@@ -233,4 +233,108 @@ do
     print("  ok")
 end
 
+local function count_rows(db, sql, ...)
+    local stmt = db:prepare(sql)
+    local args = {...}
+    for i, v in ipairs(args) do stmt:bind_value(i, v) end
+    assert(stmt:exec())
+    local n = 0
+    while stmt:next() do n = n + 1 end
+    stmt:finalize()
+    return n
+end
+
+print("-- undo: video-only master with no pre-existing link groups --")
+do
+    local db = build_fixture()
+
+    -- Snapshot pre-state.
+    local pre_clips_v   = #clips_on_track(db, "e", "e-v1")
+    local pre_clips_a   = #clips_on_track(db, "e", "e-a1")
+    local pre_tracks_m  = count_rows(db, "SELECT id FROM tracks WHERE sequence_id = ?", "m")
+    local pre_mrefs_m   = count_rows(db, "SELECT id FROM media_refs WHERE owner_sequence_id = ?", "m")
+    local pre_links     = count_rows(db, "SELECT clip_id FROM clip_links WHERE 1")
+
+    local capture = GrowMasterMedium.execute({
+        sequence_id = "m",
+        medium      = "audio",
+        track_spec  = { media_id = "aud", sample_rate = 48000 },
+    })
+    -- Sanity: forward-direction effects observed.
+    assert(#capture.companions == 3, "3 companions made before undo")
+    assert(#clips_on_track(db, "e", "e-a1") == 3, "edit gained 3 A clips before undo")
+    assert(count_rows(db, "SELECT id FROM tracks WHERE sequence_id = ?", "m") == pre_tracks_m + 1,
+        "master gained 1 A track before undo")
+
+    -- Now undo.
+    GrowMasterMedium.undo(capture)
+
+    -- Companion clips deleted.
+    assert(#clips_on_track(db, "e", "e-a1") == pre_clips_a,
+        "edit's A1 returns to pre-state clip count after undo")
+    assert(#clips_on_track(db, "e", "e-v1") == pre_clips_v,
+        "edit's V1 unchanged by undo")
+    -- Master's new track + media_ref gone.
+    assert(count_rows(db, "SELECT id FROM tracks WHERE sequence_id = ?", "m") == pre_tracks_m,
+        "master's new A track deleted on undo")
+    assert(count_rows(db, "SELECT id FROM media_refs WHERE owner_sequence_id = ?", "m") == pre_mrefs_m,
+        "master's new media_ref deleted on undo")
+    -- Link groups created during execute are gone (we created 3 new ones,
+    -- one per V/A pair; undo must remove them entirely since they didn't
+    -- exist pre-execute).
+    assert(count_rows(db, "SELECT clip_id FROM clip_links WHERE 1") == pre_links,
+        "all link_links rows we created on forward pass are gone after undo")
+
+    print("  ok")
+end
+
+print("-- undo: link group that pre-existed must remain after undo --")
+do
+    local db = build_fixture()
+    -- Pre-existing link group on c1: (V) + (some unrelated A 'c1-a').
+    -- GrowMasterMedium will SKIP c1 (already has audio peer) and create
+    -- companions only for c2 and c3. Undo must remove c2's and c3's
+    -- companions + their link groups, but MUST NOT touch c1's pre-existing
+    -- link group.
+    assert(db:exec([[
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
+            nested_sequence_id, name,
+            timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame,
+            master_layer_track_id, fps_mismatch_policy,
+            enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('c1-a', 'p1', 'e', 'e-a1', 'm', 'c1-a',
+                0, 100, 0, 200000, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES ('lg-c1', 'c1', 'video', 0, 1),
+               ('lg-c1', 'c1-a', 'audio', 0, 1);
+    ]]))
+
+    local capture = GrowMasterMedium.execute({
+        sequence_id = "m",
+        medium      = "audio",
+        track_spec  = { media_id = "aud", sample_rate = 48000 },
+    })
+    assert(#capture.companions == 2, "execute made 2 companions (c2,c3)")
+
+    GrowMasterMedium.undo(capture)
+
+    -- c1's pre-existing link group survives.
+    assert(link_group_of(db, "c1") == "lg-c1",
+        "c1's pre-existing link group preserved through undo")
+    assert(link_group_of(db, "c1-a") == "lg-c1",
+        "c1-a's link entry preserved through undo")
+    -- c2 and c3 are unlinked again (their link groups were created+removed).
+    assert(link_group_of(db, "c2") == nil,
+        "c2's transient link group removed by undo")
+    assert(link_group_of(db, "c3") == nil,
+        "c3's transient link group removed by undo")
+    -- c2's and c3's companion clips are gone (only c1-a remains on e-a1).
+    local a_clips = clips_on_track(db, "e", "e-a1")
+    assert(#a_clips == 1 and a_clips[1].id == "c1-a",
+        "only c1-a remains on e-a1 after undo")
+
+    print("  ok")
+end
+
 print("✅ test_grow_master_medium.lua passed")

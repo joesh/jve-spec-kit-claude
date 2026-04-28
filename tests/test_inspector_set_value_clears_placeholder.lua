@@ -71,7 +71,7 @@ local entry = field_widget.create_field({}, {
     label = "Name",
     type  = schemas.FIELD_TYPES.STRING,
 }, {
-    frame_rate = function() return { fps_numerator = 25, fps_denominator = 1 } end,
+    sequence = function() return { frame_rate = { fps_numerator = 25, fps_denominator = 1 }, start_timecode_frame = 0 } end,
     on_commit  = function() end,
 })
 
@@ -112,7 +112,7 @@ local tc_entry = field_widget.create_field({}, {
     label = "Mark In",
     type  = schemas.FIELD_TYPES.TIMECODE,
 }, {
-    frame_rate = function() return { fps_numerator = 25, fps_denominator = 1 } end,
+    sequence = function() return { frame_rate = { fps_numerator = 25, fps_denominator = 1 }, start_timecode_frame = 0 } end,
     on_commit  = function() end,
 })
 widget_placeholder = nil

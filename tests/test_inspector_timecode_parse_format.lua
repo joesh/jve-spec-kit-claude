@@ -22,30 +22,30 @@ local rate_2997  = { fps_numerator = 30000, fps_denominator = 1001 }
 -- 24 fps round-trip.
 -- 00:00:04:12 at 24 fps is 4 seconds + 12 frames = 96 + 12 = 108 frames.
 do
-    local v, err = field_widget._parse_text(ft.TIMECODE, "00:00:04:12", function() return rate_24 end)
+    local v, err = field_widget._parse_text(ft.TIMECODE, "00:00:04:12", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse 00:00:04:12 @24 → 108", v, 108)
     check("parse 00:00:04:12 @24 no error", err, nil)
 
-    local text = field_widget._format_value(ft.TIMECODE, 108, function() return rate_24 end)
+    local text = field_widget._format_value(ft.TIMECODE, 108, function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("format 108 @24 → 00:00:04:12", text, "00:00:04:12")
 end
 
 -- 1 hour at 24 fps = 86400 frames.
 do
-    local v = field_widget._parse_text(ft.TIMECODE, "01:00:00:00", function() return rate_24 end)
+    local v = field_widget._parse_text(ft.TIMECODE, "01:00:00:00", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse 01:00:00:00 @24 → 86400", v, 86400)
 end
 
 -- Invalid text returns (nil, err).
 do
-    local v, err = field_widget._parse_text(ft.TIMECODE, "not timecode", function() return rate_24 end)
+    local v, err = field_widget._parse_text(ft.TIMECODE, "not timecode", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse garbage → v=nil", v, nil)
     check("parse garbage → err not nil", err ~= nil, true)
 end
 
 -- Empty string returns (nil, nil) — caller decides.
 do
-    local v, err = field_widget._parse_text(ft.TIMECODE, "", function() return rate_24 end)
+    local v, err = field_widget._parse_text(ft.TIMECODE, "", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse empty → v=nil", v, nil)
     check("parse empty → err=nil",  err, nil)
 end
@@ -74,7 +74,7 @@ end
 
 -- 29.97 drop-frame parsing (sanity: the parser accepts it and frame math works).
 do
-    local v = field_widget._parse_text(ft.TIMECODE, "00:00:01:00", function() return rate_2997 end)
+    local v = field_widget._parse_text(ft.TIMECODE, "00:00:01:00", function() return { frame_rate = rate_2997, start_timecode_frame = 0 } end)
     check("parse 00:00:01:00 @29.97 → ≥29 frames",  v and v >= 29, true)
 end
 
@@ -82,13 +82,13 @@ end
 -- digits, matching the behavior of the timeline's timecode entry widget.
 -- "10:00" at 24 fps = 10 seconds + 0 frames = 240 frames.
 do
-    local v = field_widget._parse_text(ft.TIMECODE, "10:00", function() return rate_24 end)
+    local v = field_widget._parse_text(ft.TIMECODE, "10:00", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse '10:00' @24 → 240 (right-aligned: 10s:00f)", v, 240)
 end
 
 -- "1:23" right-aligned at 24 fps = 1 second + 23 frames = 47 frames.
 do
-    local v = field_widget._parse_text(ft.TIMECODE, "1:23", function() return rate_24 end)
+    local v = field_widget._parse_text(ft.TIMECODE, "1:23", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse '1:23' @24 → 47 (right-aligned: 1s:23f)", v, 47)
 end
 
@@ -96,7 +96,7 @@ end
 -- 34 >= 24 (rolls over), it's 12s + 34f → frame-only interpretation per
 -- timecode_input semantics.
 do
-    local v = field_widget._parse_text(ft.TIMECODE, "1234", function() return rate_24 end)
+    local v = field_widget._parse_text(ft.TIMECODE, "1234", function() return { frame_rate = rate_24, start_timecode_frame = 0 } end)
     check("parse bare '1234' → non-nil integer",
         type(v) == "number" and v >= 0, true)
 end

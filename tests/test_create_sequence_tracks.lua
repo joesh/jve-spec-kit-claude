@@ -93,6 +93,7 @@ local function run_test()
     cmd:set_parameter("frame_rate", 30)  -- CreateSequence accepts frame_rate, converts internally
     cmd:set_parameter("width", 1920)
     cmd:set_parameter("height", 1080)
+    cmd:set_parameter("audio_sample_rate", 48000)
 
     local result = command_manager.execute(cmd)
     if not result or not result.success then

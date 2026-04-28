@@ -1,9 +1,8 @@
 #!/usr/bin/env luajit
---- ensure_stream_clips must fail loud on malformed master sequences.
--- Hardening from the project_browser orphan-master crash class:
--- previously, a master sequence missing frame_rate or audio_sample_rate
--- silently produced stub-with-nil-fields rate tables that crashed
--- consumers later. Now the constructor asserts at the source.
+--- Sequence model audio_sample_rate / frame_rate fail-fast contract.
+-- Schema permits NULL audio_sample_rate ONLY on kind='master' (where the
+-- master happens to source video-only media). Everywhere else a positive
+-- rate is required. The constructor and writer must enforce both rules.
 require("test_env")
 
 print("=== test_ensure_stream_clips_asserts.lua ===")
@@ -18,15 +17,14 @@ local function expect_error(label, fn, pattern)
     print(string.format("  ✓ %s", label))
 end
 
--- Build a master-sequence-shaped object directly (bypassing DB) so we can
--- omit fields that the schema would normally require.
+local FR = { fps_numerator = 24, fps_denominator = 1 }
+
+-- ensure_stream_clips on a master fake without frame_rate must fail loud.
 local function fake_master(opts)
     local self = {
         id = "fake-master",
         kind = "master",
         frame_rate = opts.frame_rate,
-        fps_numerator = opts.fps_numerator,
-        fps_denominator = opts.fps_denominator,
         audio_sample_rate = opts.audio_sample_rate,
     }
     return setmetatable(self, { __index = Sequence })
@@ -37,19 +35,26 @@ expect_error("missing frame_rate fails loud", function()
     s:video_stream()
 end, "missing frame_rate")
 
-expect_error("missing audio_sample_rate fails loud", function()
-    local s = fake_master({
-        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
-    })
-    s:audio_streams()
-end, "missing audio_sample_rate")
+-- Sequence.create: nested timelines REQUIRE audio_sample_rate.
+expect_error("nested sequence without audio_sample_rate refused", function()
+    Sequence.create("e", "p1", FR, 1920, 1080,
+        { id = "e", kind = "nested" })
+end, "audio_sample_rate is required for non%-master")
 
-expect_error("zero audio_sample_rate fails loud", function()
-    local s = fake_master({
-        frame_rate = { fps_numerator = 24, fps_denominator = 1 },
-        audio_sample_rate = 0,
-    })
-    s:audio_streams()
-end, "missing audio_sample_rate")
+-- Sequence.create: zero/negative audio_sample_rate is rejected even on master.
+expect_error("master with zero audio_sample_rate refused", function()
+    Sequence.create("m", "p1", FR, 1920, 1080,
+        { id = "m", kind = "master", audio_sample_rate = 0 })
+end, "audio_sample_rate must be a positive number")
+
+-- Sequence.create: master may carry NULL audio_sample_rate (video-only).
+do
+    local s = Sequence.create("m", "p1", FR, 1920, 1080,
+        { id = "m", kind = "master" })  -- audio_sample_rate omitted (nil)
+    assert(s, "master without audio_sample_rate constructed (video-only allowed)")
+    assert(s.audio_sample_rate == nil,
+        "video-only master keeps NULL rate; got " .. tostring(s.audio_sample_rate))
+    print("  ✓ video-only master accepts NULL audio_sample_rate")
+end
 
 print("\n✅ test_ensure_stream_clips_asserts.lua passed")

@@ -1,6 +1,7 @@
---- Test: clip_mutator.resolve_occlusions/resolve_ripple assert on missing required fields
--- nil params/track_id → noop (valid "nothing to do")
--- nil duration/start_value/shift_amount within valid params → assert (invariant violation)
+--- Test: clip_mutator.resolve_occlusions/resolve_ripple fail-fast on missing required fields.
+-- Per rule 2.13 / 1.14: callers must supply complete params; the previous
+-- "nil params/track_id → silent noop" behavior masked bugs. Now every
+-- missing required field asserts loud.
 require("test_env")
 
 local passed, failed = 0, 0
@@ -14,40 +15,37 @@ package.loaded["core.krono"] = nil
 
 local ClipMutator = require("core.clip_mutator")
 
--- Test 1: resolve_occlusions with nil track_id → noop (true)
+-- resolve_occlusions: every missing required input asserts loud.
 local ok1 = pcall(function()
-    return ClipMutator.resolve_occlusions(nil, { track_id = nil, timeline_start = 0, duration = 10 })
+    ClipMutator.resolve_occlusions(nil, { track_id = nil, timeline_start = 0, duration = 10 })
 end)
-check("resolve_occlusions noops on nil track_id", ok1)
+check("resolve_occlusions asserts on nil track_id", not ok1)
 
--- Test 2: resolve_occlusions with nil duration should assert
 local ok2 = pcall(function()
     ClipMutator.resolve_occlusions(nil, { track_id = "t1", timeline_start = 0, duration = nil })
 end)
 check("resolve_occlusions asserts on nil duration", not ok2)
 
--- Test 3: resolve_ripple with nil track_id → noop (true)
-local ok3 = pcall(function()
-    return ClipMutator.resolve_ripple(nil, { track_id = nil, timeline_start_frame = 0, shift_amount = 5 })
+local ok5 = pcall(function()
+    ClipMutator.resolve_occlusions(nil, nil)
 end)
-check("resolve_ripple noops on nil track_id", ok3)
+check("resolve_occlusions asserts on nil params", not ok5)
 
--- Test 4: resolve_ripple with nil shift_amount should assert
+-- resolve_ripple: same contract.
+local ok3 = pcall(function()
+    ClipMutator.resolve_ripple(nil, { track_id = nil, timeline_start_frame = 0, shift_amount = 5 })
+end)
+check("resolve_ripple asserts on nil track_id", not ok3)
+
 local ok4 = pcall(function()
     ClipMutator.resolve_ripple(nil, { track_id = "t1", timeline_start_frame = 0, shift_amount = nil })
 end)
 check("resolve_ripple asserts on nil shift_amount", not ok4)
 
--- Test 5: nil params → noop (true), not crash
-local ok5, _ = pcall(function()
-    return ClipMutator.resolve_occlusions(nil, nil)
+local ok6 = pcall(function()
+    ClipMutator.resolve_ripple(nil, nil)
 end)
-check("resolve_occlusions noops on nil params", ok5)
-
-local ok6, _ = pcall(function()
-    return ClipMutator.resolve_ripple(nil, nil)
-end)
-check("resolve_ripple noops on nil params", ok6)
+check("resolve_ripple asserts on nil params", not ok6)
 
 if failed > 0 then
     print(string.format("❌ test_clip_mutator_missing_fields.lua: %d passed, %d FAILED", passed, failed))

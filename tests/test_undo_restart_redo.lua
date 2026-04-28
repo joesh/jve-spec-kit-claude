@@ -57,6 +57,7 @@ local function create_sequence_command(name)
     cmd:set_parameter("frame_rate", 30.0)
     cmd:set_parameter("width", 1920)
     cmd:set_parameter("height", 1080)
+    cmd:set_parameter("audio_sample_rate", 48000)
     return cmd
 end
 

@@ -73,7 +73,7 @@ do
     local entry = field_widget.create_field({}, {
         key = "offline", label = "Offline",
         type = schemas.FIELD_TYPES.BOOLEAN, read_only = true,
-    }, { frame_rate = function() return nil end, on_commit = function() end })
+    }, { sequence = function() return nil end, on_commit = function() end })
     check("BOOLEAN read_only: widget setEnabled(false)",
         enabled_state[entry.widget] == false)
     check("BOOLEAN read_only: widget focusPolicy = NoFocus (Tab skips)",
@@ -86,7 +86,7 @@ do
     local entry = field_widget.create_field({}, {
         key = "enabled", label = "Enabled",
         type = schemas.FIELD_TYPES.BOOLEAN,  -- read_only defaults false
-    }, { frame_rate = function() return nil end, on_commit = function() end })
+    }, { sequence = function() return nil end, on_commit = function() end })
     check("BOOLEAN editable: not disabled",
         enabled_state[entry.widget] ~= false)
     check("BOOLEAN editable: focusPolicy not set to NoFocus",
@@ -101,7 +101,7 @@ do
     local entry = field_widget.create_field({}, {
         key = "media_id", label = "Media ID",
         type = schemas.FIELD_TYPES.STRING, read_only = true,
-    }, { frame_rate = function() return nil end, on_commit = function() end })
+    }, { sequence = function() return nil end, on_commit = function() end })
     check("STRING read_only: focusPolicy = NoFocus",
         focus_policy_set[entry.widget] == "NoFocus")
     -- We intentionally do NOT setEnabled(false) on line edits — it makes them
@@ -117,7 +117,7 @@ do
     local entry = field_widget.create_field({}, {
         key = "name", label = "Clip Name",
         type = schemas.FIELD_TYPES.STRING,
-    }, { frame_rate = function() return nil end, on_commit = function() end })
+    }, { sequence = function() return nil end, on_commit = function() end })
     check("STRING editable: not disabled",
         enabled_state[entry.widget] ~= false)
     check("STRING editable: focusPolicy not NoFocus",
@@ -130,7 +130,7 @@ do
     local entry = field_widget.create_field({}, {
         key = "playhead_frame", label = "Source Playhead",
         type = schemas.FIELD_TYPES.TIMECODE, read_only = true,
-    }, { frame_rate = function() return { fps_numerator = 25, fps_denominator = 1 } end, on_commit = function() end })
+    }, { sequence = function() return { frame_rate = { fps_numerator = 25, fps_denominator = 1 }, start_timecode_frame = 0 } end, on_commit = function() end })
     check("TIMECODE read_only: focusPolicy = NoFocus",
         focus_policy_set[entry.widget] == "NoFocus")
     check("TIMECODE read_only: NOT disabled",

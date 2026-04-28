@@ -21,19 +21,17 @@ local ks_path = test_env.resolve_repo_path("src/lua/core/keyboard_shortcuts.lua"
 local fh = assert(io.open(ks_path, "r"), "cannot open " .. ks_path)
 local src = fh:read("*a"); fh:close()
 
--- Extract the Tab branch: from the opening `if key == KEY.Tab or key == KEY.Backtab then`
--- to the matching `end` that closes it. This is a naive bracket-matcher — works
--- because the Tab branch is top-level inside handle_key_impl, so the first
--- `end` that returns us to handle_key_impl's indentation closes it.
+-- Extract the Tab branch: it lives in the file-local helper
+-- `try_handle_tab_key`. The function signature line is unique in this
+-- file; scan forward to its closing `end` (top-level `end` at column 0).
 local tab_branch_start, tab_branch_end
 do
-    local s = src:find("if key == KEY%.Tab or key == KEY%.Backtab then")
-    assert(s, "could not locate Tab branch start in keyboard_shortcuts.lua")
+    local s = src:find("local function try_handle_tab_key%(")
+    assert(s, "could not locate try_handle_tab_key in keyboard_shortcuts.lua")
     tab_branch_start = s
-    -- Scan forward for `    end` (4-space-aligned) which closes the Tab branch.
-    local next_end = src:find("\n    end\n", s)
-    assert(next_end, "could not locate end of Tab branch")
-    tab_branch_end = next_end + 8  -- include the "    end\n"
+    local next_end = src:find("\nend\n", s)
+    assert(next_end, "could not locate end of try_handle_tab_key")
+    tab_branch_end = next_end + 5  -- include "\nend\n"
 end
 
 local tab_branch = src:sub(tab_branch_start, tab_branch_end)

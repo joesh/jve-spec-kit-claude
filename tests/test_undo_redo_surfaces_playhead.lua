@@ -66,6 +66,7 @@ cmd1:set_parameter("project_id", "proj1")
 cmd1:set_parameter("frame_rate", 30.0)
 cmd1:set_parameter("width", 1920)
 cmd1:set_parameter("height", 1080)
+cmd1:set_parameter("audio_sample_rate", 48000)
 local result = command_manager.execute(cmd1)
 assert(result.success, "cmd1 should succeed: " .. tostring(result.error_message))
 

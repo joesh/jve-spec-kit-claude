@@ -328,21 +328,24 @@ do
 end
 
 -- ============================================================
--- capture_selection_snapshot — nil/empty clips
+-- capture_selection_snapshot — empty selection produces empty JSON
 -- ============================================================
-print("\n--- capture_selection_snapshot nil clips ---")
+-- Per rule 2.13, timeline_state's getters must always return a table. A
+-- nil return is a contract violation and would surface as an error here
+-- (no longer silently coerced to {} via `or {}` in command_state.lua).
+print("\n--- capture_selection_snapshot empty selection ---")
 do
     local mock_timeline = {
-        get_selected_clips = function() return nil end,
-        get_selected_edges = function() return nil end,
+        get_selected_clips = function() return {} end,
+        get_selected_edges = function() return {} end,
         get_selected_gaps = nil, -- method doesn't exist
     }
     package.loaded["ui.timeline.timeline_state"] = mock_timeline
 
     local clips_json, edges_json, gaps_json = command_state.capture_selection_snapshot()
-    check("nil clips → empty json", clips_json == "[]")
-    check("nil edges → empty json", edges_json == "[]")
-    check("nil gaps → empty json", gaps_json == "[]")
+    check("empty clips → empty json", clips_json == "[]")
+    check("empty edges → empty json", edges_json == "[]")
+    check("absent gaps method → empty json", gaps_json == "[]")
 end
 
 -- ============================================================

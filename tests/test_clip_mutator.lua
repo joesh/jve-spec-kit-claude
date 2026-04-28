@@ -187,16 +187,16 @@ end
 -- 2. resolve_occlusions (DB-backed tests)
 -- ═══════════════════════════════════════════════════════════════
 
-print("\n--- resolve_occlusions: nil params → noop ---")
+print("\n--- resolve_occlusions: nil params → assert (rule 2.13) ---")
 do
-    local ok = ClipMutator.resolve_occlusions(nil, nil)
-    check("nil params returns true", ok == true)
+    local ok = pcall(ClipMutator.resolve_occlusions, nil, nil)
+    check("nil params raises", not ok)
 end
 
-print("\n--- resolve_occlusions: missing track_id → noop ---")
+print("\n--- resolve_occlusions: missing track_id → assert (rule 2.13) ---")
 do
-    local ok = ClipMutator.resolve_occlusions(nil, {timeline_start = 0, duration = 10})
-    check("missing track_id returns true", ok == true)
+    local ok = pcall(ClipMutator.resolve_occlusions, nil, {timeline_start = 0, duration = 10})
+    check("missing track_id raises", not ok)
 end
 
 print("\n--- resolve_occlusions: no overlap ---")
@@ -412,16 +412,16 @@ end
 -- 3. resolve_ripple (DB-backed tests)
 -- ═══════════════════════════════════════════════════════════════
 
-print("\n--- resolve_ripple: nil params → noop ---")
+print("\n--- resolve_ripple: nil params → assert (rule 2.13) ---")
 do
-    local ok = ClipMutator.resolve_ripple(nil, nil)
-    check("ripple nil params ok", ok == true)
+    local ok = pcall(ClipMutator.resolve_ripple, nil, nil)
+    check("ripple nil params raises", not ok)
 end
 
-print("\n--- resolve_ripple: missing timeline_start_frame → noop ---")
+print("\n--- resolve_ripple: missing timeline_start_frame → assert (rule 2.13) ---")
 do
-    local ok = ClipMutator.resolve_ripple(nil, {track_id = "t1", shift_amount = 10})
-    check("ripple missing timeline_start_frame ok", ok == true)
+    local ok = pcall(ClipMutator.resolve_ripple, nil, {track_id = "t1", shift_amount = 10})
+    check("ripple missing timeline_start_frame raises", not ok)
 end
 
 print("\n--- resolve_ripple: shift clips after insert point ---")
