@@ -161,14 +161,17 @@ function M.create(widget, state_module, track_filter_fn, options)
         command_manager.end_command_event()
     end
     local function on_wheel(dx, dy, mods)
-        input.handle_wheel(view, dx, dy, mods)
+        return input.handle_wheel(view, dx, dy, mods)
     end
 
     timeline.set_lua_state(widget)
     local hname = "tl_mouse_" .. tostring(widget):gsub("[^%w]", "_")
-    _G[hname] = function(e) 
-        if e.type == "wheel" then on_wheel(e.delta_x, e.delta_y, e.modifiers)
-        else on_mouse(e.type, e.x, e.y, e.button, e) end
+    _G[hname] = function(e)
+        if e.type == "wheel" then
+            return on_wheel(e.delta_x, e.delta_y, e.modifiers)
+        else
+            on_mouse(e.type, e.x, e.y, e.button, e)
+        end
     end
     timeline.set_mouse_event_handler(widget, hname)
 

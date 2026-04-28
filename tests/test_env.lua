@@ -176,11 +176,25 @@ enforce_nil_call_protection()
 -- Provide qt_monotonic_s for plain-luajit test runs. The native binding
 -- (misc_bindings.cpp) uses std::chrono::steady_clock; under the editor
 -- it's registered globally at startup. Tests under luajit don't load
--- the C++ bindings, so we fall back to os.clock(): not wall-time
--- accurate when parallel C++ code is involved, but tests don't spawn
--- parallel probe pools (they inject fake probe_fn).
+-- the C++ bindings, so we substitute a wall-clock source via FFI to
+-- POSIX clock_gettime(CLOCK_MONOTONIC). MUST be wall time — earlier
+-- versions used os.clock() (process CPU time), which silently misled
+-- any test that measured gesture-gap or idle-period behavior because
+-- CPU time barely advances when the app is idle.
 if not _G.qt_monotonic_s then
-    _G.qt_monotonic_s = os.clock
+    local ffi = require("ffi")
+    pcall(ffi.cdef, [[
+        typedef long time_t;
+        struct timespec { time_t tv_sec; long tv_nsec; };
+        int clock_gettime(int clk_id, struct timespec *tp);
+    ]])
+    -- macOS: CLOCK_MONOTONIC=6; Linux: CLOCK_MONOTONIC=1.
+    local clk_id = (jit.os == "OSX") and 6 or 1
+    local ts = ffi.new("struct timespec[1]")
+    _G.qt_monotonic_s = function()
+        ffi.C.clock_gettime(clk_id, ts)
+        return tonumber(ts[0].tv_sec) + tonumber(ts[0].tv_nsec) * 1e-9
+    end
 end
 
 -- Lightweight dependency guards for tests

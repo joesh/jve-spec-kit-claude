@@ -9,25 +9,26 @@ local magnetic_snapping = require("core.magnetic_snapping")
 local TimelineActiveRegion = require("core.timeline_active_region")
 local command_manager = require("core.command_manager")
 local scroll_axis_lock = require("ui.timeline.scroll_axis_lock")
-
--- luacheck: globals qt_elapsed_ms
-
--- Monotonic clock in milliseconds for scroll-gesture timing. Prefer Qt's
--- event timestamp if the runtime exposes one (avoids drift when the process
--- is starved); otherwise fall back to os.clock() * 1000.
-local function wheel_timestamp_ms()
-    if type(qt_elapsed_ms) == "function" then
-        return qt_elapsed_ms()
-    end
-    return os.clock() * 1000
-end
-
 local cancel = require("core.cancel")
+local qt_constants = require("core.qt_constants")
+local log = require("core.logger").for_area("timeline")
+
+-- luacheck: globals qt_monotonic_s
 
 local RIGHT_MOUSE_BUTTON = 2
 local DRAG_THRESHOLD = ui_constants.TIMELINE.DRAG_THRESHOLD
-local qt_constants = require("core.qt_constants")
-local log = require("core.logger").for_area("timeline")
+
+-- Monotonic WALL-CLOCK time in milliseconds for scroll-gesture timing.
+-- Must NOT use os.clock() — that returns process CPU time, which barely
+-- advances when the app is idle between user gestures, so
+-- scroll_axis_lock's GESTURE_GAP_MS threshold never trips and the locked
+-- axis wedges across gestures (the "stuck scroll direction" regression).
+local function wheel_timestamp_ms()
+    assert(type(qt_monotonic_s) == "function",
+        "timeline_view_input.wheel_timestamp_ms: qt_monotonic_s binding not registered")
+    return qt_monotonic_s() * 1000
+end
+M._wheel_timestamp_ms = wheel_timestamp_ms
 
 --- Filter gap clips from a clip list. Gaps are in-memory only and must not
 --- participate in drag operations (Nudge/MoveClipToTrack can't load them from DB).
@@ -158,35 +159,71 @@ local function find_gap_at_time(view, track_id, time_frame)
     return nil
 end
 
-function M.handle_wheel(view, delta_x, delta_y, modifiers)
-    -- Per-view axis-lock state. Lazily created on first wheel event.
+-- Treat sub-thousandth deltas as zero — wheel deltas are floating-point
+-- pixel quantities; an absolute threshold is the standard idiom in this
+-- file's input math, kept as a named constant rather than a magic number.
+local WHEEL_DELTA_EPSILON = 1e-4
+
+--- Apply the asymmetric axis lock to the raw (delta_x, delta_y) wheel
+-- pair, lazily creating the per-view state on first use.
+local function filter_wheel_axis(view, delta_x, delta_y)
     if not view._scroll_axis_state then
         view._scroll_axis_state = scroll_axis_lock.new_state()
     end
-    local dx, dy = scroll_axis_lock.apply(
-        view._scroll_axis_state,
-        delta_x or 0,
-        delta_y or 0,
-        wheel_timestamp_ms())
+    return scroll_axis_lock.apply(
+        view._scroll_axis_state, delta_x, delta_y, wheel_timestamp_ms())
+end
 
-    -- Shift converts vertical scroll to horizontal (historical Mac convention).
-    -- Applied AFTER axis-lock so a shift-held vertical gesture can still
-    -- scroll horizontally once it has locked to the vertical axis.
-    local horizontal = dx
-    if math.abs(horizontal) < 0.0001 and modifiers and modifiers.shift then
-        horizontal = dy
+--- Resolve the horizontal-scroll delta from an axis-locked (dx, dy) pair.
+-- Shift converts vertical to horizontal (historical Mac convention).
+-- Operates on the POST-suppression dy so a vertical drift the axis lock
+-- already zeroed can't be resurrected as horizontal motion via shift.
+local function effective_horizontal(dx, dy, modifiers)
+    if math.abs(dx) >= WHEEL_DELTA_EPSILON then
+        return dx
     end
+    if modifiers and modifiers.shift then
+        return dy
+    end
+    return 0
+end
 
-    if horizontal and math.abs(horizontal) > 0.0001 then
-        local width = timeline.get_dimensions(view.widget)
-        if width and width > 0 then
-            local viewport_duration = view.state.get_viewport_duration()
-            local delta_time = (-horizontal / width) * viewport_duration
-            local new_start = math.floor(view.state.get_viewport_start_time() + delta_time)
-            view.state.set_viewport_start_time(new_start)
-            view.state.flush_pending_notify()
-        end
+--- Translate a horizontal wheel delta into a viewport-start change.
+local function scroll_viewport_horizontally(view, horizontal)
+    if math.abs(horizontal) < WHEEL_DELTA_EPSILON then
+        return
     end
+    local width = timeline.get_dimensions(view.widget)
+    assert(type(width) == "number" and width > 0,
+        "timeline_view_input.scroll_viewport_horizontally: timeline.get_dimensions returned invalid width "
+            .. tostring(width))
+    local viewport_duration = view.state.get_viewport_duration()
+    local delta_time = (-horizontal / width) * viewport_duration
+    local new_start = math.floor(view.state.get_viewport_start_time() + delta_time)
+    view.state.set_viewport_start_time(new_start)
+    view.state.flush_pending_notify()
+end
+
+--- Handle a wheel event on the timeline view.
+--
+-- Drives the horizontal viewport from `dx` (always) and decides whether
+-- Qt's native vertical scroll should fire for `dy`. The asymmetric axis
+-- lock suppresses vertical jitter during/after horizontal-dominant
+-- gestures; in that case we return false so the C++ caller accepts the
+-- event without propagating to QWidget::wheelEvent (which would otherwise
+-- scroll the parent QScrollArea vertically using the raw, unfiltered dy).
+--
+-- @return propagate_vertical:bool — true to let Qt scroll vertically; false
+--         to consume the event and pin the vertical position.
+function M.handle_wheel(view, delta_x, delta_y, modifiers)
+    assert(type(delta_x) == "number",
+        "timeline_view_input.handle_wheel: delta_x must be a number, got " .. type(delta_x))
+    assert(type(delta_y) == "number",
+        "timeline_view_input.handle_wheel: delta_y must be a number, got " .. type(delta_y))
+
+    local dx, dy = filter_wheel_axis(view, delta_x, delta_y)
+    scroll_viewport_horizontally(view, effective_horizontal(dx, dy, modifiers))
+    return math.abs(dy) >= WHEEL_DELTA_EPSILON
 end
 
 -- Scan the requested track for clips near the cursor and return whichever edges

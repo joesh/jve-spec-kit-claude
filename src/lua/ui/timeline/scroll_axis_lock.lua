@@ -1,70 +1,105 @@
---- scroll_axis_lock.lua — per-gesture axis lock for trackpad wheel events.
+--- scroll_axis_lock.lua — asymmetric per-gesture vertical-suppression filter
+-- for trackpad wheel events on the timeline.
 --
--- Trackpad scroll gestures are rarely perfectly axis-aligned; a gesture the
--- user intends as pure horizontal usually has small vertical drift, and vice
--- versa. Without hysteresis, that drift reads as orthogonal scrolling on the
--- other axis and feels like "the timeline scrolled sideways when I was
--- scrolling the tracks list".
+-- Horizontal motion is the primary use of the timeline view; vertical drift
+-- on a horizontal swipe is the truly annoying failure mode (the timeline
+-- jumps off the track the user was looking at). Conversely, suppressing
+-- horizontal is never desirable on this widget — there is no other
+-- horizontal navigation gesture worth protecting.
 --
--- Semantics:
---   • A gesture is a run of wheel events separated by no more than
---     SCROLL_GESTURE_GAP_MS ms. Longer gaps start a new gesture.
---   • When the first event of a gesture has one axis clearly dominating
---     (magnitude ratio ≥ SCROLL_AXIS_LOCK_RATIO), the gesture locks to that
---     axis and the orthogonal delta is zeroed for the rest of the gesture.
---   • If no axis dominates on the first event, the gesture stays unlocked
---     and both axes pass through. A later event in the same gesture can
---     establish the lock.
---   • Once locked, the orthogonal axis is suppressed even when a later event
---     in the gesture happens to be orthogonal-dominant.
---
--- Design rationale: the lock is per-gesture, not per-event, and not per-view.
--- The caller holds the per-view state table and passes it in. This keeps the
--- module pure and trivially testable.
+-- Therefore this module is asymmetric and aggressively favors horizontal:
+--   • Horizontal delta (dx) is ALWAYS passed through unchanged.
+--   • Vertical delta (dy) is suppressed by default at the start of every
+--     gesture (eats opening jitter).
+--   • Vertical is released ("vertical_allowed") only when cumulative |dy|
+--     crosses SCROLL_VERTICAL_INTENT_PX BEFORE cumulative |dx| has crossed
+--     SCROLL_HORIZONTAL_COMMIT_PX — i.e., the gesture is essentially pure
+--     vertical.
+--   • Once cumulative |dx| crosses SCROLL_HORIZONTAL_COMMIT_PX, the gesture
+--     ratchets to "horizontal_only" — even if it had previously committed
+--     to vertical_allowed. This is checked every event so a long
+--     horizontal sweep with vertical drift, OR a vertical scroll that
+--     starts to drift sideways, both end up suppressing vertical for the
+--     rest of the gesture. There is no escape from horizontal_only without
+--     a SCROLL_GESTURE_GAP_MS pause to reset the gesture.
+--   • A pause of SCROLL_GESTURE_GAP_MS (wall-clock) resets the gesture and
+--     a fresh classification can occur.
 --
 -- @file scroll_axis_lock.lua
 local M = {}
 local ui_constants = require("core.ui_constants")
 
-local LOCK_RATIO = ui_constants.TIMELINE.SCROLL_AXIS_LOCK_RATIO
 local GESTURE_GAP_MS = ui_constants.TIMELINE.SCROLL_GESTURE_GAP_MS
+local VERTICAL_INTENT_PX = ui_constants.TIMELINE.SCROLL_VERTICAL_INTENT_PX
+local HORIZONTAL_COMMIT_PX = ui_constants.TIMELINE.SCROLL_HORIZONTAL_COMMIT_PX
 
-assert(type(LOCK_RATIO) == "number" and LOCK_RATIO > 1,
-    "scroll_axis_lock: ui_constants.TIMELINE.SCROLL_AXIS_LOCK_RATIO must be > 1")
 assert(type(GESTURE_GAP_MS) == "number" and GESTURE_GAP_MS > 0,
     "scroll_axis_lock: ui_constants.TIMELINE.SCROLL_GESTURE_GAP_MS must be > 0")
+assert(type(VERTICAL_INTENT_PX) == "number" and VERTICAL_INTENT_PX > 0,
+    "scroll_axis_lock: ui_constants.TIMELINE.SCROLL_VERTICAL_INTENT_PX must be > 0")
+assert(type(HORIZONTAL_COMMIT_PX) == "number" and HORIZONTAL_COMMIT_PX > 0,
+    "scroll_axis_lock: ui_constants.TIMELINE.SCROLL_HORIZONTAL_COMMIT_PX must be > 0")
+
+-- Per-view state-table shape. `mode` takes one of:
+--   "tentative"        — gesture in progress, no commitment yet (vertical suppressed)
+--   "horizontal_only"  — committed to horizontal; vertical stays suppressed (sticky)
+--   "vertical_allowed" — committed to vertical; both axes pass through (until cum_dx
+--                        crosses the horizontal threshold and ratchets back)
 
 --- Create a fresh per-view state table.
 function M.new_state()
-    return { axis = nil, last_ts = nil }
+    return { mode = "tentative", cum_dx = 0, cum_dy = 0, last_ts = nil }
 end
 
---- Apply axis lock to an incoming (dx, dy) wheel delta pair.
+-- Reset the gesture if the inter-event pause exceeds GESTURE_GAP_MS.
+local function reset_if_gesture_gap(state, now_ms)
+    if state.last_ts ~= nil and (now_ms - state.last_ts) > GESTURE_GAP_MS then
+        state.mode = "tentative"
+        state.cum_dx = 0
+        state.cum_dy = 0
+    end
+    state.last_ts = now_ms
+end
+
+-- Add this event's magnitudes to the cumulative tally for the gesture.
+local function accumulate_motion(state, dx, dy)
+    state.cum_dx = state.cum_dx + math.abs(dx)
+    state.cum_dy = state.cum_dy + math.abs(dy)
+end
+
+-- Update the gesture mode given accumulated motion. The horizontal ratchet
+-- is checked every event so a vertical_allowed gesture that starts
+-- drifting sideways past the threshold also reclaims to horizontal_only —
+-- vertical drift on a horizontal swipe never wins. There is no escape
+-- from horizontal_only without a wall-clock pause to reset the gesture.
+local function update_mode(state)
+    if state.cum_dx >= HORIZONTAL_COMMIT_PX then
+        state.mode = "horizontal_only"
+    elseif state.mode == "tentative" and state.cum_dy >= VERTICAL_INTENT_PX then
+        state.mode = "vertical_allowed"
+    end
+end
+
+--- Apply asymmetric axis-suppression to an incoming (dx, dy) wheel delta pair.
+--
+-- Horizontal is always returned unchanged. Vertical is returned only when
+-- the gesture is currently in vertical_allowed AND has not been ratcheted
+-- into horizontal_only by accumulated horizontal motion.
 --
 -- @param state   table created by new_state(); mutated in place
 -- @param dx      incoming horizontal delta
 -- @param dy      incoming vertical delta
--- @param now_ms  monotonic timestamp in milliseconds for this event
--- @return (effective_dx, effective_dy) after axis-lock suppression
+-- @param now_ms  monotonic wall-clock timestamp in milliseconds for this event
+-- @return (effective_dx, effective_dy) after suppression
 function M.apply(state, dx, dy, now_ms)
-    if state.last_ts ~= nil and (now_ms - state.last_ts) > GESTURE_GAP_MS then
-        state.axis = nil
-    end
-    state.last_ts = now_ms
+    reset_if_gesture_gap(state, now_ms)
+    accumulate_motion(state, dx, dy)
+    update_mode(state)
 
-    if state.axis == nil then
-        local adx = math.abs(dx)
-        local ady = math.abs(dy)
-        if adx > ady * LOCK_RATIO then
-            state.axis = "h"
-        elseif ady > adx * LOCK_RATIO then
-            state.axis = "v"
-        end
+    if state.mode == "vertical_allowed" then
+        return dx, dy
     end
-
-    if state.axis == "h" then return dx, 0 end
-    if state.axis == "v" then return 0, dy end
-    return dx, dy
+    return dx, 0
 end
 
 return M

@@ -313,13 +313,18 @@ ui_constants.TIMELINE = {
     DEFAULT_FPS_DENOMINATOR = 1, -- Default sequence frame rate denominator when not specified
     ACTIVE_REGION_PAD_FRAMES_MULTIPLIER = 2, -- Multiplies sequence FPS to pad TimelineActiveRegion window
     MAX_RIPPLE_CONSTRAINT_RETRIES = 5, -- Maximum retry attempts for ripple constraint resolution
-    -- Scroll axis lock (trackpad hysteresis).
-    -- Once a scroll gesture establishes a dominant axis, orthogonal deltas
-    -- are ignored until the user pauses (SCROLL_GESTURE_GAP_MS of no wheel
-    -- events). An axis is considered dominant when its magnitude exceeds
-    -- the orthogonal magnitude by at least SCROLL_AXIS_LOCK_RATIO.
-    SCROLL_AXIS_LOCK_RATIO = 1.5,
+    -- Scroll axis lock — asymmetric trackpad hysteresis. See
+    -- ui/timeline/scroll_axis_lock.lua for the full policy.
+    -- Summary: horizontal is always allowed. Vertical is suppressed at
+    -- the start of every gesture and is only released ("vertical_allowed")
+    -- when cumulative |dy| crosses SCROLL_VERTICAL_INTENT_PX BEFORE
+    -- cumulative |dx| crosses SCROLL_HORIZONTAL_COMMIT_PX. The horizontal
+    -- threshold is a one-way ratchet: once cum_dx crosses it, the gesture
+    -- is horizontal_only for the rest of the gesture, no exceptions. A
+    -- pause of SCROLL_GESTURE_GAP_MS (wall-clock) resets the gesture.
     SCROLL_GESTURE_GAP_MS = 150,
+    SCROLL_VERTICAL_INTENT_PX = 30,
+    SCROLL_HORIZONTAL_COMMIT_PX = 20,
 }
 
 --- Compute zoom-to-fit viewport from content bounds.

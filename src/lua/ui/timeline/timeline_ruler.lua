@@ -383,6 +383,11 @@ function M.create(widget, state_module)
     _G[handler_name] = function(event)
         if event.type == "wheel" then
             on_wheel_event(event.delta_x, event.delta_y, event)
+            -- Ruler converts wheel to horizontal viewport scroll; vertical
+            -- propagation is harmless here (ruler isn't inside a vertical
+            -- scroll area), but the wheel-handler protocol requires an
+            -- explicit bool — return true to keep Qt's default propagation.
+            return true
         else
             on_mouse_event(event.type, event.x, event.y, event.button, event)
         end

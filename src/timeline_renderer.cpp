@@ -413,6 +413,14 @@ void TimelineRenderer::mouseMoveEvent(QMouseEvent* event)
 
 void TimelineRenderer::wheelEvent(QWheelEvent* event)
 {
+    // Propagate the wheel event to the parent QScrollArea by default.
+    // The Lua handler may opt out by returning false — used by the timeline
+    // view's asymmetric axis lock to pin vertical position when it judges
+    // the gesture to be horizontal-dominant. Without that opt-out, the
+    // parent QScrollArea would scroll vertically using the original raw dy
+    // even after Lua suppressed it for the horizontal-only viewport path.
+    bool propagate = true;
+
     if (!mouse_event_handler_.empty() && lua_state_) {
         lua_getglobal(lua_state_, mouse_event_handler_.c_str());
         if (lua_isfunction(lua_state_, -1)) {
@@ -457,8 +465,23 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
 
             {
                 JveLuaStateGuard guard(lua_state_);
-                if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
+                if (lua_pcall(lua_state_, 1, 1, 0) != LUA_OK) {
                     jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.wheel");
+                } else {
+                    // Wheel handler protocol: must return a boolean indicating
+                    // whether to propagate the event to the parent QScrollArea.
+                    // Asserting (rather than silently defaulting) catches future
+                    // wheel-handler additions that forget to return a value.
+                    if (!lua_isboolean(lua_state_, -1)) {
+                        std::string msg = "TimelineRenderer.wheel: Lua handler '";
+                        msg += mouse_event_handler_;
+                        msg += "' must return a boolean (got ";
+                        msg += lua_typename(lua_state_, lua_type(lua_state_, -1));
+                        msg += ")";
+                        JVE_FAIL(msg.c_str());
+                    }
+                    propagate = lua_toboolean(lua_state_, -1) != 0;
+                    lua_pop(lua_state_, 1);
                 }
             }
         } else {
@@ -466,7 +489,11 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
         }
     }
 
-    QWidget::wheelEvent(event);
+    if (propagate) {
+        QWidget::wheelEvent(event);
+    } else {
+        event->accept();
+    }
 }
 
 void TimelineRenderer::keyPressEvent(QKeyEvent* event)
