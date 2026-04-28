@@ -39,7 +39,7 @@ local F  = ui_constants.FONTS
 --- on success, (nil, err) on parse failure. Empty string is treated as
 --- "no change" for non-string fields and returns (nil, nil) — the caller
 --- decides whether to clear, skip, or reject.
-local function parse_text(field_type, text, frame_rate_provider)
+local function parse_text(field_type, text, sequence_provider)
     if field_type == FT.STRING or field_type == FT.TEXT_AREA or field_type == FT.DROPDOWN then
         return text, nil
     end
@@ -59,23 +59,24 @@ local function parse_text(field_type, text, frame_rate_provider)
         return n, nil
     end
     if field_type == FT.TIMECODE then
-        local rate = frame_rate_provider()
-        assert(rate, "field_widget.parse_text: TIMECODE requires a frame rate provider")
+        local seq = sequence_provider()
+        assert(seq and seq.frame_rate,
+            "field_widget.parse_text: TIMECODE requires a sequence_provider returning {frame_rate}")
+        local rate = seq.frame_rate
         -- Lenient parser: accepts "01:02:03:04" (full), "1:23" (right-
         -- aligned = 1s:23f @ fps), "1234" (bare digits = right-aligned), and
-        -- relative entries "+10" / "-2s" / "+1:00". Matches the shorthand
-        -- the timeline's timecode entry widget uses, so Inspector behaves
-        -- the same way.
+        -- relative entries "+10" / "-2s" / "+1:00".
         local v, err = timecode_input.parse(text, rate)
         if not v then return nil, err or "invalid timecode" end
-        -- Extract integer frames — CLAUDE.md "all coords are integers".
+        local frames
         if type(v) == "table" and v.frames then
-            return v.frames, nil
+            frames = v.frames
         elseif type(v) == "number" then
-            return v, nil
+            frames = v
         else
             return nil, "timecode_input.parse returned unexpected type " .. type(v)
         end
+        return frames, nil
     end
     error("field_widget.parse_text: unknown field_type " .. tostring(field_type))
 end
@@ -96,12 +97,13 @@ local function classify_commit(parsed_value, parse_error)
 end
 M._classify_commit = classify_commit
 
-local function format_value(field_type, value, frame_rate_provider)
+local function format_value(field_type, value, sequence_provider)
     if value == nil then return "" end
     if field_type == FT.TIMECODE then
-        local rate = frame_rate_provider()
-        assert(rate, "field_widget.format_value: TIMECODE requires a frame rate provider")
-        return frame_utils.format_timecode(value, rate)
+        local seq = sequence_provider()
+        assert(seq and seq.frame_rate,
+            "field_widget.format_value: TIMECODE requires a sequence_provider returning {frame_rate}")
+        return frame_utils.format_timecode(value, seq.frame_rate)
     end
     if type(value) == "boolean" then
         return value and "true" or "false"
@@ -184,7 +186,8 @@ end
 
 local function create_control(field_def)
     local ft = field_def.type
-    if ft == FT.STRING or ft == FT.INTEGER or ft == FT.DOUBLE or ft == FT.TIMECODE then
+    if ft == FT.STRING or ft == FT.INTEGER or ft == FT.DOUBLE
+        or ft == FT.TIMECODE then
         return create_line_edit_control(field_def.read_only), "line_edit"
     elseif ft == FT.TEXT_AREA then
         return create_text_area_control(field_def.read_only), "text_area"
@@ -230,7 +233,7 @@ function Entry:get_value()
         return qt_constants.PROPERTIES.GET_TEXT(self.widget)
     else
         local text = qt_constants.PROPERTIES.GET_TEXT(self.widget) or ""
-        local v, _ = parse_text(self.field_type, text, self._rate_provider)
+        local v, _ = parse_text(self.field_type, text, self._sequence_provider)
         return v
     end
 end
@@ -272,7 +275,7 @@ function Entry:_write_widget(value)
             qt_constants.PROPERTIES.SET_COMBOBOX_CURRENT_TEXT(self.widget, tostring(value))
         end
     else
-        qt_constants.PROPERTIES.SET_TEXT(self.widget, format_value(self.field_type, value, self._rate_provider))
+        qt_constants.PROPERTIES.SET_TEXT(self.widget, format_value(self.field_type, value, self._sequence_provider))
     end
 end
 
@@ -291,7 +294,7 @@ local function install_line_edit_handlers(entry, callbacks)
         if entry._programmatic then return end
         entry.dirty = true
         local text = qt_constants.PROPERTIES.GET_TEXT(entry.widget) or ""
-        local v, err = parse_text(entry.field_type, text, entry._rate_provider)
+        local v, err = parse_text(entry.field_type, text, entry._sequence_provider)
         if err then
             entry.pending_value = nil
             -- Surface the error even before commit so the UI banner can
@@ -318,7 +321,7 @@ local function install_line_edit_handlers(entry, callbacks)
         if entry._programmatic then return end
         if not entry.dirty then return end
         local text = qt_constants.PROPERTIES.GET_TEXT(entry.widget) or ""
-        local v, err = parse_text(entry.field_type, text, entry._rate_provider)
+        local v, err = parse_text(entry.field_type, text, entry._sequence_provider)
         local action = classify_commit(v, err)
         if action == "error" then
             -- Parse failure: keep the bad text visible with red border; do not
@@ -439,8 +442,8 @@ function M.create_field(parent_container, field_def, callbacks)
     assert(type(callbacks) == "table", "field_widget.create_field: callbacks required")
     assert(type(callbacks.on_commit) == "function",
         "field_widget.create_field: callbacks.on_commit required")
-    assert(type(callbacks.frame_rate) == "function",
-        "field_widget.create_field: callbacks.frame_rate required")
+    assert(type(callbacks.sequence) == "function",
+        "field_widget.create_field: callbacks.sequence required")
 
     -- Build row container: horizontal label + control.
     local row = qt_constants.WIDGET.CREATE()
@@ -485,7 +488,7 @@ function M.create_field(parent_container, field_def, callbacks)
         pending_value  = nil,
         _programmatic  = false,
         _last_model_value = nil,
-        _rate_provider = callbacks.frame_rate,
+        _sequence_provider = callbacks.sequence,
     }, Entry)
 
     -- Attach row to parent. Supports either a layout or a container with layout.

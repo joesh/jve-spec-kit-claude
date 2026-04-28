@@ -57,35 +57,36 @@ assert(loaded2.start_timecode_frame == one_hour_25fps,
 print("  ✓ 1-hour start timecode (90000 frames at 25fps) persists")
 
 -- =========================================================================
--- Test 3: format_timecode tc_start option (for future 0-based sequences)
+-- Test 3: format_timecode emits raw TC for absolute frames (no offset).
+-- Under V13 absolute-TC convention, the TC string IS the absolute frame
+-- at the sequence rate; start_timecode_frame is metadata, never math.
 -- =========================================================================
 local rate_25 = { fps_numerator = 25, fps_denominator = 1 }
 
--- Frame 0 with no offset → 00:00:00:00
 local tc_zero = frame_utils.format_timecode(0, rate_25)
 assert(tc_zero == "00:00:00:00",
-    "frame 0 no offset: expected 00:00:00:00, got " .. tc_zero)
+    "frame 0: expected 00:00:00:00, got " .. tc_zero)
 
--- Frame 0 with 1-hour offset → 01:00:00:00
-local tc_1hr = frame_utils.format_timecode(0, rate_25, { tc_start = one_hour_25fps })
+-- Absolute frame 90000 @ 25fps → 01:00:00:00
+local tc_1hr = frame_utils.format_timecode(one_hour_25fps, rate_25)
 assert(tc_1hr == "01:00:00:00",
-    "frame 0 + 1hr offset: expected 01:00:00:00, got " .. tc_1hr)
+    "frame 90000 (= 1hr @ 25fps): expected 01:00:00:00, got " .. tc_1hr)
 
--- Frame 250 (10 seconds) with 1-hour offset → 01:00:10:00
-local tc_10s = frame_utils.format_timecode(250, rate_25, { tc_start = one_hour_25fps })
+-- Absolute frame 90250 @ 25fps → 01:00:10:00
+local tc_10s = frame_utils.format_timecode(one_hour_25fps + 250, rate_25)
 assert(tc_10s == "01:00:10:00",
-    "frame 250 + 1hr offset: expected 01:00:10:00, got " .. tc_10s)
+    "frame 90250 (= 1hr + 10s): expected 01:00:10:00, got " .. tc_10s)
 
--- Frame 0 with 10-hour offset → 10:00:00:00
+-- Absolute frame 900000 @ 25fps → 10:00:00:00
 local ten_hours = 25 * 60 * 60 * 10
-local tc_10hr = frame_utils.format_timecode(0, rate_25, { tc_start = ten_hours })
+local tc_10hr = frame_utils.format_timecode(ten_hours, rate_25)
 assert(tc_10hr == "10:00:00:00",
-    "frame 0 + 10hr offset: expected 10:00:00:00, got " .. tc_10hr)
+    "frame 900000 (= 10hr): expected 10:00:00:00, got " .. tc_10hr)
 
-print("  ✓ format_timecode applies tc_start offset correctly")
+print("  ✓ format_timecode formats absolute frames raw")
 
 -- =========================================================================
--- Test 4: format_ruler_label respects tc_start offset
+-- Test 4: format_ruler_label is a thin wrapper — same rule, no offset.
 -- =========================================================================
 local timecode = require("core.timecode")
 
@@ -93,11 +94,11 @@ local ruler_0 = timecode.format_ruler_label(0, rate_25)
 assert(ruler_0 == "00:00:00:00",
     "ruler frame 0: expected 00:00:00:00, got " .. ruler_0)
 
-local ruler_1hr = timecode.format_ruler_label(0, rate_25, one_hour_25fps)
+local ruler_1hr = timecode.format_ruler_label(one_hour_25fps, rate_25)
 assert(ruler_1hr == "01:00:00:00",
-    "ruler frame 0 + 1hr: expected 01:00:00:00, got " .. ruler_1hr)
+    "ruler frame 90000: expected 01:00:00:00, got " .. ruler_1hr)
 
-print("  ✓ format_ruler_label applies tc_start offset")
+print("  ✓ format_ruler_label formats absolute frames raw")
 
 -- =========================================================================
 -- Test 5: start_timecode_frame validation (must be non-negative integer)

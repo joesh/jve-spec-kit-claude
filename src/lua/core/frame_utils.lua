@@ -89,29 +89,30 @@ function M.snap_delta_to_frame(delta, frame_rate)
     return M.snap_to_frame(delta, frame_rate)
 end
 
--- Format time as timecode string (HH:MM:SS:FF)
+-- Format an absolute frame as a timecode string (HH:MM:SS:FF) at the given
+-- frame rate. Per V13: clip placements, playhead, marks, and sequence
+-- start_timecode_frame all live in absolute timecode space, so this is the
+-- single canonical formatter — ruler labels, playhead counter, inspector
+-- fields all call it with the raw absolute frame. No sequence offset is
+-- applied here; an "offset" only exists in the user's mental model
+-- (sequence start TC = where on the timeline the content begins).
 function M.format_timecode(time_obj, frame_rate, opts)
     local rate = M.normalize_rate(frame_rate)
     local r = Rational.hydrate(time_obj, rate.fps_numerator, rate.fps_denominator)
-    
-    -- Get total frames
+
     local total_frames
     local sign = ""
-    
+
     local drop_frame = false
     local separator = ":"
-    local tc_start = 0
     if type(opts) == "table" then
         drop_frame = opts.drop_frame or false
         separator = opts.separator or separator
-        tc_start = opts.tc_start or 0
     end
 
     if r then
         local rescaled = r:rescale(rate.fps_numerator, rate.fps_denominator)
-        -- Apply tc_start offset BEFORE sign extraction so negative inputs
-        -- are relative to the timecode origin, not absolute zero.
-        total_frames = rescaled.frames + tc_start
+        total_frames = rescaled.frames
         if total_frames < 0 then
             sign = "-"
             total_frames = -total_frames

@@ -53,12 +53,12 @@ local function style_error_banner()
         C.FIELD_ERROR_BORDER, C.FIELD_ERROR_BORDER)
 end
 
-local function get_frame_rate()
+local function get_sequence()
     assert(timeline_state and timeline_state.get_sequence_frame_rate,
         "inspector.mount: timeline_state.get_sequence_frame_rate unavailable")
     local rate = timeline_state.get_sequence_frame_rate()
     assert(rate, "inspector.mount: no sequence frame rate available")
-    return rate
+    return { frame_rate = rate }
 end
 
 local function build_root_layout(container)
@@ -237,7 +237,7 @@ local function prebuild_schemas(ui_state, content_layout)
         end
     end
     local callbacks = {
-        frame_rate          = get_frame_rate,
+        sequence            = get_sequence,
         on_commit           = on_commit,
         on_error            = on_error,
         on_field_focused    = on_field_focused,

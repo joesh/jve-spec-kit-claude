@@ -16,6 +16,12 @@ metadata_schemas.FIELD_TYPES = {
     INTEGER   = "INTEGER",
     DOUBLE    = "DOUBLE",
     BOOLEAN   = "BOOLEAN",
+    -- TIMECODE: integer frame → HH:MM:SS:FF at the active sequence's
+    --   frame rate. The codebase stores all timeline positions (playhead,
+    --   marks, clip timeline_start, start_timecode_frame) in absolute
+    --   timecode space, so format/parse never adds or subtracts an offset.
+    --   Used for: every TC field — durations, sequence start, playhead,
+    --   marks, source-side positions.
     TIMECODE  = "TIMECODE",
 }
 
