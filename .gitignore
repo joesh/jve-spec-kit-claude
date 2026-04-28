@@ -101,6 +101,15 @@ tests/tests/
 # Local Claude Code settings
 .claude/settings.local.json
 
+# Claude Code worktree scratch (per-agent isolation; not source)
+.claude/worktrees/
+
+# Graphify cache + reports (regenerable from the project; not source)
+graphify-out/
+
+# Local JVE projects copied/dropped into the repo while debugging
+JVE/
+
 # Test output
 test-errors.txt
 
