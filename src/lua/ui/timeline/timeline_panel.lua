@@ -130,16 +130,31 @@ local function update_tab_scroll_arrows()
     qt_constants.DISPLAY.SET_VISIBLE(tab_bar_right_arrow, not all_fit and info.value < info.max)
 end
 
+-- The active sequence's frame rate, used by both format and parse paths
+-- in the playhead TC entry. Asserts loudly when fps metadata is missing
+-- (rule 1.14: required state, no silent default).
 local function get_sequence_frame_rate_for_timecode()
     local rate = state and state.get_sequence_frame_rate and state.get_sequence_frame_rate() or nil
-    assert(rate and rate.fps_numerator and rate.fps_denominator, "timeline_panel: missing sequence fps metadata")
+    assert(rate and rate.fps_numerator and rate.fps_denominator,
+        "timeline_panel: missing sequence fps metadata")
     return rate
 end
 
+-- Whether typed timecode input is relative ("+10", "-2s", "+1:00") rather
+-- than absolute. Relative input is a delta off the current playhead;
+-- absolute input lands directly in absolute-TC frame space.
+local function is_relative_timecode_input(text)
+    assert(type(text) == "string",
+        "timeline_panel.is_relative_timecode_input: text must be a string")
+    local trimmed = text:match("^%s*(.-)%s*$")
+    local first = trimmed:sub(1, 1)
+    return first == "+" or first == "-"
+end
+
 local function get_formatted_playhead_timecode()
-    local rate = get_sequence_frame_rate_for_timecode()
-    local playhead = state.get_playhead_position()
-    return timecode.to_string(playhead, rate)
+    local frame_utils = require("core.frame_utils")
+    return frame_utils.format_timecode(state.get_playhead_position(),
+        get_sequence_frame_rate_for_timecode())
 end
 
 local function set_timecode_text_if_changed(text)
@@ -212,22 +227,32 @@ local function focus_timeline_view()
     return false
 end
 
+-- Convert typed timecode text into the absolute sequence frame to store as
+-- playhead_position. Returns (frame, nil) on success, (nil, err) on parse
+-- failure. Absolute input ("01:02:03:04") parses straight to an absolute
+-- frame. Relative input ("+10" / "-2s") is a delta off the current position.
+local function parse_typed_timecode_to_raw_frame(text)
+    local rate = get_sequence_frame_rate_for_timecode()
+    local current = state.get_playhead_position()
+    local parsed, err = timecode_input.parse(text, rate, {base_time = current})
+    if not parsed then return nil, err end
+    local frame = parsed.frames
+    assert(type(frame) == "number" and frame == math.floor(frame),
+        "timeline_panel: timecode parse must yield integer frame, got " .. tostring(frame))
+    return frame, nil
+end
+
 local function apply_timecode_entry_text()
     if not timecode_entry.line_edit then
         return false
     end
-    local rate = get_sequence_frame_rate_for_timecode()
-    local current = state.get_playhead_position()
     local raw = qt_constants.PROPERTIES.GET_TEXT(timecode_entry.line_edit)
-    local parsed, err = timecode_input.parse(raw, rate, {base_time = current})
-    if not parsed then
+    local frame, err = parse_typed_timecode_to_raw_frame(raw)
+    if not frame then
         log.warn("Invalid timecode input: %s (%s)", tostring(raw), tostring(err))
         set_timecode_text_if_changed(get_formatted_playhead_timecode())
         return false
     end
-    local frame = parsed.frames
-    assert(type(frame) == "number" and frame == math.floor(frame),
-        "timeline_panel: timecode parse must yield integer frame, got " .. tostring(frame))
     command_manager.execute_interactive("SetPlayhead", {
         project_id = state.get_project_id(),
         sequence_id = state.get_sequence_id(),
@@ -481,9 +506,9 @@ function M.unload_sequence()
 end
 
 -- Assert that `first_clip` carries the metadata the new sequence needs.
--- The fps / width / height come from the first dropped clip (spec Q2). If
--- that clip has no usable metadata the caller must substitute project
--- defaults before calling handle_drop_on_blank_timeline.
+-- The fps / width / height / audio_sample_rate come from the first dropped
+-- clip (spec Q2). If that clip has no usable metadata the caller must
+-- substitute project defaults before calling handle_drop_on_blank_timeline.
 local function assert_clip_metadata_for_new_sequence(first_clip)
     assert(type(first_clip.name) == "string" and first_clip.name ~= "",
         "handle_drop_on_blank_timeline: first clip missing name")
@@ -493,6 +518,9 @@ local function assert_clip_metadata_for_new_sequence(first_clip)
         "handle_drop_on_blank_timeline: first clip must carry fps_numerator "
             .. "and fps_denominator (caller lifts project defaults if media "
             .. "metadata is unusable)")
+    assert(type(first_clip.audio_sample_rate) == "number" and first_clip.audio_sample_rate > 0,
+        "handle_drop_on_blank_timeline: first clip must carry audio_sample_rate "
+            .. "(caller lifts project defaults if media metadata is unusable)")
 end
 
 -- Create a new sequence for a drop batch and return its id + the id of its
@@ -503,13 +531,14 @@ local function create_drop_target_sequence(project_id, first_clip, clip_count)
     local name = drop_naming.build_drop_sequence_name(first_clip.name, clip_count - 1)
 
     local result = command_manager.execute_interactive("CreateSequence", {
-        project_id  = project_id,
-        sequence_id = new_seq_id,
-        name        = name,
-        frame_rate  = { fps_numerator = first_clip.fps_numerator,
-                        fps_denominator = first_clip.fps_denominator },
-        width       = first_clip.width,
-        height      = first_clip.height,
+        project_id        = project_id,
+        sequence_id       = new_seq_id,
+        name              = name,
+        frame_rate        = { fps_numerator = first_clip.fps_numerator,
+                              fps_denominator = first_clip.fps_denominator },
+        width             = first_clip.width,
+        height            = first_clip.height,
+        audio_sample_rate = first_clip.audio_sample_rate,
     })
     assert(result and result.success,
         "handle_drop_on_blank_timeline: CreateSequence failed: "

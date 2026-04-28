@@ -200,7 +200,9 @@ function M.create(widget, state_module)
             local snapped_frames = math.floor(frame_pos + 0.5)
             local x = to_pixel(snapped_frames)
             if x then
-                -- Timecode label with appropriate precision
+                -- snapped_frames is in absolute TC space (the ruler shares
+                -- the timeline's coordinate system with clip placements);
+                -- format directly, no offset applied.
                 local label = timecode.format_ruler_label(snapped_frames, frame_rate)
                 local label_width = estimate_label_width(label)
                 local label_start = x - (label_width / 2)
