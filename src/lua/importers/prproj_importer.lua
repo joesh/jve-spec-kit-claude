@@ -249,152 +249,205 @@ M._parse_media_element = parse_media_element  -- exported for tests
 -- ---------------------------------------------------------------------------
 
 --- Parse a single track's clips from a VideoClipTrack or AudioClipTrack element.
-local function parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, track_type)
+-- Walk the SubClip → Clip → Source → Media reference chain rooted at a
+-- ClipTrackItem and return the (in_point_ticks, out_point_ticks, media_uuid).
+-- Any missing link returns all-nil; the caller skips the clip when
+-- media_uuid is nil.
+local function resolve_clip_reference_chain(cti, by_id)
+    local subclip_ref = find_direct_child(cti, "SubClip")
+    if not subclip_ref then return nil, nil, nil, nil end
+    local subclip_id = subclip_ref.attrs and subclip_ref.attrs.ObjectRef
+    if not subclip_id then return nil, nil, nil, nil end
+    local subclip = by_id[tonumber(subclip_id)]
+    if not subclip then
+        log.warn("prproj: SubClip %s not found", tostring(subclip_id))
+        return nil, nil, nil, nil
+    end
+    local clip_name = get_child_text(subclip, "Name") or "Untitled"
+
+    local clip_ref = find_direct_child(subclip, "Clip")
+    if not (clip_ref and clip_ref.attrs and clip_ref.attrs.ObjectRef) then
+        return clip_name, nil, nil, nil
+    end
+    local clip_elem = by_id[tonumber(clip_ref.attrs.ObjectRef)]
+    if not clip_elem then return clip_name, nil, nil, nil end
+
+    local inner_clip = find_direct_child(clip_elem, "Clip")
+    if not inner_clip then return clip_name, nil, nil, nil end
+
+    local in_point_ticks  = get_child_number(inner_clip, "InPoint")
+    local out_point_ticks = get_child_number(inner_clip, "OutPoint")
+
+    local media_uuid
+    local source_ref = find_direct_child(inner_clip, "Source")
+    if source_ref and source_ref.attrs and source_ref.attrs.ObjectRef then
+        local source_elem = by_id[tonumber(source_ref.attrs.ObjectRef)]
+        if source_elem then
+            local media_source = find_direct_child(source_elem, "MediaSource")
+            if media_source then
+                local media_ref = find_direct_child(media_source, "Media")
+                if media_ref and media_ref.attrs then
+                    media_uuid = media_ref.attrs.ObjectURef
+                end
+            end
+        end
+    end
+    return clip_name, in_point_ticks, out_point_ticks, media_uuid
+end
+
+-- Parse a single ClipItems → TrackItem entry into a clip table, or nil
+-- when the entry is missing required state (skipped with a log line).
+local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
+    local ref_id = ti_ref.attrs and ti_ref.attrs.ObjectRef
+    if not ref_id then return nil end
+
+    local ti_elem = by_id[tonumber(ref_id)]
+    if not ti_elem then
+        log.warn("prproj: TrackItem ObjectRef %s not found", tostring(ref_id))
+        return nil
+    end
+    if ti_elem.tag:find("Transition") then return nil end
+
+    local cti = find_direct_child(ti_elem, "ClipTrackItem")
+    if not cti then return nil end
+
+    local inner_ti = find_direct_child(cti, "TrackItem")
+    local start_ticks = inner_ti and get_child_number(inner_ti, "Start") or 0
+    local end_ticks   = inner_ti and get_child_number(inner_ti, "End")
+    if not end_ticks then return nil end
+
+    local enabled = get_child_text(cti, "IsMuted") ~= "true"
+
+    local clip_name, in_point_ticks, out_point_ticks, media_uuid =
+        resolve_clip_reference_chain(cti, by_id)
+    if not media_uuid then
+        log.detail("Skipping clip '%s' — no media reference", tostring(clip_name))
+        return nil
+    end
+
+    local file_path
+    local media_elem = by_uuid[media_uuid]
+    if media_elem then
+        if is_synthetic_media(media_elem) then
+            log.detail("Skipping synthetic clip '%s'", clip_name)
+            return nil
+        end
+        file_path = clean_file_path(
+            get_child_text(media_elem, "FilePath")
+            or get_child_text(media_elem, "ActualMediaFilePath"))
+    end
+
+    local start_frame    = ticks_to_frames(start_ticks, ticks_per_frame)
+    local end_frame      = ticks_to_frames(end_ticks,   ticks_per_frame)
+    local duration_frames = end_frame - start_frame
+    if duration_frames <= 0 then
+        log.warn("Skipping zero-duration clip '%s' (start=%d end=%d)",
+            clip_name, start_frame, end_frame)
+        return nil
+    end
+
+    -- InPoint/OutPoint are authoritative source coords in Premiere's
+    -- model. A TrackItem missing either is malformed .prproj (third-
+    -- party PRPROJ-READER defaults to 0, but Adobe's own scripting docs
+    -- describe these as concrete Time values with no documented default
+    -- — Premiere itself always writes them).
+    assert(in_point_ticks, string.format(
+        "prproj: clip '%s' missing InPoint (malformed TrackItem)", clip_name))
+    assert(out_point_ticks, string.format(
+        "prproj: clip '%s' missing OutPoint (malformed TrackItem)", clip_name))
+
+    return {
+        name        = clip_name,
+        start_value = start_frame,
+        duration    = duration_frames,
+        source_in   = ticks_to_frames(in_point_ticks,  ticks_per_frame),
+        source_out  = ticks_to_frames(out_point_ticks, ticks_per_frame),
+        file_uuid   = media_uuid,
+        file_path   = file_path,
+        clip_speed  = 1.0,
+        enabled     = enabled,
+    }
+end
+
+local function parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, _track_type)
     local clips = {}
 
-    -- Find ClipItems → TrackItems
+    -- ClipTrack → ClipItems → TrackItems is the standard nesting; any
+    -- missing rung means this track has no clips to import.
     local clip_track = find_direct_child(track_elem, "ClipTrack")
     if not clip_track then return clips end
-
     local clip_items = find_direct_child(clip_track, "ClipItems")
     if not clip_items then return clips end
-
     local track_items_elem = find_direct_child(clip_items, "TrackItems")
     if not track_items_elem then return clips end
 
     for _, ti_ref in ipairs(find_all_direct_children(track_items_elem, "TrackItem")) do
-        local ref_id = ti_ref.attrs and ti_ref.attrs.ObjectRef
-        if not ref_id then goto next_track_item end
-
-        local ti_elem = by_id[tonumber(ref_id)]
-        if not ti_elem then
-            log.warn("prproj: TrackItem ObjectRef %s not found", tostring(ref_id))
-            goto next_track_item
-        end
-
-        -- Skip transition items
-        if ti_elem.tag:find("Transition") then goto next_track_item end
-
-        -- Get timeline position
-        local cti = find_direct_child(ti_elem, "ClipTrackItem")
-        if not cti then goto next_track_item end
-
-        local inner_ti = find_direct_child(cti, "TrackItem")
-        local start_ticks = inner_ti and get_child_number(inner_ti, "Start") or 0
-        local end_ticks = inner_ti and get_child_number(inner_ti, "End")
-        if not end_ticks then goto next_track_item end
-
-        -- Enabled state
-        local is_muted = get_child_text(cti, "IsMuted")
-        local enabled = is_muted ~= "true"
-
-        -- Follow reference chain: SubClip → Clip → Source → Media
-        local subclip_ref = find_direct_child(cti, "SubClip")
-        if not subclip_ref then goto next_track_item end
-        local subclip_id = subclip_ref.attrs and subclip_ref.attrs.ObjectRef
-        if not subclip_id then goto next_track_item end
-
-        local subclip = by_id[tonumber(subclip_id)]
-        if not subclip then
-            log.warn("prproj: SubClip %s not found", tostring(subclip_id))
-            goto next_track_item
-        end
-
-        local clip_name = get_child_text(subclip, "Name") or "Untitled"
-
-        -- Resolve Clip → InPoint/OutPoint
-        local clip_ref = find_direct_child(subclip, "Clip")
-        local in_point_ticks, out_point_ticks
-        local media_uuid
-
-        if clip_ref and clip_ref.attrs and clip_ref.attrs.ObjectRef then
-            local clip_elem = by_id[tonumber(clip_ref.attrs.ObjectRef)]
-            if clip_elem then
-                -- InPoint/OutPoint are inside the nested <Clip> element
-                local inner_clip = find_direct_child(clip_elem, "Clip")
-                if inner_clip then
-                    in_point_ticks = get_child_number(inner_clip, "InPoint")
-                    out_point_ticks = get_child_number(inner_clip, "OutPoint")
-
-                    -- Source → Media
-                    local source_ref = find_direct_child(inner_clip, "Source")
-                    if source_ref and source_ref.attrs and source_ref.attrs.ObjectRef then
-                        local source_elem = by_id[tonumber(source_ref.attrs.ObjectRef)]
-                        if source_elem then
-                            local media_source = find_direct_child(source_elem, "MediaSource")
-                            if media_source then
-                                local media_ref = find_direct_child(media_source, "Media")
-                                if media_ref and media_ref.attrs then
-                                    media_uuid = media_ref.attrs.ObjectURef
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-
-        if not media_uuid then
-            log.detail("Skipping clip '%s' — no media reference", clip_name)
-            goto next_track_item
-        end
-
-        -- Look up media for file_path
-        local media_elem = by_uuid[media_uuid]
-        local file_path = nil
-        if media_elem then
-            local raw = get_child_text(media_elem, "FilePath")
-                or get_child_text(media_elem, "ActualMediaFilePath")
-            file_path = clean_file_path(raw)
-            -- Skip synthetic media clips
-            if is_synthetic_media(media_elem) then
-                log.detail("Skipping synthetic clip '%s'", clip_name)
-                goto next_track_item
-            end
-        end
-
-        -- Convert ticks to frames
-        local start_frame = ticks_to_frames(start_ticks, ticks_per_frame)
-        local end_frame = ticks_to_frames(end_ticks, ticks_per_frame)
-        local duration_frames = end_frame - start_frame
-
-        -- InPoint/OutPoint are authoritative source coords in Premiere's
-        -- model. A TrackItem missing either is malformed .prproj (third-
-        -- party PRPROJ-READER defaults to 0, but Adobe's own scripting
-        -- docs describe these as concrete Time values with no documented
-        -- default — Premiere itself always writes them).
-        assert(in_point_ticks, string.format(
-            "prproj: clip '%s' missing InPoint (malformed TrackItem)", clip_name))
-        assert(out_point_ticks, string.format(
-            "prproj: clip '%s' missing OutPoint (malformed TrackItem)", clip_name))
-        local source_in = ticks_to_frames(in_point_ticks, ticks_per_frame)
-        local source_out = ticks_to_frames(out_point_ticks, ticks_per_frame)
-
-        if duration_frames <= 0 then
-            log.warn("Skipping zero-duration clip '%s' (start=%d end=%d)",
-                clip_name, start_frame, end_frame)
-            goto next_track_item
-        end
-
-        clips[#clips + 1] = {
-            name = clip_name,
-            start_value = start_frame,
-            duration = duration_frames,
-            source_in = source_in,
-            source_out = source_out,
-            file_uuid = media_uuid,
-            file_path = file_path,
-            clip_speed = 1.0,
-            enabled = enabled,
-        }
-
-        ::next_track_item::
+        local clip = parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
+        if clip then clips[#clips + 1] = clip end
     end
-
     return clips
 end
 
 --- Parse a Sequence element into the intermediate representation.
+-- Find the VideoTrackGroup and AudioTrackGroup behind a sequence's
+-- TrackGroups list. Each entry's <Second> ObjectRef points at one of the
+-- two group types — we deduce which by tag.
+local function find_video_audio_track_groups(track_groups_elem, by_id)
+    local video_group, audio_group
+    for _, tg in ipairs(find_all_direct_children(track_groups_elem, "TrackGroup")) do
+        local second = find_direct_child(tg, "Second")
+        if second and second.attrs and second.attrs.ObjectRef then
+            local group_elem = by_id[tonumber(second.attrs.ObjectRef)]
+            if group_elem then
+                if     group_elem.tag == "VideoTrackGroup" then video_group = group_elem
+                elseif group_elem.tag == "AudioTrackGroup" then audio_group = group_elem
+                end
+            end
+        end
+    end
+    return video_group, audio_group
+end
+
+-- Parse a <FrameRect>x1,y1,x2,y2</FrameRect> into (width, height). PRPROJ
+-- reliably emits this on video track groups; missing or malformed values
+-- are malformed input and we fail loud (rule 2.13: no fabricated dims).
+local function parse_video_frame_rect(video_group, name)
+    local frame_rect_str = get_child_text(video_group, "FrameRect")
+    assert(frame_rect_str, string.format(
+        "prproj: sequence '%s' missing FrameRect on VideoTrackGroup", name))
+    local x1, y1, x2, y2 = frame_rect_str:match("(%d+),(%d+),(%d+),(%d+)")
+    assert(x2 and y2, string.format(
+        "prproj: sequence '%s' has malformed FrameRect '%s'",
+        name, frame_rect_str))
+    local width, height = tonumber(x2) - tonumber(x1), tonumber(y2) - tonumber(y1)
+    assert(width > 0 and height > 0, string.format(
+        "prproj: sequence '%s' has non-positive dimensions %dx%d (FrameRect '%s')",
+        name, width, height, frame_rect_str))
+    return width, height
+end
+
+-- Walk a TrackGroup's <Tracks> list and parse each track. Indexes in
+-- PRPROJ are 0-based; we present them as 1-based to the rest of the
+-- importer pipeline.
+local function parse_track_group_tracks(inner_tg, kind, by_id, by_uuid, ticks_per_frame, tracks)
+    if not inner_tg then return end
+    local tg_tracks = find_direct_child(inner_tg, "Tracks")
+    if not tg_tracks then return end
+    for _, track_ref in ipairs(find_all_direct_children(tg_tracks, "Track")) do
+        local track_uuid = track_ref.attrs and track_ref.attrs.ObjectURef
+        if track_uuid then
+            local track_elem = by_uuid[track_uuid]
+            if track_elem then
+                tracks[#tracks + 1] = {
+                    type  = kind,
+                    index = (tonumber(track_ref.attrs.Index) or 0) + 1,
+                    clips = parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, kind),
+                }
+            end
+        end
+    end
+end
+
 local function parse_sequence(seq_elem, by_id, by_uuid, media_items)
     local name = get_child_text(seq_elem, "Name")
     assert(name, "prproj: Sequence missing Name")
@@ -407,113 +460,32 @@ local function parse_sequence(seq_elem, by_id, by_uuid, media_items)
     local track_groups_elem = find_direct_child(seq_elem, "TrackGroups")
     assert(track_groups_elem, "prproj: Sequence '" .. name .. "' missing TrackGroups")
 
-    local video_group, audio_group
-    for _, tg in ipairs(find_all_direct_children(track_groups_elem, "TrackGroup")) do
-        local second = find_direct_child(tg, "Second")
-        if second and second.attrs and second.attrs.ObjectRef then
-            local group_elem = by_id[tonumber(second.attrs.ObjectRef)]
-            if group_elem then
-                if group_elem.tag == "VideoTrackGroup" then
-                    video_group = group_elem
-                elseif group_elem.tag == "AudioTrackGroup" then
-                    audio_group = group_elem
-                end
-            end
-        end
-    end
-
+    local video_group, audio_group = find_video_audio_track_groups(track_groups_elem, by_id)
     assert(video_group, "prproj: Sequence '" .. name .. "' missing VideoTrackGroup")
 
-    -- Frame rate from VideoTrackGroup
     local inner_vtg = find_direct_child(video_group, "TrackGroup")
     local video_ticks_per_frame = get_child_number(inner_vtg, "FrameRate")
     assert(video_ticks_per_frame and video_ticks_per_frame > 0,
         "prproj: Sequence '" .. name .. "' missing video FrameRate")
 
     local fps = ticks_per_frame_to_fps(video_ticks_per_frame)
+    local width, height = parse_video_frame_rect(video_group, name)
 
-    -- Resolution from VideoTrackGroup. .prproj reliably emits FrameRect on
-    -- video track groups; a missing one indicates malformed input — fail
-    -- loud rather than fabricate dimensions.
-    local frame_rect_str = get_child_text(video_group, "FrameRect")
-    assert(frame_rect_str, string.format(
-        "prproj: sequence '%s' missing FrameRect on VideoTrackGroup", name))
-    local x1, y1, x2, y2 = frame_rect_str:match("(%d+),(%d+),(%d+),(%d+)")
-    assert(x2 and y2, string.format(
-        "prproj: sequence '%s' has malformed FrameRect '%s'",
-        name, frame_rect_str))
-    local width  = tonumber(x2) - tonumber(x1)
-    local height = tonumber(y2) - tonumber(y1)
-    assert(width > 0 and height > 0, string.format(
-        "prproj: sequence '%s' has non-positive dimensions %dx%d (FrameRect '%s')",
-        name, width, height, frame_rect_str))
-
-    -- Audio ticks per sample
     local audio_ticks_per_sample
+    local inner_atg
     if audio_group then
-        local inner_atg = find_direct_child(audio_group, "TrackGroup")
+        inner_atg = find_direct_child(audio_group, "TrackGroup")
         audio_ticks_per_sample = get_child_number(inner_atg, "FrameRate")
     end
 
-    -- Convert ZeroPoint and EditLine to frames
     local start_tc_seconds = zero_point_ticks / TICKS_PER_SECOND
+    local cur_playhead_relative = ticks_to_frames(edit_line_ticks, video_ticks_per_frame)
 
-    -- Playhead relative to start TC
-    local playhead_ticks_from_start = edit_line_ticks
-    local cur_playhead_relative = ticks_to_frames(playhead_ticks_from_start, video_ticks_per_frame)
-
-    -- Parse video tracks
     local tracks = {}
-    if inner_vtg then
-        local vtg_tracks = find_direct_child(inner_vtg, "Tracks")
-        if vtg_tracks then
-            for _, track_ref in ipairs(find_all_direct_children(vtg_tracks, "Track")) do
-                local track_uuid = track_ref.attrs and track_ref.attrs.ObjectURef
-                if track_uuid then
-                    local track_elem = by_uuid[track_uuid]
-                    if track_elem then
-                        local track_index = track_ref.attrs.Index
-                        local clips = parse_track_clips(
-                            track_elem, by_id, by_uuid, video_ticks_per_frame, "VIDEO")
-
-                        tracks[#tracks + 1] = {
-                            type = "VIDEO",
-                            index = (tonumber(track_index) or 0) + 1,  -- 0-indexed → 1-indexed
-                            clips = clips,
-                        }
-                    end
-                end
-            end
-        end
+    parse_track_group_tracks(inner_vtg, "VIDEO", by_id, by_uuid, video_ticks_per_frame, tracks)
+    if audio_ticks_per_sample then
+        parse_track_group_tracks(inner_atg, "AUDIO", by_id, by_uuid, audio_ticks_per_sample, tracks)
     end
-
-    -- Parse audio tracks
-    if audio_group and audio_ticks_per_sample then
-        local inner_atg = find_direct_child(audio_group, "TrackGroup")
-        local atg_tracks = inner_atg and find_direct_child(inner_atg, "Tracks")
-        if atg_tracks then
-            for _, track_ref in ipairs(find_all_direct_children(atg_tracks, "Track")) do
-                local track_uuid = track_ref.attrs and track_ref.attrs.ObjectURef
-                if track_uuid then
-                    local track_elem = by_uuid[track_uuid]
-                    if track_elem then
-                        local track_index = track_ref.attrs.Index
-                        local clips = parse_track_clips(
-                            track_elem, by_id, by_uuid, audio_ticks_per_sample, "AUDIO")
-
-                        tracks[#tracks + 1] = {
-                            type = "AUDIO",
-                            index = (tonumber(track_index) or 0) + 1,
-                            clips = clips,
-                        }
-                    end
-                end
-            end
-        end
-    end
-
-    -- Update media_items with duration from Sources encountered during clip parsing
-    -- (Media elements don't always have duration directly)
 
     return {
         name = name,

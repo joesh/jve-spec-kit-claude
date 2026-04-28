@@ -1702,6 +1702,79 @@ end
 M._apply_pmc_metadata = apply_pmc_metadata  -- exported for tests
 M._parse_master_clip_element = parse_master_clip_element
 
+-- Build the MediaRef→{path, name, audio sample rate} maps from the
+-- decoded media pool hierarchy. Timeline clips reference pool master
+-- clips via <MediaRef>. The pool master clip's binary blob encodes the
+-- original source path; the timeline clip's <MediaFilePath> may be
+-- stale (proxy path or old volume name from a prior relink), so we
+-- prefer the path/name pulled from the blob.
+--
+-- Video-only media (no audio blob) is intentionally NOT in the sample
+-- rate map. Audio clips that link to such media are skipped in
+-- parse_resolve_tracks (silent companion clips).
+local function build_media_ref_maps(media_pool_hierarchy)
+    local path_map, name_map, sample_rate_map = {}, {}, {}
+    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
+        if pmc.id then
+            if pmc.file_path then path_map[pmc.id] = pmc.file_path end
+            if pmc.name      then name_map[pmc.id] = pmc.name end
+            if pmc.audio_duration and pmc.audio_duration.sample_rate then
+                sample_rate_map[pmc.id] = pmc.audio_duration.sample_rate
+            end
+        end
+    end
+    return path_map, name_map, sample_rate_map
+end
+
+-- Locate the root <Project>/<SM_Project> element in a parsed project.xml.
+-- Returns nil + err string when no recognized container is present.
+local function locate_project_element(project_root)
+    local project_elem = find_element(project_root, "Project")
+    if project_elem then return project_elem end
+    if project_root.tag == "SM_Project" or project_root.tag == "Project" then
+        return project_root
+    end
+    return find_element(project_root, "SM_Project")
+end
+
+-- Some sequence XMLs wrap the timeline tracks in <Sequence>; others land
+-- them in <Sm2SequenceContainer>. Pick whichever element actually carries
+-- the track elements.
+local function resolve_sequence_root_element(seq_root)
+    local seq_elem = find_element(seq_root, "Sequence")
+    if seq_elem then
+        local has_classic_tracks = find_element(seq_elem, "VideoTrack")
+            or find_element(seq_elem, "AudioTrack")
+        local has_resolve_tracks = find_element(seq_elem, "Sm2TiTrack")
+        if has_classic_tracks or has_resolve_tracks then
+            return seq_elem
+        end
+    end
+    return find_element(seq_root, "Sm2SequenceContainer") or seq_root
+end
+
+-- Decorate a freshly-parsed timeline with the metadata pulled from the
+-- MediaPool sidecar (name, fps, resolution, start TC, viewport).
+-- project.settings.{width,height} fill in resolution for legacy DRPs that
+-- don't carry per-sequence FrameRect.
+local function apply_timeline_metadata(timeline, metadata, fps_for_parsing,
+                                       project_settings, seq_ref_id)
+    timeline.tab_uuid = seq_ref_id
+    if metadata and metadata.name then
+        timeline.name = metadata.name
+    end
+    timeline.fps = fps_for_parsing
+    -- Lua truthy-zero — `0 or fallback` == 0, so check > 0 explicitly.
+    local meta_w = metadata and metadata.width
+    local meta_h = metadata and metadata.height
+    timeline.width  = (meta_w and meta_w > 0) and meta_w or project_settings.width
+    timeline.height = (meta_h and meta_h > 0) and meta_h or project_settings.height
+    timeline.folder_id = metadata and metadata.folder_id or nil
+    timeline.start_tc_seconds = metadata and metadata.start_tc_seconds or nil
+    timeline.ui_scale = metadata and metadata.ui_scale or nil
+    timeline.cur_playhead_relative = metadata and metadata.cur_playhead_relative or nil
+end
+
 function M.parse_drp_file(drp_path, progress_cb)
     local pump = progress_cb or function() end
 
@@ -1719,15 +1792,7 @@ function M.parse_drp_file(drp_path, progress_cb)
         return {success = false, error = "Failed to parse project.xml: " .. tostring(parse_err)}
     end
 
-    local project_elem = find_element(project_root, "Project")
-    if not project_elem then
-        if project_root.tag == "SM_Project" or project_root.tag == "Project" then
-            project_elem = project_root
-        else
-            project_elem = find_element(project_root, "SM_Project")
-        end
-    end
-
+    local project_elem = locate_project_element(project_root)
     if not project_elem then
         os.execute("rm -rf " .. tmp_dir)
         return {success = false, error = "No <Project> element found in project.xml"}
@@ -1765,27 +1830,8 @@ function M.parse_drp_file(drp_path, progress_cb)
         pump(25 + math.floor(sub_pct * 0.45), "Decoding media pool clips…")
     end)
 
-    -- Build MediaRef DbId → original file path map.
-    -- Timeline clips reference pool master clips via <MediaRef>. The pool master clip's
-    -- binary blob encodes the original source path, while the timeline clip's <MediaFilePath>
-    -- may be stale (e.g., proxy path or old volume name from a prior relink).
-    local media_ref_path_map = {}
-    local media_ref_name_map = {}
-    local media_ref_sample_rate_map = {}  -- MediaRef → audio sample rate
-    for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
-        if pmc.id and pmc.file_path then
-            media_ref_path_map[pmc.id] = pmc.file_path
-        end
-        if pmc.id and pmc.name then
-            media_ref_name_map[pmc.id] = pmc.name
-        end
-        if pmc.id and pmc.audio_duration and pmc.audio_duration.sample_rate then
-            media_ref_sample_rate_map[pmc.id] = pmc.audio_duration.sample_rate
-        end
-        -- Video-only media (no audio blob) is intentionally NOT in the
-        -- sample rate map. Audio clips linking to such media are skipped
-        -- in parse_resolve_tracks (silent companion clips).
-    end
+    local media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map =
+        build_media_ref_maps(media_pool_hierarchy)
 
     pump(70, "Parsing sequences…")
 
@@ -1809,63 +1855,24 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
         local seq_root = parse_xml_file(seq_file)
         if seq_root then
-            local seq_elem = find_element(seq_root, "Sequence")
+            local seq_elem = resolve_sequence_root_element(seq_root)
             if seq_elem then
-                local has_classic_tracks = find_element(seq_elem, "VideoTrack") or find_element(seq_elem, "AudioTrack")
-                local has_resolve_tracks = find_element(seq_elem, "Sm2TiTrack")
-                if not has_classic_tracks and not has_resolve_tracks then
-                    seq_elem = find_element(seq_root, "Sm2SequenceContainer") or seq_root
-                end
-            else
-                seq_elem = find_element(seq_root, "Sm2SequenceContainer") or seq_root
-            end
-            if seq_elem then
-                -- Look up the timeline's metadata (name + fps) using the sequence reference
                 local seq_ref_id = extract_sequence_ref_id(seq_elem)
                 local metadata = seq_ref_id and timeline_metadata_map[seq_ref_id]
-
-                -- Skip orphan sequences with no MediaPool metadata (compound clips, deleted timelines)
+                -- Skip orphan sequences with no MediaPool metadata
+                -- (compound clips, deleted timelines).
                 local fps_for_parsing = metadata and metadata.fps
-                if not fps_for_parsing or fps_for_parsing <= 0 then
+                if fps_for_parsing and fps_for_parsing > 0 then
+                    local timeline = parse_sequence(seq_elem, fps_for_parsing,
+                        media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+                    apply_timeline_metadata(timeline, metadata, fps_for_parsing,
+                        project.settings, seq_ref_id)
+                    table.insert(timelines, timeline)
+                else
                     log.warn("Skipping sequence '%s' (seq_ref_id=%s) - no fps in MediaPool metadata",
                         seq_file:match("([^/]+)%.xml$") or seq_file,
                         tostring(seq_ref_id))
-                    goto continue_seq
                 end
-                local timeline = parse_sequence(seq_elem, fps_for_parsing, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
-
-                -- Carry the Sm2Sequence.DbId through so the importer can emit
-                -- a tab-uuid → sequence-id map for post-import tab restoration
-                -- without falling back to fragile name matching.
-                timeline.tab_uuid = seq_ref_id
-
-                -- Apply timeline name from metadata
-                if metadata and metadata.name then
-                    timeline.name = metadata.name
-                end
-
-                -- Store the fps for downstream use
-                timeline.fps = fps_for_parsing
-
-                -- Store resolution from metadata (or use project defaults)
-                -- NOTE: Lua truthy-zero — `0 or fallback` == 0, so check > 0 explicitly
-                local meta_w = metadata and metadata.width
-                local meta_h = metadata and metadata.height
-                timeline.width = (meta_w and meta_w > 0) and meta_w or project.settings.width
-                timeline.height = (meta_h and meta_h > 0) and meta_h or project.settings.height
-
-                -- Store folder_id for bin hierarchy import
-                timeline.folder_id = metadata and metadata.folder_id or nil
-
-                -- Store start timecode from MediaExtents (seconds → frames)
-                timeline.start_tc_seconds = metadata and metadata.start_tc_seconds or nil
-
-                -- Viewport data from Resolve's UI state (pixels-per-frame scale + playhead)
-                timeline.ui_scale = metadata and metadata.ui_scale or nil
-                timeline.cur_playhead_relative = metadata and metadata.cur_playhead_relative or nil
-
-                table.insert(timelines, timeline)
-                ::continue_seq::
             end
         end
     end
@@ -2337,6 +2344,115 @@ end
 -- @param progress_cb function|nil: optional progress(pct, text [, log_line])
 -- @return boolean: success
 -- @return string|nil: error message if failed
+-- Pick the project audio sample rate by majority vote across the imported
+-- timelines' media files. DRP doesn't store project-level mix bus rate,
+-- so we infer it. Fall back to 48000 (industry-standard mix bus rate for
+-- FCP/Premiere/Resolve) when no media has audio — user-modifiable
+-- post-import.
+local function pick_majority_audio_sample_rate(parse_result)
+    local votes = {}
+    for _, timeline in ipairs(parse_result.timelines or {}) do
+        for _, info in pairs(timeline.media_files or {}) do
+            local r = info.audio_sample_rate
+            if r and r > 0 then votes[r] = (votes[r] or 0) + 1 end
+        end
+    end
+    local picked, best_count = 48000, 0
+    for r, c in pairs(votes) do
+        if c > best_count then picked, best_count = r, c end
+    end
+    return picked
+end
+
+-- Create the project DB at jvp_path, build the Project row, and return
+-- the saved project (asserts on save failure). Removes any existing
+-- jvp/-shm/-wal at the target path first (caller already confirmed
+-- overwrite in the save dialog).
+local function init_project_database(jvp_path, parse_result, picked_audio_rate)
+    os.remove(jvp_path)
+    os.remove(jvp_path .. "-shm")
+    os.remove(jvp_path .. "-wal")
+    local database = require("core.database")
+    local ok, err = pcall(function() database.init(jvp_path) end)
+    if not ok then
+        error("Failed to create database: " .. tostring(err), 0)
+    end
+
+    local json = require("dkjson")
+    local settings = {
+        frame_rate        = parse_result.project.settings.frame_rate,
+        width             = parse_result.project.settings.width,
+        height            = parse_result.project.settings.height,
+        audio_sample_rate = picked_audio_rate,
+    }
+    local project = Project.create(parse_result.project.name, {
+        settings            = json.encode(settings),
+        fps_mismatch_policy = "resample",
+    })
+    if not project:save() then
+        error("Failed to save project record", 0)
+    end
+    log.event("Created project: %s (%dx%d @ %sfps)",
+        project.name, settings.width, settings.height, tostring(settings.frame_rate))
+    return project, settings
+end
+
+-- Translate parsed-result tab UUIDs to JVE Sequence.ids and persist the
+-- open / last-open project settings. Asserts on any unresolved UUID —
+-- a missing mapping means a timeline the DRP marked open was silently
+-- dropped during import, which is a real bug to fix (not hide).
+local function persist_open_tabs(parse_result, import_result, project_id)
+    local open_tab_uuids = parse_result.project.open_timeline_ids or {}
+    if #open_tab_uuids == 0 then return end
+    local active_tab_uuid = parse_result.project.active_timeline_id
+    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
+
+    local open_sequence_ids, active_sequence_id = {}, nil
+    for _, tab_uuid in ipairs(open_tab_uuids) do
+        local seq_id = tab_uuid_to_sequence_id[tab_uuid]
+        assert(seq_id, string.format(
+            "drp_importer: open timeline tab UUID %s has no corresponding "
+            .. "sequence. Timeline was present in project.xml open-tab list "
+            .. "but never created during import (check for parse_drp_file "
+            .. "skips or a mismatch between Sm2Sequence.DbId and the id "
+            .. "used in SequenceTabsData / TimelineHandleVec).",
+            tostring(tab_uuid)))
+        open_sequence_ids[#open_sequence_ids + 1] = seq_id
+        if tab_uuid == active_tab_uuid then
+            active_sequence_id = seq_id
+        end
+    end
+
+    -- Open tabs known ⇒ active tab must also be known. Both Phase A
+    -- priorities (SequenceTabsData, TimelineHandleVec+Index) emit
+    -- active_tab_uuid whenever they emit open_tab_uuids. Any violation
+    -- here means the parser returned inconsistent state — fail loud.
+    assert(active_tab_uuid, string.format(
+        "drp_importer: %d open tab UUIDs but active_tab_uuid is nil — "
+        .. "parser returned inconsistent tab state", #open_tab_uuids))
+    assert(active_sequence_id, string.format(
+        "drp_importer: active timeline UUID %s was not in the open-tab "
+        .. "list %s — project.xml inconsistency",
+        tostring(active_tab_uuid), table.concat(open_tab_uuids, ",")))
+
+    local database = require("core.database")
+    database.set_project_setting(project_id, "open_sequence_ids", open_sequence_ids)
+    database.set_project_setting(project_id, "last_open_sequence_id", active_sequence_id)
+end
+
+-- Record provenance: insert a synthetic command so the history shows
+-- where this project came from (chain of custody). sequence_number=0,
+-- parent=-1: visible in history, invisible to undo/redo.
+local function record_drp_provenance(project_id, drp_path, source_name)
+    local Command = require("command")
+    Command.insert_provenance("ImportResolveProject", project_id, {
+        drp_path    = drp_path,
+        source_name = source_name,
+    })
+    -- Undo cursor at 0 — provenance is history, not undoable.
+    Sequence.set_undo_cursor_for_project(project_id, 0)
+end
+
 function M.convert(drp_path, jvp_path, progress_cb)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
@@ -2364,127 +2480,25 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     report(30, "Creating project database…")
-
-    -- Remove existing file if present (user confirmed overwrite in save dialog)
-    os.remove(jvp_path)
-    os.remove(jvp_path .. "-shm")
-    os.remove(jvp_path .. "-wal")
-
-    local database = require("core.database")
-    local ok, err = pcall(function()
-        database.init(jvp_path)
-    end)
-
-    if not ok then
-        return false, "Failed to create database: " .. tostring(err)
-    end
-
-    local json = require("dkjson")
-    -- 013: every sequence carries audio_sample_rate (mix bus rate). DRP doesn't store
-    -- it at the project level; pick the most common audio_sample_rate among
-    -- imported media, or fall back to 48000 (industry-standard mix bus rate
-    -- for FCP/Premiere/Resolve project defaults — user-modifiable post-import).
-    local audio_rate_votes = {}
-    for _, timeline in ipairs(parse_result.timelines or {}) do
-        for _, info in pairs(timeline.media_files or {}) do
-            local r = info.audio_sample_rate
-            if r and r > 0 then
-                audio_rate_votes[r] = (audio_rate_votes[r] or 0) + 1
-            end
-        end
-    end
-    local picked_audio_rate, best_count = 48000, 0
-    for r, c in pairs(audio_rate_votes) do
-        if c > best_count then picked_audio_rate, best_count = r, c end
-    end
-    local settings = {
-        frame_rate = parse_result.project.settings.frame_rate,
-        width = parse_result.project.settings.width,
-        height = parse_result.project.settings.height,
-        audio_sample_rate = picked_audio_rate,
-    }
-
-    local project = Project.create(parse_result.project.name, {
-        settings = json.encode(settings),
-        fps_mismatch_policy = "resample",
-    })
-
-    if not project:save() then
-        return false, "Failed to save project record"
-    end
-
-    log.event("Created project: %s (%dx%d @ %sfps)",
-        project.name, settings.width, settings.height, tostring(settings.frame_rate))
+    local picked_audio_rate = pick_majority_audio_sample_rate(parse_result)
+    local project, settings = init_project_database(jvp_path, parse_result, picked_audio_rate)
 
     report(40, "Importing media…")
     local import_result = M.import_into_project(project.id, parse_result, {
         project_settings = settings,
         progress_cb = progress_cb and function(sub_pct, text)
-            -- Map sub_pct 0-100 → overall range 40-90
+            -- Map sub_pct 0-100 → overall range 40-90.
             report(40 + math.floor(sub_pct * 0.5), text)
         end or nil,
     })
 
-    -- Store open timeline state as project settings for layout.lua.
-    --
-    -- UUID-keyed join: parse_result.project.open_timeline_ids are DRP
-    -- Sm2Sequence.DbIds; import_result.tab_uuid_to_sequence_id maps each to
-    -- the newly-created Sequence.id. We fail loudly on any unresolved UUID —
-    -- a missing mapping means a timeline the DRP marked open was silently
-    -- dropped during import, which is a real bug to fix (not hide).
     report(95, "Setting active timeline…")
-    local pid = database.get_current_project_id()
-    local open_tab_uuids = parse_result.project.open_timeline_ids or {}
-    local active_tab_uuid = parse_result.project.active_timeline_id
-    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
+    local database = require("core.database")
+    persist_open_tabs(parse_result, import_result, database.get_current_project_id())
 
-    if #open_tab_uuids > 0 then
-        local open_sequence_ids = {}
-        local active_sequence_id = nil
-        for _, tab_uuid in ipairs(open_tab_uuids) do
-            local seq_id = tab_uuid_to_sequence_id[tab_uuid]
-            assert(seq_id, string.format(
-                "drp_importer: open timeline tab UUID %s has no corresponding "
-                .. "sequence. Timeline was present in project.xml open-tab list "
-                .. "but never created during import (check for parse_drp_file "
-                .. "skips or a mismatch between Sm2Sequence.DbId and the id "
-                .. "used in SequenceTabsData / TimelineHandleVec).",
-                tostring(tab_uuid)))
-            table.insert(open_sequence_ids, seq_id)
-            if tab_uuid == active_tab_uuid then
-                active_sequence_id = seq_id
-            end
-        end
-
-        -- If open tabs are known, an active tab MUST also be known.
-        -- Both Phase A priorities (SequenceTabsData, TimelineHandleVec+Index)
-        -- emit active_tab_uuid whenever they emit open_tab_uuids. Any violation
-        -- means a parser returned inconsistent state — fail loud.
-        assert(active_tab_uuid, string.format(
-            "drp_importer: %d open tab UUIDs but active_tab_uuid is nil — "
-            .. "parser returned inconsistent tab state", #open_tab_uuids))
-        assert(active_sequence_id, string.format(
-            "drp_importer: active timeline UUID %s was not in the open-tab "
-            .. "list %s — project.xml inconsistency",
-            tostring(active_tab_uuid), table.concat(open_tab_uuids, ",")))
-
-        database.set_project_setting(pid, "open_sequence_ids", open_sequence_ids)
-        database.set_project_setting(pid, "last_open_sequence_id", active_sequence_id)
-    end
-
-    -- Record provenance: insert a synthetic command so the history shows
-    -- where this project came from (chain of custody).
-    -- Record provenance in commands table for edit history display.
-    -- sequence_number=0, parent=-1: visible in history, invisible to undo/redo.
     report(98, "Recording provenance…")
-    local Command = require("command")
-    Command.insert_provenance("ImportResolveProject", pid, {
-        drp_path = drp_path,
-        source_name = parse_result.project.name,
-    })
-
-    -- Undo cursor at 0 — provenance is history, not undoable
-    Sequence.set_undo_cursor_for_project(pid, 0)
+    record_drp_provenance(database.get_current_project_id(), drp_path,
+        parse_result.project.name)
 
     report(100, "Done")
 
