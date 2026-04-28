@@ -11,7 +11,7 @@
 -- - Per-clip containment check for trimmed media (check_clip_containment)
 -- - Segment-file fan-out for split recordings (build_segment_index,
 --   match_segment_filename)
--- - Batch orchestration + result classification (relink_media_batch)
+-- - Batch dispatch + result classification (relink_media_batch)
 --
 -- Non-goals:
 -- - Database mutation — handled by the RelinkClips command
@@ -715,122 +715,145 @@ end
 -- @param matching_rules table Matching criteria
 -- @param probe_fn function(path) → {start_tc_value, start_tc_rate, width, height, fps_num, fps_den, duration_frames} or nil
 -- @return table Array of {path, start_tc_value, start_tc_rate, probe_result, tc_mismatch}
+-- Build the initial set of candidate paths to consider. With
+-- match_filename enabled we narrow to paths whose basename matches the
+-- media's basename; without it every indexed path is in scope.
+local function collect_paths_to_check(candidate_index, matching_rules, media_path)
+    local paths = {}
+    if matching_rules.match_filename then
+        local basename = get_filename(media_path)
+        local lookup_key = basename and basename:lower() or nil
+        if lookup_key and candidate_index[lookup_key] then
+            for _, p in ipairs(candidate_index[lookup_key]) do
+                paths[#paths + 1] = p
+            end
+        end
+    else
+        for _, list in pairs(candidate_index) do
+            for _, p in ipairs(list) do
+                paths[#paths + 1] = p
+            end
+        end
+    end
+    return paths
+end
+
+-- TC-matching pass for one candidate. Returns
+--   passed         — whether this candidate survives the TC criterion
+--   tc_value, rate — candidate's container TC (when probed)
+--   tc_mismatch    — true when accepted only via the trimmed-media
+--                    containment fallback (FR-008/FR-009)
+--   probe_result   — cached probe (passed back so the caller doesn't
+--                    re-probe in the next pass)
+local function check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
+    if not matching_rules.match_timecode then
+        return true, nil, nil, false, nil
+    end
+    local stored_value = media_info.media_start_tc_value
+    local stored_rate  = media_info.media_start_tc_rate
+    if not (stored_value and stored_rate) then
+        log.detail("  %s: no stored TC — accepting on non-TC criteria",
+            get_filename(cand_path))
+        return true, nil, nil, false, nil
+    end
+
+    local probe_result = probe_fn(cand_path)
+    local cand_tc_value, cand_tc_rate
+    if probe_result then
+        cand_tc_value = probe_result.start_tc_value
+        cand_tc_rate  = probe_result.start_tc_rate
+    end
+
+    if not (cand_tc_value and cand_tc_rate) then
+        log.detail("  %s: no candidate TC — accepting on non-TC criteria",
+            get_filename(cand_path))
+        return true, cand_tc_value, cand_tc_rate, false, probe_result
+    end
+
+    local offset = M.compute_tc_offset(stored_value, stored_rate, cand_tc_value, cand_tc_rate)
+    if math.abs(offset) <= 1 then
+        return true, cand_tc_value, cand_tc_rate, false, probe_result
+    end
+
+    -- Primary TC mismatch — check file_original_timecode (FR-008).
+    local file_orig_tc = media_info.media_file_original_tc
+    if file_orig_tc then
+        local orig_offset = M.compute_tc_offset(
+            file_orig_tc, stored_rate, cand_tc_value, cand_tc_rate)
+        if math.abs(orig_offset) <= 1 then
+            -- FR-009: clean accept (no containment fallback needed).
+            log.event("  %s: TC matches file_original_timecode (offset=%.1f)",
+                get_filename(cand_path), orig_offset)
+            return true, cand_tc_value, cand_tc_rate, false, probe_result
+        end
+        if matching_rules.accept_trimmed_media then
+            return true, cand_tc_value, cand_tc_rate, true, probe_result
+        end
+        return false, cand_tc_value, cand_tc_rate, false, probe_result
+    end
+    -- No file_original_tc → existing trimmed-media containment fallback.
+    if matching_rules.accept_trimmed_media then
+        return true, cand_tc_value, cand_tc_rate, true, probe_result
+    end
+    return false, cand_tc_value, cand_tc_rate, false, probe_result
+end
+
+-- Resolution + frame-rate pass. probe_result is reused when the TC pass
+-- already loaded it. Returns (passed, probe_result).
+local function check_candidate_resolution_fps(cand_path, media_info, matching_rules,
+                                               probe_fn, probe_result)
+    if not (matching_rules.match_resolution or matching_rules.match_frame_rate) then
+        return true, probe_result
+    end
+    probe_result = probe_result or probe_fn(cand_path)
+    if not probe_result then return true, probe_result end
+    if matching_rules.match_resolution then
+        if probe_result.width ~= media_info.width
+            or probe_result.height ~= media_info.height then
+            return false, probe_result
+        end
+    end
+    if matching_rules.match_frame_rate
+        and probe_result.fps_num and probe_result.fps_den then
+        if probe_result.fps_num ~= media_info.fps_num
+            or probe_result.fps_den ~= media_info.fps_den then
+            return false, probe_result
+        end
+    end
+    return true, probe_result
+end
+
 function M.find_candidates_for_media(media_info, candidate_index, matching_rules, probe_fn)
     assert(type(media_info) == "table", "find_candidates_for_media: media_info required")
     assert(type(candidate_index) == "table", "find_candidates_for_media: candidate_index required")
     assert(type(matching_rules) == "table", "find_candidates_for_media: matching_rules required")
 
     local results = {}
+    local paths_to_check = collect_paths_to_check(
+        candidate_index, matching_rules, media_info.media_path)
 
-    -- Step 1: Collect initial candidate paths
-    local paths_to_check = {}
-
-    if matching_rules.match_filename then
-        local basename = get_filename(media_info.media_path)
-        local lookup_key = basename and basename:lower() or nil
-        if lookup_key and candidate_index[lookup_key] then
-            for _, path in ipairs(candidate_index[lookup_key]) do
-                paths_to_check[#paths_to_check + 1] = path
-            end
-        end
-    else
-        for _, paths in pairs(candidate_index) do
-            for _, path in ipairs(paths) do
-                paths_to_check[#paths_to_check + 1] = path
-            end
-        end
-    end
-
-    -- Step 2: Filter each candidate through enabled criteria
     for _, cand_path in ipairs(paths_to_check) do
-        local passed = true
-        local cand_tc_value, cand_tc_rate
-        local tc_mismatch = false
-        local probe_result = nil
-
-        -- TC matching
-        if passed and matching_rules.match_timecode then
-            local stored_value = media_info.media_start_tc_value
-            local stored_rate = media_info.media_start_tc_rate
-
-            if stored_value and stored_rate then
-                probe_result = probe_result or probe_fn(cand_path)
-                if probe_result then
-                    cand_tc_value = probe_result.start_tc_value
-                    cand_tc_rate = probe_result.start_tc_rate
-                end
-
-                if cand_tc_value and cand_tc_rate then
-                    local offset = M.compute_tc_offset(stored_value, stored_rate, cand_tc_value, cand_tc_rate)
-
-                    if math.abs(offset) > 1 then
-                        -- Primary TC mismatch — check file_original_timecode (FR-008)
-                        local file_orig_tc = media_info.media_file_original_tc
-                        if file_orig_tc then
-                            local orig_offset = M.compute_tc_offset(
-                                file_orig_tc, stored_rate, cand_tc_value, cand_tc_rate)
-                            if math.abs(orig_offset) <= 1 then
-                                -- Candidate matches file_original_timecode: clean accept (FR-009)
-                                log.event("  %s: TC matches file_original_timecode (offset=%.1f)",
-                                    get_filename(cand_path), orig_offset)
-                                -- tc_mismatch stays false — no containment fallback needed
-                            elseif matching_rules.accept_trimmed_media then
-                                tc_mismatch = true
-                            else
-                                passed = false
-                            end
-                        elseif matching_rules.accept_trimmed_media then
-                            -- No file_original_tc → existing trimmed-media containment fallback
-                            tc_mismatch = true
-                        else
-                            passed = false
-                        end
-                    end
-                else
-                    log.detail("  %s: no candidate TC — accepting on non-TC criteria",
-                        get_filename(cand_path))
-                end
-            else
-                log.detail("  %s: no stored TC — accepting on non-TC criteria",
-                    get_filename(cand_path))
-            end
+        local passed, cand_tc_value, cand_tc_rate, tc_mismatch, probe_result =
+            check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
+        if passed then
+            passed, probe_result = check_candidate_resolution_fps(
+                cand_path, media_info, matching_rules, probe_fn, probe_result)
         end
-
-        -- Resolution + frame rate matching
-        if passed and (matching_rules.match_resolution or matching_rules.match_frame_rate) then
-            probe_result = probe_result or probe_fn(cand_path)
-            if probe_result then
-                if matching_rules.match_resolution then
-                    if probe_result.width ~= media_info.width or probe_result.height ~= media_info.height then
-                        passed = false
-                    end
-                end
-                if passed and matching_rules.match_frame_rate then
-                    if probe_result.fps_num and probe_result.fps_den then
-                        if probe_result.fps_num ~= media_info.fps_num or probe_result.fps_den ~= media_info.fps_den then
-                            passed = false
-                        end
-                    end
-                end
-            end
-        end
-
         if passed then
             results[#results + 1] = {
-                path = cand_path,
+                path           = cand_path,
                 start_tc_value = cand_tc_value,
-                start_tc_rate = cand_tc_rate,
-                probe_result = probe_result,
-                tc_mismatch = tc_mismatch,
+                start_tc_rate  = cand_tc_rate,
+                probe_result   = probe_result,
+                tc_mismatch    = tc_mismatch,
             }
         end
     end
-
     return results
 end
 
 -- =============================================================================
--- Batch orchestration: fan out per-media matching + classification
+-- Batch dispatch: fan out per-media matching + classification
 -- =============================================================================
 
 -- Delta between the media's displayed start-TC and the file's container
@@ -1041,6 +1064,87 @@ end
 -- @param candidates table Array from find_candidates_for_media
 -- @param clip_loader function(media_id) → array of {clip_id, source_in, source_out, fps_num, fps_den}
 -- @return table {relinked = [...], failed = [...], ambiguous = [...]}
+-- Try the per-clip-containment "partial fit" strategy. Returns true and
+-- populates `out.relinked` when at least one clip fits a candidate;
+-- false (caller falls through to the partial-coverage / failure paths)
+-- otherwise. Lazy-loads the media's clip list via `clip_loader` (callers
+-- skip this path when no loader is available).
+local function try_partial_fit_relink(out, media_info, partial_fit_candidates,
+                                      clip_loader, stored_rate, tc_remap_offset)
+    if #partial_fit_candidates == 0 or not clip_loader then return false end
+    local raw_clips = clip_loader(media_info.media_id)
+    if not (raw_clips and #raw_clips > 0) then return false end
+    local clips = normalize_clips_to_stored_rate(raw_clips, stored_rate)
+
+    -- Pick the candidate that covers the largest subset of clips.
+    local best_cand, best_fits, best_count = nil, nil, 0
+    for _, cand in ipairs(partial_fit_candidates) do
+        if cand.probe_result then
+            local fits = {}
+            for _, clip in ipairs(clips) do
+                if M.check_clip_containment(clip, cand.probe_result, stored_rate, tc_remap_offset) then
+                    fits[#fits + 1] = clip.clip_id
+                end
+            end
+            if #fits == 0 and #clips > 0 then
+                log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
+            end
+            if #fits > best_count then
+                best_cand, best_fits, best_count = cand, fits, #fits
+            end
+        end
+    end
+    if best_count == 0 then return false end
+
+    if best_count == #clips then
+        -- All clips fit — the extent check was overly conservative
+        -- (usually rate-conversion rounding). Treat as a full relink.
+        out.relinked[#out.relinked + 1] = {
+            media_id = media_info.media_id,
+            new_path = best_cand.path,
+            strategy = best_cand.is_segment and "segment" or "filename",
+            probed_tc = probed_tc_for_metadata(best_cand.probe_result),
+        }
+    else
+        out.relinked[#out.relinked + 1] = {
+            media_id      = media_info.media_id,
+            new_path      = best_cand.path,
+            strategy      = best_cand.is_segment and "segment" or "filename",
+            needs_split   = true,
+            split_clip_ids = best_fits,
+            probed_tc     = probed_tc_for_metadata(best_cand.probe_result),
+        }
+        log.event("  partial fit: %d/%d clips fit in %s → needs split",
+            best_count, #clips, get_filename(best_cand.path))
+    end
+    return true
+end
+
+-- Try the partial-coverage strategy. The user's intent is "this file is
+-- clearly my media — just missing a few frames at the boundaries."
+-- Promote the best partial candidate so media.file_path points at the
+-- real (short) file; clips whose source range fits within coverage
+-- render online, clips extending past it render offline with a
+-- shortfall note. Shift+F, playback for covered frames, and probing
+-- all work against the real file; boundary frames produce offline
+-- output per C++ TMB EOF handling.
+local function try_partial_coverage_relink(out, media_info, partial_fit_candidates, stored_rate)
+    local pc = compute_partial_coverage(partial_fit_candidates, stored_rate)
+    if not pc then return false end
+    log.event("  PARTIAL: %s → %s (covers %d..%d @%d)",
+        media_info.media_name, get_filename(pc.candidate_path),
+        pc.coverage.covered_start_tc, pc.coverage.covered_end_tc,
+        pc.coverage.rate)
+    out.relinked[#out.relinked + 1] = {
+        media_id  = media_info.media_id,
+        new_path  = pc.candidate_path,
+        strategy  = "partial_coverage",
+        coverage  = pc.coverage,
+        probed_tc = probed_tc_for_metadata(pc.probe_result),
+    }
+    return true
+end
+
 local function classify_media(media_info, candidates, clip_loader)
     local stored_rate = media_info.media_start_tc_rate
     local tc_remap_offset = compute_tc_remap_offset(media_info)
@@ -1054,80 +1158,12 @@ local function classify_media(media_info, candidates, clip_loader)
         return out
     end
 
-    -- No full-fit candidates. Try partial fit via per-clip containment (lazy clip load).
-    if #partial_fit_candidates > 0 and clip_loader then
-        local raw_clips = clip_loader(media_info.media_id)
-        if raw_clips and #raw_clips > 0 then
-            local clips = normalize_clips_to_stored_rate(raw_clips, stored_rate)
-
-            -- Pick the candidate that covers the largest subset of this
-            -- media's clips.
-            local best_cand, best_fits, best_count = nil, nil, 0
-            for _, cand in ipairs(partial_fit_candidates) do
-                if cand.probe_result then
-                    local fits = {}
-                    for _, clip in ipairs(clips) do
-                        if M.check_clip_containment(
-                            clip, cand.probe_result, stored_rate, tc_remap_offset) then
-                            fits[#fits + 1] = clip.clip_id
-                        end
-                    end
-                    if #fits == 0 and #clips > 0 then
-                        log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
-                    end
-                    if #fits > best_count then
-                        best_cand, best_fits, best_count = cand, fits, #fits
-                    end
-                end
-            end
-
-            if best_count > 0 and best_count == #clips then
-                -- All clips fit — extent check was overly conservative
-                -- (usually rate conversion rounding). Treat as full relink.
-                out.relinked[#out.relinked + 1] = {
-                    media_id = media_info.media_id,
-                    new_path = best_cand.path,
-                    strategy = best_cand.is_segment and "segment" or "filename",
-                    probed_tc = probed_tc_for_metadata(best_cand.probe_result),
-                }
-                return out
-            elseif best_count > 0 then
-                out.relinked[#out.relinked + 1] = {
-                    media_id = media_info.media_id,
-                    new_path = best_cand.path,
-                    strategy = best_cand.is_segment and "segment" or "filename",
-                    needs_split = true,
-                    split_clip_ids = best_fits,
-                    probed_tc = probed_tc_for_metadata(best_cand.probe_result),
-                }
-                log.event("  partial fit: %d/%d clips fit in %s → needs split",
-                    best_count, #clips, get_filename(best_cand.path))
-                return out
-            end
-        end
+    if try_partial_fit_relink(out, media_info, partial_fit_candidates,
+                              clip_loader, stored_rate, tc_remap_offset) then
+        return out
     end
 
-    -- Partial-coverage relink: the user's intent is "this file is clearly
-    -- my media — just missing a few frames at the boundaries." Promote
-    -- the best partial candidate so media.file_path points at the real
-    -- (short) file; clips whose source range fits within coverage render
-    -- online, clips extending past it render offline with a shortfall
-    -- note. Shift+F, playback for covered frames, and probing all work
-    -- against the real file; boundary frames produce offline output per
-    -- C++ TMB EOF handling.
-    local pc = compute_partial_coverage(partial_fit_candidates, stored_rate)
-    if pc then
-        log.event("  PARTIAL: %s → %s (covers %d..%d @%d)",
-            media_info.media_name, get_filename(pc.candidate_path),
-            pc.coverage.covered_start_tc, pc.coverage.covered_end_tc,
-            pc.coverage.rate)
-        out.relinked[#out.relinked + 1] = {
-            media_id = media_info.media_id,
-            new_path = pc.candidate_path,
-            strategy = "partial_coverage",
-            coverage = pc.coverage,
-            probed_tc = probed_tc_for_metadata(pc.probe_result),
-        }
+    if try_partial_coverage_relink(out, media_info, partial_fit_candidates, stored_rate) then
         return out
     end
 
@@ -1189,6 +1225,74 @@ end
 -- @param options table {search_paths, matching_rules}
 -- @param progress_cb function|nil progress_cb(pct, status, log_line)
 -- @return table {relinked, failed, ambiguous, new_media}
+-- Build the set of candidate paths to pre-probe. With match_filename
+-- enabled we narrow to paths whose basename appears in the batch; without
+-- it every candidate is potentially relevant. Returns a deduplicated list.
+local function collect_paths_to_preprobe(media_infos, candidate_index, matching_rules)
+    local paths_to_preprobe = {}
+    local seen = {}
+    if matching_rules.match_filename then
+        for _, media_info in ipairs(media_infos) do
+            local basename = get_filename(media_info.media_path)
+            local key = basename and basename:lower() or nil
+            if key and candidate_index[key] then
+                for _, path in ipairs(candidate_index[key]) do
+                    if not seen[path] then
+                        seen[path] = true
+                        paths_to_preprobe[#paths_to_preprobe + 1] = path
+                    end
+                end
+            end
+        end
+    else
+        for _, bucket in pairs(candidate_index) do
+            for _, path in ipairs(bucket) do
+                if not seen[path] then
+                    seen[path] = true
+                    paths_to_preprobe[#paths_to_preprobe + 1] = path
+                end
+            end
+        end
+    end
+    return paths_to_preprobe
+end
+
+-- Pre-probe every candidate that could ever be consulted, in parallel.
+-- Serial single-shot probes were the dominant Phase 2 cost (72.5 ms × 562
+-- calls = 40s observed). MEDIA_PROBE_BATCH dispatches hardware_concurrency
+-- workers through emp::MediaFile::ProbeMetadata, each of which skips
+-- avformat_find_stream_info (~5× faster per probe). Combined expectation:
+-- ~40s → ~1s on 8-core hardware. We only probe when a matching rule
+-- actually consults probe output (TC/resolution/frame rate); otherwise
+-- matching is filename-only and probes are never read.
+--
+-- The native bindings (EMP.MEDIA_PROBE_BATCH + qt_file_stat_batch) are
+-- editor-only. Under plain luajit tests they are absent and we let
+-- per-candidate cached_probe fall through to probe_file_ffprobe during
+-- the match loop. Same correctness, slower wall clock — fine for tests.
+local function maybe_prefetch_candidate_probes(probe_cache, media_infos, candidate_index,
+                                               matching_rules, progress_cb)
+    local needs_probe = matching_rules.match_timecode
+        or matching_rules.match_resolution
+        or matching_rules.match_frame_rate
+    if not needs_probe then return end
+
+    local paths_to_preprobe = collect_paths_to_preprobe(media_infos, candidate_index, matching_rules)
+
+    local EMP = qt_constants and qt_constants.EMP
+    local bindings_ready = EMP and EMP.MEDIA_PROBE_BATCH
+        and rawget(_G, "qt_file_stat_batch") ~= nil
+    if not (bindings_ready and #paths_to_preprobe > 0) then return end
+
+    if progress_cb then
+        progress_cb(10, string.format("Probing %d candidate(s)...", #paths_to_preprobe))
+    end
+    local n, dt = preprobe_batch(probe_cache, paths_to_preprobe)
+    log.event("relink_media_batch: pre-probed %d candidates "
+        .. "in parallel in %.2fs (%.1f ms/probe effective)",
+        n, dt, n > 0 and (dt * 1000 / n) or 0)
+end
+
 function M.relink_media_batch(media_infos, options, progress_cb)
     assert(type(media_infos) == "table", "relink_media_batch: media_infos required")
     assert(type(options) == "table", "relink_media_batch: options required")
@@ -1258,72 +1362,8 @@ function M.relink_media_batch(media_infos, options, progress_cb)
     local probe_count = 0
     local probe_total_seconds = 0  -- wall-clock spent inside single-shot probe_file calls
 
-    -- Step 1.5: Pre-probe every candidate that could ever be consulted, in
-    -- parallel. Serial single-shot probes were the dominant Phase 2 cost
-    -- (72.5 ms × 562 calls = 40s observed). MEDIA_PROBE_BATCH dispatches
-    -- hardware_concurrency workers through emp::MediaFile::ProbeMetadata,
-    -- each of which skips avformat_find_stream_info (~5× faster per probe).
-    -- Combined expectation: ~40s → ~1s on 8-core hardware.
-    --
-    -- We only need to probe when a matching rule actually consults probe
-    -- output (TC, resolution, frame rate). If none are enabled, matching is
-    -- filename-only and probes are never read — skip the prefetch entirely.
-    local needs_probe = matching_rules.match_timecode
-        or matching_rules.match_resolution
-        or matching_rules.match_frame_rate
-
-    if needs_probe then
-        local paths_to_preprobe = {}
-        local seen = {}
-
-        if matching_rules.match_filename then
-            -- Only paths whose basename maps back to at least one media
-            -- in the batch can ever be consulted. Narrower prefetch set.
-            for _, media_info in ipairs(media_infos) do
-                local basename = get_filename(media_info.media_path)
-                local key = basename and basename:lower() or nil
-                if key and candidate_index[key] then
-                    for _, path in ipairs(candidate_index[key]) do
-                        if not seen[path] then
-                            seen[path] = true
-                            paths_to_preprobe[#paths_to_preprobe + 1] = path
-                        end
-                    end
-                end
-            end
-        else
-            -- Without filename filter, every candidate is a potential match.
-            for _, bucket in pairs(candidate_index) do
-                for _, path in ipairs(bucket) do
-                    if not seen[path] then
-                        seen[path] = true
-                        paths_to_preprobe[#paths_to_preprobe + 1] = path
-                    end
-                end
-            end
-        end
-
-        -- Bulk prefetch runs only under the editor, where both native
-        -- bindings (EMP.MEDIA_PROBE_BATCH and qt_file_stat_batch, via
-        -- the disk cache) are loaded. Under plain luajit tests those
-        -- bindings aren't available; we skip the prefetch and let the
-        -- per-candidate cached_probe fall through to probe_file_ffprobe
-        -- during the match loop. Same correctness, slower wall clock
-        -- for tests — which is fine because tests use small fixtures.
-        local EMP = qt_constants and qt_constants.EMP
-        local bindings_ready = EMP and EMP.MEDIA_PROBE_BATCH
-            and rawget(_G, "qt_file_stat_batch") ~= nil
-        if bindings_ready and #paths_to_preprobe > 0 then
-            if progress_cb then
-                progress_cb(10, string.format("Probing %d candidate(s)...",
-                    #paths_to_preprobe))
-            end
-            local n, dt = preprobe_batch(probe_cache, paths_to_preprobe)
-            log.event("relink_media_batch: pre-probed %d candidates "
-                .. "in parallel in %.2fs (%.1f ms/probe effective)",
-                n, dt, n > 0 and (dt * 1000 / n) or 0)
-        end
-    end
+    maybe_prefetch_candidate_probes(probe_cache, media_infos, candidate_index,
+                                    matching_rules, progress_cb)
 
     local function cached_probe(path)
         local cached = probe_cache[path]
@@ -1400,11 +1440,11 @@ function M.relink_media_batch(media_infos, options, progress_cb)
     return results
 end
 
--- Testing hook. classify_media is file-local because it's an internal
--- orchestration step, but tests need to exercise its partial-coverage /
--- containment branches without constructing a full search-path-backed
--- relink invocation (which would require real files on disk). Keep
--- the underscored name so callers understand it's internal surface.
+-- Testing hook. classify_media is file-local because it's an internal step,
+-- but tests need to exercise its partial-coverage / containment branches
+-- without constructing a full search-path-backed relink invocation (which
+-- would require real files on disk). Keep the underscored name so callers
+-- understand it's internal surface.
 M._classify_media = classify_media
 
 return M

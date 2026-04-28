@@ -10,20 +10,132 @@ local SubmissionDialog = {}
 -- Create bug submission review dialog
 -- @param test_path: Path to test JSON file
 -- @return: Dialog widget
+-- Helper: build a `<bold-label> <value>` row with min-width on the label.
+local function build_info_row(layout, label_text, value_text)
+    local row = qt.CREATE_LAYOUT("horizontal")
+    local label = qt.CREATE_LABEL(label_text)
+    qt.SET_WIDGET_STYLE(label, "font-weight: bold; min-width: 100px;")
+    qt.LAYOUT_ADD_WIDGET(row, label)
+    qt.LAYOUT_ADD_WIDGET(row, qt.CREATE_LABEL(value_text))
+    qt.LAYOUT_ADD_STRETCH(row)
+    qt.LAYOUT_ADD_LAYOUT(layout, row)
+end
+
+local function build_info_section(test)
+    local group  = qt.CREATE_GROUP_BOX("Bug Information")
+    local layout = qt.CREATE_LAYOUT("vertical")
+
+    build_info_row(layout, "Name:",     test.test_name or test.test_id)
+    build_info_row(layout, "Category:", test.category or "bug")
+    if test.capture_metadata and test.capture_metadata.timestamp then
+        build_info_row(layout, "Captured:",
+            os.date("%Y-%m-%d %H:%M:%S", test.capture_metadata.timestamp))
+    end
+    build_info_row(layout, "Statistics:", string.format(
+        "%d gestures, %d commands, %d screenshots",
+        #(test.gesture_log or {}),
+        #(test.command_log or {}),
+        (test.screenshots and test.screenshots.screenshot_count or 0)))
+
+    qt.SET_WIDGET_LAYOUT(group, layout)
+    return group
+end
+
+local function build_preview_section(test)
+    local group  = qt.CREATE_GROUP_BOX("GitHub Issue Preview")
+    local layout = qt.CREATE_LAYOUT("vertical")
+
+    local title_row = qt.CREATE_LAYOUT("horizontal")
+    local title_label = qt.CREATE_LABEL("Title:")
+    qt.SET_WIDGET_STYLE(title_label, "font-weight: bold;")
+    qt.LAYOUT_ADD_WIDGET(title_row, title_label)
+    qt.LAYOUT_ADD_LAYOUT(layout, title_row)
+
+    local issue_title = require("bug_reporter.bug_submission").format_issue_title(test)
+    local title_edit = qt.CREATE_LINE_EDIT(issue_title)
+    qt.LAYOUT_ADD_WIDGET(layout, title_edit)
+
+    qt.LAYOUT_ADD_SPACING(layout, 5)
+
+    local body_label = qt.CREATE_LABEL("Body:")
+    qt.SET_WIDGET_STYLE(body_label, "font-weight: bold;")
+    qt.LAYOUT_ADD_WIDGET(layout, body_label)
+
+    local body_text = qt.CREATE_TEXT_EDIT(github_issue_creator.format_bug_report_body(test))
+    qt.SET_WIDGET_PROPERTY(body_text, "readOnly", true)
+    qt.SET_WIDGET_PROPERTY(body_text, "minimumHeight", 200)
+    qt.LAYOUT_ADD_WIDGET(layout, body_text)
+
+    qt.SET_WIDGET_LAYOUT(group, layout)
+    return group, title_edit, body_text
+end
+
+local function build_options_section(video_path)
+    local group  = qt.CREATE_GROUP_BOX("Submission Options")
+    local layout = qt.CREATE_LAYOUT("vertical")
+
+    local upload_video = qt.CREATE_CHECKBOX("Upload slideshow video to YouTube")
+    qt.SET_CHECKED(upload_video, true)
+    qt.LAYOUT_ADD_WIDGET(layout, upload_video)
+
+    if not video_path then
+        qt.SET_ENABLED(upload_video, false)
+        local note = qt.CREATE_LABEL("  (No slideshow video found)")
+        qt.SET_WIDGET_STYLE(note, "color: red;")
+        qt.LAYOUT_ADD_WIDGET(layout, note)
+    else
+        local info = qt.CREATE_LABEL("  Video: " .. video_path)
+        qt.SET_WIDGET_STYLE(info, "color: gray; font-size: 9pt;")
+        qt.LAYOUT_ADD_WIDGET(layout, info)
+    end
+
+    local create_issue = qt.CREATE_CHECKBOX("Create GitHub issue")
+    qt.SET_CHECKED(create_issue, true)
+    qt.LAYOUT_ADD_WIDGET(layout, create_issue)
+
+    local privacy_row = qt.CREATE_LAYOUT("horizontal")
+    local privacy_combo = qt.CREATE_COMBOBOX({"Unlisted", "Private", "Public"})
+    qt.SET_CURRENT_INDEX(privacy_combo, 0)
+    qt.LAYOUT_ADD_WIDGET(privacy_row, qt.CREATE_LABEL("  Video privacy:"))
+    qt.LAYOUT_ADD_WIDGET(privacy_row, privacy_combo)
+    qt.LAYOUT_ADD_STRETCH(privacy_row)
+    qt.LAYOUT_ADD_LAYOUT(layout, privacy_row)
+
+    qt.SET_WIDGET_LAYOUT(group, layout)
+    return group, upload_video, create_issue, privacy_combo
+end
+
+local function build_button_row(video_path)
+    local row = qt.CREATE_LAYOUT("horizontal")
+    qt.LAYOUT_ADD_STRETCH(row)
+
+    local preview_btn = qt.CREATE_BUTTON("Preview Video")
+    if not video_path then qt.SET_ENABLED(preview_btn, false) end
+
+    local submit_btn = qt.CREATE_BUTTON("Submit Bug Report")
+    qt.SET_WIDGET_STYLE(submit_btn,
+        "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
+
+    local cancel_btn = qt.CREATE_BUTTON("Cancel")
+
+    qt.LAYOUT_ADD_WIDGET(row, preview_btn)
+    qt.LAYOUT_ADD_WIDGET(row, submit_btn)
+    qt.LAYOUT_ADD_WIDGET(row, cancel_btn)
+    return row, preview_btn, submit_btn, cancel_btn
+end
+
 function SubmissionDialog.create(test_path)
     if not qt.is_available() then
         log.error("Qt bindings not available for submission dialog")
         return nil
     end
 
-    -- Load test data
     local test, err = json_test_loader.load(test_path)
     if not test then
         log.error("Failed to load test: %s", err)
         return nil
     end
 
-    -- Create dialog
     local dialog = qt.CREATE_DIALOG("Submit Bug Report")
     if not dialog then
         log.error("Failed to create submission dialog")
@@ -36,180 +148,42 @@ function SubmissionDialog.create(test_path)
         return nil
     end
 
-    -- === Header ===
-    local header_label = qt.CREATE_LABEL("Review Bug Report Before Submission")
-    qt.SET_WIDGET_STYLE(header_label, "font-size: 14pt; font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(main_layout, header_label)
-
+    local header = qt.CREATE_LABEL("Review Bug Report Before Submission")
+    qt.SET_WIDGET_STYLE(header, "font-size: 14pt; font-weight: bold;")
+    qt.LAYOUT_ADD_WIDGET(main_layout, header)
     qt.LAYOUT_ADD_SPACING(main_layout, 10)
 
-    -- === Test Information ===
-    local info_group = qt.CREATE_GROUP_BOX("Bug Information")
-    local info_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Test name
-    local name_layout = qt.CREATE_LAYOUT("horizontal")
-    local name_label = qt.CREATE_LABEL("Name:")
-    qt.SET_WIDGET_STYLE(name_label, "font-weight: bold; min-width: 100px;")
-    local name_value = qt.CREATE_LABEL(test.test_name or test.test_id)
-    qt.LAYOUT_ADD_WIDGET(name_layout, name_label)
-    qt.LAYOUT_ADD_WIDGET(name_layout, name_value)
-    qt.LAYOUT_ADD_STRETCH(name_layout)
-    qt.LAYOUT_ADD_LAYOUT(info_layout, name_layout)
-
-    -- Category
-    local category_layout = qt.CREATE_LAYOUT("horizontal")
-    local category_label = qt.CREATE_LABEL("Category:")
-    qt.SET_WIDGET_STYLE(category_label, "font-weight: bold; min-width: 100px;")
-    local category_value = qt.CREATE_LABEL(test.category or "bug")
-    qt.LAYOUT_ADD_WIDGET(category_layout, category_label)
-    qt.LAYOUT_ADD_WIDGET(category_layout, category_value)
-    qt.LAYOUT_ADD_STRETCH(category_layout)
-    qt.LAYOUT_ADD_LAYOUT(info_layout, category_layout)
-
-    -- Timestamp
-    if test.capture_metadata and test.capture_metadata.timestamp then
-        local time_layout = qt.CREATE_LAYOUT("horizontal")
-        local time_label = qt.CREATE_LABEL("Captured:")
-        qt.SET_WIDGET_STYLE(time_label, "font-weight: bold; min-width: 100px;")
-        local time_value = qt.CREATE_LABEL(
-            os.date("%Y-%m-%d %H:%M:%S", test.capture_metadata.timestamp)
-        )
-        qt.LAYOUT_ADD_WIDGET(time_layout, time_label)
-        qt.LAYOUT_ADD_WIDGET(time_layout, time_value)
-        qt.LAYOUT_ADD_STRETCH(time_layout)
-        qt.LAYOUT_ADD_LAYOUT(info_layout, time_layout)
-    end
-
-    -- Statistics
-    local stats_layout = qt.CREATE_LAYOUT("horizontal")
-    local stats_label = qt.CREATE_LABEL("Statistics:")
-    qt.SET_WIDGET_STYLE(stats_label, "font-weight: bold; min-width: 100px;")
-    local stats_text = string.format(
-        "%d gestures, %d commands, %d screenshots",
-        #(test.gesture_log or {}),
-        #(test.command_log or {}),
-        (test.screenshots and test.screenshots.screenshot_count or 0)
-    )
-    local stats_value = qt.CREATE_LABEL(stats_text)
-    qt.LAYOUT_ADD_WIDGET(stats_layout, stats_label)
-    qt.LAYOUT_ADD_WIDGET(stats_layout, stats_value)
-    qt.LAYOUT_ADD_STRETCH(stats_layout)
-    qt.LAYOUT_ADD_LAYOUT(info_layout, stats_layout)
-
-    qt.SET_WIDGET_LAYOUT(info_group, info_layout)
-    qt.LAYOUT_ADD_WIDGET(main_layout, info_group)
-
+    qt.LAYOUT_ADD_WIDGET(main_layout, build_info_section(test))
     qt.LAYOUT_ADD_SPACING(main_layout, 10)
 
-    -- === Preview ===
-    local preview_group = qt.CREATE_GROUP_BOX("GitHub Issue Preview")
-    local preview_layout = qt.CREATE_LAYOUT("vertical")
-
-    -- Issue title
-    local title_layout = qt.CREATE_LAYOUT("horizontal")
-    local title_label = qt.CREATE_LABEL("Title:")
-    qt.SET_WIDGET_STYLE(title_label, "font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(title_layout, title_label)
-    qt.LAYOUT_ADD_LAYOUT(preview_layout, title_layout)
-
-    local issue_title = require("bug_reporter.bug_submission").format_issue_title(test)
-    local title_edit = qt.CREATE_LINE_EDIT(issue_title)
-    qt.LAYOUT_ADD_WIDGET(preview_layout, title_edit)
-
-    qt.LAYOUT_ADD_SPACING(preview_layout, 5)
-
-    -- Issue body
-    local body_label = qt.CREATE_LABEL("Body:")
-    qt.SET_WIDGET_STYLE(body_label, "font-weight: bold;")
-    qt.LAYOUT_ADD_WIDGET(preview_layout, body_label)
-
-    local issue_body = github_issue_creator.format_bug_report_body(test)
-    local body_text = qt.CREATE_TEXT_EDIT(issue_body)
-    qt.SET_WIDGET_PROPERTY(body_text, "readOnly", true)
-    qt.SET_WIDGET_PROPERTY(body_text, "minimumHeight", 200)
-    qt.LAYOUT_ADD_WIDGET(preview_layout, body_text)
-
-    qt.SET_WIDGET_LAYOUT(preview_group, preview_layout)
+    local preview_group, title_edit, body_text = build_preview_section(test)
     qt.LAYOUT_ADD_WIDGET(main_layout, preview_group)
-
     qt.LAYOUT_ADD_SPACING(main_layout, 10)
 
-    -- === Options ===
-    local options_group = qt.CREATE_GROUP_BOX("Submission Options")
-    local options_layout = qt.CREATE_LAYOUT("vertical")
-
-    local upload_video_checkbox = qt.CREATE_CHECKBOX("Upload slideshow video to YouTube")
-    qt.SET_CHECKED(upload_video_checkbox, true)
-    qt.LAYOUT_ADD_WIDGET(options_layout, upload_video_checkbox)
-
-    -- Check if video exists
     local video_path = SubmissionDialog.find_slideshow_video(test_path)
-    if not video_path then
-        qt.SET_ENABLED(upload_video_checkbox, false)
-        local no_video_label = qt.CREATE_LABEL("  (No slideshow video found)")
-        qt.SET_WIDGET_STYLE(no_video_label, "color: red;")
-        qt.LAYOUT_ADD_WIDGET(options_layout, no_video_label)
-    else
-        local video_info = qt.CREATE_LABEL("  Video: " .. video_path)
-        qt.SET_WIDGET_STYLE(video_info, "color: gray; font-size: 9pt;")
-        qt.LAYOUT_ADD_WIDGET(options_layout, video_info)
-    end
-
-    local create_issue_checkbox = qt.CREATE_CHECKBOX("Create GitHub issue")
-    qt.SET_CHECKED(create_issue_checkbox, true)
-    qt.LAYOUT_ADD_WIDGET(options_layout, create_issue_checkbox)
-
-    local privacy_layout = qt.CREATE_LAYOUT("horizontal")
-    local privacy_label = qt.CREATE_LABEL("  Video privacy:")
-    local privacy_combo = qt.CREATE_COMBOBOX({"Unlisted", "Private", "Public"})
-    qt.SET_CURRENT_INDEX(privacy_combo, 0)
-    qt.LAYOUT_ADD_WIDGET(privacy_layout, privacy_label)
-    qt.LAYOUT_ADD_WIDGET(privacy_layout, privacy_combo)
-    qt.LAYOUT_ADD_STRETCH(privacy_layout)
-    qt.LAYOUT_ADD_LAYOUT(options_layout, privacy_layout)
-
-    qt.SET_WIDGET_LAYOUT(options_group, options_layout)
+    local options_group, upload_video, create_issue, privacy_combo =
+        build_options_section(video_path)
     qt.LAYOUT_ADD_WIDGET(main_layout, options_group)
 
-    -- === Buttons ===
     qt.LAYOUT_ADD_SPACING(main_layout, 20)
-    local button_layout = qt.CREATE_LAYOUT("horizontal")
-    qt.LAYOUT_ADD_STRETCH(button_layout)
+    local button_row, preview_video, submit, cancel = build_button_row(video_path)
+    qt.LAYOUT_ADD_LAYOUT(main_layout, button_row)
 
-    local preview_video_button = qt.CREATE_BUTTON("Preview Video")
-    if not video_path then
-        qt.SET_ENABLED(preview_video_button, false)
-    end
-
-    local submit_button = qt.CREATE_BUTTON("Submit Bug Report")
-    qt.SET_WIDGET_STYLE(submit_button, "background-color: #4CAF50; color: white; font-weight: bold; padding: 8px;")
-
-    local cancel_button = qt.CREATE_BUTTON("Cancel")
-
-    qt.LAYOUT_ADD_WIDGET(button_layout, preview_video_button)
-    qt.LAYOUT_ADD_WIDGET(button_layout, submit_button)
-    qt.LAYOUT_ADD_WIDGET(button_layout, cancel_button)
-    qt.LAYOUT_ADD_LAYOUT(main_layout, button_layout)
-
-    -- Set dialog layout
     qt.SET_DIALOG_LAYOUT(dialog, main_layout)
 
-    -- Return wrapper table with dialog and metadata
-    -- (dialog is C++ userdata, can't add fields to it)
     return {
         dialog = dialog,
         test_path = test_path,
         test = test,
         widgets = {
-            title_edit = title_edit,
-            body_text = body_text,
-            upload_video = upload_video_checkbox,
-            create_issue = create_issue_checkbox,
+            title_edit    = title_edit,
+            body_text     = body_text,
+            upload_video  = upload_video,
+            create_issue  = create_issue,
             privacy_combo = privacy_combo,
-            preview_video = preview_video_button,
-            submit = submit_button,
-            cancel = cancel_button
+            preview_video = preview_video,
+            submit        = submit,
+            cancel        = cancel,
         }
     }
 end
