@@ -189,6 +189,16 @@ local function effective_horizontal(dx, dy, modifiers)
 end
 
 --- Translate a horizontal wheel delta into a viewport-start change.
+--
+-- High zoom amplifies sub-pixel wheel deltas into sub-frame viewport
+-- deltas. A naive `math.floor(prev + delta_time)` discards the fractional
+-- part every event AND rounds toward −∞, so right-going gestures never
+-- accumulate to a frame advance while left-going gestures over-commit
+-- (the asymmetry surfaced 2026-04-28). Carry the residual fraction across
+-- events on the per-view scroll-axis state — it shares the gesture
+-- lifecycle, so a wall-clock pause resets it alongside the axis-lock mode.
+-- math.modf truncates toward zero, leaving a signed fractional remainder
+-- that direction reversal naturally cancels out.
 local function scroll_viewport_horizontally(view, horizontal)
     if math.abs(horizontal) < WHEEL_DELTA_EPSILON then
         return
@@ -197,9 +207,19 @@ local function scroll_viewport_horizontally(view, horizontal)
     assert(type(width) == "number" and width > 0,
         "timeline_view_input.scroll_viewport_horizontally: timeline.get_dimensions returned invalid width "
             .. tostring(width))
+    local axis_state = view._scroll_axis_state
+    assert(axis_state,
+        "timeline_view_input.scroll_viewport_horizontally: view._scroll_axis_state must exist "
+            .. "(filter_wheel_axis lazily initialises it; this function runs after that)")
     local viewport_duration = view.state.get_viewport_duration()
     local delta_time = (-horizontal / width) * viewport_duration
-    local new_start = math.floor(view.state.get_viewport_start_time() + delta_time)
+    local accumulated = axis_state.frac_x + delta_time
+    local whole, residual = math.modf(accumulated)
+    axis_state.frac_x = residual
+    if whole == 0 then
+        return
+    end
+    local new_start = view.state.get_viewport_start_time() + whole
     view.state.set_viewport_start_time(new_start)
     view.state.flush_pending_notify()
 end

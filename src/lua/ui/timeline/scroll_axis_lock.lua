@@ -45,10 +45,17 @@ assert(type(HORIZONTAL_COMMIT_PX) == "number" and HORIZONTAL_COMMIT_PX > 0,
 --   "horizontal_only"  — committed to horizontal; vertical stays suppressed (sticky)
 --   "vertical_allowed" — committed to vertical; both axes pass through (until cum_dx
 --                        crosses the horizontal threshold and ratchets back)
+--
+-- frac_x carries the unconverted sub-frame fractional viewport-start delta
+-- across events within a single gesture. Resets on the same gesture-gap
+-- threshold as `mode`, so a fresh gesture never inherits residual fraction
+-- from the previous one (which would surface as a ghost-jump on the first
+-- post-pause event). Owned here because the gesture lifecycle already
+-- lives in this module.
 
 --- Create a fresh per-view state table.
 function M.new_state()
-    return { mode = "tentative", cum_dx = 0, cum_dy = 0, last_ts = nil }
+    return { mode = "tentative", cum_dx = 0, cum_dy = 0, frac_x = 0, last_ts = nil }
 end
 
 -- Reset the gesture if the inter-event pause exceeds GESTURE_GAP_MS.
@@ -57,6 +64,7 @@ local function reset_if_gesture_gap(state, now_ms)
         state.mode = "tentative"
         state.cum_dx = 0
         state.cum_dy = 0
+        state.frac_x = 0
     end
     state.last_ts = now_ms
 end
