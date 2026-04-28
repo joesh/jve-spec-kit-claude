@@ -1101,6 +1101,91 @@ function M.load_media()
     return media_items
 end
 
+-- Build the browser entry for one master-sequence row joined with its
+-- media_ref/media. Under V13 a "master clip" IS the sequence (kind='master'),
+-- so clip_id == sequence_id; media_id comes from the (possibly absent)
+-- media_ref join. Used only by load_master_clips.
+local function build_master_clip_entry(q)
+    -- LEFT JOIN: if no media row, is_still stays nil (not false) so the
+    -- browser classifier can distinguish "no media" from "has media, not still".
+    local media_is_still
+    local media_is_still_raw = q:value(24)
+    if media_is_still_raw ~= nil then
+        media_is_still = tonumber(media_is_still_raw) == 1
+    end
+
+    local seq_id            = q:value(0)
+    local seq_project_id    = q:value(2)
+    local seq_fps_num       = q:value(3)
+    local seq_fps_den       = q:value(4)
+    local seq_width         = q:value(5)
+    local seq_height        = q:value(6)
+    local media_id          = q:value(10)
+    local media_path        = q:value(13)
+    local media_duration    = q:value(14)
+    local media_width       = q:value(17)
+    local media_height      = q:value(18)
+    local media_channels    = q:value(19)
+    local media_codec       = q:value(20)
+
+    local media_info = {
+        id             = media_id,
+        project_id     = q:value(11),
+        name           = q:value(12),
+        file_name      = q:value(12),
+        file_path      = media_path,
+        duration       = media_duration,
+        frame_rate     = { fps_numerator = q:value(15), fps_denominator = q:value(16) },
+        width          = media_width,
+        height         = media_height,
+        audio_channels = media_channels,
+        codec          = media_codec,
+        metadata       = q:value(21),
+        created_at     = q:value(22),
+        modified_at    = q:value(23),
+        is_still       = media_is_still,
+    }
+
+    -- The masterclip sequence IS the masterclip (IS-a relationship).
+    local sequence_info = {
+        id                = seq_id,
+        project_id        = seq_project_id,
+        frame_rate        = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+        width             = seq_width,
+        height            = seq_height,
+        audio_sample_rate = q:value(7),
+    }
+
+    return {
+        clip_id        = seq_id,
+        sequence_id    = seq_id,
+        project_id     = seq_project_id,
+        name           = q:value(1),
+        media_id       = media_id,
+
+        -- Listing-level defaults (browsers display the whole master).
+        timeline_start = 0,
+        duration       = media_duration or 0,
+        source_in      = 0,
+        source_out     = media_duration or 0,
+
+        frame_rate     = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
+        enabled        = true,
+        created_at     = q:value(8),
+        modified_at    = q:value(9),
+        media          = media_info,
+        sequence       = sequence_info,
+
+        -- Convenience fields for consumers.
+        file_path      = media_path,
+        width          = media_width or seq_width,
+        height         = media_height or seq_height,
+        codec          = media_codec,
+        is_still       = media_is_still,
+        audio_channels = media_channels,
+    }
+end
+
 function M.load_master_clips(project_id)
     -- V13: master sequences hold media_refs (not clips). Each master sequence
     -- represents one media file; the media_ref join carries media_id, with
@@ -1108,37 +1193,24 @@ function M.load_master_clips(project_id)
     if not project_id or project_id == "" then
         error("FATAL: load_master_clips requires project_id", 2)
     end
-
     if not db_connection then
         error("FATAL: No database connection - cannot load master clips")
     end
 
     local query = db_connection:prepare([[
         SELECT DISTINCT
-            s.id,
-            s.name,
-            s.project_id,
-            s.fps_numerator,
-            s.fps_denominator,
-            s.width,
-            s.height,
+            s.id, s.name, s.project_id,
+            s.fps_numerator, s.fps_denominator,
+            s.width, s.height,
             s.audio_sample_rate,
-            s.created_at,
-            s.modified_at,
+            s.created_at, s.modified_at,
             mr.media_id,
-            m.project_id,
-            m.name,
-            m.file_path,
+            m.project_id, m.name, m.file_path,
             m.duration_frames,
-            m.fps_numerator,
-            m.fps_denominator,
-            m.width,
-            m.height,
-            m.audio_channels,
-            m.codec,
-            m.metadata,
-            m.created_at,
-            m.modified_at,
+            m.fps_numerator, m.fps_denominator,
+            m.width, m.height,
+            m.audio_channels, m.codec, m.metadata,
+            m.created_at, m.modified_at,
             m.is_still
         FROM sequences s
         LEFT JOIN media_refs mr ON mr.owner_sequence_id = s.id
@@ -1148,116 +1220,17 @@ function M.load_master_clips(project_id)
         GROUP BY s.id
         ORDER BY s.name
     ]])
-
     if not query then
         error("FATAL: Failed to prepare master clip query")
     end
-
     query:bind_value(1, project_id)
 
     local clips = {}
     if query:exec() then
         while query:next() do
-            local seq_id = query:value(0)
-            local seq_name = query:value(1)
-            local seq_project_id = query:value(2)
-            local seq_fps_num = query:value(3)
-            local seq_fps_den = query:value(4)
-            local seq_width = query:value(5)
-            local seq_height = query:value(6)
-            local seq_audio_rate = query:value(7)
-            local seq_created_at = query:value(8)
-            local seq_modified_at = query:value(9)
-
-            local media_id = query:value(10)
-            local media_project_id = query:value(11)
-            local media_name = query:value(12)
-            local media_path = query:value(13)
-            local media_duration_frames = query:value(14)
-            local media_fps_num = query:value(15)
-            local media_fps_den = query:value(16)
-            local media_width = query:value(17)
-            local media_height = query:value(18)
-            local media_channels = query:value(19)
-            local media_codec = query:value(20)
-            local media_metadata = query:value(21)
-            local media_created_at = query:value(22)
-            local media_modified_at = query:value(23)
-            -- LEFT JOIN: if no media row, keep is_still nil (not false) so the
-            -- browser classifier can distinguish "no media" from "has media, not still".
-            local media_is_still_raw = query:value(24)
-            local media_is_still
-            if media_is_still_raw ~= nil then
-                media_is_still = tonumber(media_is_still_raw) == 1
-            end
-
-            local media_info = {
-                id = media_id,
-                project_id = media_project_id,
-                name = media_name,
-                file_name = media_name,
-                file_path = media_path,
-                duration = media_duration_frames,
-                frame_rate = { fps_numerator = media_fps_num, fps_denominator = media_fps_den },
-                width = media_width,
-                height = media_height,
-                audio_channels = media_channels,
-                codec = media_codec,
-                metadata = media_metadata,
-                created_at = media_created_at,
-                modified_at = media_modified_at,
-                is_still = media_is_still,
-            }
-
-            -- The masterclip sequence IS the masterclip (IS-a relationship)
-            local sequence_info = {
-                id = seq_id,
-                project_id = seq_project_id,
-                frame_rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
-                width = seq_width,
-                height = seq_height,
-                audio_sample_rate = seq_audio_rate
-            }
-
-            -- Browser entry for a master sequence. Under V13 a "master clip"
-            -- is a sequence with kind='master', so:
-            --   clip_id        = sequence id (browser uses this as primary key)
-            --   sequence_id    = sequence id (canonical V13 alias)
-            --   media_id       = the master's first/only media_ref's media id
-            local clip_entry = {
-                clip_id = seq_id,
-                sequence_id = seq_id,
-                project_id = seq_project_id,
-                name = seq_name,
-                media_id = media_id,
-
-                -- Listing-level defaults (browsers display the whole master).
-                timeline_start = 0,
-                duration = media_duration_frames or 0,
-                source_in = 0,
-                source_out = media_duration_frames or 0,
-
-                frame_rate = { fps_numerator = seq_fps_num, fps_denominator = seq_fps_den },
-
-                enabled = true,
-                created_at = seq_created_at,
-                modified_at = seq_modified_at,
-                media = media_info,
-                sequence = sequence_info,
-            }
-
-            -- Convenience fields for consumers
-            clip_entry.file_path = media_path
-            clip_entry.width = media_width or seq_width
-            clip_entry.height = media_height or seq_height
-            clip_entry.codec = media_codec
-            clip_entry.is_still = media_is_still
-            clip_entry.audio_channels = media_channels
-
-            table.insert(clips, clip_entry)
+            clips[#clips + 1] = build_master_clip_entry(query)
         end
     end
-
     query:finalize()
 
     log.event("Loaded %d master clips from database", #clips)
@@ -1375,9 +1348,20 @@ function M.load_sequence_record(sequence_id)
             audio_sample_rate = tonumber(query:value(15))
         }
 
-        if not sequence.width or not sequence.height then
+        -- width/height are NULL on audio-only masters (schema permits it
+        -- for kind='master' specifically). For every other sequence both
+        -- must be positive integers.
+        if (sequence.width == nil) ~= (sequence.height == nil) then
             query:finalize()
-            error(string.format("FATAL: sequence %s missing width/height", tostring(sequence_id)))
+            error(string.format("FATAL: sequence %s has only one of width/height set",
+                tostring(sequence_id)))
+        end
+        if sequence.width == nil and sequence.kind ~= "master" then
+            query:finalize()
+            error(string.format(
+                "FATAL: sequence %s has kind='%s' but NULL width/height "
+                .. "(NULL is permitted only on masters)",
+                tostring(sequence_id), tostring(sequence.kind)))
         end
 
         if not sequence.playhead_value or not sequence.viewport_start_value or not sequence.viewport_duration_frames_value then
@@ -1385,11 +1369,21 @@ function M.load_sequence_record(sequence_id)
             error(string.format("FATAL: sequence %s missing view/playhead fields", tostring(sequence_id)))
         end
 
-        if not sequence.audio_sample_rate or sequence.audio_sample_rate <= 0 then
+        -- audio_sample_rate is NULL on video-only masters (schema permits
+        -- this for kind='master' specifically). For every other sequence
+        -- a positive rate is required.
+        if sequence.audio_sample_rate ~= nil and sequence.audio_sample_rate <= 0 then
             query:finalize()
             error(string.format(
-                "FATAL: sequence %s missing valid audio_sample_rate", tostring(sequence_id)
-            ))
+                "FATAL: sequence %s has invalid audio_sample_rate (must be NULL or > 0)",
+                tostring(sequence_id)))
+        end
+        if sequence.audio_sample_rate == nil and sequence.kind ~= "master" then
+            query:finalize()
+            error(string.format(
+                "FATAL: sequence %s has kind='%s' but NULL audio_sample_rate "
+                .. "(NULL is permitted only on masters)",
+                tostring(sequence_id), tostring(sequence.kind)))
         end
     end
 
@@ -1786,6 +1780,164 @@ function M.load_bins(project_id, opts)
     return bins
 end
 
+-- Capture every existing tag_assignment for (project_id, namespace_id) so
+-- we can restore them after the bin purge cascades through. Returns the
+-- list of assignments (possibly empty); never errors — failure here just
+-- means we restore nothing.
+local function snapshot_existing_assignments(project_id, namespace_id)
+    local saved = {}
+    local stmt = db_connection:prepare([[
+        SELECT tag_id, entity_type, entity_id FROM tag_assignments
+        WHERE project_id = ? AND namespace_id = ?
+    ]])
+    if not stmt then return saved end
+    stmt:bind_value(1, project_id)
+    stmt:bind_value(2, namespace_id)
+    if stmt:exec() then
+        while stmt:next() do
+            saved[#saved + 1] = {
+                tag_id      = stmt:value(0),
+                entity_type = stmt:value(1),
+                entity_id   = stmt:value(2),
+            }
+        end
+    end
+    stmt:finalize()
+    return saved
+end
+
+-- DELETE every tag in the given namespace. tag_assignments cascades.
+local function purge_namespace_tags(project_id, namespace_id)
+    local stmt = db_connection:prepare([[
+        DELETE FROM tags WHERE project_id = ? AND namespace_id = ?
+    ]])
+    if not stmt then return end
+    stmt:bind_value(1, project_id)
+    stmt:bind_value(2, namespace_id)
+    stmt:exec()
+    stmt:finalize()
+end
+
+-- INSERT each bin in the ordered list as a tag row. Returns (inserted_set, err)
+-- — caller rolls back the surrounding transaction on err.
+local function upsert_bin_rows(project_id, namespace_id, ordered, lookup, path_cache)
+    local stmt = db_connection:prepare([[
+        INSERT INTO tags (id, project_id, namespace_id, name, path, parent_id, sort_index)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    ]])
+    if not stmt then
+        return nil, "save_bins: failed to prepare upsert statement"
+    end
+    local inserted = {}
+    for _, bin in ipairs(ordered) do
+        if stmt.reset then stmt:reset() end
+        stmt:clear_bindings()
+        stmt:bind_value(1, bin.id)
+        stmt:bind_value(2, project_id)
+        stmt:bind_value(3, namespace_id)
+        stmt:bind_value(4, bin.name)
+        stmt:bind_value(5, path_cache[bin.id])
+        if bin.parent_id and lookup[bin.parent_id] then
+            stmt:bind_value(6, bin.parent_id)
+        elseif stmt.bind_null then
+            stmt:bind_null(6)
+        else
+            stmt:bind_value(6, nil)
+        end
+        stmt:bind_value(7, bin.sort_index or 0)
+        if stmt:exec() == false then
+            local reason = string.format(
+                "save_bins: failed to upsert bin %s (project_id=%s, ns=%s, error=%s, rc=%s)",
+                tostring(bin.id), tostring(project_id), tostring(namespace_id),
+                tostring(stmt:last_error() or "unknown error"),
+                tostring(stmt:last_result_code() or "?"))
+            stmt:finalize()
+            return nil, reason
+        end
+        inserted[bin.id] = true
+    end
+    stmt:finalize()
+    return inserted, nil
+end
+
+-- Find tag rows in this namespace that the upsert pass DIDN'T re-insert
+-- (i.e., the caller dropped the bin). Returns the list of stale ids.
+local function collect_stale_bin_ids(project_id, namespace_id, inserted)
+    local stmt = db_connection:prepare([[
+        SELECT id FROM tags WHERE project_id = ? AND namespace_id = ?
+    ]])
+    if not stmt then return nil, "save_bins: failed to prepare select statement" end
+    stmt:bind_value(1, project_id)
+    stmt:bind_value(2, namespace_id)
+    local stale_ids = {}
+    if stmt:exec() then
+        while stmt:next() do
+            local id = stmt:value(0)
+            if id and not inserted[id] then
+                stale_ids[#stale_ids + 1] = id
+            end
+        end
+    end
+    stmt:finalize()
+    return stale_ids
+end
+
+-- DELETE the stale bin tags. Returns (true, nil) on success, (false, reason)
+-- on the first failed delete.
+local function delete_stale_bin_ids(project_id, namespace_id, stale_ids)
+    if #stale_ids == 0 then return true end
+    local stmt = db_connection:prepare([[
+        DELETE FROM tags WHERE project_id = ? AND namespace_id = ? AND id = ?
+    ]])
+    if not stmt then return false, "save_bins: failed to prepare stale delete statement" end
+    for _, stale_id in ipairs(stale_ids) do
+        stmt:bind_value(1, project_id)
+        stmt:bind_value(2, namespace_id)
+        stmt:bind_value(3, stale_id)
+        local ok = stmt:exec()
+        stmt:clear_bindings()
+        if ok == false then
+            local reason = string.format(
+                "save_bins: failed to delete stale bin %s (%s, rc=%s)",
+                tostring(stale_id),
+                tostring(stmt:last_error() or "unknown error"),
+                tostring(stmt:last_result_code() or "?"))
+            stmt:finalize()
+            return false, reason
+        end
+    end
+    stmt:finalize()
+    return true
+end
+
+-- Re-INSERT the saved tag_assignments, but only for bins that survived
+-- the purge/upsert (orphan assignments to deleted bins are dropped).
+local function restore_bin_assignments(project_id, namespace_id, saved_assignments, inserted)
+    if #saved_assignments == 0 then return end
+    local stmt = db_connection:prepare([[
+        INSERT OR IGNORE INTO tag_assignments
+            (tag_id, project_id, namespace_id, entity_type, entity_id)
+        VALUES (?, ?, ?, ?, ?)
+    ]])
+    if not stmt then
+        log.warn("save_bins: failed to prepare restore statement")
+        return
+    end
+    for _, a in ipairs(saved_assignments) do
+        if inserted[a.tag_id] then
+            if stmt.reset then stmt:reset() end
+            stmt:bind_value(1, a.tag_id)
+            stmt:bind_value(2, project_id)
+            stmt:bind_value(3, namespace_id)
+            stmt:bind_value(4, a.entity_type)
+            stmt:bind_value(5, a.entity_id)
+            stmt:exec()
+            stmt:clear_bindings()
+        end
+    end
+    stmt:finalize()
+end
+
 function M.save_bins(project_id, bins, opts)
     if not project_id or project_id == "" then
         local reason = "save_bins: Missing project_id"
@@ -1821,166 +1973,34 @@ function M.save_bins(project_id, bins, opts)
         return false, reason
     end
 
-    -- Save existing tag_assignments before deleting bins (to survive ON DELETE CASCADE)
-    local saved_assignments = {}
-    local save_stmt = db_connection:prepare([[
-        SELECT tag_id, entity_type, entity_id FROM tag_assignments
-        WHERE project_id = ? AND namespace_id = ?
-    ]])
-    if save_stmt then
-        save_stmt:bind_value(1, project_id)
-        save_stmt:bind_value(2, namespace_id)
-        if save_stmt:exec() then
-            while save_stmt:next() do
-                table.insert(saved_assignments, {
-                    tag_id = save_stmt:value(0),
-                    entity_type = save_stmt:value(1),
-                    entity_id = save_stmt:value(2)
-                })
-            end
-        end
-        save_stmt:finalize()
-    end
+    -- Capture assignments before the cascade-delete wipes them.
+    local saved_assignments = snapshot_existing_assignments(project_id, namespace_id)
+    purge_namespace_tags(project_id, namespace_id)
 
-    local purge_stmt = db_connection:prepare([[
-        DELETE FROM tags
-        WHERE project_id = ? AND namespace_id = ?
-    ]])
-    if purge_stmt then
-        purge_stmt:bind_value(1, project_id)
-        purge_stmt:bind_value(2, namespace_id)
-        purge_stmt:exec()
-        purge_stmt:finalize()
-    end
-
-    local upsert_stmt = db_connection:prepare([[
-        INSERT INTO tags (id, project_id, namespace_id, name, path, parent_id, sort_index)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    ]])
-    if not upsert_stmt then
+    local inserted, upsert_err = upsert_bin_rows(
+        project_id, namespace_id, ordered, lookup, path_cache)
+    if not inserted then
         rollback_transaction(started)
-        return false, "save_bins: failed to prepare upsert statement"
+        return false, upsert_err
     end
 
-    local inserted = {}
-    for _, bin in ipairs(ordered) do
-        if upsert_stmt.reset then
-            upsert_stmt:reset()
-        end
-        upsert_stmt:clear_bindings()
-        local path = path_cache[bin.id]
-        upsert_stmt:bind_value(1, bin.id)
-        upsert_stmt:bind_value(2, project_id)
-        upsert_stmt:bind_value(3, namespace_id)
-        upsert_stmt:bind_value(4, bin.name)
-        upsert_stmt:bind_value(5, path)
-        if bin.parent_id and lookup[bin.parent_id] then
-            upsert_stmt:bind_value(6, bin.parent_id)
-        elseif upsert_stmt.bind_null then
-            upsert_stmt:bind_null(6)
-        else
-            upsert_stmt:bind_value(6, nil)
-        end
-        upsert_stmt:bind_value(7, bin.sort_index or 0)
-        local success = upsert_stmt:exec()
-        if success == false then
-            local reason = string.format(
-                "save_bins: failed to upsert bin %s (project_id=%s, ns=%s, error=%s, rc=%s)",
-                tostring(bin.id),
-                tostring(project_id),
-                tostring(namespace_id),
-                tostring(upsert_stmt:last_error() or "unknown error"),
-                tostring(upsert_stmt:last_result_code() or "?")
-            )
-            upsert_stmt:finalize()
-            rollback_transaction(started)
-            return false, reason
-        end
-        inserted[bin.id] = true
-    end
-    upsert_stmt:finalize()
-
-    local select_stmt = db_connection:prepare([[
-        SELECT id
-        FROM tags
-        WHERE project_id = ? AND namespace_id = ?
-    ]])
-        if not select_stmt then
-            rollback_transaction(started)
-            return false, "save_bins: failed to prepare select statement"
-        end
-    select_stmt:bind_value(1, project_id)
-    select_stmt:bind_value(2, BIN_NAMESPACE)
-
-    local stale_ids = {}
-    if select_stmt:exec() then
-        while select_stmt:next() do
-            local existing_id = select_stmt:value(0)
-            if existing_id and not inserted[existing_id] then
-                table.insert(stale_ids, existing_id)
-            end
-        end
-    end
-    select_stmt:finalize()
-
-    if #stale_ids > 0 then
-        local delete_stmt = db_connection:prepare([[
-            DELETE FROM tags
-            WHERE project_id = ? AND namespace_id = ? AND id = ?
-        ]])
-        if not delete_stmt then
-            rollback_transaction(started)
-            return false, "save_bins: failed to prepare stale delete statement"
-        end
-        for _, stale_id in ipairs(stale_ids) do
-            delete_stmt:bind_value(1, project_id)
-            delete_stmt:bind_value(2, namespace_id)
-            delete_stmt:bind_value(3, stale_id)
-            local success = delete_stmt:exec()
-            delete_stmt:clear_bindings()
-        if success == false then
-            local reason = string.format(
-                "save_bins: failed to delete stale bin %s (%s, rc=%s)",
-                tostring(stale_id),
-                tostring(delete_stmt:last_error() or "unknown error"),
-                tostring(delete_stmt:last_result_code() or "?")
-            )
-            delete_stmt:finalize()
-            rollback_transaction(started)
-            return false, reason
-            end
-        end
-        delete_stmt:finalize()
+    -- Note: stale collection still uses BIN_NAMESPACE specifically, which
+    -- mirrors the original behavior (a non-bin namespace still cleans only
+    -- bin tags). resolve_namespace returns BIN_NAMESPACE by default.
+    local stale_ids, stale_select_err = collect_stale_bin_ids(
+        project_id, BIN_NAMESPACE, inserted)
+    if not stale_ids then
+        rollback_transaction(started)
+        return false, stale_select_err
     end
 
-    -- Restore saved tag_assignments (only for bins that still exist)
-    if #saved_assignments > 0 then
-        local restore_stmt = db_connection:prepare([[
-            INSERT OR IGNORE INTO tag_assignments (tag_id, project_id, namespace_id, entity_type, entity_id)
-            VALUES (?, ?, ?, ?, ?)
-        ]])
-        if restore_stmt then
-            for _, assignment in ipairs(saved_assignments) do
-                -- Only restore if the bin still exists
-                if inserted[assignment.tag_id] then
-                    -- Reset statement before reuse (like upsert_stmt does)
-                    if restore_stmt.reset then
-                        restore_stmt:reset()
-                    end
-                    restore_stmt:bind_value(1, assignment.tag_id)
-                    restore_stmt:bind_value(2, project_id)
-                    restore_stmt:bind_value(3, namespace_id)
-                    restore_stmt:bind_value(4, assignment.entity_type)
-                    restore_stmt:bind_value(5, assignment.entity_id)
-                    restore_stmt:exec()
-                    restore_stmt:clear_bindings()
-                end
-            end
-            restore_stmt:finalize()
-        else
-            log.warn("save_bins: failed to prepare restore statement")
-        end
+    local del_ok, del_err = delete_stale_bin_ids(project_id, namespace_id, stale_ids)
+    if not del_ok then
+        rollback_transaction(started)
+        return false, del_err
     end
+
+    restore_bin_assignments(project_id, namespace_id, saved_assignments, inserted)
 
     if not commit_transaction(started, "save_bins") then
         return false, "save_bins: commit failed"

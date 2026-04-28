@@ -89,12 +89,21 @@ CREATE TABLE IF NOT EXISTS sequences (
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
     fps_denominator INTEGER NOT NULL CHECK(fps_denominator > 0),
 
-    -- Sequence Audio Sample Rate (e.g. 48000)
-    audio_sample_rate INTEGER NOT NULL CHECK(audio_sample_rate > 0),
+    -- Sequence Audio Sample Rate (e.g. 48000). NULL is permitted ONLY for
+    -- masters whose source media has no audio (audio-less video files);
+    -- such masters never emit audio media_refs and never get audio clips
+    -- referencing them, so the rate is genuinely unrepresentable. For all
+    -- other sequences (every nested edit + any master with audio media),
+    -- the rate is required and must be positive.
+    audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate > 0),
 
-    -- Dimensions
-    width INTEGER NOT NULL,
-    height INTEGER NOT NULL,
+    -- Dimensions. NULL is permitted ONLY for masters whose source media
+    -- has no video (audio-only files); such masters never emit video
+    -- media_refs and never get clips referencing them as a video source.
+    -- Every other sequence (every nested edit + any master with video
+    -- media) requires positive integer width/height.
+    width INTEGER CHECK(width IS NULL OR width > 0),
+    height INTEGER CHECK(height IS NULL OR height > 0),
 
     -- Timeline Start Timecode (display offset, does not affect internal coords)
     start_timecode_frame INTEGER NOT NULL DEFAULT 0,

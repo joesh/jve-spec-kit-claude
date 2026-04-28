@@ -361,4 +361,22 @@ function M.calculate_anchor_time(link_group_id, db)
     return anchor_time
 end
 
+-- Delete every clip_links row belonging to `link_group_id`. Use when
+-- the entire link group becomes meaningless (e.g. a command that created
+-- the group is being undone, and the cascade-deletion of the only peer
+-- left a singleton entry behind).
+function M.delete_link_group(link_group_id, db)
+    assert(type(link_group_id) == "string" and link_group_id ~= "",
+        "clip_link.delete_link_group: link_group_id required")
+    db = db or database.get_connection()
+    local stmt = assert(db:prepare(
+        "DELETE FROM clip_links WHERE link_group_id = ?"),
+        "clip_link.delete_link_group: prepare failed")
+    stmt:bind_value(1, link_group_id)
+    assert(stmt:exec(), string.format(
+        "clip_link.delete_link_group: DELETE failed for group %s",
+        tostring(link_group_id)))
+    stmt:finalize()
+end
+
 return M
