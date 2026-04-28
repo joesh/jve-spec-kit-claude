@@ -381,9 +381,16 @@ local function parse_sequence(sequence_node)
         if name == "name" then
             sequence_info.name = child.text
         elseif name == "rate" then
+            -- Apple's FCP7 XML reference defines <timebase> as required
+            -- with no default. Per rule 2.13, refuse rather than silently
+            -- inventing 30fps.
             for _, rate_child in ipairs(child.children or {}) do
                 if rate_child.tag == "timebase" then
-                    sequence_info.frame_rate = tonumber(rate_child.text) or 30.0
+                    local tb = tonumber(rate_child.text)
+                    assert(tb and tb > 0, string.format(
+                        "FCP7 XML import: <rate><timebase> must be a positive number; got %q",
+                        tostring(rate_child.text)))
+                    sequence_info.frame_rate = tb
                 end
             end
         end
@@ -1104,10 +1111,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
             -- 013: edit timelines from FCP7 XML are kind='nested'.
-            -- audio_sample_rate is parsed from <audio><samplecharacteristics><samplerate>;
-            -- if missing, use the project-conventional default (FCP7's own
-            -- default mix bus rate is 48000).
-            local seq_audio_rate = seq_info.audio_sample_rate or 48000
+            -- Apple's FCP7 XML reference (Final Cut Pro XML Interchange Format)
+            -- specifies <samplerate> as required (valid entries 32000/44100/48000)
+            -- with NO documented default. Per rule 2.13 + 1.12, refuse rather
+            -- than silently inventing one.
+            local seq_audio_rate = seq_info.audio_sample_rate
+            assert(type(seq_audio_rate) == "number" and seq_audio_rate > 0,
+                string.format(
+                    "FCP7 XML import: sequence '%s' is missing "
+                    .. "<audio><samplecharacteristics><samplerate>. The FCP7 "
+                    .. "XML spec defines no default for this element; refusing "
+                    .. "to import rather than silently choosing a rate.",
+                    tostring(seq_info.name)))
             local sequence = Sequence.create(
                 seq_info.name,
                 project_id,

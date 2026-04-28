@@ -147,7 +147,7 @@ local function copy_timeline_selection()
         return false, "Timeline state unavailable"
     end
 
-    local selected = timeline_state.get_selected_clips() or {}
+    local selected = timeline_state.get_selected_clips()
     if #selected == 0 then
         return false, "No timeline clips selected"
     end

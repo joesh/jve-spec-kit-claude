@@ -1,16 +1,13 @@
---- Compatibility shim for legacy tests that require the monolithic
--- core.command_implementations module. The real command execution logic
--- now lives in per-command modules under core.commands and is auto-loaded
--- by command_manager/command_registry. We provide a no-op register_commands
--- so callers that expect the old API continue to work without eagerly
--- loading every command module.
+--- Test helper: load every per-command module and register its
+-- executor/undoer with command_manager. Production code does not need this
+-- — command_manager/command_registry auto-load on demand. Tests that need
+-- every command available up-front (e.g. ones that exercise undo across
+-- many command types) call M.register_commands.
 local command_manager = require("core.command_manager")
 
 local M = {}
 
--- Load and register all command modules to maintain compatibility with legacy
--- tests that expect core.command_implementations.register_commands to populate
--- executor/undoer tables.
+-- The list of per-command modules under core.commands.
 local command_modules = {
     "add_clips_to_sequence", "add_track", "batch_ripple_edit",
     "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",

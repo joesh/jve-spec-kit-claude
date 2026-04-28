@@ -351,7 +351,7 @@ function M.create_audio_track_resolver(sequence_id)
     if timeline_state and timeline_state.get_audio_tracks then
         audio_tracks = timeline_state.get_audio_tracks() or {}
     else
-        audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
+        audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO")
     end
 
     return function(_, index)
@@ -363,7 +363,7 @@ function M.create_audio_track_resolver(sequence_id)
 
         -- Need to create audio track - first refresh the track list from DB
         -- (handles redo case where tracks exist but weren't in our initial list)
-        local fresh_tracks = Track.find_by_sequence(sequence_id, "AUDIO") or {}
+        local fresh_tracks = Track.find_by_sequence(sequence_id, "AUDIO")
         if #fresh_tracks > #audio_tracks then
             audio_tracks = fresh_tracks
             if index < #audio_tracks then

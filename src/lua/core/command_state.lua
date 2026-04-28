@@ -134,7 +134,7 @@ function M.capture_selection_snapshot()
     -- Lazy load to avoid circular dependency
     local timeline_state = require('ui.timeline.timeline_state')
     
-    local selected_clips = timeline_state.get_selected_clips() or {}
+    local selected_clips = timeline_state.get_selected_clips()
     local clip_ids = {}
     for _, clip in ipairs(selected_clips) do
         if clip and clip.id then
@@ -142,7 +142,7 @@ function M.capture_selection_snapshot()
         end
     end
 
-    local selected_edges = timeline_state.get_selected_edges() or {}
+    local selected_edges = timeline_state.get_selected_edges()
     local edge_descriptors = {}
     for _, edge in ipairs(selected_edges) do
         if edge and edge.clip_id and edge.edge_type then
