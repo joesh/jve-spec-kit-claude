@@ -475,6 +475,47 @@ function M.init(path)
     return M.set_path(path)
 end
 
+-- Helpers for set_path — declared above so the closures resolve to
+-- the locals (Lua scoping). See rule 2.5 (algorithm-style).
+
+-- Reads the outgoing project_id without letting a corrupt outgoing DB
+-- block the switch. Per Joe's log-and-continue policy: errors are
+-- logged loud (so operators see them) and the lookup falls through to
+-- nil, which the pre-switch handler treats as cold-start. Returning
+-- nil unconditionally on a corrupt DB is safer than failing to detach
+-- (would leave the editor stuck on an unusable project).
+local function lookup_outgoing_project_id()
+    if not db_connection then return nil end
+    local ok, id_or_err = pcall(M.get_current_project_id)
+    if ok then return id_or_err end
+    log.error("set_path: failed to read outgoing project_id (%s) — treating as cold-start.\n%s",
+        tostring(id_or_err), debug.traceback("", 2))
+    return nil
+end
+
+-- Emit project_will_change before the outgoing connection closes.
+-- Lazy require on core.signals: signals → core.error_system → core.logger
+-- → this module is the cycle the lazy load breaks. If the require fails
+-- (rare; would mean signals.lua is broken), we still want the swap to
+-- proceed — the bridge surfaces the require failure.
+local function emit_pre_switch_signal(outgoing_id)
+    local ok, Signals = pcall(require, "core.signals")
+    if not ok or not Signals or not Signals.emit then
+        log.error("set_path: failed to load core.signals (%s); skipping pre-switch emit",
+            tostring(Signals))
+        return
+    end
+    Signals.emit("project_will_change", outgoing_id)
+end
+
+local function close_outgoing_connection()
+    if db_connection and db_connection.close then
+        db_connection:close()
+        db_connection = nil
+    end
+    tag_tables_supported = nil
+end
+
 -- Set database path and open connection.
 --
 -- Emits the project_will_change signal BEFORE closing the outgoing
@@ -484,32 +525,11 @@ end
 -- nil-tolerant. Per Signals dispatcher contract, individual handler
 -- errors are caught and logged; the swap proceeds regardless.
 function M.set_path(path)
-    -- Pre-switch phase: emit project_will_change while the outgoing
-    -- DB is still live. Handlers (e.g. media_status flush, deferred-
-    -- timer cancellation) get one last opportunity to interact with
-    -- the outgoing project.
-    local outgoing_id = nil
-    if db_connection then
-        -- Best-effort outgoing-id lookup. Use pcall so a corrupted
-        -- outgoing DB doesn't block the switch — the worst case is
-        -- handlers see outgoing=nil and treat it as cold-start, which
-        -- is safer than failing to detach.
-        local ok, id_or_err = pcall(M.get_current_project_id)
-        if ok then outgoing_id = id_or_err end
-    end
-    -- Lazy require to avoid circular dependency: signals.lua requires
-    -- core.error_system which transitively requires core.logger which
-    -- this module is.
-    local ok_signals, Signals = pcall(require, "core.signals")
-    if ok_signals and Signals and Signals.emit then
-        Signals.emit("project_will_change", outgoing_id)
-    end
-
-    if db_connection and db_connection.close then
-        db_connection:close()
-        db_connection = nil
-    end
-    tag_tables_supported = nil
+    -- Algorithm: emit pre-switch → close outgoing → open incoming
+    -- → apply schema. Pre-switch phase runs while db_connection still
+    -- resolves to the outgoing project.
+    emit_pre_switch_signal(lookup_outgoing_project_id())
+    close_outgoing_connection()
 
     db_path = path
     log.event("Database path set to: %s", tostring(path))

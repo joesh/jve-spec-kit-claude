@@ -717,28 +717,38 @@ Signals.connect("media_changed", M.reprobe_media_ids, 30)
 -- Priority 12: after playback_controller (priority 10) stops; before
 -- secondary cleanup. Same priority as the project_changed handler so
 -- pre/post pair line up in dispatch order.
-Signals.connect("project_will_change", function(outgoing_id)
-    if not outgoing_id or outgoing_id == "" then return end
+-- Pre-switch handler helpers (rule 2.5 algorithm-style). Helpers
+-- declared before the Signals.connect closure that uses them.
+
+local DRAIN_BUDGET_MS = 1000
+
+-- Best-effort flush of in-flight writes to the outgoing DB, bounded
+-- by FR-003a's 1 s budget. Runs while current_project_id is still
+-- the outgoing id, so the flush lands in the outgoing project.
+local function flush_outgoing_with_drain_budget()
     M.cancel_background_probe()
-    -- Best-effort drain of in-flight writes. Bounded by FR-003a's 1 s
-    -- budget; in practice persist_now completes in well under that.
-    -- Drain runs while current_project_id is still the outgoing id,
-    -- so the flush lands in the outgoing DB.
-    local DRAIN_BUDGET_MS = 1000
-    local drained = M.wait_for_drain(DRAIN_BUDGET_MS)
-    if not drained then
+    if not M.wait_for_drain(DRAIN_BUDGET_MS) then
         log.warn("media_status: drain budget exceeded; %d writes discarded",
             M.pending_count())
     end
-    -- Unbind the cache from the outgoing project. Any deferred persist
-    -- timer that survived the drain and fires AFTER this point (in the
-    -- window between set_path's DB swap and project_changed's M.clear)
-    -- sees current_project_id == nil, short-circuits in
-    -- has_pending_persist_state(), and exits without invoking Layer 2.
-    -- Without this unbind, Layer 2 catches every such timer at error
-    -- level (correct safety-net behavior, but noisy in TSO during
-    -- normal project-switch sequences).
+end
+
+-- Unbind the cache from the outgoing project. Any deferred persist
+-- timer that survived the drain and fires AFTER this point (in the
+-- window between set_path's DB swap and project_changed's M.clear)
+-- sees current_project_id == nil, short-circuits in
+-- has_pending_persist_state, and exits without invoking Layer 2.
+-- Without this unbind, Layer 2 catches every such timer at error
+-- level (correct safety-net behavior, but noisy during normal
+-- project-switch sequences).
+local function unbind_outgoing_cache()
     current_project_id = nil
+end
+
+Signals.connect("project_will_change", function(outgoing_id)
+    if not outgoing_id or outgoing_id == "" then return end
+    flush_outgoing_with_drain_budget()
+    unbind_outgoing_cache()
 end, 12)
 
 -- Post-switch: clear cache, load new project's persisted state, start bg probe.

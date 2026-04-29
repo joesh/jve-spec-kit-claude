@@ -459,11 +459,13 @@ end
 -- core.persist_state_to_db only writes when persist_dirty is true; it
 -- short-circuits otherwise. Cold start (outgoing_id == nil) has
 -- nothing to flush; we skip without erroring.
+assert(type(core.persist_state_to_db) == "function",
+    "timeline_state: timeline_core_state.persist_state_to_db is required " ..
+    "for the project_will_change pre-switch handler (feature 014). " ..
+    "If this function was renamed/removed, update both modules together.")
 Signals.connect("project_will_change", function(outgoing_id)
     if not outgoing_id or outgoing_id == "" then return end
-    if core.persist_state_to_db then
-        core.persist_state_to_db(true)
-    end
+    core.persist_state_to_db(true)
 end, 40)
 
 -- Register for project_changed signal
