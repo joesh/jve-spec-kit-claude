@@ -475,8 +475,36 @@ function M.init(path)
     return M.set_path(path)
 end
 
--- Set database path and open connection
+-- Set database path and open connection.
+--
+-- Emits the project_will_change signal BEFORE closing the outgoing
+-- connection so handlers see the outgoing project's DB as live (per
+-- contracts/signal_will_change.md, feature 014). Cold start is the
+-- nil → P transition: outgoing_id is nil; handlers must be
+-- nil-tolerant. Per Signals dispatcher contract, individual handler
+-- errors are caught and logged; the swap proceeds regardless.
 function M.set_path(path)
+    -- Pre-switch phase: emit project_will_change while the outgoing
+    -- DB is still live. Handlers (e.g. media_status flush, deferred-
+    -- timer cancellation) get one last opportunity to interact with
+    -- the outgoing project.
+    local outgoing_id = nil
+    if db_connection then
+        -- Best-effort outgoing-id lookup. Use pcall so a corrupted
+        -- outgoing DB doesn't block the switch — the worst case is
+        -- handlers see outgoing=nil and treat it as cold-start, which
+        -- is safer than failing to detach.
+        local ok, id_or_err = pcall(M.get_current_project_id)
+        if ok then outgoing_id = id_or_err end
+    end
+    -- Lazy require to avoid circular dependency: signals.lua requires
+    -- core.error_system which transitively requires core.logger which
+    -- this module is.
+    local ok_signals, Signals = pcall(require, "core.signals")
+    if ok_signals and Signals and Signals.emit then
+        Signals.emit("project_will_change", outgoing_id)
+    end
+
     if db_connection and db_connection.close then
         db_connection:close()
         db_connection = nil

@@ -1,6 +1,41 @@
 --- General-purpose signal/slot system for JVE
 -- Inspired by Emacs hooks and Qt signals for maximum user extensibility
 -- Provides unified event system for Qt signals, Lua-to-Lua communication, and user extensions
+--
+-- ============================================================
+-- KNOWN SIGNALS (project lifecycle)
+-- ============================================================
+--
+-- The dispatcher is generic over signal names — any string is a valid
+-- signal. The signals listed here are the documented contract surfaces
+-- modules listen on. Adding a new well-known signal? Document it here
+-- alongside the others.
+--
+-- "project_will_change" — emitted SYNCHRONOUSLY before the active
+--   project's database connection is detached. Payload: outgoing_id
+--   (string|nil — nil only at cold start). At handler time, the
+--   live DB connection still resolves to outgoing_id. Modules with
+--   pending writes flush here (e.g. media_status's debounced
+--   persist). Modules with deferred work (single-shot timers,
+--   background workers) cancel here.
+--
+--   Contract: contracts/signal_will_change.md (feature 014).
+--   Emit point: database.set_path, before closing the outgoing
+--   connection.
+--
+-- "project_changed" — emitted SYNCHRONOUSLY after the incoming
+--   project's database is attached. Payload: incoming_id
+--   (string|nil — nil when closing without replacement). At handler
+--   time, the live DB connection resolves to incoming_id. Modules
+--   clear caches and load the new project's persisted state.
+--
+--   Emit point: open_project.post_open_init (and equivalents).
+--
+-- Both signals' per-handler errors are caught by the dispatcher and
+-- logged via the error-system path; the dispatch continues with the
+-- next handler so a single misbehaving handler can't block the
+-- switch.
+
 local error_system = require("core.error_system")
 local unpack = table.unpack or unpack
 
