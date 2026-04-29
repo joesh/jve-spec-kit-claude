@@ -172,7 +172,11 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Test-pass verification
 
-- [ ] **T025** Run T004–T013 again. Confirm all 10 turn green. Re-run the full Lua suite (`./tests/run_lua_tests_all.sh > /tmp/post_phase33.txt 2>&1`). Diff against `/tmp/baseline_build.txt` from T003: only the new tests should differ; no regressions.
+- [X] **T025** Phase 3.3 verification 2026-04-29:
+  - Lua suite: 667 PASSED / 0 FAILED (was 659 baseline + 8 new tests; T011 + T009 GREEN as pins; T004-T008/T010-T013 turned green via implementation tasks).
+  - Binding tests: T008 (`test_lua_callback_stack_trace`) PASS; T009 (`test_anamnesis_reimport_no_asserts`) PASS.
+  - Luacheck on touched files: 0 warnings.
+  - Pre-existing baseline binding-test failures (23 V13 schema migration debt) unchanged: not addressed by this feature, not regressed.
 
 ---
 
