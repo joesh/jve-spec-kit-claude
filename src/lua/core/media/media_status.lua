@@ -271,13 +271,33 @@ function M._count_map(map)
     return n
 end
 
---- Flush dirty cache to DB immediately.
-function M.persist_now()
-    if not current_project_id then return end
-    if not get_database().has_connection() then return end
+-- Helpers for M.persist_now algorithm-style structure (T023). Defined
+-- before M.persist_now so the closures resolve to the locals.
+
+local function has_pending_persist_state()
+    return current_project_id ~= nil and get_database().has_connection()
+end
+
+local function project_id_is_live()
+    -- Layer 2 validation (FR-006): if the live DB doesn't match our
+    -- cached current_project_id, we're a stale deferred-work caller
+    -- post-switch. Log + return false; persist_now no-ops.
+    return get_database().assert_project_id_is_live(
+        current_project_id, "media_status.persist_now")
+end
+
+local function flush_status_cache_to_db()
     local map = build_persist_map()
     get_database().set_project_setting(current_project_id, DB_SETTING_KEY, map)
     log.detail("media_status: persisted %d entries", M._count_map(map))
+end
+
+--- Flush dirty cache to DB immediately. No-op if no project is loaded,
+--- the connection is gone, or the cached project_id is stale (Layer 2).
+function M.persist_now()
+    if not has_pending_persist_state() then return end
+    if not project_id_is_live() then return end
+    flush_status_cache_to_db()
 end
 
 --- Schedule a debounced persist (coalesces rapid status changes).
@@ -409,12 +429,15 @@ function M.update_from_tmb(media_path, offline, error_code)
     end
 end
 
---- Clear all watches and cache. Called on project_changed.
+--- Clear all watches and cache. Called on project_changed (POST-switch).
+--- Does NOT flush pending writes — by the time this runs, the live DB
+--- has already swapped to the incoming project; a flush here would
+--- write the OUTGOING project's status cache to the INCOMING project's
+--- DB (the bug feature 014 fixed). Pending writes are flushed in the
+--- pre-switch handler below (project_will_change at priority 12).
 function M.clear()
     -- Cancel any running background probe before clearing
     M.cancel_background_probe()
-    -- Flush any pending error state before clearing
-    M.persist_now()
     if fs_available then
         FS.CLEAR_ALL()
     end
@@ -614,6 +637,38 @@ function M.cancel_background_probe()
     end
 end
 
+--- Wait up to `timeout_ms` for queued status writes to land in the
+--- outgoing DB. Used by the pre-switch project_will_change handler to
+--- enforce the FR-003a drain budget. Returns true when drained, false
+--- on timeout.
+---
+--- For the current implementation: media_status writes are synchronous
+--- (persist_now writes the full map in one call, no async queue), and
+--- the C++ background codec probe is cancelled by cancel_background_
+--- probe before this is called. So calling persist_now here drains any
+--- pending in-memory dirty state. The timeout_ms parameter is a hard
+--- cap for future implementations that gain async write queues.
+function M.wait_for_drain(timeout_ms)
+    assert(type(timeout_ms) == "number" and timeout_ms >= 0,
+        "media_status.wait_for_drain: timeout_ms must be non-negative number")
+    -- Force a synchronous flush of any debounced state. persist_now is
+    -- synchronous and bounded by the size of status_cache; for the
+    -- expected project sizes this completes well within any reasonable
+    -- timeout. Returns true after flush.
+    M.persist_now()
+    return true
+end
+
+--- Number of dirty cache entries not yet persisted. Diagnostic for the
+--- pre-switch drain-timeout warning log line.
+function M.pending_count()
+    -- A pending debounced timer means the cache has at least one
+    -- entry waiting to be persisted. Without per-entry dirty tracking,
+    -- we report a coarse {0, 1} signal: 0 = clean, 1 = dirty.
+    if persist_timer_active then return 1 end
+    return 0
+end
+
 --- Re-probe current paths of changed media records so the cache is
 -- authoritative by the time views call ensure_clip_status.
 -- @param media_ids table: set {media_id = true, ...}
@@ -645,9 +700,34 @@ end
 -- Priority 30: prime cache before view refresh handlers (default 100).
 Signals.connect("media_changed", M.reprobe_media_ids, 30)
 
--- Register for project_changed signal: flush old, clear, load new, start bg probe
+-- Pre-switch: flush pending writes to the OUTGOING DB before the swap
+-- (feature 014, FR-001..FR-003a). The live DB still resolves to the
+-- outgoing project at this point — persist_now safely lands status
+-- changes in the outgoing project's settings JSON.
+--
+-- Cold start (outgoing_id == nil) has nothing to flush; we skip
+-- without erroring. The project_changed handler below will fire next
+-- with the incoming project_id and load its persisted state.
+--
+-- Priority 12: after playback_controller (priority 10) stops; before
+-- secondary cleanup. Same priority as the project_changed handler so
+-- pre/post pair line up in dispatch order.
+Signals.connect("project_will_change", function(outgoing_id)
+    if not outgoing_id or outgoing_id == "" then return end
+    M.cancel_background_probe()
+    -- Best-effort drain of in-flight writes. Bounded by FR-003a's 1 s
+    -- budget; in practice persist_now completes in well under that.
+    local DRAIN_BUDGET_MS = 1000
+    local drained = M.wait_for_drain(DRAIN_BUDGET_MS)
+    if not drained then
+        log.warn("media_status: drain budget exceeded; %d writes discarded",
+            M.pending_count())
+    end
+end, 12)
+
+-- Post-switch: clear cache, load new project's persisted state, start bg probe.
 Signals.connect("project_changed", function(project_id)
-    M.clear()  -- cancels bg probe, flushes pending writes, clears cache
+    M.clear()  -- clears in-memory cache only (no DB writes)
     if project_id and project_id ~= "" then
         M.load_persisted(project_id)
         M.read_offline_notes_from_db()
