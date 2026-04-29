@@ -22,31 +22,31 @@ SimpleLuaEngine::SimpleLuaEngine() : L(nullptr)
     // Load standard libraries
     luaL_openlibs(L);
 
-    // Install global error handler with stack traces
+    // Install message handler for top-level lua_pcall in executeFile/
+    // executeString. lua_pcall calls __jve_error_handler with the raw
+    // error before storing; the handler enriches with a Lua traceback
+    // and returns the enriched string, which lua_pcall stores as the
+    // error message (then surfaced via m_lastError).
+    //
+    // This handler ONLY fires for top-level script errors (the script's
+    // main chunk). Errors raised inside Qt callbacks (single-shot
+    // timer, button-box accepted, fs watcher, etc.) take a different
+    // path through jve_handle_lua_callback_error in jve_lua_callback.cpp,
+    // which captures its own Lua traceback via luaL_traceback.
+    //
+    // The previous error() override printed traces a second time on
+    // every error() call. That dual-print was redundant for explicit
+    // error() calls and silent for assert() failures (which bypass
+    // the override entirely via luaL_error). The bridge handler is
+    // now the single source for callback-error tracebacks; this
+    // handler is the single source for top-level script-error
+    // tracebacks.
     const char* errorHandler = R"(
-        -- Global error handler that prints detailed stack traces
         function __jve_error_handler(err)
             local trace = debug.traceback("ERROR: " .. tostring(err), 2)
             print(trace)
             return trace
         end
-
-        -- Override default error() to include stack trace (except level 0)
-        local original_error = error
-        function error(message, level)
-            level = level or 1
-            if level > 0 then
-                local trace = debug.traceback(tostring(message), level + 1)
-                print("ERROR with stack trace:")
-                print(trace)
-            end
-            original_error(message, level > 0 and (level + 1) or 0)
-        end
-
-        -- Install panic handler for pcall/xpcall
-        debug.sethook(function()
-            -- This doesn't get called for regular errors, but useful for debugging
-        end, "", 0)
     )";
 
     int result = luaL_dostring(L, errorHandler);
