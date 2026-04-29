@@ -475,13 +475,61 @@ function M.init(path)
     return M.set_path(path)
 end
 
--- Set database path and open connection
-function M.set_path(path)
+-- Helpers for set_path — declared above so the closures resolve to
+-- the locals (Lua scoping). See rule 2.5 (algorithm-style).
+
+-- Reads the outgoing project_id without letting a corrupt outgoing DB
+-- block the switch. Per Joe's log-and-continue policy: errors are
+-- logged loud (so operators see them) and the lookup falls through to
+-- nil, which the pre-switch handler treats as cold-start. Returning
+-- nil unconditionally on a corrupt DB is safer than failing to detach
+-- (would leave the editor stuck on an unusable project).
+local function lookup_outgoing_project_id()
+    if not db_connection then return nil end
+    local ok, id_or_err = pcall(M.get_current_project_id)
+    if ok then return id_or_err end
+    log.error("set_path: failed to read outgoing project_id (%s) — treating as cold-start.\n%s",
+        tostring(id_or_err), debug.traceback("", 2))
+    return nil
+end
+
+-- Emit project_will_change before the outgoing connection closes.
+-- Lazy require on core.signals: signals → core.error_system → core.logger
+-- → this module is the cycle the lazy load breaks. If the require fails
+-- (rare; would mean signals.lua is broken), we still want the swap to
+-- proceed — the bridge surfaces the require failure.
+local function emit_pre_switch_signal(outgoing_id)
+    local ok, Signals = pcall(require, "core.signals")
+    if not ok or not Signals or not Signals.emit then
+        log.error("set_path: failed to load core.signals (%s); skipping pre-switch emit",
+            tostring(Signals))
+        return
+    end
+    Signals.emit("project_will_change", outgoing_id)
+end
+
+local function close_outgoing_connection()
     if db_connection and db_connection.close then
         db_connection:close()
         db_connection = nil
     end
     tag_tables_supported = nil
+end
+
+-- Set database path and open connection.
+--
+-- Emits the project_will_change signal BEFORE closing the outgoing
+-- connection so handlers see the outgoing project's DB as live (per
+-- contracts/signal_will_change.md, feature 014). Cold start is the
+-- nil → P transition: outgoing_id is nil; handlers must be
+-- nil-tolerant. Per Signals dispatcher contract, individual handler
+-- errors are caught and logged; the swap proceeds regardless.
+function M.set_path(path)
+    -- Algorithm: emit pre-switch → close outgoing → open incoming
+    -- → apply schema. Pre-switch phase runs while db_connection still
+    -- resolves to the outgoing project.
+    emit_pre_switch_signal(lookup_outgoing_project_id())
+    close_outgoing_connection()
 
     db_path = path
     log.event("Database path set to: %s", tostring(path))
@@ -1503,6 +1551,50 @@ local function assert_project_exists(project_id)
         tostring(project_id), tostring(sole_id), tostring(db_path)))
 end
 
+-- ====================================================================
+-- Layer 2 — assert_project_id_is_live: log+no-op for module-local
+-- caches that may have gone stale during a project switch.
+-- See specs/014-two-phase-project/contracts/persist_now_validation.md.
+--
+-- Layer 1 (assert_project_exists, above) hard-asserts on caller bugs:
+-- someone passed a wrong id through a public API. Layer 2 logs and
+-- returns false — the caller no-ops its write. Layer 2 catches the
+-- TIMING bug where a deferred-work callback (single-shot timer body,
+-- background worker callback) reads its module-local cached
+-- current_project_id after the project has switched. That race is
+-- an EXPECTED mode of the contract; hard-asserting would re-create
+-- the silent-swallow bug feature 014 exists to fix.
+-- ====================================================================
+
+local function stale_check_possible(cached_id)
+    return cached_id and cached_id ~= "" and db_connection ~= nil
+end
+
+local function log_stale_project_violation(caller_label, cached_id, live_id)
+    log.error(
+        "%s: stale project_id (cached=%s, live=%s) — no-op-ing write\n%s",
+        tostring(caller_label),
+        tostring(cached_id),
+        tostring(live_id),
+        debug.traceback("", 2))
+end
+
+--- Returns true when the cached project_id matches the live DB; false
+--- otherwise. On mismatch logs at error level (the broken-invariant
+--- tier per CLAUDE.md logger usage) and returns false. The caller
+--- MUST no-op its write.
+---
+--- @param cached_id string|nil  module's cached project_id
+--- @param caller_label string   e.g. "media_status.persist_now"
+--- @return boolean is_live
+function M.assert_project_id_is_live(cached_id, caller_label)
+    if not stale_check_possible(cached_id) then return false end
+    local live_id = M.get_current_project_id()
+    if live_id == cached_id then return true end
+    log_stale_project_violation(caller_label, cached_id, live_id)
+    return false
+end
+
 function M.get_project_settings(project_id)
     if not project_id or project_id == "" then
         error("FATAL: get_project_settings requires project_id", 2)
@@ -1949,6 +2041,7 @@ function M.save_bins(project_id, bins, opts)
         log.warn("%s", reason)
         return false, reason
     end
+    assert_project_exists(project_id)  -- Layer 1 (FR-005)
 
     require_tag_tables()
 
@@ -2061,6 +2154,7 @@ function M.save_master_clip_bin_map(project_id, bin_map)
     if not db_connection then
         return false
     end
+    assert_project_exists(project_id)  -- Layer 1 (FR-005)
 
     require_tag_tables()
 
@@ -2138,6 +2232,7 @@ function M.add_to_bin(project_id, entity_ids, bin_id, entity_type)
     assert(bin_id and bin_id ~= "", "database.add_to_bin: missing bin_id")
     assert(entity_type and entity_type ~= "", "database.add_to_bin: missing entity_type")
     assert(db_connection, "database.add_to_bin: no database connection")
+    assert_project_exists(project_id)  -- Layer 1 (FR-005)
     if type(entity_ids) ~= "table" or #entity_ids == 0 then
         return true
     end
@@ -2190,6 +2285,7 @@ function M.remove_from_bin(project_id, entity_ids, bin_id, entity_type)
     assert(bin_id and bin_id ~= "", "database.remove_from_bin: missing bin_id")
     assert(entity_type and entity_type ~= "", "database.remove_from_bin: missing entity_type")
     assert(db_connection, "database.remove_from_bin: no database connection")
+    assert_project_exists(project_id)  -- Layer 1 (FR-005)
     if type(entity_ids) ~= "table" or #entity_ids == 0 then
         return true
     end
@@ -2237,6 +2333,7 @@ function M.set_bin(project_id, entity_ids, bin_id, entity_type)
     assert(project_id and project_id ~= "", "database.set_bin: missing project_id")
     assert(entity_type and entity_type ~= "", "database.set_bin: missing entity_type")
     assert(db_connection, "database.set_bin: no database connection")
+    assert_project_exists(project_id)  -- Layer 1 (FR-005)
     if type(entity_ids) ~= "table" or #entity_ids == 0 then
         return true
     end
@@ -2308,6 +2405,7 @@ function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
     if not project_id or project_id == "" then
         return false, "Missing project_id"
     end
+    assert_project_exists(project_id)  -- Layer 1 (FR-005); validates BEFORE empty-clip-ids short-circuit
     if type(clip_ids) ~= "table" or #clip_ids == 0 then
         return true
     end
@@ -2322,6 +2420,10 @@ function M.assign_master_clips_to_bin(project_id, clip_ids, bin_id)
 end
 
 function M.assign_master_clip_to_bin(project_id, clip_id, bin_id)
+    if not project_id or project_id == "" then
+        return false
+    end
+    assert_project_exists(project_id)  -- Layer 1 (FR-005); validates BEFORE clip_id short-circuit
     if not clip_id or clip_id == "" then
         return false
     end

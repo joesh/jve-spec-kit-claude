@@ -440,9 +440,33 @@ end
 --- empty model (MVC pull). Covers the feature 010 case where the new
 --- project has no active sequence and `load_sequence` is never called —
 --- without this, the previous project's tracks/clips keep rendering.
+---
+--- Post-switch by design: pending writes are flushed in the
+--- project_will_change handler below (feature 014). Before that
+--- pre-switch handler existed, this function had to discard
+--- persist_dirty to avoid writing the outgoing project's state to the
+--- incoming project's DB; pending writes were silently lost on every
+--- project switch. With the pre-switch flush in place, by the time we
+--- reach this handler everything has already been persisted to the
+--- correct (outgoing) DB.
 function M.on_project_change()
     core.reset_for_project_change()
 end
+
+-- Pre-switch: flush pending timeline state to the OUTGOING DB before
+-- the swap (feature 014, FR-001..FR-003). Priority 40 mirrors the
+-- post-switch handler so pre/post pair line up in dispatch order.
+-- core.persist_state_to_db only writes when persist_dirty is true; it
+-- short-circuits otherwise. Cold start (outgoing_id == nil) has
+-- nothing to flush; we skip without erroring.
+assert(type(core.persist_state_to_db) == "function",
+    "timeline_state: timeline_core_state.persist_state_to_db is required " ..
+    "for the project_will_change pre-switch handler (feature 014). " ..
+    "If this function was renamed/removed, update both modules together.")
+Signals.connect("project_will_change", function(outgoing_id)
+    if not outgoing_id or outgoing_id == "" then return end
+    core.persist_state_to_db(true)
+end, 40)
 
 -- Register for project_changed signal
 Signals.connect("project_changed", M.on_project_change, 40)

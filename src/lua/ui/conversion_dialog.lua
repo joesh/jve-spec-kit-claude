@@ -205,7 +205,21 @@ function M.show(config)
         converting = true
         set_converting(true)
 
-        local ok, err = config.convert_fn(config.source_path, dest_path, progress.update)
+        -- Wrap convert_fn in pcall: convert_fn signals success via (true) or
+        -- non-fatal cancel via (false, "Cancelled"), but ASSERTS through Lua
+        -- error() on real failures (e.g. an importer assertion mid-import).
+        -- Without pcall here the assertion bubbles to the Qt button-box handler,
+        -- where lua_pcall + jve_handle_lua_callback_error LOG-AND-DISCARD it,
+        -- leaving the dialog open and a half-written .jvp on disk that the
+        -- user later opens and crashes on.
+        local pcall_ok, ret_or_err, ret_err_msg = pcall(
+            config.convert_fn, config.source_path, dest_path, progress.update)
+        local ok, err
+        if not pcall_ok then
+            ok, err = false, ret_or_err
+        else
+            ok, err = ret_or_err, ret_err_msg
+        end
 
         converting = false
         if progress.is_cancelled() then
@@ -231,6 +245,12 @@ function M.show(config)
                 qt.DIALOG.CLOSE(dialog, true)
             end
         else
+            -- Convert failed (returned (false, msg) or threw). Don't leave a
+            -- partial .jvp on disk: the user would later "Open Recent" it and
+            -- hit a half-imported state. Same cleanup the cancel branch does.
+            os.remove(dest_path)
+            os.remove(dest_path .. "-wal")
+            os.remove(dest_path .. "-shm")
             set_converting(false)
             qt.PROPERTIES.SET_TEXT(error_label, "Error: " .. tostring(err))
             qt.DISPLAY.SET_VISIBLE(error_label, true)

@@ -1500,12 +1500,24 @@ function M.create(opts)
         state.clear()
     end
 
-    -- Set up selection callback for inspector
-    state.set_on_selection_changed(function(selected_clips)
+    -- Set up selection callback for inspector. In the no-active-sequence
+    -- state (feature 010 — project opened with no last_open_sequence_id, or
+    -- after the user closed the last tab) there is no sequence to build a
+    -- selection inspectable for. normalize_timeline_selection asserts on a
+    -- present sequence_id; the boundary handles the absent-sequence case by
+    -- broadcasting an empty selection so the inspector clears.
+    local function broadcast_selection(selected_clips)
+        local sid = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        if not (sid and sid ~= "") then
+            selection_hub.update_selection("timeline", {})
+            return
+        end
         selection_hub.update_selection("timeline", normalize_timeline_selection(selected_clips))
-    end)
+    end
+
+    state.set_on_selection_changed(broadcast_selection)
     local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
-    selection_hub.update_selection("timeline", normalize_timeline_selection(initial_selection))
+    broadcast_selection(initial_selection)
 
     local last_mark_signature = nil
     if #initial_selection == 0 then
@@ -1523,7 +1535,7 @@ function M.create(opts)
             local signature = tostring(mark_in) .. ":" .. tostring(mark_out)
             if signature ~= last_mark_signature then
                 last_mark_signature = signature
-                selection_hub.update_selection("timeline", normalize_timeline_selection(selected))
+                broadcast_selection(selected)
             end
         else
             last_mark_signature = nil
