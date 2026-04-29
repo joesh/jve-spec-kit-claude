@@ -19,14 +19,19 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ## Phase 3.1: Setup
 
-- [ ] **T001** Working-tree audit. Run `git status --short` from repo root. The branch `014-two-phase-project` carries uncommitted changes from the prior session (drp_importer.lua MTBA fix, conversion_dialog.lua pcall, timeline_panel.lua guard, emp_timeline_media_buffer.cpp prefetch softening). Confirm with Joe whether to commit those before starting feature work or carry them through. Do NOT touch them with `git stash`/`git reset --hard` (rule from `feedback_no_repo_wide_git.md`).
+- [X] **T001** Working-tree audit. Resolved 2026-04-29: per Joe's call, prior-session fixes committed as 4 separate commits (`emp:` prefetch softening, `drp_importer:` MTBA frame-snap, `conversion_dialog:` pcall + cleanup, `timeline_panel:` blank-state guard) followed by the spec-dir commit (`spec: 014 …`). Tree clean before T002.
 
-- [ ] **T002** Verify existing infrastructure prerequisites. Run from repo root:
-  - `grep -n 'function Signals.connect\|function Signals.emit' /Users/joe/Local/jve-spec-kit-claude/src/lua/core/signals.lua` — confirm broadcast pub/sub is intact.
-  - `grep -n 'function M.set_project_setting\|function M.get_project_settings\|local function assert_project_exists' /Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua` — confirm validation surface exists at `database.lua:1493`.
-  - `grep -n 'jve_handle_lua_callback_error' /Users/joe/Local/jve-spec-kit-claude/src/jve_lua_callback.cpp` — confirm bridge exists.
+- [X] **T002** Verify existing infrastructure prerequisites. Verified 2026-04-29:
+  - Signals: `Signals.connect` at `core/signals.lua:23`, `Signals.emit` at line 183, `Signals.disconnect` at line 128.
+  - Database: `assert_project_exists` at `core/database.lua:1493`; `get_current_project_id` at line 803; `get_project_settings` at line 1506; `set_project_setting` at line 1540 (singular only — no `set_project_settings` plural form).
+  - Other project-id-taking exports surfaced for the T020 audit: `load_master_clips`, `load_sequences`, `load_bins`, `get_project_setting`.
+  - Bridge: `jve_handle_lua_callback_error` declared at `src/jve_lua_callback.h:24`, defined at `src/jve_lua_callback.cpp:10`. Existing `JVE_ASSERT(L != nullptr, ...)` and `JVE_ASSERT(where != nullptr, ...)` guards stay; only the body changes (T015).
 
-- [ ] **T003** Confirm clean baseline build before any change. Run `make -j4 > /tmp/baseline_build.txt 2>&1` from repo root. Required: zero luacheck warnings, all Lua tests pass. If baseline is dirty (existing failures), capture the baseline failure list to `/tmp/baseline_failures.txt` for diff comparison after this feature lands.
+- [X] **T003** Confirm baseline before any feature work. Captured 2026-04-29:
+  - **Luacheck**: 0 warnings (one pre-existing warning in `tests/test_playhead_absolute_no_double_offset.lua:66` — unused `FT` alias — fixed in commit `ac6758c9` per rule 2.4).
+  - **Lua suite (`tests/run_lua_tests_all.sh`)**: 659 PASSED / 0 FAILED.
+  - **Binding tests (`make -j4`)**: 23 pre-existing failures (V13 schema migration debt — `projects.fps_mismatch_policy NOT NULL`, removed `clips.clip_kind` column, schema version V8 vs V13). Captured to `/tmp/baseline_failures.txt`. NOT caused by feature 014; out of scope per rule 2.15. T042 measures DELTA from this baseline (no NEW failures may be introduced).
+  - Build artifacts at `/tmp/baseline_build.txt`.
 
 ---
 
@@ -36,11 +41,11 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Contract tests (one per `contracts/*.md`)
 
-- [ ] **T004** [P] Contract test for `project_will_change` signal ordering and payload at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_will_change_ordering.lua`. Per `contracts/signal_will_change.md`:
-  - Register a pre-handler that records `database.get_current_project_id()` and the payload arg.
-  - Register a post-handler that does the same for `project_changed`.
-  - Trigger an open(P1) → switch(P2) sequence using a synthetic two-DB setup in `/tmp/jve/`.
-  - Assert pre-handler observed `(outgoing=P1, live_db=P1)`; post-handler observed `(incoming=P2, live_db=P2)`. Both before/after `database.init` swap.
+- [X] **T004** [P] Contract test for `project_will_change` signal ordering and payload. Test at `tests/test_project_will_change_ordering.lua`. Verifies the pre/post live-DB invariant via two real SQLite DBs in `/tmp/jve/test_014_t004/`. Has two halves:
+  - Manual-emit half: confirms the signal infrastructure works (passes today).
+  - Production-emit half: asserts `database.set_path` itself emits `project_will_change` before closing the outgoing connection. Fails today — this is the red-state for T014.
+
+  Failure captured at `/tmp/T004.fail.txt`: `test_project_will_change_ordering.lua:144: PRODUCTION CONTRACT: database.set_path must emit project_will_change before closing the outgoing connection.`
 
 - [ ] **T005** [P] Contract test for Layer 1 `assert_project_exists` coverage at `/Users/joe/Local/jve-spec-kit-claude/tests/test_assert_project_exists_coverage.lua`. Per `contracts/persist_now_validation.md`:
   - For each public DB-write export of `database.lua` that takes a `project_id` arg (`set_project_setting`, `set_project_settings`, plus any others surfaced during Phase 4), call it with a known-bogus project_id while a different real project is the sole row.
