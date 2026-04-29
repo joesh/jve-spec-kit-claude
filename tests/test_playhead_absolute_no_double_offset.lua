@@ -63,7 +63,6 @@ check("ruler label at frame 92265 → 01:01:30:15",
 -- ----------------------------------------------------------------------
 local field_widget = require("ui.inspector.field_widget")
 local metadata_schemas = require("ui.metadata_schemas")
-local FT = metadata_schemas.FIELD_TYPES
 local sequence_provider = function() return seq end
 
 local function field_type_for(schema_id, key)
