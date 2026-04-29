@@ -1329,11 +1329,18 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         // Map to source coordinates using first_sample_tc from reader
         const auto& next_info = next_reader->media_file()->info();
         int64_t next_file_pos = next_source_in - next_info.first_sample_tc;
-        JVE_ASSERT(next_file_pos >= 0,
-            ("GetTrackAudio(boundary): negative file_pos=" + std::to_string(next_file_pos)
-             + " source_in=" + std::to_string(next_source_in)
-             + " first_sample_tc=" + std::to_string(next_info.first_sample_tc)
-             + " clip=" + next_clip_id.substr(0, 8)).c_str());
+        // Partial-coverage head shortfall — symmetric to the in-clip path
+        // and decode_audio_into_cache. Skip this boundary clip; the existing
+        // NSF-ACCEPT contract (lines 1318–1320) already treats failure here
+        // as a silence gap that Lua's audio pipeline zero-fills.
+        if (next_file_pos < 0) {
+            EMP_LOG_WARN("GetTrackAudio(boundary): clip %.8s source_in=%lld is before first_sample_tc=%lld — skipping (head shortfall)",
+                         next_clip_id.c_str(),
+                         (long long)next_source_in,
+                         (long long)next_info.first_sample_tc);
+            cursor = next_end_us;
+            continue;
+        }
         TimeUS next_src_origin = FrameTime::from_frame(next_file_pos, next_clip_rate).to_us();
         double next_sr = static_cast<double>(next_speed);
         TimeUS next_src_t0 = next_src_origin + static_cast<int64_t>((seg_t0 - next_start_us) * next_sr);
@@ -2903,11 +2910,19 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     // source_in is absolute TC; subtract file's TC origin for file-relative position
     const auto& file_info = reader->media_file()->info();
     int64_t file_pos = clip->source_in - file_info.first_sample_tc;
-    JVE_ASSERT(file_pos >= 0,
-        ("decode_audio_into_cache: negative file_pos=" + std::to_string(file_pos)
-         + " source_in=" + std::to_string(clip->source_in)
-         + " first_sample_tc=" + std::to_string(file_info.first_sample_tc)
-         + " clip=" + clip->clip_id.substr(0, 8)).c_str());
+    // Partial-coverage head shortfall — symmetric to GetTrackAudio (dd4bbc28).
+    // Clip's source_in is earlier than any sample the file actually contains
+    // (sub-frame TC drift, file_original_timecode override, or a master that
+    // pre-dates its media). Skip the prefetch; GetTrackAudio renders beep
+    // silence for the uncovered range. Hard-asserting here crashes the
+    // prefetch worker before the read path can soften.
+    if (file_pos < 0) {
+        EMP_LOG_WARN("AUDIO PREFETCH: clip %.8s source_in=%lld is before first_sample_tc=%lld — skipping decode (head shortfall)",
+                     clip->clip_id.c_str(),
+                     (long long)clip->source_in,
+                     (long long)file_info.first_sample_tc);
+        return;
+    }
     TimeUS src_origin = FrameTime::from_frame(file_pos, clip->rate()).to_us();
     double sr_d = static_cast<double>(clip->speed_ratio);
     TimeUS src_t0 = src_origin + static_cast<int64_t>((position - seg.start_us) * sr_d);
