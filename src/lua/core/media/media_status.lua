@@ -717,12 +717,23 @@ Signals.connect("project_will_change", function(outgoing_id)
     M.cancel_background_probe()
     -- Best-effort drain of in-flight writes. Bounded by FR-003a's 1 s
     -- budget; in practice persist_now completes in well under that.
+    -- Drain runs while current_project_id is still the outgoing id,
+    -- so the flush lands in the outgoing DB.
     local DRAIN_BUDGET_MS = 1000
     local drained = M.wait_for_drain(DRAIN_BUDGET_MS)
     if not drained then
         log.warn("media_status: drain budget exceeded; %d writes discarded",
             M.pending_count())
     end
+    -- Unbind the cache from the outgoing project. Any deferred persist
+    -- timer that survived the drain and fires AFTER this point (in the
+    -- window between set_path's DB swap and project_changed's M.clear)
+    -- sees current_project_id == nil, short-circuits in
+    -- has_pending_persist_state(), and exits without invoking Layer 2.
+    -- Without this unbind, Layer 2 catches every such timer at error
+    -- level (correct safety-net behavior, but noisy in TSO during
+    -- normal project-switch sequences).
+    current_project_id = nil
 end, 12)
 
 -- Post-switch: clear cache, load new project's persisted state, start bg probe.
