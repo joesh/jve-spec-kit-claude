@@ -1341,34 +1341,58 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                     y_first, y_last = y_out_sec, y_in_sec
                     clip_speed = -math.abs(clip_speed)
                 end
-                -- Source-position rounding matches Resolve's Inspector TC display:
-                --   |slope| > 1 (accel): floor y_first (source frame whose span starts at/before).
-                --   |slope| <= 1 (decel): ceil y_first (source frame whose span starts at/after).
-                -- Consumed source frames always use floor: ceil would claim a partial
-                -- final frame the clip doesn't fully play, putting source_out past the
-                -- end of a zero-padding Media-Managed trim.
-                if abs_speed > 1.0 then
-                    in_offset = math.floor(y_first * native_rate)
-                else
-                    in_offset = math.ceil(y_first * native_rate)
-                end
+                -- Snap at FRAME granularity (not sample). The curve-eval lands
+                -- within a few float ULPs of the true seconds value; at
+                -- native_rate=48000 a 1-ULP miss amplifies to a 1-sample shift.
+                -- Resolve's Media-Managed exports cut source on whole-frame
+                -- boundaries (no sub-frame audio edits, video is frame-
+                -- quantized) so the result must land on a frame boundary.
+                --
+                -- Empirical rule (matches Resolve's Media-Manage exports across
+                -- this branch's project for both accel and decel curves):
+                --   in:  CEIL  — the first whole source-frame whose span
+                --                starts at-or-after y_first; this is the head
+                --                boundary of the trimmed file.
+                --   out: FLOOR — the last whole source-frame fully consumed
+                --                by the clip; ceil would claim a partial frame
+                --                past the file's tail.
+                -- A small ULP-tolerance (1e-6 frames ≈ 0.04 ms at 25 fps) keeps
+                -- "essentially integer" values from snapping the wrong way.
+                local y_in_frames   = y_first * frame_rate
+                local y_last_frames = y_last  * frame_rate
+                local in_frame  = math.ceil (y_in_frames   - 1e-6)
+                local out_frame = math.floor(y_last_frames + 1e-6)
                 -- Resolve writes retime keyframes whose first-anchor Y is
                 -- occasionally sub-frame negative (observed Y in [-0.01, 0)
                 -- seconds with zero bezier tangents — a direct Resolve
                 -- encoding, not float noise). Resolve's Inspector shows
                 -- Source In = media frame 0 for these clips; a frame before
-                -- the file doesn't exist. Snap in_offset from -1 to 0 when
-                -- y_first is within one frame of zero. Beyond that magnitude
-                -- is a real parser bug: the assert below still fires.
-                if in_offset < 0 and (y_first * native_rate) > -1.0 then
-                    in_offset = 0
+                -- the file doesn't exist. Snap from -1 to 0 when y_first is
+                -- within one frame of zero. Beyond that magnitude is a real
+                -- parser bug: the assert below still fires.
+                if in_frame < 0 and y_in_frames > -1.0 then
+                    in_frame = 0
                 end
-                source_duration = math.floor((y_last - y_first) * native_rate)
+                in_offset = math.floor(in_frame * native_rate / frame_rate + 0.5)
+                source_duration =
+                    math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
             else
-                -- No curve: in_value is source frames at sequence rate.
-                -- Convert to native_rate units, folding in the <In> sub-frame.
-                in_offset = math.floor((in_value + in_sub_frame) * native_rate / frame_rate + 0.5)
-                source_duration = math.floor(duration_raw * native_rate / frame_rate + 0.5)
+                -- No curve: <In> is source frames at sequence rate.
+                -- Snap at FRAME granularity for the same reason as the retimed
+                -- branch above: Resolve's Media-Managed exports cut source on
+                -- whole-frame boundaries, so source_in / source_out must too.
+                -- Without this, a clip with sub-frame <In> ends up with
+                -- source_out = source_in + (timeline-duration × native_rate /
+                -- frame_rate), which can land 1 frame past where Resolve cut
+                -- the file (file = ceil(in_real) → floor(out_real), 1 frame
+                -- shorter than naïve duration scaling when <In> has a fraction).
+                local in_real_frames  = in_value + in_sub_frame
+                local out_real_frames = in_real_frames + duration_raw
+                local in_frame  = math.ceil (in_real_frames  - 1e-6)
+                local out_frame = math.floor(out_real_frames + 1e-6)
+                in_offset       = math.floor(in_frame  * native_rate / frame_rate + 0.5)
+                source_duration =
+                    math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
             end
 
             -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.

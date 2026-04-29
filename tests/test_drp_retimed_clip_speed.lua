@@ -77,11 +77,17 @@ assert(clip.source_in == 35, string.format(
     clip.source_in))
 print(string.format("  ✓ source_in = %d (not retimed, sub-frame rounded)", clip.source_in))
 
--- source_duration = raw duration (181)
+-- source_duration: Resolve's Media-Managed exports cut source on whole-frame
+-- boundaries: file = ceil(in_real) → floor(out_real). With sub-frame in-point
+-- 0.9048 and timeline-duration 181, in_real..out_real = 34.9048..215.9048 →
+-- ceil/floor → frames 35..215 → 180 source frames in the file. Keeping
+-- source_duration at the raw 181 puts source_out 1 frame past the file's
+-- actual end (the partial-coverage "1f at tail" pattern from real DRPs).
 local actual_dur = clip.source_out - clip.source_in
-assert(actual_dur == 181, string.format(
-    "No MTBA: source_duration should be raw 181, got %d", actual_dur))
-print(string.format("  ✓ source_duration = %d (not retimed)", actual_dur))
+assert(actual_dur == 180, string.format(
+    "No MTBA: source_duration should be 180 (floor(out_real) - ceil(in_real) " ..
+    "= 215 - 35 with sub-frame in-point), got %d", actual_dur))
+print(string.format("  ✓ source_duration = %d (cut at integer frames)", actual_dur))
 
 -- Timeline duration unchanged
 assert(clip.duration == 181, "Timeline duration should be 181, got " .. clip.duration)
@@ -314,11 +320,17 @@ assert(clip_333.source_in == mst8_origin + 394, string.format(
 print(string.format("  ✓ source_in = %d (curve walk through MTBA, not hex 0.7273 → 325)",
     clip_333.source_in))
 
--- source_duration: 132 DRP × 0.88 ≈ 116 source frames
+-- source_duration: cut at integer source-frame boundaries (file = ceil(in_real)
+-- → floor(out_real)). Curve walk: in_real ≈ 393.36 → ceil 394; out_real ≈
+-- 509.52 → floor 509. File spans 115 source frames. The naive estimate "132
+-- × 0.88 ≈ 116" overcounts by 1: it doesn't account for Resolve cutting at
+-- whole-frame boundaries (which is also why pre-fix relinks of this clip
+-- showed "1f at tail" partial-coverage warnings).
 local actual_dur_333 = clip_333.source_out - clip_333.source_in
-assert(actual_dur_333 == 116, string.format(
-    "source_duration: 132 DRP × MTBA 0.88 = 116, got %d", actual_dur_333))
-print(string.format("  ✓ source_duration = %d (MTBA speed)", actual_dur_333))
+assert(actual_dur_333 == 115, string.format(
+    "source_duration: floor(out_real) - ceil(in_real) = 509 - 394 = 115 " ..
+    "(file boundary at integer source frames), got %d", actual_dur_333))
+print(string.format("  ✓ source_duration = %d (cut at integer frames)", actual_dur_333))
 
 -- clip_speed must reflect MTBA magnitude ≈ 0.88 (not hex 0.7273)
 local mtba_speed = 73.28 / 83.28  -- from fixture YMax/XMax
