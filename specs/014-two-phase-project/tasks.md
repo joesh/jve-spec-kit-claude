@@ -47,22 +47,22 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
   Failure captured at `/tmp/T004.fail.txt`: `test_project_will_change_ordering.lua:144: PRODUCTION CONTRACT: database.set_path must emit project_will_change before closing the outgoing connection.`
 
-- [ ] **T005** [P] Contract test for Layer 1 `assert_project_exists` coverage at `/Users/joe/Local/jve-spec-kit-claude/tests/test_assert_project_exists_coverage.lua`. Per `contracts/persist_now_validation.md`:
+- [X] **T005** [P] Contract test for Layer 1 `assert_project_exists` coverage at `/Users/joe/Local/jve-spec-kit-claude/tests/test_assert_project_exists_coverage.lua`. Per `contracts/persist_now_validation.md`:
   - For each public DB-write export of `database.lua` that takes a `project_id` arg (`set_project_setting`, `set_project_settings`, plus any others surfaced during Phase 4), call it with a known-bogus project_id while a different real project is the sole row.
   - Each call MUST hard-assert with the `assert_project_exists: project_id 'X' != sole project 'Y'` message format.
   - Wrap in `pcall` and assert the returned error string contains `assert_project_exists`.
 
-- [ ] **T006** [P] Contract test for Layer 2 `assert_project_id_is_live` no-op-on-stale at `/Users/joe/Local/jve-spec-kit-claude/tests/test_assert_project_id_is_live.lua`. Per `contracts/persist_now_validation.md`:
+- [X] **T006** [P] Contract test for Layer 2 `assert_project_id_is_live` no-op-on-stale at `/Users/joe/Local/jve-spec-kit-claude/tests/test_assert_project_id_is_live.lua`. Per `contracts/persist_now_validation.md`:
   - Stale path: a fake module caches a project_id from a previous DB; switch to a new DB; call `assert_project_id_is_live(stale_id, "test_caller")`; assert returns `false`, an `[error]`-level log line includes `stale project_id`, includes the caller_label, and includes a stack traceback. No hard assert fires.
   - Live path: same fake module, current cache matches live DB; call returns `true`; no log line emitted.
   - Empty-cache path: call with `nil` cached_id returns `false` quietly (no log line).
 
-- [ ] **T007** [P] Contract test for worker cancel-and-drain at `/Users/joe/Local/jve-spec-kit-claude/tests/test_worker_cancel_drain.lua`. Per `contracts/worker_cancel_drain.md`:
+- [X] **T007** [P] Contract test for worker cancel-and-drain at `/Users/joe/Local/jve-spec-kit-claude/tests/test_worker_cancel_drain.lua`. Per `contracts/worker_cancel_drain.md`:
   - Drain-success: synthetic worker queues 5 writes that complete within 100 ms total. Pre-switch invokes `cancel()` then `wait_for_drain(1000)`. Assert `drained == true`, all 5 writes landed in outgoing DB, no warning logged.
   - Drain-timeout: synthetic worker has a write callback that artificially blocks for 2000 ms. Pre-switch invokes `cancel()` then `wait_for_drain(1000)`. Assert `drained == false`, a warning was logged naming the worker and its `pending_count`, switch proceeds (no hang past ~1100 ms wall clock).
   - Stale-write safety net: drain times out, the over-budget write fires AFTER the project switch, write callback consults `assert_project_id_is_live`. Assert: write no-op, Layer 2 warning logged, no `assert_project_exists` hard fail.
 
-- [ ] **T008** [P] Contract test for the Lua-callback bridge stack-trace logging at `/Users/joe/Local/jve-spec-kit-claude/tests/test_lua_callback_stack_trace.lua`. Per `contracts/lua_callback_bridge.md`. This test MUST run via `JVEEditor --test` mode because it exercises the C++ bridge:
+- [X] **T008** [P] Contract test for the Lua-callback bridge stack-trace logging at `/Users/joe/Local/jve-spec-kit-claude/tests/test_lua_callback_stack_trace.lua`. Per `contracts/lua_callback_bridge.md`. This test MUST run via `JVEEditor --test` mode because it exercises the C++ bridge:
   - Wire a synthetic Qt button-box `accepted` handler that calls a Lua function `error("synthetic test error")`.
   - Trigger the signal.
   - Capture stdout/stderr.
@@ -72,7 +72,7 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Integration / scenario tests (from quickstart.md)
 
-- [ ] **T009** [P] Integration test for the failing scenario at `/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_anamnesis_reimport_no_asserts.lua`. Per `quickstart.md` and FR-011. Runs via `JVEEditor --test`:
+- [X] **T009** [P] Integration test for the failing scenario at `/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_anamnesis_reimport_no_asserts.lua`. Per `quickstart.md` and FR-011. Runs via `JVEEditor --test`:
   - Delete any pre-existing `anamnesis-gold-timeline.jvp` files in the test sandbox.
   - Drive the conversion of `tests/fixtures/resolve/anamnesis-gold-timeline.drp` programmatically via the importer API.
   - Open the resulting `.jvp` programmatically.
@@ -81,20 +81,20 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
   - Capture all log output.
   - Assert: zero lines containing `assert_project_exists.*Stale project_id after project switch`. Other unrelated warnings (PeakGenerator, FieldsBlob) are out of scope and not asserted on.
 
-- [ ] **T010** [P] Edge-case test: cold start at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_cold_start.lua`. Per spec Edge Cases:
+- [X] **T010** [P] Edge-case test: cold start at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_cold_start.lua`. Per spec Edge Cases:
   - With no project DB attached, trigger an open(P1).
   - Assert: `project_will_change` fired with `outgoing_project_id == nil`; no handler errored; post-switch `project_changed` fired with `incoming = P1`.
 
-- [ ] **T011** [P] Edge-case test: close without replacement at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_close_no_replacement.lua`. Per spec Edge Cases:
+- [X] **T011** [P] Edge-case test: close without replacement at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_close_no_replacement.lua`. Per spec Edge Cases:
   - Open P1; trigger close.
   - Assert: `project_will_change` fired with `outgoing = P1`; pending writes (one synthetic `media_status` entry) flushed to P1's DB; `project_changed` fired with `incoming = nil`; no handler errored.
 
-- [ ] **T012** [P] Edge-case test: handler-error isolation at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_will_change_handler_error_isolation.lua`. Per FR-008/FR-009:
+- [X] **T012** [P] Edge-case test: handler-error isolation at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_will_change_handler_error_isolation.lua`. Per FR-008/FR-009:
   - Register two pre-handlers at adjacent priorities. The first deliberately calls `error("synthetic")`.
   - Trigger a switch.
   - Assert: second handler still ran; switch completed; the first handler's error logged with stack trace at error level. Switch never blocked.
 
-- [ ] **T013** [P] Edge-case test: rapid sequential switches at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_rapid.lua`. Per spec Edge Cases:
+- [X] **T013** [P] Edge-case test: rapid sequential switches at `/Users/joe/Local/jve-spec-kit-claude/tests/test_project_switch_rapid.lua`. Per spec Edge Cases:
   - Schedule three switches P1 → P2 → P3 within a single Qt event-loop turn.
   - Inject a pending `media_status` write during P1.
   - Assert: P1's DB received the flush BEFORE the P1→P2 switch; P2's DB and P3's DB never received the P1 write.
@@ -112,7 +112,7 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Bridge update (independent of signal work; parallelizable up front)
 
-- [ ] **T015** Update `jve_handle_lua_callback_error` in `/Users/joe/Local/jve-spec-kit-claude/src/jve_lua_callback.cpp` per `contracts/lua_callback_bridge.md`:
+- [X] **T015** Update `jve_handle_lua_callback_error` in `/Users/joe/Local/jve-spec-kit-claude/src/jve_lua_callback.cpp` per `contracts/lua_callback_bridge.md`:
   - Replace the bare-error log path with the three-line sequence: `luaL_tolstring(L, -1, NULL)` → `luaL_traceback(L, L, err_str, 1)` → `JVE_LOG_ERROR` reading `lua_tostring(L, -1)` (the traceback) → `lua_pop(L, 3)`. See the contract for the exact stack progression.
   - Use `luaL_tolstring` (not bare `lua_tostring`) so non-string errors (tables, userdata) get a proper string representation via `__tostring` instead of NULL.
   - Remove the now-redundant `<non-string error of type %s>` fallback branch.
@@ -121,15 +121,15 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Signal registration & emit (foundational)
 
-- [ ] **T016** Register `project_will_change` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/signals.lua`:
+- [X] **T016** Register `project_will_change` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/signals.lua`:
   - Add a docblock above the existing `project_changed` documentation describing the new signal name, payload, ordering invariants, and pre-switch contract (cross-reference `contracts/signal_will_change.md`).
   - No dispatcher code change required — `Signals.connect`/`Signals.emit` are already generic over signal names. Adding the doc is the registration.
 
-- [ ] **T017** Locate every call to `database.init(new_path)` outside test code:
+- [X] **T017** Locate every call to `database.init(new_path)` outside test code:
   - Run `grep -rn 'database\.init(' /Users/joe/Local/jve-spec-kit-claude/src/lua/core/ /Users/joe/Local/jve-spec-kit-claude/src/lua/ui/ 2>/dev/null` to enumerate.
   - Expected sites (verify): `core/project_open.lua`, `core/commands/new_project.lua`. Document any others found.
 
-- [ ] **T018** Emit `project_will_change` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/project_open.lua` immediately before `database.init(new_path)`:
+- [X] **T018** Emit `project_will_change` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/project_open.lua` immediately before `database.init(new_path)`:
   - Read the outgoing project_id via `database.get_current_project_id()` (or nil if no project is attached).
   - `Signals.emit("project_will_change", outgoing_project_id_or_nil)`.
   - Same change pattern in any additional emit sites surfaced by T017 (e.g. `new_project.lua` if it detaches a prior DB).
@@ -137,25 +137,25 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Database validation surface
 
-- [ ] **T019** [P] Add `assert_project_id_is_live(cached_id, caller_label)` helper in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua` per `contracts/persist_now_validation.md`. Algorithm-style structure with extracted helpers (`stale_check_possible`, `log_stale_project_violation`). Logs at `log.error` level with full `debug.traceback`. Returns boolean.
+- [X] **T019** [P] Add `assert_project_id_is_live(cached_id, caller_label)` helper in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua` per `contracts/persist_now_validation.md`. Algorithm-style structure with extracted helpers (`stale_check_possible`, `log_stale_project_violation`). Logs at `log.error` level with full `debug.traceback`. Returns boolean.
 
-- [ ] **T020** [P] Audit Layer 1 `assert_project_exists` coverage in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua`:
+- [X] **T020** [P] Audit Layer 1 `assert_project_exists` coverage in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/database.lua`:
   - For every public function (`function M.<name>`) that takes a `project_id` argument and writes, confirm the call chain reaches `assert_project_exists`.
   - For any uncovered write, add a direct `assert_project_exists(project_id)` at the top of the function.
   - Update the function-level docblock for each touched function. T005 verifies coverage.
 
 ### `media_status` migration (the canary)
 
-- [ ] **T021** Move `M.persist_now()` invocation out of `M.clear()` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua`:
+- [X] **T021** Move `M.persist_now()` invocation out of `M.clear()` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua`:
   - `M.clear()` keeps cancel-background-probe, in-memory cache reset, and `current_project_id = nil`. Drop the `M.persist_now()` call from `M.clear()`.
   - Verify `M.clear()` no longer touches the DB.
 
-- [ ] **T022** Register a `project_will_change` handler in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua` at priority 12 (mirroring the existing `project_changed` priority):
+- [X] **T022** Register a `project_will_change` handler in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua` at priority 12 (mirroring the existing `project_changed` priority):
   - Cancel pending `schedule_persist` timer (track its id; call cancel-by-flag).
   - Call worker cancel + wait_for_drain(1000ms) on the background probe (depends on T024 below).
   - Call `M.persist_now()` to flush pending status changes to the OUTGOING DB.
 
-- [ ] **T023** Add Layer 2 validation in `M.persist_now()` (same file). Restructure the body to read as an algorithm, with extracted helpers:
+- [X] **T023** Add Layer 2 validation in `M.persist_now()` (same file). Restructure the body to read as an algorithm, with extracted helpers:
   - `has_pending_persist_state()` — guards on `current_project_id` and DB connection.
   - `project_id_is_live()` — calls `database.assert_project_id_is_live(current_project_id, "media_status.persist_now")`.
   - `flush_status_cache_to_db()` — performs the actual `set_project_setting` write.
@@ -163,7 +163,7 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Background-worker cancel & drain
 
-- [ ] **T024** Extend `cancel_background_probe` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua` (or wherever the probe runs) per `contracts/worker_cancel_drain.md`:
+- [X] **T024** Extend `cancel_background_probe` in `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/media_status.lua` (or wherever the probe runs) per `contracts/worker_cancel_drain.md`:
   - Inspect existing implementation: does it set a flag, does it drain?
   - Add `wait_for_drain(timeout_ms)` if missing — blocks the caller while queued write callbacks land; returns `true` on drain, `false` on timeout.
   - Add `pending_count()` accessor for the timeout-warning log line.
@@ -186,43 +186,43 @@ The seed `handler_audit.md` has TBD rows that must be resolved before the featur
 
 ### Inspect & classify (each updates `handler_audit.md` — sequential because they all write the same audit catalog file)
 
-- [ ] **T026** Inspect handler `peak_cache` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/peak_cache.lua:401`. Read the body. Determine if it writes any per-project DB rows. Classify in `handler_audit.md` as `no-action`, `must-cancel-deferred-work`, or `must-flush-pending-writes`. Update the row.
+- [X] **T026** Inspect handler `peak_cache` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/media/peak_cache.lua:401`. Read the body. Determine if it writes any per-project DB rows. Classify in `handler_audit.md` as `no-action`, `must-cancel-deferred-work`, or `must-flush-pending-writes`. Update the row.
 
-- [ ] **T027** Inspect handler `project_generation` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/project_generation.lua:31`. Same as T026.
+- [X] **T027** Inspect handler `project_generation` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/core/project_generation.lua:31`. Same as T026.
 
-- [ ] **T028** Inspect handler `timeline_state.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/timeline_state.lua:448`. Same.
+- [X] **T028** Inspect handler `timeline_state.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/timeline_state.lua:448`. Same.
 
-- [ ] **T029** Inspect handler `inspector change_listeners` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/inspector/change_listeners.lua:71`. Same.
+- [X] **T029** Inspect handler `inspector change_listeners` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/inspector/change_listeners.lua:71`. Same.
 
-- [ ] **T030** Inspect handler `project_browser.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/project_browser.lua:2596`. Same. Watch for `persist_open_tabs`-style writes.
+- [X] **T030** Inspect handler `project_browser.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/project_browser.lua:2596`. Same. Watch for `persist_open_tabs`-style writes.
 
-- [ ] **T031** Inspect handler `timeline_panel.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/timeline_panel.lua:2482`. Same. Likely contains `persist_open_tabs` to DB; if so → must-flush.
+- [X] **T031** Inspect handler `timeline_panel.on_project_change` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/timeline_panel.lua:2482`. Same. Likely contains `persist_open_tabs` to DB; if so → must-flush.
 
-- [ ] **T032** Inspect handler `timeline_view_renderer` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/view/timeline_view_renderer.lua:36`. Same.
+- [X] **T032** Inspect handler `timeline_view_renderer` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/timeline/view/timeline_view_renderer.lua:36`. Same.
 
-- [ ] **T033** Inspect handler `sequence_monitor` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/sequence_monitor.lua:147`. Same.
+- [X] **T033** Inspect handler `sequence_monitor` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/sequence_monitor.lua:147`. Same.
 
-- [ ] **T034** Inspect handler `fullscreen_viewer` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/fullscreen_viewer.lua:202`. Same.
+- [X] **T034** Inspect handler `fullscreen_viewer` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/fullscreen_viewer.lua:202`. Same.
 
-- [ ] **T035** Inspect handler `edit_history_window` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/edit_history_window.lua:252`. Same.
+- [X] **T035** Inspect handler `edit_history_window` at `/Users/joe/Local/jve-spec-kit-claude/src/lua/ui/edit_history_window.lua:252`. Same.
 
 ### Inspect deferred-work timer call sites (also updates `handler_audit.md`)
 
-- [ ] **T036** Inspect timer callbacks in `peak_cache.lua` (lines 175, 180), `edit_history_window.lua:263`, `project_browser.lua:209`, `sequence_monitor.lua:709`, `timeline_panel.lua:2117`, `layout.lua:714`. For each, determine if the callback touches DB or holds project-scoped state. Classify each row in `handler_audit.md` and decide mitigation: `cancel-on-will-change`, `validate-at-fire-time`, or `none-needed`.
+- [X] **T036** Inspect timer callbacks in `peak_cache.lua` (lines 175, 180), `edit_history_window.lua:263`, `project_browser.lua:209`, `sequence_monitor.lua:709`, `timeline_panel.lua:2117`, `layout.lua:714`. For each, determine if the callback touches DB or holds project-scoped state. Classify each row in `handler_audit.md` and decide mitigation: `cancel-on-will-change`, `validate-at-fire-time`, or `none-needed`.
 
 ### Migrate (per handler classified as must-flush or must-cancel)
 
-- [ ] **T037** Migrate handlers from T026–T035 classified `must-flush-pending-writes` or `must-cancel-deferred-work`. Each handler lives in its own file, so the per-file work is parallelizable [P], BUT each migration also updates `handler_audit.md` — those edits must be serialized. For each handler:
+- [X] **T037** Migrate handlers from T026–T035 classified `must-flush-pending-writes` or `must-cancel-deferred-work`. Each handler lives in its own file, so the per-file work is parallelizable [P], BUT each migration also updates `handler_audit.md` — those edits must be serialized. For each handler:
   - Add a `project_will_change` handler in the same module at the same priority that does the flush/cancel.
   - In the existing `project_changed` handler, remove the flush/cancel obligation; keep clear-and-load semantics only.
   - Update the row in `handler_audit.md` `migration_status` to `migrated`.
   - For handlers stale-safe via Layer 2 validation only (no flush, but reads project-scoped data on a deferred path), set `migration_status = safe-by-validation` and add the validation call to the deferred path.
 
-- [ ] **T038** Migrate every deferred-work timer site classified `cancel-on-will-change` from T036. Each gets a cancel hook in its module's `project_will_change` handler (or a flag-and-no-op-in-callback pattern, depending on what `qt_create_single_shot_timer` supports — verify during this task).
+- [X] **T038** Migrate every deferred-work timer site classified `cancel-on-will-change` from T036. Each gets a cancel hook in its module's `project_will_change` handler (or a flag-and-no-op-in-callback pattern, depending on what `qt_create_single_shot_timer` supports — verify during this task).
 
 ### Audit-catalog gate
 
-- [ ] **T039** Verify the FR-007 invariant in `/Users/joe/Local/jve-spec-kit-claude/specs/014-two-phase-project/handler_audit.md`:
+- [X] **T039** Verify the FR-007 invariant in `/Users/joe/Local/jve-spec-kit-claude/specs/014-two-phase-project/handler_audit.md`:
   - No row with `classification ∈ {must-cancel-deferred-work, must-flush-pending-writes}` AND `migration_status = none-needed`.
   - No row contains "TBD" in any column.
   - All 15 `project_changed` handlers + all timer sites enumerated.
@@ -232,16 +232,16 @@ The seed `handler_audit.md` has TBD rows that must be resolved before the featur
 
 ## Phase 3.5: Integration & Validation
 
-- [ ] **T040** Run T009 (anamnesis re-import zero-asserts integration test). Confirm green.
+- [X] **T040** Run T009 (anamnesis re-import zero-asserts integration test). Confirm green.
 
-- [ ] **T041** Execute `quickstart.md` manually:
+- [X] **T041** Execute `quickstart.md` manually:
   - Reset state per quickstart step 1.
   - Launch `JVEEditor`, import `anamnesis-gold-timeline.drp`, interact (arrow, play, select, switch), per steps 2–3.
   - Verify TSO has zero `assert_project_exists ... Stale project_id` lines per step 4.
   - Verify pre-switch flush populated outgoing DB per step 5.
   - Verify `handler_audit.md` is committed (T039 already gated this) per step 6.
 
-- [ ] **T042** Re-run full test suite: `make -j4 > /tmp/final_build.txt 2>&1` from repo root. Required:
+- [X] **T042** Re-run full test suite: `make -j4 > /tmp/final_build.txt 2>&1` from repo root. Required:
   - Zero luacheck warnings (rule 2.4).
   - All Lua tests pass.
   - Diff against `/tmp/baseline_build.txt` from T003: only new tests added, no regressions.
@@ -250,15 +250,15 @@ The seed `handler_audit.md` has TBD rows that must be resolved before the featur
 
 ## Phase 3.6: Polish
 
-- [ ] **T043** [P] Re-grep for new module-local project caches that may have been added without validation. Run `grep -rn 'local current_project_id\|local _project_id' /Users/joe/Local/jve-spec-kit-claude/src/lua/` and verify every hit is in `handler_audit.md` with `validate_before_write = YES`.
+- [X] **T043** [P] Re-grep for new module-local project caches that may have been added without validation. Run `grep -rn 'local current_project_id\|local _project_id' /Users/joe/Local/jve-spec-kit-claude/src/lua/` and verify every hit is in `handler_audit.md` with `validate_before_write = YES`.
 
-- [ ] **T044** [P] Confirm the conversion-dialog `pcall` wrapper from the prior session (in `src/lua/ui/conversion_dialog.lua`) is still in place. It is intentionally OUT of scope for this feature (separate concern, separate commit) but should not have regressed.
+- [X] **T044** [P] Confirm the conversion-dialog `pcall` wrapper from the prior session (in `src/lua/ui/conversion_dialog.lua`) is still in place. It is intentionally OUT of scope for this feature (separate concern, separate commit) but should not have regressed.
 
-- [ ] **T045** Update memory: append a `feedback_two_phase_project_switch.md` entry to `/Users/joe/.claude/projects/-Users-joe-Local-jve-spec-kit-claude/memory/` capturing the contract: "every project_changed handler that wrote to the outgoing DB has been migrated to project_will_change; new modules with project-scoped state must register both signals." Add a 1-line pointer in `MEMORY.md`.
+- [X] **T045** Update memory: append a `feedback_two_phase_project_switch.md` entry to `/Users/joe/.claude/projects/-Users-joe-Local-jve-spec-kit-claude/memory/` capturing the contract: "every project_changed handler that wrote to the outgoing DB has been migrated to project_will_change; new modules with project-scoped state must register both signals." Add a 1-line pointer in `MEMORY.md`.
 
-- [ ] **T046** Document the closed audit at `handler_audit.md` (already enforced by T039) and remove the "(seed)" annotation from the file's header. The committed file is the FR-007 deliverable.
+- [X] **T046** Document the closed audit at `handler_audit.md` (already enforced by T039) and remove the "(seed)" annotation from the file's header. The committed file is the FR-007 deliverable.
 
-- [ ] **T047** Final tone audit on this feature's docs (rules 2.1, 3.14): re-grep `/Users/joe/Local/jve-spec-kit-claude/specs/014-two-phase-project/` for marketing-speak (`robust|powerful|professional|enterprise|amazing|seamless|elegant`) — expect zero hits.
+- [X] **T047** Final tone audit on this feature's docs (rules 2.1, 3.14): re-grep `/Users/joe/Local/jve-spec-kit-claude/specs/014-two-phase-project/` for marketing-speak (`robust|powerful|professional|enterprise|amazing|seamless|elegant`) — expect zero hits.
 
 ---
 
