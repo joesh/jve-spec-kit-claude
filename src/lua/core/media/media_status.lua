@@ -642,19 +642,24 @@ end
 --- enforce the FR-003a drain budget. Returns true when drained, false
 --- on timeout.
 ---
---- For the current implementation: media_status writes are synchronous
---- (persist_now writes the full map in one call, no async queue), and
---- the C++ background codec probe is cancelled by cancel_background_
---- probe before this is called. So calling persist_now here drains any
---- pending in-memory dirty state. The timeout_ms parameter is a hard
---- cap for future implementations that gain async write queues.
+--- Current implementation: media_status writes are synchronous
+--- (persist_now writes the full map in one call; there's no async
+--- queue). The C++ background codec probe is cancelled by
+--- cancel_background_probe before this is called, so it's not actively
+--- writing. Calling persist_now here flushes any pending in-memory
+--- dirty state synchronously. timeout_ms is unused today but kept on
+--- the API surface so future async implementations don't break the
+--- pre-switch handler's contract.
+---
+--- A queued debounce timer may STILL be in flight when this returns
+--- (we cannot cancel a queued Qt single-shot timer from Lua). Its
+--- lambda will fire later in the post-switch window. The pre-switch
+--- handler defangs that lambda by unbinding current_project_id
+--- AFTER this returns; the lambda then sees nil and short-circuits
+--- in has_pending_persist_state. See test_media_status_pre_switch_unbind.
 function M.wait_for_drain(timeout_ms)
     assert(type(timeout_ms) == "number" and timeout_ms >= 0,
         "media_status.wait_for_drain: timeout_ms must be non-negative number")
-    -- Force a synchronous flush of any debounced state. persist_now is
-    -- synchronous and bounded by the size of status_cache; for the
-    -- expected project sizes this completes well within any reasonable
-    -- timeout. Returns true after flush.
     M.persist_now()
     return true
 end
