@@ -3,7 +3,6 @@
 -- Responsibilities:
 -- - TOML loading → registry for command dispatch
 -- - Input management: Tab focus, text input bypass, arrow repeat, key release
--- - Context-heavy key handlers (nudge, extend edit, insert/overwrite)
 -- - Drag state query (for toggle_snapping command)
 --
 -- Non-goals:
@@ -30,7 +29,6 @@ keyboard_shortcuts.MOD = MOD
 
 
 -- Module references (set in init, asserted non-nil)
-local timeline_state = nil
 local command_manager = nil
 local project_browser = nil
 local timeline_panel = nil
@@ -51,13 +49,11 @@ end
 -- INIT
 -------------------------------------------------------------------------------
 
-function keyboard_shortcuts.init(state, cmd_mgr, proj_browser, panel)
-    assert(state, "keyboard_shortcuts.init: timeline_state required")
+function keyboard_shortcuts.init(cmd_mgr, proj_browser, panel)
     assert(cmd_mgr, "keyboard_shortcuts.init: command_manager required")
     assert(proj_browser, "keyboard_shortcuts.init: project_browser required")
     assert(panel, "keyboard_shortcuts.init: timeline_panel required")
 
-    timeline_state = state
     command_manager = cmd_mgr
     project_browser = proj_browser
     timeline_panel = panel
@@ -237,113 +233,6 @@ local function try_handle_arrow_keys(event, key, panel_active_browser,
     return true
 end
 
--- Comma/Period: nudge clips/edges in the active sequence. Edges go through
--- BatchRippleEdit (handles 1+ edges uniformly); clip nudges go through
--- Nudge.
-local function try_handle_nudge_keys(key, panel_active_timeline,
-                                     modifier_meta, modifier_alt, modifier_shift)
-    if (key ~= KEY.Comma and key ~= KEY.Period)
-        or not panel_active_timeline
-        or modifier_meta or modifier_alt then
-        return nil
-    end
-    -- No-active-sequence state: nudge targets a sequence — silent no-op.
-    if not timeline_state.get_sequence_id() then return true end
-
-    local nudge_frames = modifier_shift and 5 or 1
-    if key == KEY.Comma then nudge_frames = -nudge_frames end
-
-    local selected_edges = timeline_state.get_selected_edges()
-    local selected_clips = timeline_state.get_selected_clips()
-    local project_id = timeline_state.get_project_id()
-    local sequence_id = timeline_state.get_sequence_id()
-    assert(project_id and project_id ~= "", "keyboard_shortcuts: missing project_id for nudge")
-    assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts: missing sequence_id for nudge")
-
-    if #selected_edges > 0 then
-        local all_clips = timeline_state.get_clips()
-        local edge_infos = {}
-        for _, edge in ipairs(selected_edges) do
-            for _, c in ipairs(all_clips) do
-                if c.id == edge.clip_id then
-                    edge_infos[#edge_infos + 1] = {
-                        clip_id   = edge.clip_id,
-                        edge_type = edge.edge_type,
-                        track_id  = c.track_id,
-                        trim_type = edge.trim_type,
-                    }
-                    break
-                end
-            end
-        end
-        -- BatchRippleEdit handles 1+ edges uniformly (its batch_context.create
-        -- normalizes a single edge into a 1-element edge_infos array). The
-        -- standalone RippleEdit command was deleted in T046; this is the
-        -- single dispatch path for both single-edge and multi-edge nudges.
-        if #edge_infos > 0 then
-            execute_command("BatchRippleEdit", {
-                edge_infos   = edge_infos,
-                delta_frames = nudge_frames,
-                sequence_id  = sequence_id,
-                project_id   = project_id,
-            })
-        end
-    elseif #selected_clips > 0 then
-        local clip_ids = {}
-        for _, clip in ipairs(selected_clips) do clip_ids[#clip_ids + 1] = clip.id end
-        execute_command("Nudge", {
-            nudge_amount       = nudge_frames,
-            selected_clip_ids  = clip_ids,
-            sequence_id        = sequence_id,
-            project_id         = project_id,
-        })
-    end
-    return true
-end
-
--- E: ExtendEdit (needs edge gathering from timeline_state).
-local function try_handle_extend_edit_key(key, panel_active_timeline,
-                                          modifier_meta, modifier_alt)
-    if key ~= KEY.E or not panel_active_timeline or modifier_meta or modifier_alt then
-        return nil
-    end
-    if not timeline_state.get_sequence_id() then return true end
-
-    local selected_edges = timeline_state.get_selected_edges()
-    if not selected_edges or #selected_edges == 0 then return true end
-
-    local playhead_value = timeline_state.get_playhead_position()
-    local project_id = timeline_state.get_project_id()
-    local sequence_id = timeline_state.get_sequence_id()
-    assert(project_id and project_id ~= "", "keyboard_shortcuts: missing project_id for ExtendEdit")
-    assert(sequence_id and sequence_id ~= "", "keyboard_shortcuts: missing sequence_id for ExtendEdit")
-
-    local all_clips = timeline_state.get_clips()
-    local edge_infos = {}
-    for _, edge in ipairs(selected_edges) do
-        for _, c in ipairs(all_clips) do
-            if c.id == edge.clip_id then
-                edge_infos[#edge_infos + 1] = {
-                    clip_id   = edge.clip_id,
-                    edge_type = edge.edge_type,
-                    track_id  = c.track_id,
-                    trim_type = edge.trim_type,
-                }
-                break
-            end
-        end
-    end
-    if #edge_infos > 0 then
-        execute_command("ExtendEdit", {
-            edge_infos     = edge_infos,
-            playhead_frame = playhead_value,
-            project_id     = project_id,
-            sequence_id    = sequence_id,
-        })
-    end
-    return true
-end
-
 -- Floating-window fallback: TOML registry lookup for keys that weren't
 -- handled above. Only fires when focus is outside the main window (e.g.
 -- floating History). When focus IS inside the main window, QShortcuts
@@ -400,28 +289,27 @@ local function handle_key_impl(event)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
     -- Dispatch through per-key handlers. Each returns nil to fall through.
-    -- Order matches the original cascade: Tab → Escape → text-edit short-
-    -- circuit → arrow keys → Comma/Period (nudge) → E (ExtendEdit) →
-    -- floating-window TOML fallback.
+    -- Order: Tab → Escape → text-edit short-circuit → arrow keys → floating-
+    -- window TOML fallback. Comma/Period/E used to live here as a residual
+    -- cascade; they now bind in TOML (NudgeSelection, ExtendEdit) and dispatch
+    -- via the QShortcut path like every other key.
     local r = try_handle_tab_key(event, key, modifiers, focused_panel, focus_is_text_input)
     if r ~= nil then return r end
 
     r = try_handle_escape_key(key, focused_panel, focus_is_text_input, panel_active_timeline)
     if r ~= nil then return r end
 
-    -- Non-residual keys: QShortcut handles dispatch (T003/T004). Qt's
-    -- ShortcutOverride on QLineEdit provides text input protection. Only
-    -- residual keys below (arrows, Comma/Period, E) need Lua handling.
-    -- F9/F10 moved to TOML keymap — Insert/Overwrite resolve context via
-    -- gather_context.
+    -- Non-residual keys: QShortcut handles dispatch. Qt's ShortcutOverride on
+    -- QLineEdit provides text input protection. Only arrow keys still need
+    -- Lua handling (arrow_repeat timer is input management, not command
+    -- dispatch).
 
     -- Text-input priority: when focus is on a text-editing widget and the
     -- key is a canonical text-editing key (typing, caret nav, selection,
     -- clipboard, undo/redo, delete), the widget owns it. Return false so
     -- Qt continues delivery to the widget's keyPressEvent. One rule for
-    -- main-window and floating-window text input — covers Left/Right/
-    -- Comma/Period/E and every macOS editing shortcut (Cmd+A, Shift+Cmd+Z,
-    -- etc.).
+    -- main-window and floating-window text input — covers Left/Right and
+    -- every macOS editing shortcut (Cmd+A, Shift+Cmd+Z, etc.).
     if focus_is_text_input and event.is_text_editing_key then
         log.detail("  → text-editing key in text input, deferring to widget")
         return false
@@ -429,13 +317,6 @@ local function handle_key_impl(event)
 
     r = try_handle_arrow_keys(event, key, panel_active_browser, panel_active_timeline,
         panel_active_source, panel_active_tl_view, modifier_meta, modifier_alt, modifier_shift)
-    if r ~= nil then return r end
-
-    r = try_handle_nudge_keys(key, panel_active_timeline,
-        modifier_meta, modifier_alt, modifier_shift)
-    if r ~= nil then return r end
-
-    r = try_handle_extend_edit_key(key, panel_active_timeline, modifier_meta, modifier_alt)
     if r ~= nil then return r end
 
     r = try_handle_floating_window_fallback(event, key, modifiers,

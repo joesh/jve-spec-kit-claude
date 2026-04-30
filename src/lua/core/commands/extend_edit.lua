@@ -1,23 +1,62 @@
 --- ExtendEdit command — extends selected edge(s) to meet the playhead.
 --
 -- Takes selected edges and computes delta to reach playhead, then delegates
--- to RippleEdit/BatchRippleEdit. Honors trim_type (ripple vs roll).
+-- to BatchRippleEdit. Honors trim_type (ripple vs roll).
 --
 -- This is a "nudge to playhead" for edges - the delta is computed automatically
 -- based on edge position and playhead position.
+--
+-- Selection: if the caller does not pass `edge_infos`, the executor gathers
+-- the active timeline's selected edges via timeline_state. This makes the
+-- command directly bindable from TOML (`"E" = "ExtendEdit @timeline"`) — the
+-- keyboard layer no longer assembles selection on its behalf.
 --
 -- @file extend_edit.lua
 local M = {}
 
 local SPEC = {
     args = {
-        edge_infos = { required = true },      -- array of {clip_id, edge_type, track_id, trim_type}
-        playhead_frame = { required = true },  -- target frame (int)
+        edge_infos = { kind = "table" },       -- array of {clip_id, edge_type, track_id, trim_type}; gathered from selection if absent
+        playhead = { required = true, kind = "number" },  -- target frame (int) — auto-injected by execute_interactive
         project_id = { required = true },
         sequence_id = { required = true },
     },
-    persisted = {},  -- Delegates to RippleEdit/BatchRippleEdit for undo
+    persisted = {},  -- Delegates to BatchRippleEdit for undo
 }
+
+-- Gather selected edges from timeline_state and decorate with track_id +
+-- trim_type by joining against the active clip set. Mirrors the join the
+-- keyboard layer used to do; keeping it here means UI-facing dispatch sites
+-- stay thin.
+--
+-- Asserts every selected edge resolves to a clip on the timeline. A
+-- mismatch means selection state is out of sync with the timeline model
+-- — silently dropping the edge would mask that bug. Crash with the
+-- offending clip_id so the upstream cause is identifiable.
+local function gather_edge_infos_from_selection()
+    local ts = require("ui.timeline.timeline_state")
+    local selected_edges = ts.get_selected_edges()
+    if not selected_edges or #selected_edges == 0 then return {} end
+
+    local clip_by_id = {}
+    for _, c in ipairs(ts.get_clips()) do clip_by_id[c.id] = c end
+
+    local edge_infos = {}
+    for _, edge in ipairs(selected_edges) do
+        local clip = clip_by_id[edge.clip_id]
+        assert(clip, string.format(
+            "ExtendEdit: selected edge references clip_id=%s, "
+            .. "which is not on the active timeline (selection is stale)",
+            tostring(edge.clip_id)))
+        edge_infos[#edge_infos + 1] = {
+            clip_id   = edge.clip_id,
+            edge_type = edge.edge_type,
+            track_id  = clip.track_id,
+            trim_type = edge.trim_type,
+        }
+    end
+    return edge_infos
+end
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["ExtendEdit"] = function(command)
@@ -27,11 +66,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local Clip = require("models.clip")
 
         local edge_infos = args.edge_infos
-        assert(type(edge_infos) == "table" and #edge_infos > 0,
-            "ExtendEdit: edge_infos must be non-empty array")
+        if not edge_infos or #edge_infos == 0 then
+            edge_infos = gather_edge_infos_from_selection()
+        end
+        if #edge_infos == 0 then
+            -- No selection → nothing to extend. Matches the prior keyboard-
+            -- layer behavior (silent no-op when nothing is selected).
+            log.event("ExtendEdit: no edge selection, no-op")
+            return true
+        end
 
-        local playhead = args.playhead_frame
-        assert(type(playhead) == "number", "ExtendEdit: playhead_frame must be integer")
+        local playhead = args.playhead
+        assert(type(playhead) == "number", "ExtendEdit: playhead must be integer")
 
         log.event("ExtendEdit edges=%d playhead=%d", #edge_infos, playhead)
 

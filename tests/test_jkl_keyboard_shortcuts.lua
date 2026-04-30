@@ -76,7 +76,7 @@ local mock_cm = {
 local function reset()
     dispatched = {}
     focus_manager.set_focused_panel("timeline")
-    keyboard_shortcuts.init(timeline_state, mock_cm,
+    keyboard_shortcuts.init(mock_cm,
         { add_selected_to_timeline = function() end },
         { is_dragging = function() return false end })
 end

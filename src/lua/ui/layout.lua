@@ -420,12 +420,9 @@ local timeline_panel = timeline_panel_mod.create({
     project_id = active_project_id,
 })
 
--- 5. Initialize keyboard shortcuts with the SAME timeline_state instance that timeline_panel uses
--- Note: Use F9 and F10 to add test clips via commands
+-- 5. Initialize keyboard shortcuts.
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
-local timeline_state_from_panel = timeline_panel_mod.get_state()
-log.event("timeline_state from panel = %s", tostring(timeline_state_from_panel))
-keyboard_shortcuts.init(timeline_state_from_panel, command_manager, project_browser_mod, timeline_panel_mod)
+keyboard_shortcuts.init(command_manager, project_browser_mod, timeline_panel_mod)
 
 -- 5b. Create QShortcut objects from TOML bindings for Qt-native shortcut resolution.
 -- Panel containers map context names to widgets; Qt fires the right shortcut based on focus.

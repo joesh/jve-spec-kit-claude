@@ -104,7 +104,7 @@ local function init_all()
 
     local project_browser_stub = { add_selected_to_timeline = function() end }
     local timeline_panel_stub = { is_dragging = function() return false end }
-    keyboard_shortcuts.init(timeline_state, command_manager,
+    keyboard_shortcuts.init(command_manager,
         project_browser_stub, timeline_panel_stub)
 
     focus_manager.set_focused_panel("timeline")

@@ -71,8 +71,14 @@
 "Cmd+L" = "LinkClips @timeline"
 "Cmd+Shift+L" = "UnlinkClips @timeline"
 "Cmd+Delete" = "CloseGap @timeline"
-# Comma/Period handled in keyboard_shortcuts.lua (edge vs clip context gathering)
-# E handled in keyboard_shortcuts.lua (edge context gathering)
+# Nudge keys: NudgeSelection routes to BatchRippleEdit (edges) or Nudge (clips)
+# based on the active timeline selection. Magnitude lives in the binding so
+# users can rebind nudge step from TOML alone.
+"Comma"        = "NudgeSelection direction=-1 magnitude=1 @timeline"
+"Period"       = "NudgeSelection direction=1 magnitude=1 @timeline"
+"Shift+Comma"  = "NudgeSelection direction=-1 magnitude=5 @timeline"
+"Shift+Period" = "NudgeSelection direction=1 magnitude=5 @timeline"
+"E"            = "ExtendEdit @timeline"
 "F9" = "Insert advance_playhead=true"
 "F10" = "Overwrite advance_playhead=true"
 # Zoom

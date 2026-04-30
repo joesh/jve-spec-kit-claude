@@ -109,7 +109,7 @@ do
             track_id = "t1",
             trim_type = "ripple",
         }},
-        playhead_frame = 150,
+        playhead = 150,
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -152,7 +152,7 @@ do
             track_id = "t1",
             trim_type = "ripple",
         }},
-        playhead_frame = 50,
+        playhead = 50,
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -191,7 +191,7 @@ do
             track_id = "t1",
             trim_type = "roll",  -- Roll, not ripple
         }},
-        playhead_frame = 130,
+        playhead = 130,
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -229,7 +229,7 @@ do
             edge_type = "out",
             track_id = "t1",
         }},
-        playhead_frame = 100,  -- Exactly at out-point
+        playhead = 100,  -- Exactly at out-point
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -269,7 +269,7 @@ do
             { clip_id = "c5", edge_type = "out", track_id = "t1" },
             { clip_id = "c6", edge_type = "out", track_id = "t2" },
         },
-        playhead_frame = 150,
+        playhead = 150,
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -314,7 +314,7 @@ do
             edge_type = "out",
             track_id = "t1",
         }},
-        playhead_frame = 80,  -- out edge at 100, delta = 80-100 = -20
+        playhead = 80,  -- out edge at 100, delta = 80-100 = -20
         project_id = "p1",
         sequence_id = "s1",
     })
@@ -326,6 +326,103 @@ do
     if #ripple_calls > 0 then
         check("gap out: delta_frames = -20", ripple_calls[1].params.delta_frames == -20)
     end
+end
+
+-- ═══════════════════════════════════════════════════════════
+-- Test: edge_infos absent → gather from active timeline selection
+-- ═══════════════════════════════════════════════════════════
+--
+-- ExtendEdit is bound directly from TOML (`E = ExtendEdit @timeline`),
+-- so the keyboard layer no longer assembles edge_infos for it. The
+-- command must read selection itself when the caller doesn't pass
+-- edge_infos. Behaviour parity with the explicit-edge_infos path:
+-- same delta computation, same delegation to BatchRippleEdit.
+
+print("\n--- ExtendEdit: gathers edge_infos from selection ---")
+do
+    ripple_calls = {}
+    clip_store["c_sel"] = {
+        id = "c_sel",
+        timeline_start = 0,
+        duration = 100,
+        source_in = 0,
+        source_out = 100,
+        track_id = "trackA",
+    }
+
+    package.loaded["ui.timeline.timeline_state"] = {
+        get_selected_edges = function()
+            return {{ clip_id = "c_sel", edge_type = "out", trim_type = "ripple" }}
+        end,
+        get_clips = function()
+            return {{ id = "c_sel", track_id = "trackA" }}
+        end,
+    }
+
+    local cmd = Command.create("ExtendEdit", "p1")
+    cmd:set_parameters({
+        playhead = 130,
+        project_id = "p1",
+        sequence_id = "s1",
+    })
+
+    local ok = executors["ExtendEdit"](cmd)
+    check("gather: executor returns true", ok == true)
+    check("gather: BatchRippleEdit called", #ripple_calls == 1)
+    if #ripple_calls > 0 then
+        check("gather: delta_frames = 30", ripple_calls[1].params.delta_frames == 30)
+        local ei = ripple_calls[1].params.edge_infos[1]
+        check("gather: clip_id from selection", ei.clip_id == "c_sel")
+        check("gather: track_id joined from clip", ei.track_id == "trackA")
+        check("gather: edge_type preserved", ei.edge_type == "out")
+        check("gather: trim_type preserved", ei.trim_type == "ripple")
+    end
+end
+
+print("\n--- ExtendEdit: stale selection (edge clip missing) asserts ---")
+do
+    -- See the matching test in test_nudge_selection_dispatch.lua. The
+    -- selection model and the timeline clip set must agree; a mismatch
+    -- is a bug somewhere upstream and silently dropping it would mask
+    -- that bug. Surface it loudly with the offending clip_id.
+    package.loaded["ui.timeline.timeline_state"] = {
+        get_selected_edges = function()
+            return {{ clip_id = "ghost_clip", edge_type = "out", trim_type = "ripple" }}
+        end,
+        get_clips = function() return {} end,
+    }
+
+    local cmd = Command.create("ExtendEdit", "p1")
+    cmd:set_parameters({
+        playhead = 100,
+        project_id = "p1",
+        sequence_id = "s1",
+    })
+
+    local ok, err = pcall(function() return executors["ExtendEdit"](cmd) end)
+    check("stale selection: executor asserts", ok == false)
+    check("stale selection: error mentions clip_id",
+        type(err) == "string" and err:find("ghost_clip", 1, true) ~= nil)
+end
+
+print("\n--- ExtendEdit: empty selection is a no-op ---")
+do
+    ripple_calls = {}
+    package.loaded["ui.timeline.timeline_state"] = {
+        get_selected_edges = function() return {} end,
+        get_clips = function() return {} end,
+    }
+
+    local cmd = Command.create("ExtendEdit", "p1")
+    cmd:set_parameters({
+        playhead = 100,
+        project_id = "p1",
+        sequence_id = "s1",
+    })
+
+    local ok = executors["ExtendEdit"](cmd)
+    check("empty selection: executor returns true", ok == true)
+    check("empty selection: nothing dispatched", #ripple_calls == 0)
 end
 
 -- ═══════════════════════════════════════════════════════════

@@ -51,7 +51,7 @@ timeline_state.set_edge_selection(edge_infos)
 -- ExtendEdit to close the gap: move gap's out-edge to playhead at 1000
 local result1 = command_manager.execute("ExtendEdit", {
     edge_infos = edge_infos,
-    playhead_frame = 1000,
+    playhead = 1000,
     project_id = layout.project_id,
     sequence_id = layout.sequence_id,
 })

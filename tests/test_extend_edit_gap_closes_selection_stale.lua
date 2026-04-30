@@ -54,7 +54,7 @@ timeline_state.set_edge_selection(edge_infos)
 print("--- First ExtendEdit: closing the gap ---")
 local result1 = command_manager.execute("ExtendEdit", {
     edge_infos = edge_infos,
-    playhead_frame = playhead_target,
+    playhead = playhead_target,
     project_id = layout.project_id,
     sequence_id = layout.sequence_id,
 })
@@ -99,7 +99,7 @@ print("\n--- Second ExtendEdit: extending further ---")
 
 local result2 = command_manager.execute("ExtendEdit", {
     edge_infos = current_edges,
-    playhead_frame = playhead_target2,
+    playhead = playhead_target2,
     project_id = layout.project_id,
     sequence_id = layout.sequence_id,
 })

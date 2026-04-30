@@ -165,7 +165,7 @@ local function reset_environment()
         find_bar = nil,  -- find bar state for Escape dismiss test
         hide_find_bar = function() end,
     }
-    keyboard_shortcuts.init(timeline_state, command_manager_stub, project_browser_stub, timeline_panel_stub)
+    keyboard_shortcuts.init(command_manager_stub, project_browser_stub, timeline_panel_stub)
 end
 
 local function find_command(name)
@@ -346,7 +346,7 @@ local pb_with_find = {
     find_bar = { visible = true },
     hide_find_bar = function() find_bar_hidden = true end,
 }
-keyboard_shortcuts.init(timeline_state, command_manager_stub, pb_with_find, timeline_panel_stub)
+keyboard_shortcuts.init(command_manager_stub, pb_with_find, timeline_panel_stub)
 focus_manager.set_focused_panel("project_browser")
 
 handled = keyboard_shortcuts.handle_key({

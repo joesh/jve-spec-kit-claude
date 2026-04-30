@@ -92,7 +92,7 @@ local result = command_manager.execute("ExtendEdit", {
         { clip_id = left_clip_id, edge_type = "out", track_id = track_id, trim_type = "roll" },
         { clip_id = right_clip_id, edge_type = "in", track_id = track_id, trim_type = "roll" },
     },
-    playhead_frame = playhead,
+    playhead = playhead,
 })
 
 assert(result.success, "ExtendEdit should succeed: " .. tostring(result.error_message))

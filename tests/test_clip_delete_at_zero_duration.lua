@@ -64,7 +64,7 @@ end
 -- This should make the middle clip disappear or have 0 duration
 local result1 = command_manager.execute("ExtendEdit", {
     edge_infos = edge_infos,
-    playhead_frame = 1000,  -- Roll out to meet in at 1000
+    playhead = 1000,  -- Roll out to meet in at 1000
     project_id = layout.project_id,
     sequence_id = layout.sequence_id,
 })

@@ -56,7 +56,7 @@ local mock_command_manager = {
 
 local mock_project_browser = { add_selected_to_timeline = function() end }
 local mock_timeline_panel = { is_dragging = function() return false end }
-keyboard_shortcuts.init(timeline_state, mock_command_manager, mock_project_browser, mock_timeline_panel)
+keyboard_shortcuts.init(mock_command_manager, mock_project_browser, mock_timeline_panel)
 
 local event = {
     key = QT_KEY_B,

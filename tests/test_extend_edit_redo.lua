@@ -94,7 +94,7 @@ command_manager.init("default_sequence", "default_project")
 -- Execute ExtendEdit (spawns nested BatchRippleEdit)
 local extend_cmd = Command.create("ExtendEdit", "default_project")
 extend_cmd:set_parameter("edge_infos", pre_selected_edges)
-extend_cmd:set_parameter("playhead_frame", 150)
+extend_cmd:set_parameter("playhead", 150)
 extend_cmd:set_parameter("sequence_id", "default_sequence")
 extend_cmd:set_parameter("project_id", "default_project")
 
