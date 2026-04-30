@@ -53,7 +53,7 @@ command_manager.init('seq1', 'proj1')
 -- Load real modules
 local keyboard_shortcuts = require("core.keyboard_shortcuts")
 local focus_manager = require("ui.focus_manager")
-local timeline_state = require("ui.timeline.timeline_state")
+require("ui.timeline.timeline_state")
 
 -- ── Literal Qt key codes ──
 local QT_KEY_J = 74

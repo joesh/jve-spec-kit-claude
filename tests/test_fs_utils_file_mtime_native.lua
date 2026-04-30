@@ -49,6 +49,7 @@ local original_popen = io.popen
 local execute_calls = 0
 local popen_calls = 0
 
+-- luacheck: push ignore 121 122
 os.execute = function(cmd)
     execute_calls = execute_calls + 1
     return original_execute(cmd)
@@ -63,6 +64,7 @@ local mtime = fs_utils.file_mtime(SCRATCH)
 
 os.execute = original_execute
 io.popen = original_popen
+-- luacheck: pop
 
 check("returns a numeric mtime", type(mtime) == "number")
 check("mtime > 0", (mtime or 0) > 0)
