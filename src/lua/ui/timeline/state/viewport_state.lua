@@ -338,41 +338,56 @@ function M.set_playhead_position(time_obj, persist_callback, selection_callback)
     end
 end
 
--- Convert time (integer frame) to pixel position
+-- Convert time (integer frame) to pixel position.
+--
+-- Uses an absolute pixel grid: each frame maps to a deterministic absolute
+-- pixel index floor(t * ppf), and the viewport offset is subtracted *after*
+-- flooring. This makes pixel widths of fixed-frame extents (clips, gaps,
+-- mark ranges) invariant under scroll — without it, sub-pixel zoom causes
+-- adjacent floors to shift independently as viewport_start changes, and
+-- clips strobe ±1 px while scrolling.
 function M.time_to_pixel(time_obj, viewport_width)
     local state = data.state
     assert(type(time_obj) == "number" and math.floor(time_obj) == time_obj,
-        "viewport_state.time_to_pixel: time must be integer frame")
+        "viewport_state.time_to_pixel: time must be integer frame, got " .. tostring(time_obj))
+    assert(type(viewport_width) == "number" and viewport_width > 0,
+        "viewport_state.time_to_pixel: viewport_width must be positive number, got " .. tostring(viewport_width))
 
     local start_frames = state.viewport_start_time
     local duration_frames = state.viewport_duration
+    assert(type(start_frames) == "number",
+        "viewport_state.time_to_pixel: viewport_start_time not initialized")
+    assert(type(duration_frames) == "number" and duration_frames > 0,
+        "viewport_state.time_to_pixel: viewport_duration must be positive, got " .. tostring(duration_frames))
 
-    if type(start_frames) ~= "number" or type(duration_frames) ~= "number" then
-        return 0
-    end
-    if duration_frames <= 0 then return 0 end
-
-    local delta_frames = time_obj - start_frames
     local pixels_per_frame = viewport_width / duration_frames
-    return math.floor(delta_frames * pixels_per_frame)
+    return math.floor(time_obj * pixels_per_frame)
+        - math.floor(start_frames * pixels_per_frame)
 end
 
--- Convert pixel position to time (returns integer frame)
+-- Convert pixel position to time (returns integer frame).
+-- Inverse of time_to_pixel using the same absolute pixel grid.
 function M.pixel_to_time(pixel, viewport_width)
     local state = data.state
+    assert(type(pixel) == "number",
+        "viewport_state.pixel_to_time: pixel must be number, got " .. tostring(pixel))
+    assert(type(viewport_width) == "number" and viewport_width > 0,
+        "viewport_state.pixel_to_time: viewport_width must be positive number, got " .. tostring(viewport_width))
+
     local start_frames = state.viewport_start_time
     local duration_frames = state.viewport_duration
-
-    if type(start_frames) ~= "number" or type(duration_frames) ~= "number" then
-        return 0
-    end
-    if duration_frames <= 0 then
-        return start_frames
-    end
+    assert(type(start_frames) == "number",
+        "viewport_state.pixel_to_time: viewport_start_time not initialized")
+    assert(type(duration_frames) == "number" and duration_frames > 0,
+        "viewport_state.pixel_to_time: viewport_duration must be positive, got " .. tostring(duration_frames))
 
     local pixels_per_frame = viewport_width / duration_frames
-    local delta_frames = pixel / pixels_per_frame
-    return math.max(0, math.floor(start_frames + delta_frames + 0.5))
+    local abs_pixel = pixel + math.floor(start_frames * pixels_per_frame)
+    -- Mouse coordinates can fall outside the widget (e.g. drag past the
+    -- left edge), so the converted frame can be negative. Clamp to frame 0
+    -- because the timeline has no negative-time domain — callers ask for
+    -- "what time is the cursor at" and frame 0 is the floor.
+    return math.max(0, math.floor(abs_pixel / pixels_per_frame + 0.5))
 end
 
 function M.push_viewport_guard()

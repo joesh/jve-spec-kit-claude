@@ -725,7 +725,7 @@ function M.render(view)
         local x = state_module.time_to_pixel(clip_start, width)
         local clip_end_px = state_module.time_to_pixel(clip_end, width)
         y = y + 5
-        local clip_width = math.max(1, clip_end_px - x)
+        local clip_width = clip_end_px - x
         local clip_height = track_height - 10
 
         local visible_x = x
@@ -738,21 +738,11 @@ function M.render(view)
             visible_width = width - visible_x
         end
 
-        -- Off-widget cull: clip is entirely outside the paint region.
-        -- Frame-level visibility was already verified by draw_visible_clips,
-        -- so a clip that reaches here overlaps the viewport in frame space —
-        -- but independent flooring of start/end pixel positions at extreme
-        -- zoom-out can collapse the clipped-to-widget visible_width to 0.
-        -- We do NOT cull on visible_width <= 0: we snap to 1 px below so the
-        -- clip remains visible during scroll instead of flashing on/off as
-        -- viewport_start crosses whole-pixel boundaries.
         if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
             return
         end
-
         if visible_width < 1 then
-            if visible_x >= width then visible_x = width - 1 end
-            visible_width = 1
+            return
         end
 
         local draw_width = visible_width

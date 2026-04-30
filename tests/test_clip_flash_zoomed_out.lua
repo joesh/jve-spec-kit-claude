@@ -1,18 +1,22 @@
 #!/usr/bin/env luajit
 
 -- Regression: when the timeline is zoomed very far out (pixels_per_frame << 1),
--- a clip that is inside the viewport by frame-level bounds must draw at least
--- one visible pixel on every scroll step.
+-- a clip that has non-zero pixel width must draw consistently on every scroll
+-- step — no flashing on/off as the viewport translates by whole frames.
 --
--- Previously, the renderer would cull sub-pixel clips near the viewport edges
--- because the independent flooring of start/end pixel positions, combined
--- with the negative-x visible_width clip, could yield visible_width == 0.
--- As viewport_start scrolled one frame at a time, whether the clip's
--- sub-pixel extent crossed a whole-pixel boundary toggled → the clip flashed.
+-- Previously, time_to_pixel folded viewport_start *inside* the floor:
+-- floor((t - vs) * ppf). The fractional parts of clip_start*ppf and
+-- clip_end*ppf shifted independently as vs changed, so a fixed clip's
+-- pixel width strobed ±1 px during scroll, and clips whose visible_width
+-- collapsed to 0 flashed off entirely.
 --
--- Domain assertion: for a clip whose frame-level overlap with the viewport is
--- non-empty (clip_end > viewport_start AND clip_start < viewport_end), at
--- least one add_rect call must reach the draw backend at every scroll step.
+-- Fix: time_to_pixel uses an absolute pixel grid — floor(t*ppf) -
+-- floor(vs*ppf). Clip widths in pixel space are now invariant under scroll.
+-- Sub-pixel clips cull cleanly (deterministic 0 width) instead of strobing.
+--
+-- Domain assertion: a clip with multi-pixel width at the current zoom
+-- draws on every scroll step inside its visibility window, with the same
+-- pixel width on every step.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -37,12 +41,13 @@ local seq_rate = { fps_numerator = 24, fps_denominator = 1 }
 -- Zoomed so that 1 frame = 1920 / 100000 ≈ 0.0192 px (highly sub-pixel).
 local VIEWPORT_DURATION = 100000
 
--- One clip that's slightly inside the viewport. We scroll viewport_start
--- past the clip's start so the clip straddles the viewport's left edge —
--- this is where the negative-x + sub-pixel culling bug bites.
--- 5-frame clip at 5000..5005; we'll scroll viewport_start from ~4990..5050.
+-- 500-frame clip at 5000..5500. At ppf ≈ 0.0192 this is ~9-10 absolute
+-- px wide — comfortably above the cull threshold. Scroll viewport_start
+-- across the clip's frame extent and verify width stays constant.
+local CLIP_START = 5000
+local CLIP_DURATION = 500
 local clips = {
-    { id = "c1", track_id = "v1", timeline_start = 5000, duration = 5, enabled = true, clip_kind = "video" },
+    { id = "c1", track_id = "v1", timeline_start = CLIP_START, duration = CLIP_DURATION, enabled = true, clip_kind = "video" },
 }
 
 local viewport_start_time = 0
@@ -75,9 +80,9 @@ local state = {
         return clips
     end,
     time_to_pixel = function(t, width)
-        local delta = (t or 0) - viewport_start_time
         local px_per_frame = width / VIEWPORT_DURATION
-        return math.floor(delta * px_per_frame)
+        return math.floor((t or 0) * px_per_frame)
+            - math.floor(viewport_start_time * px_per_frame)
     end,
     debug_begin_layout_capture = function() end,
     debug_record_track_layout = function() end,
@@ -102,43 +107,63 @@ local view = {
 
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 
--- Count how many clip bodies were drawn in this render. Clip bodies use
--- clip_video color; other rects (track backgrounds, etc.) use different colors.
-local function count_clip_bodies()
-    local n = 0
+-- Find the clip body draw call for this render. Clip bodies use the
+-- clip_video color; other rects use different colors.
+local function clip_body_widths()
+    local widths = {}
     for _, c in ipairs(draw_calls) do
-        if c.color == "#548bb5" then n = n + 1 end
+        if c.color == "#548bb5" then table.insert(widths, c.width) end
     end
-    return n
+    return widths
 end
 
--- =============================================================================
--- Scroll viewport_start from 4990 to 5050 (crossing the clip). At every step,
--- frame-level overlap is non-empty → the clip MUST draw at least one pixel.
--- =============================================================================
+-- Scroll viewport_start across the clip and assert the body draws on every
+-- step where the clip overlaps the viewport, AND that its width is constant.
 local total_steps = 0
-local missing_steps = 0
-for vs = 4990, 5050 do
+local first_width
+local mismatches = {}
+local missing = {}
+-- Keep the clip fully inside the viewport (vs ≤ CLIP_START) so we test
+-- pure width invariance, separate from edge-clipping behavior.
+for vs = 0, CLIP_START do
     viewport_start_time = vs
     draw_calls = {}
     renderer.render(view)
     total_steps = total_steps + 1
-    local drawn = count_clip_bodies()
 
-    -- Frame-level overlap: clip [5000..5005] intersects [vs..vs+VP_DUR]?
-    -- vs+VP_DUR is always > 5005 (huge viewport), so overlap when vs < 5005.
-    local clip_should_be_visible = (vs < 5005)
-    if clip_should_be_visible and drawn == 0 then
-        missing_steps = missing_steps + 1
-        if missing_steps <= 5 then
-            print(string.format("  STEP vs=%d drew %d clips (expected ≥1)", vs, drawn))
+    local widths = clip_body_widths()
+    local clip_end = CLIP_START + CLIP_DURATION
+    local clip_should_be_visible = (vs < clip_end)
+
+    if clip_should_be_visible then
+        if #widths == 0 then
+            table.insert(missing, vs)
+        else
+            local w = widths[1]
+            if not first_width then first_width = w end
+            if w ~= first_width then
+                table.insert(mismatches, { vs = vs, w = w })
+            end
         end
     end
 end
 
-assert(missing_steps == 0,
-    string.format("%d/%d scroll steps dropped a visible clip — sub-pixel cull regression",
-        missing_steps, total_steps))
+if #missing > 0 then
+    for i = 1, math.min(5, #missing) do
+        print(string.format("  STEP vs=%d drew 0 clips (expected ≥1)", missing[i]))
+    end
+    error(string.format("%d/%d scroll steps dropped a visible clip", #missing, total_steps))
+end
 
-print(string.format("  PASS: all %d scroll steps drew the visible clip", total_steps))
+if #mismatches > 0 then
+    print(string.format("first_width = %d", first_width))
+    for i = 1, math.min(5, #mismatches) do
+        print(string.format("  vs=%d width=%d (expected %d)",
+            mismatches[i].vs, mismatches[i].w, first_width))
+    end
+    error(string.format("%d/%d scroll steps drew a different width — strobing",
+        #mismatches, total_steps))
+end
+
+print(string.format("  PASS: all %d scroll steps drew width=%d", total_steps, first_width))
 print("\n✅ test_clip_flash_zoomed_out.lua passed")
