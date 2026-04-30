@@ -197,6 +197,25 @@ if not _G.qt_monotonic_s then
     end
 end
 
+-- Provide qt_file_mtime for plain-luajit test runs. Production registers
+-- the C++ binding (misc_bindings.cpp::lua_qt_file_mtime), which calls
+-- POSIX stat(2) directly for nanosecond precision. The headless harness
+-- can't link Qt, so we shell out to `stat` here. fs_utils.file_mtime
+-- now assumes the binding exists — the stub keeps the same global
+-- contract so tests don't need to know which environment they run in.
+if not _G.qt_file_mtime then
+    _G.qt_file_mtime = function(path)
+        if type(path) ~= "string" or path == "" then return nil end
+        local handle = io.popen(string.format("stat -f %%Fm %q 2>/dev/null", path))
+        if not handle then return nil end
+        local data = handle:read("*a") or ""
+        local close_ok = handle:close()
+        if not close_ok then return nil end
+        local mtime = tonumber((data:gsub("%s+$", "")))
+        return mtime
+    end
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

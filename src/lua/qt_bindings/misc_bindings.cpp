@@ -2,6 +2,7 @@
 #include "../../jve_log.h"
 #include "../../timeline_renderer.h" // For lua_create_timeline_renderer
 #include <chrono>
+#include <sys/stat.h>      // ::stat for nanosecond mtime (POSIX)
 #include <QApplication> // For QApplication::focusWidget()
 #include <QFileInfo>
 #include <QDateTime>
@@ -59,6 +60,41 @@ static int lua_qt_monotonic_s(lua_State* L) {
     auto now = std::chrono::steady_clock::now().time_since_epoch();
     double seconds = std::chrono::duration<double>(now).count();
     lua_pushnumber(L, seconds);
+    return 1;
+}
+
+// Single-path mtime as seconds-since-epoch with sub-second resolution.
+// Returns nil when the file doesn't exist (callers race the FS between
+// existence checks and mtime reads — the same nil-on-missing contract
+// fs_utils.file_mtime advertised when it shelled out to `stat`).
+//
+// Uses POSIX stat(2) directly so we get nanosecond precision (st_mtim /
+// st_mtimespec). The previous implementation forked a shell, ran the
+// `stat` binary, redirected to a temp file, and read it back — measured
+// at ~7 ms per call, which dominated peak_cache.init_for_project for
+// projects with hundreds of audio files (TSO 2026-04-29 21:42:14:
+// 3.79s in stat() out of a 3.93s init_for_project for 551 files).
+static int lua_qt_file_mtime(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    struct stat st;
+    if (::stat(path, &st) != 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+#if defined(__APPLE__)
+    // macOS exposes the timespec under the BSD-historical name.
+    double sec = static_cast<double>(st.st_mtimespec.tv_sec)
+               + static_cast<double>(st.st_mtimespec.tv_nsec) / 1e9;
+#elif defined(__linux__)
+    double sec = static_cast<double>(st.st_mtim.tv_sec)
+               + static_cast<double>(st.st_mtim.tv_nsec) / 1e9;
+#else
+    // Whole-second fallback. Production targets are macOS + Linux; this
+    // branch keeps the binding compilable elsewhere without lying about
+    // precision (the value is still a valid float, just floored).
+    double sec = static_cast<double>(st.st_mtime);
+#endif
+    lua_pushnumber(L, sec);
     return 1;
 }
 

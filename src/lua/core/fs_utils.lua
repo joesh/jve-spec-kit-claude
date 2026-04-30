@@ -26,24 +26,27 @@ function M.file_exists(path, mode)
     return false
 end
 
---- Get file modification time (seconds since epoch).
+--- Get file modification time (seconds since epoch, sub-second resolution).
 --- Returns nil if the file doesn't exist (expected case — callers race
 --- against FS changes between file_exists and file_mtime).
+---
+--- Forwards to the qt_file_mtime binding, which calls POSIX stat(2)
+--- directly for nanosecond precision (st_mtim / st_mtimespec). The
+--- prior implementation forked a shell per call (`stat -f %Fm <path>`
+--- via try_shell_capture) and cost ~7 ms each — 551 audio files at
+--- project-open made init_for_project a 3.8 s syscall storm.
+---
+--- The binding is registered globally at editor startup (qt_bindings.cpp)
+--- and stubbed by tests/test_env.lua for the headless harness.
+---
 --- @param path string absolute file path
 --- @return number|nil mtime
 function M.file_mtime(path)
     if not path or path == "" then return nil end
-    -- `%Fm` = nanosecond-fraction mtime ("1745999123.123456789"). Whole-
-    -- second (`%m`) resolution misses same-second rewrites, which breaks
-    -- media_status's in-place-rewrite detection — two writes inside one
-    -- second compare equal, so `media_content_changed` is never emitted.
-    local ok, data = M.try_shell_capture(string.format("stat -f %%Fm %q", path))
-    if not ok then return nil end
-    local mtime = tonumber((data:gsub("%s+$", "")))
-    assert(mtime, string.format(
-        "fs_utils.file_mtime: stat succeeded but output non-numeric for %s: %q",
-        path, data))
-    return mtime
+    assert(type(_G.qt_file_mtime) == "function",
+        "fs_utils.file_mtime: qt_file_mtime binding not registered "
+        .. "(production: src/qt_bindings.cpp; headless: tests/test_env.lua)")
+    return _G.qt_file_mtime(path)
 end
 
 --- List filenames in a directory.

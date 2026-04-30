@@ -192,6 +192,66 @@ end
 -- Public API
 -- ============================================================================
 
+local function expected_samples_from_probe(info)
+    if not info then return nil end
+    if not info.duration_us or info.duration_us <= 0 then return nil end
+    if not info.audio_sample_rate or info.audio_sample_rate <= 0 then return nil end
+    return math.floor(info.duration_us / 1e6 * info.audio_sample_rate)
+end
+
+-- Cache the media's audio TC origin (in samples). The lazy extractor
+-- opens the file via EMP only when metadata doesn't already carry TC,
+-- so we count cache hits vs extractions for visibility.
+local function cache_tc_origin(media_obj, counters)
+    local pre_meta = media_obj:_parsed_metadata()
+    local had_tc = pre_meta and pre_meta.start_tc_value ~= nil
+    local tc_samples = media_obj:get_audio_start_tc()
+    media_tc_origins[media_obj.id] = (tc_samples ~= nil) and tc_samples or 0
+    if had_tc then counters.tc_cached = counters.tc_cached + 1
+    else counters.tc_extracted = counters.tc_extracted + 1 end
+end
+
+-- Trigger peak load (or generation) for one online media file. mtime is
+-- already available — file_mtime returning nil means "file disappeared
+-- between our existence check and the stat", which is rare but real.
+local function ensure_peaks_for_online(rec, expected_samples, counters)
+    local mtime = fs_utils.file_mtime(rec.file_path)
+    if not mtime then
+        log.warn("peak_cache: could not stat %s — skipping peak gen", rec.file_path)
+        return
+    end
+    local was_loaded = peak_handles[rec.id] ~= nil
+    local was_generating = generation_status[rec.id] == "generating"
+    M.ensure_peaks(rec.id, rec.file_path, mtime, expected_samples)
+    if peak_handles[rec.id] and not was_loaded then
+        counters.peaks_loaded = counters.peaks_loaded + 1
+    elseif generation_status[rec.id] == "generating" and not was_generating then
+        counters.peaks_requested = counters.peaks_requested + 1
+    end
+end
+
+-- Per-media body of init_for_project. Pulled out so init_for_project
+-- itself reads as a four-step algorithm (fetch list → batch-probe →
+-- iterate → log) rather than mixing the loop body inline.
+local function init_one_media(rec, info, counters, Media)
+    assert(rec.file_path and rec.file_path ~= "",
+        string.format("peak_cache: media %s has nil/empty file_path", tostring(rec.id)))
+
+    local media_obj = Media.load(rec.id)
+    assert(media_obj, string.format(
+        "peak_cache: Media.load returned nil for media_id=%s", tostring(rec.id)))
+
+    cache_tc_origin(media_obj, counters)
+
+    if not fs_utils.file_exists(rec.file_path) then
+        log.detail("peak_cache: skipping offline %s", rec.file_path)
+        counters.offline = counters.offline + 1
+        return
+    end
+
+    ensure_peaks_for_online(rec, expected_samples_from_probe(info), counters)
+end
+
 --- Initialize the peak cache for a project.
 --- Scans all audio media and queues peak generation for any without cached peaks.
 function M.init_for_project(project_id)
@@ -206,8 +266,11 @@ function M.init_for_project(project_id)
     EMP = qt_constants and qt_constants.EMP
     assert(EMP, "peak_cache.init_for_project: qt_constants.EMP not available")
 
+    local t_start = qt_monotonic_s()  -- luacheck: globals qt_monotonic_s
+
     local Media = require("models.media")
     local audio_media = Media.get_audio_for_project(project_id)
+    local t_query = qt_monotonic_s()
 
     -- Batch-probe every audio media's file to get the authoritative
     -- audio sample count. We can't trust media.duration_frames — after
@@ -218,48 +281,28 @@ function M.init_for_project(project_id)
     local media_paths = {}
     for i, rec in ipairs(audio_media) do media_paths[i] = rec.file_path end
     local probes = probe_cache.probe_batch(media_paths)
+    local t_probe = qt_monotonic_s()
+
+    local counters = {
+        tc_cached      = 0,
+        tc_extracted   = 0,
+        peaks_loaded   = 0,
+        peaks_requested = 0,
+        offline        = 0,
+    }
 
     for i, rec in ipairs(audio_media) do
-        assert(rec.file_path and rec.file_path ~= "",
-            string.format("peak_cache: media %s has nil/empty file_path", tostring(rec.id)))
-
-        -- Cache audio TC origin for absolute→file-relative conversion.
-        -- nil from get_audio_start_tc means "no timecode metadata" → origin is 0
-        -- (file-relative and absolute coordinates are the same).
-        local media_obj = Media.load(rec.id)
-        assert(media_obj, string.format(
-            "peak_cache: Media.load returned nil for media_id=%s", tostring(rec.id)))
-        local tc_samples = media_obj:get_audio_start_tc()
-        media_tc_origins[rec.id] = (tc_samples ~= nil) and tc_samples or 0
-
-        -- Only generate peaks for files that exist on disk (skip offline media)
-        if not fs_utils.file_exists(rec.file_path) then
-            log.detail("peak_cache: skipping offline %s", rec.file_path)
-            goto continue_media
-        end
-
-        -- Expected audio sample count from the fresh probe. nil when the
-        -- probe failed (e.g. unreadable file) — try_load_existing then
-        -- skips the coverage check and relies on mtime alone.
-        local info = probes[i]
-        local expected_samples = nil
-        if info and info.duration_us and info.duration_us > 0
-                and info.audio_sample_rate and info.audio_sample_rate > 0 then
-            expected_samples = math.floor(
-                info.duration_us / 1e6 * info.audio_sample_rate)
-        end
-
-        local mtime = fs_utils.file_mtime(rec.file_path)
-        if mtime then
-            M.ensure_peaks(rec.id, rec.file_path, mtime, expected_samples)
-        else
-            log.warn("peak_cache: could not stat %s — skipping peak gen", rec.file_path)
-        end
-        ::continue_media::
+        init_one_media(rec, probes[i], counters, Media)
     end
 
-    log.event("peak_cache: initialized for project %s (%d audio media)",
-        project_id, #audio_media)
+    local t_done = qt_monotonic_s()
+    log.event("peak_cache.init_for_project: %d audio "
+        .. "(tc_cached=%d tc_extracted=%d peaks_loaded=%d peaks_requested=%d offline=%d) "
+        .. "query=%.2fs probe=%.2fs loop=%.2fs total=%.2fs",
+        #audio_media,
+        counters.tc_cached, counters.tc_extracted,
+        counters.peaks_loaded, counters.peaks_requested, counters.offline,
+        t_query - t_start, t_probe - t_query, t_done - t_probe, t_done - t_start)
 
     start_completion_poll()
 end

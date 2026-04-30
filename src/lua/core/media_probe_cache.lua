@@ -270,9 +270,9 @@ function M.probe_batch(paths)
         log.event("media_probe_cache: save failed; next run will re-probe")
     end
 
-    log.event("media_probe_cache: %d paths, %d hit, %d miss (%d missing-file)",
-        #paths, c.hit_count, #c.miss_paths - c.missing_count, c.missing_count)
-    log.detail("media_probe_cache timing: load=%.2fs stat=%.2fs probe=%.2fs save=%.2fs",
+    log.event("media_probe_cache: %d paths, %d hit, %d miss (%d missing-file) "
+        .. "load=%.2fs stat=%.2fs probe=%.2fs save=%.2fs",
+        #paths, c.hit_count, #c.miss_paths - c.missing_count, c.missing_count,
         t_stat - t_load, t_stat_end - t_stat, t_probe_end - t_probe_start,
         t_end - t_probe_end)
 
