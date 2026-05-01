@@ -849,17 +849,14 @@ function M.import_into_project(project_id, parse_result, opts)
                         tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
                     end
 
-                    -- Only collect clips whose source format declared an
-                    -- explicit V↔A link group ID. The previous (file_uuid,
-                    -- timeline_start) heuristic produced wrong groups on
-                    -- timelines with parallel-track video duplicates (V→V
-                    -- copies grouped together) or with V/A pairs whose
-                    -- starts differ slightly (genuine syncs missed). The
-                    -- source format is the only authority on linking; see
-                    -- DRP <LinkedItemSync>, FCP7 <link>, prproj
-                    -- LinkedClipRef. Importers that don't yet extract
-                    -- their format's link ID will produce no links —
-                    -- correct behaviour until they do.
+                    -- V↔A linkage is driven entirely by an explicit pair
+                    -- key the parser surfaces on clip_data.linked_item_sync.
+                    -- The value is opaque here — equality alone is what
+                    -- groups clips. nil means the source format declared
+                    -- the clip unlinked (or doesn't yet emit a key); such
+                    -- clips never join a group. Linkage is never inferred
+                    -- from media identity, timeline position, or name
+                    -- coincidence — the source format is authoritative.
                     if clip_data.linked_item_sync ~= nil then
                         table.insert(clips_for_linking, {
                             clip_id = clip_id,
@@ -871,9 +868,8 @@ function M.import_into_project(project_id, parse_result, opts)
                 end
             end
 
-            -- STEP 6: Create A/V link groups, keyed on the source format's
-            -- link ID. Clips with no link ID are not collected above and
-            -- so cannot end up in a group here.
+            -- STEP 6: Pool collected clips into groups by their pair key.
+            -- Singleton groups are filtered out below.
             local link_groups_by_key = {}
             for _, clip_info in ipairs(clips_for_linking) do
                 local key = tostring(clip_info.link_id)
