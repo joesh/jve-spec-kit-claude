@@ -1,21 +1,22 @@
--- Integration test: DRP import creates V↔A link groups from
--- <LinkedItemSync>, not from a (file_uuid, timeline_start) heuristic.
+-- Integration test: DRP import builds correct V↔A clip_links groups
+-- against the anamnesis-gold-timeline.drp fixture.
 --
--- Domain behaviour:
---   - The DRP fixture pairs the V `13-053-001` shot at timeline_start=
---     111632 with the A `13-053-001` chunk at 111626 via
---     <LinkedItemSync>-2021</LinkedItemSync> on each.
---   - There is also a parallel-track V duplicate of `13-053-001` at
---     111632 with NO <LinkedItemSync> (a colour/grade copy of the
---     same source media).
+-- Domain expectations (derived from how Resolve renders this fixture):
 --
---   Expected: the linked V and the linked A end up in the same
---   clip_links group; the parallel V duplicate ends up in NO group.
+--   * The V `13-053-001` shot at timeline_start = 111632 and the
+--     A `13-053-001` chunk at 111626 belong to the same V↔A pair.
+--     They must end up in one clip_links group.
 --
---   Prior bug: importer_core grouped on (file_uuid, timeline_start),
---   which pulled the parallel V duplicate into a video-only group with
---   the linked V, and put the linked A into a separate audio-only
---   group. Opt+click on the timeline expanded to the wrong sibling.
+--   * A parallel-track V duplicate of `13-053-001` at 111632 (a
+--     colour/grade copy) is unlinked. It must NOT join the pair's
+--     group, so Opt+Click on the linked V doesn't drag the duplicate
+--     into the selection.
+--
+--   * The linked group must be scoped to ONE shot name. Adjacent
+--     shots `13-053-001` and `13-055-001` were bladed from the same
+--     parent take and therefore share their <LinkedItemSync> value,
+--     but Resolve treats each shot name as its own independent V↔A
+--     pair.
 --
 -- Runs via JVEEditor --test (qt_xml_parse C++ binding required by
 -- drp_importer.parse_drp_file).
@@ -195,14 +196,10 @@ assert(has_video and has_audio, string.format(
     has_audio and "audio" or ""))
 
 -- ----------------------------------------------------------------------
--- Assertion 2b: the link group is JUST `13-053-001` — it must NOT
--- absorb the adjacent `13-055-001` segments that share LinkedItemSync.
--- LinkedItemSync is a parent-take ID; multiple shot-named segments
--- from the same take share it. Resolve treats each shot name as its
--- own V↔A pair. Bug 2026-05-01: the first fix grouped on
--- LinkedItemSync alone, producing a 4-clip group {V 13-053-001,
--- V 13-055-001, A 13-053-001, A 13-055-001}. Pair key is
--- (LinkedItemSync, Name).
+-- Assertion 3: the link group is scoped to the `13-053-001` shot —
+-- it must NOT absorb the adjacent `13-055-001` segments that share
+-- the same parent-take ID via <LinkedItemSync>. Resolve renders each
+-- shot name as its own V↔A pair.
 -- ----------------------------------------------------------------------
 
 local member_names = {}
@@ -240,14 +237,14 @@ print(string.format(
     #group_members))
 
 -- ----------------------------------------------------------------------
--- Assertion 3: the unlinked V duplicate is NOT in any group.
+-- Assertion 4: the unlinked V duplicate is NOT in any group.
 -- ----------------------------------------------------------------------
 
 local unlinked_group = get_link_group_id(unlinked_v.id)
 assert(unlinked_group == nil, string.format(
-    "BUG: parallel-track V duplicate (track_index=%d, clip=%s) is in\n" ..
-    "link group %s. It has no <LinkedItemSync> in the DRP and should\n" ..
-    "be unlinked.",
+    "parallel-track V duplicate (track_index=%d, clip=%s) is in link\n" ..
+    "group %s. It has no <LinkedItemSync> in the DRP and should be\n" ..
+    "unlinked.",
     unlinked_v.track_index, unlinked_v.id, tostring(unlinked_group)))
 
 print("  ✓ Linked V and A `13-053-001` share a clip_links group")

@@ -1,31 +1,25 @@
 #!/usr/bin/env luajit
 
--- Regression: DRP parse_resolve_tracks must extract <LinkedItemSync> per
--- clip and surface it on clip_data.linked_item_sync. This is the V↔A
--- link-group ID Resolve writes for clips that share a sync chain
--- (chain icon in the Resolve UI). Two clips — one video, one audio —
--- with the same LinkedItemSync value are linked. Clips without a
--- LinkedItemSync value (or with <LinkedItemSync/>) are unlinked.
+-- Regression: parse_resolve_tracks must surface a V↔A pair key on
+-- clip_data.linked_item_sync that captures Resolve's per-shot
+-- linkage. <LinkedItemSync> alone is a parent-take ID — it's
+-- shared across multiple shot-named segments produced by source-
+-- side blading, so the pair key combines the sync value with the
+-- clip name.
 --
--- Domain behaviour:
---   - Importing a DRP that pairs a V clip and an A clip via
---     <LinkedItemSync>N</LinkedItemSync> produces ONE link group
---     containing both. Selecting one with Opt+Click extends to the
---     other.
---   - A duplicate video copy on a parallel track that has NO
---     LinkedItemSync element (the unsynced V duplicate) does NOT
---     join either of those groups. Opt+clicking it selects only
---     itself.
---
--- Bug history (2026-05-01):
---   importer_core's STEP 6 keyed link groups on (file_uuid,
---   timeline_start). Two V copies of the same shot on parallel
---   tracks pooled together (same media + same start), and the
---   genuine V↔A pair never pooled (different media files, slightly
---   different timeline starts). Opt+click on the timeline expanded
---   to the parallel V duplicate instead of the synced A. Fix: drive
---   linking off the source format's explicit link ID — DRP writes
---   it as <LinkedItemSync>.
+-- Domain behaviour the rest of the importer relies on:
+--   1. A V clip and an A clip with the same parent-take ID and
+--      shot name surface the same opaque key (so importer_core
+--      pools them in one clip_links group; Opt+Click on the
+--      timeline expands V↔A within the shot).
+--   2. A clip with no <LinkedItemSync> (or `<LinkedItemSync/>`)
+--      surfaces nil — a parallel-track grade copy or an isolated
+--      audio chunk forms no link group.
+--   3. Two adjacent shots from one continuous take share the
+--      parent-take ID but produce DISTINCT pair keys (Resolve
+--      renders each as its own chain icon).
+--   4. Malformed input (non-numeric sync, name containing the
+--      key separator) crashes loudly (Rule 1.14).
 
 require("test_env")
 
@@ -47,25 +41,22 @@ local function elem(tag, attrs, children_or_text)
 end
 local function text(tag, t) return elem(tag, {}, t) end
 
--- 25 fps as little-endian IEEE-754 double (DRP format).
+-- 25 fps as little-endian IEEE-754 double (DRP <MediaFrameRate> format).
 -- 25.0 = 0x4039000000000000 (BE) → "0000000000003940" (LE).
 local FPS_25_LE_HEX = "0000000000003940"
 
--- ─────────────────────────────────────────────────────────────────────
--- Build a synthetic Sm2SequenceContainer with:
---   V1: clip name="ANCHOR" Start=100 LinkedItemSync=42  (linked V)
---   V2: clip name="ANCHOR" Start=100 LinkedItemSync absent (parallel duplicate, unlinked)
---   A1: clip name="ANCHOR" Start=98  LinkedItemSync=42  (linked A — pairs with V1)
---   A2: clip name="ANCHOR" Start=98  LinkedItemSync=<empty/> (isolated A, unlinked)
--- ─────────────────────────────────────────────────────────────────────
+-- ASCII Unit Separator — the parser uses this internally between the
+-- sync value and the clip name. Tests reference it only to construct
+-- the hostile-input fail-fast case at the bottom.
+local UNIT_SEP = "\x1F"
 
-local function video_clip(start_frame, sync_child)
+local function video_clip(clip_name, start_frame, sync_child)
     local children = {
-        text("Name", "ANCHOR"),
+        text("Name", clip_name),
         text("Start", tostring(start_frame)),
         text("Duration", "100"),
         text("In", "0"),
-        text("MediaFilePath", "/tmp/anchor.mov"),
+        text("MediaFilePath", "/tmp/" .. clip_name .. ".mov"),
         text("MediaFrameRate", FPS_25_LE_HEX),
         text("MediaStartTime", "0"),
         text("WasDisbanded", "false"),
@@ -75,13 +66,13 @@ local function video_clip(start_frame, sync_child)
     return elem("Sm2TiVideoClip", {}, children)
 end
 
-local function audio_clip(start_frame, media_ref, sync_child)
+local function audio_clip(clip_name, start_frame, media_ref, sync_child)
     local children = {
-        text("Name", "ANCHOR"),
+        text("Name", clip_name),
         text("Start", tostring(start_frame)),
         text("Duration", "100"),
         text("In", "0"),
-        text("MediaFilePath", "/tmp/anchor.wav"),
+        text("MediaFilePath", "/tmp/" .. clip_name .. ".wav"),
         text("MediaRef", media_ref),
         text("MediaStartTime", "0"),
         text("WasDisbanded", "false"),
@@ -103,147 +94,113 @@ local function track(track_type_value, clips)
     })
 end
 
-local v_track = track(0, {
-    video_clip(100, text("LinkedItemSync", "42")),                  -- V1: linked
-    video_clip(100, nil),                                           -- V2: no LinkedItemSync element at all
-})
-local a_track = track(1, {
-    audio_clip(98, "audio-ref-1", text("LinkedItemSync", "42")),    -- A1: linked (pairs with V1)
-    audio_clip(98, "audio-ref-1", elem("LinkedItemSync", {}, "")),  -- A2: empty <LinkedItemSync/>
-})
+-- =========================================================================
+-- Single-shot V↔A pair + an unlinked V duplicate + an unlinked A chunk
+-- =========================================================================
+-- Synthetic Sm2SequenceContainer:
+--   V row 1: name="ANCHOR" Start=100 LinkedItemSync=42         (linked V)
+--   V row 2: name="ANCHOR" Start=100 (no <LinkedItemSync>)     (unlinked dup)
+--   A row 1: name="ANCHOR" Start=98  LinkedItemSync=42         (linked A — pairs V row 1)
+--   A row 2: name="ANCHOR" Start=98  <LinkedItemSync/>         (isolated A)
 
-local seq_elem = elem("Sm2SequenceContainer", {}, { v_track, a_track })
-
--- Sample rate map keyed by MediaRef: required for AUDIO clips.
-local media_ref_sample_rate_map = { ["audio-ref-1"] = 48000 }
-local media_ref_path_map        = { ["audio-ref-1"] = "/tmp/anchor.wav" }
-local media_ref_name_map        = { ["audio-ref-1"] = "anchor.wav" }
+local single_shot_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, {
+        video_clip("ANCHOR", 100, text("LinkedItemSync", "42")),
+        video_clip("ANCHOR", 100, nil),
+    }),
+    track(1, {
+        audio_clip("ANCHOR", 98, "audio-ref-1", text("LinkedItemSync", "42")),
+        audio_clip("ANCHOR", 98, "audio-ref-1", elem("LinkedItemSync", {}, "")),
+    }),
+})
 
 local v_tracks, a_tracks = drp.parse_resolve_tracks(
-    seq_elem, 25,
-    media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+    single_shot_seq, 25,
+    { ["audio-ref-1"] = "/tmp/ANCHOR.wav" },
+    { ["audio-ref-1"] = "ANCHOR.wav" },
+    { ["audio-ref-1"] = 48000 })
 
-assert(#v_tracks == 1, string.format("expected 1 video track, got %d", #v_tracks))
-assert(#a_tracks == 1, string.format("expected 1 audio track, got %d", #a_tracks))
-assert(#v_tracks[1].clips == 2, string.format(
-    "expected 2 video clips, got %d", #v_tracks[1].clips))
-assert(#a_tracks[1].clips == 2, string.format(
-    "expected 2 audio clips, got %d", #a_tracks[1].clips))
+assert(#v_tracks == 1 and #a_tracks == 1,
+    "expected 1 video track and 1 audio track")
+assert(#v_tracks[1].clips == 2 and #a_tracks[1].clips == 2,
+    "expected 2 clips per track")
 
-local v1 = v_tracks[1].clips[1]   -- V with sync, name=ANCHOR  (linked V)
-local v2 = v_tracks[1].clips[2]   -- V without LinkedItemSync   (unlinked dup)
-local a1 = a_tracks[1].clips[1]   -- A with sync, name=ANCHOR  (linked A — pairs with V1)
-local a2 = a_tracks[1].clips[2]   -- A with empty <LinkedItemSync/>
+local linked_v   = v_tracks[1].clips[1]
+local unlinked_v = v_tracks[1].clips[2]
+local linked_a   = a_tracks[1].clips[1]
+local isolated_a = a_tracks[1].clips[2]
 
--- Domain-level assertions about pair-key behaviour — the test does
--- not look at how the parser encodes the key, only at equality and
--- presence semantics that downstream link-group construction relies
--- on (Rule 2.34: test domain behaviour, not implementation).
+-- The test asserts only equality / presence semantics that downstream
+-- link-group construction relies on. It does not look at the encoded
+-- form of the key (Rule 2.34: test domain behaviour, not implementation).
 
--- An unlinked clip surfaces nil, not a sentinel. Importer_core must
--- be able to skip it cheaply (presence check, not value compare).
-assert(v2.linked_item_sync == nil,
+assert(unlinked_v.linked_item_sync == nil,
     "V duplicate without <LinkedItemSync> must surface nil")
-assert(a2.linked_item_sync == nil,
+assert(isolated_a.linked_item_sync == nil,
     "A clip with empty <LinkedItemSync/> must surface nil")
 print("  ✓ Clips without LinkedItemSync surface nil")
 
--- A V/A pair that share parent-take ID and shot name surface the
--- same opaque key — that's what makes importer_core put them in one
--- link group.
-assert(v1.linked_item_sync ~= nil and a1.linked_item_sync ~= nil,
+assert(linked_v.linked_item_sync ~= nil and linked_a.linked_item_sync ~= nil,
     "linked V and A must surface non-nil keys")
-assert(v1.linked_item_sync == a1.linked_item_sync, string.format(
+assert(linked_v.linked_item_sync == linked_a.linked_item_sync, string.format(
     "linked V and A must share a pair key (got V=%s, A=%s)",
-    tostring(v1.linked_item_sync), tostring(a1.linked_item_sync)))
+    tostring(linked_v.linked_item_sync), tostring(linked_a.linked_item_sync)))
 print("  ✓ Linked V/A pair shares a key")
 
--- The unlinked V duplicate must not collide with the linked clips'
--- key — otherwise opt+click would expand to it.
-assert(v2.linked_item_sync ~= v1.linked_item_sync,
+assert(unlinked_v.linked_item_sync ~= linked_v.linked_item_sync,
     "unlinked V duplicate must not share the linked V's key")
 print("  ✓ Unlinked V duplicate has a distinct (nil) key")
 
 -- =========================================================================
--- Test 7: Multi-shot take — same LinkedItemSync, different names.
--- Two adjacent shots from one continuous take share the parent-take
--- ID but Resolve treats them as TWO independent V↔A pairs.
+-- Multi-shot take: shared parent-take ID, distinct shot names
 -- =========================================================================
-local function v_clip_named(name, start_frame, sync_val)
-    local children = {
-        text("Name", name),
-        text("Start", tostring(start_frame)),
-        text("Duration", "100"),
-        text("In", "0"),
-        text("MediaFilePath", "/tmp/" .. name .. ".mov"),
-        text("MediaFrameRate", FPS_25_LE_HEX),
-        text("MediaStartTime", "0"),
-        text("WasDisbanded", "false"),
-        text("Flags", "0"),
-        text("LinkedItemSync", tostring(sync_val)),
-    }
-    return elem("Sm2TiVideoClip", {}, children)
-end
-local function a_clip_named(name, start_frame, ref, sync_val)
-    local children = {
-        text("Name", name),
-        text("Start", tostring(start_frame)),
-        text("Duration", "100"),
-        text("In", "0"),
-        text("MediaFilePath", "/tmp/" .. name .. ".wav"),
-        text("MediaRef", ref),
-        text("MediaStartTime", "0"),
-        text("WasDisbanded", "false"),
-        text("Flags", "0"),
-        text("LinkedItemSync", tostring(sync_val)),
-    }
-    return elem("Sm2TiAudioClip", {}, children)
-end
+-- Two adjacent shots bladed from one continuous capture. Both shots'
+-- V and A halves carry the same <LinkedItemSync>, but Resolve treats
+-- them as two independent V↔A pairs (chain icon per shot) — so the
+-- pair keys must differ across shot names.
 
-local multi_v = track(0, {
-    v_clip_named("SHOT_A", 200, 99),
-    v_clip_named("SHOT_B", 300, 99),
+local multi_shot_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, {
+        video_clip("SHOT_A", 200, text("LinkedItemSync", "99")),
+        video_clip("SHOT_B", 300, text("LinkedItemSync", "99")),
+    }),
+    track(1, {
+        audio_clip("SHOT_A", 200, "ref-shot-a", text("LinkedItemSync", "99")),
+        audio_clip("SHOT_B", 300, "ref-shot-b", text("LinkedItemSync", "99")),
+    }),
 })
-local multi_a = track(1, {
-    a_clip_named("SHOT_A", 200, "ref-shot-a", 99),
-    a_clip_named("SHOT_B", 300, "ref-shot-b", 99),
-})
-local multi_seq = elem("Sm2SequenceContainer", {}, { multi_v, multi_a })
 
-local m_v_tracks, m_a_tracks = drp.parse_resolve_tracks(
-    multi_seq, 25,
+local mv_tracks, ma_tracks = drp.parse_resolve_tracks(
+    multi_shot_seq, 25,
     { ["ref-shot-a"] = "/tmp/SHOT_A.wav", ["ref-shot-b"] = "/tmp/SHOT_B.wav" },
     { ["ref-shot-a"] = "SHOT_A.wav",      ["ref-shot-b"] = "SHOT_B.wav" },
     { ["ref-shot-a"] = 48000,             ["ref-shot-b"] = 48000 })
 
-local m_v_a, m_v_b = m_v_tracks[1].clips[1], m_v_tracks[1].clips[2]
-local m_a_a, m_a_b = m_a_tracks[1].clips[1], m_a_tracks[1].clips[2]
+local shot_a_video = mv_tracks[1].clips[1]
+local shot_b_video = mv_tracks[1].clips[2]
+local shot_a_audio = ma_tracks[1].clips[1]
+local shot_b_audio = ma_tracks[1].clips[2]
 
--- Domain guarantee: SHOT_A and SHOT_B must not collapse into one
--- group despite sharing parent-take ID. Resolve renders this as two
--- independent V↔A pairs (chain icon per shot), and opt+click must
--- only expand within a shot.
-assert(m_v_a.linked_item_sync == m_a_a.linked_item_sync,
-    "V SHOT_A and A SHOT_A must share a pair key")
-assert(m_v_b.linked_item_sync == m_a_b.linked_item_sync,
-    "V SHOT_B and A SHOT_B must share a pair key")
-assert(m_v_a.linked_item_sync ~= m_v_b.linked_item_sync,
+assert(shot_a_video.linked_item_sync == shot_a_audio.linked_item_sync,
+    "SHOT_A video and audio must share a pair key")
+assert(shot_b_video.linked_item_sync == shot_b_audio.linked_item_sync,
+    "SHOT_B video and audio must share a pair key")
+assert(shot_a_video.linked_item_sync ~= shot_b_video.linked_item_sync,
     "shots from one parent take must produce distinct pair keys per shot name")
 print("  ✓ Multi-shot take: shared parent ID + different shot name → independent pairs")
 
 -- =========================================================================
--- Test 8: Fail-fast on malformed inputs (Rule 1.14, Rule 2.32 —
--- assert-based failure paths must be exercised via pcall).
+-- Fail-fast on malformed inputs (Rule 1.14, Rule 2.32)
 -- =========================================================================
 
 -- Non-numeric LinkedItemSync content must crash with an actionable
 -- error that names the offending clip and the bad value.
-local bad_sync_seq = elem("Sm2SequenceContainer", {}, {
+local non_numeric_seq = elem("Sm2SequenceContainer", {}, {
     track(0, {
-        video_clip(100, text("LinkedItemSync", "not-a-number")),
+        video_clip("ANCHOR", 100, text("LinkedItemSync", "not-a-number")),
     }),
 })
-local ok, err = pcall(drp.parse_resolve_tracks, bad_sync_seq, 25, {}, {}, {})
+local ok, err = pcall(drp.parse_resolve_tracks, non_numeric_seq, 25, {}, {}, {})
 assert(not ok, "non-numeric LinkedItemSync must error")
 assert(tostring(err):find("LinkedItemSync"), string.format(
     "error message must mention LinkedItemSync (got: %s)", tostring(err)))
@@ -253,21 +210,11 @@ print("  ✓ Non-numeric <LinkedItemSync> fails fast with actionable message")
 
 -- Clip name containing the pair-key separator must crash — pair-key
 -- composition would otherwise be ambiguous.
-local UNIT_SEP = "\x1F"
-local hostile_v = elem("Sm2TiVideoClip", {}, {
-    text("Name", "EVIL" .. UNIT_SEP .. "NAME"),
-    text("Start", "100"),
-    text("Duration", "100"),
-    text("In", "0"),
-    text("MediaFilePath", "/tmp/evil.mov"),
-    text("MediaFrameRate", FPS_25_LE_HEX),
-    text("MediaStartTime", "0"),
-    text("WasDisbanded", "false"),
-    text("Flags", "0"),
-    text("LinkedItemSync", "99"),
-})
 local hostile_seq = elem("Sm2SequenceContainer", {}, {
-    track(0, { hostile_v }),
+    track(0, {
+        video_clip("EVIL" .. UNIT_SEP .. "NAME", 100,
+            text("LinkedItemSync", "99")),
+    }),
 })
 ok, err = pcall(drp.parse_resolve_tracks, hostile_seq, 25, {}, {}, {})
 assert(not ok, "clip name containing pair-key separator must error")

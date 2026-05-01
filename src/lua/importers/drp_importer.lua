@@ -1108,30 +1108,35 @@ end
 
 --- Compose the V↔A pair key from <LinkedItemSync> + <Name>.
 --
--- LinkedItemSync is a parent-take ID: every clip that originated
--- from the same continuous capture carries the same value, including
--- multiple shot-named segments produced by source-side blading.
--- Resolve's actual V↔A pair granularity is per shot name within a
--- take, so the key is (sync_value, name).
+-- <LinkedItemSync> is a parent-take ID Resolve assigns to every
+-- timeline clip that originated from one continuous capture — the
+-- same value appears on each post-blade segment of that take. Its
+-- actual V↔A pair granularity is per shot name within a take, so
+-- the key downstream code groups on is (sync_value, name).
 --
--- Returned value is opaque to importer_core — equality alone is what
--- matters. Empty (`<LinkedItemSync/>`) or absent element → nil
--- (unlinked clip). Non-numeric content asserts (Rule 1.14).
+-- Returned value is opaque to importer_core — equality alone is
+-- what matters. Empty (`<LinkedItemSync/>`) or absent element →
+-- nil (unlinked clip). Non-numeric content asserts.
 --
--- The pair key uses ASCII Unit Separator (\x1F) so it can never
--- collide with clip-name content.
+-- The composed key uses ASCII Unit Separator (\x1F) between fields
+-- so it can never collide with clip-name content; the helper
+-- asserts the name is free of that separator.
+--
+-- @param clip_elem table: Sm2TiVideoClip or Sm2TiAudioClip element
+-- @param clip_name string: clip's <Name> (already resolved by caller)
+-- @return string|nil: opaque pair key, or nil for unlinked clips
 local PAIR_KEY_SEP = "\x1F"
-local function parse_linked_item_sync(clip_elem, clip_name)
+local function extract_linked_item_sync(clip_elem, clip_name)
     local lis_elem = find_element(clip_elem, "LinkedItemSync")
     local lis_text = lis_elem and get_text(lis_elem)
     if not lis_text or lis_text == "" then return nil end
 
     local sync_value = tonumber(lis_text)
     assert(sync_value, string.format(
-        "parse_linked_item_sync: clip '%s' has non-numeric LinkedItemSync '%s'",
+        "extract_linked_item_sync: clip '%s' has non-numeric LinkedItemSync '%s'",
         clip_name, lis_text))
     assert(not clip_name:find(PAIR_KEY_SEP, 1, true), string.format(
-        "parse_linked_item_sync: clip name '%s' contains the pair-key " ..
+        "extract_linked_item_sync: clip name '%s' contains the pair-key " ..
         "separator (\\x1F); pair-key composition would be ambiguous",
         clip_name))
     return string.format("%d%s%s", sync_value, PAIR_KEY_SEP, clip_name)
@@ -1478,7 +1483,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
             end
 
-            local linked_item_sync = parse_linked_item_sync(clip_elem, clip_name)
+            local linked_item_sync = extract_linked_item_sync(clip_elem, clip_name)
 
             local clip = {
                 name = clip_name,
