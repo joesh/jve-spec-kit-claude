@@ -356,6 +356,11 @@ local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
     assert(out_point_ticks, string.format(
         "prproj: clip '%s' missing OutPoint (malformed TrackItem)", clip_name))
 
+    -- linked_item_sync intentionally absent: Premiere's <LinkContainer>
+    -- stores A/V link groups but is empty in all available fixtures.
+    -- Until a fixture with populated <LinkContainer> is available for
+    -- verification, we leave linked_item_sync = nil so importer_core
+    -- STEP 6 skips link group creation rather than producing wrong links.
     return {
         name        = clip_name,
         start_value = start_frame,

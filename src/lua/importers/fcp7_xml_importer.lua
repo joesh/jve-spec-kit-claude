@@ -180,7 +180,8 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         source_out = 0,    -- integer frames
         enabled = true,
         frame_rate = frame_rate,
-        raw_duration = nil
+        raw_duration = nil,
+        linked_item_sync = nil,
     }
 
     local children = clipitem_node.children or {}
@@ -251,6 +252,22 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
             clip_info.source_out = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "enabled" then
             clip_info.enabled = (child.text:upper() == "TRUE")
+        elseif name == "link" then
+            -- Collect <linkclipref> values from this <link> block.
+            -- A clipitem linked to one or more peers has symmetric <link>
+            -- children; each holds a <linkclipref> with a sibling clip id.
+            -- Canonical group key = sorted minimum of all ref values so that
+            -- every clip in the group independently computes the same key.
+            for _, link_child in ipairs(child.children or {}) do
+                if link_child.tag == "linkclipref" and link_child.text and link_child.text ~= "" then
+                    local ref = link_child.text:match("^%s*(.-)%s*$")
+                    if ref ~= "" then
+                        if not clip_info.linked_item_sync or ref < clip_info.linked_item_sync then
+                            clip_info.linked_item_sync = ref
+                        end
+                    end
+                end
+            end
         end
     end
 
@@ -602,6 +619,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
     local recorded_media_ids = {}
     local master_lookup = {}
     local recorded_master_ids = {}
+    local clips_for_linking = {}
 
     local bins = tag_service.list(project_id)
     local bins_by_name = {}
@@ -867,6 +885,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             audio_sample_rate = media_info.audio_sample_rate,
             codec = codec,
             is_still = Media.classify_is_still(codec, width, duration),
+            metadata = media_info.metadata,
         })
 
         if not media then
@@ -962,6 +981,15 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         if clip_key then
             result.clip_id_map[tostring(clip_key)] = clip_id
         end
+
+        if clip_info.linked_item_sync then
+            table.insert(clips_for_linking, {
+                clip_id          = clip_id,
+                linked_item_sync = clip_info.linked_item_sync,
+                role             = track_type == "VIDEO" and "video" or "audio",
+            })
+        end
+
         return true
     end
 
@@ -1174,6 +1202,36 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         rollback_transaction()
         rollback_partial()
         return {success = false, error = string.format("Failed to commit import transaction: %s", tostring(commit_err))}
+    end
+
+    -- STEP: Create A/V link groups from format-explicit linked_item_sync keys.
+    -- Clips sharing the same non-nil linked_item_sync within a sequence form
+    -- one group. FCP7 key = sorted minimum of all <linkclipref> ids in the
+    -- <link> block (all clips in a linked pair independently compute the same
+    -- minimum, so they share a key without any cross-clip coordination).
+    if #clips_for_linking > 0 then
+        local clip_link = require("models.clip_link")
+        local link_groups_by_key = {}
+        for _, info in ipairs(clips_for_linking) do
+            local key = info.linked_item_sync
+            link_groups_by_key[key] = link_groups_by_key[key] or {}
+            table.insert(link_groups_by_key[key], info)
+        end
+        for _, group in pairs(link_groups_by_key) do
+            if #group >= 2 then
+                local to_link = {}
+                for _, info in ipairs(group) do
+                    table.insert(to_link, { clip_id = info.clip_id, role = info.role, time_offset = 0 })
+                end
+                local link_id, link_err = clip_link.create_link_group(to_link)
+                if link_id then
+                    log.event("FCP7 import: created link group for %d clips (key=%s)",
+                        #to_link, tostring(group[1].linked_item_sync))
+                else
+                    log.warn("FCP7 import: failed to create link group: %s", tostring(link_err))
+                end
+            end
+        end
     end
 
     local bins_saved = true
