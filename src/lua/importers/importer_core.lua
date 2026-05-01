@@ -858,10 +858,22 @@ function M.import_into_project(project_id, parse_result, opts)
                     -- from media identity, timeline position, or name
                     -- coincidence — the source format is authoritative.
                     if clip_data.linked_item_sync ~= nil then
+                        local role
+                        if track_data.type == "VIDEO" then
+                            role = "video"
+                        elseif track_data.type == "AUDIO" then
+                            role = "audio"
+                        else
+                            assert(false, string.format(
+                                "import_into_project: clip '%s' on unsupported " ..
+                                "track type '%s' surfaced a link key — clip_links " ..
+                                "role column accepts only video|audio",
+                                tostring(clip_data.name), tostring(track_data.type)))
+                        end
                         table.insert(clips_for_linking, {
                             clip_id = clip_id,
                             link_id = clip_data.linked_item_sync,
-                            role    = track_data.type == "VIDEO" and "video" or "audio",
+                            role    = role,
                         })
                     end
                     ::continue_clip::

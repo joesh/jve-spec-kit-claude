@@ -222,4 +222,18 @@ assert(tostring(err):find("separator") or tostring(err):find("ambiguous"),
     "error must explain the collision (got: " .. tostring(err) .. ")")
 print("  ✓ Clip name containing pair-key separator fails fast")
 
+-- Fractional LinkedItemSync must crash. string.format("%d", 1.5)
+-- silently truncates to "1", so two distinct fractional sync values
+-- would alias on the same key. Reject upstream rather than masking.
+local fractional_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, {
+        video_clip("ANCHOR", 100, text("LinkedItemSync", "1.5")),
+    }),
+})
+ok, err = pcall(drp.parse_resolve_tracks, fractional_seq, 25, {}, {}, {})
+assert(not ok, "fractional LinkedItemSync must error")
+assert(tostring(err):find("non-integer") or tostring(err):find("truncate"),
+    "error must explain truncation risk (got: " .. tostring(err) .. ")")
+print("  ✓ Fractional <LinkedItemSync> fails fast")
+
 print("✅ test_drp_linked_item_sync.lua passed")

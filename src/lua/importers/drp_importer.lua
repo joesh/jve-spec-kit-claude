@@ -1116,7 +1116,8 @@ end
 --
 -- Returned value is opaque to importer_core — equality alone is
 -- what matters. Empty (`<LinkedItemSync/>`) or absent element →
--- nil (unlinked clip). Non-numeric content asserts.
+-- nil (unlinked clip). Non-numeric, non-integer, or unrepresentable
+-- content asserts (Rule 1.14).
 --
 -- The composed key uses ASCII Unit Separator (\x1F) between fields
 -- so it can never collide with clip-name content; the helper
@@ -1127,6 +1128,13 @@ end
 -- @return string|nil: opaque pair key, or nil for unlinked clips
 local PAIR_KEY_SEP = "\x1F"
 local function extract_linked_item_sync(clip_elem, clip_name)
+    assert(type(clip_elem) == "table",
+        "extract_linked_item_sync: clip_elem must be a table (got "
+        .. type(clip_elem) .. ")")
+    assert(type(clip_name) == "string" and clip_name ~= "",
+        "extract_linked_item_sync: clip_name must be a non-empty string (got "
+        .. type(clip_name) .. ")")
+
     local lis_elem = find_element(clip_elem, "LinkedItemSync")
     local lis_text = lis_elem and get_text(lis_elem)
     if not lis_text or lis_text == "" then return nil end
@@ -1135,6 +1143,15 @@ local function extract_linked_item_sync(clip_elem, clip_name)
     assert(sync_value, string.format(
         "extract_linked_item_sync: clip '%s' has non-numeric LinkedItemSync '%s'",
         clip_name, lis_text))
+    -- Float values would silently truncate inside string.format("%d", ...) —
+    -- two distinct fractional sync values would collide on the same key.
+    -- Resolve writes integers; reject anything else loudly.
+    assert(sync_value == math.floor(sync_value)
+        and sync_value > -2^53 and sync_value < 2^53, string.format(
+        "extract_linked_item_sync: clip '%s' has non-integer LinkedItemSync " ..
+        "'%s' (parsed as %s); pair-key composition truncates fractional " ..
+        "values and would alias distinct clips",
+        clip_name, lis_text, tostring(sync_value)))
     assert(not clip_name:find(PAIR_KEY_SEP, 1, true), string.format(
         "extract_linked_item_sync: clip name '%s' contains the pair-key " ..
         "separator (\\x1F); pair-key composition would be ambiguous",
