@@ -133,10 +133,13 @@ assert(#a_tracks[1].clips == 2, string.format(
 -- =========================================================================
 -- Test 1: V clip with explicit <LinkedItemSync>42</LinkedItemSync>
 -- =========================================================================
+-- Pair key combines sync value with clip name (Resolve groups all
+-- clips from the same continuous take under one LinkedItemSync but
+-- pairs them V↔A per name).
 local v1 = v_tracks[1].clips[1]
-assert(v1.linked_item_sync == 42, string.format(
-    "V1 linked_item_sync: expected 42, got %s", tostring(v1.linked_item_sync)))
-print("  ✓ V clip with <LinkedItemSync>42</LinkedItemSync> → linked_item_sync = 42")
+assert(v1.linked_item_sync == "42:ANCHOR", string.format(
+    "V1 linked_item_sync: expected '42:ANCHOR', got %s", tostring(v1.linked_item_sync)))
+print("  ✓ V clip with <LinkedItemSync>42</LinkedItemSync> name=ANCHOR → '42:ANCHOR'")
 
 -- =========================================================================
 -- Test 2: V duplicate with NO <LinkedItemSync> element at all
@@ -150,9 +153,9 @@ print("  ✓ V clip without <LinkedItemSync> element → linked_item_sync = nil"
 -- Test 3: A clip with explicit <LinkedItemSync>42</LinkedItemSync>
 -- =========================================================================
 local a1 = a_tracks[1].clips[1]
-assert(a1.linked_item_sync == 42, string.format(
-    "A1 linked_item_sync: expected 42, got %s", tostring(a1.linked_item_sync)))
-print("  ✓ A clip with <LinkedItemSync>42</LinkedItemSync> → linked_item_sync = 42")
+assert(a1.linked_item_sync == "42:ANCHOR", string.format(
+    "A1 linked_item_sync: expected '42:ANCHOR', got %s", tostring(a1.linked_item_sync)))
+print("  ✓ A clip with <LinkedItemSync>42</LinkedItemSync> name=ANCHOR → '42:ANCHOR'")
 
 -- =========================================================================
 -- Test 4: A clip with empty <LinkedItemSync/>
@@ -178,5 +181,80 @@ assert(v2.linked_item_sync ~= v1.linked_item_sync,
 assert(v2.linked_item_sync ~= a1.linked_item_sync,
     "V2 (parallel duplicate) must not share A1's link ID")
 print("  ✓ V2 (unlinked duplicate) does not match V1/A1 link ID")
+
+-- =========================================================================
+-- Test 7: Multi-shot take — same LinkedItemSync, different names.
+-- Two adjacent shots from one continuous take share the parent-take
+-- ID but Resolve treats them as TWO independent V↔A pairs.
+-- =========================================================================
+local function v_clip_named(name, start_frame, sync_val)
+    local children = {
+        text("Name", name),
+        text("Start", tostring(start_frame)),
+        text("Duration", "100"),
+        text("In", "0"),
+        text("MediaFilePath", "/tmp/" .. name .. ".mov"),
+        text("MediaFrameRate", FPS_25_LE_HEX),
+        text("MediaStartTime", "0"),
+        text("WasDisbanded", "false"),
+        text("Flags", "0"),
+        text("LinkedItemSync", tostring(sync_val)),
+    }
+    return elem("Sm2TiVideoClip", {}, children)
+end
+local function a_clip_named(name, start_frame, ref, sync_val)
+    local children = {
+        text("Name", name),
+        text("Start", tostring(start_frame)),
+        text("Duration", "100"),
+        text("In", "0"),
+        text("MediaFilePath", "/tmp/" .. name .. ".wav"),
+        text("MediaRef", ref),
+        text("MediaStartTime", "0"),
+        text("WasDisbanded", "false"),
+        text("Flags", "0"),
+        text("LinkedItemSync", tostring(sync_val)),
+    }
+    return elem("Sm2TiAudioClip", {}, children)
+end
+
+local multi_v = track(0, {
+    v_clip_named("SHOT_A", 200, 99),
+    v_clip_named("SHOT_B", 300, 99),
+})
+local multi_a = track(1, {
+    a_clip_named("SHOT_A", 200, "ref-shot-a", 99),
+    a_clip_named("SHOT_B", 300, "ref-shot-b", 99),
+})
+local multi_seq = elem("Sm2SequenceContainer", {}, { multi_v, multi_a })
+
+local m_v_tracks, m_a_tracks = drp.parse_resolve_tracks(
+    multi_seq, 25,
+    { ["ref-shot-a"] = "/tmp/SHOT_A.wav", ["ref-shot-b"] = "/tmp/SHOT_B.wav" },
+    { ["ref-shot-a"] = "SHOT_A.wav",      ["ref-shot-b"] = "SHOT_B.wav" },
+    { ["ref-shot-a"] = 48000,             ["ref-shot-b"] = 48000 })
+
+local m_v_a, m_v_b = m_v_tracks[1].clips[1], m_v_tracks[1].clips[2]
+local m_a_a, m_a_b = m_a_tracks[1].clips[1], m_a_tracks[1].clips[2]
+
+assert(m_v_a.linked_item_sync == "99:SHOT_A",
+    "V SHOT_A: " .. tostring(m_v_a.linked_item_sync))
+assert(m_a_a.linked_item_sync == "99:SHOT_A",
+    "A SHOT_A: " .. tostring(m_a_a.linked_item_sync))
+assert(m_v_b.linked_item_sync == "99:SHOT_B",
+    "V SHOT_B: " .. tostring(m_v_b.linked_item_sync))
+assert(m_a_b.linked_item_sync == "99:SHOT_B",
+    "A SHOT_B: " .. tostring(m_a_b.linked_item_sync))
+
+-- The decisive guarantee: SHOT_A and SHOT_B do NOT collapse into one
+-- group despite sharing LinkedItemSync=99. Importing this would
+-- produce two distinct V↔A pairs, not one 4-clip group.
+assert(m_v_a.linked_item_sync ~= m_v_b.linked_item_sync,
+    "Multi-shot take must produce distinct pair keys per shot name")
+assert(m_v_a.linked_item_sync == m_a_a.linked_item_sync,
+    "V SHOT_A and A SHOT_A must share a pair key")
+assert(m_v_b.linked_item_sync == m_a_b.linked_item_sync,
+    "V SHOT_B and A SHOT_B must share a pair key")
+print("  ✓ Multi-shot take: same LinkedItemSync + different Name → distinct pair keys")
 
 print("✅ test_drp_linked_item_sync.lua passed")

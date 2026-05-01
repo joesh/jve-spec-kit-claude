@@ -1447,21 +1447,34 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
             end
 
-            -- Extract <LinkedItemSync>: V↔A link-group ID. Same value on a
-            -- video clip and an audio clip means Resolve treats them as a
-            -- linked pair (chain icon in the Resolve UI). Empty/self-closing
-            -- means the clip is unlinked (a duplicate copy on a parallel
-            -- track, an isolated audio chunk, etc.). Sole authoritative
-            -- source of V↔A linking from the DRP — must not be inferred
-            -- from name/position/media coincidence.
+            -- Extract <LinkedItemSync>: parent-take ID assigned by Resolve
+            -- to every clip that originated from the same continuous
+            -- capture. Two clips share this value when they came from
+            -- the same source-side blade — but the value is also
+            -- shared across multiple post-blade segments of that take.
+            -- E.g. one continuous take split into shots `13-053-001`
+            -- and `13-055-001` produces FOUR clips on the timeline (V
+            -- and A for each shot), all four carrying the same
+            -- LinkedItemSync. Resolve's V↔A pair linkage is finer-
+            -- grained: the pair key is (LinkedItemSync, Name), so each
+            -- shot-named segment links V to A independently. Empty
+            -- (`<LinkedItemSync/>`) or absent element means the clip is
+            -- unlinked (parallel-track grade copy, isolated audio,
+            -- etc.). Combined link key is built downstream — surface
+            -- both the raw sync value and the name so importer_core
+            -- can compose the pair key.
             local lis_elem = find_element(clip_elem, "LinkedItemSync")
             local lis_text = lis_elem and get_text(lis_elem)
             local linked_item_sync = nil
             if lis_text and lis_text ~= "" then
-                linked_item_sync = tonumber(lis_text)
-                assert(linked_item_sync, string.format(
+                local sync_value = tonumber(lis_text)
+                assert(sync_value, string.format(
                     "parse_resolve_tracks: clip '%s' has non-numeric LinkedItemSync '%s'",
                     clip_name, lis_text))
+                -- Compose the pair key here so importer_core stays
+                -- format-agnostic. Name is part of the key because
+                -- multi-shot takes share LinkedItemSync.
+                linked_item_sync = string.format("%d:%s", sync_value, clip_name)
             end
 
             local clip = {

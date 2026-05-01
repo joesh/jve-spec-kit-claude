@@ -89,16 +89,22 @@ Resolve's screenshot (image 3) confirms the truth: the V1 instance shows a chain
 the A4 audio chunk for the same shot, with related audio appearing on A3/A5 — i.e. the DRP
 file *does* carry the V↔A linkage; the importer is just not reading it.
 
-### Fix (landed 2026-05-01)
+### Fix (landed 2026-05-01, refined same day)
 
-DRP carries V↔A linkage in a per-clip `<LinkedItemSync>` element under each
-`<Sm2TiVideoClip>` / `<Sm2TiAudioClip>`. Two clips (one V, one A) sharing the same numeric
-LinkedItemSync value form a linked pair; an empty `<LinkedItemSync/>` or a missing element
-means the clip is unlinked (parallel-track grade copy, isolated audio chunk, etc.).
-Verified empirically against the anamnesis-gold-timeline.drp fixture: 25 unique values, each
-appearing on a matched V+A set; the sole `LinkedGroup` UUID field that 989 video clips
-share is video-only (one big colour-grouping bucket of 585 V members), unrelated to V↔A
-sync.
+DRP carries V↔A linkage in `<LinkedItemSync>`, but the value is a **parent-take ID**, not a
+pair ID. Every clip that originated from one continuous capture carries the same value —
+including multiple shot-named segments produced by source-side blading. Resolve's actual
+V↔A pair granularity is `(LinkedItemSync, Name)`: each shot-named segment links V to A
+independently.
+
+Empirical confirmation against the anamnesis-gold-timeline.drp fixture:
+`LinkedItemSync = -2021` is shared by FOUR timeline clips —
+`V 13-053-001` + `V 13-055-001` + `A 13-053-001` + `A 13-055-001` (two adjacent shots
+bladed from one take). Resolve renders this as TWO separate chain icons, not one 4-clip
+group. Initial fix grouped on `LinkedItemSync` alone and produced a 4-member group; the
+refined fix composes the pair key as `"<sync_value>:<clip_name>"`. The sole `LinkedGroup`
+UUID field that 989 video clips share is video-only colour/grade grouping (585 V members
+in one bucket, 0 A members), unrelated to V↔A pair linkage.
 
 Changes:
 - `src/lua/importers/drp_importer.lua` `parse_resolve_tracks` now reads

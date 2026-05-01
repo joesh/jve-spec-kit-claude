@@ -195,6 +195,51 @@ assert(has_video and has_audio, string.format(
     has_audio and "audio" or ""))
 
 -- ----------------------------------------------------------------------
+-- Assertion 2b: the link group is JUST `13-053-001` — it must NOT
+-- absorb the adjacent `13-055-001` segments that share LinkedItemSync.
+-- LinkedItemSync is a parent-take ID; multiple shot-named segments
+-- from the same take share it. Resolve treats each shot name as its
+-- own V↔A pair. Bug 2026-05-01: the first fix grouped on
+-- LinkedItemSync alone, producing a 4-clip group {V 13-053-001,
+-- V 13-055-001, A 13-053-001, A 13-055-001}. Pair key is
+-- (LinkedItemSync, Name).
+-- ----------------------------------------------------------------------
+
+local member_names = {}
+for _, m in ipairs(group_members) do
+    member_names[m.name] = (member_names[m.name] or 0) + 1
+end
+local distinct_names = 0
+for _ in pairs(member_names) do distinct_names = distinct_names + 1 end
+
+if distinct_names ~= 1 then
+    print("--- linked group members (multi-name) ---")
+    for _, m in ipairs(group_members) do
+        print(string.format(
+            "  %s/%d %s start=%d", m.track_type, m.track_index,
+            m.name, m.timeline_start_frame))
+    end
+end
+
+assert(distinct_names == 1, string.format(
+    "BUG: link group %s spans %d shot names (expected 1).\n" ..
+    "Adjacent shots from the same take share LinkedItemSync but must\n" ..
+    "form independent V↔A pairs per shot name. Members: %d total.",
+    linked_v_group, distinct_names, #group_members))
+assert(member_names["13-053-001"] == #group_members, string.format(
+    "expected all %d members to be `13-053-001`; got: %s",
+    #group_members, (function()
+        local s = {}
+        for n, c in pairs(member_names) do
+            table.insert(s, string.format("%s=%d", n, c))
+        end
+        return table.concat(s, ", ")
+    end)()))
+print(string.format(
+    "  ✓ Link group is shot-pair scoped: %d members, all `13-053-001`",
+    #group_members))
+
+-- ----------------------------------------------------------------------
 -- Assertion 3: the unlinked V duplicate is NOT in any group.
 -- ----------------------------------------------------------------------
 
