@@ -1468,6 +1468,10 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 native_rate = native_rate,            -- media's native rate (source coords are in this rate)
                 media_start_time = media_start_time,  -- seconds since midnight (file TC origin)
                 original_clip = extract_original_clip(clip_elem),  -- nil unless substituted
+                linked_item_sync = (function()
+                    local lis = get_text(find_direct_child(clip_elem, "LinkedItemSync"))
+                    return (lis ~= "") and lis or nil
+                end)(),
             }
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then

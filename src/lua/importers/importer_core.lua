@@ -849,22 +849,27 @@ function M.import_into_project(project_id, parse_result, opts)
                         tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
                     end
 
-                    if clip_data.file_uuid or clip_data.file_path then
+                    if clip_data.linked_item_sync then
                         table.insert(clips_for_linking, {
-                            clip_id        = clip_id,
-                            link_key       = clip_data.file_uuid or clip_data.file_path,
-                            timeline_start = clip_data.start_value,
-                            role           = track_data.type == "VIDEO" and "video" or "audio",
+                            clip_id          = clip_id,
+                            linked_item_sync = clip_data.linked_item_sync,
+                            role             = track_data.type == "VIDEO" and "video" or "audio",
                         })
                     end
                     ::continue_clip::
                 end
             end
 
-            -- STEP 6: Create A/V link groups
+            -- STEP 6: Create A/V link groups from format-explicit link IDs.
+            -- Clips sharing the same non-nil linked_item_sync within a sequence
+            -- form one link group. The value is an opaque key supplied by the
+            -- source format (DRP: <LinkedItemSync> integer, FCP7: sorted minimum
+            -- of <linkclipref> values). No heuristic fallback — if a format
+            -- provides no explicit link ID, linked_item_sync is nil and no link
+            -- group is created.
             local link_groups_by_key = {}
             for _, clip_info in ipairs(clips_for_linking) do
-                local key = clip_info.link_key .. ":" .. tostring(clip_info.timeline_start)
+                local key = clip_info.linked_item_sync
                 link_groups_by_key[key] = link_groups_by_key[key] or {}
                 table.insert(link_groups_by_key[key], clip_info)
             end
