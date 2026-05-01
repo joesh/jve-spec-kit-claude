@@ -849,22 +849,34 @@ function M.import_into_project(project_id, parse_result, opts)
                         tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
                     end
 
-                    if clip_data.file_uuid or clip_data.file_path then
+                    -- Only collect clips whose source format declared an
+                    -- explicit V↔A link group ID. The previous (file_uuid,
+                    -- timeline_start) heuristic produced wrong groups on
+                    -- timelines with parallel-track video duplicates (V→V
+                    -- copies grouped together) or with V/A pairs whose
+                    -- starts differ slightly (genuine syncs missed). The
+                    -- source format is the only authority on linking; see
+                    -- DRP <LinkedItemSync>, FCP7 <link>, prproj
+                    -- LinkedClipRef. Importers that don't yet extract
+                    -- their format's link ID will produce no links —
+                    -- correct behaviour until they do.
+                    if clip_data.linked_item_sync ~= nil then
                         table.insert(clips_for_linking, {
-                            clip_id        = clip_id,
-                            link_key       = clip_data.file_uuid or clip_data.file_path,
-                            timeline_start = clip_data.start_value,
-                            role           = track_data.type == "VIDEO" and "video" or "audio",
+                            clip_id = clip_id,
+                            link_id = clip_data.linked_item_sync,
+                            role    = track_data.type == "VIDEO" and "video" or "audio",
                         })
                     end
                     ::continue_clip::
                 end
             end
 
-            -- STEP 6: Create A/V link groups
+            -- STEP 6: Create A/V link groups, keyed on the source format's
+            -- link ID. Clips with no link ID are not collected above and
+            -- so cannot end up in a group here.
             local link_groups_by_key = {}
             for _, clip_info in ipairs(clips_for_linking) do
-                local key = clip_info.link_key .. ":" .. tostring(clip_info.timeline_start)
+                local key = tostring(clip_info.link_id)
                 link_groups_by_key[key] = link_groups_by_key[key] or {}
                 table.insert(link_groups_by_key[key], clip_info)
             end

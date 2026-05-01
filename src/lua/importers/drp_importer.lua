@@ -1447,6 +1447,23 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
             end
 
+            -- Extract <LinkedItemSync>: V↔A link-group ID. Same value on a
+            -- video clip and an audio clip means Resolve treats them as a
+            -- linked pair (chain icon in the Resolve UI). Empty/self-closing
+            -- means the clip is unlinked (a duplicate copy on a parallel
+            -- track, an isolated audio chunk, etc.). Sole authoritative
+            -- source of V↔A linking from the DRP — must not be inferred
+            -- from name/position/media coincidence.
+            local lis_elem = find_element(clip_elem, "LinkedItemSync")
+            local lis_text = lis_elem and get_text(lis_elem)
+            local linked_item_sync = nil
+            if lis_text and lis_text ~= "" then
+                linked_item_sync = tonumber(lis_text)
+                assert(linked_item_sync, string.format(
+                    "parse_resolve_tracks: clip '%s' has non-numeric LinkedItemSync '%s'",
+                    clip_name, lis_text))
+            end
+
             local clip = {
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
@@ -1468,6 +1485,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 native_rate = native_rate,            -- media's native rate (source coords are in this rate)
                 media_start_time = media_start_time,  -- seconds since midnight (file TC origin)
                 original_clip = extract_original_clip(clip_elem),  -- nil unless substituted
+                linked_item_sync = linked_item_sync,  -- V↔A link-group key (nil = unlinked)
             }
             -- Skip degenerate zero-duration clips (Resolve artifacts: speed changes, disabled items)
             if clip.duration <= 0 then
