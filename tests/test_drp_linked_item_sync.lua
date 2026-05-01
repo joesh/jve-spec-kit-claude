@@ -130,57 +130,39 @@ assert(#v_tracks[1].clips == 2, string.format(
 assert(#a_tracks[1].clips == 2, string.format(
     "expected 2 audio clips, got %d", #a_tracks[1].clips))
 
--- =========================================================================
--- Test 1: V clip with explicit <LinkedItemSync>42</LinkedItemSync>
--- =========================================================================
--- Pair key combines sync value with clip name (Resolve groups all
--- clips from the same continuous take under one LinkedItemSync but
--- pairs them V↔A per name).
-local v1 = v_tracks[1].clips[1]
-assert(v1.linked_item_sync == "42:ANCHOR", string.format(
-    "V1 linked_item_sync: expected '42:ANCHOR', got %s", tostring(v1.linked_item_sync)))
-print("  ✓ V clip with <LinkedItemSync>42</LinkedItemSync> name=ANCHOR → '42:ANCHOR'")
+local v1 = v_tracks[1].clips[1]   -- V with sync, name=ANCHOR  (linked V)
+local v2 = v_tracks[1].clips[2]   -- V without LinkedItemSync   (unlinked dup)
+local a1 = a_tracks[1].clips[1]   -- A with sync, name=ANCHOR  (linked A — pairs with V1)
+local a2 = a_tracks[1].clips[2]   -- A with empty <LinkedItemSync/>
 
--- =========================================================================
--- Test 2: V duplicate with NO <LinkedItemSync> element at all
--- =========================================================================
-local v2 = v_tracks[1].clips[2]
-assert(v2.linked_item_sync == nil, string.format(
-    "V2 linked_item_sync: expected nil, got %s", tostring(v2.linked_item_sync)))
-print("  ✓ V clip without <LinkedItemSync> element → linked_item_sync = nil")
+-- Domain-level assertions about pair-key behaviour — the test does
+-- not look at how the parser encodes the key, only at equality and
+-- presence semantics that downstream link-group construction relies
+-- on (Rule 2.34: test domain behaviour, not implementation).
 
--- =========================================================================
--- Test 3: A clip with explicit <LinkedItemSync>42</LinkedItemSync>
--- =========================================================================
-local a1 = a_tracks[1].clips[1]
-assert(a1.linked_item_sync == "42:ANCHOR", string.format(
-    "A1 linked_item_sync: expected '42:ANCHOR', got %s", tostring(a1.linked_item_sync)))
-print("  ✓ A clip with <LinkedItemSync>42</LinkedItemSync> name=ANCHOR → '42:ANCHOR'")
+-- An unlinked clip surfaces nil, not a sentinel. Importer_core must
+-- be able to skip it cheaply (presence check, not value compare).
+assert(v2.linked_item_sync == nil,
+    "V duplicate without <LinkedItemSync> must surface nil")
+assert(a2.linked_item_sync == nil,
+    "A clip with empty <LinkedItemSync/> must surface nil")
+print("  ✓ Clips without LinkedItemSync surface nil")
 
--- =========================================================================
--- Test 4: A clip with empty <LinkedItemSync/>
--- =========================================================================
-local a2 = a_tracks[1].clips[2]
-assert(a2.linked_item_sync == nil, string.format(
-    "A2 linked_item_sync: expected nil, got %s", tostring(a2.linked_item_sync)))
-print("  ✓ A clip with empty <LinkedItemSync/> → linked_item_sync = nil")
-
--- =========================================================================
--- Test 5: V1 (linked) and A1 (linked) share the same link ID
--- =========================================================================
+-- A V/A pair that share parent-take ID and shot name surface the
+-- same opaque key — that's what makes importer_core put them in one
+-- link group.
+assert(v1.linked_item_sync ~= nil and a1.linked_item_sync ~= nil,
+    "linked V and A must surface non-nil keys")
 assert(v1.linked_item_sync == a1.linked_item_sync, string.format(
-    "V1 (%s) and A1 (%s) should share linked_item_sync",
+    "linked V and A must share a pair key (got V=%s, A=%s)",
     tostring(v1.linked_item_sync), tostring(a1.linked_item_sync)))
-print("  ✓ V1 and A1 share the same linked_item_sync value (=> linked pair)")
+print("  ✓ Linked V/A pair shares a key")
 
--- =========================================================================
--- Test 6: V2 (parallel duplicate) does NOT match V1/A1's link ID
--- =========================================================================
+-- The unlinked V duplicate must not collide with the linked clips'
+-- key — otherwise opt+click would expand to it.
 assert(v2.linked_item_sync ~= v1.linked_item_sync,
-    "V2 (parallel duplicate) must not share V1's link ID")
-assert(v2.linked_item_sync ~= a1.linked_item_sync,
-    "V2 (parallel duplicate) must not share A1's link ID")
-print("  ✓ V2 (unlinked duplicate) does not match V1/A1 link ID")
+    "unlinked V duplicate must not share the linked V's key")
+print("  ✓ Unlinked V duplicate has a distinct (nil) key")
 
 -- =========================================================================
 -- Test 7: Multi-shot take — same LinkedItemSync, different names.
@@ -237,24 +219,60 @@ local m_v_tracks, m_a_tracks = drp.parse_resolve_tracks(
 local m_v_a, m_v_b = m_v_tracks[1].clips[1], m_v_tracks[1].clips[2]
 local m_a_a, m_a_b = m_a_tracks[1].clips[1], m_a_tracks[1].clips[2]
 
-assert(m_v_a.linked_item_sync == "99:SHOT_A",
-    "V SHOT_A: " .. tostring(m_v_a.linked_item_sync))
-assert(m_a_a.linked_item_sync == "99:SHOT_A",
-    "A SHOT_A: " .. tostring(m_a_a.linked_item_sync))
-assert(m_v_b.linked_item_sync == "99:SHOT_B",
-    "V SHOT_B: " .. tostring(m_v_b.linked_item_sync))
-assert(m_a_b.linked_item_sync == "99:SHOT_B",
-    "A SHOT_B: " .. tostring(m_a_b.linked_item_sync))
-
--- The decisive guarantee: SHOT_A and SHOT_B do NOT collapse into one
--- group despite sharing LinkedItemSync=99. Importing this would
--- produce two distinct V↔A pairs, not one 4-clip group.
-assert(m_v_a.linked_item_sync ~= m_v_b.linked_item_sync,
-    "Multi-shot take must produce distinct pair keys per shot name")
+-- Domain guarantee: SHOT_A and SHOT_B must not collapse into one
+-- group despite sharing parent-take ID. Resolve renders this as two
+-- independent V↔A pairs (chain icon per shot), and opt+click must
+-- only expand within a shot.
 assert(m_v_a.linked_item_sync == m_a_a.linked_item_sync,
     "V SHOT_A and A SHOT_A must share a pair key")
 assert(m_v_b.linked_item_sync == m_a_b.linked_item_sync,
     "V SHOT_B and A SHOT_B must share a pair key")
-print("  ✓ Multi-shot take: same LinkedItemSync + different Name → distinct pair keys")
+assert(m_v_a.linked_item_sync ~= m_v_b.linked_item_sync,
+    "shots from one parent take must produce distinct pair keys per shot name")
+print("  ✓ Multi-shot take: shared parent ID + different shot name → independent pairs")
+
+-- =========================================================================
+-- Test 8: Fail-fast on malformed inputs (Rule 1.14, Rule 2.32 —
+-- assert-based failure paths must be exercised via pcall).
+-- =========================================================================
+
+-- Non-numeric LinkedItemSync content must crash with an actionable
+-- error that names the offending clip and the bad value.
+local bad_sync_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, {
+        video_clip(100, text("LinkedItemSync", "not-a-number")),
+    }),
+})
+local ok, err = pcall(drp.parse_resolve_tracks, bad_sync_seq, 25, {}, {}, {})
+assert(not ok, "non-numeric LinkedItemSync must error")
+assert(tostring(err):find("LinkedItemSync"), string.format(
+    "error message must mention LinkedItemSync (got: %s)", tostring(err)))
+assert(tostring(err):find("ANCHOR"), string.format(
+    "error message must name the offending clip (got: %s)", tostring(err)))
+print("  ✓ Non-numeric <LinkedItemSync> fails fast with actionable message")
+
+-- Clip name containing the pair-key separator must crash — pair-key
+-- composition would otherwise be ambiguous.
+local UNIT_SEP = "\x1F"
+local hostile_v = elem("Sm2TiVideoClip", {}, {
+    text("Name", "EVIL" .. UNIT_SEP .. "NAME"),
+    text("Start", "100"),
+    text("Duration", "100"),
+    text("In", "0"),
+    text("MediaFilePath", "/tmp/evil.mov"),
+    text("MediaFrameRate", FPS_25_LE_HEX),
+    text("MediaStartTime", "0"),
+    text("WasDisbanded", "false"),
+    text("Flags", "0"),
+    text("LinkedItemSync", "99"),
+})
+local hostile_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, { hostile_v }),
+})
+ok, err = pcall(drp.parse_resolve_tracks, hostile_seq, 25, {}, {}, {})
+assert(not ok, "clip name containing pair-key separator must error")
+assert(tostring(err):find("separator") or tostring(err):find("ambiguous"),
+    "error must explain the collision (got: " .. tostring(err) .. ")")
+print("  ✓ Clip name containing pair-key separator fails fast")
 
 print("✅ test_drp_linked_item_sync.lua passed")

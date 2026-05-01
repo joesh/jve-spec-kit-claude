@@ -1106,6 +1106,37 @@ local function parse_drp_frame_value(text, clip_name, field_name)
     return num, subframe
 end
 
+--- Compose the V↔A pair key from <LinkedItemSync> + <Name>.
+--
+-- LinkedItemSync is a parent-take ID: every clip that originated
+-- from the same continuous capture carries the same value, including
+-- multiple shot-named segments produced by source-side blading.
+-- Resolve's actual V↔A pair granularity is per shot name within a
+-- take, so the key is (sync_value, name).
+--
+-- Returned value is opaque to importer_core — equality alone is what
+-- matters. Empty (`<LinkedItemSync/>`) or absent element → nil
+-- (unlinked clip). Non-numeric content asserts (Rule 1.14).
+--
+-- The pair key uses ASCII Unit Separator (\x1F) so it can never
+-- collide with clip-name content.
+local PAIR_KEY_SEP = "\x1F"
+local function parse_linked_item_sync(clip_elem, clip_name)
+    local lis_elem = find_element(clip_elem, "LinkedItemSync")
+    local lis_text = lis_elem and get_text(lis_elem)
+    if not lis_text or lis_text == "" then return nil end
+
+    local sync_value = tonumber(lis_text)
+    assert(sync_value, string.format(
+        "parse_linked_item_sync: clip '%s' has non-numeric LinkedItemSync '%s'",
+        clip_name, lis_text))
+    assert(not clip_name:find(PAIR_KEY_SEP, 1, true), string.format(
+        "parse_linked_item_sync: clip name '%s' contains the pair-key " ..
+        "separator (\\x1F); pair-key composition would be ambiguous",
+        clip_name))
+    return string.format("%d%s%s", sync_value, PAIR_KEY_SEP, clip_name)
+end
+
 --- Parse Resolve tracks from sequence element
 -- NSF: frame_rate is REQUIRED - DRP reliably encodes fps in metadata
 -- @param seq_elem table: XML sequence element
@@ -1447,35 +1478,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
                 -- nil = not a volume blob (different effect type, wrong size, etc.) → unity
             end
 
-            -- Extract <LinkedItemSync>: parent-take ID assigned by Resolve
-            -- to every clip that originated from the same continuous
-            -- capture. Two clips share this value when they came from
-            -- the same source-side blade — but the value is also
-            -- shared across multiple post-blade segments of that take.
-            -- E.g. one continuous take split into shots `13-053-001`
-            -- and `13-055-001` produces FOUR clips on the timeline (V
-            -- and A for each shot), all four carrying the same
-            -- LinkedItemSync. Resolve's V↔A pair linkage is finer-
-            -- grained: the pair key is (LinkedItemSync, Name), so each
-            -- shot-named segment links V to A independently. Empty
-            -- (`<LinkedItemSync/>`) or absent element means the clip is
-            -- unlinked (parallel-track grade copy, isolated audio,
-            -- etc.). Combined link key is built downstream — surface
-            -- both the raw sync value and the name so importer_core
-            -- can compose the pair key.
-            local lis_elem = find_element(clip_elem, "LinkedItemSync")
-            local lis_text = lis_elem and get_text(lis_elem)
-            local linked_item_sync = nil
-            if lis_text and lis_text ~= "" then
-                local sync_value = tonumber(lis_text)
-                assert(sync_value, string.format(
-                    "parse_resolve_tracks: clip '%s' has non-numeric LinkedItemSync '%s'",
-                    clip_name, lis_text))
-                -- Compose the pair key here so importer_core stays
-                -- format-agnostic. Name is part of the key because
-                -- multi-shot takes share LinkedItemSync.
-                linked_item_sync = string.format("%d:%s", sync_value, clip_name)
-            end
+            local linked_item_sync = parse_linked_item_sync(clip_elem, clip_name)
 
             local clip = {
                 name = clip_name,
