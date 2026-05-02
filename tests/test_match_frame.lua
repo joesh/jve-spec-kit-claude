@@ -148,6 +148,14 @@ VALUES
     now, now, now, now, now, now,  -- clips (3 timeline: v1, v2, no_parent × 2)
     now, now, now, now, now, now)) -- clips (3 audio: a1, a2, a3 × 2)
 
+-- MatchFrame's offline-file guard requires every fixture media path to
+-- exist on disk. The executor doesn't decode them; empty files suffice.
+for _, p in ipairs({"/tmp/clip_a.mov", "/tmp/clip_b.mov", "/tmp/audio.wav"}) do
+    local f = assert(io.open(p, "w"),
+        "test_match_frame: could not create fixture file at " .. p)
+    f:close()
+end
+
 command_manager.init('default_sequence', 'default_project')
 
 -- Get real clip objects from state for selection
@@ -314,11 +322,17 @@ assert(master_b.mark_out == 100,
 assert(master_b.playhead_position == 50,
     string.format("playhead_position should be 50, got %s", tostring(master_b.playhead_position)))
 
--- Test 14: Out-of-range source position → set_playhead asserts → error surfaced
--- Simulates DRP import bug where media.duration is timeline edit duration (short)
--- but timeline clip's source range references deeper into the real file.
--- The assert in Sequence:set_playhead catches this at the write boundary.
-print("Test 14: Out-of-range playhead asserts via set_playhead")
+-- Test 14: Out-of-range source position is now CLAMPED to the master's
+-- valid range instead of asserting. The pre-fix behavior — "set_playhead
+-- asserts and the executor crashes" — was the buggy half of the
+-- partial-coverage interaction surfaced by Joe (drp-import + relink to a
+-- shorter file leaves clips whose source range extends past the master's
+-- coverage; MatchFrame on those clips used to take down the executor).
+-- Post-fix: marks/playhead clamp to coverage boundary, command succeeds,
+-- a log.warn carries the per-frame deficit. See
+-- test_match_frame_partial_and_offline.lua for the dedicated coverage of
+-- the policy. Here we just verify this specific scenario no longer crashes.
+print("Test 14: Out-of-range playhead is clamped, not asserted")
 db:exec(string.format([[
     INSERT INTO clips (
         id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
@@ -338,10 +352,17 @@ load_calls = {}
 timeline_state.set_playhead_position(550)  -- inside clip_overrange [500, 600)
 timeline_state.set_selection({})
 result = command_manager.execute("MatchFrame", { project_id = "default_project" })
--- playhead = 800 + (550 - 500) = 850, but master_clip_a has 500 frames → assert fires
-assert(not result.success, "Should fail: source position 850 exceeds master clip's 500 frames")
-assert(result.error_message:find("set_playhead") or result.error_message:find("set_in") or result.error_message:find("set_out"),
-    "Error should mention bounds validation, got: " .. tostring(result.error_message))
+-- playhead = 800 + (550 - 500) = 850, but master_clip_a covers [0, 500).
+-- Post-fix: clamp to mend - 1 = 499; command succeeds.
+assert(result.success, string.format(
+    "Out-of-range source position should clamp + succeed, not crash. "
+    .. "Got error: %s", tostring(result.error_message)))
+master_a = Sequence.load('master_clip_a')
+assert(master_a.playhead_position == 499, string.format(
+    "playhead should clamp to master_clip_a's last frame (499), got %s",
+    tostring(master_a.playhead_position)))
+assert(master_a.mark_out == 500, string.format(
+    "mark_out should clamp to master end (500), got %s", tostring(master_a.mark_out)))
 
 -- Cleanup
 timeline_state.set_selection({})
