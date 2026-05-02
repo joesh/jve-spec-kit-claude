@@ -881,9 +881,38 @@ end
 --   * A tc_mismatch that fails both is dropped.
 local function partition_candidates(media_info, candidates, stored_rate, tc_remap_offset)
     local viable, partial_fit = {}, {}
+
+    -- Decide whether this candidate's probed extent contains the media's
+    -- full source range. Returns true only when both the extent fields
+    -- and the probe carry enough info to make the call; absence of either
+    -- means "can't tell" and the candidate is treated as viable per the
+    -- pre-extent legacy behavior.
+    local function extent_known_insufficient(cand)
+        if not (media_info.source_extent_start
+            and media_info.source_extent_end
+            and cand.probe_result) then
+            return false
+        end
+        return not M.check_extent_containment(
+            media_info.source_extent_start, media_info.source_extent_end,
+            cand.probe_result, stored_rate, tc_remap_offset)
+    end
+
     for _, cand in ipairs(candidates) do
         if not (cand.tc_mismatch and stored_rate) then
-            viable[#viable + 1] = cand
+            -- TC-clean candidate. Even a 1-frame extent shortfall must
+            -- demote it to partial_fit so try_partial_fit / partial_coverage
+            -- can attach the offline_note that surfaces the deficit. Skipping
+            -- the extent check here was the bug: TC-matching candidates that
+            -- didn't have enough frames for the clip's source range slipped
+            -- through as a clean relink, and clips short of coverage rendered
+            -- "File not found" against the now-stale-but-untouched original
+            -- path with no diagnostic.
+            if extent_known_insufficient(cand) then
+                partial_fit[#partial_fit + 1] = cand
+            else
+                viable[#viable + 1] = cand
+            end
         elseif media_info.source_extent_start and media_info.source_extent_end
             and cand.probe_result
             and M.check_extent_containment(
@@ -1003,43 +1032,53 @@ local function normalize_clips_to_stored_rate(raw_clips, stored_rate)
     return out
 end
 
--- Compute the partial_coverage note for the widest partial candidate — the
--- candidate carrying the most frames wins; its covered TC range drives the
--- per-clip shortfall diagnostic downstream.
-local function compute_partial_coverage(partial_fit, stored_rate)
-    if not stored_rate or #partial_fit == 0 then return nil end
-    local best, best_dur = nil, -1
-    for _, c in ipairs(partial_fit) do
-        local pr = c.probe_result
-        if pr and pr.duration_frames then
-            local dur = pr.duration_frames
-            if pr.fps_num and pr.fps_den then
-                local probe_rate = pr.fps_num / pr.fps_den
-                if math.abs(probe_rate - stored_rate) > 0.01 then
-                    dur = math.floor(
-                        dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
-                end
-            end
-            if dur > best_dur then best, best_dur = c, dur end
+-- Compute the {covered_start_tc, covered_end_tc} pair for one candidate,
+-- in the media's stored_rate frame units. Returns nil when the candidate
+-- doesn't carry enough probe info to describe coverage.
+local function coverage_for_candidate(cand, stored_rate)
+    if not stored_rate then return nil end
+    local pr = cand.probe_result
+    if not (pr and pr.duration_frames) then return nil end
+
+    local dur = pr.duration_frames
+    if pr.fps_num and pr.fps_den then
+        local probe_rate = pr.fps_num / pr.fps_den
+        if math.abs(probe_rate - stored_rate) > 0.01 then
+            dur = math.floor(
+                dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
         end
     end
-    if not best then return nil end
 
-    local pr = best.probe_result
     local cov_start = pr.start_tc_value or 0
     if pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
         cov_start = math.floor(cov_start * stored_rate / pr.start_tc_rate + 0.5)
     end
     return {
+        kind = "partial_coverage",
+        candidate_path = cand.path,
+        covered_start_tc = cov_start,
+        covered_end_tc = cov_start + dur,
+        rate = stored_rate,
+    }, dur
+end
+
+-- Compute the partial_coverage note for the widest partial candidate — the
+-- candidate carrying the most frames wins; its covered TC range drives the
+-- per-clip shortfall diagnostic downstream.
+local function compute_partial_coverage(partial_fit, stored_rate)
+    if not stored_rate or #partial_fit == 0 then return nil end
+    local best, best_dur, best_cov = nil, -1, nil
+    for _, c in ipairs(partial_fit) do
+        local cov, dur = coverage_for_candidate(c, stored_rate)
+        if cov and dur > best_dur then
+            best, best_dur, best_cov = c, dur, cov
+        end
+    end
+    if not best then return nil end
+    return {
         candidate_path = best.path,
-        probe_result = pr,
-        coverage = {
-            kind = "partial_coverage",
-            candidate_path = best.path,
-            covered_start_tc = cov_start,
-            covered_end_tc = cov_start + best_dur,
-            rate = stored_rate,
-        },
+        probe_result = best.probe_result,
+        coverage = best_cov,
     }
 end
 
@@ -1106,6 +1145,15 @@ local function try_partial_fit_relink(out, media_info, partial_fit_candidates,
             probed_tc = probed_tc_for_metadata(best_cand.probe_result),
         }
     else
+        -- Split: the fitting clips will retarget to a clone of media at
+        -- best_cand's path. The non-fitting clips stay on the ORIGINAL
+        -- media row, which we annotate with a partial_coverage note so
+        -- the source viewer can render "Found <candidate>, missing Xf"
+        -- instead of the misleading "File not found" against the now-
+        -- stale original path. Coverage describes best_cand specifically
+        -- (the file the fitting clips relink to) so the diagnostic
+        -- references the same file the user can see is online for the
+        -- adjacent clips.
         out.relinked[#out.relinked + 1] = {
             media_id      = media_info.media_id,
             new_path      = best_cand.path,
@@ -1113,6 +1161,7 @@ local function try_partial_fit_relink(out, media_info, partial_fit_candidates,
             needs_split   = true,
             split_clip_ids = best_fits,
             probed_tc     = probed_tc_for_metadata(best_cand.probe_result),
+            coverage      = coverage_for_candidate(best_cand, stored_rate),
         }
         log.event("  partial fit: %d/%d clips fit in %s → needs split",
             best_count, #clips, get_filename(best_cand.path))
