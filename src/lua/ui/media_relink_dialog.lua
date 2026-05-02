@@ -87,13 +87,23 @@ function M._format_results_summary(results, media_infos)
                 local sf = offline_note_mod.shortfall(
                     cov, mi.source_extent_start, mi.source_extent_end)
                 if sf then
+                    -- format_frame_delta tacks on a "(~Ns)" hint for any
+                    -- delta ≥ rate. For audio media the note's `rate` is
+                    -- the sample rate (e.g., 48000), so a 2-million-frame
+                    -- shortfall renders as "2048004f (~42.7s)" instead of
+                    -- a bare "2048004f" that the user reads as 22 hours
+                    -- of video.
+                    local fmt = offline_note_mod.format_frame_delta
                     if sf.head_missing > 0 and sf.tail_missing > 0 then
-                        detail = string.format(" (short %df at head, %df at tail)",
-                            sf.head_missing, sf.tail_missing)
+                        detail = string.format(" (short %s at head, %s at tail)",
+                            fmt(sf.head_missing, sf.rate),
+                            fmt(sf.tail_missing, sf.rate))
                     elseif sf.head_missing > 0 then
-                        detail = string.format(" (short %df at head)", sf.head_missing)
+                        detail = string.format(" (short %s at head)",
+                            fmt(sf.head_missing, sf.rate))
                     else
-                        detail = string.format(" (short %df at tail)", sf.tail_missing)
+                        detail = string.format(" (short %s at tail)",
+                            fmt(sf.tail_missing, sf.rate))
                     end
                 end
             end

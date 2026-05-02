@@ -102,6 +102,49 @@ assert(a001_pos < nf_header_pos,
 assert(b001_pos > nf_header_pos,
     "not-found entries appear after Not-found section header")
 
+-- Audio-media shortfall: when the media's stored_rate is the audio
+-- sample rate (DRP imports of audio-only WAVs get start_tc_rate set to
+-- the file's sample rate), the shortfall numbers are in audio samples.
+-- The plain "Nf" label that worked for video at 25fps becomes confusing:
+-- "(short 2048004f at tail)" reads as 2 million video frames (~22 hours)
+-- but actually means 2 million samples (~43 seconds at 48 kHz). The
+-- summary must surface a seconds hint so the user can tell at a glance
+-- the deficit isn't actually catastrophic.
+do
+    local audio_infos = {
+        ["aud"] = {
+            name = "Smash.wav", path = "/Volumes/Cam/Smash.wav",
+            -- source_extent in audio samples (target = audio_sample_rate)
+            source_extent_start = 0,
+            source_extent_end   = 2048004,
+        },
+    }
+    local audio_results = {
+        relinked = {
+            { media_id = "aud", new_path = "/local/Smash.wav",
+              strategy = "partial_coverage",
+              coverage = {
+                kind = "partial_coverage",
+                candidate_path = "/local/Smash.wav",
+                covered_start_tc = 0,
+                covered_end_tc   = 0,        -- candidate covers nothing
+                rate = 48000,                -- AUDIO sample rate
+              } },
+        },
+        failed = {}, ambiguous = {},
+    }
+    local s = dialog._format_results_summary(audio_results, audio_infos)
+    -- The raw frame count is fine; what's missing is the seconds hint
+    -- that disambiguates audio samples from video frames.
+    assert(s:find("2048004f", 1, true), string.format(
+        "audio shortfall must still expose the raw count for diagnosis: %s", s))
+    assert(s:find("~42", 1, true) or s:find("~43", 1, true), string.format(
+        "REGRESSION: audio shortfall (2048004 samples @ 48000 Hz ≈ 42.7s) "
+        .. "must include a seconds hint so 'Nf' isn't read as N video frames. "
+        .. "Without the hint, '2048004f' looks like ~22 hours instead of 43s. "
+        .. "Got: %s", s))
+end
+
 -- All-good scenario: 1 relinked, 0 failed → "all relinked" prose.
 do
     local all_ok = {
