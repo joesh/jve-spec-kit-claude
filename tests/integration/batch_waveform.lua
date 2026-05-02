@@ -8,6 +8,7 @@ local _, failed = runner.run("waveform", runner.resolve_paths(dir, {
     "test_waveform_end_to_end.lua",
     "test_waveform_alignment.lua",
     "test_peak_drift_regression.lua",
+    "test_relink_invalidates_peaks.lua",
 }))
 
 assert(failed == 0, string.format("batch_waveform: %d test(s) failed", failed))

@@ -199,16 +199,26 @@ local function expected_samples_from_probe(info)
     return math.floor(info.duration_us / 1e6 * info.audio_sample_rate)
 end
 
--- Cache the media's audio TC origin (in samples). The lazy extractor
--- opens the file via EMP only when metadata doesn't already carry TC,
--- so we count cache hits vs extractions for visibility.
-local function cache_tc_origin(media_obj, counters)
+-- Pull the media's audio TC origin (in samples) into the cache.
+-- 0 means "file at TC origin" (no embedded TC) — the same sentinel the
+-- get_visible_peaks consumer keys off. Returns true when the value came
+-- from already-parsed metadata, false when get_audio_start_tc had to
+-- open the file via EMP to extract it.
+local function set_tc_origin(media_obj)
     local pre_meta = media_obj:_parsed_metadata()
     local had_tc = pre_meta and pre_meta.start_tc_value ~= nil
     local tc_samples = media_obj:get_audio_start_tc()
     media_tc_origins[media_obj.id] = (tc_samples ~= nil) and tc_samples or 0
-    if had_tc then counters.tc_cached = counters.tc_cached + 1
-    else counters.tc_extracted = counters.tc_extracted + 1 end
+    return had_tc
+end
+
+-- init_for_project wrapper: same TC pull + bump cache-vs-extract counters.
+local function cache_tc_origin(media_obj, counters)
+    if set_tc_origin(media_obj) then
+        counters.tc_cached = counters.tc_cached + 1
+    else
+        counters.tc_extracted = counters.tc_extracted + 1
+    end
 end
 
 -- Trigger peak load (or generation) for one online media file. mtime is
@@ -387,22 +397,77 @@ function M.get_status(media_id)
     return generation_status[media_id] or "none"
 end
 
---- Invalidate peaks for a media file (relink, mtime change).
-function M.invalidate(media_id)
-    assert(media_id, "peak_cache.invalidate: media_id required")
-
+-- Drop in-memory state (handle, pending gen, cached TC) for a media id
+-- without touching the on-disk peak file. Caller decides whether to also
+-- delete the disk file (full invalidate) or leave it for try_load_existing
+-- to re-validate (relink refresh).
+local function release_in_memory_state(media_id)
     if peak_handles[media_id] then
         EMP.PEAK_RELEASE(peak_handles[media_id])
         peak_handles[media_id] = nil
     end
-
-    if EMP then
-        EMP.PEAK_CANCEL(media_id)
-    end
-
-    os.remove(peak_file_path(media_id))
+    EMP.PEAK_CANCEL(media_id)
     generation_status[media_id] = nil
+    media_tc_origins[media_id] = nil
+end
+
+--- Invalidate peaks for a media file (relink, mtime change). Drops in-
+--- memory state and removes the on-disk peak file. No-op when the cache
+--- hasn't been initialized — invalidate guarantees the cache no longer
+--- holds this media; if there's no cache, that's already true.
+function M.invalidate(media_id)
+    assert(media_id, "peak_cache.invalidate: media_id required")
+    if not cache_dir then return end
+    release_in_memory_state(media_id)
+    os.remove(peak_file_path(media_id))
     log.event("peak_cache: invalidated %s", media_id)
+end
+
+-- Refresh peak state for one media row that changed (path, TC, etc).
+-- Re-fetches the now-current row, repopulates the cached TC origin, and
+-- calls ensure_peaks against the new file. Caller has already released
+-- in-memory state. Media.load returns nil for deleted rows (e.g. the
+-- RelinkClips undo path) and there's nothing further to do for those.
+local function refresh_one_media(media_id, Media)
+    local media = Media.load(media_id)
+    if not media then return end
+
+    set_tc_origin(media)
+
+    local file_path = media:get_file_path()
+    local has_audio = media.audio_sample_rate and media.audio_sample_rate > 0
+    if not (file_path and file_path ~= "" and has_audio
+        and fs_utils.file_exists(file_path)) then
+        return
+    end
+    local mtime = fs_utils.file_mtime(file_path)
+    if not mtime then
+        log.warn("peak_cache: could not stat %s — skipping peak gen", file_path)
+        return
+    end
+    M.ensure_peaks(media_id, file_path, mtime, nil)
+end
+
+--- Re-evaluate peaks for media whose rows changed. Wired to the
+--- `media_changed` signal so RelinkClips, importers, and future
+--- mutating commands refresh downstream waveforms automatically.
+--- ensure_peaks → try_load_existing's mtime + coverage cross-check
+--- decides whether the on-disk peak file is still authoritative, so
+--- a relink to a byte-identical file (same mtime) reuses the existing
+--- peaks instead of triggering needless re-generation. No-op when the
+--- cache isn't initialized (no project open yet).
+--- @param media_ids table {[media_id]=true} — payload shape from
+---        Media.end_batch / Media.mark_dirty.
+function M.handle_media_changed(media_ids)
+    assert(type(media_ids) == "table",
+        "peak_cache.handle_media_changed: media_ids must be a table")
+    if not cache_dir then return end
+
+    local Media = require("models.media")
+    for media_id in pairs(media_ids) do
+        release_in_memory_state(media_id)
+        refresh_one_media(media_id, Media)
+    end
 end
 
 --- Cleanup orphaned peak files.
@@ -444,5 +509,10 @@ end
 Signals.connect("project_changed", function()
     M.clear()
 end, 15)
+
+-- Refresh peaks for any media whose row changed (path, TC, etc).
+-- Priority 35 puts us after media_status (30) so its offline-status
+-- cache is fresh before we decide whether to request new peak gen.
+Signals.connect("media_changed", M.handle_media_changed, 35)
 
 return M
