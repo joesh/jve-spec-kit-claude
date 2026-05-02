@@ -638,7 +638,17 @@ local function try_import_media_item(media_item, project_id, project_settings,
     local media_height = media_item.has_video and project_settings.height or 0
     local media_codec  = media_item.codec
 
+    -- media.id IS the source format's stable per-file identifier (DRP
+    -- MediaRef DbId, FCP7 file id, etc) when one is present. Fresh-uuid
+    -- fallback only when the parser couldn't extract one. Stable ids
+    -- across re-imports keep per-media-id caches (peak files, future
+    -- content caches) intact instead of orphaning them every time the
+    -- DRP is re-converted into the same destination.
+    local stable_id = media_item.file_uuid
+    if stable_id == "" then stable_id = nil end
+
     local media = Media.create({
+        id                = stable_id,
         project_id        = project_id,
         name              = media_item.name,
         file_path         = media_item.file_path,
