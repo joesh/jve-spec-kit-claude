@@ -89,7 +89,15 @@ void PeakGenerator::CancelPeaks(const std::string& media_id)
     std::lock_guard<std::mutex> lock(m_mutex);
     auto it = m_jobs.find(media_id);
     if (it != m_jobs.end()) {
+        // Signal the worker (if any) to bail out, then drop the map entry
+        // so a subsequent RequestPeaks for the same media_id starts a
+        // fresh job. RequestPeaks is idempotent on the {media_id : state !=
+        // None} pair, so leaving the entry in Complete/Failed state would
+        // make later relink-driven re-requests silent no-ops. Workers
+        // holding a shared_ptr to the cancelled job keep it valid until
+        // they finish — no use-after-free.
         it->second->cancel_flag = true;
+        m_jobs.erase(it);
     }
 }
 
