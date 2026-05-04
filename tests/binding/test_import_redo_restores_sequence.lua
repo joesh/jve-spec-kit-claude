@@ -30,8 +30,8 @@ local function init_database(path)
     local db = database.get_connection()
     assert(db:exec(SCHEMA_SQL))
     assert(db:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', 0, 0);
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
         INSERT INTO sequences (
             id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate,

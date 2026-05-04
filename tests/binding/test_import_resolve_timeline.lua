@@ -48,8 +48,8 @@ local schema_sql = require('import_schema')
 assert_true("schema creation", db:exec(schema_sql))
 
 assert_true("bootstrap project", db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('host_project', 'Host Project', 0, 0);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('host_project', 'Host Project', 0, 0, 'passthrough');
 ]]))
 assert_true("bootstrap sequence", db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)

@@ -116,7 +116,7 @@ db:exec(require("import_schema"))
 local project_id = "proj-peak-coverage"
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('%s', 'p', %d, %d)",
+    "INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy) VALUES ('%s', 'p', %d, %d, 'passthrough')",
     project_id, now, now))
 peak_cache.init_for_project(project_id)
 

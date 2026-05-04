@@ -15,8 +15,8 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 assert(db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 0, 0);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
 ]]))
 
 -- Ensure the default bin namespace exists for importer bin assignment.

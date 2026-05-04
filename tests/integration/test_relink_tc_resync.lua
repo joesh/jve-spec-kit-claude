@@ -83,7 +83,7 @@ local project_id = "proj-tc-resync"
 local media_id = "media-tc-resync"
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('%s', 'tc test', %d, %d)",
+    "INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy) VALUES ('%s', 'tc test', %d, %d, 'passthrough')",
     project_id, now, now))
 
 -- Seed the Media row with the kind of "original file TC" a DRP import

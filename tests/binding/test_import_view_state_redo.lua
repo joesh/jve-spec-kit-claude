@@ -19,8 +19,8 @@ local db = database.get_connection()
 
 db:exec(require('import_schema'))
 db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 0, 0);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                            view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)

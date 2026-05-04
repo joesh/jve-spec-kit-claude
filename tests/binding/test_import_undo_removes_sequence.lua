@@ -67,8 +67,8 @@ exec(db, SCHEMA_SQL)
 
 local now = os.time()
 exec(db, string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', %d, %d);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('default_project', 'Default Project', %d, %d, 'passthrough');
 
     INSERT INTO sequences (
         id, project_id, name, kind,

@@ -78,8 +78,8 @@ local function bootstrap_schema(conn)
     assert(conn, "bootstrap_schema requires a database connection")
     assert(conn:exec(require('import_schema')), "Failed to create schema tables")
     assert(conn:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('default_project', 'Default Project', 0, 0);
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
 
         INSERT INTO sequences (
             id, project_id, name, kind,

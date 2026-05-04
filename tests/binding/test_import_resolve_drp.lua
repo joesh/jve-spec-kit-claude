@@ -69,8 +69,8 @@ assert_true("schema creation", db:exec(schema_sql))
 
 -- Add initial project data
 local bootstrap_ok = db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 0, 0);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
 ]])
 assert_true("bootstrap project", bootstrap_ok)
 

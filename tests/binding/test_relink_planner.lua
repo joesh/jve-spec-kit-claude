@@ -57,8 +57,8 @@ end
 
 local function bootstrap_project(db, project_id, sequence_id)
     local ok = db:exec(string.format([[
-        INSERT INTO projects (id, name, created_at, modified_at)
-        VALUES ('%s', 'Planner Test', strftime('%%s','now'), strftime('%%s','now'));
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+        VALUES ('%s', 'Planner Test', strftime('%%s','now'), strftime('%%s','now'), 'passthrough');
     ]], project_id))
     expect("project row", ok, "project insert")
 

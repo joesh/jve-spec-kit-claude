@@ -97,8 +97,8 @@ local db = database.get_connection()
 local schema_sql = require('import_schema')
 assert(db:exec(schema_sql), "schema creation failed")
 assert(db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at)
-    VALUES ('hp', 'Host', 0, 0);
+    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
+    VALUES ('hp', 'Host', 0, 0, 'passthrough');
 ]]), "bootstrap failed")
 
 local importer_core = require("importers.importer_core")
