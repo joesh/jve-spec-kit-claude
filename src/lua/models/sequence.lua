@@ -1928,6 +1928,7 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         WHERE c.owner_sequence_id = ?
+          AND c.enabled = 1
           AND (c.timeline_start_frame + c.duration_frames) > ?
           AND c.timeline_start_frame < ?
         ORDER BY t.track_type DESC, t.track_index ASC,

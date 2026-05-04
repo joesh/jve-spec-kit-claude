@@ -127,12 +127,13 @@ assert(db:exec(import_schema))
 local project_id = uuid.generate()
 local now = os.time()
 assert(db:exec(string.format(
-    "INSERT INTO projects(id, name, created_at, modified_at) VALUES('%s', 'MuteTest', %d, %d)",
+    "INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at) VALUES('%s', 'MuteTest', 'passthrough', %d, %d)",
     project_id, now, now)))
 
 -- Create sequence + audio track
 local seq = Sequence.create("MuteTestSeq", project_id,
-    {fps_numerator = 25, fps_denominator = 1}, 1920, 1080)
+    {fps_numerator = 25, fps_denominator = 1}, 1920, 1080,
+    { kind = "nested", audio_sample_rate = 48000 })
 assert(seq:save())
 
 local track = Track.create_audio("A1", seq.id, {index = 1})
@@ -142,6 +143,7 @@ assert(track:save())
 local med = Media.create({
     project_id = project_id, name = "chirp.mp4",
     file_path = media_path, duration_frames = 750, frame_rate = 25,
+    audio_channels = 1, audio_sample_rate = 48000,
 })
 assert(med:save())
 
@@ -151,37 +153,42 @@ local mc_seq_id = require("test_env").create_test_masterclip_sequence(
 
 -- Enabled clip: timeline frames 0..100 (4 seconds at 25fps)
 -- source_in/out in clip rate units (48000/1 = samples)
-local clip_en = Clip.create({
+Clip.create({
         name = "enabled_chirp",
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
         timeline_start_frame = 0,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
         enabled = true,
         nested_sequence_id = mc_seq_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_en:save({skip_occlusion = true}))
 
 -- Disabled clip: timeline frames 200..300 (non-adjacent, gap at 100..200)
-local clip_dis = Clip.create({
+Clip.create({
         name = "disabled_chirp",
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
         timeline_start_frame = 200,
+        duration_frames = 100,
+        source_in_frame = 0,
+        source_out_frame = 100,
+        nested_sequence_id = mc_seq_id,
         enabled = false,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip_dis:save({skip_occlusion = true}))
 
 -- Verify in DB
 local en_stmt = assert(db:prepare(
-    "SELECT COUNT(*) FROM clips WHERE track_id=? AND enabled=1 AND clip_kind='timeline'"))
+    "SELECT COUNT(*) FROM clips WHERE track_id=? AND enabled=1"))
 en_stmt:bind_value(1, track.id)
 assert(en_stmt:exec() and en_stmt:next())
 local en_count = en_stmt:value(0)
@@ -189,7 +196,7 @@ en_stmt:finalize()
 check(en_count == 1, string.format("1 enabled clip in DB (got %d)", en_count))
 
 local dis_stmt = assert(db:prepare(
-    "SELECT COUNT(*) FROM clips WHERE track_id=? AND enabled=0 AND clip_kind='timeline'"))
+    "SELECT COUNT(*) FROM clips WHERE track_id=? AND enabled=0"))
 dis_stmt:bind_value(1, track.id)
 assert(dis_stmt:exec() and dis_stmt:next())
 local dis_count = dis_stmt:value(0)
