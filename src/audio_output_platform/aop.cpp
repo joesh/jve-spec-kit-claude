@@ -392,6 +392,13 @@ int64_t AudioOutput::PlayheadTimeUS() const {
     return m_impl->playhead_us();
 }
 
+int64_t AudioOutput::AudibleTimeUS() const {
+    int64_t fill_us = m_impl->playhead_us();
+    int64_t sink_us = m_impl->sink_buffer_us();
+    int64_t audible = fill_us - sink_us;
+    return audible > 0 ? audible : 0;
+}
+
 int64_t AudioOutput::LatencyFrames() const {
     return m_impl->latency_frames();
 }

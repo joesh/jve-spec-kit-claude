@@ -44,9 +44,18 @@ public:
     // How many frames are currently buffered (approximate)
     int64_t BufferedFrames() const;
 
-    // Device playhead in microseconds since Start() was called
-    // This is the audio-master clock for sync
+    // Device playhead in microseconds since Start() was called.
+    // This is the BUFFER-FILL position (frames pulled from our IODevice into
+    // QAudioSink). It leads the audible position by the QAudioSink internal
+    // buffer (~hundreds of ms). Use as the audio-master clock for internal
+    // sync — same reference on both sides cancels the buffer offset.
     int64_t PlayheadTimeUS() const;
+
+    // Position currently audible at the speaker output, in microseconds since
+    // Start(). Equals PlayheadTimeUS() minus the QAudioSink internal buffer
+    // width. Use for sync against video display or any user-visible "where am
+    // I" UI. Clamped to >= 0 before the first sink-buffer fill.
+    int64_t AudibleTimeUS() const;
 
     // Latency estimate (buffer + device) in frames
     int64_t LatencyFrames() const;

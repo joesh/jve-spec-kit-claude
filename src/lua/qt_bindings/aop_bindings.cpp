@@ -140,12 +140,27 @@ static int lua_aop_buffered_frames(lua_State* L) {
 }
 
 // AOP.PLAYHEAD_US(aop) -> t_us
+// Buffer-fill position. Use as internal clock anchor (cancels in deltas).
+// For UI / A/V sync against video display, prefer AOP.AUDIBLE_US.
 static int lua_aop_playhead_us(lua_State* L) {
     aop::AudioOutput* output = get_aop_userdata(L, 1);
     if (!output) {
         return luaL_error(L, "AOP.PLAYHEAD_US: invalid aop handle");
     }
     lua_pushinteger(L, static_cast<lua_Integer>(output->PlayheadTimeUS()));
+    return 1;
+}
+
+// AOP.AUDIBLE_US(aop) -> t_us
+// Position currently audible at the speaker (PLAYHEAD_US minus QAudioSink
+// internal buffer). Use for video-sync drift measurement and any user-visible
+// "where am I" reporting.
+static int lua_aop_audible_us(lua_State* L) {
+    aop::AudioOutput* output = get_aop_userdata(L, 1);
+    if (!output) {
+        return luaL_error(L, "AOP.AUDIBLE_US: invalid aop handle");
+    }
+    lua_pushinteger(L, static_cast<lua_Integer>(output->AudibleTimeUS()));
     return 1;
 }
 
@@ -304,6 +319,8 @@ void register_aop_bindings(lua_State* L) {
     lua_setfield(L, -2, "BUFFERED_FRAMES");
     lua_pushcfunction(L, lua_aop_playhead_us);
     lua_setfield(L, -2, "PLAYHEAD_US");
+    lua_pushcfunction(L, lua_aop_audible_us);
+    lua_setfield(L, -2, "AUDIBLE_US");
     lua_pushcfunction(L, lua_aop_latency_frames);
     lua_setfield(L, -2, "LATENCY_FRAMES");
     lua_pushcfunction(L, lua_aop_had_underrun);

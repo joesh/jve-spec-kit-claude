@@ -182,7 +182,7 @@ check(PLAYBACK.CURRENT_FRAME(pc) == START_FRAME,
     string.format("parked at frame %d", START_FRAME))
 
 local baseline_surface = EMP.SURFACE_FRAME_COUNT(surface)
-local baseline_audio = has_audio and qt_constants.AOP.PLAYHEAD_US(aop) or 0
+local baseline_audio = has_audio and qt_constants.AOP.AUDIBLE_US(aop) or 0
 
 position_history = {}
 PLAYBACK.PLAY(pc, 1, 1.0)
@@ -201,13 +201,13 @@ for _ = 1, 120 do
         wall_us = wall_us(),
     }
     if has_audio then
-        entry.audio_playhead_us = qt_constants.AOP.PLAYHEAD_US(aop)
+        entry.audio_playhead_us = qt_constants.AOP.AUDIBLE_US(aop)
     end
     samples[#samples + 1] = entry
 end
 
 -- Capture audio playhead BEFORE stop (stop resets AOP playhead to 0)
-local pre_stop_audio = has_audio and qt_constants.AOP.PLAYHEAD_US(aop) or 0
+local pre_stop_audio = has_audio and qt_constants.AOP.AUDIBLE_US(aop) or 0
 
 PLAYBACK.STOP(pc)
 
@@ -237,19 +237,32 @@ if has_audio then
     local had_underrun = qt_constants.AOP.HAD_UNDERRUN(aop)
     check(not had_underrun, "no audio underruns during playback")
 
-    -- Measure drift
+    -- Measure drift RELATIVE to first sample.
+    -- AUDIBLE_US subtracts the QAudioSink internal buffer, but Qt does not
+    -- expose CoreAudio HAL latency. The irreducible offset doesn't matter
+    -- for sync — only divergence from baseline does.
+    local baseline_offset
     local max_drift_us = 0
     for _, s in ipairs(samples) do
         if s.audio_playhead_us and s.audio_playhead_us > 0 then
             local video_time_us = (s.video_frame - START_FRAME) * 1000000.0 / target_fps
-            local drift = math.abs(video_time_us - s.audio_playhead_us)
+            local raw_offset = s.audio_playhead_us - video_time_us
+            if not baseline_offset then baseline_offset = raw_offset end
+            local drift = math.abs(raw_offset - baseline_offset)
             if drift > max_drift_us then max_drift_us = drift end
         end
     end
+    assert(baseline_offset ~= nil,
+        "drift loop: no audio samples — has_audio was true but " ..
+        "AUDIBLE_US never returned > 0; check AOP startup path")
 
-    -- Same threshold as test_playback_av_sync: 350ms
-    check(max_drift_us < 350000,
-        string.format("A/V drift max %.1fms (limit 350ms) with source_in offsets",
+    -- 150ms peak ceiling: under manual TICK (no CVDisplayLink) the integer
+    -- frame counter quantizes behind wall, so peak relative drift is
+    -- slope×window + frame-quantization noise (~150ms total). Catches real
+    -- one-shot jumps from misapplied source_in offsets without false-
+    -- flagging the harness. Production hits ~10-30ms.
+    check(max_drift_us < 150000,
+        string.format("A/V drift max %.1fms (limit 150ms) with source_in offsets",
             max_drift_us / 1000.0))
 
     -- Diag summary
