@@ -58,7 +58,7 @@ local function find_gold_master_sequence_id()
         SELECT sequences.id
         FROM sequences
         LEFT JOIN clips ON clips.owner_sequence_id = sequences.id
-        WHERE sequences.kind = 'timeline'
+        WHERE sequences.kind = 'nested'
         GROUP BY sequences.id
         ORDER BY COUNT(clips.id) DESC, sequences.modified_at DESC
         LIMIT 1

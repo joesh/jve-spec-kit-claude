@@ -19,9 +19,12 @@ local project_info = ui.create_test_project({
 
 local database = require("core.database")
 
--- Step 2: Insert fake BRAW media + clips into the DB
+-- Step 2: Insert fake BRAW media + clips into the DB (V13 schema)
 os.execute("mkdir -p /tmp/jve/codec_test_media")
 local fake_paths = {}
+local Media = require("models.media")
+local Clip = require("models.clip")
+local test_env = require("test_env")
 local now = os.time()
 local db = database.get_connection()
 local project_id = project_info.project.id
@@ -41,28 +44,37 @@ for i = 1, 3 do
     local f = io.open(path, "w"); f:write("not real braw"); f:close()
     fake_paths[i] = path
 
-    local mid = string.format("media_braw_%d", i)
-    local sql1 = string.format([[
-        INSERT INTO media (id, project_id, name, file_path,
-            duration_frames, fps_numerator, fps_denominator,
-            created_at, modified_at)
-        VALUES ('%s', '%s', 'fake_%d.braw', '%s', 100, 24, 1, %d, %d)
-    ]], mid, project_id, i, path, now, now)
-    assert(db:exec(sql1), "media INSERT failed: " .. tostring(db:last_error()))
+    local med = Media.create({
+        id = string.format("media_braw_%d", i),
+        project_id = project_id,
+        name = string.format("fake_%d.braw", i),
+        file_path = path,
+        duration_frames = 100,
+        frame_rate = 24,
+        width = 1920,
+        height = 1080,
+    })
+    assert(med:save(), "media save failed: " .. tostring(db:last_error()))
 
-    local clip_id = string.format("clip_braw_%d", i)
-    local sql2 = string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, name, track_id,
-            media_id, owner_sequence_id,
-            timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            fps_numerator, fps_denominator, enabled, offline,
-            created_at, modified_at)
-        VALUES ('%s', '%s', 'timeline', 'BRAW Clip %d', '%s',
-            '%s', '%s', %d, 50, 0, 50, 24, 1, 1, 0, %d, %d)
-    ]], clip_id, project_id, i, track_id, mid, seq.id,
-        1000 + (i - 1) * 60, now, now)
-    assert(db:exec(sql2), "clip INSERT failed: " .. tostring(db:last_error()))
+    local mc_seq_id = test_env.create_test_masterclip_sequence(
+        project_id, string.format("braw_%d mc", i), 24, 1, 100, med.id)
+
+    Clip.create({
+        id = string.format("clip_braw_%d", i),
+        name = string.format("BRAW Clip %d", i),
+        project_id = project_id,
+        owner_sequence_id = seq.id,
+        track_id = track_id,
+        nested_sequence_id = mc_seq_id,
+        timeline_start_frame = 1000 + (i - 1) * 60,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        fps_mismatch_policy = "passthrough",
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+    })
 end
 
 -- Verify inserts worked on this connection

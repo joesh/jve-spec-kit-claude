@@ -79,7 +79,8 @@ function M.create_test_project(opts)
 
     -- Create project
     local Project = require("models.project")
-    local project = Project.create(opts.project_name or "UI Test Project")
+    local project = Project.create(opts.project_name or "UI Test Project",
+        { fps_mismatch_policy = "passthrough" })
     project:save()
 
     -- Create sequences with tracks
@@ -93,7 +94,8 @@ function M.create_test_project(opts)
             or ("Sequence " .. i)
         local seq = Sequence.create(name, project.id,
             { fps_numerator = 24, fps_denominator = 1 },
-            1920, 1080)
+            1920, 1080,
+            { kind = "nested", audio_sample_rate = 48000 })
         seq:save()
 
         -- Each sequence needs at least one video track for timeline_panel

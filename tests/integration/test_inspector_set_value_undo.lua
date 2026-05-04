@@ -42,13 +42,15 @@ local med = Media.create({
     file_path       = "/tmp/jve/inspector_undo_fixture.mp4",
     duration_frames = 240,
     frame_rate      = 24,
+    width           = 1920,
+    height          = 1080,
 })
 assert(med:save(), "media save failed")
 
 local mc_seq_id = test_env.create_test_masterclip_sequence(
     project_id, "test mc", 24, 1, 240, med.id)
 
-local clip = Clip.create({
+local clip_id = Clip.create({
         name = ORIGINAL,
         project_id = project_id,
         owner_sequence_id = seq_id,
@@ -58,13 +60,12 @@ local clip = Clip.create({
         source_in_frame = 0,
         source_out_frame = 60,
         enabled = true,
-        master_clip_id = mc_seq_id,
+        nested_sequence_id = mc_seq_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
     })
-assert(clip ~= nil and clip ~= "", "clip save failed")
-local clip_id = clip.id
+assert(clip_id ~= nil and clip_id ~= "", "clip create failed")
 
 -- Force a clip reload; load_sequence early-returns because ui.launch
 -- already made this the active sequence.
