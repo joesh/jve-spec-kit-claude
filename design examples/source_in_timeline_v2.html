@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Source-in-Timeline v2 — full editor layout, horizontal split</title>
+<style>
+  :root {
+    --bg:           #0f0f14;
+    --panel:        #181820;
+    --panel-2:      #1d1d27;
+    --panel-3:      #14141c;
+    --line:         #262630;
+    --line-strong:  #353542;
+    --text:         #d8d8de;
+    --text-dim:     #7a7a86;
+    --text-faint:   #4a4a56;
+
+    --src:          #e89968;
+    --src-bg:       rgba(232,153,104,0.08);
+    --src-dim:      #6e4a36;
+    --rec:          #6bbacf;
+    --rec-bg:       rgba(107,186,207,0.08);
+    --rec-dim:      #34616e;
+
+    --link-grp-1:   #b070e8;
+
+    --mark-in:      #7ccc7c;
+    --mark-out:     #d96f6f;
+    --ghost:        #d8d8de;
+
+    --clip-v:       #4a6fb0;
+    --clip-a:       #3a8a64;
+    --clip-a-dim:   #2a5040;
+
+    --pill-on-bg:   #3c3c4a;
+    --pill-border:  #4a4a58;
+
+    --row-h:        30px;
+    --ruler-h:      24px;
+  }
+
+  html, body { background: var(--bg); color: var(--text); margin: 0; }
+  body {
+    font: 12px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif;
+    padding: 24px;
+  }
+
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); margin: 0 0 16px; font-size: 11.5px; }
+  .legend { display: flex; gap: 16px; margin: 0 0 16px; color: var(--text-dim); font-size: 11px; flex-wrap: wrap; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+
+  /* ============== APP FRAME ============== */
+  .app {
+    width: 1600px;
+    height: 940px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: grid;
+    grid-template-rows: 40px 1fr 26px;
+    grid-template-columns: 1fr;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+  }
+
+  /* ----- Toolbar ----- */
+  .toolbar {
+    background: #0c0c12;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center;
+    padding: 0 12px;
+    gap: 16px;
+    color: var(--text-dim);
+    font-size: 11.5px;
+  }
+  .toolbar .menu { display: flex; gap: 14px; }
+  .toolbar .menu span:hover { color: var(--text); }
+  .toolbar .transport { display: flex; gap: 4px; margin-left: 12px; }
+  .toolbar .tbtn {
+    width: 28px; height: 24px; border-radius: 4px;
+    background: #1a1a22; border: 1px solid var(--line-strong);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text); font-size: 10px;
+  }
+  .toolbar .tbtn.play { background: #2c4a3c; border-color: #3a6c54; color: #aee8c4; }
+  .toolbar .tools { display: flex; gap: 4px; margin-left: 16px; }
+  .toolbar .tools .tbtn { width: 26px; }
+  .toolbar .tools .tbtn.active { background: #2a3650; border-color: #4a5a78; color: #c8d8f8; }
+  .toolbar .tc {
+    margin-left: auto; display: flex; gap: 14px; align-items: center;
+    font-feature-settings: "tnum"; font-variant-numeric: tabular-nums;
+  }
+  .toolbar .tc .label { color: var(--text-faint); font-size: 10px; letter-spacing: 0.4px; }
+  .toolbar .tc .val { color: var(--text); font-size: 12px; }
+  .toolbar .tc .val.src { color: var(--src); }
+  .toolbar .tc .val.rec { color: var(--rec); }
+
+  /* ----- Body ----- */
+  .body {
+    display: grid;
+    grid-template-columns: 248px 1fr 280px;
+    grid-template-rows: 1fr;
+    overflow: hidden;
+  }
+
+  /* ----- Project browser ----- */
+  .browser {
+    background: var(--panel-3);
+    border-right: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .browser .ph {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text-dim); font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .browser .search {
+    margin: 8px;
+    background: #0a0a10; border: 1px solid var(--line);
+    border-radius: 5px;
+    padding: 5px 8px; color: var(--text-dim); font-size: 11px;
+  }
+  .browser .tree { padding: 0 4px; overflow: auto; flex: 1; }
+  .browser .tn {
+    padding: 4px 8px 4px 4px;
+    font-size: 11.5px;
+    color: var(--text);
+    display: flex; gap: 6px; align-items: center;
+    border-radius: 4px;
+  }
+  .browser .tn .chev { color: var(--text-faint); width: 10px; display: inline-block; }
+  .browser .tn .ico { width: 12px; color: var(--text-dim); font-size: 10px; }
+  .browser .tn.sel { background: rgba(107,186,207,0.12); color: var(--rec); }
+  .browser .tn.loaded { color: var(--src); }
+  .browser .tn.loaded .ico { color: var(--src); }
+  .browser .indent { padding-left: 16px; }
+  .browser .indent .indent { padding-left: 16px; }
+  .browser .meta {
+    padding: 8px 10px;
+    border-top: 1px solid var(--line);
+    color: var(--text-faint); font-size: 10.5px;
+    line-height: 1.5;
+  }
+  .browser .meta .k { color: var(--text-dim); }
+
+  /* ----- Center column ----- */
+  .center {
+    display: grid;
+    grid-template-rows: 360px 1fr;
+    overflow: hidden;
+  }
+
+  /* ----- Monitors row ----- */
+  .monitors {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--line);
+    border-bottom: 1px solid var(--line-strong);
+  }
+  .monitor {
+    display: flex; flex-direction: column;
+    background: var(--panel);
+  }
+  .monitor .mhead {
+    height: 28px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 0 10px;
+    font-size: 11px;
+    border-bottom: 1px solid var(--line);
+  }
+  .monitor.src .mhead { background: linear-gradient(to bottom, rgba(232,153,104,0.16), rgba(232,153,104,0.04)); color: var(--src); }
+  .monitor.rec .mhead { background: linear-gradient(to bottom, rgba(107,186,207,0.16), rgba(107,186,207,0.04)); color: var(--rec); }
+  .monitor .mhead .role { font-weight: 700; letter-spacing: 0.6px; font-size: 10px; }
+  .monitor .mhead .name { color: var(--text); font-weight: 500; }
+  .monitor .mhead .meta { margin-left: auto; color: var(--text-dim); font-size: 10.5px; font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+  .monitor .frame {
+    flex: 1;
+    background: #050507;
+    position: relative;
+    overflow: hidden;
+  }
+  .monitor.src .frame { background: radial-gradient(ellipse at center, #1a120c 0%, #050507 70%); }
+  .monitor.rec .frame { background: radial-gradient(ellipse at center, #0c1418 0%, #050507 70%); }
+  .frame .placeholder {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); font-size: 12px;
+    flex-direction: column; gap: 6px;
+  }
+  .frame .tcoverlay {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.6);
+    padding: 3px 10px; border-radius: 3px;
+    font-feature-settings: "tnum"; font-variant-numeric: tabular-nums;
+    font-size: 12px; color: #fff;
+  }
+  .frame .badges {
+    position: absolute; top: 8px; left: 8px;
+    display: flex; gap: 4px;
+  }
+  .badge {
+    padding: 2px 6px; border-radius: 3px;
+    font-size: 10px; letter-spacing: 0.4px;
+    background: rgba(0,0,0,0.55); color: var(--text);
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .badge.in { color: var(--mark-in); border-color: rgba(124,204,124,0.4); }
+  .badge.out { color: var(--mark-out); border-color: rgba(217,111,111,0.4); }
+  .badge.ghost { color: var(--text-dim); border-style: dashed; }
+  .frame .audiometers {
+    position: absolute; right: 8px; top: 8px; bottom: 36px;
+    display: flex; gap: 2px;
+  }
+  .ameter {
+    width: 4px; background: linear-gradient(to top, #2a4a36 0%, #2a4a36 var(--lvl, 60%), #1a1a1f var(--lvl, 60%), #1a1a1f 100%);
+    border: 1px solid #1a1a1f;
+    border-radius: 1px;
+  }
+  .monitor .transport {
+    height: 32px;
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 10px;
+    border-top: 1px solid var(--line);
+    background: var(--panel-2);
+  }
+  .transport .tbtn {
+    width: 26px; height: 22px; border-radius: 3px;
+    background: #1a1a22; border: 1px solid var(--line-strong);
+    color: var(--text-dim); font-size: 10px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .transport .markin  { color: var(--mark-in); border-color: rgba(124,204,124,0.4); }
+  .transport .markout { color: var(--mark-out); border-color: rgba(217,111,111,0.4); }
+  .transport .spacer { flex: 1; }
+  .transport .duration { color: var(--text-dim); font-size: 10.5px; font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+
+  /* ============== TIMELINE PANEL ============== */
+  .timeline {
+    display: grid;
+    grid-template-columns: 1fr 96px 1fr;
+    background: var(--panel);
+    overflow: hidden;
+    border-top: 1px solid var(--line-strong);
+    position: relative;
+  }
+  .tl-strip {
+    position: absolute; left: 0; right: 0; top: 0; height: 26px;
+    background: #0c0c12;
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center;
+    padding: 0 10px;
+    font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase;
+    color: var(--text-faint);
+    z-index: 6;
+  }
+  .tl-strip .seg { display: flex; align-items: center; gap: 6px; }
+  .tl-strip .seg.src { color: var(--src); }
+  .tl-strip .seg.rec { color: var(--rec); }
+  .tl-strip .seg.patch { color: var(--text-dim); }
+  .tl-strip .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .tl-strip .seg.src       { width: calc((100% - 96px) / 2 - 10px); }
+  .tl-strip .seg.patch     { width: 96px; justify-content: center; }
+  .tl-strip .seg.rec       { width: calc((100% - 96px) / 2 - 10px); justify-content: flex-end; }
+
+  /* SOURCE SIDE — lane on LEFT, header on RIGHT (mirrored toward patch panel) */
+  .tl-source {
+    background: var(--src-bg);
+    border-right: 1px solid var(--line);
+    padding-top: 26px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .tl-source .ruler-row {
+    display: flex; height: var(--ruler-h);
+    border-bottom: 1px solid var(--line);
+  }
+  .tl-source .ruler-row .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 49px,
+        rgba(255,255,255,0.06) 49px, rgba(255,255,255,0.06) 50px);
+    color: var(--text-faint); font-size: 10px;
+  }
+  .tl-source .ruler-row .lane .tick { position: absolute; top: 6px; transform: translateX(-50%); }
+  .tl-source .ruler-row .lane .mark { position: absolute; top: 0; bottom: -2px; width: 2px; }
+  .tl-source .ruler-row .lane .mark.in  { background: var(--mark-in); }
+  .tl-source .ruler-row .lane .mark.out { background: var(--mark-out); }
+  .tl-source .ruler-row .lane .playhead { position: absolute; top: 0; bottom: -2px; width: 1px; background: rgba(255,255,255,0.85); }
+  .tl-source .ruler-row .lane .playhead::before {
+    content:""; position:absolute; top:-1px; left:-5px;
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 6px solid #fff;
+  }
+  .tl-source .ruler-row .header-spacer { width: 100px; flex: 0 0 100px; border-left: 1px solid var(--line); background: var(--panel-3); }
+
+  .tl-source .rows { flex: 1; overflow: auto; }
+
+  /* SOURCE row: lane LEFT, header RIGHT */
+  .row-s {
+    display: flex; height: var(--row-h);
+    border-bottom: 1px solid var(--line);
+  }
+  .row-s:nth-child(odd)  { background: rgba(232,153,104,0.025); }
+  .row-s:nth-child(even) { background: rgba(232,153,104,0.05); }
+  .row-s.muted { opacity: 0.5; }
+  .row-s .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 49px,
+        rgba(255,255,255,0.025) 49px, rgba(255,255,255,0.025) 50px);
+  }
+  .row-s .header-s {
+    width: 100px; flex: 0 0 100px;
+    border-left: 1px solid var(--line-strong);
+    background: var(--panel-2);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 6px 0 8px;
+    position: relative;
+  }
+  .row-s .header-s .tn {
+    display: flex; flex-direction: column; line-height: 1.1;
+    font-size: 11px;
+  }
+  .row-s .header-s .tn .id { color: var(--text); font-weight: 600; }
+  .row-s .header-s .tn .label { color: var(--text-dim); font-size: 10px; }
+  .row-s .header-s .tn.video .id { color: #c9d4ee; }
+  .row-s .header-s .tn.unrouted .label { color: #8c5e44; font-style: italic; }
+  .row-s .header-s .pill-row { display: flex; gap: 4px; }
+  .pill {
+    width: 18px; height: 18px; border-radius: 50%;
+    border: 1px solid var(--pill-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9.5px; color: var(--text-dim);
+    background: transparent;
+  }
+  .pill.on { background: var(--pill-on-bg); color: var(--text); border-color: #5e5e6e; }
+  .pill.aud.on { color: #d8d8de; border-color: #6e6e7c; }
+  .pill.edt.on { color: var(--rec); border-color: var(--rec-dim); background: rgba(107,186,207,0.15); }
+  .pill.lnk.on { color: var(--link-grp-1); border-color: #5a3a78; background: rgba(176,112,232,0.15); }
+
+  .port {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--panel); border: 1.5px solid var(--line-strong);
+    position: absolute;
+  }
+  .row-s .port {
+    right: -5px; top: 50%; transform: translateY(-50%);
+  }
+  .port.routed.src { border-color: var(--src); background: var(--src); box-shadow: 0 0 6px rgba(232,153,104,0.6); }
+  .port.routed.rec { border-color: var(--rec); background: var(--rec); box-shadow: 0 0 6px rgba(107,186,207,0.6); }
+  .port.unrouted { border-color: #4a3a32; background: #2a1f18; }
+
+  /* RECORD SIDE — header on LEFT, lane on RIGHT */
+  .tl-record {
+    background: var(--rec-bg);
+    padding-top: 26px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .tl-record .ruler-row {
+    display: flex; height: var(--ruler-h);
+    border-bottom: 1px solid var(--line);
+  }
+  .tl-record .ruler-row .header-spacer { width: 156px; flex: 0 0 156px; border-right: 1px solid var(--line); background: var(--panel-3); }
+  .tl-record .ruler-row .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 49px,
+        rgba(255,255,255,0.06) 49px, rgba(255,255,255,0.06) 50px);
+    color: var(--text-faint); font-size: 10px;
+  }
+  .tl-record .ruler-row .lane .tick { position: absolute; top: 6px; transform: translateX(-50%); }
+  .tl-record .ruler-row .lane .mark { position: absolute; top: 0; bottom: -2px; width: 2px; }
+  .tl-record .ruler-row .lane .mark.in  { background: var(--mark-in); }
+  .tl-record .ruler-row .lane .mark.out { background: var(--mark-out); }
+  .tl-record .ruler-row .lane .mark.ghost { background: transparent; border-left: 2px dashed var(--ghost); opacity: 0.55; }
+  .tl-record .ruler-row .lane .playhead { position: absolute; top: 0; bottom: -2px; width: 1px; background: rgba(255,255,255,0.85); }
+  .tl-record .ruler-row .lane .playhead::before {
+    content:""; position:absolute; top:-1px; left:-5px;
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 6px solid #fff;
+  }
+
+  .tl-record .rows { flex: 1; overflow: auto; }
+
+  .row-r {
+    display: flex; height: var(--row-h);
+    border-bottom: 1px solid var(--line);
+  }
+  .row-r:nth-child(odd)  { background: rgba(107,186,207,0.025); }
+  .row-r:nth-child(even) { background: rgba(107,186,207,0.05); }
+  .row-r .header-r {
+    width: 156px; flex: 0 0 156px;
+    border-right: 1px solid var(--line-strong);
+    background: var(--panel-2);
+    display: flex; align-items: center; gap: 6px;
+    padding: 0 6px;
+    position: relative;
+  }
+  .row-r .header-r .linkrail {
+    width: 5px; height: 100%; background: transparent;
+  }
+  .row-r .header-r.g1 .linkrail { background: var(--link-grp-1); }
+  .row-r .header-r .tn {
+    display: flex; flex-direction: column; line-height: 1.1; font-size: 11px;
+    flex: 1; min-width: 0;
+  }
+  .row-r .header-r .tn .id { color: var(--text); font-weight: 600; }
+  .row-r .header-r .tn .label { color: var(--text-dim); font-size: 10px; }
+  .row-r .header-r .tn.video .id { color: #c9d4ee; }
+  .row-r .header-r .pill-row { display: flex; gap: 4px; }
+  .row-r .header-r .port { left: -5px; top: 50%; transform: translateY(-50%); }
+  .row-r .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 49px,
+        rgba(255,255,255,0.025) 49px, rgba(255,255,255,0.025) 50px);
+  }
+
+  /* clips */
+  .clip {
+    position: absolute; top: 2px; bottom: 2px;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+    overflow: hidden; padding: 2px 5px;
+    font-size: 10px; color: rgba(255,255,255,0.85);
+  }
+  .clip.v { background: linear-gradient(to bottom, #5078b8, #3a5c94); }
+  .clip.a { background: linear-gradient(to bottom, #4a9c74, #2e6e50); }
+  .clip.a.dim { background: linear-gradient(to bottom, #3a6050, #2a4438); }
+  .clip .wave {
+    position: absolute; left: 4px; right: 4px; top: 12px; bottom: 3px;
+    background-image:
+      radial-gradient(ellipse at 10% 50%, rgba(255,255,255,0.35) 0, transparent 40%),
+      radial-gradient(ellipse at 25% 50%, rgba(255,255,255,0.30) 0, transparent 35%),
+      radial-gradient(ellipse at 40% 50%, rgba(255,255,255,0.45) 0, transparent 45%),
+      radial-gradient(ellipse at 55% 50%, rgba(255,255,255,0.25) 0, transparent 35%),
+      radial-gradient(ellipse at 72% 50%, rgba(255,255,255,0.40) 0, transparent 40%),
+      radial-gradient(ellipse at 88% 50%, rgba(255,255,255,0.30) 0, transparent 35%);
+    opacity: 0.7;
+  }
+
+  .lane > .mark { position: absolute; top: 0; bottom: 0; width: 2px; z-index: 3; pointer-events: none; }
+  .lane > .mark.in  { background: var(--mark-in); box-shadow: 0 0 4px rgba(124,204,124,0.5); }
+  .lane > .mark.out { background: var(--mark-out); box-shadow: 0 0 4px rgba(217,111,111,0.5); }
+  .lane > .mark.ghost { background: transparent; border-left: 2px dashed var(--ghost); opacity: 0.45; }
+  .lane > .playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.85); z-index: 3; }
+  .lane > .range { position: absolute; top: 0; bottom: 0; z-index: 1; background: rgba(255,255,255,0.04); }
+  .lane > .range.ghost { background: rgba(255,255,255,0.025); border-top: 1px dashed rgba(255,255,255,0.18); border-bottom: 1px dashed rgba(255,255,255,0.18); }
+
+  /* ============== PATCH PANEL ============== */
+  .patch {
+    background: linear-gradient(to right,
+      rgba(232,153,104,0.06) 0%,
+      rgba(40,40,52,0.45) 50%,
+      rgba(107,186,207,0.06) 100%);
+    border-left: 1px solid var(--line);
+    border-right: 1px solid var(--line);
+    padding-top: 26px;
+    position: relative;
+    overflow: hidden;
+  }
+  .patch .ruler-row { height: var(--ruler-h); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 9.5px; letter-spacing: 0.5px; text-transform: uppercase; }
+  .patch .body { position: relative; height: calc(100% - var(--ruler-h)); }
+  .patch .mismatch {
+    position: absolute; left: 0; right: 0; bottom: 6px;
+    text-align: center; font-size: 10px;
+    color: #c8826a;
+  }
+  .patch .mismatch .badge {
+    background: rgba(232,153,104,0.15); color: var(--src);
+    border: 1px solid var(--src-dim);
+    padding: 2px 7px; border-radius: 10px;
+    display: inline-block;
+  }
+
+  /* SVG patch lines drawn inside .patch .body */
+  .patchSvg { position: absolute; inset: 0; pointer-events: none; }
+
+  /* ============== INSPECTOR ============== */
+  .inspector {
+    background: var(--panel-3);
+    border-left: 1px solid var(--line);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .inspector .ph {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+    color: var(--text-dim); font-size: 10.5px; letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .inspector .tabs { display: flex; border-bottom: 1px solid var(--line); }
+  .inspector .tabs .t {
+    flex: 1; text-align: center;
+    padding: 8px 0;
+    font-size: 11px; color: var(--text-dim);
+    border-bottom: 2px solid transparent;
+  }
+  .inspector .tabs .t.active { color: var(--text); border-bottom-color: var(--rec); }
+  .inspector .sel {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .inspector .sel .name { font-size: 12px; color: var(--text); font-weight: 600; }
+  .inspector .sel .kind { color: var(--text-dim); font-size: 10.5px; }
+  .inspector .section { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .inspector .section h3 {
+    margin: 0 0 6px; font-size: 10px; letter-spacing: 0.6px; text-transform: uppercase;
+    color: var(--text-dim); font-weight: 500;
+  }
+  .inspector .kv { display: grid; grid-template-columns: 80px 1fr; gap: 4px 8px; font-size: 11px; }
+  .inspector .kv .k { color: var(--text-dim); }
+  .inspector .kv .v { color: var(--text); font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+
+  /* ============== STATUS ============== */
+  .status {
+    background: #0a0a10;
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 12px;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .status .k { color: var(--text-faint); margin-right: 4px; }
+  .status .v { color: var(--text); font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+  .status .v.ghost { color: var(--text-dim); font-style: italic; }
+  .status .pip { width: 8px; height: 8px; border-radius: 2px; display: inline-block; vertical-align: -1px; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Source-in-Timeline v2 — full editor layout, horizontal split</h1>
+<p class="sub">Source LEFT (lane → header → port). Patch panel CENTER (short direct connectors). Record RIGHT (port → header → lane). 8ch field shoot patched onto triple-mono record.</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--src)"></span>Source</span>
+  <span><span class="sw" style="background:var(--rec)"></span>Record / sequence</span>
+  <span><span class="sw" style="background:var(--mark-in)"></span>Mark IN</span>
+  <span><span class="sw" style="background:var(--mark-out)"></span>Mark OUT</span>
+  <span><span class="sw" style="background:transparent;border:1px dashed var(--ghost)"></span>Computed (ghost)</span>
+  <span><span class="sw" style="background:var(--link-grp-1)"></span>Linked rail</span>
+  <span style="margin-left:auto"><b>A</b> Audible · <b>E</b> Editable · <b>L</b> Linked</span>
+</div>
+
+<div class="app">
+
+  <!-- ============= TOOLBAR ============= -->
+  <div class="toolbar">
+    <div class="menu">
+      <span>JVE</span><span>File</span><span>Edit</span><span>Mark</span><span>Clip</span><span>Sequence</span><span>View</span><span>Window</span>
+    </div>
+    <div class="transport">
+      <div class="tbtn">⏮</div><div class="tbtn">⏪</div>
+      <div class="tbtn play">▶</div>
+      <div class="tbtn">⏩</div><div class="tbtn">⏭</div>
+    </div>
+    <div class="tools">
+      <div class="tbtn active" title="Select">▢</div>
+      <div class="tbtn" title="Blade">/</div>
+      <div class="tbtn" title="Slip">↔</div>
+      <div class="tbtn" title="Slide">↮</div>
+      <div class="tbtn" title="Ripple">»</div>
+    </div>
+    <div class="tc">
+      <span><span class="label">SRC</span> <span class="val src">00:00:18:11</span></span>
+      <span><span class="label">REC</span> <span class="val rec">01:30:05:00</span></span>
+    </div>
+  </div>
+
+  <!-- ============= BODY ============= -->
+  <div class="body">
+
+    <!-- ----- BROWSER ----- -->
+    <div class="browser">
+      <div class="ph">Project · Untitled.jvp</div>
+      <input class="search" value="Search bins…" readonly>
+      <div class="tree">
+        <div class="tn"><span class="chev">▾</span><span class="ico">▦</span>Sequences</div>
+        <div class="indent">
+          <div class="tn sel"><span class="chev"></span><span class="ico">▶</span>Main Sequence</div>
+          <div class="tn"><span class="chev"></span><span class="ico">▶</span>Pickups v3</div>
+          <div class="tn"><span class="chev"></span><span class="ico">▶</span>Trailer Cut</div>
+        </div>
+        <div class="tn"><span class="chev">▾</span><span class="ico">▦</span>Dailies</div>
+        <div class="indent">
+          <div class="tn"><span class="chev">▾</span><span class="ico">▦</span>Day 1 — Kitchen</div>
+          <div class="indent">
+            <div class="tn"><span class="chev"></span><span class="ico">⌑</span>SC4_T1.mxf</div>
+            <div class="tn loaded"><span class="chev"></span><span class="ico">●</span>SC4_T2.mxf</div>
+            <div class="tn"><span class="chev"></span><span class="ico">⌑</span>SC4_T3.mxf</div>
+            <div class="tn"><span class="chev"></span><span class="ico">⌑</span>SC4_T4.mxf</div>
+          </div>
+          <div class="tn"><span class="chev">▸</span><span class="ico">▦</span>Day 2 — Living Room</div>
+          <div class="tn"><span class="chev">▸</span><span class="ico">▦</span>Day 3 — Exterior</div>
+        </div>
+        <div class="tn"><span class="chev">▸</span><span class="ico">▦</span>Music</div>
+        <div class="tn"><span class="chev">▸</span><span class="ico">▦</span>SFX</div>
+      </div>
+      <div class="meta">
+        <div><span class="k">Loaded source:</span> <span style="color:var(--src)">SC4_T2.mxf</span></div>
+        <div><span class="k">8ch · 24p · 42:18</span></div>
+      </div>
+    </div>
+
+    <!-- ----- CENTER ----- -->
+    <div class="center">
+
+      <!-- monitors -->
+      <div class="monitors">
+        <div class="monitor src">
+          <div class="mhead">
+            <span class="role">SOURCE</span>
+            <span class="name">INT_KITCHEN_SC4_T2.mxf</span>
+            <span class="meta">24p · 8ch · 42:18</span>
+          </div>
+          <div class="frame">
+            <div class="placeholder">◳ Anna at counter, OTS Ben</div>
+            <div class="badges">
+              <span class="badge in">IN 00:00:12:00</span>
+              <span class="badge out">OUT 00:00:24:00</span>
+            </div>
+            <div class="audiometers">
+              <div class="ameter" style="--lvl:72%"></div>
+              <div class="ameter" style="--lvl:65%"></div>
+              <div class="ameter" style="--lvl:58%"></div>
+              <div class="ameter" style="--lvl:24%"></div>
+              <div class="ameter" style="--lvl:18%"></div>
+              <div class="ameter" style="--lvl:18%"></div>
+              <div class="ameter" style="--lvl:8%"></div>
+              <div class="ameter" style="--lvl:5%"></div>
+            </div>
+            <div class="tcoverlay">00:00:18:11</div>
+          </div>
+          <div class="transport">
+            <div class="tbtn markin">I</div>
+            <div class="tbtn markout">O</div>
+            <div class="tbtn">⏮</div><div class="tbtn">▶</div><div class="tbtn">⏭</div>
+            <div class="spacer"></div>
+            <div class="duration">DUR 00:00:12:00</div>
+          </div>
+        </div>
+        <div class="monitor rec">
+          <div class="mhead">
+            <span class="role">RECORD</span>
+            <span class="name">Main Sequence</span>
+            <span class="meta">23.976 · stereo bus · 14:22:06</span>
+          </div>
+          <div class="frame">
+            <div class="placeholder">◳ SC3 · OTS Anna (parked)</div>
+            <div class="badges">
+              <span class="badge in">IN 01:30:05:00</span>
+              <span class="badge ghost">OUT 01:30:17:00 ↺</span>
+            </div>
+            <div class="audiometers">
+              <div class="ameter" style="--lvl:62%"></div>
+              <div class="ameter" style="--lvl:48%"></div>
+              <div class="ameter" style="--lvl:54%"></div>
+            </div>
+            <div class="tcoverlay">01:30:05:00</div>
+          </div>
+          <div class="transport">
+            <div class="tbtn markin">I</div>
+            <div class="tbtn markout">O</div>
+            <div class="tbtn">⏮</div><div class="tbtn">▶</div><div class="tbtn">⏭</div>
+            <div class="spacer"></div>
+            <div class="duration">DUR 14:22:06 · 1042 clips</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- timeline panel -->
+      <div class="timeline">
+        <div class="tl-strip">
+          <div class="seg src"><span class="dot"></span>SOURCE · SC4_T2 · 8ch</div>
+          <div class="seg patch">PATCH BRIDGE</div>
+          <div class="seg rec"><span class="dot"></span>SEQUENCE · MAIN · TRIPLE-MONO</div>
+        </div>
+
+        <!-- ===== SOURCE SIDE ===== -->
+        <div class="tl-source">
+          <div class="ruler-row">
+            <div class="lane" id="srcRulerLane">
+              <span class="tick" style="left:50px">00:00:05</span>
+              <span class="tick" style="left:200px">00:00:15</span>
+              <span class="tick" style="left:350px">00:00:25</span>
+              <span class="tick" style="left:500px">00:00:35</span>
+              <span class="mark in"  style="left:120px"></span>
+              <span class="mark out" style="left:240px"></span>
+              <span class="playhead" style="left:184px"></span>
+            </div>
+            <div class="header-spacer"></div>
+          </div>
+          <div class="rows">
+
+            <!-- V1 -->
+            <div class="row-s">
+              <div class="lane">
+                <div class="range" style="left:120px; width:120px"></div>
+                <div class="clip v" style="left:20px; width:680px">SC4_T2 · V1</div>
+                <div class="mark in" style="left:120px"></div>
+                <div class="mark out" style="left:240px"></div>
+                <div class="playhead" style="left:184px"></div>
+              </div>
+              <div class="header-s">
+                <div class="tn video"><span class="id">V1</span><span class="label">picture</span></div>
+                <div class="pill-row">
+                  <div class="pill aud on">A</div>
+                </div>
+                <span class="port routed src" id="sV1"></span>
+              </div>
+            </div>
+
+            <!-- A1 boom -->
+            <div class="row-s">
+              <div class="lane">
+                <div class="range" style="left:120px; width:120px"></div>
+                <div class="clip a" style="left:20px; width:680px">boom<div class="wave"></div></div>
+                <div class="mark in" style="left:120px"></div>
+                <div class="mark out" style="left:240px"></div>
+              </div>
+              <div class="header-s">
+                <div class="tn"><span class="id">A1</span><span class="label">boom</span></div>
+                <div class="pill-row"><div class="pill aud on">A</div></div>
+                <span class="port routed src" id="sA1"></span>
+              </div>
+            </div>
+
+            <!-- A2 lav1 -->
+            <div class="row-s">
+              <div class="lane">
+                <div class="range" style="left:120px; width:120px"></div>
+                <div class="clip a" style="left:20px; width:680px">lav1 (Anna)<div class="wave"></div></div>
+                <div class="mark in" style="left:120px"></div>
+                <div class="mark out" style="left:240px"></div>
+              </div>
+              <div class="header-s">
+                <div class="tn"><span class="id">A2</span><span class="label">lav1 · Anna</span></div>
+                <div class="pill-row"><div class="pill aud on">A</div></div>
+                <span class="port routed src" id="sA2"></span>
+              </div>
+            </div>
+
+            <!-- A3 lav2 -->
+            <div class="row-s">
+              <div class="lane">
+                <div class="range" style="left:120px; width:120px"></div>
+                <div class="clip a" style="left:20px; width:680px">lav2 (Ben)<div class="wave"></div></div>
+                <div class="mark in" style="left:120px"></div>
+                <div class="mark out" style="left:240px"></div>
+              </div>
+              <div class="header-s">
+                <div class="tn"><span class="id">A3</span><span class="label">lav2 · Ben</span></div>
+                <div class="pill-row"><div class="pill aud on">A</div></div>
+                <span class="port routed src" id="sA3"></span>
+              </div>
+            </div>
+
+            <!-- A4-A8 unrouted -->
+            <div class="row-s muted">
+              <div class="lane"><div class="clip a dim" style="left:20px; width:680px">lav3<div class="wave"></div></div></div>
+              <div class="header-s">
+                <div class="tn unrouted"><span class="id">A4</span><span class="label">lav3 (offline)</span></div>
+                <div class="pill-row"><div class="pill aud">A</div></div>
+                <span class="port unrouted" id="sA4"></span>
+              </div>
+            </div>
+            <div class="row-s muted">
+              <div class="lane"><div class="clip a dim" style="left:20px; width:680px">cam-L<div class="wave"></div></div></div>
+              <div class="header-s">
+                <div class="tn unrouted"><span class="id">A5</span><span class="label">cam mic L</span></div>
+                <div class="pill-row"><div class="pill aud">A</div></div>
+                <span class="port unrouted"></span>
+              </div>
+            </div>
+            <div class="row-s muted">
+              <div class="lane"><div class="clip a dim" style="left:20px; width:680px">cam-R<div class="wave"></div></div></div>
+              <div class="header-s">
+                <div class="tn unrouted"><span class="id">A6</span><span class="label">cam mic R</span></div>
+                <div class="pill-row"><div class="pill aud">A</div></div>
+                <span class="port unrouted"></span>
+              </div>
+            </div>
+            <div class="row-s muted">
+              <div class="lane"><div class="clip a dim" style="left:20px; width:680px">room<div class="wave"></div></div></div>
+              <div class="header-s">
+                <div class="tn unrouted"><span class="id">A7</span><span class="label">room tone</span></div>
+                <div class="pill-row"><div class="pill aud">A</div></div>
+                <span class="port unrouted"></span>
+              </div>
+            </div>
+            <div class="row-s muted">
+              <div class="lane"><div class="clip a dim" style="left:20px; width:680px">slate<div class="wave"></div></div></div>
+              <div class="header-s">
+                <div class="tn unrouted"><span class="id">A8</span><span class="label">slate / aux</span></div>
+                <div class="pill-row"><div class="pill aud">A</div></div>
+                <span class="port unrouted"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== PATCH PANEL ===== -->
+        <div class="patch" id="patchPanel">
+          <div class="ruler-row">PATCHES · 3 / 8</div>
+          <div class="body" id="patchBody">
+            <svg class="patchSvg" id="patchSvg"></svg>
+            <div class="mismatch"><span class="badge">5 unrouted</span></div>
+          </div>
+        </div>
+
+        <!-- ===== RECORD SIDE ===== -->
+        <div class="tl-record">
+          <div class="ruler-row">
+            <div class="header-spacer"></div>
+            <div class="lane" id="recRulerLane">
+              <span class="tick" style="left:50px">01:29:55</span>
+              <span class="tick" style="left:200px">01:30:05</span>
+              <span class="tick" style="left:350px">01:30:15</span>
+              <span class="tick" style="left:500px">01:30:25</span>
+              <span class="mark in"    style="left:200px"></span>
+              <span class="mark ghost" style="left:320px"></span>
+              <span class="playhead"   style="left:200px"></span>
+            </div>
+          </div>
+          <div class="rows">
+
+            <!-- V1 -->
+            <div class="row-r">
+              <div class="header-r g1">
+                <span class="port routed rec" id="rV1"></span>
+                <div class="linkrail"></div>
+                <div class="tn video"><span class="id">V1</span><span class="label">picture</span></div>
+                <div class="pill-row">
+                  <div class="pill aud on">A</div>
+                  <div class="pill edt on">E</div>
+                  <div class="pill lnk on">L</div>
+                </div>
+              </div>
+              <div class="lane">
+                <div class="range ghost" style="left:200px; width:120px"></div>
+                <div class="clip v" style="left:50px;  width:140px">SC3 · OTS Anna</div>
+                <div class="clip v" style="left:340px; width:200px">SC5 · 2-shot</div>
+                <div class="mark in" style="left:200px"></div>
+                <div class="mark ghost" style="left:320px"></div>
+                <div class="playhead" style="left:200px"></div>
+              </div>
+            </div>
+
+            <!-- A1 boom -->
+            <div class="row-r">
+              <div class="header-r g1">
+                <span class="port routed rec" id="rA1"></span>
+                <div class="linkrail"></div>
+                <div class="tn"><span class="id">A1</span><span class="label">boom</span></div>
+                <div class="pill-row">
+                  <div class="pill aud on">A</div>
+                  <div class="pill edt on">E</div>
+                  <div class="pill lnk on">L</div>
+                </div>
+              </div>
+              <div class="lane">
+                <div class="range ghost" style="left:200px; width:120px"></div>
+                <div class="clip a" style="left:50px;  width:140px">boom<div class="wave"></div></div>
+                <div class="clip a" style="left:340px; width:200px">boom<div class="wave"></div></div>
+                <div class="mark in" style="left:200px"></div>
+                <div class="mark ghost" style="left:320px"></div>
+              </div>
+            </div>
+
+            <!-- A2 lav1 -->
+            <div class="row-r">
+              <div class="header-r g1">
+                <span class="port routed rec" id="rA2"></span>
+                <div class="linkrail"></div>
+                <div class="tn"><span class="id">A2</span><span class="label">lav1 · Anna</span></div>
+                <div class="pill-row">
+                  <div class="pill aud on">A</div>
+                  <div class="pill edt on">E</div>
+                  <div class="pill lnk on">L</div>
+                </div>
+              </div>
+              <div class="lane">
+                <div class="range ghost" style="left:200px; width:120px"></div>
+                <div class="clip a" style="left:50px;  width:140px">lav1<div class="wave"></div></div>
+                <div class="clip a" style="left:340px; width:200px">lav1<div class="wave"></div></div>
+                <div class="mark in" style="left:200px"></div>
+                <div class="mark ghost" style="left:320px"></div>
+              </div>
+            </div>
+
+            <!-- A3 lav2 -->
+            <div class="row-r">
+              <div class="header-r g1">
+                <span class="port routed rec" id="rA3"></span>
+                <div class="linkrail"></div>
+                <div class="tn"><span class="id">A3</span><span class="label">lav2 · Ben</span></div>
+                <div class="pill-row">
+                  <div class="pill aud on">A</div>
+                  <div class="pill edt on">E</div>
+                  <div class="pill lnk on">L</div>
+                </div>
+              </div>
+              <div class="lane">
+                <div class="range ghost" style="left:200px; width:120px"></div>
+                <div class="clip a" style="left:50px;  width:140px">lav2<div class="wave"></div></div>
+                <div class="clip a" style="left:340px; width:200px">lav2<div class="wave"></div></div>
+                <div class="mark in" style="left:200px"></div>
+                <div class="mark ghost" style="left:320px"></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ----- INSPECTOR ----- -->
+    <div class="inspector">
+      <div class="ph">Inspector</div>
+      <div class="tabs">
+        <div class="t active">Clip</div>
+        <div class="t">Effects</div>
+        <div class="t">Metadata</div>
+      </div>
+      <div class="sel">
+        <div class="name">SC4_T2 · INT_KITCHEN</div>
+        <div class="kind" style="color:var(--src)">Source clip · 8ch · loaded</div>
+      </div>
+      <div class="section">
+        <h3>Source identity</h3>
+        <div class="kv">
+          <div class="k">Reel</div><div class="v">A001_C014</div>
+          <div class="k">Scene</div><div class="v">4</div>
+          <div class="k">Take</div><div class="v">2</div>
+          <div class="k">Camera</div><div class="v">A · Alexa Mini LF</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Timecode</h3>
+        <div class="kv">
+          <div class="k">TC In</div><div class="v">10:14:22:06</div>
+          <div class="k">TC Out</div><div class="v">10:15:04:24</div>
+          <div class="k">Duration</div><div class="v">00:00:42:18</div>
+          <div class="k">Frame Rate</div><div class="v">24.000 fps</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Audio (8 channels)</h3>
+        <div class="kv">
+          <div class="k">A1</div><div class="v">boom · routed → rec A1</div>
+          <div class="k">A2</div><div class="v">lav1 (Anna) · routed → rec A2</div>
+          <div class="k">A3</div><div class="v">lav2 (Ben) · routed → rec A3</div>
+          <div class="k">A4</div><div class="v" style="color:var(--text-faint)">lav3 · unrouted</div>
+          <div class="k">A5</div><div class="v" style="color:var(--text-faint)">cam mic L · unrouted</div>
+          <div class="k">A6</div><div class="v" style="color:var(--text-faint)">cam mic R · unrouted</div>
+          <div class="k">A7</div><div class="v" style="color:var(--text-faint)">room · unrouted</div>
+          <div class="k">A8</div><div class="v" style="color:var(--text-faint)">slate · unrouted</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>3-point edit</h3>
+        <div class="kv">
+          <div class="k">Src IN</div><div class="v" style="color:var(--mark-in)">00:00:12:00</div>
+          <div class="k">Src OUT</div><div class="v" style="color:var(--mark-out)">00:00:24:00</div>
+          <div class="k">Rec IN</div><div class="v" style="color:var(--mark-in)">01:30:05:00</div>
+          <div class="k">Rec OUT</div><div class="v ghost">01:30:17:00 (computed)</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============= STATUS ============= -->
+  <div class="status">
+    <span><span class="k">3-pt:</span><span class="pip" style="background:var(--mark-in)"></span><span class="v">src 12:00 → 24:00</span></span>
+    <span><span class="pip" style="background:var(--mark-in)"></span><span class="v">rec 01:30:05:00</span></span>
+    <span><span class="pip" style="background:transparent;border:1px dashed var(--ghost)"></span><span class="v ghost">→ 01:30:17:00 (computed)</span></span>
+    <span><span class="k">Linked:</span><span class="v" style="color:var(--link-grp-1)">DIA · V1 + A1 + A2 + A3</span></span>
+    <span><span class="k">Patches:</span><span class="v">3 of 8 · boom→A1 · lav1→A2 · lav2→A3</span></span>
+    <span style="margin-left:auto" class="v">JVE 0.1 · Untitled.jvp</span>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  // Draw direct horizontal patch lines from source-side ports to record-side ports,
+  // routed through the central patch panel SVG. Coordinates are page-absolute, then
+  // converted into the patch panel's local SVG coordinate space.
+  const svg = document.getElementById('patchSvg');
+  const panelBody = document.getElementById('patchBody');
+  if (!svg || !panelBody) return;
+
+  const NS = "http://www.w3.org/2000/svg";
+  svg.innerHTML = `
+    <defs>
+      <linearGradient id="pg" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#e89968"/>
+        <stop offset="100%" stop-color="#6bbacf"/>
+      </linearGradient>
+      <radialGradient id="srcDot" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ffd0a8"/>
+        <stop offset="100%" stop-color="#e89968"/>
+      </radialGradient>
+      <radialGradient id="recDot" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#aee0ec"/>
+        <stop offset="100%" stop-color="#6bbacf"/>
+      </radialGradient>
+    </defs>
+  `;
+
+  function center(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.left + r.width/2, y: r.top + r.height/2 };
+  }
+
+  function toLocal(pt) {
+    const r = panelBody.getBoundingClientRect();
+    return { x: pt.x - r.left, y: pt.y - r.top };
+  }
+
+  function drawConnector(srcId, dstId) {
+    const a = center(srcId), b = center(dstId);
+    if (!a || !b) return;
+    const A = toLocal(a), B = toLocal(b);
+    // mostly-horizontal cubic; tiny y-bend tolerated automatically when rows misalign
+    const dx = B.x - A.x;
+    const c1x = A.x + dx * 0.45, c1y = A.y;
+    const c2x = A.x + dx * 0.55, c2y = B.y;
+    const d = `M ${A.x} ${A.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${B.x} ${B.y}`;
+
+    const halo = document.createElementNS(NS, "path");
+    halo.setAttribute("d", d);
+    halo.setAttribute("fill", "none");
+    halo.setAttribute("stroke", "url(#pg)");
+    halo.setAttribute("stroke-width", "5");
+    halo.setAttribute("stroke-opacity", "0.20");
+    halo.setAttribute("stroke-linecap", "round");
+    svg.appendChild(halo);
+
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "url(#pg)");
+    path.setAttribute("stroke-width", "1.8");
+    path.setAttribute("stroke-linecap", "round");
+    svg.appendChild(path);
+  }
+
+  function drawStub(srcId) {
+    // unrouted source ports get a short stub fading into the panel
+    const a = center(srcId);
+    if (!a) return;
+    const A = toLocal(a);
+    const stub = document.createElementNS(NS, "path");
+    stub.setAttribute("d", `M ${A.x} ${A.y} L ${A.x + 22} ${A.y}`);
+    stub.setAttribute("fill", "none");
+    stub.setAttribute("stroke", "#6e4a36");
+    stub.setAttribute("stroke-width", "1.2");
+    stub.setAttribute("stroke-dasharray", "2 3");
+    stub.setAttribute("stroke-opacity", "0.55");
+    svg.appendChild(stub);
+  }
+
+  requestAnimationFrame(() => {
+    const w = panelBody.clientWidth, h = panelBody.clientHeight;
+    svg.setAttribute("width", w);
+    svg.setAttribute("height", h);
+    drawConnector("sV1", "rV1");
+    drawConnector("sA1", "rA1");
+    drawConnector("sA2", "rA2");
+    drawConnector("sA3", "rA3");
+    drawStub("sA4");
+  });
+})();
+</script>
+
+</body>
+</html>

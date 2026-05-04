@@ -1,0 +1,732 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Source-in-Timeline + modern track headers — v1 mockup</title>
+<style>
+  :root {
+    --bg:           #14141a;
+    --panel:        #1c1c23;
+    --panel-2:      #20202a;
+    --line:         #2a2a34;
+    --line-strong:  #3a3a48;
+    --text:         #d8d8de;
+    --text-dim:     #7a7a86;
+    --text-faint:   #4a4a56;
+
+    --src:          #e89968;   /* warm coral-amber for Source role */
+    --src-dim:      #6e4a36;
+    --rec:          #6bbacf;   /* cool cyan for Sequence role     */
+    --rec-dim:      #34616e;
+
+    --link-grp-1:   #b070e8;   /* violet linked rail              */
+    --link-grp-2:   #58c084;   /* (unused, shows multi-group idea)*/
+
+    --mark-in:      #7ccc7c;
+    --mark-out:     #d96f6f;
+    --ghost:        #d8d8de;
+
+    --clip-v:       #4a6fb0;
+    --clip-a:       #3a8a64;
+    --clip-a-dim:   #2a5040;
+
+    --pill-on-bg:   #3c3c4a;
+    --pill-off-bg:  transparent;
+    --pill-border:  #4a4a58;
+
+    --hdr-w:        228px;
+    --row-h:        34px;
+    --ruler-h:      24px;
+    --tab-h:        32px;
+    --gap:          14px;
+  }
+
+  html, body { background: var(--bg); color: var(--text); }
+  body {
+    margin: 0;
+    font: 12px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif;
+    padding: 28px 24px 80px;
+  }
+
+  h1 { font-size: 14px; font-weight: 600; margin: 0 0 4px; color: var(--text); }
+  .sub { color: var(--text-dim); margin: 0 0 22px; font-size: 11.5px; }
+  .legend { display: flex; gap: 18px; margin: 0 0 18px; color: var(--text-dim); font-size: 11px; flex-wrap: wrap; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: -1px; margin-right: 6px; }
+
+  .stage {
+    position: relative;
+    width: 1400px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  /* ---------- Tabs ---------- */
+  .tabs {
+    display: flex; height: var(--tab-h);
+    background: #101015;
+    border-bottom: 1px solid var(--line);
+    padding: 0 8px;
+    gap: 2px;
+    align-items: end;
+  }
+  .tab {
+    height: calc(var(--tab-h) - 2px);
+    padding: 0 12px;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px;
+    color: var(--text-dim);
+    border-radius: 5px 5px 0 0;
+    border: 1px solid transparent;
+    border-bottom: none;
+  }
+  .tab .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .tab.src { color: var(--src); }
+  .tab.rec { color: var(--rec); }
+  .tab.active { background: var(--panel); border-color: var(--line); color: var(--text); }
+  .tab.active.src { box-shadow: inset 0 2px 0 var(--src); }
+  .tab.active.rec { box-shadow: inset 0 2px 0 var(--rec); }
+  .tab .name { color: inherit; }
+
+  /* ---------- Panels ---------- */
+  .panel {
+    position: relative;
+    border-bottom: 1px solid var(--line);
+  }
+  .panel.src { border-top: 1px solid var(--src-dim); }
+  .panel.rec { border-top: 1px solid var(--rec-dim); }
+
+  .panel-rail {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px;
+  }
+  .panel.src .panel-rail { background: linear-gradient(to bottom, var(--src) 0%, transparent 100%); }
+  .panel.rec .panel-rail { background: linear-gradient(to bottom, var(--rec) 0%, transparent 100%); }
+
+  .panel-title {
+    position: absolute; left: 14px; top: 6px;
+    font-size: 10.5px; letter-spacing: 0.6px; text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .panel-title b { font-weight: 600; letter-spacing: 0; text-transform: none; font-size: 11.5px; margin-right: 8px; }
+  .panel.src .panel-title .role { color: var(--src); }
+  .panel.rec .panel-title .role { color: var(--rec); }
+
+  /* ---------- Ruler ---------- */
+  .ruler {
+    height: var(--ruler-h);
+    margin-left: var(--hdr-w);
+    border-bottom: 1px solid var(--line);
+    border-left: 1px solid var(--line);
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 59px,
+        var(--line) 59px, var(--line) 60px);
+    position: relative;
+    color: var(--text-faint);
+    font-size: 10px;
+    padding-top: 26px; /* labels appear inside via spans */
+  }
+  .ruler .tick-label { position: absolute; top: 6px; transform: translateX(-50%); }
+  .ruler .mark { position: absolute; top: 0; bottom: -4px; width: 2px; pointer-events: none; }
+  .ruler .mark.in  { background: var(--mark-in); }
+  .ruler .mark.out { background: var(--mark-out); }
+  .ruler .mark.ghost { background: transparent; border-left: 2px dashed var(--ghost); opacity: 0.55; }
+  .ruler .playhead { position: absolute; top: 0; bottom: -4px; width: 1px; background: #fff; opacity: 0.85; box-shadow: 0 0 0 1px rgba(255,255,255,0.15); }
+  .ruler .playhead::before {
+    content: ""; position: absolute; top: -2px; left: -5px;
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 6px solid #fff;
+  }
+
+  /* ---------- Track row ---------- */
+  .row {
+    display: flex; height: var(--row-h);
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  .row:nth-child(odd) { background: var(--panel-2); }
+  .row.muted { opacity: 0.55; }
+
+  .header {
+    width: var(--hdr-w);
+    flex: 0 0 var(--hdr-w);
+    display: flex; align-items: center;
+    border-right: 1px solid var(--line-strong);
+    position: relative;
+  }
+  .linkrail {
+    width: 6px; height: 100%;
+    background: transparent;
+  }
+  .linkrail.g1 { background: var(--link-grp-1); }
+  .linkrail.g1.cap-top    { background: linear-gradient(to bottom, var(--link-grp-1) 60%, var(--link-grp-1)); border-top-right-radius: 2px; }
+  .linkrail.g1.cap-bottom { border-bottom-right-radius: 2px; }
+
+  .tname {
+    width: 110px; padding-left: 10px;
+    color: var(--text); font-size: 11.5px;
+    display: flex; flex-direction: column; gap: 1px;
+    line-height: 1.15;
+  }
+  .tname .id { color: var(--text); font-weight: 600; }
+  .tname .label { color: var(--text-dim); font-size: 10.5px; }
+  .tname.video .id { color: #c9d4ee; }
+  .tname.unrouted .label { color: #6c5040; font-style: italic; }
+
+  .pills {
+    display: flex; gap: 6px; align-items: center;
+    margin-left: 4px;
+  }
+  .pill {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 1px solid var(--pill-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 10.5px; color: var(--text-dim);
+    background: var(--pill-off-bg);
+    cursor: default; user-select: none;
+  }
+  .pill.on { background: var(--pill-on-bg); color: var(--text); border-color: #5e5e6e; }
+  .pill.aud.on { color: #d8d8de; border-color: #6e6e7c; }
+  .pill.edt.on { color: var(--rec); border-color: var(--rec-dim); background: rgba(107,186,207,0.15); }
+  .pill.lnk.on { color: var(--link-grp-1); border-color: #5a3a78; background: rgba(176,112,232,0.15); }
+
+  .pill-group-label {
+    margin-left: 6px; font-size: 9.5px; letter-spacing: 0.4px;
+    color: var(--text-faint); text-transform: uppercase;
+  }
+
+  .patch-port {
+    position: absolute; right: -5px; top: 50%; transform: translateY(-50%);
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--panel); border: 1.5px solid var(--line-strong);
+    z-index: 4;
+  }
+  .patch-port.routed { border-color: var(--src); background: var(--src); box-shadow: 0 0 6px rgba(232,153,104,0.55); }
+  .patch-port.routed.dest { border-color: var(--rec); background: var(--rec); box-shadow: 0 0 6px rgba(107,186,207,0.55); }
+  .patch-port.unrouted { border-color: #4a3a32; background: #2a1f18; }
+
+  /* ---------- Lane (clip area) ---------- */
+  .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 59px,
+        rgba(255,255,255,0.025) 59px, rgba(255,255,255,0.025) 60px);
+  }
+  .lane .clip {
+    position: absolute; top: 3px; bottom: 3px;
+    border-radius: 3px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06);
+    overflow: hidden;
+    font-size: 10px; color: rgba(255,255,255,0.85);
+    padding: 3px 6px;
+  }
+  .clip.v { background: linear-gradient(to bottom, #5078b8, #3a5c94); }
+  .clip.a { background: linear-gradient(to bottom, #4a9c74, #2e6e50); }
+  .clip.a.dim { background: linear-gradient(to bottom, #3a6050, #2a4438); color: #aaa; }
+  .clip .wave {
+    position: absolute; left: 4px; right: 4px; top: 14px; bottom: 4px;
+    background-image:
+      radial-gradient(ellipse at 10% 50%, rgba(255,255,255,0.35) 0, transparent 40%),
+      radial-gradient(ellipse at 25% 50%, rgba(255,255,255,0.30) 0, transparent 35%),
+      radial-gradient(ellipse at 40% 50%, rgba(255,255,255,0.45) 0, transparent 45%),
+      radial-gradient(ellipse at 55% 50%, rgba(255,255,255,0.25) 0, transparent 35%),
+      radial-gradient(ellipse at 72% 50%, rgba(255,255,255,0.40) 0, transparent 40%),
+      radial-gradient(ellipse at 88% 50%, rgba(255,255,255,0.30) 0, transparent 35%);
+    opacity: 0.7;
+  }
+
+  .lane .mark { position: absolute; top: 0; bottom: 0; width: 2px; pointer-events: none; z-index: 3; }
+  .lane .mark.in  { background: var(--mark-in); box-shadow: 0 0 4px rgba(124,204,124,0.5); }
+  .lane .mark.out { background: var(--mark-out); box-shadow: 0 0 4px rgba(217,111,111,0.5); }
+  .lane .mark.ghost { background: transparent; border-left: 2px dashed var(--ghost); opacity: 0.45; }
+  .lane .playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.85); z-index: 3; }
+
+  /* selection range fill between IN/OUT */
+  .lane .range {
+    position: absolute; top: 0; bottom: 0; z-index: 1;
+    background: rgba(255,255,255,0.04);
+    border-top: 1px solid rgba(124,204,124,0.25);
+    border-bottom: 1px solid rgba(217,111,111,0.25);
+  }
+  .lane .range.ghost {
+    background: rgba(255,255,255,0.025);
+    border-top: 1px dashed rgba(255,255,255,0.18);
+    border-bottom: 1px dashed rgba(255,255,255,0.18);
+  }
+
+  /* ---------- Patch overlay (between source and record) ---------- */
+  .patch-bridge {
+    position: relative;
+    height: var(--gap);
+    background: linear-gradient(to bottom,
+      rgba(232,153,104,0.04) 0%,
+      rgba(107,186,207,0.04) 100%);
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+    overflow: visible;
+  }
+  .patch-svg {
+    position: absolute; left: 0; top: -200px; right: 0; bottom: -200px;
+    width: 100%; pointer-events: none;
+  }
+  .bridge-label {
+    position: absolute; left: 14px; top: 0; bottom: 0;
+    display: flex; align-items: center;
+    color: var(--text-faint); font-size: 10px; letter-spacing: 0.5px; text-transform: uppercase;
+  }
+  .bridge-mismatch {
+    position: absolute; right: 14px; top: 0; bottom: 0;
+    display: flex; align-items: center; gap: 8px;
+    color: #c8826a; font-size: 10.5px;
+  }
+  .bridge-mismatch .badge {
+    background: rgba(232,153,104,0.15); color: var(--src);
+    border: 1px solid var(--src-dim);
+    padding: 2px 7px; border-radius: 10px; font-size: 10px;
+  }
+
+  /* ---------- Status strip ---------- */
+  .status {
+    height: 28px; background: #101015;
+    border-top: 1px solid var(--line);
+    display: flex; align-items: center; gap: 22px; padding: 0 14px;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .status .k { color: var(--text-faint); margin-right: 4px; }
+  .status .v { color: var(--text); }
+  .status .v.ghost { color: var(--text-dim); font-style: italic; }
+  .status .pip { width: 8px; height: 8px; border-radius: 2px; display: inline-block; vertical-align: -1px; margin-right: 6px; }
+
+  /* ---------- Annotations ---------- */
+  .annot {
+    position: absolute; z-index: 10;
+    background: #2c1f18; color: #f0d8c0;
+    border: 1px solid #6a4a36;
+    padding: 7px 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    max-width: 230px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  }
+  .annot b { color: var(--src); }
+  .annot::after {
+    content: ""; position: absolute;
+    width: 0; height: 0;
+  }
+
+  /* annotation pointers */
+  .annot.left::after  { left: -8px; top: 14px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-right: 8px solid #6a4a36; }
+  .annot.right::after { right: -8px; top: 14px; border-top: 6px solid transparent; border-bottom: 6px solid transparent; border-left: 8px solid #6a4a36; }
+  .annot.up::after    { top: -8px; left: 18px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 8px solid #6a4a36; }
+  .annot.down::after  { bottom: -8px; left: 18px; border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 8px solid #6a4a36; }
+
+  .num { display: inline-block; width: 16px; height: 16px; line-height: 16px; text-align: center; border-radius: 50%; background: var(--src); color: #1a1a1a; font-weight: 700; font-size: 10px; margin-right: 6px; }
+</style>
+</head>
+<body>
+
+<h1>Source-in-Timeline + modern track headers — v1 mockup</h1>
+<p class="sub">Dark theme · 8-channel field recording (V1 + boom + 3 lavs + cam mic L/R + room + slate) onto triple-mono record (boom / lav1 / lav2). Source-side coral-amber, record-side cyan.</p>
+
+<div class="legend">
+  <span><span class="sw" style="background:var(--src)"></span>Source role</span>
+  <span><span class="sw" style="background:var(--rec)"></span>Record / sequence role</span>
+  <span><span class="sw" style="background:var(--mark-in)"></span>Mark IN</span>
+  <span><span class="sw" style="background:var(--mark-out)"></span>Mark OUT</span>
+  <span><span class="sw" style="background:transparent;border:1px dashed var(--ghost)"></span>Computed (ghost) mark</span>
+  <span><span class="sw" style="background:var(--link-grp-1)"></span>Linked rail (sync group)</span>
+  <span style="margin-left:auto"><b>A</b> = Audible · <b>E</b> = Editable · <b>L</b> = Linked</span>
+</div>
+
+<div class="stage" id="stage">
+
+  <!-- ===================== TABS ===================== -->
+  <div class="tabs">
+    <div class="tab src active"><span class="dot"></span><span class="name">Source · INT_KITCHEN_SC4_T2.mxf</span></div>
+    <div class="tab rec active"><span class="dot"></span><span class="name">Main Sequence</span></div>
+    <div class="tab" style="margin-left:auto"><span class="dot" style="background:#444"></span><span class="name">Pickups v3</span></div>
+  </div>
+
+  <!-- ===================== SOURCE PANEL ===================== -->
+  <div class="panel src" id="srcPanel">
+    <div class="panel-rail"></div>
+    <div class="panel-title"><b class="role" style="color:var(--src)">SOURCE</b><span>INT_KITCHEN_SC4_T2.mxf · 8ch · 24fps · 00:00:00:00 → 00:00:42:18</span></div>
+
+    <!-- Ruler -->
+    <div class="ruler" id="srcRuler">
+      <span class="tick-label" style="left:60px">00:00:05</span>
+      <span class="tick-label" style="left:240px">00:00:15</span>
+      <span class="tick-label" style="left:420px">00:00:25</span>
+      <span class="tick-label" style="left:600px">00:00:35</span>
+      <span class="tick-label" style="left:780px">00:00:45</span>
+      <span class="tick-label" style="left:960px">00:00:55</span>
+      <!-- src marks at IN=00:00:12  OUT=00:00:24  (12s span) -->
+      <span class="mark in"  style="left:144px"></span>
+      <span class="mark out" style="left:288px"></span>
+      <span class="playhead" style="left:200px"></span>
+    </div>
+
+    <!-- V1 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname video"><span class="id">V1</span><span class="label">picture</span></div>
+        <div class="pills">
+          <div class="pill aud on" title="Audible">A</div>
+          <div class="pill edt on" title="Editable (source)">E</div>
+          <div class="pill lnk" title="Linked">L</div>
+        </div>
+        <span class="patch-port routed" title="Patched"></span>
+      </div>
+      <div class="lane">
+        <div class="range" style="left:144px; width:144px"></div>
+        <div class="clip v" style="left:24px; width:880px">INT_KITCHEN_SC4_T2  ·  V1</div>
+        <div class="mark in"  style="left:144px"></div>
+        <div class="mark out" style="left:288px"></div>
+        <div class="playhead" style="left:200px"></div>
+      </div>
+    </div>
+
+    <!-- A1 boom (routed) -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname"><span class="id">A1</span><span class="label">boom</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port routed" id="srcA1port"></span>
+      </div>
+      <div class="lane">
+        <div class="range" style="left:144px; width:144px"></div>
+        <div class="clip a" style="left:24px; width:880px">boom<div class="wave"></div></div>
+        <div class="mark in"  style="left:144px"></div>
+        <div class="mark out" style="left:288px"></div>
+      </div>
+    </div>
+
+    <!-- A2 lav1 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname"><span class="id">A2</span><span class="label">lav1 (actor A)</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port routed" id="srcA2port"></span>
+      </div>
+      <div class="lane">
+        <div class="range" style="left:144px; width:144px"></div>
+        <div class="clip a" style="left:24px; width:880px">lav1<div class="wave"></div></div>
+        <div class="mark in"  style="left:144px"></div>
+        <div class="mark out" style="left:288px"></div>
+      </div>
+    </div>
+
+    <!-- A3 lav2 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname"><span class="id">A3</span><span class="label">lav2 (actor B)</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port routed" id="srcA3port"></span>
+      </div>
+      <div class="lane">
+        <div class="range" style="left:144px; width:144px"></div>
+        <div class="clip a" style="left:24px; width:880px">lav2<div class="wave"></div></div>
+        <div class="mark in"  style="left:144px"></div>
+        <div class="mark out" style="left:288px"></div>
+      </div>
+    </div>
+
+    <!-- A4 lav3 — UNROUTED -->
+    <div class="row muted">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname unrouted"><span class="id">A4</span><span class="label">lav3 — unrouted</span></div>
+        <div class="pills">
+          <div class="pill aud">A</div>
+          <div class="pill edt">E</div>
+          <div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port unrouted" id="srcA4port"></span>
+      </div>
+      <div class="lane">
+        <div class="clip a dim" style="left:24px; width:880px">lav3<div class="wave"></div></div>
+      </div>
+    </div>
+
+    <div class="row muted">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname unrouted"><span class="id">A5</span><span class="label">cam mic L — unrouted</span></div>
+        <div class="pills">
+          <div class="pill aud">A</div><div class="pill edt">E</div><div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port unrouted"></span>
+      </div>
+      <div class="lane"><div class="clip a dim" style="left:24px; width:880px">cam-L<div class="wave"></div></div></div>
+    </div>
+
+    <div class="row muted">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname unrouted"><span class="id">A6</span><span class="label">cam mic R — unrouted</span></div>
+        <div class="pills">
+          <div class="pill aud">A</div><div class="pill edt">E</div><div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port unrouted"></span>
+      </div>
+      <div class="lane"><div class="clip a dim" style="left:24px; width:880px">cam-R<div class="wave"></div></div></div>
+    </div>
+
+    <div class="row muted">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname unrouted"><span class="id">A7</span><span class="label">room — unrouted</span></div>
+        <div class="pills">
+          <div class="pill aud">A</div><div class="pill edt">E</div><div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port unrouted"></span>
+      </div>
+      <div class="lane"><div class="clip a dim" style="left:24px; width:880px">room<div class="wave"></div></div></div>
+    </div>
+
+    <div class="row muted">
+      <div class="header">
+        <div class="linkrail"></div>
+        <div class="tname unrouted"><span class="id">A8</span><span class="label">slate — unrouted</span></div>
+        <div class="pills">
+          <div class="pill aud">A</div><div class="pill edt">E</div><div class="pill lnk">L</div>
+        </div>
+        <span class="patch-port unrouted"></span>
+      </div>
+      <div class="lane"><div class="clip a dim" style="left:24px; width:880px">slate<div class="wave"></div></div></div>
+    </div>
+  </div>
+
+  <!-- ===================== PATCH BRIDGE ===================== -->
+  <div class="patch-bridge" id="bridge">
+    <div class="bridge-label">PATCH BRIDGE</div>
+    <div class="bridge-mismatch">
+      <span class="badge">5 source channels unrouted</span>
+      <span>cam-L/R · room · slate · lav3</span>
+    </div>
+  </div>
+
+  <!-- ===================== SEQUENCE PANEL ===================== -->
+  <div class="panel rec" id="recPanel">
+    <div class="panel-rail"></div>
+    <div class="panel-title"><b class="role" style="color:var(--rec)">SEQUENCE</b><span>Main Sequence · 23.976 fps · TC starts 01:00:00:00</span></div>
+
+    <!-- Ruler -->
+    <div class="ruler" id="recRuler">
+      <span class="tick-label" style="left:60px">01:29:55</span>
+      <span class="tick-label" style="left:240px">01:30:05</span>
+      <span class="tick-label" style="left:420px">01:30:15</span>
+      <span class="tick-label" style="left:600px">01:30:25</span>
+      <span class="tick-label" style="left:780px">01:30:35</span>
+      <span class="tick-label" style="left:960px">01:30:45</span>
+      <!-- record IN at 01:30:00 (offset 60+72=132 to align), ghost OUT at 01:30:12 -->
+      <span class="mark in" style="left:240px"></span>
+      <span class="mark ghost" style="left:384px" title="Computed OUT (ghost)"></span>
+      <span class="playhead" style="left:240px"></span>
+    </div>
+
+    <!-- V1 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail g1 cap-top"></div>
+        <div class="tname video"><span class="id">V1</span><span class="label">picture</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk on">L</div>
+        </div>
+        <span class="pill-group-label">DIA</span>
+        <span class="patch-port routed dest" id="recV1port"></span>
+      </div>
+      <div class="lane">
+        <div class="range ghost" style="left:240px; width:144px"></div>
+        <div class="clip v" style="left:60px;  width:170px">SC3 · OTS Anna</div>
+        <div class="clip v" style="left:420px; width:240px">SC5 · 2-shot</div>
+        <div class="mark in" style="left:240px"></div>
+        <div class="mark ghost" style="left:384px"></div>
+        <div class="playhead" style="left:240px"></div>
+      </div>
+    </div>
+
+    <!-- A1 boom -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail g1"></div>
+        <div class="tname"><span class="id">A1</span><span class="label">boom</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk on">L</div>
+        </div>
+        <span class="patch-port routed dest" id="recA1port"></span>
+      </div>
+      <div class="lane">
+        <div class="range ghost" style="left:240px; width:144px"></div>
+        <div class="clip a" style="left:60px;  width:170px">boom<div class="wave"></div></div>
+        <div class="clip a" style="left:420px; width:240px">boom<div class="wave"></div></div>
+        <div class="mark in" style="left:240px"></div>
+        <div class="mark ghost" style="left:384px"></div>
+      </div>
+    </div>
+
+    <!-- A2 lav1 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail g1"></div>
+        <div class="tname"><span class="id">A2</span><span class="label">lav1 (Anna)</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk on">L</div>
+        </div>
+        <span class="patch-port routed dest" id="recA2port"></span>
+      </div>
+      <div class="lane">
+        <div class="range ghost" style="left:240px; width:144px"></div>
+        <div class="clip a" style="left:60px;  width:170px">lav1<div class="wave"></div></div>
+        <div class="clip a" style="left:420px; width:240px">lav1<div class="wave"></div></div>
+        <div class="mark in" style="left:240px"></div>
+        <div class="mark ghost" style="left:384px"></div>
+      </div>
+    </div>
+
+    <!-- A3 lav2 -->
+    <div class="row">
+      <div class="header">
+        <div class="linkrail g1 cap-bottom"></div>
+        <div class="tname"><span class="id">A3</span><span class="label">lav2 (Ben)</span></div>
+        <div class="pills">
+          <div class="pill aud on">A</div>
+          <div class="pill edt on">E</div>
+          <div class="pill lnk on">L</div>
+        </div>
+        <span class="patch-port routed dest" id="recA3port"></span>
+      </div>
+      <div class="lane">
+        <div class="range ghost" style="left:240px; width:144px"></div>
+        <div class="clip a" style="left:60px;  width:170px">lav2<div class="wave"></div></div>
+        <div class="clip a" style="left:420px; width:240px">lav2<div class="wave"></div></div>
+        <div class="mark in" style="left:240px"></div>
+        <div class="mark ghost" style="left:384px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== STATUS ===================== -->
+  <div class="status">
+    <span><span class="k">3-pt:</span><span class="pip" style="background:var(--mark-in)"></span><span class="v">src IN 00:00:12:00</span></span>
+    <span><span class="pip" style="background:var(--mark-out)"></span><span class="v">src OUT 00:00:24:00</span></span>
+    <span><span class="pip" style="background:var(--mark-in)"></span><span class="v">rec IN 01:30:05:00</span></span>
+    <span><span class="pip" style="background:transparent;border:1px dashed var(--ghost)"></span><span class="v ghost">rec OUT 01:30:17:00 (computed)</span></span>
+    <span style="margin-left:auto"><span class="k">Linked group:</span><span class="v" style="color:var(--link-grp-1)">DIA · V1 + A1 + A2 + A3</span></span>
+    <span><span class="k">Patches:</span><span class="v">3 of 8 routed</span></span>
+  </div>
+
+  <!-- ===================== ANNOTATIONS ===================== -->
+  <div class="annot left" style="left:1080px; top:88px"><span class="num">1</span><b>Patch ports</b> are first-class connectors, not header icons. Drag to repatch.</div>
+  <div class="annot left" style="left:1080px; top:300px"><span class="num">2</span><b>Unrouted source channels</b> dim themselves, port hollow. No silent drops.</div>
+  <div class="annot left" style="left:1080px; top:430px"><span class="num">3</span><b>Patch bridge</b> is the spatial gap between source and record. Lines live here, not in headers.</div>
+  <div class="annot left" style="left:1080px; top:520px"><span class="num">4</span><b>Linked rail</b> = colored stripe spans the contiguous group. Drag track in/out to join.</div>
+  <div class="annot left" style="left:1080px; top:640px"><span class="num">5</span><b>Computed OUT</b> shown as ghost mark — 3-point math made visible before commit.</div>
+
+</div>
+
+<!-- ===================== PATCH SVG OVERLAY ===================== -->
+<!-- Drawn AFTER the stage so we can compute coordinates and absolute-position over it. -->
+<script>
+(function() {
+  const stage = document.getElementById('stage');
+  const stageRect = stage.getBoundingClientRect();
+
+  // Build SVG overlay sized to stage
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("style",
+    "position:absolute; left:0; top:0; width:100%; height:100%; pointer-events:none; z-index:5;");
+  svg.setAttribute("width", stage.offsetWidth);
+  svg.setAttribute("height", stage.offsetHeight);
+
+  // Defs: glow filter + arrowhead
+  svg.innerHTML = `
+    <defs>
+      <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+        <feGaussianBlur stdDeviation="2.2" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+      <linearGradient id="patchGrad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#e89968"/>
+        <stop offset="100%" stop-color="#6bbacf"/>
+      </linearGradient>
+    </defs>
+  `;
+
+  function portCenter(id) {
+    const el = document.getElementById(id);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return {
+      x: r.left + r.width/2 - stageRect.left,
+      y: r.top  + r.height/2 - stageRect.top
+    };
+  }
+
+  function drawPatch(srcId, dstId) {
+    const a = portCenter(srcId), b = portCenter(dstId);
+    if (!a || !b) return;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    // Curve out to the right of the header column then back
+    const bend = 60 + Math.abs(dy) * 0.06;
+    const c1x = a.x + bend, c1y = a.y;
+    const c2x = b.x + bend, c2y = b.y;
+    const d = `M ${a.x} ${a.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${b.x} ${b.y}`;
+
+    const halo = document.createElementNS(NS, "path");
+    halo.setAttribute("d", d);
+    halo.setAttribute("fill", "none");
+    halo.setAttribute("stroke", "url(#patchGrad)");
+    halo.setAttribute("stroke-width", "5");
+    halo.setAttribute("stroke-opacity", "0.18");
+    halo.setAttribute("stroke-linecap", "round");
+    svg.appendChild(halo);
+
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "none");
+    path.setAttribute("stroke", "url(#patchGrad)");
+    path.setAttribute("stroke-width", "1.6");
+    path.setAttribute("stroke-linecap", "round");
+    svg.appendChild(path);
+  }
+
+  // After layout settles
+  requestAnimationFrame(() => {
+    drawPatch("srcA1port", "recA1port"); // boom -> boom
+    drawPatch("srcA2port", "recA2port"); // lav1 -> lav1
+    drawPatch("srcA3port", "recA3port"); // lav2 -> lav2
+    stage.appendChild(svg);
+  });
+})();
+</script>
+
+</body>
+</html>
