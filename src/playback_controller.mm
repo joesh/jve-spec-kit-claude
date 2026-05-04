@@ -1333,6 +1333,15 @@ bool PlaybackController::IsPlaying() const {
 // CVDisplayLink lifecycle
 // ============================================================================
 
+// CVDisplayLink is deprecated in macOS 15 in favor of
+// NSView/NSWindow/NSScreen.displayLink(target:selector:). The replacement
+// requires an NSView ref + main-thread selector dispatch, which is a real
+// architectural change (PlaybackController has no NSView today; callback
+// runs on the CV thread, not main). Tracked as TODO; deprecation silenced
+// here to keep build warning-free until the migration lands.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 bool PlaybackController::startDisplayLink() {
     if (m_displayLink) {
         return true;  // Already running
@@ -1374,6 +1383,8 @@ void PlaybackController::stopDisplayLink() {
 
     JVE_LOG_EVENT(Ticks, "CVDisplayLink stopped");
 }
+
+#pragma clang diagnostic pop
 
 void PlaybackController::Tick() {
     displayLinkTick(mach_absolute_time(), 0);

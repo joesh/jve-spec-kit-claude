@@ -25,7 +25,6 @@ local fake_paths = {}
 local Media = require("models.media")
 local Clip = require("models.clip")
 local test_env = require("test_env")
-local now = os.time()
 local db = database.get_connection()
 local project_id = project_info.project.id
 local seq = project_info.sequences[1]
