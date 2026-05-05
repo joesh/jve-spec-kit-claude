@@ -180,7 +180,11 @@ end
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
 local function load_track_clips(db, track_id)
     -- V13 SELECT: same column set produced by database.load_clips, plus
-    -- fields legacy callers in clip_mutator expect.
+    -- fields legacy callers in clip_mutator expect. The media_refs JOIN is
+    -- constrained to media_refs whose own track_type matches the clip's
+    -- owner-track type — without this, A/V masters multiply each clip by
+    -- the number of media_refs (V + A) and downstream consumers see
+    -- duplicates. GROUP BY collapses to one row per clip.
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
                c.owner_sequence_id, c.nested_sequence_id,
@@ -199,7 +203,13 @@ local function load_track_clips(db, track_id)
         JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
         LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
                                 AND nested_seq.kind = 'master'
+                                AND EXISTS (
+                                    SELECT 1 FROM tracks mt
+                                    WHERE mt.id = mr.track_id
+                                      AND mt.track_type = t.track_type
+                                )
         WHERE c.track_id = ?
+        GROUP BY c.id
         ORDER BY c.timeline_start_frame
     ]])
     if not stmt then

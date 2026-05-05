@@ -64,7 +64,7 @@ local function bootstrap_project(db, project_id, sequence_id)
 
     ok = db:exec(string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-        VALUES ('%s', '%s', 'Seq', 'timeline', 25, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+        VALUES ('%s', '%s', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
     ]], sequence_id, project_id))
     expect("sequence row", ok, "sequence insert")
 end
@@ -96,26 +96,36 @@ local function make_track(db, project_id, sequence_id, track_id, track_type)
     expect("track row", ok, "track insert")
 end
 
--- The planner only reads clips via Clip.find_clips_for_media (raw SQL on
--- clips.media_id), so we insert rows directly and bypass Clip.create's
--- master_clip_id / TC-origin requirements. The test's purpose is planner
--- state shape, not clip-creation invariants.
--- Counter for non-overlapping placements per-track (DB enforces no overlap).
+-- V13: a clip references a master sequence (kind='master') via
+-- nested_sequence_id; the master's media_refs row carries the media_id.
+-- find_clips_for_media (used by the planner) walks that path. So per media,
+-- create the master once via test_env helper, then Clip.create per clip.
 local _clip_placement = setmetatable({}, { __index = function() return 0 end })
-local function make_clip(db, project_id, sequence_id, track_id, clip_id, media_id)
+local _master_seq_for_media = {}
+local Clip = require("models.clip")
+local test_env_helper = require("test_env")
+local function make_clip(db, project_id, sequence_id, track_id, clip_id, media_id)  -- luacheck: ignore 212
     local slot = _clip_placement[track_id]
     _clip_placement[track_id] = slot + 1
     local start = slot * 200
-    local ok, err = db:exec(string.format([[
-        INSERT INTO clips (id, project_id, clip_kind, owner_sequence_id, track_id, media_id,
-                           name, timeline_start_frame, duration_frames,
-                           source_in_frame, source_out_frame,
-                           fps_numerator, fps_denominator, created_at, modified_at)
-        VALUES ('%s', '%s', 'timeline', '%s', '%s', '%s',
-                'c_%s', %d, 100, 0, 100, 25, 1,
-                strftime('%%s','now'), strftime('%%s','now'));
-    ]], clip_id, project_id, sequence_id, track_id, media_id, clip_id:sub(1, 6), start))
-    expect("clip row " .. clip_id, ok, tostring(err))
+    -- Per-DB scoped master cache (sequences disappear when reset_db wipes).
+    local key = (database.get_path() or "") .. "::" .. media_id
+    if not _master_seq_for_media[key] then
+        _master_seq_for_media[key] = test_env_helper.create_test_masterclip_sequence(
+            project_id, "master_" .. media_id, 25, 1, 1000, media_id)
+    end
+    local nested_seq_id = _master_seq_for_media[key]
+    local _id = Clip.create({
+        id = clip_id, project_id = project_id,
+        owner_sequence_id = sequence_id, track_id = track_id,
+        nested_sequence_id = nested_seq_id,
+        name = "c_" .. clip_id:sub(1, 6),
+        timeline_start_frame = start, duration_frames = 100,
+        source_in_frame = 0, source_out_frame = 100,
+        fps_mismatch_policy = "passthrough",
+        enabled = true, volume = 1.0, playhead_frame = 0,
+    })
+    expect("clip row " .. clip_id, _id == clip_id, "Clip.create returned " .. tostring(_id))
     return { id = clip_id }
 end
 

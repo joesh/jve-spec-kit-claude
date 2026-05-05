@@ -92,7 +92,7 @@ local function bootstrap_schema(conn)
             created_at, modified_at
         )
         VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            'default_sequence', 'default_project', 'Default Sequence', 'nested',
             30, 1, 48000,
             1920, 1080,
             0, 240, 0,
@@ -156,7 +156,9 @@ end
 
 local function fetch_clip_ids(limit)
     local ids = {}
-    local stmt = db:prepare("SELECT id FROM clips WHERE clip_kind = 'timeline' ORDER BY timeline_start_frame DESC")
+    -- V13: every row in `clips` is a timeline-side clip (INV-2 enforces it).
+    local stmt = db:prepare("SELECT id FROM clips ORDER BY timeline_start_frame DESC")
+    assert(stmt, "fetch_clip_ids: prepare failed")
     assert(stmt:exec())
     while stmt:next() do
         table.insert(ids, stmt:value(0))
@@ -173,7 +175,6 @@ local initial_counts = {
     media = count_rows("media")
 }
 
-local xml_path_relative = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
 local function resolve_fixture(path)
     local absolute = test_env.resolve_repo_path(path)
     local handle = io.open(absolute, "r")
@@ -193,7 +194,7 @@ end
 -- ============================================================
 -- Execute Import
 -- ============================================================
-local xml_path = resolve_fixture(xml_path_relative)
+local xml_path = resolve_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
 local import_cmd = Command.create("ImportFCP7XML", "default_project")
 import_cmd:set_parameter("xml_path", xml_path)
 import_cmd:set_parameter("project_id", "default_project")
@@ -215,12 +216,15 @@ assert(after_import_counts.media >= initial_counts.media, "Import should add or 
 
 -- ============================================================
 -- Master clips + bins
+-- V13: master clips ARE sequences (kind='master'), one per media. The
+-- pre-013 clips.clip_kind='master' rows are gone.
 -- ============================================================
-local master_count_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE clip_kind = 'master']])
-assert(master_count_stmt:exec() and master_count_stmt:next(), "Master clip count query should succeed")
+local master_count_stmt = db:prepare([[SELECT COUNT(*) FROM sequences WHERE kind = 'master']])
+assert(master_count_stmt, "Master sequence count query should prepare")
+assert(master_count_stmt:exec() and master_count_stmt:next(), "Master sequence count query should succeed")
 local master_clip_count = master_count_stmt:value(0)
 master_count_stmt:finalize()
-assert(master_clip_count > 0, "Import should create master clips for MatchFrame")
+assert(master_clip_count > 0, "Import should create master sequences for MatchFrame")
 
 local expected_master_bin_name = "Timeline 1 (Resolve) Master Clips"
 local master_bin_id = nil
@@ -232,8 +236,9 @@ for _, bin in ipairs(database.load_bins("default_project")) do
 end
 assert(master_bin_id, "Importer should create a '<sequence name> Master Clips' bin")
 
-local sample_master_stmt = db:prepare([[SELECT id FROM clips WHERE clip_kind = 'master' ORDER BY id LIMIT 1]])
-assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master clip")
+local sample_master_stmt = db:prepare([[SELECT id FROM sequences WHERE kind = 'master' ORDER BY id LIMIT 1]])
+assert(sample_master_stmt, "Sample master sequence query should prepare")
+assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master sequence")
 sample_master_stmt:finalize()
 local media_bin_map = database.load_master_clip_bin_map("default_project")
 local assigned_count = 0
@@ -286,9 +291,12 @@ os.remove(scratch_db_path)
 -- ============================================================
 -- MatchFrame on imported clips (real timeline_state)
 -- ============================================================
--- Find an imported timeline clip with a master_clip_id
-local timeline_master_stmt = db:prepare([[SELECT c.id, c.master_clip_id, c.timeline_start_frame
-    FROM clips c WHERE c.clip_kind = 'timeline' AND c.master_clip_id IS NOT NULL LIMIT 1]])
+-- V13: timeline-side clips reference their master via nested_sequence_id
+-- (the V8 master_clip_id column is gone), and INV-2 already enforces that
+-- every clip has a non-null nested_sequence_id, so no NULL filter needed.
+local timeline_master_stmt = db:prepare([[SELECT c.id, c.nested_sequence_id, c.timeline_start_frame
+    FROM clips c LIMIT 1]])
+assert(timeline_master_stmt, "Timeline clip master query should prepare")
 assert(timeline_master_stmt:exec(), "Timeline clip master query should run")
 local timeline_clip_id, timeline_master_id, tl_start = nil, nil, nil
 if timeline_master_stmt:next() then
@@ -297,7 +305,8 @@ if timeline_master_stmt:next() then
     tl_start = timeline_master_stmt:value(2)
 end
 timeline_master_stmt:finalize()
-assert(timeline_clip_id and timeline_master_id, "Importer should assign master_clip_id for timeline clips")
+assert(timeline_clip_id and timeline_master_id,
+    "Importer should assign nested_sequence_id (master) for timeline clips")
 
 -- Get the imported sequence and switch real timeline_state to it
 local import_record = command_manager.get_last_command('default_project')
@@ -315,7 +324,18 @@ timeline_state.set_playhead_position(tl_start + 1)
 
 local match_cmd = Command.create("MatchFrame", "default_project")
 local match_result = command_manager.execute(match_cmd)
-assert(match_result.success, "MatchFrame should succeed on imported clips: " .. tostring(match_result.error_message))
+-- KNOWN OPEN QUESTION (flagged for Joe): MatchFrame's file_exists guard
+-- (match_frame.lua:127) requires media on disk. The FCP7 fixture refers
+-- to Premiere tutorial paths that don't exist on dev machines. Importers
+-- don't rely on file paths (CLAUDE.md), so it's inconsistent for MatchFrame
+-- (a downstream operation on imported state) to require them. Either:
+--   a. MatchFrame should drop file_exists (source viewer already shows
+--      offline indicators); test then passes for offline fixtures.
+--   b. This test should ship real media.
+-- Asserting strict success here so the inconsistency surfaces rather than
+-- being silently masked.
+assert(match_result.success, "MatchFrame should succeed on imported clips: "
+    .. tostring(match_result.error_message))
 assert(stub_source_monitor.sequence_id == timeline_master_id,
     "MatchFrame should load the master clip into source viewer")
 
@@ -506,7 +526,7 @@ assert(db:exec([[
         current_sequence_number,
         created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+        'default_sequence', 'default_project', 'Default Sequence', 'nested',
         30, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -547,9 +567,17 @@ print("✅ FCP7 XML import is idempotent across undo/redo and command replay")
 -- ============================================================
 -- Post-replay regression: real editing commands
 -- ============================================================
-local function fetch_video_tracks()
+local function fetch_video_tracks(sequence_id)
+    -- Must scope by sequence_id: V13 enforces owner_sequence_id matches the
+    -- clip's track.sequence_id (load_clips asserts). Cross-sequence track
+    -- pulls produce broken state.
+    assert(sequence_id and sequence_id ~= "",
+        "fetch_video_tracks: sequence_id required")
     local tracks = {}
-    local stmt = db:prepare([[SELECT id FROM tracks WHERE track_type = 'VIDEO' ORDER BY track_index]])
+    local stmt = db:prepare([[SELECT id FROM tracks
+        WHERE track_type = 'VIDEO' AND sequence_id = ? ORDER BY track_index]])
+    assert(stmt, "fetch_video_tracks: prepare failed")
+    stmt:bind_value(1, sequence_id)
     assert(stmt:exec())
     while stmt:next() do
         tracks[#tracks + 1] = stmt:value(0)
@@ -572,12 +600,14 @@ end
 
 local function fetch_single_clip_id(sequence_id)
     assert(sequence_id, "fetch_single_clip_id: sequence_id required")
+    -- V13: every clip is on the owner sequence's tracks (INV-2 enforces it).
     local stmt = db:prepare([[
         SELECT c.id FROM clips c
         JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ? AND c.clip_kind = 'timeline'
+        WHERE t.sequence_id = ?
         LIMIT 1
     ]])
+    assert(stmt, "fetch_single_clip_id: prepare failed")
     stmt:bind_value(1, sequence_id)
     assert(stmt:exec())
     local clip_id = nil
@@ -589,7 +619,7 @@ local function fetch_single_clip_id(sequence_id)
 end
 
 -- Switch real timeline_state to the replayed imported sequence
-local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'timeline' LIMIT 1]])
+local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'nested' LIMIT 1]])
 assert(replay_seq_stmt:exec())
 local replayed_sequence_id = nil
 if replay_seq_stmt:next() then
@@ -600,7 +630,7 @@ assert(replayed_sequence_id, "Should find replayed imported sequence")
 timeline_state.init(replayed_sequence_id, "default_project")
 command_manager.activate_timeline_stack(replayed_sequence_id)
 
-local video_tracks = fetch_video_tracks()
+local video_tracks = fetch_video_tracks(replayed_sequence_id)
 assert(#video_tracks >= 2, "Importer should provide at least two video tracks")
 
 local media_ids = fetch_media_ids(1)
@@ -628,23 +658,48 @@ local toggle_cmd2 = Command.create("ToggleClipEnabled", "default_project")
 toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
+-- V13 Insert: source range comes from the master sequence's marks; the
+-- timeline-side spec is just (target track, timeline_start_frame).
+do
+    local Sequence = require("models.sequence")
+    local mc_seq = Sequence.load(insert_nested_sequence_id)
+    assert(mc_seq, "master sequence must load to set marks")
+    -- Constrain marks to the media's actual duration (the master inherits it
+    -- from the media row; ensure_master ignores the duration arg passed to
+    -- create_test_masterclip_sequence). Use the full extent.
+    local end_frame = mc_seq:content_duration()
+    assert(end_frame and end_frame > 0,
+        "Master sequence has no content_duration — fixture media missing duration")
+    mc_seq.mark_in = 0
+    mc_seq.mark_out = end_frame
+    mc_seq:save()
+end
 local insert_cmd2 = Command.create("Insert", "default_project")
 insert_cmd2:set_parameter("nested_sequence_id", insert_nested_sequence_id)
-insert_cmd2:set_parameter("track_id", video_tracks[1])
-insert_cmd2:set_parameter("insert_time", 800000)
-insert_cmd2:set_parameter("duration", 1000)
-insert_cmd2:set_parameter("source_in", 0)
-insert_cmd2:set_parameter("source_out", 1000)
+insert_cmd2:set_parameter("target_video_track_id", video_tracks[1])
+insert_cmd2:set_parameter("timeline_start_frame", 800)
 insert_cmd2:set_parameter("sequence_id", replayed_sequence_id)
-assert(command_manager.execute(insert_cmd2).success, "Insert command should succeed for regression setup")
-local inserted_clip_id = insert_cmd2:get_parameter("clip_id")
-assert(inserted_clip_id, "Insert command must record new clip_id for replay")
+do
+    local _r = command_manager.execute(insert_cmd2)
+    assert(_r.success,
+        "Insert command should succeed for regression setup: " ..
+        tostring(_r.error_message))
+end
+local created_clip_ids = insert_cmd2:get_parameter("created_clip_ids")
+assert(created_clip_ids and created_clip_ids[1],
+    "Insert command must record created_clip_ids for replay")
+local inserted_clip_id = created_clip_ids[1]
 
+-- V13 SplitClip param renamed split_value → split_frame (frame coords).
 local split_cmd = Command.create("SplitClip", "default_project")
 split_cmd:set_parameter("clip_id", inserted_clip_id)
-split_cmd:set_parameter("split_value", 800500)
+split_cmd:set_parameter("split_frame", 805)
 split_cmd:set_parameter("sequence_id", replayed_sequence_id)
-assert(command_manager.execute(split_cmd).success, "SplitClip should succeed for regression setup")
+do
+    local _r = command_manager.execute(split_cmd)
+    assert(_r.success, "SplitClip should succeed for regression setup: "
+        .. tostring(_r.error_message))
+end
 
 local split_second_clip_id = split_cmd:get_parameter("second_clip_id")
 

@@ -79,7 +79,7 @@ exec(db, [[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Default', 'timeline',
+        'default_sequence', 'default_project', 'Default', 'nested',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,
@@ -92,6 +92,10 @@ local xml_contents = load_fixture_contents()
 local existing_path = pick_any_media_path(xml_contents)
 
 do
+    -- V13 ensure_master needs TC origin metadata to anchor a master sequence.
+    -- duration_frames=1 was a stand-in (still-image-ish); make it a real
+    -- multi-frame clip so the test exercises the reuse path against a
+    -- master that actually has body.
     local stmt = assert(db:prepare([[
         INSERT INTO media (
             id, project_id, name, file_path,
@@ -101,9 +105,9 @@ do
         )
         VALUES (
             'media_existing', 'default_project', 'Existing Media', ?,
-            1, 30000, 1001,
+            12000, 30000, 1001,
             1920, 1080, 0, '',
-            0, 0, '{}'
+            0, 0, '{"start_tc_value":0,"start_tc_rate":30}'
         );
     ]]))
     stmt:bind_value(1, existing_path)
@@ -131,7 +135,17 @@ for _, media_id in ipairs(created_media_ids) do
     assert(media_id ~= "media_existing", "Importer should not mark pre-existing media as created")
 end
 
-local referenced = scalar(db, "SELECT COUNT(*) FROM clips WHERE media_id = ?", "media_existing")
+-- V13: clips no longer carry media_id directly; the link is clip → nested
+-- master sequence → media_refs → media. Count clips whose nested master
+-- holds a media_ref to the existing media.
+local referenced = scalar(db, [[
+    SELECT COUNT(*) FROM clips c
+    WHERE EXISTS (
+        SELECT 1 FROM media_refs mr
+        WHERE mr.owner_sequence_id = c.nested_sequence_id
+          AND mr.media_id = ?
+    )
+]], "media_existing")
 assert(referenced > 0, "Imported clips should reference the pre-existing media row")
 
 assert(command_manager.undo().success, "Undo import should succeed")

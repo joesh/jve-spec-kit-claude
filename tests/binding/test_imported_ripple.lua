@@ -39,7 +39,7 @@ local function init_database(db_path)
             current_sequence_number, created_at, modified_at
         )
         VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            'default_sequence', 'default_project', 'Default Sequence', 'nested',
             30, 1, 48000,
             1920, 1080,
             0, 10000, 0,
@@ -53,6 +53,9 @@ end
 local function import_fixture(db_path)
     local db = init_database(db_path)
     command_manager.init('default_sequence', 'default_project')
+    -- ImportFCP7XML requires an active timeline_state for undo safety.
+    local timeline_state = require('ui.timeline.timeline_state')
+    timeline_state.init('default_sequence', 'default_project')
 
     local import_cmd = Command.create("ImportFCP7XML", "default_project")
     import_cmd:set_parameter("xml_path", test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
@@ -69,6 +72,9 @@ local function import_fixture(db_path)
         "Importer did not record created sequence IDs")
 
     local sequence_id = created_sequence_ids[1]
+    -- Switch timeline_state to the imported sequence so BatchRippleEdit's
+    -- clip-cache builder has the right context (model state is live there).
+    timeline_state.init(sequence_id, 'default_project')
     return db, sequence_id
 end
 
@@ -112,15 +118,20 @@ local function assert_import_invariants(db, sequence_id)
     for track_id, track_clips in pairs(clips_by_track) do
         table.sort(track_clips, function(a, b) return a.timeline_start < b.timeline_start end)
         local previous_end = nil
+        local prev_clip = nil
         for _, clip in ipairs(track_clips) do
             local start_value = clip.timeline_start
             local duration = clip.duration
             if previous_end then
                 assert(start_value >= previous_end,
-                    string.format("Track %s overlaps: clip %s starts at %d before previous end %d",
-                        track_id, clip.id, start_value, previous_end))
+                    string.format("Track %s overlaps: clip %s starts at %d before previous end %d (prev clip %s ts=%d dur=%d)",
+                        track_id, clip.id, start_value, previous_end,
+                        prev_clip and prev_clip.id or "?",
+                        prev_clip and prev_clip.timeline_start or -1,
+                        prev_clip and prev_clip.duration or -1))
             end
             previous_end = start_value + duration
+            prev_clip = clip
         end
     end
 end
@@ -181,11 +192,16 @@ for _, clip_index in ipairs(CLIP_CASES) do
         delta = -1
     end
 
-    local ripple_cmd = Command.create("RippleEdit", "default_project")
-    ripple_cmd:set_parameter("edge_info", {
-        clip_id = target.id,
-        edge_type = "out",
-        track_id = target.track_id
+    -- V13: ripple is folded into BatchRippleEdit (single executor handles
+    -- ripple + roll for one or many edges); shape edge as single-element list.
+    local ripple_cmd = Command.create("BatchRippleEdit", "default_project")
+    ripple_cmd:set_parameter("edge_infos", {
+        {
+            clip_id = target.id,
+            edge_type = "out",
+            track_id = target.track_id,
+            trim_type = "ripple",
+        }
     })
     ripple_cmd:set_parameter("delta_frames", delta)
     ripple_cmd:set_parameter("sequence_id", sequence_id)

@@ -79,7 +79,7 @@ exec(db, string.format([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Sequence 1', 'timeline',
+        'default_sequence', 'default_project', 'Sequence 1', 'nested',
         30, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -102,16 +102,17 @@ import_cmd:set_parameter("xml_path", fixture_path)
 local exec_result = command_manager.execute(import_cmd)
 assert(exec_result.success, "ImportFCP7XML command should succeed")
 
-local baseline_sequences = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'timeline'")
+local baseline_sequences = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'nested'")
 assert(baseline_sequences == 2, "Import should create an additional timeline sequence")
 
 local imported_exists = scalar(db, "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")
 assert(imported_exists == 1, "Imported sequence should be present after import")
 
 local undo_result = command_manager.undo()
-assert(undo_result.success, "Undoing the import should succeed")
+assert(undo_result.success, "Undoing the import should succeed: " ..
+    tostring(undo_result.error_message or undo_result.error))
 
-local sequences_after = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'timeline'")
+local sequences_after = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'nested'")
 assert(sequences_after == 1, "Undo should remove the imported timeline sequence")
 
 local imported_after = scalar(db, "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")

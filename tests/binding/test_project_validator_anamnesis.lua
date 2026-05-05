@@ -23,7 +23,9 @@ os.remove(jvp_path)
 os.remove(jvp_path .. "-wal")
 os.remove(jvp_path .. "-shm")
 
-local convert_ok, convert_err = drp.convert(drp_path, jvp_path)
+-- DRP carries no project-wide audio rate; supply explicitly.
+local convert_ok, convert_err = drp.convert(drp_path, jvp_path, nil,
+    {audio_sample_rate = 48000})
 assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))
 
 local db = database.get_connection()

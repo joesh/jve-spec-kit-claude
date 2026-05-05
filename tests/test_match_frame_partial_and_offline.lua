@@ -301,32 +301,27 @@ assert(#load_calls == 1 and load_calls[1] == 'master_stale',
 print("  ✓ no spurious dialog; viewer loaded; clamp path took over")
 
 -- ---------------------------------------------------------------------------
--- Test B: offline file — pop a dialog naming the file path; do not crash.
+-- Test B: offline file — succeed and load the master; no dialog. The source
+-- viewer's own offline indicator surfaces the file-missing state to the
+-- user. MatchFrame is navigation, not playback (consistent with the
+-- importer-no-probe philosophy applied to downstream operations).
 -- ---------------------------------------------------------------------------
-print("Test B: offline-file clip pops dialog with file path")
+print("Test B: offline-file clip loads viewer without dialog")
 load_calls = {}
 dialog_calls = {}
 timeline_state.set_playhead_position(350)  -- inside c_missing
 timeline_state.set_selection({})
 
 result = command_manager.execute("MatchFrame", { project_id = "p" })
-assert(not result.success,
-    "MatchFrame on a clip whose media file is missing must not pretend "
-    .. "to succeed; it has no source viewer to load.")
-assert(#load_calls == 0,
-    "source viewer must NOT be loaded for an offline clip — there's "
-    .. "nothing to show")
-assert(#dialog_calls == 1, string.format(
-    "exactly one dialog should pop for the offline-file case, got %d",
-    #dialog_calls))
-local d = dialog_calls[1]
-assert(type(d.message) == "string"
-    and d.message:find(MISSING_PATH, 1, true),
-    "dialog message must include the missing file path so the user "
-    .. "knows what's gone. message: " .. tostring(d.message))
-assert(d.icon == "critical",
-    "dialog should be styled critical, got icon=" .. tostring(d.icon))
-print("  ✓ dialog popped with file path")
+assert(result.success,
+    "MatchFrame on offline media must still succeed: source viewer "
+    .. "renders the master sequence with its offline overlay")
+assert(#load_calls == 1,
+    "source viewer should load the master so its offline overlay can render")
+assert(#dialog_calls == 0, string.format(
+    "no dialog should pop for offline media — viewer overlay surfaces it; "
+    .. "got %d dialog call(s)", #dialog_calls))
+print("  ✓ viewer loaded without dialog; offline state surfaces via overlay")
 
 -- Cleanup
 os.remove(PARTIAL_PATH)

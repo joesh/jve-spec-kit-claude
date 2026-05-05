@@ -26,6 +26,10 @@ local SPEC_DRP = {
         project_id = { required = true },
         interactive = { kind = "boolean" },
         drp_path = {},
+        -- Caller-supplied project audio rate. DRP carries no project-wide
+        -- default (per Resolve format); UI prompts the user, tests pass
+        -- explicitly. Importer asserts when missing — never invented.
+        audio_sample_rate = { kind = "number" },
     },
     persisted = {
         created_clip_ids = {},
@@ -366,10 +370,17 @@ function M.register(executors, undoers, db)
         local Project = require("models.project")
         local json = require("dkjson")
 
+        -- Resolve's DRP carries no project-wide audio default. Order of
+        -- preference: caller-supplied (UI prompt / test scaffolding) →
+        -- majority vote across parsed media → nil (importer_core asserts).
+        -- We never invent a default.
+        local pick_majority = require("importers.drp_importer").pick_majority_audio_sample_rate
         local settings = {
             frame_rate = parse_result.project.settings.frame_rate,
             width = parse_result.project.settings.width,
             height = parse_result.project.settings.height,
+            audio_sample_rate = args.audio_sample_rate
+                or pick_majority(parse_result),
         }
 
         local project = Project.create(parse_result.project.name, {
@@ -424,8 +435,18 @@ function M.register(executors, undoers, db)
             return { success = false, error_message = parse_result.error }
         end
 
+        -- Load the host project's settings so importer_core can pick up
+        -- audio_sample_rate (asserts on nil — no silent default to 48000).
+        local Project = require("models.project")
+        local json = require("dkjson")
+        local host = assert(Project.load(args.project_id),
+            "ImportResolveTimeline: host project " .. args.project_id .. " not found")
+        local host_settings = (host.settings and host.settings ~= "")
+            and json.decode(host.settings) or {}
         local import_result = drp_importer.import_into_project(
-            args.project_id, parse_result, {})
+            args.project_id, parse_result, {
+                project_settings = host_settings,
+            })
 
         persist_and_refresh(command, "target_project_id", args.project_id, import_result)
 

@@ -47,7 +47,7 @@ assert(with_alt_paths > 0, "expected some media with alt_paths (cross-volume ded
 
 -- Step 2: Convert to JVP
 print("\n--- Step 2: Convert to JVP ---")
-local ok, err = drp_importer.convert(fixture_path, JVP_PATH)
+local ok, err = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()

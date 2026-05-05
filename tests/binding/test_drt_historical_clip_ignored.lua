@@ -102,7 +102,10 @@ assert(db:exec([[
 ]]), "bootstrap failed")
 
 local importer_core = require("importers.importer_core")
-local import_result = importer_core.import_into_project('hp', r, {})
+-- importer_core asserts audio_sample_rate is supplied (no silent default).
+local import_result = importer_core.import_into_project('hp', r, {
+    project_settings = { audio_sample_rate = 48000 },
+})
 
 -- Find the saved clip whose parse-side original_clip pointed at phantom_path.
 -- Query via Property rows for property_name='original_clip'.

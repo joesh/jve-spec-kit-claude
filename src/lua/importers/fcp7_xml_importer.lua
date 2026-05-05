@@ -4,6 +4,7 @@
 local M = {}
 local uuid = require("uuid")
 local log = require("core.logger").for_area("media")
+local json = require("dkjson")
 
 -- Parse FCP7 time value (rational number like "900/30")
 -- Returns integer frames at the sequence's frame rate
@@ -669,7 +670,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         end
         if not recorded_master_ids[id] then
             recorded_master_ids[id] = true
-            table.insert(result.clip_ids, id)
+            -- V13: master clips ARE sequences (kind='master'). The undoer
+            -- iterates result.sequence_ids and DELETEs from sequences,
+            -- which cascades to media_refs. Mis-routing them to clip_ids
+            -- (the V8 location) made undo silently skip them and then
+            -- explode on media DELETE because media_refs still pointed
+            -- at the media row.
+            table.insert(result.sequence_ids, id)
         end
     end
 
@@ -854,6 +861,37 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
 
         local codec = media_info.codec or ""
         local width = media_info.width or 0
+        -- FCP7 XML carries no per-file TC element (sequence has <timecode>,
+        -- files do not). TC origin defaults to 0 — files without TC tags
+        -- start at TC 00:00:00:00. Importer-no-probe rule (CLAUDE.md):
+        -- we set this from the project bytes only; runtime probe (if media
+        -- resolves on disk) refines via media:_ensure_tc_extracted later.
+        -- extract_frame_rate returns a plain number (e.g. 24, 29.97). For
+        -- TC origin we want the display-frame rate, which is the rounded
+        -- integer (NTSC TC counts at the rounded frame rate).
+        assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
+            "FCP7 import: media '%s' has no resolvable frame_rate (got %s)",
+            tostring(media_info.name or key), tostring(frame_rate)))
+        local fps_num = math.floor(frame_rate + 0.5)
+        local audio_ch = media_info.audio_channels or 0
+        local audio_sr = media_info.audio_sample_rate
+        -- File-level <audio><samplecharacteristics><samplerate> is OPTIONAL
+        -- per Apple's FCP7 XML spec (asterisk). Resolve omits it. When a file
+        -- declares audio_channels > 0 but no rate, default to 48000 — the
+        -- FCP7-spec implied default and the universal video-post standard.
+        if audio_ch > 0 and not (audio_sr and audio_sr > 0) then
+            audio_sr = 48000
+            log.event(
+                "FCP7 import: media '%s' has audio_channels=%d but no <audio>"
+                .. "<samplecharacteristics><samplerate>; defaulting to 48000 Hz "
+                .. "(spec-optional element).",
+                tostring(media_info.name or key), audio_ch)
+        end
+        local meta = { start_tc_value = 0, start_tc_rate = fps_num }
+        if audio_ch > 0 then
+            meta.start_tc_audio_samples = 0
+            meta.start_tc_audio_rate    = audio_sr
+        end
         local media = Media.create({
             id = reuse_id,
             project_id = project_id,
@@ -863,10 +901,11 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             frame_rate = frame_rate,
             width = width,
             height = media_info.height,
-            audio_channels = media_info.audio_channels or 0,
-            audio_sample_rate = media_info.audio_sample_rate,
+            audio_channels = audio_ch,
+            audio_sample_rate = audio_sr,
             codec = codec,
             is_still = Media.classify_is_still(codec, width, duration),
+            metadata = json.encode(meta),
         })
 
         if not media then
@@ -886,6 +925,29 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         assert(media_id and media_id ~= "",
             string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
+
+        -- V13 INV-2: clips need a master sequence (nested_sequence_id), and
+        -- Sequence.ensure_master requires media with width>0 OR audio_channels>0
+        -- to anchor a TC origin. FCP7 XML may legitimately omit per-file
+        -- <media><samplecharacteristics> for unresolvable / placeholder
+        -- file references — those clips can't be created. Skip with a warning
+        -- rather than aborting the whole import (preserves fail-fast in
+        -- Sequence.ensure_master while letting the importer be permissive).
+        local media = Media.load(media_id)
+        local has_video = media and media.width and media.width > 0
+        local has_audio = media and media.audio_channels and media.audio_channels > 0
+        if not (has_video or has_audio) then
+            log.warn(
+                "FCP7 import: skipping clip '%s' — referenced media has no "
+                .. "video or audio streams declared in XML (cannot anchor a "
+                .. "master sequence). file_id=%s",
+                tostring(clip_info.name or clip_info.original_id),
+                tostring(clip_info.original_id or clip_key))
+            -- Return success (skip is intentional). create_clip's caller
+            -- treats false as a fatal abort.
+            return true
+        end
+
         -- V13: nested_sequence_id is the master sequence id (replaces master_clip_id).
         local nested_seq_id = ensure_master_clip(clip_info, clip_key, media_id)
         assert(nested_seq_id and nested_seq_id ~= "",
@@ -923,6 +985,17 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         local source_out = clip_info.source_out or (source_in + duration)
         if source_out < source_in then
             source_out = source_in + duration
+        end
+
+        -- V13 INV-4: clip's [source_in, source_out] must fit within nested
+        -- (master) sequence's duration. Stills and 1-frame media: master
+        -- duration is 1 — collapse to a unit source range; the clip's
+        -- duration_frames (timeline) carries the on-screen length and the
+        -- resolver loops the single source frame. Mirrors importer_core.lua's
+        -- still clamp (DRP path).
+        if media and (media.n or (media.duration and media.duration <= 1)) then
+            source_in = 0
+            source_out = 1
         end
 
         local reuse_id = resolve_reuse_id('clips', clip_key)
@@ -1111,18 +1184,21 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
             -- 013: edit timelines from FCP7 XML are kind='nested'.
-            -- Apple's FCP7 XML reference (Final Cut Pro XML Interchange Format)
-            -- specifies <samplerate> as required (valid entries 32000/44100/48000)
-            -- with NO documented default. Per rule 2.13 + 1.12, refuse rather
-            -- than silently inventing one.
+            -- Apple's FCP7 XML reference marks <samplecharacteristics> as
+            -- OPTIONAL (asterisk in spec). Resolve-exported XML routinely
+            -- omits the entire sequence-level <audio><samplecharacteristics>
+            -- block. FCP7 itself defaulted to 48000 Hz when the element
+            -- was absent — that's the de-facto industry post-production
+            -- standard and what every NLE assumes.
             local seq_audio_rate = seq_info.audio_sample_rate
-            assert(type(seq_audio_rate) == "number" and seq_audio_rate > 0,
-                string.format(
-                    "FCP7 XML import: sequence '%s' is missing "
-                    .. "<audio><samplecharacteristics><samplerate>. The FCP7 "
-                    .. "XML spec defines no default for this element; refusing "
-                    .. "to import rather than silently choosing a rate.",
-                    tostring(seq_info.name)))
+            if not (type(seq_audio_rate) == "number" and seq_audio_rate > 0) then
+                seq_audio_rate = 48000
+                log.event(
+                    "FCP7 import: sequence '%s' has no <audio>"
+                    .. "<samplecharacteristics><samplerate>; defaulting to "
+                    .. "48000 Hz (FCP7-spec optional element, FCP7 default).",
+                    tostring(seq_info.name))
+            end
             local sequence = Sequence.create(
                 seq_info.name,
                 project_id,

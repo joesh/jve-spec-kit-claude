@@ -43,7 +43,7 @@ print(string.format("  first_sample_tc=%d (matches BWF)", probe.first_sample_tc)
 -- Import DRP
 local JVP_PATH = "/tmp/jve/test_drp_bwf_sync.jvp"
 os.remove(JVP_PATH); os.remove(JVP_PATH .. "-wal"); os.remove(JVP_PATH .. "-shm")
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH)
+local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "DRP convert failed: " .. tostring(err))
 
 -- Query clips + media metadata

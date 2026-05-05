@@ -19,7 +19,7 @@ os.remove(JVP); os.remove(JVP .. "-wal"); os.remove(JVP .. "-shm")
 
 print("\n=== DRP Import Coordinate Accuracy (sample_project.drp) ===")
 
-local ok, err = drp_converter.convert(fixture, JVP)
+local ok, err = drp_converter.convert(fixture, JVP, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -68,15 +68,17 @@ print("\n--- 1: Video clips with non-zero source_in ---")
 -- Known: DRP <In>=2189 at 24fps sequence rate, media is 59.94fps (≈60/1).
 -- Source coords are at native media rate: 2189 * 60/24 = 5473 (rounded).
 -- clip rate = native media rate = 60/1 (not sequence rate).
+-- V13: clips no longer carry fps_*; rate comes from the nested master
+-- sequence (kind='master') the clip references via nested_sequence_id.
 local video_clips = query_all([[
     SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
-           c.fps_numerator, c.fps_denominator
+           ns.fps_numerator, ns.fps_denominator
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
+    JOIN sequences ns ON c.nested_sequence_id = ns.id
     WHERE s.name = 'resolve audio tracks tutorial'
       AND t.track_type = 'VIDEO' AND t.name = 'V1'
-      AND c.clip_kind = 'timeline'
     ORDER BY c.timeline_start_frame
 ]])
 
@@ -108,15 +110,22 @@ print("  PASS: 6 video clips — all source_in values match DRP <In>")
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 2: V/A source_in correspondence ---")
 
+-- V13: audio clips and video clips for the same media share one master
+-- sequence; that master's fps_* reflects the media's VIDEO fps.
+-- The audio sample rate lives on the media row (and nested seq's
+-- audio_sample_rate). Verify both — they should match.
 local audio_clips = query_all([[
     SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
-           c.fps_numerator, c.fps_denominator
+           ns.audio_sample_rate, m.audio_sample_rate
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
+    JOIN sequences ns ON c.nested_sequence_id = ns.id
+    JOIN media_refs mr ON mr.owner_sequence_id = ns.id
+    JOIN media m ON mr.media_id = m.id
     WHERE s.name = 'resolve audio tracks tutorial'
       AND t.track_type = 'AUDIO' AND t.name = 'A1'
-      AND c.clip_kind = 'timeline'
+    GROUP BY c.id
     ORDER BY c.timeline_start_frame
 ]])
 
@@ -145,9 +154,13 @@ for i = 1, 5 do
     assert(a[2] == expected_audio[i][2], string.format(
         "clip %d: expected audio src_in=%d, got %d",
         i, expected_audio[i][2], a[2]))
-    -- Audio fps = 48000/1
-    assert(a[4] == 48000 and a[5] == 1, string.format(
-        "clip %d: audio fps should be 48000/1, got %d/%d", i, a[4], a[5]))
+    -- V13: audio sample rate lives on media + master seq, both should be 48000.
+    assert(a[4] == 48000, string.format(
+        "clip %d: master seq audio_sample_rate should be 48000, got %s",
+        i, tostring(a[4])))
+    assert(a[5] == 48000, string.format(
+        "clip %d: media audio_sample_rate should be 48000, got %s",
+        i, tostring(a[5])))
 end
 print("  PASS: 5 V/A pairs — audio source_in at 48kHz native rate")
 
@@ -159,13 +172,16 @@ print("\n--- 3: Non-unity speed audio clip ---")
 local a6 = audio_clips[6]
 -- Known-answer (derived from DRP XML, not code tracing):
 -- <In>=6000|00e0401cd451d83f → 6000 whole frames + sub-frame hex that
--- decodes as LE IEEE-754 double to 0.37999…, i.e. (6000 + 0.38)/24 fps
--- = 250.01583… sec. At 48 kHz audio native rate:
--- 250.01583 × 48000 = 12,000,760 samples exact.
--- tl=90082, src_in=12000760 (sub-frame preserved per f9b306f), dur=6, fps=48000/1
+-- decodes as LE IEEE-754 double to 0.37999…
+-- Per commit 9b5d306f, importer snaps both video AND audio to whole
+-- source frames (Resolve Media-Manage cuts on whole-frame boundaries
+-- for both): in_frame = ceil(6000.38 - 1e-6) = 6001.
+-- At 48 kHz audio native rate via 24fps timeline:
+--   src_in = 6001 × 48000 / 24 = 12,002,000 samples.
+-- tl=90082, src_in=12002000, dur=6, audio_sample_rate=48000.
 assert(a6[1] == 90082, "clip 6 tl_start: " .. tostring(a6[1]))
-assert(a6[2] == 12000760, "clip 6 src_in: " .. tostring(a6[2]))
-assert(a6[4] == 48000, "clip 6 fps_num: " .. tostring(a6[4]))
+assert(a6[2] == 12002000, "clip 6 src_in: " .. tostring(a6[2]))
+assert(a6[4] == 48000, "clip 6 master seq audio_sample_rate: " .. tostring(a6[4]))
 -- This clip's source_in does NOT follow the V/A * 800 rule because it's
 -- a different clip with speed=0.38 (the DRP speed affects source mapping)
 -- V1 clip 6: tl=90084, src_in=14998 — different timeline_start too
@@ -177,15 +193,22 @@ print("  PASS: audio clip 6 has independent coordinates (speed=0.38)")
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 4: Multi-track source_in (Timeline 1 — FogTL) ---")
 
--- V1: two FogTL clips at src_in=57
+-- V13: clip → nested master sequence → media_refs → media. The "media" of
+-- a clip is the media_ref(s) sitting on its master sequence.
+-- V13 master sequences hold V+A media_refs from one media; JOIN multiplies.
+-- EXISTS keeps one row per clip.
 local fog_v1 = query_all([[
     SELECT c.timeline_start_frame, c.source_in_frame
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
-    JOIN media m ON c.media_id = m.id
-    WHERE s.name = 'Timeline 1' AND t.name = 'V1' AND m.name = 'FogTL.mp4'
-      AND c.source_in_frame != 0 AND c.clip_kind = 'timeline'
+    WHERE s.name = 'Timeline 1' AND t.name = 'V1'
+      AND c.source_in_frame != 0
+      AND EXISTS (
+        SELECT 1 FROM media_refs mr JOIN media m ON mr.media_id = m.id
+        WHERE mr.owner_sequence_id = c.nested_sequence_id
+          AND m.name = 'FogTL.mp4'
+      )
     ORDER BY c.timeline_start_frame
 ]])
 assert(#fog_v1 == 2, "expected 2 trimmed FogTL on V1, got " .. #fog_v1)
@@ -198,9 +221,12 @@ local fog_v2 = query_all([[
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
-    JOIN media m ON c.media_id = m.id
-    WHERE s.name = 'Timeline 1' AND t.name = 'V2' AND m.name = 'FogTL.mp4'
-      AND c.clip_kind = 'timeline'
+    WHERE s.name = 'Timeline 1' AND t.name = 'V2'
+      AND EXISTS (
+        SELECT 1 FROM media_refs mr JOIN media m ON mr.media_id = m.id
+        WHERE mr.owner_sequence_id = c.nested_sequence_id
+          AND m.name = 'FogTL.mp4'
+      )
 ]])
 assert(#fog_v2 == 1, "expected 1 FogTL on V2")
 assert(fog_v2[1][2] == 156, "FogTL V2 src_in: " .. tostring(fog_v2[1][2]))
@@ -244,7 +270,8 @@ print(string.format("  PASS: WAV TC = %.1fs (01:00:03.6)", wav_tc))
 -- 6. Total clip count (sanity)
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 6: Total counts ---")
-local r3 = query_one("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+-- V13: every row in clips is a "timeline" row (INV-2 enforces nested-only).
+local r3 = query_one("SELECT COUNT(*) FROM clips")
 assert(r3[1] == 126, "expected 126 timeline clips, got " .. tostring(r3[1]))
 local r4 = query_one("SELECT COUNT(*) FROM media")
 assert(r4[1] == 37, "expected 37 media, got " .. tostring(r4[1]))

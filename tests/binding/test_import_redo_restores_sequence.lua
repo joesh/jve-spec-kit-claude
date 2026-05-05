@@ -41,7 +41,7 @@ local function init_database(path)
             current_sequence_number, created_at, modified_at
         )
         VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'timeline',
+            'default_sequence', 'default_project', 'Default Sequence', 'nested',
             30, 1, 48000,
             1920, 1080,
             0, 300, 0,

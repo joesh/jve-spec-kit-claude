@@ -76,7 +76,12 @@ local DEFAULT_CONFIG = {
             fps_denominator = 1,
             width = 1920,
             height = 1080,
-            audio_channels = 0,
+            -- V13: audio clips that reference this default media expect the
+            -- master sequence to carry an audio_sample_rate (project_validator
+            -- flags audio masters with NULL rate as MISSING_AUDIO_RATE — a
+            -- real data-integrity bug). Give the default fixture a full V+A
+            -- profile so audio clips on a1 work without per-test overrides.
+            audio_channels = 2,
             codec = "raw",
             metadata = "{}"
         }

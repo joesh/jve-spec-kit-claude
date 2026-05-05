@@ -35,11 +35,13 @@ local seed_seq_id = info.sequences[1].id
 -- Seed three media items + masterclip sequences so the drop payload has
 -- real backing objects for Overwrite.
 local function seed_clip(media_id, name, dur_frames)
+    -- V13 ensure_master needs media with width>0 OR audio_channels>0.
     local m = Media.create({
         id = media_id, project_id = project_id,
         file_path = "/tmp/jve/" .. media_id .. ".mov",
         name = name, duration_frames = dur_frames,
         fps_numerator = 25, fps_denominator = 1,
+        width = 1920, height = 1080,
     })
     m:save(database.get_connection())
     local mc_seq_id = test_env.create_test_masterclip_sequence(
@@ -56,6 +58,7 @@ local function seed_clip(media_id, name, dur_frames)
         fps_denominator = 1,
         width = 1920,
         height = 1080,
+        audio_sample_rate = 48000,
     }
 end
 

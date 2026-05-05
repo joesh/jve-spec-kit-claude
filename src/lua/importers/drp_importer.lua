@@ -2429,6 +2429,10 @@ end
 -- so we infer it. Fall back to 48000 (industry-standard mix bus rate for
 -- FCP/Premiere/Resolve) when no media has audio — user-modifiable
 -- post-import.
+-- Returns the most-common audio sample rate across parsed media, or nil
+-- when no media reports a positive rate. Resolve's DRP carries no
+-- project-wide audio default, so the caller MUST surface (not invent) the
+-- nil case — downstream importer_core asserts on missing audio rate.
 local function pick_majority_audio_sample_rate(parse_result)
     local votes = {}
     for _, timeline in ipairs(parse_result.timelines or {}) do
@@ -2437,12 +2441,16 @@ local function pick_majority_audio_sample_rate(parse_result)
             if r and r > 0 then votes[r] = (votes[r] or 0) + 1 end
         end
     end
-    local picked, best_count = 48000, 0
+    local picked, best_count = nil, 0
     for r, c in pairs(votes) do
         if c > best_count then picked, best_count = r, c end
     end
     return picked
 end
+-- Exposed so command-layer importers (ImportResolveProject) can derive the
+-- project's audio_sample_rate from the same parse_result the convert() flow
+-- uses. nil result is intentional — see function comment.
+M.pick_majority_audio_sample_rate = pick_majority_audio_sample_rate
 
 -- Create the project DB at jvp_path, build the Project row, and return
 -- the saved project (asserts on save failure). Removes any existing
@@ -2533,9 +2541,19 @@ local function record_drp_provenance(project_id, drp_path, source_name)
     Sequence.set_undo_cursor_for_project(project_id, 0)
 end
 
-function M.convert(drp_path, jvp_path, progress_cb)
+--- Convert a .drp into a .jvp.
+-- @param drp_path string
+-- @param jvp_path string
+-- @param progress_cb function|nil
+-- @param opts table|nil
+--   audio_sample_rate: explicit project audio rate (Hz). DRP carries no
+--     project-wide audio default; callers must supply when the parsed media
+--     don't agree on one (pick_majority returns nil). Tests typically pass
+--     48000; production UI prompts the user.
+function M.convert(drp_path, jvp_path, progress_cb, opts)
     assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
     assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
+    opts = opts or {}
     local raw_report = progress_cb or function() end
     local function report(pct, text)
         if raw_report(pct, text) == "cancel" then
@@ -2560,7 +2578,11 @@ function M.convert(drp_path, jvp_path, progress_cb)
     end
 
     report(30, "Creating project database…")
-    local picked_audio_rate = pick_majority_audio_sample_rate(parse_result)
+    -- Explicit opts.audio_sample_rate wins; otherwise vote across parsed
+    -- media. nil here propagates: importer_core asserts when no rate is
+    -- available — Resolve carries no project-wide default to invent.
+    local picked_audio_rate = opts.audio_sample_rate
+        or pick_majority_audio_sample_rate(parse_result)
     local project, settings = init_project_database(jvp_path, parse_result, picked_audio_rate)
 
     report(40, "Importing media…")
@@ -2573,12 +2595,14 @@ function M.convert(drp_path, jvp_path, progress_cb)
     })
 
     report(95, "Setting active timeline…")
-    local database = require("core.database")
-    persist_open_tabs(parse_result, import_result, database.get_current_project_id())
+    -- Use the project we just created — `database.get_current_project_id()`
+    -- asserts when more than one project exists in the DB (test contexts
+    -- that bootstrap a default project before driving import). We already
+    -- have the authoritative id from init_project_database.
+    persist_open_tabs(parse_result, import_result, project.id)
 
     report(98, "Recording provenance…")
-    record_drp_provenance(database.get_current_project_id(), drp_path,
-        parse_result.project.name)
+    record_drp_provenance(project.id, drp_path, parse_result.project.name)
 
     report(100, "Done")
 

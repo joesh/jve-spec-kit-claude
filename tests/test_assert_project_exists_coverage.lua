@@ -81,9 +81,13 @@ local function expect_stale_id_assert(label, fn)
         "  Got: %s\n" ..
         "  The canonical Layer 1 message format must be reachable so\n" ..
         "  failures point operators at the staleness root cause.", label, err_str))
-    assert(err_str:find("Stale project_id after project switch", 1, true), string.format(
+    -- V13: assert_project_exists no longer requires the project be SOLE
+    -- (multiple projects coexist in import flows); the staleness signal is
+    -- now "id not found", which is the same actionable diagnostic for stale
+    -- project_id after a switch.
+    assert(err_str:find("not found", 1, true), string.format(
         "COVERAGE FORMAT: '%s' assertion lacks the canonical staleness\n" ..
-        "  diagnostic. Got: %s", label, err_str))
+        "  diagnostic ('not found'). Got: %s", label, err_str))
 end
 
 -- ----------------------------------------------------------------------

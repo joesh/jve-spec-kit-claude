@@ -43,13 +43,16 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default', 'timeline',
+        'default_sequence', 'default_project', 'Default', 'nested',
         30, 1, 48000, 1920, 1080, 0, 400, 0,
         '[]', '[]', '[]', 0, %d, %d
     );
 ]], now, now, now, now))
 
 command_manager.init("default_sequence", "default_project")
+-- ImportFCP7XML asserts an active timeline_state for undo safety; the test
+-- needs to mirror the production app pre-state where a sequence is loaded.
+timeline_state.init("default_sequence", "default_project")
 
 -- Execute import
 local import_cmd = Command.create("ImportFCP7XML", "default_project")

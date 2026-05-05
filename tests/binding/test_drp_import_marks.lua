@@ -43,7 +43,7 @@ assert(clips_with_playhead > 0, "Fixture should have at least one clip with non-
 -- Convert DRP to JVP (exercises the full import pipeline)
 -- ======================================================================
 print("Step 2: Converting DRP...")
-local ok, err = drp_importer.convert(fixture_path, JVP_PATH)
+local ok, err = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -66,15 +66,17 @@ end
 -- ======================================================================
 print("Test 1: Master clip playhead propagation...")
 
--- Get all master clips with their media names and playhead_frame values
+-- V13: pool master-clip marks/playhead live on media_refs rows inside
+-- the per-media master sequence (kind='master'). Query media_refs joined
+-- to the media row for the name and the track for V/A type.
 local stmt = db:prepare([[
-    SELECT c.id, c.name, c.playhead_frame, c.mark_in_frame, c.mark_out_frame,
-           m.name as media_name,
-           t.track_type
-    FROM clips c
-    JOIN media m ON c.media_id = m.id
-    JOIN tracks t ON c.track_id = t.id
-    WHERE c.clip_kind = 'master'
+    SELECT mr.id, mr.playhead_frame, mr.mark_in_frame, mr.mark_out_frame,
+           m.name AS media_name, t.track_type
+    FROM media_refs mr
+    JOIN media m ON mr.media_id = m.id
+    JOIN tracks t ON mr.track_id = t.id
+    JOIN sequences s ON mr.owner_sequence_id = s.id
+    WHERE s.kind = 'master'
 ]])
 assert(stmt, "Failed to prepare master clips query")
 assert(stmt:exec(), "Master clips query failed")
@@ -82,13 +84,12 @@ assert(stmt:exec(), "Master clips query failed")
 local master_clips_checked = 0
 local playheads_matched = 0
 while stmt:next() do
-    local _clip_id = stmt:value(0)   -- luacheck: ignore 211
-    local clip_name = stmt:value(1)
-    local playhead = stmt:value(2)
-    local _mark_in = stmt:value(3)  -- luacheck: ignore 211
-    local _mark_out = stmt:value(4) -- luacheck: ignore 211
-    local media_name = stmt:value(5)
-    local track_type = stmt:value(6)
+    local _ref_id = stmt:value(0)   -- luacheck: ignore 211
+    local playhead = stmt:value(1)
+    local _mark_in = stmt:value(2)  -- luacheck: ignore 211
+    local _mark_out = stmt:value(3) -- luacheck: ignore 211
+    local media_name = stmt:value(4)
+    local track_type = stmt:value(5)
 
     master_clips_checked = master_clips_checked + 1
 
@@ -99,8 +100,8 @@ while stmt:next() do
     local expected = expected_playheads[key]
     if expected then
         assert(playhead == expected, string.format(
-            "Master clip '%s' (media=%s, type=%s): playhead=%s, expected=%s",
-            clip_name, media_name, clip_type, tostring(playhead), tostring(expected)))
+            "Media '%s' (type=%s) media_ref playhead=%s, expected=%s",
+            media_name, clip_type, tostring(playhead), tostring(expected)))
         playheads_matched = playheads_matched + 1
     end
 end
@@ -112,12 +113,12 @@ print("  OK")
 
 -- ======================================================================
 -- Test 2: Timeline clips do NOT have marks (marks live on master clips)
+-- V13: every row in clips is a timeline-side clip (INV-2 enforces nested-only).
 -- ======================================================================
 print("Test 2: Timeline clips have no marks...")
 local tl_mark_count = scalar([[
     SELECT COUNT(*) FROM clips
-    WHERE clip_kind = 'timeline'
-      AND (mark_in_frame IS NOT NULL OR mark_out_frame IS NOT NULL)
+    WHERE mark_in_frame IS NOT NULL OR mark_out_frame IS NOT NULL
 ]])
 assert(tl_mark_count == 0, string.format(
     "Expected 0 timeline clips with marks, got %d", tl_mark_count))
@@ -125,25 +126,24 @@ assert(tl_mark_count == 0, string.format(
 -- Timeline clips should have default playhead (0)
 local tl_playhead_count = scalar([[
     SELECT COUNT(*) FROM clips
-    WHERE clip_kind = 'timeline'
-      AND playhead_frame != 0
+    WHERE playhead_frame != 0
 ]])
 assert(tl_playhead_count == 0, string.format(
     "Expected 0 timeline clips with non-zero playhead, got %d", tl_playhead_count))
 print("  OK")
 
 -- ======================================================================
--- Test 3: Master clips with nil marks in fixture have NULL in DB
+-- Test 3: Master-side rows (V13: media_refs) with nil marks in the fixture
+-- have NULL in DB
 -- ======================================================================
 print("Test 3: Nil marks stay NULL in DB...")
 -- All pool_master_clips in the fixture have nil mark_in/mark_out
 local marked_count = scalar([[
-    SELECT COUNT(*) FROM clips
-    WHERE clip_kind = 'master'
-      AND (mark_in_frame IS NOT NULL OR mark_out_frame IS NOT NULL)
+    SELECT COUNT(*) FROM media_refs
+    WHERE mark_in_frame IS NOT NULL OR mark_out_frame IS NOT NULL
 ]])
 assert(marked_count == 0, string.format(
-    "Expected 0 master clips with marks (fixture has none), got %d", marked_count))
+    "Expected 0 media_refs with marks (fixture has none), got %d", marked_count))
 print("  OK")
 
 -- Cleanup

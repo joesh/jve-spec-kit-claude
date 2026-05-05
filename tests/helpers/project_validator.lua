@@ -197,12 +197,20 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
     if sequence_id_filter then
         where_clause = string.format(" AND t.sequence_id = '%s'", sequence_id_filter)
     end
-    -- V13: clip.frame_rate derives from nested_sequence; pull both owner+nested fps.
+    -- V13: clip's source units depend on the OWNER track type:
+    --   * VIDEO clips → source_in/out are in nested-sequence FRAMES at
+    --     nested.fps_numerator/denominator. Unity = dur * nested_fps/seq_fps.
+    --   * AUDIO clips → source_in/out are in nested-sequence SAMPLES at
+    --     nested.audio_sample_rate. Unity = dur * audio_sr / seq_fps.
+    -- The pre-013 single-fps formula generated false ABSURD_SPEED on every
+    -- audio clip with implied speed = audio_sample_rate / seq_fps. See
+    -- todo_audio_media_tc_rate_normalization in MEMORY.md.
     local sql = string.format([[
         SELECT c.id, c.name, c.source_in_frame, c.source_out_frame,
                c.duration_frames,
                nested.fps_numerator, nested.fps_denominator,
-               s.fps_numerator, s.fps_denominator
+               s.fps_numerator, s.fps_denominator,
+               t.track_type, nested.audio_sample_rate
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
@@ -226,14 +234,32 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
         local clip_fps_den = stmt:value(6)
         local seq_fps_num = stmt:value(7)
         local seq_fps_den = stmt:value(8)
+        local track_type = stmt:value(9)
+        local nested_audio_sr = stmt:value(10)
 
         local actual_source_range = source_out - source_in
         -- Reverse clips have negative source range — use absolute value for speed
         if actual_source_range < 0 then actual_source_range = -actual_source_range end
 
-        -- Unity source range = duration * clip_rate / seq_rate
-        local unity_source_range = duration * clip_fps_num * seq_fps_den
-            / (clip_fps_den * seq_fps_num)
+        -- Pick the right source-unit rate per track type (see comment above).
+        local src_num, src_den
+        if track_type == "AUDIO" then
+            if not (nested_audio_sr and nested_audio_sr > 0) then
+                fail(result, string.format(
+                    "MISSING_AUDIO_RATE: audio clip %s (%s) — nested master "
+                    .. "%s has no audio_sample_rate; importer dropped it",
+                    tostring(clip_id), tostring(stmt:value(1)),
+                    tostring(stmt:value(0))))
+                return
+            end
+            src_num, src_den = nested_audio_sr, 1
+        else
+            src_num, src_den = clip_fps_num, clip_fps_den
+        end
+
+        -- Unity source range = duration * source_rate / seq_rate
+        local unity_source_range = duration * src_num * seq_fps_den
+            / (src_den * seq_fps_num)
 
         if unity_source_range > 0 then
             local speed = actual_source_range / unity_source_range
@@ -241,11 +267,12 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
                 fail(result, string.format(
                     "ABSURD_SPEED: clip %s (%s) implied speed=%.4f "
                     .. "(source_range=%d unity_range=%.0f source_in=%d source_out=%d "
-                    .. "dur=%d clip_rate=%d/%d seq_rate=%d/%d)",
+                    .. "dur=%d src_rate=%s/%s seq_rate=%d/%d track=%s)",
                     tostring(clip_id), tostring(stmt:value(1)),
                     speed, source_out - source_in, unity_source_range,
                     source_in, source_out, duration,
-                    clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den))
+                    tostring(src_num), tostring(src_den),
+                    seq_fps_num, seq_fps_den, tostring(track_type)))
             end
         end
     end)

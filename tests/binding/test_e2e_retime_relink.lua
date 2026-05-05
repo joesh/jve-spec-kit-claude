@@ -29,7 +29,7 @@ os.remove(JVP_PATH .. "-wal")
 
 print("=== test_e2e_retime_relink.lua ===")
 print("[1/6] Converting DRP → " .. JVP_PATH)
-local convert_ok, convert_err = drp_importer.convert(DRP_PATH, JVP_PATH)
+local convert_ok, convert_err = drp_importer.convert(DRP_PATH, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))
 print("      ✓ converted")
 

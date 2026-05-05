@@ -24,7 +24,7 @@ db:exec([[
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                            view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
-    VALUES ('placeholder_seq', 'default_project', 'Placeholder', 'timeline', 24, 1, 48000, 1920, 1080,
+    VALUES ('placeholder_seq', 'default_project', 'Placeholder', 'nested', 24, 1, 48000, 1920, 1080,
             0, 240, 0, 0, 0);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -32,6 +32,8 @@ db:exec([[
 ]])
 
 command_manager.init('placeholder_seq', 'default_project')
+-- ImportFCP7XML asserts an active timeline_state for undo safety.
+timeline_state.init('placeholder_seq', 'default_project')
 
 -- Simple FCP7 XML with clips
 local xml_content = [[<?xml version="1.0" encoding="UTF-8"?>
@@ -68,6 +70,14 @@ local xml_content = [[<?xml version="1.0" encoding="UTF-8"?>
               <duration>200</duration>
               <rate><timebase>24</timebase><ntsc>FALSE</ntsc></rate>
               <pathurl>file:///tmp/test_media.mov</pathurl>
+              <media>
+                <video>
+                  <samplecharacteristics>
+                    <width>1920</width>
+                    <height>1080</height>
+                  </samplecharacteristics>
+                </video>
+              </media>
             </file>
           </clipitem>
           <clipitem id="clip2">

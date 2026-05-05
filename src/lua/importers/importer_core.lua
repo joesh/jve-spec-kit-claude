@@ -805,6 +805,24 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     -- V13: master sequence is the link from clip → media.
+                    -- Skip clips whose media has no V/A streams declared —
+                    -- ensure_master would assert (no TC anchor possible) and
+                    -- abort the import. DRT exports / FCP7 placeholders can
+                    -- carry such media; logging here lets the rest of the
+                    -- import succeed. Mirrors fcp7_xml_importer.create_clip.
+                    local _media_pre = Media.load(media_id)
+                    local _has_v = _media_pre and _media_pre.width
+                        and _media_pre.width > 0
+                    local _has_a = _media_pre and _media_pre.audio_channels
+                        and _media_pre.audio_channels > 0
+                    if not (_has_v or _has_a) then
+                        log.warn(
+                            "importer_core: skipping clip '%s' — media %s has "
+                            .. "no video or audio streams declared (cannot "
+                            .. "anchor a master sequence)",
+                            tostring(clip_data.name), tostring(media_id))
+                        goto continue_clip
+                    end
                     local master_seq_id = Sequence.ensure_master(media_id, project_id)
                     local media_row     = Media.load(media_id)
                     assert(media_row, string.format(

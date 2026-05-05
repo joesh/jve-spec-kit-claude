@@ -20,7 +20,7 @@ os.remove(JVP_PATH .. "-shm")
 print("\n=== DRP Converter Clip Creation Regression ===")
 
 -- Convert must succeed (previously asserted on missing owner_sequence_id)
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH)
+local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "drp_converter.convert() failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -37,29 +37,21 @@ local function scalar(sql, param)
     return val
 end
 
--- Verify clips were created
-local clip_count = scalar("SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline'")
+-- V13: all clips live in a nested sequence (INV-2). owner_sequence_id +
+-- project_id are NOT NULL at schema level, so the original orphan/no-project
+-- queries are unfalsifiable — INSERT would have failed before reaching this
+-- assertion. We keep the count-positive check; structural integrity is the
+-- INV-2/INV-3 triggers' job.
+local clip_count = scalar("SELECT COUNT(*) FROM clips")
 assert(clip_count and clip_count > 0,
-    string.format("Expected timeline clips, got %s", tostring(clip_count)))
-print(string.format("  %d timeline clip(s) created", clip_count))
+    string.format("Expected clips, got %s", tostring(clip_count)))
+print(string.format("  %d clip(s) created", clip_count))
 
--- Verify every timeline clip has owner_sequence_id set
-local orphan_count = scalar(
-    "SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND owner_sequence_id IS NULL")
-assert(orphan_count == 0,
-    string.format("Found %d clip(s) without owner_sequence_id", orphan_count))
-print("  All timeline clips have owner_sequence_id")
-
--- Verify every timeline clip has project_id set
-local no_project = scalar(
-    "SELECT COUNT(*) FROM clips WHERE clip_kind = 'timeline' AND project_id IS NULL")
-assert(no_project == 0,
-    string.format("Found %d clip(s) without project_id", no_project))
-print("  All timeline clips have project_id")
-
--- Verify masterclip sequences were auto-created for clips with media
-local mc_count = scalar("SELECT COUNT(*) FROM sequences WHERE kind = 'masterclip'")
-print(string.format("  %d masterclip sequence(s) auto-created", mc_count))
+-- Verify master sequences were auto-created for media (V13: kind='master')
+local mc_count = scalar("SELECT COUNT(*) FROM sequences WHERE kind = 'master'")
+assert(mc_count and mc_count > 0,
+    string.format("Expected master sequence(s), got %s", tostring(mc_count)))
+print(string.format("  %d master sequence(s) auto-created", mc_count))
 
 -- Cleanup
 os.remove(JVP_PATH)

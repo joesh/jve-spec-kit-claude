@@ -33,7 +33,7 @@ local function check(label, condition)
 end
 
 -- Convert DRP fixture
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH)
+local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "drp_converter.convert() failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -102,7 +102,7 @@ print("\n--- Bug 1: Master clips in DRP folder bins ---")
 
 -- Query all masterclip sequences (col0=id, col1=name)
 local masterclip_seqs = query_pairs(
-    "SELECT id, name FROM sequences WHERE kind = 'masterclip' AND project_id = ?",
+    "SELECT id, name FROM sequences WHERE kind = 'master' AND project_id = ?",
     project_id)
 
 -- Query all bin assignments for master_clip entity_type (col0=entity_id, col1=tag_id)
@@ -149,7 +149,7 @@ if footage_bin then
     local footage_mc = scalar([[
         SELECT s.id FROM sequences s
         JOIN media m ON s.name = m.name
-        WHERE s.kind = 'masterclip' AND m.name LIKE 'A001%'
+        WHERE s.kind = 'master' AND m.name LIKE 'A001%'
         LIMIT 1
     ]])
     if footage_mc then
@@ -177,7 +177,7 @@ local seq_assignments = query_pairs([[
 ]], project_id)
 
 local timelines = query_pairs(
-    "SELECT id, name FROM sequences WHERE kind = 'timeline' AND project_id = ?",
+    "SELECT id, name FROM sequences WHERE kind = 'nested' AND project_id = ?",
     project_id)
 
 print(string.format("  %d timeline(s), %d sequence bin assignment(s)", #timelines, #seq_assignments))

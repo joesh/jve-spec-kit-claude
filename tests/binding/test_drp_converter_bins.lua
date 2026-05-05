@@ -29,7 +29,7 @@ local function check(label, condition)
 end
 
 -- Convert DRP fixture
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH)
+local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "drp_converter.convert() failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -56,7 +56,8 @@ print("\n--- 1. Per-sequence master clip bins ---")
 
 -- Get all timeline sequences
 local seq_names = {}
-local seq_stmt = db:prepare("SELECT name FROM sequences WHERE kind = 'timeline'")
+-- V13: edit timelines are kind='nested' (master is the per-media row).
+local seq_stmt = db:prepare("SELECT name FROM sequences WHERE kind = 'nested'")
 assert(seq_stmt:exec())
 while seq_stmt:next() do
     table.insert(seq_names, seq_stmt:value(0))
@@ -113,9 +114,10 @@ check("bins created", #bins >= #seq_names)
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 4. Masterclip sequences ---")
 
-local mc_count = scalar("SELECT COUNT(*) FROM sequences WHERE kind = 'masterclip'")
-print(string.format("  %d masterclip sequence(s)", mc_count))
-check("masterclip sequences exist", mc_count > 0)
+-- V13: per-media master sequences are kind='master'.
+local mc_count = scalar("SELECT COUNT(*) FROM sequences WHERE kind = 'master'")
+print(string.format("  %d master sequence(s)", mc_count))
+check("master sequences exist", mc_count > 0)
 
 -- Cleanup
 os.remove(JVP_PATH)

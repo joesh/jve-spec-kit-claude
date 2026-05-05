@@ -945,6 +945,11 @@ function M.load_clips(sequence_id)
         error("FATAL: No database connection - cannot load clips")
     end
 
+    -- V13: a clip's nested master sequence may carry both V and A
+    -- media_refs (one media file with both streams). The clip itself plays
+    -- ONE medium — the one matching its owner-side track_type. JOIN
+    -- media_refs through tracks so it picks the matching-medium media_ref
+    -- only, otherwise the LEFT JOIN multiplies clips by media_ref count.
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
                c.owner_sequence_id, c.nested_sequence_id,
@@ -963,8 +968,14 @@ function M.load_clips(sequence_id)
         JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
         LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
                                 AND nested_seq.kind = 'master'
+                                AND EXISTS (
+                                    SELECT 1 FROM tracks mt
+                                    WHERE mt.id = mr.track_id
+                                      AND mt.track_type = t.track_type
+                                )
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.owner_sequence_id = ?
+        GROUP BY c.id
         ORDER BY c.timeline_start_frame ASC
     ]])
 
@@ -1542,13 +1553,21 @@ local function assert_project_exists(project_id)
     assert(project_id and project_id ~= "", "assert_project_exists: project_id is required")
     assert(db_connection, "assert_project_exists: no database connection")
 
-    -- Verify this project_id is the SOLE project in the database.
-    -- If count != 1 or the id doesn't match, something wrote a phantom row.
-    local sole_id = M.get_current_project_id()  -- asserts exactly 1 project
-    assert(sole_id == project_id, string.format(
-        "assert_project_exists: project_id '%s' != sole project '%s' in '%s'. "
-        .. "Stale project_id after project switch?",
-        tostring(project_id), tostring(sole_id), tostring(db_path)))
+    -- Verify the project_id refers to a real row. The pre-013 variant
+    -- additionally asserted SOLE project (catching stale-id-after-switch
+    -- bugs), but that conflated "id is valid" with "DB is single-project";
+    -- multiple projects coexist legitimately in import paths and tests.
+    -- Existence is the load-bearing check; ambiguity over "current" is
+    -- callers' responsibility (they were already passing project_id in).
+    local stmt = db_connection:prepare("SELECT 1 FROM projects WHERE id = ?")
+    assert(stmt, "assert_project_exists: prepare failed")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), "assert_project_exists: exec failed")
+    local found = stmt:next()
+    stmt:finalize()
+    assert(found, string.format(
+        "assert_project_exists: project_id '%s' not found in '%s'",
+        tostring(project_id), tostring(db_path)))
 end
 
 -- ====================================================================

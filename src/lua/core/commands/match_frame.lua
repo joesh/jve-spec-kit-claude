@@ -13,39 +13,7 @@ local log = require("core.logger").for_area("commands")
 local source_viewer = require('ui.source_viewer')
 local Sequence = require('models.sequence')
 local command_helper = require("core.command_helper")
-local fs_utils = require("core.fs_utils")
 local media_status = require("core.media.media_status")
-local offline_note_mod = require("core.media.offline_note")
-
--- Check whether the clip's media row carries a partial_coverage
--- offline_note that points at a file actually on disk. The relinker's
--- partial-fit/clone strategy leaves the original media row's file_path
--- at the (offline) volume path even though the candidate it found is
--- right there on the local disk; the candidate path lives only in the
--- offline_note. The source viewer reads the note and surfaces a useful
--- overlay; MatchFrame must do the same lookup so it doesn't pop a
--- "missing on disk" dialog naming a path the user has visibly relinked
--- past in the same session.
-local function partial_coverage_candidate_present(clip)
-    local raw = clip.resolved_media and clip.resolved_media.offline_note
-    if not raw then return false end
-    local note = offline_note_mod.parse(raw)
-    if not note or note.kind ~= "partial_coverage" then return false end
-    local cand = note.candidate_path
-    return cand and cand ~= "" and fs_utils.file_exists(cand)
-end
-
-local function show_offline_dialog(file_path)
-    assert(qt_constants and qt_constants.DIALOG and qt_constants.DIALOG.SHOW_CONFIRM,
-        "match_frame.show_offline_dialog: qt_constants.DIALOG.SHOW_CONFIRM not registered")
-    qt_constants.DIALOG.SHOW_CONFIRM({
-        title = "Match Frame: Media Offline",
-        message = "Cannot match-frame this clip — the media file is "
-            .. "missing on disk.\n\n" .. tostring(file_path),
-        icon = "critical",
-        confirm_text = "OK",
-    })
-end
 
 -- Clamp a frame into [mstart, mend), or [mstart, mend] when hi_inclusive.
 local function clamp_frame(f, mstart, mend, hi_inclusive)
@@ -115,25 +83,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- Offline-file guard: pop a dialog naming the missing path
-        -- before proceeding into the source-viewer load (which would
-        -- otherwise either crash decoding or show an empty viewer
-        -- with no diagnostic). Skipped when a partial_coverage note
-        -- already names an on-disk candidate — the source viewer's
-        -- own overlay surfaces that case, and a contradictory
-        -- "missing" dialog would just confuse the user.
+        -- Offline media is fine: load the master into the source viewer
+        -- regardless of disk presence. The viewer's own overlay surfaces
+        -- offline state. MatchFrame's job is navigation, not playback —
+        -- consistent with the importer-no-probe philosophy applied to
+        -- downstream operations. Refresh status caches so the viewer's
+        -- offline indicators are accurate when it loads.
         media_status.ensure_clip_status(target_clip)
-        if target_clip.media_path and target_clip.media_path ~= ""
-            and not fs_utils.file_exists(target_clip.media_path)
-            and not partial_coverage_candidate_present(target_clip) then
-            local missing_path = target_clip.media_path
-            log.warn("MatchFrame: media file not found: %s", missing_path)
-            show_offline_dialog(missing_path)
-            set_last_error("MatchFrame: media file not found: " .. missing_path)
-            return false
-        end
 
-        -- Write marks + playhead to the master sequence. Clamp to its
+-- Write marks + playhead to the master sequence. Clamp to its
         -- valid range first: a relink to a shorter candidate leaves the
         -- master covering only part of the clip's recorded source range,
         -- and Sequence:set_in / set_out / set_playhead assert when out

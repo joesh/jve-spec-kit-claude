@@ -41,7 +41,7 @@ assert(next(parse_result.media_items), "expected some media items")
 
 -- Step 2: Convert to JVP
 print("\n--- Step 2: Convert to JVP ---")
-local ok, err = drp_importer.convert(fixture_path, JVP_PATH)
+local ok, err = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
@@ -74,8 +74,8 @@ assert(dup_uuid == 0, string.format("%d duplicate file_uuid values", dup_uuid))
 local no_fps = scalar("SELECT COUNT(*) FROM media WHERE fps_numerator IS NULL OR fps_numerator <= 0")
 assert(no_fps == 0, string.format("%d media missing frame_rate", no_fps))
 
--- Schema version
+-- Schema version (V13 / "Timeline Placements" — see src/lua/schema.sql)
 local version = scalar("SELECT MAX(version) FROM schema_version")
-assert(version == 8, string.format("Expected schema V8, got %d", version))
+assert(version == 9, string.format("Expected schema V9, got %d", version))
 
 print("\n✅ test_drp_uuid_dedup.lua passed")
