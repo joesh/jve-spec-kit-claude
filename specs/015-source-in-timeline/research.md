@@ -205,7 +205,7 @@ Specifically:
 
 **Probe** (to be performed before T014/T033 fan out): `rg "frame_quantize|round_to_frame|snap_to_frame|quantize" src/lua/core/` and inspect existing blade/split commands (likely `src/lua/core/commands/split_clip.lua` or similar) for the canonical helper.
 
-**Decision (to be filled at task start)**: TBD. Pin the function name and module path in this section before T014 / T033 begin so all parallel implementers reference the same function. If no canonical function exists today, that's a separate finding and warrants a clarification — DO NOT invent a new helper without surfacing.
+**Decision (resolved 2026-05-05)**: No separate quantization helper exists. `SplitClip` uses plain integer arithmetic: `split_offset = split_frame - clip.timeline_start_frame` (owner frames). Source offset computed via `owner_delta_to_source(fps_mismatch_policy, split_offset, owner_fps, nested_fps)` in `split_clip.lua:99–101`. T014 and T033 both call `SplitClip` at the trim point and use the same integer split_offset formula to compute expected values — no external helper needed.
 
 **Rationale**: avoids two parallel implementers duplicating quantization logic with subtle differences.
 
