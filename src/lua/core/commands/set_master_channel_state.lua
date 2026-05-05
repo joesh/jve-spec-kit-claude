@@ -5,7 +5,7 @@
 ---     sequence_id is the master being mutated (rule 2.29).
 ---   Pre:
 ---     * sequence_id.kind == 'master'.
----     * channel_index < master's audio channel count (INV-5).
+---     * channel_index < master's audio channel count.
 ---     * enabled and gain_db both required (rule 2.13).
 ---   Mutation: UPSERT media_refs_channel_state(sequence_id, channel_index)
 ---     with the new (enabled, default_gain_db).
@@ -57,7 +57,7 @@ function M.execute(args)
     local channel_count = Sequence.count_master_audio_channels(sequence_id)
     assert(channel_index < channel_count, string.format(
         "SetMasterChannelState: channel_index %d out of bounds for master %s "
-        .. "(has %d audio channels). INV-5.",
+        .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
         channel_index, sequence_id, channel_count))
 
     local existing = State.find(sequence_id, channel_index)

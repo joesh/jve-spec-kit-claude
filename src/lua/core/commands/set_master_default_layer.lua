@@ -5,7 +5,7 @@
 ---     sequence_id is the master being mutated (rule 2.29).
 ---   Pre:
 ---     * sequence_id.kind == 'master'.
----     * track_id is non-NULL (INV-8 forbids NULL when the master has
+---     * track_id is non-NULL (default_video_layer_track_id must be non-NULL when the master has
 ---       at least one video track; SetMasterDefaultLayer doesn't NULL).
 ---     * track_id belongs to sequence_id's V tracks.
 ---   Mutation: sequences.default_video_layer_track_id ← track_id.

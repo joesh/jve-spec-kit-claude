@@ -79,7 +79,7 @@ print("\n--- create: required fps fields ---")
 -- comes via the master sequence's media_ref. The pre-013 "missing fps"
 -- and "missing media_id auto-resolve master_clip_id" error paths are
 -- therefore no longer applicable. Coverage moved to nested_sequence_id +
--- INV-2 / INV-4 model assertions.
+-- ownership + source-window model assertions.
 
 -- ============================================================================
 -- create(): Timeline clips require track_id, owner_sequence_id, etc.

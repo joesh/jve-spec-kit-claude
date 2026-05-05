@@ -1,5 +1,5 @@
 -- T024 / CT-R7 (013): resolver cycle defense-in-depth.
--- The mutation-time check refuses cycles (INV-3). If a cycle somehow lands in
+-- The mutation-time check refuses cycles (containment DAG must be acyclic). If a cycle somehow lands in
 -- the DB (direct SQL bypassing the model's cycle check, or external mutation),
 -- the resolver must assert loudly when it encounters one, naming both sequences
 -- in the cycle and the provenance chain.

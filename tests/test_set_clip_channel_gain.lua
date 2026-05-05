@@ -9,7 +9,7 @@
 -- (c) Undo of (a) deletes the row (back to tracking master).
 -- (d) Undo of (b) restores the prior gain_db (enabled unchanged).
 -- (e) sequence_id required (rule 2.29).
--- (f) channel_index out of bounds: refused (INV-5).
+-- (f) channel_index out of bounds: refused (channel_index must be < master's audio channel count).
 
 require("test_env")
 local database = require("core.database")
@@ -143,7 +143,7 @@ do
     print("  ok")
 end
 
-print("-- (f) channel_index out of bounds (INV-5) --")
+print("-- (f) channel_index out of bounds (must be < master's audio channel count) --")
 do
     build_fixture()
     local ok, err = pcall(SetClipChannelGain.execute, {

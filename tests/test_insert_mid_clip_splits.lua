@@ -43,7 +43,7 @@ db:exec(string.format([[
 command_manager.init('seq', 'proj')
 
 -- Long media so existing clips can use a non-trivial source window without
--- bumping into INV-4 (clip source must fit in master's effective duration).
+-- bumping into clip source window: non-empty, lower bound >= 0.
 test_env.create_test_media({
     id = "med", project_id = "proj", file_path = "/tmp/jve/med.mov",
     name = "med", duration_frames = 5000,

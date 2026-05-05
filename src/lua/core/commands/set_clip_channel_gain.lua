@@ -66,7 +66,7 @@ function M.execute(args)
     local channel_count = Sequence.count_master_audio_channels(clip.nested_sequence_id)
     assert(channel_index < channel_count, string.format(
         "SetClipChannelGain: channel_index %d out of bounds for master %s "
-        .. "(has %d audio channels). INV-5.",
+        .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
         channel_index, clip.nested_sequence_id, channel_count))
 
     local existing = Override.find(clip_id, channel_index)

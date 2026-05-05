@@ -1,14 +1,8 @@
--- T013a + T029a (013): INV-5 — clip_channel_override.channel_index
--- pointing past the referenced nested sequence's current audio channel
--- count is rejected at resolve time with a loud assert naming the clip
--- and the bad channel_index. Not a silent skip; not a silent fallback to
--- master state.
---
--- INV-5 (data-model.md):
---   "clip_channel_override.channel_index refers to an existing channel
---    in the referenced nested sequence's audio layout at resolution
---    time. Resolver asserts loudly if the channel has been removed;
---    fallback to master state is NOT silent."
+-- T013a + T029a (013): channel_index must be < master's audio channel count.
+-- clip_channel_override.channel_index pointing past the referenced nested
+-- sequence's current audio channel count is rejected at resolve time with a
+-- loud assert naming the clip and the bad channel_index. Not a silent skip;
+-- not a silent fallback to master state.
 --
 -- This drives T029a (resolve-time defense-in-depth assert) and pins the
 -- companion T013a model-layer behavior for ToggleClipChannel /
@@ -70,7 +64,7 @@ end
 
 local Sequence = require("models.sequence")
 
-print("-- T013a: ToggleClipChannel rejects channel_index >= count at write time --")
+print("-- T013a: ToggleClipChannel rejects channel_index >= audio channel count at write time --")
 do
     build_fixture()
     local ToggleClipChannel = require("core.commands.toggle_clip_channel")
@@ -79,14 +73,14 @@ do
         clip_id       = "ca",
         channel_index = 2,    -- master has 2 channels (indices 0/1); 2 is OOB
     })
-    assert(not ok, "ToggleClipChannel must refuse OOB channel_index")
+    assert(not ok, "ToggleClipChannel must refuse out-of-bounds channel_index")
     assert(tostring(err):find("INV-5") or tostring(err):find("out of bounds")
         or tostring(err):find("channel"),
         "error message names the constraint; got: " .. tostring(err))
     print("  ok")
 end
 
-print("-- T013a: SetClipChannelGain rejects channel_index >= count at write time --")
+print("-- T013a: SetClipChannelGain rejects channel_index >= audio channel count at write time --")
 do
     build_fixture()
     local SetClipChannelGain = require("core.commands.set_clip_channel_gain")
@@ -100,7 +94,7 @@ do
     print("  ok")
 end
 
-print("-- T029a: resolver asserts on existing OOB override row (corruption / shrunk master) --")
+print("-- T029a: resolver asserts on existing out-of-bounds override row (corruption / shrunk master) --")
 do
     local db = build_fixture()
     -- Insert an OOB override directly via SQL (mimics a pre-existing
@@ -120,10 +114,10 @@ do
             project_fps_mismatch_policy = "passthrough",
         })
     end)
-    assert(not ok, "resolver must assert on OOB override (INV-5)")
+    assert(not ok, "resolver must assert on out-of-bounds channel_index override")
     assert(tostring(err):find("INV-5") or tostring(err):find("channel_index")
         or tostring(err):find("ca"),
-        "G-R5/INV-5 message must name the clip + bad channel; got: "
+        "channel_index out-of-bounds message must name the clip + bad channel; got: "
         .. tostring(err))
     -- Specifically the bad channel_index (5) should appear in the message.
     assert(tostring(err):find("5"),

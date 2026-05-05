@@ -1,6 +1,6 @@
 -- T039 (013): Insert cycle refusal.
 --
--- INV-3: the containment DAG must stay acyclic. Insert refuses any
+-- The containment DAG must stay acyclic. Insert refuses any
 -- placement that would close a cycle — direct (sequence inside itself)
 -- or transitive (E1 already contains a clip pointing to E2; inserting E1
 -- into E2 would close the loop).

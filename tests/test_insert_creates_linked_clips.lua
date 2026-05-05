@@ -67,7 +67,7 @@ local function build_fixture(project_fps_mismatch_policy)
         VALUES ('e-a1', 'e', 'A1', 'AUDIO', 1);
     ]]))
 
-    -- Master's default video layer — INV-8 requires non-NULL when a master has
+    -- Master's default video layer — default_video_layer_track_id must be non-NULL when a master has
     -- any video track.
     assert(db:exec([[
         UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm'

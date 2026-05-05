@@ -3,7 +3,7 @@
 -- Responsibilities:
 -- - CRUD on rows in the `media_refs` table: direct file references that live
 --   inside master sequences (sequences.kind='master').
--- - Enforce INV-1 at the model layer with actionable asserts (rule 1.14):
+-- - Enforce "media_refs must be owned by a kind='master' sequence" at the model layer with actionable asserts (rule 1.14):
 --   every media_ref row's owner_sequence_id must reference a master sequence.
 -- - Require explicit values for every state column on INSERT (rule 2.13).
 --
@@ -32,7 +32,7 @@ local function fetch_sequence_kind(db, sequence_id)
     return found, kind
 end
 
---- Assert that the target sequence exists and has kind='master' (INV-1).
+--- Assert that the target sequence exists and has kind='master' (media_refs must be owned by a kind='master' sequence).
 --- Message names the media_ref id, the owner_sequence_id, and the actual kind
 --- (rule 1.14 — actionable context).
 function M.assert_owning_is_master(db, media_ref_id, owner_sequence_id)
@@ -41,7 +41,7 @@ function M.assert_owning_is_master(db, media_ref_id, owner_sequence_id)
         "MediaRef.assert_owning_is_master: owner_sequence_id=%s not found (media_ref=%s)",
         tostring(owner_sequence_id), tostring(media_ref_id)))
     assert(kind == "master", string.format(
-        "INV-1 violation in MediaRef.assert_owning_is_master: media_ref=%s owner_sequence_id=%s "
+        "INV-1 (media_refs must be owned by a kind='master' sequence) violation in MediaRef.assert_owning_is_master: media_ref=%s owner_sequence_id=%s "
         .. "kind='%s' (expected 'master')",
         tostring(media_ref_id), tostring(owner_sequence_id), tostring(kind)))
 end
@@ -72,7 +72,7 @@ local function to_int_bool(v)
 end
 
 --- Create a media_ref row. Returns its id.
---- Enforces INV-1 at write time.
+--- Enforces "media_refs must be owned by a kind='master' sequence" at write time.
 function M.create(fields)
     assert(type(fields) == "table", "MediaRef.create: fields table required")
     validate_required(fields)
@@ -111,7 +111,7 @@ function M.create(fields)
     local ok = stmt:exec()
     stmt:finalize()
     assert(ok, string.format(
-        "MediaRef.create: INSERT failed for id=%s (likely INV-1 trigger or FK)",
+        "MediaRef.create: INSERT failed for id=%s (likely trigger: media_refs must be owned by a kind='master' sequence, or FK)",
         id))
     return id
 end

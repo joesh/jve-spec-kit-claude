@@ -3,7 +3,7 @@
 -- Per FR-007 / commands.md §SetMasterDefaultLayer:
 --   Args: { sequence_id, track_id }. sequence_id MUST reference a
 --     kind='master' sequence (rule 2.29).
---   Pre: track_id belongs to sequence_id's V tracks; non-NULL (INV-8
+--   Pre: track_id belongs to sequence_id's V tracks; non-NULL (default_video_layer_track_id must be non-NULL when video tracks exist;
 --     forbids NULL when the sequence has video tracks).
 --   Mutation: sequences.default_video_layer_track_id = track_id.
 --   Undo: prior value.

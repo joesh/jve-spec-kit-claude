@@ -114,7 +114,7 @@ assert(media_insert and media_insert:save(db))
 
 -- V13: media_insert needs a master sequence so Insert can find one to plant.
 -- ensure_master attaches the media_ref; the original V8 'stream clip inside
--- master' construction is gone (INV-2 forbids it).
+-- master' construction is gone (clips must be owned by a kind='nested' sequence).
 local Sequence = require("models.sequence")
 local masterclip_insert_id = Sequence.ensure_master("media_insert", "default_project")
 

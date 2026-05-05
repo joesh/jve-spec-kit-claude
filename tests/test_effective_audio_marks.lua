@@ -84,7 +84,7 @@ end
 -- audio_sample_rate=48000). The master itself becomes the test subject —
 -- clip_edit_helper.resolve_audio_stream_timing reads its media_refs to
 -- compute the audio stream timing under marks. No clips on a master under
--- INV-2 (master holds media_refs only).
+-- clips must be owned by a kind='nested' sequence (master holds media_refs only).
 local mc_id = Sequence.ensure_master("media_v", "project")
 local mc = Sequence.load(mc_id)
 assert(mc, "Failed to load master sequence")

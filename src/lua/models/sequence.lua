@@ -2,6 +2,7 @@
 -- Mirrors the behaviour of the legacy C++ model closely enough for imports and commands.
 local database = require("core.database")
 local uuid = require("uuid")
+local log = require("core.logger").for_area("media")
 
 local Sequence = {}
 Sequence.__index = Sequence
@@ -574,7 +575,7 @@ end
 ---   * sequences.video_start_tc_frame / audio_start_tc_samples populated
 ---     from media TC (FR-017 default-derivation).
 ---   * sequences.default_video_layer_track_id = the V1 track when video
----     present (INV-8).
+---     present (default_video_layer_track_id must be non-NULL when video tracks exist).
 ---
 --- Per-track unit convention (matching the established CT-R5/CT-R6 fixtures
 --- and pre-013 ensure_masterclip): video media_refs measure timeline_start
@@ -630,10 +631,11 @@ function Sequence.ensure_master(media_id, project_id, opts)
         local duration_frames = media.duration
         local has_video = media.width > 0
         local has_audio = media.audio_channels > 0
-        assert(has_video or has_audio, string.format(
-            "Sequence.ensure_master: media %s has no video and no audio "
-            .. "(width=%d, audio_channels=%d) — has no TC origin to anchor a master",
-            tostring(media_id), media.width, media.audio_channels))
+        if not has_video and not has_audio then
+            log.warn("ensure_master: media %s ('%s') has no video or audio dims; "
+                .. "master will have no media_refs until file is probed",
+                tostring(media_id), tostring(media.name))
+        end
 
         local sample_rate = opts.sample_rate
             or (has_audio and media.audio_sample_rate or nil)
@@ -675,16 +677,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             has_video        = has_video,
             has_audio        = has_audio,
             sample_rate      = sample_rate,
-            -- Video-only masters carry NULL audio_sample_rate (schema
-            -- permits it for kind='master' specifically). The resolver
-            -- never emits audio media_refs for these so the rate is
-            -- genuinely unrepresentable — better to be honest about the
-            -- absence than to invent a value.
-            seq_audio_rate   = sample_rate,  -- nil when video-only
-            -- Audio-only masters carry NULL width/height (schema permits
-            -- it for kind='master'). Same rationale as audio_sample_rate
-            -- above: no video media_refs ever land on them, so the
-            -- dimensions are unrepresentable.
+            seq_audio_rate   = sample_rate,  -- nil for video-only; schema permits NULL on kind='master'
             width            = has_video and media.width  or nil,
             height           = has_video and media.height or nil,
             video_tc         = video_tc,
@@ -736,8 +729,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             created_at           = now,
             modified_at          = now,
         })
-        -- INV-8: master with at least one V track must have a non-NULL
-        -- default_video_layer_track_id.
+        -- default_video_layer_track_id must be non-NULL when video tracks exist.
         Sequence.update(seq.id, { default_video_layer_track_id = vtrack.id })
     end
 
@@ -2141,20 +2133,19 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                     c.master_audio_track_id, "master_audio_track_id")
             end
 
-            -- INV-5: clip_channel_override.channel_index must point at an
-            -- existing channel in the referenced sequence's audio layout.
+            -- channel_index must be < master's audio channel count.
             -- Iterate the clip's overrides (if any) and assert each is in
             -- bounds. For first-landing this checks only when the clip
             -- directly references a master (kind='master') so we have a
             -- concrete channel count; nested-of-nested defers to the
-            -- master at its leaf via the recursion's downstream INV-5
-            -- check on whatever clips the inner sequence holds.
+            -- master at its leaf via the recursion's downstream check
+            -- on whatever clips the inner sequence holds.
             do
                 local kind_stmt = db:prepare(
                     "SELECT kind FROM sequences WHERE id = ?")
-                assert(kind_stmt, "Sequence.resolve INV-5: kind prepare failed")
+                assert(kind_stmt, "Sequence.resolve (channel_index < master audio channel count): kind prepare failed")
                 kind_stmt:bind_value(1, c.nested_sequence_id)
-                assert(kind_stmt:exec(), "Sequence.resolve INV-5: kind exec failed")
+                assert(kind_stmt:exec(), "Sequence.resolve (channel_index < master audio channel count): kind exec failed")
                 local nk
                 if kind_stmt:next() then nk = kind_stmt:value(0) end
                 kind_stmt:finalize()
@@ -2164,7 +2155,7 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                     local Override = require("models.clip_channel_override")
                     for _, ov in ipairs(Override.find_all(c.id)) do
                         assert(ov.channel_index < channel_count, string.format(
-                            "Sequence.resolve INV-5: clip %s has "
+                            "Sequence.resolve INV-5 (channel_index must be < master's audio channel count): clip %s has "
                             .. "clip_channel_override(channel_index=%d) but "
                             .. "the referenced master sequence %s has only "
                             .. "%d audio channel(s). The master likely "
@@ -2364,8 +2355,8 @@ function Sequence.find(id)
     return row
 end
 
---- Assert INV-8 on the given sequence: if the sequence has at least one video
---- track, default_video_layer_track_id must be non-NULL AND reference a live
+--- Assert default_video_layer_track_id invariant on the given sequence: if the sequence has at
+--- least one video track, default_video_layer_track_id must be non-NULL AND reference a live
 --- video track of THIS sequence. Actionable assert message per rule 1.14.
 function Sequence.assert_inv8(id)
     local conn = resolve_db()
@@ -2384,7 +2375,7 @@ function Sequence.assert_inv8(id)
     if not has_video then
         -- No video tracks; default_video_layer_track_id must be NULL.
         assert(row.default_video_layer_track_id == nil, string.format(
-            "INV-8: sequence %s has no video tracks but default_video_layer_track_id=%s "
+            "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s has no video tracks but default_video_layer_track_id=%s "
             .. "(Sequence.assert_inv8)",
             id, tostring(row.default_video_layer_track_id)))
         return
@@ -2392,7 +2383,7 @@ function Sequence.assert_inv8(id)
 
     -- Has video tracks → default MUST be non-NULL and reference a live V track of this sequence.
     assert(row.default_video_layer_track_id ~= nil, string.format(
-        "INV-8 violation: sequence %s has video tracks but default_video_layer_track_id is NULL "
+        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s has video tracks but default_video_layer_track_id is NULL "
         .. "(Sequence.assert_inv8)", id))
 
     local vs = conn:prepare(
@@ -2408,14 +2399,14 @@ function Sequence.assert_inv8(id)
     end
     vs:finalize()
     assert(found, string.format(
-        "INV-8: sequence %s default_video_layer_track_id=%s does not exist "
+        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s does not exist "
         .. "(Sequence.assert_inv8)",
         id, tostring(row.default_video_layer_track_id)))
     assert(ttype == "VIDEO", string.format(
-        "INV-8: sequence %s default_video_layer_track_id=%s is track_type=%s (expected VIDEO)",
+        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s is track_type=%s (expected VIDEO)",
         id, tostring(row.default_video_layer_track_id), tostring(ttype)))
     assert(tseq == id, string.format(
-        "INV-8: sequence %s default_video_layer_track_id=%s belongs to sequence %s (cross-sequence not allowed)",
+        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s belongs to sequence %s (cross-sequence not allowed)",
         id, tostring(row.default_video_layer_track_id), tostring(tseq)))
 end
 
@@ -2436,8 +2427,8 @@ local SEQUENCE_UPDATABLE = {
 }
 
 --- Update a subset of columns on a sequence. Fields not in the table are
---- untouched. Enforces INV-8 after the write — the update as a unit must not
---- leave the sequence in a state that violates INV-8.
+--- untouched. Enforces default_video_layer_track_id validity after the write — the update as a unit must not
+--- leave the sequence with a NULL default when video tracks exist.
 function Sequence.update(id, fields)
     assert(type(fields) == "table", "Sequence.update: fields table required")
     local conn = resolve_db()
@@ -2476,7 +2467,7 @@ function Sequence.update(id, fields)
     assert(ok, string.format("Sequence.update: exec failed for id=%s: %s",
         id, tostring(err)))
 
-    -- INV-8 post-condition check.
+    -- Post-condition: default_video_layer_track_id must be non-NULL when video tracks exist.
     Sequence.assert_inv8(id)
     return true
 end
@@ -2735,7 +2726,7 @@ end
 
 --- Count the audio channels exposed by a master sequence's tracks. Sum
 --- of media.audio_channels across the master's A-track media_refs. Used
---- by ToggleClipChannel/SetClipChannelGain for INV-5 bounds checks.
+--- by ToggleClipChannel/SetClipChannelGain for channel_index bounds checks.
 ---
 --- @param master_id string  must reference a kind='master' sequence
 --- @return integer  total audio channel count

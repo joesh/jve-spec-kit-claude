@@ -130,18 +130,48 @@ check("audio TC=2204162 (explicit)", atc4 == 2204162, "got: " .. tostring(atc4))
 check("audio rate=48000", arate4 == 48000)
 
 --------------------------------------------------------------------------------
--- Half 2: Output invariants — ensure_masterclip asserts on unknown TC
+-- Half 2: Output invariants
 --------------------------------------------------------------------------------
 
-print("\n--- ensure_masterclip rejects unknown TC ---")
+print("\n--- media with no video or audio dims: ensure_master succeeds, no media_refs ---")
 
-expect_error("ensure_masterclip asserts on nil TC", function()
-    Sequence.ensure_master("m_no_tc", "proj1")
-end, "has no TC origin")
+-- Media whose project file carried no dims (placeholder ref, failed blob
+-- decode) still gets a master row — dims will be filled in when the file
+-- is probed. ensure_master logs a warning and continues.
+local mc_nodims_ok, mc_nodims_id = pcall(Sequence.ensure_master, "m_no_tc", "proj1")
+check("no-dims media → ensure_master succeeds", mc_nodims_ok,
+    "error: " .. tostring(mc_nodims_id))
 
-expect_error("ensure_masterclip asserts on empty metadata TC", function()
-    Sequence.ensure_master("m_empty", "proj1")
-end, "has no TC origin")
+local mc_empty_ok, mc_empty_id = pcall(Sequence.ensure_master, "m_empty", "proj1")
+check("empty metadata → ensure_master succeeds", mc_empty_ok,
+    "error: " .. tostring(mc_empty_id))
+
+-- The master exists but has no media_refs yet.
+if mc_nodims_ok then
+    local stmt2 = assert(db:prepare("SELECT COUNT(*) FROM media_refs WHERE owner_sequence_id = ?"))
+    stmt2:bind_value(1, mc_nodims_id)
+    stmt2:exec(); stmt2:next()
+    check("no-dims master has 0 media_refs", stmt2:value(0) == 0,
+        "got: " .. tostring(stmt2:value(0)))
+    stmt2:finalize()
+end
+
+print("\n--- ensure_masterclip asserts on unknown TC for media WITH video/audio ---")
+
+-- A media record with video dims (width > 0) but no TC metadata must assert —
+-- the source viewer and decoder need an authoritative TC origin.
+local m_video_no_tc = Media.create({
+    id = "m_video_no_tc", project_id = "proj1", name = "video_notc.mov",
+    file_path = "/nonexistent/video_notc.mov",
+    duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
+    width = 1920, height = 1080,
+    -- no metadata → get_start_tc returns nil
+})
+m_video_no_tc:save(db)
+
+expect_error("video media without TC → ensure_master asserts", function()
+    Sequence.ensure_master("m_video_no_tc", "proj1")
+end, "no video TC origin")
 
 --------------------------------------------------------------------------------
 -- Half 2: Output invariants — masterclip source_in uses real TC

@@ -113,7 +113,7 @@ print("  OK")
 
 -- ======================================================================
 -- Test 2: Timeline clips do NOT have marks (marks live on master clips)
--- V13: every row in clips is a timeline-side clip (INV-2 enforces nested-only).
+-- V13: every row in clips is a timeline-side clip (clips must be owned by a kind='nested' sequence).
 -- ======================================================================
 print("Test 2: Timeline clips have no marks...")
 local tl_mark_count = scalar([[

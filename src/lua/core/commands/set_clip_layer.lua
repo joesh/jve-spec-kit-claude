@@ -2,7 +2,7 @@
 ---
 --- Sets a per-clip video-layer override. The override picks one of the
 --- referenced sequence's V tracks; NULL means "track the referenced
---- sequence's default_video_layer_track_id" (which INV-8 keeps valid).
+--- sequence's default_video_layer_track_id" (which is kept non-NULL when video tracks exist).
 ---
 --- Per FR-013 and contracts/commands.md §SetClipLayer:
 ---   Args: { sequence_id, clip_id, track_id_or_null }

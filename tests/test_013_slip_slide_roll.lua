@@ -3,7 +3,7 @@
 -- Slip:  move source_in AND source_out by ±N nested frames. Window
 --        content changes, but the clip's position and duration on the
 --        owner timeline are unchanged. Must keep the source window
---        within [0, nested.native_duration] per INV-4.
+--        within [0, nested.native_duration] (source window: non-empty, lower bound >= 0).
 --
 -- Slide: move timeline_start by ±N owner frames. Source window is
 --        unchanged. Adjacent clips on the same track ripple (the
@@ -19,8 +19,8 @@
 --          B.source_in shifts by source_delta_B;
 --          B.timeline_start +=/- N;
 --          B.duration -=/+ N.
---        Each side uses its own fps_mismatch_policy. Must respect INV-4
---        on both sides.
+--        Each side uses its own fps_mismatch_policy. Source window must be
+--        non-empty with lower bound >= 0 on both sides.
 --
 -- Black-box DB-state assertions.
 
@@ -143,7 +143,7 @@ do
     print("  ok")
 end
 
--- Error: Slip that would push source_in below 0 (INV-4).
+-- Error: Slip that would push source_in below 0 (source window lower bound must be >= 0).
 print("-- Slip that underflows refuses --")
 do
     local db = build_fixture(24, 1000)
@@ -273,6 +273,26 @@ do
         delta_timeline_frames = -50,
     })
     assert(not ok, "Roll collapsing A to zero must refuse")
+    print("  ok")
+end
+
+-- Error: Roll that would push A's source_out past master coverage.
+print("-- Roll that overflows A's master coverage refuses --")
+do
+    -- nested has 200-frame coverage. A currently ends at 180 (source_out).
+    -- Roll N=+25 would push A.source_out to 205 > 200 → must refuse.
+    local db = build_fixture(24, 200)
+    seed_clip(db, "a", "passthrough", 0,  100, 80,  180)
+    seed_clip(db, "b", "passthrough", 100, 50, 180, 230)
+    local ok = pcall(Roll.execute, {
+        sequence_id = "e",
+        outgoing_clip_id = "a",
+        incoming_clip_id = "b",
+        delta_timeline_frames = 25,
+    })
+    assert(not ok, "Roll past A.source_out=master.coverage must refuse")
+    local a = load_clip(db, "a")
+    assert(a.source_out == 180, "DB unchanged after refused roll overflow: source_out=" .. tostring(a.source_out))
     print("  ok")
 end
 

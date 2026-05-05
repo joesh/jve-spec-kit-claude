@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS sequences (
 
     -- 013: default video layer exposed when this sequence is referenced by a
     -- clip whose master_layer_track_id is NULL. Non-NULL whenever the sequence
-    -- has at least one video track (INV-8, enforced at model layer + triggers).
+    -- has at least one video track (default_video_layer_track_id must be non-NULL when video tracks exist — enforced at model layer + triggers).
     default_video_layer_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
 
     -- 013: FR-017 — user-modifiable start TCs.
@@ -243,7 +243,7 @@ CREATE TABLE IF NOT EXISTS clips (
     -- Per-clip audio-track selector. NULL = composite (play all of the nested
     -- sequence's audio tracks together; FR-005). Non-NULL = expose exactly one
     -- of the nested sequence's audio tracks (FR-023/FR-024 — Expand/Collapse).
-    -- Symmetric to master_layer_track_id but for audio. INV-9: non-NULL only
+    -- Symmetric to master_layer_track_id but for audio. Non-NULL only
     -- on clips whose owner-side track is itself an audio track, and the
     -- referenced track must belong to nested_sequence_id and have kind='audio'
     -- (model-layer asserts; FK takes care of dangling-on-delete).
@@ -433,7 +433,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- INV-1 / INV-2 — schema-layer enforcement (rule 2.21 static verifiability)
+-- media_refs/clips ownership constraints — schema-layer enforcement (rule 2.21 static verifiability)
 -- ============================================================================
 -- SQLite doesn't allow subqueries in CHECK constraints; triggers are the
 -- schema-layer path to express "owner_sequence_id must reference a sequence

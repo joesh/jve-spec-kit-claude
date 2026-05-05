@@ -156,7 +156,7 @@ end
 
 local function fetch_clip_ids(limit)
     local ids = {}
-    -- V13: every row in `clips` is a timeline-side clip (INV-2 enforces it).
+    -- V13: every row in `clips` is a timeline-side clip (clips must be owned by a kind='nested' sequence).
     local stmt = db:prepare("SELECT id FROM clips ORDER BY timeline_start_frame DESC")
     assert(stmt, "fetch_clip_ids: prepare failed")
     assert(stmt:exec())
@@ -292,7 +292,7 @@ os.remove(scratch_db_path)
 -- MatchFrame on imported clips (real timeline_state)
 -- ============================================================
 -- V13: timeline-side clips reference their master via nested_sequence_id
--- (the V8 master_clip_id column is gone), and INV-2 already enforces that
+-- (the V8 master_clip_id column is gone), and clips must be owned by a kind='nested' sequence; that
 -- every clip has a non-null nested_sequence_id, so no NULL filter needed.
 local timeline_master_stmt = db:prepare([[SELECT c.id, c.nested_sequence_id, c.timeline_start_frame
     FROM clips c LIMIT 1]])
@@ -600,7 +600,7 @@ end
 
 local function fetch_single_clip_id(sequence_id)
     assert(sequence_id, "fetch_single_clip_id: sequence_id required")
-    -- V13: every clip is on the owner sequence's tracks (INV-2 enforces it).
+    -- V13: every clip is on the owner sequence's tracks (clips must be owned by a kind='nested' sequence).
     local stmt = db:prepare([[
         SELECT c.id FROM clips c
         JOIN tracks t ON c.track_id = t.id

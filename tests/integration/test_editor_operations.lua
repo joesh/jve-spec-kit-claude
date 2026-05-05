@@ -162,7 +162,7 @@ local function find_adjacent_pair(track_id, min_headroom)
     local clips = timeline_state.get_clips()
     local track_clips = {}
     for _, c in ipairs(clips) do
-        if c.track_id == track_id and c.clip_kind ~= "gap" then
+        if c.track_id == track_id and not c.is_gap then
             table.insert(track_clips, c)
         end
     end
@@ -172,9 +172,10 @@ local function find_adjacent_pair(track_id, min_headroom)
     for i = 1, #track_clips - 1 do
         local a = track_clips[i]
         local b = track_clips[i + 1]
-        if a.timeline_start + a.duration == b.timeline_start and a.media_id then
+        local a_media_id = a.resolved_media and a.resolved_media.id
+        if a.timeline_start + a.duration == b.timeline_start and a_media_id then
             -- Check media headroom: can clip_a extend its out edge?
-            local media = Media.load(a.media_id)
+            local media = Media.load(a_media_id)
             if media and media.duration then
                 local tc_origin = media:get_start_tc() or 0
                 local file_src_in = a.source_in - tc_origin
@@ -194,7 +195,7 @@ local function find_gapped_pair(track_id)
     local clips = timeline_state.get_clips()
     local track_clips = {}
     for _, c in ipairs(clips) do
-        if c.track_id == track_id and c.clip_kind ~= "gap" then
+        if c.track_id == track_id and not c.is_gap then
             table.insert(track_clips, c)
         end
     end
@@ -232,7 +233,7 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
     local all_clips = timeline_state.get_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap"
+        if c.track_id == V1_TRACK and not c.is_gap
             and c.timeline_start > clip_b.timeline_start + clip_b.duration then
             downstream = c
             break
@@ -301,7 +302,7 @@ run_test("roll_on_audio_doesnt_shift_downstream", function()
     local all_clips = timeline_state.get_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == A3_TRACK and c.clip_kind ~= "gap"
+        if c.track_id == A3_TRACK and not c.is_gap
             and c.timeline_start > clip_b.timeline_start + clip_b.duration then
             downstream = c
             break
@@ -359,7 +360,7 @@ run_test("ripple_on_v1_shifts_downstream", function()
     local all_clips = timeline_state.get_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap"
+        if c.track_id == V1_TRACK and not c.is_gap
             and c.timeline_start > clip_b.timeline_start + clip_b.duration then
             downstream = c
             break
@@ -413,7 +414,7 @@ run_test("roll_vs_ripple_produce_different_results", function()
     local all_clips = timeline_state.get_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap"
+        if c.track_id == V1_TRACK and not c.is_gap
             and c.timeline_start > clip_b.timeline_start + clip_b.duration then
             downstream = c
             break
@@ -548,7 +549,7 @@ run_test("split_clip_preserves_coverage", function()
     local all_clips = timeline_state.get_clips()
     local target = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap" and c.duration > 10 then
+        if c.track_id == V1_TRACK and not c.is_gap and c.duration > 10 then
             target = c
             break
         end
@@ -562,7 +563,7 @@ run_test("split_clip_preserves_coverage", function()
     local cmd = Command.create("SplitClip", PROJECT_ID)
     cmd:set_parameter("sequence_id", SEQUENCE_ID)
     cmd:set_parameter("clip_id", target.id)
-    cmd:set_parameter("split_value", split_point)
+    cmd:set_parameter("split_frame", split_point)
 
     local result = command_manager.execute(cmd)
     assert(result.success, "SplitClip failed: " .. tostring(result.error_message))
@@ -594,7 +595,7 @@ run_test("toggle_clip_enabled", function()
     local all_clips = timeline_state.get_clips()
     local target = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap" then
+        if c.track_id == V1_TRACK and not c.is_gap then
             target = c
             break
         end
@@ -633,7 +634,7 @@ run_test("nudge_clip_position", function()
     -- Find a clip that's NOT at position 0 (so we can nudge left)
     local target = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and c.clip_kind ~= "gap" and c.timeline_start > 10 then
+        if c.track_id == V1_TRACK and not c.is_gap and c.timeline_start > 10 then
             target = c
             break
         end

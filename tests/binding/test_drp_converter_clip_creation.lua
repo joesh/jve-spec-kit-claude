@@ -37,11 +37,11 @@ local function scalar(sql, param)
     return val
 end
 
--- V13: all clips live in a nested sequence (INV-2). owner_sequence_id +
+-- V13: all clips live in a nested sequence (clips must be owned by a kind='nested' sequence). owner_sequence_id +
 -- project_id are NOT NULL at schema level, so the original orphan/no-project
 -- queries are unfalsifiable — INSERT would have failed before reaching this
 -- assertion. We keep the count-positive check; structural integrity is the
--- INV-2/INV-3 triggers' job.
+-- ownership + acyclicity triggers' job.
 local clip_count = scalar("SELECT COUNT(*) FROM clips")
 assert(clip_count and clip_count > 0,
     string.format("Expected clips, got %s", tostring(clip_count)))

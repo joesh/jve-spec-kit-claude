@@ -15,7 +15,7 @@
 -- timebase directly, since that's the space in which the window is valid.
 --
 -- Refuses: delta == 0, or any slip that pushes the window outside
--- [0, nested.effective_duration] (INV-4). Refusal is loud; DB unchanged.
+-- [0, nested.effective_duration] (source window: non-empty, lower bound >= 0). Refusal is loud; DB unchanged.
 --
 -- SQL isolation: all DB access via models.
 --
@@ -46,7 +46,9 @@ function M.execute(args)
     local new_source_in  = clip.source_in_frame  + delta
     local new_source_out = clip.source_out_frame + delta
 
-    -- Clip.update asserts INV-4 pre-write; refused slip leaves DB untouched.
+    Clip.assert_within_master_coverage(clip.nested_sequence_id, new_source_out,
+        "Slip clip=" .. args.clip_id)
+
     Clip.update_bounds(args.clip_id,
         clip.timeline_start_frame, clip.duration_frames,
         new_source_in, new_source_out)

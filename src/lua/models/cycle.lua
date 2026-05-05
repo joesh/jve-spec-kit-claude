@@ -11,7 +11,7 @@
 -- mutation time per research.md §3. O(|reachable from candidate|); real
 -- projects rarely exceed depth 3.
 --
--- Master sequences never appear as "owner" in clips (INV-2), so their subtree
+-- Master sequences never appear as "owner" in clips (clips must be kind='nested'), so their subtree
 -- is terminal: no outgoing nested_sequence_id edges.
 
 local database = require("core.database")

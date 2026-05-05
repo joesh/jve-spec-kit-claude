@@ -105,7 +105,7 @@ local function validate_plan_args(args)
         "place_shared: timeline_start_frame must be non-negative integer")
 end
 
--- Load the owner+nested sequences, enforce INV-2 on the owner, project
+-- Load the owner+nested sequences, enforce that owner is kind='nested', project
 -- consistency, and cycle absence. Returns owner, nested.
 local function resolve_endpoints(args)
     local owner  = Sequence.find(args.sequence_id)
@@ -115,7 +115,7 @@ local function resolve_endpoints(args)
     assert(nested, string.format(
         "place_shared: nested %s not found", args.nested_sequence_id))
     assert(owner.kind == "nested", string.format(
-        "place_shared: owner %s has kind='%s' (expected 'nested' — INV-2)",
+        "place_shared: owner %s has kind='%s' (expected 'nested' — clips must be owned by a kind='nested' sequence)",
         owner.id, owner.kind))
     assert(owner.project_id == nested.project_id, string.format(
         "place_shared: owner project %s != nested project %s",

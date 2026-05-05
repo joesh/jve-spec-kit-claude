@@ -1,4 +1,4 @@
--- T009 (013): INV-1 — media_refs.owner_sequence_id MUST reference a kind='master' sequence.
+-- T009 (013): media_refs must be owned by a kind='master' sequence.
 -- Model layer must refuse with a loud assert naming the media_ref id, the wrong
 -- owner_sequence_id, and its actual kind (rule 1.14). Schema trigger is defense-in-depth;
 -- this test verifies the model-layer check fires FIRST with the actionable message.
@@ -16,7 +16,7 @@ assert(db:exec(
     "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
     .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
 
--- A nested (non-master) sequence. INV-1 says media_refs CANNOT live here.
+-- A nested (non-master) sequence. Media_refs must be owned by a kind='master' — cannot live here.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
@@ -62,7 +62,7 @@ assert(type(good_id) == "string" and good_id ~= "",
 local ok, err = pcall(function()
     MediaRef.create({
         project_id = "p1",
-        owner_sequence_id = "seq-edit",  -- kind='nested' — INV-1 violation
+        owner_sequence_id = "seq-edit",  -- kind='nested' — violates "media_refs must be kind='master'"
         track_id = "trk-v1",
         media_id = "med1",
         source_in_frame = 0,
@@ -74,7 +74,7 @@ local ok, err = pcall(function()
         playhead_frame = 0,
     })
 end)
-assert(not ok, "MediaRef.create on a nested sequence must refuse (INV-1)")
+assert(not ok, "MediaRef.create on a nested sequence must refuse (media_refs must be kind='master')")
 assert(tostring(err):find("INV%-1"),
     "MediaRef.create error must name INV-1; got: " .. tostring(err))
 assert(tostring(err):find("seq%-edit"),

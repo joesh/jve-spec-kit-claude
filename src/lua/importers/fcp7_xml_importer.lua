@@ -879,13 +879,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         -- per Apple's FCP7 XML spec (asterisk). Resolve omits it. When a file
         -- declares audio_channels > 0 but no rate, default to 48000 — the
         -- FCP7-spec implied default and the universal video-post standard.
+        assert(not (audio_sr and audio_sr > 0) or audio_ch > 0, string.format(
+            "FCP7 import: media '%s' has <samplerate> but audio_channels=0",
+            tostring(media_info.name or key)))
         if audio_ch > 0 and not (audio_sr and audio_sr > 0) then
             audio_sr = 48000
-            log.event(
-                "FCP7 import: media '%s' has audio_channels=%d but no <audio>"
-                .. "<samplecharacteristics><samplerate>; defaulting to 48000 Hz "
-                .. "(spec-optional element).",
-                tostring(media_info.name or key), audio_ch)
+            log.detail("FCP7 import: media '%s' no <samplecharacteristics><samplerate>; "
+                .. "using spec-implied default 48000 Hz", tostring(media_info.name or key))
         end
         local meta = { start_tc_value = 0, start_tc_rate = fps_num }
         if audio_ch > 0 then
@@ -926,29 +926,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
 
-        -- V13 INV-2: clips need a master sequence (nested_sequence_id), and
-        -- Sequence.ensure_master requires media with width>0 OR audio_channels>0
-        -- to anchor a TC origin. FCP7 XML may legitimately omit per-file
-        -- <media><samplecharacteristics> for unresolvable / placeholder
-        -- file references — those clips can't be created. Skip with a warning
-        -- rather than aborting the whole import (preserves fail-fast in
-        -- Sequence.ensure_master while letting the importer be permissive).
-        local media = Media.load(media_id)
-        local has_video = media and media.width and media.width > 0
-        local has_audio = media and media.audio_channels and media.audio_channels > 0
-        if not (has_video or has_audio) then
-            log.warn(
-                "FCP7 import: skipping clip '%s' — referenced media has no "
-                .. "video or audio streams declared in XML (cannot anchor a "
-                .. "master sequence). file_id=%s",
-                tostring(clip_info.name or clip_info.original_id),
-                tostring(clip_info.original_id or clip_key))
-            -- Return success (skip is intentional). create_clip's caller
-            -- treats false as a fatal abort.
-            return true
-        end
-
-        -- V13: nested_sequence_id is the master sequence id (replaces master_clip_id).
+        -- V13: nested_sequence_id is the master sequence id.
         local nested_seq_id = ensure_master_clip(clip_info, clip_key, media_id)
         assert(nested_seq_id and nested_seq_id ~= "",
             string.format("create_clip: ensure_master_clip returned nil for clip '%s' (media_id=%s, key=%s)",
@@ -987,14 +965,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             source_out = source_in + duration
         end
 
-        -- V13 INV-4: clip's [source_in, source_out] must fit within nested
-        -- (master) sequence's duration. Stills and 1-frame media: master
-        -- duration is 1 — collapse to a unit source range; the clip's
-        -- duration_frames (timeline) carries the on-screen length and the
-        -- resolver loops the single source frame. Mirrors importer_core.lua's
-        -- still clamp (DRP path).
-        if media and (media.n or (media.duration and media.duration <= 1)) then
-            source_in = 0
+        -- Stills have exactly 1 media frame (file-relative frame 0).
+        -- FCP7 <in> often carries timeline TC, not file-relative position.
+        -- The TMB computes speed_ratio = (source_out - source_in) / duration;
+        -- with source_in=0, source_out=1, integer truncation maps every
+        -- timeline frame to file_frame 0 — the only valid frame.
+        if clip_info.media and clip_info.media.duration == 1 then
+            source_in  = 0
             source_out = 1
         end
 
@@ -1184,19 +1161,13 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
             -- 013: edit timelines from FCP7 XML are kind='nested'.
-            -- Apple's FCP7 XML reference marks <samplecharacteristics> as
-            -- OPTIONAL (asterisk in spec). Resolve-exported XML routinely
-            -- omits the entire sequence-level <audio><samplecharacteristics>
-            -- block. FCP7 itself defaulted to 48000 Hz when the element
-            -- was absent — that's the de-facto industry post-production
-            -- standard and what every NLE assumes.
+            -- <samplecharacteristics> is OPTIONAL per FCP7 spec; 48000 Hz is the
+            -- FCP7-documented implied default when absent.
             local seq_audio_rate = seq_info.audio_sample_rate
             if not (type(seq_audio_rate) == "number" and seq_audio_rate > 0) then
                 seq_audio_rate = 48000
-                log.event(
-                    "FCP7 import: sequence '%s' has no <audio>"
-                    .. "<samplecharacteristics><samplerate>; defaulting to "
-                    .. "48000 Hz (FCP7-spec optional element, FCP7 default).",
+                log.detail("FCP7 import: sequence '%s' no <samplecharacteristics>"
+                    .. "<samplerate>; using spec-implied default 48000 Hz",
                     tostring(seq_info.name))
             end
             local sequence = Sequence.create(

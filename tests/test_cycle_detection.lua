@@ -1,6 +1,6 @@
 -- T011 (013): would_create_cycle DFS per research §3.
 -- Every command that writes a clip's nested_sequence_id must run this check first;
--- refusing a cycle at mutation time is FR-010 / INV-3.
+-- refusing a cycle at mutation time is FR-010 (containment DAG must be acyclic).
 -- Expected to FAIL until T016 (cycle.lua) lands.
 
 require("test_env")

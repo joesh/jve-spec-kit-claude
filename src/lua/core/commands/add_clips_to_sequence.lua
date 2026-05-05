@@ -24,7 +24,7 @@
 --     via the shared place_shared.occlude_track helper.
 --
 -- Refuses (loud): malformed args, conflicting clip_desc fields,
--- per-clip INV-2/INV-4 violations on insert, target_track_id absent or
+-- per-clip owner-kind and source-window violations on insert, target_track_id absent or
 -- in a different sequence.
 --
 -- Atomicity: SAVEPOINT wraps every DB write so a mid-batch failure
@@ -281,7 +281,7 @@ function M.execute(args)
     assert(owner_seq, string.format(
         "AddClipsToSequence: sequence %s not found", args.sequence_id))
     assert(owner_seq.kind == "nested", string.format(
-        "AddClipsToSequence: sequence %s has kind='%s' (expected 'nested') — INV-2",
+        "AddClipsToSequence: sequence %s has kind='%s' (expected 'nested') — clips must be owned by a kind='nested' sequence",
         args.sequence_id, tostring(owner_seq.kind)))
 
     local total_duration, track_map =

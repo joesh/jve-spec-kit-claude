@@ -63,7 +63,7 @@ do
 end
 -- V13: ensure_master creates the master Sequence + V/A tracks + media_refs
 -- in one shot. video_stream / audio_streams read from media_refs (no
--- 'clips inside master' table — INV-2 forbids that).
+-- 'clips inside master' table — clips must be owned by a kind='nested' sequence).
 local MC_TEST = Sequence.ensure_master("media_1", "project")
 local mc = Sequence.load(MC_TEST)
 assert(mc, "ensure_master should produce a loadable master")

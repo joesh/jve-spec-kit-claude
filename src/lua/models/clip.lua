@@ -186,8 +186,8 @@ end
 --- source_in_frame, source_out_frame, master_layer_track_id (nullable),
 --- fps_mismatch_policy ('resample'|'passthrough'), enabled, volume,
 --- mark_in_frame (nullable), mark_out_frame (nullable), playhead_frame.
---- Returns the clip id (string). INV-2/INV-4 enforced via the model
---- helpers + DB triggers. To create a master sequence from a media file,
+--- Returns the clip id (string). Owner must be kind='nested' and source window
+--- must be non-empty with lower bound >= 0 — enforced via the model helpers + DB triggers. To create a master sequence from a media file,
 --- call Sequence.ensure_master (writes media_refs, not clips).
 function M.create(fields)
     assert(type(fields) == "table",
@@ -875,9 +875,9 @@ end
 -- Feature 013: V9 clips row shape
 -- ===========================================================================
 -- Rows in the V9 `clips` table hold references to other sequences via
--- `nested_sequence_id`. INV-2 says owner_sequence_id must be kind='nested'
--- (enforced by the schema trigger). INV-4 says the window [source_in,
--- source_out] must fit inside the nested sequence's effective duration.
+-- `nested_sequence_id`. Clips must be owned by a kind='nested' sequence
+-- (enforced by the schema trigger). The clip source window must be non-empty
+-- with a lower bound >= 0 (enforced at model layer).
 
 local V13_REQUIRED = {
     "project_id", "owner_sequence_id", "nested_sequence_id",
@@ -889,54 +889,23 @@ local V13_REQUIRED = {
     "enabled", "volume", "playhead_frame",
 }
 
--- Fetch the nested sequence's effective duration in its own timebase. For a
--- 'nested' sequence, this is the max (timeline_start + duration) across its
--- clips; for a 'master', the max across its media_refs. 0 if empty — the
--- INV-4 caller then requires source_in/out to both be 0 (empty window refused
--- separately below).
-local function nested_sequence_effective_duration(db, seq_id)
-    local stmt = db:prepare([[
-        SELECT COALESCE(MAX(timeline_start_frame + duration_frames), 0)
-          FROM clips WHERE owner_sequence_id = ?
-        UNION ALL
-        SELECT COALESCE(MAX(timeline_start_frame + duration_frames), 0)
-          FROM media_refs WHERE owner_sequence_id = ?
-    ]])
-    assert(stmt, "Clip: nested-duration prepare failed")
-    stmt:bind_value(1, seq_id)
-    stmt:bind_value(2, seq_id)
-    assert(stmt:exec(), "Clip: nested-duration exec failed")
-    local total = 0
-    while stmt:next() do
-        local v = stmt:value(0)
-        if v and v > total then total = v end
-    end
-    stmt:finalize()
-    return total
-end
-
--- Assert window is in-bounds per INV-4. Direction-agnostic: forward clips
--- have source_in < source_out; reverse clips have source_in > source_out
--- (parser convention — see drp_importer reverse-clip handling). Both bounds
--- must lie in [0, nested_sequence_effective_duration]; only the empty
--- window source_in == source_out is forbidden. Rule 1.14: error names the
--- clip id, both bounds, and the nested sequence's duration.
-local function assert_window_in_bounds(db, clip_id, nested_seq_id, source_in, source_out)
+-- Sanity-check the source window. Direction-agnostic: forward clips have
+-- Source window: non-empty (source_in != source_out), non-negative bounds.
+-- Upper-bound (source_out <= master.duration) is NOT checked here: relink
+-- can shorten the master retroactively; runtime handles past-extent via
+-- partial_coverage / offline overlay / silence. Per-command preconditions
+-- (trim, slip, roll) enforce the upper bound at the right scope.
+local function assert_window_in_bounds(clip_id, source_in, source_out)
     assert(type(source_in) == "number" and type(source_out) == "number",
         "Clip: source_in/out must be numbers")
     assert(source_in ~= source_out, string.format(
-        "INV-4 violation: clip %s has source_in=%d == source_out=%d (empty window)",
-        tostring(clip_id), source_in, source_out))
+        "Clip window invariant: clip %s has source_in=%d == source_out=%d "
+        .. "(empty window)", tostring(clip_id), source_in, source_out))
     local lo = math.min(source_in, source_out)
-    local hi = math.max(source_in, source_out)
     assert(lo >= 0, string.format(
-        "INV-4 violation: clip %s has bound %d < 0 (source_in=%d, source_out=%d)",
-        tostring(clip_id), lo, source_in, source_out))
-    local dur = nested_sequence_effective_duration(db, nested_seq_id)
-    assert(hi <= dur, string.format(
-        "INV-4 violation: clip %s has bound %d > nested_sequence(%s).duration=%d "
+        "Clip window invariant: clip %s has negative source bound %d "
         .. "(source_in=%d, source_out=%d)",
-        tostring(clip_id), hi, tostring(nested_seq_id), dur, source_in, source_out))
+        tostring(clip_id), lo, source_in, source_out))
 end
 
 local function to_int_bool(v)
@@ -945,9 +914,9 @@ local function to_int_bool(v)
     error("Clip: boolean must be true/false or 1/0; got " .. tostring(v))
 end
 
--- Model-layer INV-2 pre-flight: fetch the owner_sequence_id's kind and raise a
--- clear error (rule 1.14) if it isn't 'nested'. This fires BEFORE the schema
--- trigger's generic RAISE(ABORT, ...) which cannot embed the offending value.
+-- Model-layer pre-flight: fetch the owner_sequence_id's kind and raise a
+-- clear error (rule 1.14) if it isn't 'nested' (clips must be owned by a kind='nested' sequence).
+-- This fires BEFORE the schema trigger's generic RAISE(ABORT, ...) which cannot embed the offending value.
 local function assert_owner_is_nested(db, clip_id, owner_seq_id)
     local stmt = db:prepare("SELECT kind FROM sequences WHERE id = ?")
     assert(stmt, "Clip: owner-kind prepare failed")
@@ -963,7 +932,7 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
         "Clip: owner_sequence_id=%s not found (clip=%s)",
         tostring(owner_seq_id), tostring(clip_id)))
     assert(kind == "nested", string.format(
-        "INV-2 violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'nested')",
+        "INV-2 (clips must be owned by a kind='nested' sequence) violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'nested')",
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
 end
 
@@ -977,8 +946,7 @@ function M._create_v13_row(fields)
     local id = fields.id or uuid.generate()
 
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
-    assert_window_in_bounds(db, id, fields.nested_sequence_id,
-        fields.source_in_frame, fields.source_out_frame)
+    assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
 
     local now = fields.created_at or os.time()
     local stmt = db:prepare([[
@@ -1018,7 +986,7 @@ function M._create_v13_row(fields)
     if not ok then err = stmt:last_error() end
     stmt:finalize()
     assert(ok, string.format(
-        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely INV-2 trigger or FK)",
+        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely trigger: clips must be owned by a kind='nested' sequence, or FK)",
         id, tostring(err)))
     return id
 end
@@ -1032,29 +1000,26 @@ local CLIP_UPDATABLE_V13 = {
     mark_in_frame = true, mark_out_frame = true, playhead_frame = true,
 }
 
---- Update a V9 clips row. Enforces INV-4 after the write — if
---- source_in_frame or source_out_frame changes, the new window must still
---- fit the nested sequence's bounds.
+--- Update a V9 clips row. Enforces the source-window invariant after the write — if
+--- source_in_frame or source_out_frame changes, the window must be non-empty with lower bound >= 0.
 function M.update(id, fields)
     assert(type(fields) == "table", "Clip.update: fields table required")
     local db = require("core.database").get_connection()
 
-    -- Fetch the clip to get the nested_sequence_id for INV-4.
     local fetch = db:prepare(
-        "SELECT nested_sequence_id, source_in_frame, source_out_frame FROM clips WHERE id = ?")
+        "SELECT source_in_frame, source_out_frame FROM clips WHERE id = ?")
     assert(fetch, "Clip.update: fetch prepare failed")
     fetch:bind_value(1, id)
     assert(fetch:exec(), "Clip.update: fetch exec failed")
     assert(fetch:next(), string.format("Clip.update: clip %s not found", tostring(id)))
-    local nested_id = fetch:value(0)
-    local cur_in = fetch:value(1)
-    local cur_out = fetch:value(2)
+    local cur_in = fetch:value(0)
+    local cur_out = fetch:value(1)
     fetch:finalize()
 
     local new_in  = fields.source_in_frame  ~= nil and fields.source_in_frame  or cur_in
     local new_out = fields.source_out_frame ~= nil and fields.source_out_frame or cur_out
     if fields.source_in_frame ~= nil or fields.source_out_frame ~= nil then
-        assert_window_in_bounds(db, id, nested_id, new_in, new_out)
+        assert_window_in_bounds(id, new_in, new_out)
     end
 
     local sets, values = {}, {}
@@ -1176,7 +1141,7 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
 end
 
 --- Low-level UPDATE: set timeline + duration + source bounds on one clip.
---- INV-4 is re-checked by Clip.update which we delegate to.
+--- Source-window invariant (non-empty, lower bound >= 0) is re-checked by Clip.update which we delegate to.
 function M.update_bounds(id, timeline_start_frame, duration_frames,
                         source_in_frame, source_out_frame)
     return M.update(id, {
@@ -1185,6 +1150,30 @@ function M.update_bounds(id, timeline_start_frame, duration_frames,
         source_in_frame      = source_in_frame,
         source_out_frame     = source_out_frame,
     })
+end
+
+--- Asserts that new_source_out does not exceed the master's media_refs
+--- coverage. No-op when master has no media_refs (coverage_max is nil).
+--- Called by editing commands (Slip, Roll) to enforce the command-layer
+--- upper bound; model layer only checks lower-bound + non-empty.
+function M.assert_within_master_coverage(nested_sequence_id, new_source_out, label)
+    assert(nested_sequence_id and nested_sequence_id ~= "",
+        "Clip.assert_within_master_coverage: nested_sequence_id required")
+    assert(type(new_source_out) == "number",
+        string.format("Clip.assert_within_master_coverage: new_source_out must be a number, got %s (%s)",
+            type(new_source_out), tostring(label)))
+    local db = require("core.database").get_connection()
+    local stmt = db:prepare(
+        "SELECT MAX(source_out_frame) FROM media_refs WHERE owner_sequence_id = ?")
+    assert(stmt, "Clip.assert_within_master_coverage: prepare failed")
+    stmt:bind_value(1, nested_sequence_id)
+    assert(stmt:exec(), "Clip.assert_within_master_coverage: exec failed")
+    local coverage_max = stmt:next() and stmt:value(0)
+    stmt:finalize()
+    if coverage_max and new_source_out > coverage_max then
+        error(string.format("%s: source_out %d exceeds master coverage %d",
+            label, new_source_out, coverage_max))
+    end
 end
 
 --- List every clip whose nested_sequence_id == the given sequence,
@@ -1294,7 +1283,7 @@ end
 
 --- Move a clip to a different owner sequence (Nest / Unnest). Distinct
 --- from M.update because owner_sequence_id is not in the structural-
---- protected updatable set there. Re-checks INV-2 via the SQLite
+--- protected updatable set there. Re-checks "clips must be owned by a kind='nested' sequence" via the SQLite
 --- trigger after the UPDATE.
 ---
 --- @param id string
@@ -1315,7 +1304,7 @@ function M.transfer_owner(id, new_owner_sequence_id)
     stmt:finalize()
     assert(ok, string.format(
         "Clip.transfer_owner: exec failed for id=%s: %s "
-        .. "(likely INV-2 trigger — new owner must be kind='nested')",
+        .. "(trigger: clips must be owned by a kind='nested' sequence — new owner must be kind='nested')",
         id, tostring(err)))
 end
 
@@ -1649,7 +1638,7 @@ function M.capture_v13_state(clip_id)
 end
 
 --- Restore a clip from the state captured by Clip.capture_v13_state.
---- Re-INSERTs the clip row (INV-2 + INV-4 fire), the
+--- Re-INSERTs the clip row (owner-kind and source-window checks fire), the
 --- clip_channel_override rows, and the clip_links row (if it had one).
 --- The clip is assumed to be ABSENT before this call — restoring over
 --- a live clip is a caller bug.

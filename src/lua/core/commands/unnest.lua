@@ -175,7 +175,7 @@ function M.undo(capture)
     -- (b) Move each inner clip back to the nested sequence at its prior
     --     track + timeline_start. Order: update track+start (trigger
     --     sees nested track empty post-resurrection), then transfer
-    --     owner (INV-2 trigger checks the new owner is kind='nested').
+    --     owner (trigger checks the new owner is kind='nested').
     for _, m in ipairs(capture.moved) do
         Clip.update(m.clip_id, {
             track_id             = m.prior_track_id,

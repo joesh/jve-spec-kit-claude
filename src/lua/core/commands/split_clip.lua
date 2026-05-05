@@ -37,10 +37,38 @@ local M = {}
 local Clip     = require("models.clip")
 local Sequence = require("models.sequence")
 local database = require("core.database")
+local Signals  = require("core.signals")
 local uuid     = require("uuid")
 local log      = require("core.logger").for_area("commands")
 
 local SAVEPOINT = "split_clip_atomic"
+
+-- Build a timeline_state mutation entry from a V13 row.
+-- Provides both direct field names (for inserts/normalize_clip_integers)
+-- and _value variants (for clip_state.apply_mutations update checks).
+local function mutation_entry(row)
+    return {
+        id                    = row.id,
+        owner_sequence_id     = row.owner_sequence_id,
+        track_sequence_id     = row.owner_sequence_id,
+        track_id              = row.track_id,
+        nested_sequence_id    = row.nested_sequence_id,
+        start_value           = row.timeline_start_frame,
+        timeline_start        = row.timeline_start_frame,
+        duration_value        = row.duration_frames,
+        duration              = row.duration_frames,
+        source_in             = row.source_in_frame,
+        source_in_value       = row.source_in_frame,
+        source_out            = row.source_out_frame,
+        source_out_value      = row.source_out_frame,
+        master_layer_track_id = row.master_layer_track_id,
+        fps_mismatch_policy   = row.fps_mismatch_policy,
+        name                  = row.name,
+        enabled               = row.enabled,
+        volume                = row.volume,
+        playhead_frame        = row.playhead_frame,
+    }
+end
 
 function M.execute(args)
     assert(type(args) == "table", "SplitClip.execute: args must be table")
@@ -166,26 +194,14 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         local left  = Clip.load_v13_row(args.clip_id)
         local right = Clip.load_v13_row(result_or_err.second_clip_id)
+        assert(left,  string.format("SplitClip executor: left half %s missing after create", args.clip_id))
+        assert(right, string.format("SplitClip executor: right half %s missing after create", result_or_err.second_clip_id))
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
-            inserts = { {
-                clip_id              = right.id,
-                track_id             = right.track_id,
-                timeline_start_value = right.timeline_start_frame,
-                duration_value       = right.duration_frames,
-                source_in_value      = right.source_in_frame,
-                source_out_value     = right.source_out_frame,
-            } },
-            deletes = {},
-            updates = { {
-                clip_id          = args.clip_id,
-                start_value      = left.timeline_start_frame,
-                duration_value   = left.duration_frames,
-                source_in_value  = left.source_in_frame,
-                source_out_value = left.source_out_frame,
-            } },
+            inserts     = { mutation_entry(right) },
+            deletes     = {},
+            updates     = { mutation_entry(left) },
         })
-        local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true, { second_clip_id = result_or_err.second_clip_id }
     end
@@ -214,41 +230,15 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.release_savepoint(SAVEPOINT),
             "Undo SplitClip: release savepoint failed")
 
-        -- Emit __timeline_mutations on undo so timeline_state cache stays
-        -- in sync (delete the right half, restore the left half's bounds).
-        do
-            local row = Clip.load_v13_row(args.clip_id)
-            local bucket = {
-                sequence_id = args.sequence_id,
-                inserts = {},
-                updates = {},
-                deletes = { { clip_id = second } },
-                bulk_shifts = {},
-            }
-            if row then
-                bucket.updates[#bucket.updates + 1] = {
-                    id                  = row.id,
-                    owner_sequence_id   = row.owner_sequence_id,
-                    track_sequence_id   = row.owner_sequence_id,
-                    track_id            = row.track_id,
-                    nested_sequence_id  = row.nested_sequence_id,
-                    start_value         = row.timeline_start_frame,
-                    timeline_start      = row.timeline_start_frame,
-                    duration_value      = row.duration_frames,
-                    duration            = row.duration_frames,
-                    source_in           = row.source_in_frame,
-                    source_out           = row.source_out_frame,
-                    fps_mismatch_policy = row.fps_mismatch_policy,
-                    name                = row.name,
-                    enabled             = row.enabled,
-                    volume              = row.volume,
-                    playhead_frame      = row.playhead_frame,
-                }
-            end
-            command:set_parameter("__timeline_mutations", bucket)
-        end
-
-        local Signals = require("core.signals")
+        local row = Clip.load_v13_row(args.clip_id)
+        assert(row, string.format("Undo SplitClip: left half %s missing after restore", args.clip_id))
+        command:set_parameter("__timeline_mutations", {
+            sequence_id = args.sequence_id,
+            inserts     = {},
+            updates     = { mutation_entry(row) },
+            deletes     = { { clip_id = second } },
+            bulk_shifts = {},
+        })
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end

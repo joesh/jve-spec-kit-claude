@@ -75,11 +75,11 @@ function M.execute(args)
         .. "owns the channel state.",
         clip_id, tostring(nested.kind)))
 
-    -- INV-5 bounds (defense-in-depth; the resolver also asserts).
+    -- channel_index bounds check (defense-in-depth; the resolver also asserts).
     local channel_count = Sequence.count_master_audio_channels(clip.nested_sequence_id)
     assert(channel_index < channel_count, string.format(
         "ToggleClipChannel: channel_index %d out of bounds for master %s "
-        .. "(has %d audio channels). INV-5.",
+        .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
         channel_index, clip.nested_sequence_id, channel_count))
 
     local existing = Override.find(clip_id, channel_index)

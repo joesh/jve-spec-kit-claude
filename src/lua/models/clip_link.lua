@@ -123,7 +123,7 @@ end
 -- left/right: {id, role, time_offset} - id can be in 'id' or 'clip_id' field
 --- INSERT a clip_links row attaching `clip_id` to an existing
 --- `link_group_id` with the given role + time_offset. Idempotent at the
---- INV-7 level — caller must not double-add.
+--- "no duplicate clip links" level — caller must not double-add.
 --- Used by ExpandAudio (extend an existing V+A link group with the new
 --- expanded A clips) and CollapseAudio (rewire link group during the
 --- expand→composite collapse).

@@ -270,7 +270,7 @@ print(string.format("  PASS: WAV TC = %.1fs (01:00:03.6)", wav_tc))
 -- 6. Total clip count (sanity)
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 6: Total counts ---")
--- V13: every row in clips is a "timeline" row (INV-2 enforces nested-only).
+-- V13: every row in clips is a "timeline" row (clips must be owned by a kind='nested' sequence).
 local r3 = query_one("SELECT COUNT(*) FROM clips")
 assert(r3[1] == 126, "expected 126 timeline clips, got " .. tostring(r3[1]))
 local r4 = query_one("SELECT COUNT(*) FROM media")

@@ -1,4 +1,4 @@
--- T013 (013): INV-8 — sequences.default_video_layer_track_id must be non-NULL
+-- T013 (013): sequences.default_video_layer_track_id must be non-NULL
 -- whenever the sequence has at least one video track.
 -- Coverage: Sequence.assert_inv8 fires with a message naming the sequence id
 -- and the violation when the default is NULL with V tracks present, or points
@@ -38,7 +38,7 @@ assert(db:exec(string.format(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-v1', '%s', 'V1', 'VIDEO', 1)", vid_id)))
 
--- Set default to the live V track via Sequence.update — INV-8 post-check passes.
+-- Set default to the live V track via Sequence.update — default_video_layer_track_id post-check passes.
 Sequence.update(vid_id, { default_video_layer_track_id = "trk-v1" })
 Sequence.assert_inv8(vid_id)
 
@@ -49,7 +49,7 @@ assert(db:exec(string.format(
     "UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = '%s'", vid_id)))
 
 local ok, err = pcall(function() Sequence.assert_inv8(vid_id) end)
-assert(not ok, "assert_inv8 must fire when default is NULL with a V track")
+assert(not ok, "assert_inv8 must fire when default_video_layer_track_id is NULL with a V track present")
 assert(tostring(err):find("INV%-8"),
     "error must name INV-8; got: " .. tostring(err))
 assert(tostring(err):find(vid_id, 1, true),

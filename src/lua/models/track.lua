@@ -339,15 +339,15 @@ function Track.ensure_defaults_for_sequence(sequence_id)
 end
 
 -- ===========================================================================
--- Feature 013: Track.delete with INV-6 repoint-or-refuse
+-- Feature 013: Track.delete with last-video-track guard (repoint-or-refuse)
 -- ===========================================================================
 -- Deleting a video track that's the default_video_layer_track_id of its
 -- sequence requires repointing to another live V track of the same sequence,
 -- OR (if this was the last V track AND no clips reference the sequence)
 -- setting the default to NULL. If there's no viable target AND live clips
--- reference the sequence, refuse.
+-- reference the sequence, refuse (last video track cannot be deleted while referenced).
 
---- Delete a track. Enforces INV-6 when the track is a video track and its
+--- Delete a track. Enforces "last video track cannot be deleted" when the track is a video track and its
 --- sequence's default_video_layer_track_id points at it.
 function Track.delete(track_id)
     assert(track_id and track_id ~= "", "Track.delete: track_id required")
@@ -405,7 +405,7 @@ function Track.delete(track_id)
             rp:finalize()
         else
             -- No other V track. If any clip anywhere references this sequence
-            -- (INV-3 + INV-6: we'd orphan the clip's visual content), refuse.
+            -- (acyclic DAG + last video track: we'd orphan the clip's visual content), refuse.
             local ref = db:prepare(
                 "SELECT 1 FROM clips WHERE nested_sequence_id = ? LIMIT 1")
             assert(ref, "Track.delete: ref prepare failed")
@@ -414,11 +414,11 @@ function Track.delete(track_id)
             local referenced = ref:next()
             ref:finalize()
             assert(not referenced, string.format(
-                "INV-6 violation in Track.delete: cannot delete last VIDEO track %s of sequence %s "
-                .. "while live clips reference the sequence (kind=%s)",
+                "Track.delete: cannot delete last VIDEO track %s of sequence %s "
+                .. "while live clips reference the sequence (kind=%s) — last video track cannot be deleted while referenced",
                 tostring(track_id), tostring(seq_id), tostring(seq_kind)))
             -- No references: clear default before the FK's ON DELETE SET NULL
-            -- would do so, so INV-8 holds throughout.
+            -- would do so, so default_video_layer_track_id non-NULL invariant holds throughout.
             local cl = db:prepare(
                 "UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = ?")
             assert(cl, "Track.delete: clear-default prepare failed")

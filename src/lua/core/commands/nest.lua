@@ -46,7 +46,7 @@ end
 -- selected clip into the newly-created nested sequence. Goes via the
 -- model-layer SQL so it stays out of command code.
 local function migrate_clip_to_S(clip_id, new_owner, new_track, new_start)
-    -- INV-2 still holds because new_owner has kind='nested'. The
+    -- clips must be owned by a kind='nested' sequence — new_owner has kind='nested'. The
     -- video-overlap trigger fires on UPDATE; new_track is empty (we just
     -- created the track) so no collision is possible.
     Clip.update(clip_id, {
@@ -129,7 +129,7 @@ local function create_nested_sequence(parent, new_seq_id)
 end
 
 -- Create a single track on S mirroring the source track's type and index.
--- For VIDEO, set the sequence's default video layer per INV-8.
+-- For VIDEO, set the sequence's default video layer (required when video tracks exist).
 local function create_mirrored_track(source_track, new_seq_id, new_track_id)
     if source_track.track_type == "VIDEO" then
         local t = Track.create_video(source_track.name, new_seq_id,

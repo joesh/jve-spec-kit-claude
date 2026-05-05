@@ -490,55 +490,6 @@ local function resolve_clip_source_range(clip_data)
     return clip_data.source_in, source_out
 end
 
--- Reconcile a clip's source range against the actual media extent. Stills
--- get a forced [tc_origin, tc_origin+1) range — Resolve sometimes writes
--- timeline TC into <In> for stills but the file has exactly one frame.
--- Asserts the audio path's metadata is complete (sample_rate + fps) and
--- that the resolved range fits inside the file's extent (parser bug
--- otherwise).
-local function reconcile_clip_range_against_media(clip_data, media_row, media_id,
-                                                  track_type, source_in_final,
-                                                  source_out_final)
-    local fdur = media_row.duration
-    assert(type(fdur) == "number" and fdur > 0, string.format(
-        "importer_core: media %s ('%s') has duration=%s — the dur<=0 skip "
-        .. "in import_into_project should have prevented this",
-        tostring(media_id), tostring(media_row.name), tostring(fdur)))
-
-    if track_type == "AUDIO" then
-        local atc           = media_row:get_audio_start_tc() or 0
-        local sr            = media_row.audio_sample_rate
-        local media_fps_num = media_row.frame_rate.fps_numerator
-        local media_fps_den = media_row.frame_rate.fps_denominator
-        assert(sr and sr > 0 and media_fps_num and media_fps_den, string.format(
-            "importer_core: media %s audio metadata incomplete "
-            .. "(sample_rate=%s, fps=%s/%s) for clip '%s'",
-            tostring(media_id), tostring(sr),
-            tostring(media_fps_num), tostring(media_fps_den),
-            tostring(clip_data.name)))
-        local dur_samples = math.floor(fdur * sr * media_fps_den / media_fps_num + 0.5)
-        local extent      = atc + dur_samples
-        assert(math.max(source_in_final, source_out_final) <= extent, string.format(
-            "importer_core: clip '%s' audio source range [%d,%d] samples exceeds "
-            .. "media %s extent %d (atc=%d, dur=%d samples = %d frames) — parser bug",
-            tostring(clip_data.name), source_in_final, source_out_final,
-            tostring(media_id), extent, atc, dur_samples, fdur))
-        return source_in_final, source_out_final
-    end
-
-    local vtc    = media_row:get_start_tc() or 0
-    local extent = vtc + fdur
-    if media_row.is_still or fdur == 1 then
-        return vtc, vtc + 1
-    end
-    assert(math.max(source_in_final, source_out_final) <= extent, string.format(
-        "importer_core: clip '%s' video source range [%d,%d] exceeds media %s "
-        .. "extent %d (vtc=%d, dur=%d) — parser bug",
-        tostring(clip_data.name), source_in_final, source_out_final,
-        tostring(media_id), extent, vtc, fdur))
-    return source_in_final, source_out_final
-end
-
 -- Resolve the bin a master sequence belongs in. Try, in order: pool-by-uuid
 -- → pool-by-name (via media_by_uuid/path lookup) → pool-by-basename →
 -- "Unorganized" fallback. Returns the bin id (always non-nil when an
@@ -701,6 +652,10 @@ function M.import_into_project(project_id, parse_result, opts)
         -- carries a tab_uuid — used to restore open tabs post-import.
         tab_uuid_to_sequence_id = {},
     }
+    -- Dedup set for master sequences captured directly from ensure_master
+    -- returns. Masters whose media_refs haven't been populated yet won't
+    -- appear in a find_master_for_media JOIN, so we capture them here.
+    local created_master_set = {}
 
     local folders = sort_folders_parent_first(parse_result.folders or {})
     local folder_to_bin = import_folders_as_bins(project_id, folders, tag_service, uuid)
@@ -804,33 +759,15 @@ function M.import_into_project(project_id, parse_result, opts)
                         goto continue_clip
                     end
 
-                    -- V13: master sequence is the link from clip → media.
-                    -- Skip clips whose media has no V/A streams declared —
-                    -- ensure_master would assert (no TC anchor possible) and
-                    -- abort the import. DRT exports / FCP7 placeholders can
-                    -- carry such media; logging here lets the rest of the
-                    -- import succeed. Mirrors fcp7_xml_importer.create_clip.
-                    local _media_pre = Media.load(media_id)
-                    local _has_v = _media_pre and _media_pre.width
-                        and _media_pre.width > 0
-                    local _has_a = _media_pre and _media_pre.audio_channels
-                        and _media_pre.audio_channels > 0
-                    if not (_has_v or _has_a) then
-                        log.warn(
-                            "importer_core: skipping clip '%s' — media %s has "
-                            .. "no video or audio streams declared (cannot "
-                            .. "anchor a master sequence)",
-                            tostring(clip_data.name), tostring(media_id))
-                        goto continue_clip
-                    end
                     local master_seq_id = Sequence.ensure_master(media_id, project_id)
-                    local media_row     = Media.load(media_id)
-                    assert(media_row, string.format(
-                        "importer_core: media %s missing while creating clip '%s'",
-                        tostring(media_id), tostring(clip_data.name)))
-                    source_in_final, source_out_final = reconcile_clip_range_against_media(
-                        clip_data, media_row, media_id, track_data.type,
-                        source_in_final, source_out_final)
+                    -- Track the master in result.sequence_ids so the
+                    -- undoer deletes it. Direct capture (rather than a
+                    -- post-loop find_master_for_media JOIN) covers masters
+                    -- whose media_refs haven't been populated yet.
+                    if not created_master_set[master_seq_id] then
+                        created_master_set[master_seq_id] = true
+                        table.insert(result.sequence_ids, master_seq_id)
+                    end
 
                     local now = os.time()
                     local clip_id = Clip.create({
@@ -945,17 +882,6 @@ function M.import_into_project(project_id, parse_result, opts)
     end
 
     sub_report(90, "Finalizing…")
-
-    -- Masterclip sequences are created as a side effect of Clip.create via
-    -- Sequence.ensure_master. They're real sequence rows that belong to
-    -- this import — track them so undoers can remove them. Newly-created
-    -- media (result.media_ids) implies a newly-created master.
-    for _, media_id in ipairs(result.media_ids) do
-        local master_id = Sequence.find_master_for_media(media_id)
-        if master_id then
-            table.insert(result.sequence_ids, master_id)
-        end
-    end
 
     log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
         #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)

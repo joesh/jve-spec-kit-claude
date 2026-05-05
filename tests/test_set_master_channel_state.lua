@@ -151,7 +151,7 @@ do
     print("  ok")
 end
 
-print("-- channel_index out of bounds: refused (INV-5) --")
+print("-- channel_index out of bounds: refused (channel_index must be < master's audio channel count) --")
 do
     build_fixture()
     local ok, err = pcall(SetMasterChannelState.execute, {

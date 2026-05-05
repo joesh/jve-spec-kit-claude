@@ -26,7 +26,7 @@ assert(db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,e
                  VALUES('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0);]]))
 
 -- V13 fixture: placeholder master sequence (clips.nested_sequence_id FK
--- + INV-1 require the referenced master to exist with kind='master').
+-- + media_refs must be owned by a kind='master' sequence).
 do
     assert(db:exec("INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_sample_rate,width,height,view_start_frame,view_duration_frames,playhead_frame,created_at,modified_at) VALUES('_v13_placeholder_master','proj','PlaceholderMaster','master',24,1,48000,1920,1080,0,2000,0,0,0);"))
     assert(db:exec("INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES('_v13_placeholder_master_v1','_v13_placeholder_master','V1','VIDEO',1,1,0,0,0,1.0,0.0);"))

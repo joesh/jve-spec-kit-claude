@@ -370,10 +370,9 @@ function M.register(executors, undoers, db)
         local Project = require("models.project")
         local json = require("dkjson")
 
-        -- Resolve's DRP carries no project-wide audio default. Order of
-        -- preference: caller-supplied (UI prompt / test scaffolding) →
-        -- majority vote across parsed media → nil (importer_core asserts).
-        -- We never invent a default.
+        -- Order: caller-supplied → majority vote across parsed media →
+        -- 48000 Hz spec-implied default (Fairlight FieldsBlob not yet decoded;
+        -- see pick_majority_audio_sample_rate TODO).
         local pick_majority = require("importers.drp_importer").pick_majority_audio_sample_rate
         local settings = {
             frame_rate = parse_result.project.settings.frame_rate,

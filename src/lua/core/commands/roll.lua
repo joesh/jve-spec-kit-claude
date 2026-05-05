@@ -22,10 +22,10 @@
 --   - A and B both on this sequence
 --   - B.timeline_start == A.timeline_start + A.duration (truly adjacent)
 --   - A.duration + N > 0 AND B.duration - N > 0 (neither collapses)
---   - INV-4 holds on both sides post-write (checked via Clip.update)
+--   - source window is non-empty with lower bound >= 0 on both sides post-write (checked via Clip.update)
 --
 -- Atomicity: writes are wrapped in a SAVEPOINT so a partial roll (A succeeds,
--- B fails INV-4) leaves the DB exactly as it was before the command ran.
+-- B fails source-window check) leaves the DB exactly as it was before the command ran.
 --
 -- SQL isolation: all DB access via models.
 --
@@ -103,12 +103,17 @@ function M.execute(args)
     local new_b_timeline     = b.timeline_start_frame + N
     local new_b_source_in    = b.source_in_frame + b_source_delta
 
+    if N > 0 then
+        Clip.assert_within_master_coverage(a.nested_sequence_id, new_a_source_out,
+            "Roll outgoing=" .. args.outgoing_clip_id)
+    end
+
     -- Update order matters for the video-overlap trigger: we must move the
     -- clip that's RETRACTING from the shared edge first, so the growing
     -- side never transiently overlaps the shrinking one.
     --   N > 0: A grows rightward; B retracts from its left edge → update B first.
     --   N < 0: A retracts from its right edge; B grows leftward → update A first.
-    -- SAVEPOINT guarantees atomicity: if either update's INV-4 check raises,
+    -- SAVEPOINT guarantees atomicity: if either update's source-window check raises,
     -- pcall unwinds to ROLLBACK TO SAVEPOINT, leaving DB untouched.
     local function update_a()
         Clip.update_bounds(args.outgoing_clip_id,

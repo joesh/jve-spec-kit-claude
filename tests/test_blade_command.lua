@@ -31,7 +31,7 @@ local Sequence = require("models.sequence")
 
 -- Bootstrap a placeholder master sequence so V13 clips can reference it.
 -- The blade test creates 1 media row per clip; we point all clips at one
--- shared placeholder master with generous duration to satisfy INV-4.
+-- shared placeholder master with generous duration to satisfy the source window lower bound.
 local function bootstrap_blade_master()
     local conn = database.get_connection()
     local exists = conn:prepare("SELECT 1 FROM sequences WHERE id = '_blade_master'")

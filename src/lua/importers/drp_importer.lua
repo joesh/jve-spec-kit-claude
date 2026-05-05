@@ -2425,14 +2425,18 @@ end
 -- @return boolean: success
 -- @return string|nil: error message if failed
 -- Pick the project audio sample rate by majority vote across the imported
--- timelines' media files. DRP doesn't store project-level mix bus rate,
--- so we infer it. Fall back to 48000 (industry-standard mix bus rate for
--- FCP/Premiere/Resolve) when no media has audio — user-modifiable
--- post-import.
--- Returns the most-common audio sample rate across parsed media, or nil
--- when no media reports a positive rate. Resolve's DRP carries no
--- project-wide audio default, so the caller MUST surface (not invent) the
--- nil case — downstream importer_core asserts on missing audio rate.
+-- timelines' media files' BtAudioInfo blobs. Falls back to 48000 when no
+-- media carries a decodeable audio rate (video-only projects, or projects
+-- whose BtAudioInfo blobs all failed to decode).
+--
+-- TODO: decode the Fairlight project FieldsBlob to read the authoritative
+-- project-level mix-bus sample rate (Project Settings → Fairlight → Timeline
+-- Sample Rate). That value is binary-encoded in SM_Project/FieldsBlob and is
+-- NOT exposed as a plain XML element. Until that decoding is implemented,
+-- 48 kHz is the safe fallback: it is Resolve's documented default and the
+-- only option in free Resolve (free offers 44.1 or 48; Studio adds 96/192).
+-- Projects actually running at 96/192 kHz will have audio media whose blobs
+-- decode successfully, so the majority-vote path handles them correctly.
 local function pick_majority_audio_sample_rate(parse_result)
     local votes = {}
     for _, timeline in ipairs(parse_result.timelines or {}) do
@@ -2445,11 +2449,18 @@ local function pick_majority_audio_sample_rate(parse_result)
     for r, c in pairs(votes) do
         if c > best_count then picked, best_count = r, c end
     end
+    if not picked then
+        -- No audio media decoded; fall back to Resolve's standard default.
+        -- TODO: replace with Fairlight FieldsBlob decode (see comment above).
+        log.warn("pick_majority_audio_sample_rate: no audio media decoded; " ..
+            "defaulting to 48000 Hz (Resolve standard default — TODO: decode Fairlight FieldsBlob)")
+        return 48000
+    end
     return picked
 end
 -- Exposed so command-layer importers (ImportResolveProject) can derive the
 -- project's audio_sample_rate from the same parse_result the convert() flow
--- uses. nil result is intentional — see function comment.
+-- uses.
 M.pick_majority_audio_sample_rate = pick_majority_audio_sample_rate
 
 -- Create the project DB at jvp_path, build the Project row, and return

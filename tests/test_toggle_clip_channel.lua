@@ -17,7 +17,7 @@
 --
 -- (e) channel_index out of bounds (master has 2 audio channels, attempt
 --     channel 5) is refused with a loud message naming the bad index
---     (FR-014 + INV-5).
+--     (FR-014 + channel_index must be < master's audio channel count).
 --
 -- Black-box: tests inspect clip_channel_override rows directly.
 
@@ -177,7 +177,7 @@ do
     print("  ok")
 end
 
-print("-- (e) channel_index out of bounds is refused (INV-5) --")
+print("-- (e) channel_index out of bounds is refused (channel_index must be < master's audio channel count) --")
 do
     build_fixture()
     local ok, err = pcall(ToggleClipChannel.execute, {
