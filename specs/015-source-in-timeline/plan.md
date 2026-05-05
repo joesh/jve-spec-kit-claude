@@ -7,7 +7,7 @@
 
 Add a **single Source tab** to JVE's timeline panel (one viewer for the source-monitor's loaded master sequence, blue accent), a **paired src/rec patch-button** track-header redesign with cell order `paired src/rec id buttons → label → lock icon → sync-mode → S/M stack` (lock BEFORE sync-mode, matching FR-008), a **per-track tristate sync-mode** (Off/Ripple/Cut) cycling on the track header, **patches** as a new persisted entity (per-source-track on/off + drag-redirect routing), and **unified Solo/Mute on both audio AND video** tracks. The feature ALSO fixes a pre-existing bug where Solo/Mute/Lock toggles incorrectly land on the per-sequence undo stack — they (and the new patch & sync-mode toggles) become explicitly **non-undoable session preferences** persisted to the project DB but skipping `snapshots`.
 
-Approach: extend existing systems rather than parallel ones. Tab system extension uses `timeline_panel.lua` `open_tabs`. Sync-mode dispatch inserts BEFORE `inject_implicit_gap_edges` in the existing ripple pipeline. New `patches` table; new `sync_mode` column on existing `tracks`. New `non_undoable` SPEC flag on commands for the 6 toggle commands.
+Approach: extend existing systems rather than parallel ones. Tab system extension uses `timeline_panel.lua` `open_tabs`. Sync-mode dispatch inserts BEFORE `inject_implicit_gap_edges` in the existing ripple pipeline. New `patches` table; new `sync_mode` column on existing `tracks`. New `undoable = false` SPEC flag on commands for the 6 toggle commands.
 
 ## Technical Context
 
@@ -66,7 +66,7 @@ JVE's existing single-project layout. This feature touches:
 src/
 ├── lua/
 │   ├── core/
-│   │   ├── command_manager.lua            # extend: support `non_undoable` SPEC flag
+│   │   ├── command_manager.lua            # extend: support `undoable = false` SPEC flag
 │   │   ├── signals.lua                    # add: source_tab_visibility_changed, displayed_tab_changed, active_sequence_changed, patch_changed, sync_mode_changed
 │   │   ├── snapshot_manager.lua           # consult: existing snapshot path; new flag bypasses it
 │   │   └── commands/
@@ -93,7 +93,7 @@ src/
 tests/
 ├── test_set_patch.lua                     # NEW
 ├── test_set_sync_mode.lua                 # NEW
-├── test_track_preference_non_undoable.lua # NEW (regression test for FR-040a bug)
+├── test_track_preference_non_undoable.lua     # NEW (regression test for FR-040a bug)
 ├── test_source_tab.lua                    # NEW
 ├── test_displayed_vs_active_pointer.lua   # NEW
 ├── test_cut_branch_split_spanning_clip.lua # NEW
@@ -109,8 +109,8 @@ tests/
 **Output**: [`research.md`](./research.md) — generated this command.
 
 Research covered:
-1. Existing snapshot mechanism (`command_manager.lua`) — confirmed `skip_clip_snapshot` and `skip_selection_snapshot` flags exist; need a NEW `non_undoable` flag for FR-040 commands. **Decision**: add `non_undoable` SPEC flag.
-2. Existing solo/mute/lock command (`set_track_property.lua`) — registers undoer, hence on undo stack today (FR-040a bug). **Decision**: split into ToggleTrackPreference (non_undoable) and SetTrackMixValue (existing undoable) OR mark SetTrackProperty as non_undoable when the property is solo/mute/lock/enabled.
+1. Existing snapshot mechanism (`command_manager.lua`) — confirmed `skip_clip_snapshot` and `skip_selection_snapshot` flags exist; need a NEW `undoable = false` flag for FR-040 commands. **Decision**: add `undoable = false` SPEC flag.
+2. Existing solo/mute/lock command (`set_track_property.lua`) — registers undoer, hence on undo stack today (FR-040a bug). **Decision**: split into ToggleTrackPreference (undoable = false) and SetTrackMixValue (existing undoable) OR mark SetTrackProperty as undoable = false when the property is solo/mute/lock/enabled.
 3. Tab system in `timeline_panel.lua` — `open_tabs` is per-sequence; SourceTab is an annotation on the tab whose sequence_id matches `source_monitor`'s loaded master. **Decision**: extend the existing system, no new tab kind.
 4. Source viewer in `source_viewer.lua:14` — `load_master_clip(master_seq_id)` is the entry point. Source clips ARE master sequences. **Decision**: SourceTab follows the source monitor's loaded master, no new "source-clip" entity.
 5. Ripple pipeline — dispatch hook lives at `core/ripple/batch/pipeline.lua` before `inject_implicit_gap_edges` (`batch_ripple_edit.lua:488`). **Decision**: insert per-track sync_mode branch at the existing pre-injection hook.
@@ -138,11 +138,11 @@ Agent file (CLAUDE.md) updated by `update-agent-context.sh` at end of Phase 1.
 - Load `.specify/templates/tasks-template.md` as base.
 - Generate tasks ordered by dependency:
   1. **Schema migration first** (data-model.md): new `sync_mode` column, new `patches` table, schema version bump. Tests for migration.
-  2. **Command framework extension**: add `non_undoable` SPEC flag to `command_manager.lua`. Tests for the flag (no snapshot row, no undo entry).
+  2. **Command framework extension**: add `undoable = false` SPEC flag to `command_manager.lua`. Tests for the flag (no snapshot row, no undo entry).
   3. **FR-040a regression test FIRST** (rule 2.20): test asserts toggling solo/mute/lock produces no `snapshots` row and is NOT Cmd-Z reverted. Test MUST FAIL on current codebase. Demonstrate the failure, commit the failing test.
-  4. **Split SetTrackProperty** (or add `non_undoable` conditionally): solo/mute/lock/enabled become non-undoable. The previously-failing regression test now passes.
-  5. **New `Patch` model + commands**: `models/patch.lua`, `core/commands/set_patch.lua` (non_undoable). Tests for create/delete/modify.
-  6. **New `SetSyncMode` command** (non_undoable). Tests including all three branches' invariants (FR-026 post-conditions).
+  4. **Split SetTrackProperty** (or add `undoable = false` conditionally): solo/mute/lock/enabled become non-undoable. The previously-failing regression test now passes.
+  5. **New `Patch` model + commands**: `models/patch.lua`, `core/commands/set_patch.lua` (undoable = false). Tests for create/delete/modify.
+  6. **New `SetSyncMode` command** (undoable = false). Tests including all three branches' invariants (FR-026 post-conditions).
   7. **Ripple pipeline dispatch**: insert per-track sync_mode branch in `batch_ripple_edit.lua` before `inject_implicit_gap_edges`. Tests for Off/Ripple/Cut behavior including spanning-clip auto-split.
   8. **`timeline_state` pointers**: add `displayed_tab_id` and `active_sequence_id` (independent). Tests for FR-005 (Source-tab click does NOT change active sequence).
   9. **Track-header refactor** (`timeline_panel.lua` lines 1029-1296): new cell order; remove P + R; lock SVG icon; sync-mode cell; S/M vertical stack. Tests via `--test` mode where Qt rendering matters.

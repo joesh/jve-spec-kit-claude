@@ -165,7 +165,7 @@ Cycle: Off → Ripple → Cut → Off (FR-024). Each transition is a non-undoabl
 | Patch command | command's sequence_id is set; `source_track_index` and `record_track_index` are in valid ranges | command name, all three values |
 | Edit-time routing | each source patch's `enabled` was consulted before include/exclude | source_track_index per patch read |
 | 3-point math | at least 3 of 4 marks set before computing 4th | which marks are present |
-| Patch/sync-mode command execution | command is `non_undoable`-flagged AND writes directly to its target table | command name, target table |
+| Patch/sync-mode command execution | command is `undoable = false`-flagged AND writes directly to its target table | command name, target table |
 
 All asserts include the function/module name (`SetPatch`, `SetSyncMode`, `apply_per_track_sync_mode_dispatch`, etc.) so the crash site is obvious (rule 1.14).
 

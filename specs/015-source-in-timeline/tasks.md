@@ -26,7 +26,7 @@
 
 - [ ] **T002** Confirm `make -j4` is green on current `master` reference (so we can recognize a regression introduced by this feature vs a pre-existing failure). Capture the baseline test count to a scratch file `/tmp/015_baseline_test_count.txt`.
 
-- [ ] **T003** [P] Decide the mechanism for the `non_undoable` SPEC flag deferred from research R1: (a) skip writing the `commands` row entirely OR (b) write the row but with NULL `undo_group_id` excluded from the per-sequence undo cursor. Read `src/lua/core/command_manager.lua` lines 1300–1700 to identify the exact dispatch point. Record the decision in `/Users/joe/Local/jve-spec-kit-claude/specs/015-source-in-timeline/research.md` under a new `R10: non_undoable mechanism (resolved)` heading. All downstream non-undoable command tasks depend on this resolution.
+- [X] **T003** [P] ~~Decide the mechanism for the `undoable = false` SPEC flag~~ — **PRE-RESOLVED**: `command_manager.lua` already implements `spec.undoable == false` (search: `undoable == false` in command_manager.lua). No new flag needed. All downstream tasks use the existing flag as-is. No research.md update required.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ### Command framework + bug-fix regression tests
 
-- [ ] **T005** [P] Write `non_undoable` flag test at `tests/test_non_undoable_flag.lua`. Register a minimal test command with `SPEC.non_undoable = true`. Execute it. Assert: no `snapshots` row created for the command's sequence_number; per-sequence undo cursor not advanced (or row excluded per T003 mechanism); Cmd-Z (via `command_manager.undo()`) does NOT revert it. Run; verify FAIL.
+- [ ] **T005** [P] Write `undoable = false` flag smoke test at `tests/test_undoable_flag.lua`. Register a minimal test command with `SPEC.undoable = false`. Execute it. Assert: no `snapshots` row created for the command's sequence_number; per-sequence undo cursor not advanced; Cmd-Z (via `command_manager.undo()`) does NOT revert it. **Run; verify PASS** — the mechanism already exists in command_manager.lua. This is a characterization test to lock in the existing behavior before new commands depend on it.
 
 - [ ] **T006** [P] **FR-040a regression test** at `tests/test_track_preference_non_undoable.lua`. **THIS TEST MUST FAIL ON CURRENT CODEBASE — that is the proof the bug exists.** For each of `muted`, `soloed`, `locked`, `enabled`: invoke `SetTrackProperty` (current command), assert that `tracks.<property>` was updated, then assert NO `snapshots` row was created and `command_manager.undo()` does NOT revert. Today, the test will fail at the "no snapshots row" or "undo does not revert" step. Run; capture the failure output to `/tmp/015_t006_failure.txt`; commit the failing test before any fix.
 
@@ -106,12 +106,12 @@
 
 ### Command framework extension
 
-- [ ] **T026** Implement `non_undoable` SPEC flag in `src/lua/core/command_manager.lua` per the mechanism resolved in T003. Add the flag check at the dispatch point. After this lands, T005 (non_undoable flag test) passes.
+- [X] **T026** ~~Implement `undoable = false` SPEC flag~~ — **PRE-RESOLVED**: `command_manager.lua` already checks `spec.undoable == false` at the dispatch point. New commands (SetPatch, SetSyncMode, ToggleTrackPreference, ShowSourceTab, etc.) simply set `undoable = false` in their SPEC table and the framework handles it. No changes to command_manager.lua required for this flag.
 
 ### FR-040a bug fix (the failing T006 turns green here)
 
 - [ ] **T027** Refactor `src/lua/core/commands/set_track_property.lua`: SPLIT into two new files per `contracts/command-specs.md` C4:
-   - `src/lua/core/commands/toggle_track_preference.lua` — handles `muted`/`soloed`/`locked`/`enabled`. SPEC has `non_undoable = true`. Emits `track_preference_changed`. NO undoer registered.
+   - `src/lua/core/commands/toggle_track_preference.lua` — handles `muted`/`soloed`/`locked`/`enabled`. SPEC has `undoable = false`. Emits `track_preference_changed`. NO undoer registered.
    - `src/lua/core/commands/set_track_mix_value.lua` — handles `volume`/`pan`. Existing undoable behavior preserved. Continues emitting `track_mix_changed`.
    - DELETE the old `set_track_property.lua` (rule 2.15 — no shim, no rename redirect).
    Migrate all existing call sites that referenced `SetTrackProperty` to the appropriate new command (search via `rg "SetTrackProperty" src/`). After this lands, T006 (FR-040a regression) passes — verify by re-running it.
@@ -205,7 +205,7 @@
 
 - [ ] **T049** [P] Audit the diff: re-read every changed file against ENGINEERING.md rules 1.14, 2.5, 2.13, 2.15, 2.20, 2.21, 2.32, 3.14 per CLAUDE.md "AUDIT AGAINST ENGINEERING.md AFTER EVERY REFACTOR" memory. Report rule → finding → fix for any violation.
 
-- [ ] **T050** [P] Update CLAUDE.md (project-root) to document any new patterns this feature introduced (the `non_undoable` SPEC flag is the most likely candidate). Use one line per pattern. Don't bloat.
+- [ ] **T050** [P] Update CLAUDE.md (project-root) to document any new patterns this feature introduced (the `undoable = false` SPEC flag is the most likely candidate). Use one line per pattern. Don't bloat.
 
 - [ ] **T051** Commit each completed task as its own git commit per rule 2.20. Use the attribution format from rule 2.8: `Authored-By: Joe Shapiro <joe@shapiro.net>` `With-Help-From: Claude`. Between commits, verify nothing else changed (parallel-Claude-session safety per CLAUDE.md "REFACTOR SAFEGUARD"). Do NOT push to remote until Joe explicitly says so.
 
@@ -216,15 +216,13 @@
 ```
 T001, T002 (setup baselines)
        ↓
-T003 (research decision — non_undoable mechanism)
+T003 ✓ PRE-RESOLVED — T026 ✓ PRE-RESOLVED (undoable = false exists in command_manager.lua)
        ↓
 T004–T024 (all tests written + verified failing) [most are [P]]
        ↓
 T025 (schema migration — first impl task)
        ↓
-T026 (non_undoable framework flag — depends on T003 decision)
-       ↓
-T027 (FR-040a fix — turns T006 green; depends on T026)
+T027 (FR-040a fix — turns T006 green; new commands use existing undoable = false flag)
        ↓
 T028, T029 (models — depend on T025)
        ↓
@@ -257,10 +255,10 @@ T051 (commits)
 
 ## Parallel execution examples
 
-**After T003 lands**, fire all of these in parallel — independent files, no shared mutation:
+**T003 + T026 pre-resolved. Fire all of these in parallel — independent files, no shared mutation:**
 ```
 Task: "Run T004 — write tests/test_schema_migration_015.lua per contracts/schema-migration.md § Migration test contract"
-Task: "Run T005 — write tests/test_non_undoable_flag.lua per contracts/command-specs.md C1"
+Task: "Run T005 — write tests/test_undoable_flag.lua per contracts/command-specs.md C1 (verify PASS — mechanism exists)"
 Task: "Run T006 — write tests/test_track_preference_non_undoable.lua (FR-040a regression — MUST FAIL on current codebase)"
 Task: "Run T007 — write tests/test_set_patch.lua per C2"
 Task: "Run T008 — write tests/test_set_sync_mode.lua per C3"
@@ -282,7 +280,7 @@ Task: "Run T023 — write tests/test_three_point_math.lua (FR-036–FR-038)"
 Task: "Run T024 — skeleton tests/test_quickstart_015.lua mechanizing quickstart Steps 1–17"
 ```
 
-**After T026 lands**, fire models in parallel:
+**After T025 lands** (T026 pre-resolved), fire models in parallel:
 ```
 Task: "Run T028 — create src/lua/models/patch.lua per data-model.md §1.1"
 Task: "Run T029 — extend src/lua/models/track.lua with sync_mode field"

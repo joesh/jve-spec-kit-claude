@@ -18,7 +18,7 @@ This document records the existing-system probes performed before drafting the p
 - A `force_snapshot` flag exists at `:1652` for the inverse case.
 - These flags govern WHAT is captured in the snapshot, not WHETHER the command is undoable. Commands are undoable by virtue of having a registered `command_undoers[<name>]` entry (see `set_track_property.lua:85` for an example).
 
-**Decision**: Add a NEW `non_undoable` SPEC flag that the command framework respects to (a) skip writing the `commands` table row that anchors undo, OR (b) write the row but mark it as not on the per-sequence undo stack. (Specific implementation detail deferred to /tasks; the contract is: `non_undoable=true` ⇒ Cmd-Z does not revert the command and no `snapshots` row is created.)
+**Decision**: Add a NEW `undoable = false` SPEC flag that the command framework respects to (a) skip writing the `commands` table row that anchors undo, OR (b) write the row but mark it as not on the per-sequence undo stack. (Specific implementation detail deferred to /tasks; the contract is: `SPEC.undoable = false` ⇒ Cmd-Z does not revert the command and no `snapshots` row is created.)
 
 **Rationale**:
 - Adding a single flag is consistent with the existing `skip_clip_snapshot` / `skip_selection_snapshot` / `force_snapshot` flag family. (Constitution V — template-based consistency.)
@@ -27,7 +27,7 @@ This document records the existing-system probes performed before drafting the p
 
 **Alternatives considered**:
 - *Don't register undoers for non-undoable commands.* Rejected — this leaves the command in the `commands` table but with a missing undoer; any future undo walk that hits the row would fail without a clear error. (Constitution VI — fail-fast asserts.)
-- *Split `SetTrackProperty` into two commands (one undoable, one not).* This is still a possibility for the FR-040a fix (see R2), but the framework-level `non_undoable` flag is needed regardless because patch and sync-mode commands are net-new.
+- *Split `SetTrackProperty` into two commands (one undoable, one not).* This is still a possibility for the FR-040a fix (see R2), but the framework-level `undoable = false` flag is needed regardless because patch and sync-mode commands are net-new.
 - *Use a separate `non_undoable_commands` table.* Rejected — extra schema for a property that fits naturally on the command SPEC.
 
 ---
@@ -44,11 +44,11 @@ This document records the existing-system probes performed before drafting the p
 - BUT `command_undoers["SetTrackProperty"]` is registered at line 85, and the executor opens `command:set_parameter("__skip_sequence_replay", true)` (line 78) but does NOT skip the `commands` table row creation. Result: the command IS recorded with `previous_value` and Cmd-Z reverts it via the registered undoer.
 - This is the pre-existing bug Joe verified.
 
-**Decision**: The fix for FR-040a is to mark the command as `non_undoable` per R1 when the property being set is `muted`, `soloed`, `locked`, or `enabled`. `volume` and `pan` keep their current undoable behavior (out of scope for this feature; if they should also be non-undoable, that's a separate clarification — for now they are unchanged).
+**Decision**: The fix for FR-040a is to mark the command as `undoable = false` per R1 when the property being set is `muted`, `soloed`, `locked`, or `enabled`. `volume` and `pan` keep their current undoable behavior (out of scope for this feature; if they should also be non-undoable, that's a separate clarification — for now they are unchanged).
 
 Two implementation paths considered:
-1. **Per-call dispatch**: SetTrackProperty's executor inspects `args.property` and reads from a static `NON_UNDOABLE_PROPERTIES` table. If present, the executor calls a new `command_manager.mark_command_non_undoable()` method during execution. The framework respects the runtime flag.
-2. **Split into two commands**: introduce `ToggleTrackPreference` (handles muted/soloed/locked/enabled, SPEC.non_undoable=true) and keep `SetTrackProperty` for volume/pan only (still undoable). UI dispatches to the appropriate command based on which property.
+1. **Per-call dispatch**: SetTrackProperty's executor inspects `args.property` and reads from a static `NON_UNDOABLE_PROPERTIES` table. If present, the executor calls `command_manager` with `spec.undoable = false` at runtime. The framework respects the flag.
+2. **Split into two commands**: introduce `ToggleTrackPreference` (handles muted/soloed/locked/enabled, `SPEC.undoable = false`) and keep `SetTrackProperty` for volume/pan only (still undoable). UI dispatches to the appropriate command based on which property.
 
 **Recommended path**: Path 2 (split) — better aligns with rule 1.4 (single responsibility) and rule 2.21 (statically-verifiable: the flag is on the command spec, not a runtime decision). Also makes the regression test surface cleaner — `test_track_preference_non_undoable.lua` targets only `ToggleTrackPreference` and never produces a snapshot for any of its arguments.
 
@@ -213,4 +213,4 @@ Specifically:
 
 ## Summary
 
-All NEEDS CLARIFICATION resolved at spec stage (Clarifications 2026-05-03). Phase 0 research surfaces no additional unknowns at the spec-coverage level; R10 documents a function-name lookup deferred to task start. Plan is consistent with the existing JVE architecture; the new entities (`patches` table, `tracks.sync_mode` column, `non_undoable` SPEC flag, SourceTab annotation) extend rather than replace existing systems.
+All NEEDS CLARIFICATION resolved at spec stage (Clarifications 2026-05-03). Phase 0 research surfaces no additional unknowns at the spec-coverage level; R10 documents a function-name lookup deferred to task start. Plan is consistent with the existing JVE architecture; the new entities (`patches` table, `tracks.sync_mode` column, `undoable = false` SPEC flag, SourceTab annotation) extend rather than replace existing systems.

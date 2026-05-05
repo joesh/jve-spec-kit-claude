@@ -7,21 +7,21 @@ JVE's command framework expects each command to expose a `SPEC` table with `args
 
 ---
 
-## C1. Command framework extension — `non_undoable` SPEC flag
+## C1. Command framework extension — `undoable = false` SPEC flag
 
 **Modifies**: `src/lua/core/command_manager.lua`.
 
-**Contract**: A new boolean SPEC flag `non_undoable` (default `false`). When `true`, the command framework MUST:
+**Contract**: A new boolean SPEC flag `undoable = false` (default `false`). When `true`, the command framework MUST:
 1. Skip writing a row to the per-sequence undo stack (`commands` table column `undo_group_id` SHOULD remain NULL or the row SHOULD be excluded from undo-cursor walks — exact mechanism deferred to /tasks).
 2. Skip producing a `snapshots` row.
 3. Still set `sequence_id` on the command row (rule 2.29 — for routing scope and replay-on-load semantics).
 4. Still emit any signals the command would normally emit.
 
 **Assertions** (rule 1.14, FR-047.8 path):
-- After a `non_undoable=true` command executes, `assert(no snapshot row was created for this command's sequence_number)`.
+- After a `SPEC.undoable = false` command executes, `assert(no snapshot row was created for this command's sequence_number)`.
 - After execution, `assert(per-sequence undo cursor was not advanced)`.
 
-**Test contract**: `test_non_undoable_flag.lua` exercises a minimal non-undoable command, verifies post-conditions, and verifies that Cmd-Z does not revert it.
+**Test contract**: `test_undoable_flag.lua` exercises a minimal `SPEC.undoable = false` command, verifies post-conditions, and verifies that Cmd-Z does not revert it.
 
 ---
 
@@ -38,7 +38,7 @@ local SPEC = {
         record_track_index = { required = false, kind = "number" }, -- nil means unchanged
     },
     persisted = {},     -- non-undoable; no previous_value capture
-    non_undoable = true,
+    undoable = false,
     skip_clip_snapshot = true,
     skip_selection_snapshot = true,
 }
@@ -57,7 +57,7 @@ local SPEC = {
 - If `record_track_index` provided: `assert(args.record_track_index >= 0)`.
 - After write: `assert(<patch row state matches args>)`.
 
-**No undoer** — `non_undoable=true` means undo dispatcher never invokes one.
+**No undoer** — `SPEC.undoable = false` means undo dispatcher never invokes one.
 
 ---
 
@@ -72,7 +72,7 @@ local SPEC = {
         sync_mode = { required = true, kind = "string" },  -- enum constraint enforced at runtime + SQL CHECK
     },
     persisted = {},
-    non_undoable = true,
+    undoable = false,
     skip_clip_snapshot = true,
     skip_selection_snapshot = true,
 }
@@ -104,7 +104,7 @@ local SPEC = {
         value    = { required = true },                   -- boolean; framework `kind` may not have a "boolean" idiom
     },
     persisted = {},
-    non_undoable = true,                      -- THE FIX (FR-040a)
+    undoable = false,                      -- THE FIX (FR-040a)
     skip_clip_snapshot = true,
     skip_selection_snapshot = true,
 }
@@ -130,7 +130,7 @@ local SPEC = {
         previous_value = {},
     },
     skip_clip_snapshot = true,                -- existing optimization preserved
-    -- non_undoable NOT set — volume/pan changes remain undoable (existing behavior)
+    -- undoable = false NOT set — volume/pan changes remain undoable (existing behavior)
 }
 ```
 
@@ -148,7 +148,7 @@ local SPEC = {
 local SPEC = {
     args = {},                                -- no args; reads source monitor's loaded master
     persisted = {},
-    non_undoable = true,                      -- tab visibility is a UI preference
+    undoable = false,                      -- tab visibility is a UI preference
     skip_clip_snapshot = true,
     skip_selection_snapshot = true,
 }

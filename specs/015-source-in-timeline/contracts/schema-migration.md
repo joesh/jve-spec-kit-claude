@@ -66,7 +66,7 @@ Per Clarifications 2026-05-03 Q1 + plan research R8: the 6 non-undoable toggle c
 
 ### 6. NO change to `commands` table
 
-The `commands` table schema is unchanged. The `non_undoable` SPEC flag (R1) influences the dispatcher's behavior, not the table schema. The flag MAY be reflected via leaving `undo_group_id` NULL — that's an implementation detail handled in /tasks.
+The `commands` table schema is unchanged. The `undoable = false` SPEC flag (R1) influences the dispatcher's behavior, not the table schema. The flag MAY be reflected via leaving `undo_group_id` NULL — that's an implementation detail handled in /tasks.
 
 ---
 
