@@ -156,7 +156,7 @@
 
 - [X] **T038** Implement paired src/rec id buttons + on/off toggle in track headers (FR-009, FR-010, FR-029a). The src-id button reflects the patch's `enabled` state (filled-blue when ON, outline-dim when OFF) when the SourceTab is displayed. The rec-id button reflects the role color of the displayed tab. Click on the src-id button: invokes `SetPatch(sequence_id=active, source_track_index=this_row, enabled=not current)`. Listen on `patch_changed` to re-render. After this lands, T018 passes.
 
-- [ ] **T039** Implement plain-drag and modifier-drag for source-id buttons (FR-010a). Plain-drag: `SetPatch(record_track_index=destination_row)`. Modifier-drag (Option/Alt by default; configurable): same as plain-drag (the action is identical at the data layer because UNIQUE(sequence_id, source_track_index) means stacking is just multiple patches with the same `record_track_index`). Cross-track-type drag refused with explicit error — the executor asserts the destination's `track_type` matches the source's. After this lands, T018 + T019 pass.
+- [X] **T039** Implement plain-drag and modifier-drag for source-id buttons (FR-010a). Plain-drag: `SetPatch(record_track_index=destination_row)`. Modifier-drag (Option/Alt by default; configurable): same as plain-drag (the action is identical at the data layer because UNIQUE(sequence_id, source_track_index) means stacking is just multiple patches with the same `record_track_index`). Cross-track-type drag refused with explicit error — the executor asserts the destination's `track_type` matches the source's. After this lands, T018 + T019 pass.
 
 ### Per-channel vs per-clip view + modifier toggle
 

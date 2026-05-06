@@ -1028,6 +1028,60 @@ local function register_track_btn_handler(callback)
     return name
 end
 
+-- Registry of rec-id buttons for geometry-based drop-target resolution (T039, FR-010a).
+-- { rec_btn=widget, track_index=N, track_type="AUDIO"|"VIDEO", seq_id="..." }
+local rec_btn_hit_registry = {}
+
+-- Returns the rec-id drop-target entry whose screen rect contains (gx, gy), or nil.
+-- Widget identity comparison is not stable across userdata allocations, so bounding-rect
+-- hit-test is the correct approach (WIDGET.MAP_TO_GLOBAL + PROPERTIES.GET_GEOMETRY).
+local function find_drop_target(gx, gy)
+    for _, entry in ipairs(rec_btn_hit_registry) do
+        assert(entry.rec_btn, "find_drop_target: rec_btn nil in registry (track_index="
+            .. tostring(entry.track_index) .. ")")
+        local sx, sy = qt_constants.WIDGET.MAP_TO_GLOBAL(entry.rec_btn, 0, 0)
+        local _, _, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(entry.rec_btn)
+        if gx >= sx and gx < sx + w and gy >= sy and gy < sy + h then
+            return entry
+        end
+    end
+    return nil
+end
+
+-- Install a drag gesture on a src-id button so dropping onto a rec-id button calls
+-- SetPatch(source=src_track_index, record=target.track_index).
+-- src_track_type required for cross-type refusal inside SetPatch (FR-010a).
+local function wire_src_drag(src_btn, sequence_id, src_track_index, src_track_type)
+    assert(sequence_id and sequence_id ~= "",
+        "wire_src_drag: sequence_id required (src_track_index=" .. tostring(src_track_index) .. ")")
+    assert(type(src_track_index) == "number",
+        "wire_src_drag: src_track_index must be number, got " .. type(src_track_index))
+    assert(src_track_type == "VIDEO" or src_track_type == "AUDIO",
+        "wire_src_drag: src_track_type must be VIDEO or AUDIO, got " .. tostring(src_track_type))
+    local drag_handler = register_track_btn_handler(function(event_type, gx, gy, _mods)
+        if event_type ~= "end" then return end
+        local target = find_drop_target(gx, gy)
+        if not target then return end
+        if target.seq_id ~= sequence_id then return end
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "wire_src_drag: no project_id")
+        local cmd = require("core.command_manager")
+        local result = cmd.execute("SetPatch", {
+            sequence_id        = sequence_id,
+            source_track_index = src_track_index,
+            record_track_index = target.track_index,
+            source_track_type  = src_track_type,
+            project_id         = project_id,
+        })
+        if not result or not result.success then
+            log.warn("wire_src_drag: SetPatch refused (src=%d→rec=%d type=%s): %s",
+                src_track_index, target.track_index, tostring(src_track_type),
+                tostring(result and result.error_message))
+        end
+    end)
+    qt_constants.CONTROL.SET_WIDGET_DRAG_HANDLER(src_btn, drag_handler)
+end
+
 --- Wire a toggle-preference click: calls ToggleTrackPreference and re-pulls style.
 local function wire_toggle_preference(btn, track_id, property, active_color)
     local captured_btn = btn
@@ -1233,6 +1287,10 @@ end)
 
 -- Helper function to create video headers with splitters
 local function create_video_headers()
+    -- Clear drag drop-target registry; audio builder repopulates its entries below.
+    -- Both builders always run together (init + rebuild paths both call both), so
+    -- clearing here at the top of the first builder is safe.
+    rec_btn_hit_registry = {}
     local video_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
     local video_tracks = state.get_video_tracks()
 
@@ -1281,6 +1339,13 @@ local function create_video_headers()
 
         local video_seq_id = state.get_sequence_id()
         wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index)
+        wire_src_drag(src_btn, video_seq_id, track.track_index, "VIDEO")
+        table.insert(rec_btn_hit_registry, {
+            rec_btn     = rec_btn,
+            track_index = track.track_index,
+            track_type  = "VIDEO",
+            seq_id      = video_seq_id,
+        })
 
         -- Track name label (flex)
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
@@ -1482,6 +1547,13 @@ local function create_audio_headers()
 
         local audio_seq_id = state.get_sequence_id()
         wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index)
+        wire_src_drag(src_btn, audio_seq_id, track.track_index, "AUDIO")
+        table.insert(rec_btn_hit_registry, {
+            rec_btn     = rec_btn,
+            track_index = track.track_index,
+            track_type  = "AUDIO",
+            seq_id      = audio_seq_id,
+        })
 
         -- Track name label (flex); FR-021 channel count pending track model extension
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)

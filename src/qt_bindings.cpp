@@ -210,6 +210,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setfield(L, -2, "SET_BUTTON_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_widget_click_handler); lua_setfield(L, -2, "SET_WIDGET_CLICK_HANDLER");
     lua_pushcfunction(L, lua_set_context_menu_handler); lua_setfield(L, -2, "SET_CONTEXT_MENU_HANDLER");
+    lua_pushcfunction(L, lua_set_widget_drag_handler); lua_setfield(L, -2, "SET_WIDGET_DRAG_HANDLER");
+    lua_pushcfunction(L, lua_widget_at_global); lua_setfield(L, -2, "WIDGET_AT_GLOBAL");
     lua_pushcfunction(L, lua_set_tree_headers); lua_setfield(L, -2, "SET_TREE_HEADERS");
     lua_pushcfunction(L, lua_set_tree_column_width); lua_setfield(L, -2, "SET_TREE_COLUMN_WIDTH");
     lua_pushcfunction(L, lua_set_tree_indentation); lua_setfield(L, -2, "SET_TREE_INDENTATION");
@@ -248,6 +250,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_button_click_handler); lua_setglobal(L, "qt_set_button_click_handler");
     lua_pushcfunction(L, lua_set_widget_click_handler); lua_setglobal(L, "qt_set_widget_click_handler");
     lua_pushcfunction(L, lua_set_context_menu_handler); lua_setglobal(L, "qt_set_context_menu_handler");
+    lua_pushcfunction(L, lua_set_widget_drag_handler); lua_setglobal(L, "qt_set_widget_drag_handler");
+    lua_pushcfunction(L, lua_widget_at_global); lua_setglobal(L, "qt_widget_at_global");
     lua_pushcfunction(L, lua_set_line_edit_text_changed_handler); lua_setglobal(L, "qt_set_line_edit_text_changed_handler");
     lua_pushcfunction(L, lua_set_line_edit_editing_finished_handler); lua_setglobal(L, "qt_set_line_edit_editing_finished_handler");
     lua_pushcfunction(L, lua_set_line_edit_return_pressed_handler); lua_setglobal(L, "qt_set_line_edit_return_pressed_handler");

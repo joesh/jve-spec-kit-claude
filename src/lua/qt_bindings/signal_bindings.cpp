@@ -436,6 +436,82 @@ private:
     lua_State* lua_state;
 };
 
+// Drag event filter: detects left-button drag gestures on a widget.
+// Fires the Lua handler as handler(event_type, global_x, global_y, modifiers)
+// where event_type is "start", "move", or "end" and modifiers is an integer
+// (Qt::KeyboardModifiers bitmask: Alt=0x08000000, Shift=0x02000000, Ctrl=0x04000000).
+// "start" fires once when the drag threshold is exceeded.
+// "move" fires on every subsequent mouse-move while dragging.
+// "end" fires on mouse-release (only if a drag was active).
+// Click (press+release without crossing threshold) fires nothing.
+static constexpr int DRAG_THRESHOLD_PX = 5;
+
+class DragMouseEventFilter : public QObject {
+public:
+    DragMouseEventFilter(const std::string& handler, lua_State* L_ptr, QObject* parent = nullptr)
+        : QObject(parent), handler_name(handler), lua_state(L_ptr),
+          dragging(false), press_x(0), press_y(0) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                dragging = false;
+                QPoint gp = me->globalPosition().toPoint();
+                press_x = gp.x();
+                press_y = gp.y();
+                return false;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->buttons() & Qt::LeftButton) {
+                QPoint gp = me->globalPosition().toPoint();
+                int dx = gp.x() - press_x;
+                int dy = gp.y() - press_y;
+                bool crossed = (dx*dx + dy*dy) >= (DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX);
+                const char* ev_type = dragging ? "move" : (crossed ? "start" : nullptr);
+                if (crossed) dragging = true;
+                if (ev_type) {
+                    fire(ev_type, gp.x(), gp.y(), static_cast<int>(me->modifiers()));
+                }
+                return false;
+            }
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && dragging) {
+                dragging = false;
+                QPoint gp = me->globalPosition().toPoint();
+                fire("end", gp.x(), gp.y(), static_cast<int>(me->modifiers()));
+                return false;
+            }
+            dragging = false;
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    void fire(const char* ev_type, int gx, int gy, int mods) {
+        lua_getglobal(lua_state, handler_name.c_str());
+        if (!lua_isfunction(lua_state, -1)) {
+            jve_discard_non_function_handler(lua_state, handler_name.c_str(), "signal.drag");
+            return;
+        }
+        lua_pushstring(lua_state, ev_type);
+        lua_pushinteger(lua_state, gx);
+        lua_pushinteger(lua_state, gy);
+        lua_pushinteger(lua_state, mods);
+        if (lua_pcall(lua_state, 4, 0, 0) != LUA_OK) {
+            jve_handle_lua_callback_error(lua_state, "signal.drag");
+        }
+    }
+
+    std::string handler_name;
+    lua_State* lua_state;
+    bool dragging;
+    int press_x, press_y;
+};
+
 // Event filter class to maintain bottom-anchored scrolling.
 // Suspended during programmatic scroll restoration (sequence tab switch)
 // to prevent async singleShot callbacks from clobbering the restored position.
@@ -515,6 +591,31 @@ int lua_set_widget_click_handler(lua_State* L) {
     ClickEventFilter* filter = new ClickEventFilter(handler_str, L, widget);
     widget->installEventFilter(filter);
     return 0;
+}
+
+// Install a drag event filter on a widget.
+// Lua: qt_set_widget_drag_handler(widget, handler_name)
+// handler fires as: handler(event_type, global_x, global_y, modifiers)
+int lua_set_widget_drag_handler(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* handler_name = lua_tostring(L, 2);
+    if (!widget || !handler_name) {
+        return luaL_error(L, "qt_set_widget_drag_handler: widget and handler_name required");
+    }
+    widget->setMouseTracking(true);
+    DragMouseEventFilter* filter = new DragMouseEventFilter(handler_name, L, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}
+
+// Return the QWidget at global screen position, or nil.
+// Lua: qt_widget_at_global(x, y) → widget|nil
+int lua_widget_at_global(lua_State* L) {
+    int x = static_cast<int>(luaL_checkinteger(L, 1));
+    int y = static_cast<int>(luaL_checkinteger(L, 2));
+    QWidget* w = QApplication::widgetAt(x, y);
+    lua_push_widget(L, w);
+    return 1;
 }
 
 int lua_set_context_menu_handler(lua_State* L) {
