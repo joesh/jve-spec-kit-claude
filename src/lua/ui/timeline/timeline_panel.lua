@@ -1154,43 +1154,51 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     return mute_btn, solo_btn
 end
 
+-- Format a source-track label for display in the src-id button.
+-- E.g. track_type="VIDEO", src_idx=1 → "V1"; track_type="AUDIO", src_idx=3 → "A3".
+local function format_source_label(track_type, src_idx)
+    local prefix = (track_type == "VIDEO") and "V" or "A"
+    return prefix .. tostring(src_idx)
+end
+
 -- Wire src-id and rec-id buttons to SetPatch command (T038, FR-009, FR-010).
--- src-id click: toggle patch enabled for this source track on the active sequence.
--- rec-id label: shows the record track index this source track routes to (or "·" if unrouted).
-local function wire_patch_buttons(src_btn, rec_btn, sequence_id, src_track_index)
+-- rec_track_index: the index of the RECORD track this row represents.
+-- track_type: "VIDEO" or "AUDIO" — used to format the source-track label.
+-- src_btn label: which SOURCE track feeds this record row (reverse-lookup from patches).
+-- rec_btn label: this record track's own name — set at creation, never changed here.
+local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_index, track_type)
     assert(sequence_id and sequence_id ~= "",
-        "wire_patch_buttons: sequence_id required (src_track_index=" .. tostring(src_track_index) .. ")")
-    assert(type(src_track_index) == "number",
-        "wire_patch_buttons: src_track_index must be number, got " .. type(src_track_index))
+        "wire_patch_buttons: sequence_id required (rec_track_index=" .. tostring(rec_track_index) .. ")")
+    assert(type(rec_track_index) == "number",
+        "wire_patch_buttons: rec_track_index must be number, got " .. type(rec_track_index))
+    assert(track_type == "VIDEO" or track_type == "AUDIO",
+        "wire_patch_buttons: track_type must be VIDEO or AUDIO, got " .. tostring(track_type))
     local captured_src = src_btn
-    local captured_rec = rec_btn
     local Patch = require("models.patch")
 
-    local function refresh_patch_style()
-        local p = Patch.find_by_source(sequence_id, src_track_index)
+    local function refresh_src_btn()
+        -- Reverse lookup: which source track is patched to this record row?
+        local p = Patch.find_by_record(sequence_id, rec_track_index)
         local enabled = p and (p.enabled == 1 or p.enabled == true)
-        local rec_label = p and tostring(p.record_track_index) or "·"
+        local src_label = p and format_source_label(track_type, p.source_track_index) or "—"
+        qt_constants.PROPERTIES.SET_TEXT(captured_src, src_label)
         qt_constants.PROPERTIES.SET_STYLE(captured_src,
             build_id_btn_stylesheet(enabled, source_tab_color))
-        qt_constants.PROPERTIES.SET_TEXT(captured_rec, rec_label)
-        qt_constants.PROPERTIES.SET_STYLE(captured_rec,
-            build_id_btn_stylesheet(p ~= nil, selection_color))
     end
 
-    refresh_patch_style()
+    refresh_src_btn()
 
     local src_handler = register_track_btn_handler(function()
-        -- src-id click = toggle enabled on an EXISTING patch.
-        -- No patch means no route set yet (user must click rec-id first per T039).
-        local p = Patch.find_by_source(sequence_id, src_track_index)
-        if not p then return end
+        -- src-id click (record-tab mode): toggle enabled on the patch feeding this record row.
+        local p = Patch.find_by_record(sequence_id, rec_track_index)
+        if not p then return end  -- no patch yet; user must drag to create one
         local project_id = timeline_state.get_project_id()
-        assert(project_id, "wire_patch_buttons: no project_id")
+        assert(project_id, "wire_patch_buttons: no project_id (rec_track_index=" .. tostring(rec_track_index) .. ")")
         local current_enabled = p.enabled == 1 or p.enabled == true
         local cmd = require("core.command_manager")
         cmd.execute("SetPatch", {
             sequence_id        = sequence_id,
-            source_track_index = src_track_index,
+            source_track_index = p.source_track_index,
             project_id         = project_id,
             enabled            = not current_enabled,
         })
@@ -1258,22 +1266,31 @@ Signals.connect("sync_mode_changed", function(track_id, new_mode)
 end)
 
 -- MVC: patch_changed fires when SetPatch creates/updates/disables a patch.
--- Re-pulls patch state for the affected source track and refreshes both buttons.
-Signals.connect("patch_changed", function(sequence_id, source_track_index, _change_type)
+-- Re-pulls patch state and refreshes the src-id button on the affected RECORD row.
+-- rec_btn label never changes (always the record track's own name).
+Signals.connect("patch_changed", function(sequence_id, source_track_index, change_type)
     local Patch = require("models.patch")
     local p = Patch.find_by_source(sequence_id, source_track_index)
-    local enabled = p and (p.enabled == 1 or p.enabled == true)
-    local rec_label = p and tostring(p.record_track_index) or "·"
+
+    -- Determine which record row to update.
+    local rec_index = p and p.record_track_index
+    local enabled   = p and (p.enabled == 1 or p.enabled == true)
+
     for track_id, refs in pairs(track_button_refs) do
-        if refs.seq_id == sequence_id and refs.src_idx == source_track_index then
-            assert(refs.src_btn, "patch_changed: src_btn nil for track " .. tostring(track_id))
-            assert(refs.rec_btn, "patch_changed: rec_btn nil for track " .. tostring(track_id))
+        if refs.seq_id == sequence_id and refs.rec_idx == rec_index then
+            assert(refs.src_btn,
+                "patch_changed: src_btn nil for track " .. tostring(track_id))
+            local src_label
+            if p and change_type ~= "deleted" then
+                src_label = format_source_label(refs.track_type, source_track_index)
+            else
+                src_label = "—"
+            end
+            qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, src_label)
             qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
                 build_id_btn_stylesheet(enabled, source_tab_color))
-            qt_constants.PROPERTIES.SET_TEXT(refs.rec_btn, rec_label)
-            qt_constants.PROPERTIES.SET_STYLE(refs.rec_btn,
-                build_id_btn_stylesheet(p ~= nil, selection_color))
-            log.event("patch_changed: refreshed buttons for track %s", track_id)
+            log.event("patch_changed: src_btn on rec_idx=%s updated to %s",
+                tostring(rec_index), src_label)
             break
         end
     end
@@ -1331,16 +1348,21 @@ local function create_video_headers()
 
         local captured_track_id = track.id
 
-        -- src-id button
-        local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        -- src-id button: shows which SOURCE track feeds this record row (filled when enabled).
+        -- Label is populated by wire_patch_buttons via reverse patch lookup.
+        local src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
+        qt_constants.PROPERTIES.SET_STYLE(src_btn,
+            build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        -- rec-patch-id button
-        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("·")
+        -- rec-patch-id button: always shows this record track's name, filled with rec-red.
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn,
+            build_id_btn_stylesheet(true, selection_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         local video_seq_id = state.get_sequence_id()
-        wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index)
+        wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index, "VIDEO")
         wire_src_drag(src_btn, video_seq_id, track.track_index, "VIDEO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
@@ -1378,7 +1400,8 @@ local function create_video_headers()
             src_btn       = src_btn,
             rec_btn       = rec_btn,
             seq_id        = video_seq_id,
-            src_idx       = track.track_index,
+            rec_idx       = track.track_index,
+            track_type    = "VIDEO",
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
@@ -1539,16 +1562,20 @@ local function create_audio_headers()
 
         local captured_track_id = track.id
 
-        -- src-id button
-        local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        -- src-id button: shows which SOURCE track feeds this record row.
+        local src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
+        qt_constants.PROPERTIES.SET_STYLE(src_btn,
+            build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        -- rec-patch-id button
-        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("·")
+        -- rec-patch-id button: always shows this record track's name, filled with rec-red.
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn,
+            build_id_btn_stylesheet(true, selection_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         local audio_seq_id = state.get_sequence_id()
-        wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index)
+        wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index, "AUDIO")
         wire_src_drag(src_btn, audio_seq_id, track.track_index, "AUDIO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
@@ -1602,7 +1629,8 @@ local function create_audio_headers()
             src_btn       = src_btn,
             rec_btn       = rec_btn,
             seq_id        = audio_seq_id,
-            src_idx       = track.track_index,
+            rec_idx       = track.track_index,
+            track_type    = "AUDIO",
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)

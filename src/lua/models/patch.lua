@@ -51,6 +51,39 @@ function Patch.find_by_source(sequence_id, src_idx)
     return setmetatable(p, Patch)
 end
 
+--- Find a patch by (sequence_id, record_track_index) — reverse lookup. Returns table or nil.
+function Patch.find_by_record(sequence_id, rec_idx)
+    assert(sequence_id and sequence_id ~= "", "Patch.find_by_record: sequence_id required")
+    assert(type(rec_idx) == "number", "Patch.find_by_record: record_track_index must be number")
+
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT id, sequence_id, source_track_index, record_track_index, enabled, color, created_at
+        FROM patches
+        WHERE sequence_id = ? AND record_track_index = ?
+        LIMIT 1
+    ]])
+    assert(stmt, "Patch.find_by_record: prepare failed for seq=" .. tostring(sequence_id)
+        .. " rec=" .. tostring(rec_idx))
+    stmt:bind_value(1, sequence_id)
+    stmt:bind_value(2, rec_idx)
+    assert(stmt:exec(), "Patch.find_by_record: exec failed for seq=" .. tostring(sequence_id)
+        .. " rec=" .. tostring(rec_idx))
+
+    if not stmt:next() then stmt:finalize(); return nil end
+    local p = setmetatable({
+        id                 = stmt:value(0),
+        sequence_id        = stmt:value(1),
+        source_track_index = stmt:value(2),
+        record_track_index = stmt:value(3),
+        enabled            = stmt:value(4),
+        color              = stmt:value(5),
+        created_at         = stmt:value(6),
+    }, Patch)
+    stmt:finalize()
+    return p
+end
+
 --- Return all patches for a sequence, ordered by source_track_index.
 function Patch.find_by_sequence(sequence_id)
     assert(sequence_id and sequence_id ~= "", "Patch.find_by_sequence: sequence_id required")
