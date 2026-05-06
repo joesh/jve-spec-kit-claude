@@ -440,8 +440,14 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             Track.delete(auto_ids[i])
         end
 
-        command:set_parameter("__timeline_mutations",
-            build_undo_mutation_bucket(args, created_ids, rippled, splits))
+        local undo_bucket = build_undo_mutation_bucket(args, created_ids, rippled, splits)
+        command:set_parameter("__timeline_mutations", undo_bucket)
+        -- When the original Insert had no clips (T042 track-only path), the undo
+        -- bucket is empty — no clip deletions or shifts.  Suppress the run_undoer
+        -- "no __timeline_mutations" error; the undo DID do real work (Track.delete).
+        if #created_ids == 0 then
+            command:set_parameter("__no_timeline_mutations_expected", true)
+        end
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)

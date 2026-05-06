@@ -164,7 +164,7 @@
 
 - [ ] **T041** Implement view-toggle modifier (FR-029d). When the user holds Option/Alt over a source row, temporarily flip the rendered representation (per_channel ↔ per_clip). Underlying `patches` rows MUST NOT be touched. Listen for keyboard modifier events; on key-down, re-render in the opposite mode; on key-up, revert. After this lands, T020 passes.
 
-- [ ] **T041a** PersistentWidget audit (FR-021c, ENGINEERING.md rule 1.6). For each new or modified UI widget in T035, T037, T038, T039, T040, T041, document in a scratch file `/tmp/015_persistence_audit.md`: (a) what state the widget owns; (b) the persistence mechanism it uses (project DB row, `~/.jve/` JSON, transient/no-persistence-needed); (c) for transient state, justify why it does not need to persist. Identify any state that needs persistence but isn't wired; surface as a follow-up sub-task or fix in-place. The audit's output joins the post-task commit message.
+- [X] **T041a** PersistentWidget audit (FR-021c, ENGINEERING.md rule 1.6). For each new or modified UI widget in T035, T037, T038, T039, T040, T041, document in a scratch file `/tmp/015_persistence_audit.md`: (a) what state the widget owns; (b) the persistence mechanism it uses (project DB row, `~/.jve/` JSON, transient/no-persistence-needed); (c) for transient state, justify why it does not need to persist. Identify any state that needs persistence but isn't wired; surface as a follow-up sub-task or fix in-place. The audit's output joins the post-task commit message.
 
 ### Auto-create record track at edit time
 
