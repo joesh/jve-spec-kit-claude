@@ -23,6 +23,7 @@ local M = {}
 
 local Clip          = require("models.clip")
 local Sequence      = require("models.sequence")
+local Track         = require("models.track")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
@@ -128,8 +129,33 @@ local SPEC = {
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
         executed_mutations     = { kind = "table" },
+        auto_track_ids         = { kind = "table" },
     },
 }
+
+-- T042: ensure the record sequence has audio tracks up to the count of the
+-- source sequence's audio tracks. Creates tracks directly (not via nested
+-- command) and returns their IDs so the undoer can delete them.
+local function auto_create_record_audio_tracks(args)
+    if not args.nested_sequence_id then return {} end
+
+    local src_audio = Track.find_by_sequence(args.nested_sequence_id, "AUDIO")
+    local rec_audio = Track.find_by_sequence(args.sequence_id,        "AUDIO")
+    local src_count = #src_audio
+    local rec_count = #rec_audio
+
+    local created_ids = {}
+    for i = rec_count + 1, src_count do
+        local t = Track.create_audio(
+            string.format("A%d", i), args.sequence_id, { sync_mode = "ripple" })
+        assert(t:save(), string.format(
+            "Insert T042: failed to save auto-created audio track A%d "
+            .. "for sequence %s", i, tostring(args.sequence_id)))
+        created_ids[#created_ids + 1] = t.id
+        log.event("Insert T042: auto-created audio track A%d id=%s", i, t.id)
+    end
+    return created_ids
+end
 
 -- Flat executed_mutations list: one entry per row touched. Stable contract
 -- consumed by tests/test_insert_split_behavior, batch-ripple undo, and
@@ -330,6 +356,41 @@ end
 function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
+
+        -- T042: auto-create any missing record audio tracks (within this undo
+        -- entry so Cmd-Z removes them together with the inserted clip).
+        local auto_ids = auto_create_record_audio_tracks(args)
+        command:set_parameter("auto_track_ids", auto_ids)
+
+        -- Validate the source sequence exists before any content checks.
+        if not Sequence.find(args.nested_sequence_id) then
+            set_last_error(string.format(
+                "Insert: nested_sequence_id '%s' not found",
+                tostring(args.nested_sequence_id)))
+            return false
+        end
+
+        -- If the source sequence has no clips, track creation was the only
+        -- goal (T042 path). Persist empty clip-insertion state and return.
+        local src_mediums = Sequence.contained_mediums(args.nested_sequence_id)
+        if not next(src_mediums) then
+            local Signals = require("core.signals")
+            command:set_parameter("created_clip_ids",      {})
+            command:set_parameter("created_link_group_id", "")
+            command:set_parameter("rippled_capture",       {})
+            command:set_parameter("split_capture",         {})
+            command:set_parameter("duration_frames",       0)
+            command:set_parameter("fps_mismatch_policy",   "")
+            command:set_parameter("executed_mutations",    {})
+            command:set_parameter("__timeline_mutations",  {
+                sequence_id = args.sequence_id,
+                inserts = {}, updates = {}, deletes = {},
+                bulk_shifts = {}, placements = {},
+            })
+            Signals.emit("sequence_content_changed", args.sequence_id)
+            return true
+        end
+
         local ok, result_or_err = pcall(M.execute, args)
         if not ok then
             set_last_error("Insert: " .. tostring(result_or_err))
@@ -370,6 +431,14 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             end
         end
         reverse_split_captures(splits)
+
+        -- T042: remove auto-created record tracks (reverse order of creation).
+        local auto_ids = args.auto_track_ids
+        assert(type(auto_ids) == "table",
+            "Insert.undo: auto_track_ids not persisted on command")
+        for i = #auto_ids, 1, -1 do
+            Track.delete(auto_ids[i])
+        end
 
         command:set_parameter("__timeline_mutations",
             build_undo_mutation_bucket(args, created_ids, rippled, splits))

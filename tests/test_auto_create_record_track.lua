@@ -171,12 +171,14 @@ assert(auto_track_id, "auto-created A4 track not found")
 for _, ch in ipairs({1, 2, 6}) do
     local mid = "med_ch" .. ch
     assert(db:exec(string.format([[
-        INSERT OR IGNORE INTO media_refs
+        INSERT OR IGNORE INTO media
             (id, project_id, name, file_path, duration_frames,
              fps_numerator, fps_denominator, audio_channels, audio_sample_rate,
-             created_at, modified_at)
-        VALUES ('%s', 'proj', 'C%d', '/tmp/c.mov', 1000, 24, 1, %d, 48000, %d, %d)
-    ]], mid, ch, ch, now, now)), "media INSERT failed for ch=" .. ch)
+             metadata, created_at, modified_at)
+        VALUES ('%s', 'proj', 'C%d', '/tmp/c_ch%d.wav', 1000, 24, 1, %d, 48000,
+                '{"start_tc_audio_samples":0,"start_tc_audio_rate":48000}',
+                %d, %d)
+    ]], mid, ch, ch, ch, now, now)), "media INSERT failed for ch=" .. ch)
 
     local r2 = command_manager.execute("AddClipToTrack", {
         sequence_id          = "rec_seq",

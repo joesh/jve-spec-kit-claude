@@ -51,6 +51,7 @@ local ripple_undo = require("core.ripple.undo_hydrator")
 local gap_lifecycle = require("core.gap_lifecycle")
 local batch_context = require("core.ripple.batch.context")
 local batch_pipeline = require("core.ripple.batch.pipeline")
+local SplitClip = require("core.commands.split_clip")
 
 local compute_edge_boundary_time = ripple_edge.compute_edge_boundary_time
 local build_edge_key = ripple_edge.build_edge_key
@@ -485,6 +486,249 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.neighbor_bounds_cache = build_neighbor_bounds_cache(ctx.track_clip_map)
     end
 
+    -- Inspect each edge's boundary frame and apply per-track sync_mode semantics:
+    --
+    --   'ripple': find the clip on the synced track that is CO-LOCATED with the
+    --             anchor clip (same timeline_start AND same end frame) when the
+    --             operation is a SHRINK (out-edge: delta<0; in-edge: delta>0).
+    --             That clip's matching edge is added to edge_infos so it is
+    --             trimmed together with the anchor, preventing the upstream-blocker
+    --             clamp that would otherwise arise.
+    --             Extend operations (+delta on out-edge, -delta on in-edge) need
+    --             no co-trim: downstream shifts handle the gap naturally.
+    --             Non-co-located clips (e.g. a longer A1 clip that merely ends at
+    --             the same boundary) are intentionally left as blockers — they
+    --             are independent content, not linked audio/video of the anchor.
+    --
+    --   'off':    mark the track in ctx.sync_off_tracks so
+    --             collect_affected_tracks_from_cache excludes it from bulk-shift.
+    --
+    --   'cut':    TODO T014 — filler insertion not yet implemented.
+    --
+    -- Runs after build_clip_cache (needs ctx.track_clip_map, ctx.clip_lookup)
+    -- and before inject_implicit_gap_edges (reads the updated ctx.edge_infos).
+    local function apply_sync_mode_dispatch(ctx)
+        if not ctx.track_sync_modes then return end
+        assert(ctx.clip_lookup,    "apply_sync_mode_dispatch: ctx.clip_lookup is nil")
+        assert(ctx.track_clip_map, "apply_sync_mode_dispatch: ctx.track_clip_map is nil")
+
+        ctx.sync_off_tracks = {}
+
+        -- Snapshot the count before adding dispatch edges so we only iterate
+        -- over the original caller-provided edges, not our own additions.
+        local original_count = #ctx.edge_infos
+
+        -- Build a set of tracks already covered by explicit edge_infos so we
+        -- never inject a second edge on a track the caller already addressed.
+        local covered = {}
+        for i = 1, original_count do
+            local edge = ctx.edge_infos[i]
+            local track_id = edge.track_id or ctx.clip_track_lookup[edge.clip_id]
+            if track_id then covered[track_id] = true end
+        end
+
+        local function clip_end(clip)
+            return clip.timeline_start + clip.duration
+        end
+
+        -- A shrink trims the clip shorter. Co-trim is only needed (and safe)
+        -- when the anchor clip shrinks: the matched clip's upstream boundary
+        -- retracts, opening room for the downstream shift on that track.
+        -- For extend operations the downstream shift alone handles everything.
+        assert(ctx.delta_frames ~= nil,
+            "apply_sync_mode_dispatch: ctx.delta_frames not resolved — prepare.resolve_delta must run first")
+
+        -- Co-trim is valid only for single-edge operations where the one selected
+        -- clip has a co-located partner on a ripple-mode track. Multi-edge
+        -- operations involve clips that may shift relative to each other before
+        -- the trim applies, making positional co-location stale and unreliable
+        -- as a proxy for "linked A/V pair."
+        local can_cotrim = (original_count == 1)
+
+        -- A shrink trims the clip shorter. Co-trim is only needed (and safe)
+        -- when the anchor clip shrinks: the matched clip's upstream boundary
+        -- retracts, opening room for the downstream shift on that track.
+        -- For extend operations the downstream shift alone handles everything.
+        local function is_shrink(edge_bracket)
+            if edge_bracket == "out" then return ctx.delta_frames < 0 end
+            if edge_bracket == "in"  then return ctx.delta_frames > 0 end
+            return false
+        end
+
+        -- Find the timeline_start of the first non-gap clip starting at or after
+        -- `after_frame`. Returns nil if no such clip exists.
+        local function first_content_downstream_start(clips, after_frame)
+            for _, c in ipairs(clips) do
+                if not c.is_gap and c.timeline_start >= after_frame then
+                    return c.timeline_start
+                end
+            end
+            return nil
+        end
+
+        -- Co-trim a clip on `track_id` that is truly co-located with `base_clip`:
+        -- same start AND same end. Additionally, the candidate's downstream clip
+        -- must start at the same frame as the primary's downstream clip — otherwise
+        -- this is coincidental co-location (not a synchronized pair) and co-trimming
+        -- would silently remove a valid upstream constraint on that track.
+        local function dispatch_colocated_edge(track_id, track_clips, base_clip,
+                                               primary_clips, edge_type)
+            local base_start         = base_clip.timeline_start
+            local base_end           = clip_end(base_clip)
+            local primary_ds_start   = first_content_downstream_start(primary_clips, base_end)
+            for _, c in ipairs(track_clips) do
+                if not c.is_gap
+                    and c.timeline_start == base_start
+                    and clip_end(c)      == base_end
+                then
+                    local c_ds_start = first_content_downstream_start(track_clips, base_end)
+                    if c_ds_start ~= primary_ds_start then
+                        -- Divergent downstream: coincidental co-location, not a
+                        -- synchronized pair. Skip to preserve the upstream constraint.
+                        return
+                    end
+                    table.insert(ctx.edge_infos, {
+                        clip_id   = c.id,
+                        edge_type = edge_type,
+                        trim_type = "ripple",
+                        track_id  = track_id,
+                    })
+                    covered[track_id] = true
+                    return
+                end
+            end
+        end
+
+        for i = 1, original_count do
+            local edge = ctx.edge_infos[i]
+            if edge.trim_type == "roll" then goto continue_edge end
+
+            local base_clip = ctx.clip_lookup[edge.clip_id]
+            if not base_clip then goto continue_edge end
+
+            local edge_bracket = edge_utils.to_bracket(edge.edge_type)
+            if edge_bracket ~= "out" and edge_bracket ~= "in" then goto continue_edge end
+
+            local do_dispatch = can_cotrim and is_shrink(edge_bracket)
+
+            local primary_track_id = edge.track_id or ctx.clip_track_lookup[edge.clip_id]
+            assert(primary_track_id and primary_track_id ~= "",
+                string.format("apply_sync_mode_dispatch: cannot resolve track for clip %s",
+                    tostring(edge.clip_id)))
+            local primary_clips = ctx.track_clip_map[primary_track_id] or {}
+
+            for track_id, sync_mode in pairs(ctx.track_sync_modes) do
+                if covered[track_id] then goto continue_track end
+                if sync_mode == "off" then
+                    ctx.sync_off_tracks[track_id] = true
+                elseif sync_mode == "ripple" and do_dispatch then
+                    local track_clips = ctx.track_clip_map[track_id]
+                    if track_clips then
+                        dispatch_colocated_edge(track_id, track_clips,
+                            base_clip, primary_clips, edge.edge_type)
+                    end
+                elseif sync_mode == "cut" then
+                    -- Compute the trim_point: the frame where the cut happens.
+                    -- For an out-edge the cut is at the anchor's right boundary;
+                    -- for an in-edge it is at the anchor's left boundary.
+                    local trim_point
+                    if edge_bracket == "out" then
+                        trim_point = base_clip.timeline_start + base_clip.duration
+                    else
+                        trim_point = base_clip.timeline_start
+                    end
+
+                    local track_clips = ctx.track_clip_map[track_id]
+                    if not track_clips then goto continue_track end
+
+                    -- Collect spanning clips first to avoid mutating the list
+                    -- while iterating it.
+                    local to_split = {}
+                    for _, c in ipairs(track_clips) do
+                        if not c.is_gap then
+                            local c_end = c.timeline_start + c.duration
+                            if c.timeline_start < trim_point and c_end > trim_point then
+                                to_split[#to_split + 1] = c
+                            end
+                        end
+                    end
+
+                    ctx.cut_left_halves     = ctx.cut_left_halves     or {}
+                    ctx.cut_dispatch_tracks = ctx.cut_dispatch_tracks  or {}
+                    ctx.cut_split_results   = ctx.cut_split_results    or {}
+
+                    for _, c in ipairs(to_split) do
+                        local orig_duration = c.duration
+                        local split_result = SplitClip.execute({
+                            sequence_id = ctx.sequence_id,
+                            clip_id     = c.id,
+                            split_frame = trim_point,
+                        })
+                        -- The left half's duration is now split_offset frames.
+                        -- Mark it so find_track_boundary_neighbors skips it as
+                        -- a blocker (the right half overlaps it intentionally).
+                        ctx.cut_left_halves[c.id] = true
+                        c.duration = split_result.split_offset
+
+                        local right_duration = orig_duration - split_result.split_offset
+                        assert(right_duration >= 1, string.format(
+                            "cut-mode split on clip %s produced sub-frame right half "
+                            .. "(orig_dur=%d split_offset=%d)",
+                            tostring(c.id), orig_duration, split_result.split_offset))
+                        local right_source_in  = split_result.prior.source_in_frame
+                                               + split_result.source_offset
+                        local right_source_out = split_result.prior.source_out_frame
+
+                        -- Record for emit_cut_split_timeline_mutations so the
+                        -- in-memory timeline_state can be updated after the DB
+                        -- apply without re-issuing any SQL.
+                        table.insert(ctx.cut_split_results, {
+                            left_id              = c.id,
+                            right_id             = split_result.second_clip_id,
+                            track_id             = track_id,
+                            left_duration_frames  = split_result.split_offset,
+                            left_source_out_frame = split_result.prior.source_in_frame
+                                                  + split_result.source_offset,
+                            right_timeline_start  = trim_point,
+                            right_duration_frames = right_duration,
+                            right_source_in_frame = right_source_in,
+                            right_source_out_frame = right_source_out,
+                        })
+
+                        -- Synthesize the right half in the ctx cache so that
+                        -- emit_bulk_shift_mutations finds it as first_downstream.
+                        local right = {
+                            id             = split_result.second_clip_id,
+                            track_id       = track_id,
+                            timeline_start = trim_point,
+                            duration       = right_duration,
+                            is_gap         = false,
+                        }
+                        table.insert(ctx.all_clips, right)
+                        ctx.clip_lookup[right.id]       = right
+                        ctx.clip_track_lookup[right.id] = track_id
+
+                        -- Insert right half into track_clip_map in timeline order.
+                        local insert_pos = #track_clips + 1
+                        for j, tc in ipairs(track_clips) do
+                            if tc.timeline_start > trim_point then
+                                insert_pos = j
+                                break
+                            end
+                        end
+                        table.insert(track_clips, insert_pos, right)
+                    end
+
+                    -- Prevent inject_implicit_gap_edges from injecting a
+                    -- redundant gap on a track the cut branch already handled.
+                    ctx.cut_dispatch_tracks[track_id] = true
+                end
+                ::continue_track::
+            end
+            ::continue_edge::
+        end
+    end
+
     -- For each ripple edge, find the gap clip on OTHER tracks at the same
     -- timeline position and inject an edge on it. If clips are adjacent
     -- (no gap), create an implied zero-length gap. This allows single-track
@@ -609,9 +853,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local boundaries, selected_tracks = collect_ripple_boundaries(ctx)
         local injected = {}
+        local cut_tracks = ctx.cut_dispatch_tracks or {}
         for _, entry in ipairs(boundaries) do
             for track_id, track_clips in pairs(ctx.track_clip_map) do
-                if not selected_tracks[track_id] then
+                if not selected_tracks[track_id] and not cut_tracks[track_id] then
                     local gap = resolve_gap_at_boundary(
                         ctx, track_id, track_clips, entry.frame, entry.is_in_edge)
                     if gap then
@@ -624,13 +869,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- Derive the set of tracks that have clips in the bounded cache —
     -- these are the "affected" tracks the ripple/roll can touch.
+    -- Tracks marked sync_mode='off' by apply_sync_mode_dispatch are excluded:
+    -- their downstream clips must not shift.
     local function collect_affected_tracks_from_cache(ctx)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.affected_tracks = {}
+        assert(ctx.sync_off_tracks, "collect_affected_tracks_from_cache: ctx.sync_off_tracks is nil")
+        local off_tracks = ctx.sync_off_tracks
         for _, clip in ipairs(ctx.all_clips) do
             assert(clip.track_id and clip.track_id ~= "",
                 string.format("assign_edge_tracks: clip %s missing track_id", tostring(clip.id)))
-            ctx.affected_tracks[clip.track_id] = true
+            if not off_tracks[clip.track_id] then
+                ctx.affected_tracks[clip.track_id] = true
+            end
         end
     end
 
@@ -1409,7 +1660,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local upstream_id = nil
         local first_downstream = nil
         for _, clip in ipairs(clips) do
-            if clip.is_gap == true or ctx.edited_clip_lookup[clip.id] then
+            if clip.is_gap == true or ctx.edited_clip_lookup[clip.id]
+               or (ctx.cut_left_halves and ctx.cut_left_halves[clip.id]) then
                 goto continue
             end
             if clip.timeline_start >= boundary_frame then
@@ -1834,6 +2086,36 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.command:set_parameter("executed_mutations", nil)
     end
 
+    -- Inject in-memory-only mutations for clips that the cut-mode dispatch
+    -- split via SplitClip.execute. SplitClip already wrote both halves to
+    -- the DB, so we must NOT add them to ctx.planned_mutations (which drives
+    -- the SQL layer). We add them directly to __timeline_mutations so that
+    -- clip_state can (a) shrink the left half's duration and (b) materialise
+    -- the right half at its PRE-shift position before the bulk_shift fires.
+    local function emit_cut_split_timeline_mutations(ctx, seq_id)
+        if not ctx.cut_split_results then return end
+        for _, sr in ipairs(ctx.cut_split_results) do
+            -- Left half: update duration and source_out in clip_state.
+            command_helper.add_update_mutation(ctx.command, seq_id, {
+                clip_id          = sr.left_id,
+                duration_value   = sr.left_duration_frames,
+                source_out_value = sr.left_source_out_frame,
+            })
+            -- Right half: insert at the PRE-bulk_shift position.
+            -- The bulk_shift mutation that follows will move it to its
+            -- final timeline position.
+            command_helper.add_insert_mutation(ctx.command, seq_id, {
+                id             = sr.right_id,
+                track_id       = sr.track_id,
+                start_value    = sr.right_timeline_start,
+                duration_value = sr.right_duration_frames,
+                source_in      = sr.right_source_in_frame,
+                source_out     = sr.right_source_out_frame,
+                is_gap         = false,
+            })
+        end
+    end
+
     -- Walk ctx.planned_mutations and emit the incremental UI-sync
     -- payloads that CommandManager forwards to timeline_state so the
     -- view can update without a full reload.
@@ -2097,6 +2379,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         assert(ctx.sequence_id and ctx.sequence_id ~= "",
             "BatchRippleEdit: missing sequence_id for timeline mutations")
+        emit_cut_split_timeline_mutations(ctx, ctx.sequence_id)
         emit_timeline_mutations(ctx, ctx.sequence_id)
 
         log.event("Batch ripple: processed %d edges, downstream shift %d frames",
@@ -2143,6 +2426,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return batch_pipeline.run(ctx, db, {
             build_clip_cache = build_clip_cache,
             prime_neighbor_bounds_cache = prime_neighbor_bounds_cache,
+            apply_sync_mode_dispatch = apply_sync_mode_dispatch,
             inject_implicit_gap_edges = inject_implicit_gap_edges,
             assign_edge_tracks = assign_edge_tracks,
             determine_lead_edge = determine_lead_edge,

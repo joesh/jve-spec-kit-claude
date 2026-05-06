@@ -82,13 +82,11 @@ assert(r and r.success,
 local function clips_on_track(track_id)
     local s = db:prepare([[
         SELECT id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
-        FROM clips WHERE owner_sequence_id = (
-            SELECT sequence_id FROM tracks WHERE id = ?
-        ) AND master_layer_track_id = ?
+        FROM clips WHERE track_id = ?
         ORDER BY timeline_start_frame
     ]])
     assert(s)
-    s:bind_value(1, track_id); s:bind_value(2, track_id); s:exec()
+    s:bind_value(1, track_id); s:exec()
     local out = {}
     while s:next() do
         out[#out+1] = {
