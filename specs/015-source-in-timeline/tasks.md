@@ -128,7 +128,7 @@
 
 - [ ] **T031** [P] Implement `src/lua/core/commands/set_sync_mode.lua` per C3. Asserts verbatim. After this lands, T008 passes.
 
-- [ ] **T032** [P] Implement `src/lua/core/commands/show_source_tab.lua` per C5. Reads source monitor's loaded master via `panel_manager.get_sequence_monitor("source_monitor")`. Opens the SourceTab in `timeline_panel.open_tabs`. Emits `source_tab_visibility_changed`.
+- [X] **T032** [P] Implement `src/lua/core/commands/show_source_tab.lua` per C5. Reads source monitor's loaded master via `panel_manager.get_sequence_monitor("source_monitor")`. Opens the SourceTab in `timeline_panel.open_tabs`. Emits `source_tab_visibility_changed`.
 
 - [ ] **T032a** Wire `ShowSourceTab` into the menu system at the appropriate menu (Window or View). Register via `menus.xml` and the existing menu_system handler chain. Per CLAUDE.md ABSOLUTE PROHIBITIONS: NO command-specific logic in `menu_system.lua` — the menu dispatches via `gather_context` then invokes the command. After T032 + T032a land, T011 passes (test exercises both the command and the menu invocation path).
 
@@ -138,13 +138,13 @@
 
 ### timeline_state pointers + tab system extension
 
-- [ ] **T034** Extend `src/lua/ui/timeline/timeline_state.lua` with `displayed_tab_id` and `active_sequence_id` as INDEPENDENT pointers per `data-model.md` §3. Add accessors. The existing notion of "active sequence" must be tied to `active_sequence_id`; existing call sites continue to work but now read from the renamed/clarified pointer. Wire signal emission: clicking a Record tab fires both `displayed_tab_changed` and `active_sequence_changed`; clicking the SourceTab fires only `displayed_tab_changed`. After this lands, T016 passes (and unblocks T024 partial pass).
+- [X] **T034** Extend `src/lua/ui/timeline/timeline_state.lua` with `displayed_tab_id` and `active_sequence_id` as INDEPENDENT pointers per `data-model.md` §3. Add accessors. The existing notion of "active sequence" must be tied to `active_sequence_id`; existing call sites continue to work but now read from the renamed/clarified pointer. Wire signal emission: clicking a Record tab fires both `displayed_tab_changed` and `active_sequence_changed`; clicking the SourceTab fires only `displayed_tab_changed`. After this lands, T016 passes (and unblocks T024 partial pass).
 
-- [ ] **T035** Extend `src/lua/ui/timeline/timeline_panel.lua` tab-strip code (lines 392–680 area, the existing `open_tabs` / `apply_tab_style` / `update_tab_styles` / `close_tab` paths). Add SourceTab styling: any tab whose `sequence_id` matches `panel_manager.get_sequence_monitor("source_monitor"):get_loaded_master_seq_id()` renders with blue accent (`--src` color). All other tabs continue with the existing red accent (`--rec` = `selection_color = #e64b3d`). Listen on `source_loaded_changed` to re-evaluate styling when the source monitor's master changes. After this lands, the Source-tab-styling parts of T024 pass.
+- [X] **T035** Extend `src/lua/ui/timeline/timeline_panel.lua` tab-strip code (lines 392–680 area, the existing `open_tabs` / `apply_tab_style` / `update_tab_styles` / `close_tab` paths). Add SourceTab styling: any tab whose `sequence_id` matches `panel_manager.get_sequence_monitor("source_monitor"):get_loaded_master_seq_id()` renders with blue accent (`--src` color). All other tabs continue with the existing red accent (`--rec` = `selection_color = #e64b3d`). Listen on `source_loaded_changed` to re-evaluate styling when the source monitor's master changes. After this lands, the Source-tab-styling parts of T024 pass.
 
 ### Source viewer extension (signal emission)
 
-- [ ] **T036** Add `source_loaded_changed` emission to `src/lua/ui/source_viewer.lua`. After `source:load_sequence(master_seq_id)` completes, emit `Signals.emit("source_loaded_changed", new_master_seq_id, previous_master_seq_id)`. Add a new public `M.unload()` path that clears the source monitor and emits the signal with `nil` for the new master (FR-007b empty-placeholder support). After this lands, T022's `source_loaded_changed` portion passes.
+- [X] **T036** Add `source_loaded_changed` emission to `src/lua/ui/source_viewer.lua`. After `source:load_sequence(master_seq_id)` completes, emit `Signals.emit("source_loaded_changed", new_master_seq_id, previous_master_seq_id)`. Add a new public `M.unload()` path that clears the source monitor and emits the signal with `nil` for the new master (FR-007b empty-placeholder support). After this lands, T022's `source_loaded_changed` portion passes.
 
 ### Track-header refactor
 
