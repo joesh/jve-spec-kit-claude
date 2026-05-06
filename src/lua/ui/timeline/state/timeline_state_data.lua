@@ -96,6 +96,7 @@ M.dimensions = {
 function M.reset()
     M.state = fresh_state()
     M.sequence = nil
+    M.source_sequence = nil
     listeners = {}
     notify_timer = nil
 end
@@ -108,6 +109,7 @@ end
 function M.reset_state_preserve_listeners()
     M.state = fresh_state()
     M.sequence = nil
+    M.source_sequence = nil
     notify_timer = nil
 end
 

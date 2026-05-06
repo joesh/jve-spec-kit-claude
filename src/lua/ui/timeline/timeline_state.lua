@@ -428,8 +428,83 @@ M.get_sequence_fps_denominator = function()
 end
 
 -- Marks: read from sequence model (set via undoable mark commands)
-M.get_mark_in = function() return data.sequence and data.sequence.mark_in end
+-- Always returns active (record) sequence marks regardless of displayed tab.
+M.get_mark_in  = function() return data.sequence and data.sequence.mark_in end
 M.get_mark_out = function() return data.sequence and data.sequence.mark_out end
+
+-- Source-sequence marks (FR-038): marks on the loaded master sequence.
+M.get_source_mark_in  = function() return data.source_sequence and data.source_sequence.mark_in end
+M.get_source_mark_out = function() return data.source_sequence and data.source_sequence.mark_out end
+M.get_source_sequence_fps = function() return data.source_sequence and data.source_sequence.frame_rate end
+
+-- Display-aware mark accessors (FR-038): returns the marks for whichever
+-- sequence the ruler is currently rendering (source tab → source marks,
+-- record tab → record marks).
+local function is_source_tab_displayed()
+    local displayed = data.state.displayed_tab_id
+    local active    = data.state.sequence_id
+    return displayed ~= nil and displayed ~= active
+end
+
+M.get_display_mark_in = function()
+    if is_source_tab_displayed() then
+        return data.source_sequence and data.source_sequence.mark_in
+    end
+    return data.sequence and data.sequence.mark_in
+end
+M.get_display_mark_out = function()
+    if is_source_tab_displayed() then
+        return data.source_sequence and data.source_sequence.mark_out
+    end
+    return data.sequence and data.sequence.mark_out
+end
+
+-- Ghost mark (FR-036/FR-037): when exactly 3 of the 4 marks are set,
+-- compute the missing one via three_point_math.  Returns nil unless the
+-- computed mark belongs to the CURRENTLY DISPLAYED tab's ruler (so the
+-- caller renders it on the visible ruler in the correct coordinate space).
+-- Returns { frame = integer, key = string } or nil.
+M.get_ghost_mark = function()
+    local src_seq = data.source_sequence
+    local rec_seq = data.sequence
+    if not src_seq or not rec_seq then return nil end
+
+    local src_fps = src_seq.frame_rate
+    local rec_fps = rec_seq.frame_rate
+    assert(src_fps and src_fps.fps_numerator and src_fps.fps_denominator,
+        "timeline_state.get_ghost_mark: source sequence has invalid frame_rate")
+    assert(rec_fps and rec_fps.fps_numerator and rec_fps.fps_denominator,
+        "timeline_state.get_ghost_mark: active sequence has invalid frame_rate")
+
+    local marks = {
+        src_in  = src_seq.mark_in,
+        src_out = src_seq.mark_out,
+        rec_in  = rec_seq.mark_in,
+        rec_out = rec_seq.mark_out,
+    }
+    local nil_count = (marks.src_in  == nil and 1 or 0)
+                    + (marks.src_out == nil and 1 or 0)
+                    + (marks.rec_in  == nil and 1 or 0)
+                    + (marks.rec_out == nil and 1 or 0)
+    if nil_count ~= 1 then return nil end
+
+    -- Validate non-nil ranges are positive before calling the math module.
+    -- Zero- or negative-duration ranges are transient editing states (e.g. user
+    -- typed src_in == src_out); skip ghost rather than asserting.
+    if marks.src_in  ~= nil and marks.src_out ~= nil and marks.src_out <= marks.src_in  then return nil end
+    if marks.rec_in  ~= nil and marks.rec_out ~= nil and marks.rec_out <= marks.rec_in  then return nil end
+
+    local tpm = require("core.three_point_math")
+    local src_pair = { src_fps.fps_numerator, src_fps.fps_denominator }
+    local rec_pair = { rec_fps.fps_numerator, rec_fps.fps_denominator }
+    local result = tpm.compute(marks, src_pair, rec_pair)
+
+    local key = result.computed_key
+    local on_source_side = (key == "src_in" or key == "src_out")
+    if is_source_tab_displayed() ~= on_source_side then return nil end
+
+    return { frame = result[key], key = key }
+end
 
 -- Debug (Proxied to local vars in original? No, original had local debug_layouts. We can move that to view logic or keep it here if views call it.)
 -- Since views call `debug_record...`, we need to support it.

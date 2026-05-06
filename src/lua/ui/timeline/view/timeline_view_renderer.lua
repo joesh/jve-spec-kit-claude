@@ -673,8 +673,12 @@ function M.render(view)
     local viewport_duration = state_module.get_viewport_duration()
     local viewport_end = viewport_start + viewport_duration
     local playhead_position = state_module.get_playhead_position()
-    local mark_in = state_module.get_mark_in and state_module.get_mark_in()
-    local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+    assert(state_module.get_display_mark_in,
+        "timeline_view_renderer: state_module missing get_display_mark_in — timeline_state required")
+    assert(state_module.get_display_mark_out,
+        "timeline_view_renderer: state_module missing get_display_mark_out — timeline_state required")
+    local mark_in  = state_module.get_display_mark_in()
+    local mark_out = state_module.get_display_mark_out()
 
     -- Compute layout
     view.update_layout_cache(height) -- Call layout logic on view object

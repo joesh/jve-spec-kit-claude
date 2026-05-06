@@ -41,8 +41,11 @@ local state = {
     get_viewport_start_time = function() return 0 end,
     get_viewport_duration = function() return 96 end,
     get_playhead_position = function() return 0 end,
-    get_mark_in = function() return nil end,
-    get_mark_out = function() return nil end,
+    get_mark_in          = function() return nil end,
+    get_mark_out         = function() return nil end,
+    get_display_mark_in  = function() return nil end,
+    get_display_mark_out = function() return nil end,
+    get_ghost_mark       = function() return nil end,
     get_sequence_frame_rate = function() return seq_rate end,
     get_clips = function()
         error("state.get_clips should not be called by renderer when get_track_clip_index is present", 2)

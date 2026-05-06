@@ -57,8 +57,11 @@ function state.debug_record_clip_layout() end
 function state.get_viewport_start_time() return 0 end
 function state.get_viewport_duration() return 5000 end
 function state.get_playhead_position() return 0 end
-function state.get_mark_in() return nil end
-function state.get_mark_out() return nil end
+function state.get_mark_in()          return nil end
+function state.get_mark_out()         return nil end
+function state.get_display_mark_in()  return nil end
+function state.get_display_mark_out() return nil end
+function state.get_ghost_mark()       return nil end
 function state.get_sequence_id() return "default_sequence" end
 function state.get_project_id() return "default_project" end
 function state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end

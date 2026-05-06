@@ -625,15 +625,44 @@ end
 
 -- Re-read marks from DB when a mark command executes (or undoes)
 Signals.connect("marks_changed", function(sequence_id)
+    local changed = false
     if data.sequence and data.state.sequence_id == sequence_id then
         local Sequence = require("models.sequence")
         local fresh = Sequence.load(sequence_id)
-        if fresh then
-            data.sequence.mark_in = fresh.mark_in
-            data.sequence.mark_out = fresh.mark_out
-        end
-        data.notify_listeners()
+        assert(fresh, string.format(
+            "timeline_core_state: marks_changed: failed to reload active sequence_id=%s",
+            tostring(sequence_id)))
+        data.sequence.mark_in  = fresh.mark_in
+        data.sequence.mark_out = fresh.mark_out
+        changed = true
     end
+    if data.source_sequence and data.source_sequence.id == sequence_id then
+        local Sequence = require("models.sequence")
+        local fresh = Sequence.load(sequence_id)
+        assert(fresh, string.format(
+            "timeline_core_state: marks_changed: failed to reload source sequence_id=%s",
+            tostring(sequence_id)))
+        data.source_sequence.mark_in  = fresh.mark_in
+        data.source_sequence.mark_out = fresh.mark_out
+        changed = true
+    end
+    if changed then data.notify_listeners() end
+end)
+
+-- Track the source sequence (loaded master clip) for 3-point mark access.
+-- Loads the full sequence model so mark_in/mark_out and frame_rate are available.
+Signals.connect("source_loaded_changed", function(new_seq_id, _prev_seq_id)
+    if not new_seq_id then
+        data.source_sequence = nil
+    else
+        local Sequence = require("models.sequence")
+        local seq = Sequence.load(new_seq_id)
+        assert(seq, string.format(
+            "timeline_core_state: source_loaded_changed: failed to load source sequence_id=%s",
+            tostring(new_seq_id)))
+        data.source_sequence = seq
+    end
+    data.notify_listeners()
 end)
 
 -- Update playhead when SetPlayhead command fires
