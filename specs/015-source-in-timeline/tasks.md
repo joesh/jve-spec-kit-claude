@@ -203,11 +203,11 @@
 
 - [X] **T048** [P] Run `make -j4` from repo root. Zero luacheck warnings (rule 2.4). Zero failing Lua tests. Zero failing C++ tests. The full test count must be ≥ baseline from T002 + the new tests added in 3.2.
 
-- [ ] **T049** [P] Audit the diff: re-read every changed file against ENGINEERING.md rules 1.14, 2.5, 2.13, 2.15, 2.20, 2.21, 2.32, 3.14 per CLAUDE.md "AUDIT AGAINST ENGINEERING.md AFTER EVERY REFACTOR" memory. Report rule → finding → fix for any violation.
+- [X] **T049** [P] Audit the diff: re-read every changed file against ENGINEERING.md rules 1.14, 2.5, 2.13, 2.15, 2.20, 2.21, 2.32, 3.14 per CLAUDE.md "AUDIT AGAINST ENGINEERING.md AFTER EVERY REFACTOR" memory. Report rule → finding → fix for any violation.
 
-- [ ] **T050** [P] Update CLAUDE.md (project-root) to document any new patterns this feature introduced (the `undoable = false` SPEC flag is the most likely candidate). Use one line per pattern. Don't bloat.
+- [X] **T050** [P] Update CLAUDE.md (project-root) to document any new patterns this feature introduced (the `undoable = false` SPEC flag is the most likely candidate). Use one line per pattern. Don't bloat.
 
-- [ ] **T051** Commit each completed task as its own git commit per rule 2.20. Use the attribution format from rule 2.8: `Authored-By: Joe Shapiro <joe@shapiro.net>` `With-Help-From: Claude`. Between commits, verify nothing else changed (parallel-Claude-session safety per CLAUDE.md "REFACTOR SAFEGUARD"). Do NOT push to remote until Joe explicitly says so.
+- [X] **T051** Commit each completed task as its own git commit per rule 2.20. Use the attribution format from rule 2.8: `Authored-By: Joe Shapiro <joe@shapiro.net>` `With-Help-From: Claude`. Between commits, verify nothing else changed (parallel-Claude-session safety per CLAUDE.md "REFACTOR SAFEGUARD"). Do NOT push to remote until Joe explicitly says so.
 
 ---
 
@@ -305,14 +305,14 @@ T048–T050 (polish) are file-independent and parallelizable.
 
 Before marking this feature complete:
 
-- [ ] All 51 tasks marked done in this file.
-- [ ] `make -j4` green (rule 2.4, 2.7).
-- [ ] All 18 test files added in 3.2 are passing in 3.4.
-- [ ] T006 was committed FAILING before T027, demonstrating rule 2.20 was followed.
-- [ ] Quickstart manual run-through (T046) reports no failed step.
-- [ ] FR-047 assert sites all confirmed wired (T045).
-- [ ] ENGINEERING.md audit (T049) reports zero violations.
-- [ ] `git log` shows clean attribution per rule 2.8.
+- [ ] All 51 tasks marked done in this file. (T017 + T046 require binary — blocked on JVEEditor build)
+- [X] `make -j4` green (rule 2.4, 2.7). — 701/701 Lua tests passed.
+- [ ] All 18 test files added in 3.2 are passing in 3.4. (T017 requires --test mode against binary)
+- [X] T006 was committed FAILING before T027, demonstrating rule 2.20 was followed.
+- [ ] Quickstart manual run-through (T046) reports no failed step. (requires human UI interaction)
+- [X] FR-047 assert sites all confirmed wired (T045).
+- [X] ENGINEERING.md audit (T049) reports zero violations.
+- [X] `git log` shows clean attribution per rule 2.8.
 
 ---
 
