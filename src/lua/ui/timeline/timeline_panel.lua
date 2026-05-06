@@ -17,6 +17,8 @@ local Track = require("models.track")
 local Signals = require("core.signals")
 local track_state = require("ui.timeline.state.track_state")
 local drop_naming = require("ui.timeline.drop_naming")
+local routing_pref  = require("ui.source_routing_view_pref")
+local routing_state = require("ui.source_routing_view_state")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
@@ -2332,6 +2334,22 @@ function M.create(opts)
     M.timeline_video_scroll = timeline_video_scroll
     M.timeline_audio_scroll = timeline_audio_scroll
     M.timeline_area = timeline_area
+
+    -- Initialize source-routing view preference and modifier-state tracking (T041, FR-029d).
+    local home = assert(os.getenv("HOME"), "HOME env var required for source_routing_view pref")
+    routing_pref.init(home .. "/.jve/source_routing_view.json")
+    routing_state.init(routing_pref)
+
+    -- Install a key-state watcher on the timeline container so holding Option/Alt
+    -- flips effective_mode() from per_channel ↔ per_clip (FR-029d).
+    -- Qt::Key_Alt = 0x01000023.  Per-clip collapsed rendering: T041a.
+    -- luacheck: globals qt_install_key_state_watcher
+    local alt_handler = register_global_handler("__timeline_alt_modifier_handler",
+        function(event_type, key, _mods)
+            if key ~= 0x01000023 then return end
+            routing_state.set_modifier_held(event_type == "press")
+        end)
+    qt_install_key_state_watcher(container, alt_handler)
 
     log.event("Multi-view timeline panel created successfully")
 

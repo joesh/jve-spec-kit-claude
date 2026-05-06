@@ -160,7 +160,7 @@
 
 ### Per-channel vs per-clip view + modifier toggle
 
-- [ ] **T040** Implement `source_routing_view` preference (FR-029c) — single-purpose JSON file at `~/.jve/source_routing_view.json` (decision: single-purpose; matches surrounding pattern of `recent_projects.json`, `find_dialog_settings.json`, etc., per research R6 alternatives). Default = `'per_channel'`. Render the source row's track headers per the preference. After this lands, T021 passes.
+- [X] **T040** Implement `source_routing_view` preference (FR-029c) — single-purpose JSON file at `~/.jve/source_routing_view.json` (decision: single-purpose; matches surrounding pattern of `recent_projects.json`, `find_dialog_settings.json`, etc., per research R6 alternatives). Default = `'per_channel'`. Render the source row's track headers per the preference. After this lands, T021 passes.
 
 - [ ] **T041** Implement view-toggle modifier (FR-029d). When the user holds Option/Alt over a source row, temporarily flip the rendered representation (per_channel ↔ per_clip). Underlying `patches` rows MUST NOT be touched. Listen for keyboard modifier events; on key-down, re-render in the opposite mode; on key-up, revert. After this lands, T020 passes.
 
