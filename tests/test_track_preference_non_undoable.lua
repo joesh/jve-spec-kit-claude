@@ -18,7 +18,6 @@ require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
-local Track = require("models.track")
 
 _G.qt_create_single_shot_timer = function(_delay, cb) cb(); return nil end
 

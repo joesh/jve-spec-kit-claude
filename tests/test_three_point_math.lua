@@ -115,7 +115,7 @@ end
 -- ── Reject zero-duration source range ────────────────────────────────────────
 print("-- zero-duration source rejected --")
 do
-    local ok, err = pcall(compute, { src_in=100, src_out=100, rec_in=480 })
+    local ok = pcall(compute, { src_in=100, src_out=100, rec_in=480 })
     assert(not ok, "FAIL: zero-duration src range must be rejected")
     print("  zero-duration rejected — OK")
 end

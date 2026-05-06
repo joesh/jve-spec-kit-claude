@@ -20,7 +20,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local Signals         = require("core.signals")
 
 _G.qt_create_single_shot_timer = function(_delay, cb) cb(); return nil end
 

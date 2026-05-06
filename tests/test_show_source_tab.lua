@@ -164,7 +164,7 @@ local saved_pm = package.loaded["ui.panel_manager"]
 package.loaded["ui.panel_manager"] = nil
 package.loaded["core.commands.show_source_tab"] = nil  -- force reload without stub
 
-local ok = pcall(command_manager.execute, "ShowSourceTab", {})
+pcall(command_manager.execute, "ShowSourceTab", {})
 -- pcall returns false because the command asserts — command_manager catches it
 -- and returns {success=false}. Either way, no crash.
 package.loaded["ui.panel_manager"] = saved_pm

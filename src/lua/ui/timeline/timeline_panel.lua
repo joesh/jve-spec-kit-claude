@@ -962,6 +962,62 @@ local function build_track_header_btn_stylesheet(active, active_color)
     ]]
 end
 
+-- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
+local SYNC_CYCLE = { off = "ripple", ripple = "cut", cut = "off" }
+local SYNC_ICONS = { off = "·", ripple = "≋", cut = "/" }
+
+local function build_sm_btn_stylesheet(active, active_color)
+    if active and active_color then
+        return string.format([[
+            QPushButton {
+                background: %s; color: #ffffff;
+                border: 1px solid #333333; padding: 0px;
+                font-size: 9px; font-weight: bold;
+                min-width: 16px; max-width: 16px;
+                min-height: 12px; max-height: 12px;
+            }
+        ]], active_color)
+    end
+    return [[
+        QPushButton {
+            background: #2a2a2a; color: #888888;
+            border: 1px solid #333333; padding: 0px; font-size: 9px;
+            min-width: 16px; max-width: 16px;
+            min-height: 12px; max-height: 12px;
+        }
+        QPushButton:hover { background: #3a3a3a; color: #cccccc; }
+    ]]
+end
+
+local function build_id_btn_stylesheet(filled, accent)
+    if filled then
+        return string.format([[
+            QPushButton {
+                background: %s; color: #ffffff;
+                border: 1px solid %s; padding: 0px 2px;
+                font-size: 9px; font-weight: bold;
+                min-width: 20px; max-width: 24px;
+                min-height: 16px; max-height: 16px;
+            }
+        ]], accent, accent)
+    end
+    return string.format([[
+        QPushButton {
+            background: transparent; color: %s;
+            border: 1px solid %s; padding: 0px 2px;
+            font-size: 9px; font-weight: bold;
+            min-width: 20px; max-width: 24px;
+            min-height: 16px; max-height: 16px;
+        }
+        QPushButton:hover { color: #ffffff; border-color: #aaaaaa; }
+    ]], accent, accent)
+end
+
+local function build_sync_mode_btn_stylesheet(mode)
+    local colors = { ripple = "#2a3a2a", cut = "#3a2a2a" }
+    return build_track_header_btn_stylesheet(mode ~= "off", colors[mode])
+end
+
 local track_btn_handler_seq = 0
 local function register_track_btn_handler(callback)
     track_btn_handler_seq = track_btn_handler_seq + 1
@@ -972,8 +1028,78 @@ local function register_track_btn_handler(callback)
     return name
 end
 
+--- Wire a toggle-preference click: calls ToggleTrackPreference and re-pulls style.
+local function wire_toggle_preference(btn, track_id, property, active_color)
+    local captured_btn = btn
+    local handler = register_track_btn_handler(function()
+        local t = Track.load(track_id)
+        assert(t, string.format("wire_toggle_preference: track %s not found", tostring(track_id)))
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "wire_toggle_preference: no project_id")
+        command_manager.execute_interactive("ToggleTrackPreference", {
+            track_id = track_id, property = property, project_id = project_id,
+        })
+        local fresh = Track.load(track_id)
+        if fresh then
+            qt_constants.PROPERTIES.SET_STYLE(captured_btn,
+                build_track_header_btn_stylesheet(fresh[property], active_color))
+        end
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
+    return handler
+end
+
+--- Wire a sync-mode cycle click: Off→Ripple→Cut→Off via SetSyncMode.
+local function wire_sync_mode_cycle(btn, track_id)
+    local captured_btn = btn
+    local handler = register_track_btn_handler(function()
+        local t = Track.load(track_id)
+        assert(t, string.format("wire_sync_mode_cycle: track %s not found", tostring(track_id)))
+        local next_mode = SYNC_CYCLE[t.sync_mode]
+        assert(next_mode, string.format(
+            "wire_sync_mode_cycle: unrecognised sync_mode '%s' on track %s",
+            tostring(t.sync_mode), tostring(track_id)))
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "wire_sync_mode_cycle: no project_id")
+        command_manager.execute_interactive("SetSyncMode", {
+            track_id = track_id, sync_mode = next_mode, project_id = project_id,
+        })
+        local fresh = Track.load(track_id)
+        if fresh then
+            qt_constants.PROPERTIES.SET_TEXT(captured_btn, SYNC_ICONS[fresh.sync_mode] or "?")
+            qt_constants.PROPERTIES.SET_STYLE(captured_btn, build_sync_mode_btn_stylesheet(fresh.sync_mode))
+        end
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
+    return handler
+end
+
+--- Build and add the S/M vertical stack to a track header layout.
+-- Returns mute_btn, solo_btn for style re-pull on external changes.
+local function add_sm_stack_to_layout(header_layout, track, track_id)
+    local sm_container = qt_constants.WIDGET.CREATE()
+    local sm_layout = qt_constants.LAYOUT.CREATE_VBOX()
+    qt_constants.LAYOUT.SET_ON_WIDGET(sm_container, sm_layout)
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(sm_layout, 1)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(sm_layout, 0, 0, 0, 0)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(sm_container, "Fixed", "Fixed")
+
+    local mute_btn = qt_constants.WIDGET.CREATE_BUTTON("M")
+    qt_constants.PROPERTIES.SET_STYLE(mute_btn, build_sm_btn_stylesheet(track.muted, "#cc3333"))
+    qt_constants.LAYOUT.ADD_WIDGET(sm_layout, mute_btn)
+    wire_toggle_preference(mute_btn, track_id, "muted", "#cc3333")
+
+    local solo_btn = qt_constants.WIDGET.CREATE_BUTTON("S")
+    qt_constants.PROPERTIES.SET_STYLE(solo_btn, build_sm_btn_stylesheet(track.soloed, "#ccaa00"))
+    qt_constants.LAYOUT.ADD_WIDGET(sm_layout, solo_btn)
+    wire_toggle_preference(solo_btn, track_id, "soloed", "#ccaa00")
+
+    qt_constants.LAYOUT.ADD_WIDGET(header_layout, sm_container)
+    return mute_btn, solo_btn
+end
+
 -- Track button references for MVC re-pull on undo/redo
--- { [track_id] = { mute_btn = widget, solo_btn = widget } }
+-- { [track_id] = { mute_btn, solo_btn, lock_btn, sync_mode_btn } }
 local track_button_refs = {}
 
 local function refresh_track_button_styles()
@@ -985,11 +1111,20 @@ local function refresh_track_button_styles()
         else
             if refs.mute_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
-                    build_track_header_btn_stylesheet(t.muted, "#cc3333"))
+                    build_sm_btn_stylesheet(t.muted, "#cc3333"))
             end
             if refs.solo_btn then
                 qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
-                    build_track_header_btn_stylesheet(t.soloed, "#ccaa00"))
+                    build_sm_btn_stylesheet(t.soloed, "#ccaa00"))
+            end
+            if refs.lock_btn then
+                qt_constants.PROPERTIES.SET_STYLE(refs.lock_btn,
+                    build_track_header_btn_stylesheet(t.locked, "#ccaa00"))
+            end
+            if refs.sync_mode_btn then
+                qt_constants.PROPERTIES.SET_TEXT(refs.sync_mode_btn, SYNC_ICONS[t.sync_mode] or "?")
+                qt_constants.PROPERTIES.SET_STYLE(refs.sync_mode_btn,
+                    build_sync_mode_btn_stylesheet(t.sync_mode))
             end
         end
     end
@@ -997,6 +1132,30 @@ end
 
 -- MVC: update button styles when track state changes externally (undo/redo)
 Signals.connect("track_mix_changed", refresh_track_button_styles)
+
+-- MVC: track_preference_changed fires when mute/solo/lock/enabled is toggled.
+Signals.connect("track_preference_changed", function(track_id, property, new_val)
+    local refs = track_button_refs[track_id]
+    if not refs then return end
+    if property == "muted" and refs.mute_btn then
+        qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
+            build_sm_btn_stylesheet(new_val, "#cc3333"))
+    elseif property == "soloed" and refs.solo_btn then
+        qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
+            build_sm_btn_stylesheet(new_val, "#ccaa00"))
+    elseif property == "locked" and refs.lock_btn then
+        qt_constants.PROPERTIES.SET_STYLE(refs.lock_btn,
+            build_track_header_btn_stylesheet(new_val, "#ccaa00"))
+    end
+end)
+
+-- MVC: sync_mode_changed fires when cycle button or SetSyncMode command runs.
+Signals.connect("sync_mode_changed", function(track_id, new_mode)
+    local refs = track_button_refs[track_id]
+    if not refs or not refs.sync_mode_btn then return end
+    qt_constants.PROPERTIES.SET_TEXT(refs.sync_mode_btn, SYNC_ICONS[new_mode] or "?")
+    qt_constants.PROPERTIES.SET_STYLE(refs.sync_mode_btn, build_sync_mode_btn_stylesheet(new_mode))
+end)
 
 -- MVC: re-evaluate tab accent colors when the source monitor loads/unloads a master.
 -- source_seq_id changing means the Source tab's identity changed — update_tab_styles
@@ -1017,7 +1176,6 @@ local function create_video_headers()
     -- end
 
     local video_headers = {}
-    local current_track = nil
     local handler_name = "video_splitter_event_" .. tostring(video_splitter):gsub("[^%w]", "_")
 
     -- Add stretch widget at top to push tracks down (V1 is anchor at bottom)
@@ -1045,26 +1203,45 @@ local function create_video_headers()
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
         qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
-        -- Lock button (inert)
-        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("L")
-        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+        local captured_track_id = track.id
 
-        -- Track name label
+        -- src-id button (placeholder; T038 wires patch source toggle)
+        local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(src_btn, build_id_btn_stylesheet(false, source_tab_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
+
+        -- rec-patch-id button (placeholder; T038 wires patch destination)
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_id_btn_stylesheet(false, selection_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        -- Track name label (flex)
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
         qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
 
-        -- Patch bay button (inert)
-        local patch_btn = qt_constants.WIDGET.CREATE_BUTTON("P")
-        qt_constants.PROPERTIES.SET_STYLE(patch_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, patch_btn)
+        -- Lock cell (unicode stand-in; proper QIcon pending binding)
+        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
+        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+        wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
 
-        -- Visibility button (inert)
-        local vis_btn = qt_constants.WIDGET.CREATE_BUTTON("V")
-        qt_constants.PROPERTIES.SET_STYLE(vis_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, vis_btn)
+        -- Sync-mode cell (cycles Off→Ripple→Cut→Off)
+        local sync_btn = qt_constants.WIDGET.CREATE_BUTTON(SYNC_ICONS[track.sync_mode] or "?")
+        qt_constants.PROPERTIES.SET_STYLE(sync_btn, build_sync_mode_btn_stylesheet(track.sync_mode))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
+        wire_sync_mode_cycle(sync_btn, captured_track_id)
+
+        -- S/M vertical stack (both video and audio tracks carry solo/mute per FR-019/FR-020)
+        local mute_btn, solo_btn = add_sm_stack_to_layout(header_layout, track, captured_track_id)
+
+        track_button_refs[captured_track_id] = {
+            mute_btn     = mute_btn,
+            solo_btn     = solo_btn,
+            lock_btn     = lock_btn,
+            sync_mode_btn = sync_btn,
+        }
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
         video_headers[i] = header
@@ -1201,7 +1378,6 @@ local function create_audio_headers()
     local audio_tracks = state.get_audio_tracks()
 
     local audio_headers = {}
-    local current_track = nil
     local handler_name = "audio_splitter_event_" .. tostring(audio_splitter):gsub("[^%w]", "_")
 
     -- Add tracks in normal order (A1, A2, A3)
@@ -1223,91 +1399,40 @@ local function create_audio_headers()
         qt_constants.PROPERTIES.SET_MIN_HEIGHT(header, header_height)
         qt_constants.PROPERTIES.SET_MAX_HEIGHT(header, header_height)
 
-        -- Lock button (inert)
-        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("L")
-        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+        local captured_track_id = track.id
 
-        -- Track name label
+        -- src-id button (placeholder; T038 wires patch source toggle)
+        local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(src_btn, build_id_btn_stylesheet(false, source_tab_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
+
+        -- rec-patch-id button (placeholder; T038 wires patch destination)
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_id_btn_stylesheet(false, selection_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        -- Track name label (flex); FR-021 channel count pending track model extension
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
         qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
 
-        -- Patch bay button (inert)
-        local patch_btn = qt_constants.WIDGET.CREATE_BUTTON("P")
-        qt_constants.PROPERTIES.SET_STYLE(patch_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, patch_btn)
+        -- Lock cell (unicode stand-in; proper QIcon pending binding)
+        local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
+        qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+        wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
 
-        -- Mute button (wired)
-        local mute_btn = qt_constants.WIDGET.CREATE_BUTTON("M")
-        qt_constants.PROPERTIES.SET_STYLE(mute_btn,
-            build_track_header_btn_stylesheet(track.muted, "#cc3333"))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, mute_btn)
+        -- Sync-mode cell (cycles Off→Ripple→Cut→Off)
+        local sync_btn = qt_constants.WIDGET.CREATE_BUTTON(SYNC_ICONS[track.sync_mode] or "?")
+        qt_constants.PROPERTIES.SET_STYLE(sync_btn, build_sync_mode_btn_stylesheet(track.sync_mode))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
+        wire_sync_mode_cycle(sync_btn, captured_track_id)
 
-        -- Wire mute toggle (via SetTrackProperty command for undo/redo)
-        local captured_track_id = track.id
-        local captured_mute_btn = mute_btn
-        local mute_handler = register_track_btn_handler(function()
-            local t = Track.load(captured_track_id)
-            assert(t, "Mute handler: track not found: " .. tostring(captured_track_id))
-            local project_id = timeline_state.get_project_id()
-            assert(project_id, "Mute handler: no project_id")
-            command_manager.execute_interactive("SetTrackProperty", {
-                track_id = captured_track_id,
-                property = "muted",
-                value = not t.muted,
-                project_id = project_id,
-            })
-            -- Re-query model state for button style (MVC: view pulls from model)
-            local fresh = Track.load(captured_track_id)
-            if fresh then
-                qt_constants.PROPERTIES.SET_STYLE(captured_mute_btn,
-                    build_track_header_btn_stylesheet(fresh.muted, "#cc3333"))
-            end
-        end)
-        qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(mute_btn, mute_handler)
+        -- S/M vertical stack
+        local mute_btn, solo_btn = add_sm_stack_to_layout(header_layout, track, captured_track_id)
 
-        -- Solo button (wired)
-        local solo_btn = qt_constants.WIDGET.CREATE_BUTTON("S")
-        qt_constants.PROPERTIES.SET_STYLE(solo_btn,
-            build_track_header_btn_stylesheet(track.soloed, "#ccaa00"))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, solo_btn)
-
-        -- Wire solo toggle (via SetTrackProperty command for undo/redo)
-        local captured_solo_btn = solo_btn
-        local solo_handler = register_track_btn_handler(function()
-            local t = Track.load(captured_track_id)
-            assert(t, "Solo handler: track not found: " .. tostring(captured_track_id))
-            local project_id = timeline_state.get_project_id()
-            assert(project_id, "Solo handler: no project_id")
-            command_manager.execute_interactive("SetTrackProperty", {
-                track_id = captured_track_id,
-                property = "soloed",
-                value = not t.soloed,
-                project_id = project_id,
-            })
-            -- Re-query model state for button style (MVC: view pulls from model)
-            local fresh = Track.load(captured_track_id)
-            if fresh then
-                qt_constants.PROPERTIES.SET_STYLE(captured_solo_btn,
-                    build_track_header_btn_stylesheet(fresh.soloed, "#ccaa00"))
-            end
-        end)
-        qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(solo_btn, solo_handler)
-
-        -- Register for MVC re-pull on external state changes (undo/redo)
-        track_button_refs[captured_track_id] = {
-            mute_btn = captured_mute_btn,
-            solo_btn = captured_solo_btn,
-        }
-
-        -- Record arm button (inert)
-        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("R")
-        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_track_header_btn_stylesheet(false))
-        qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
-
-        -- Waveform toggle button (wired — UI state only, no undo)
+        -- Waveform toggle (audio-only, UI state — no undo, kept at right edge)
         local wave_enabled = track_state.get_waveform_enabled(captured_track_id)
         local wave_btn = qt_constants.WIDGET.CREATE_BUTTON("W")
         qt_constants.PROPERTIES.SET_STYLE(wave_btn,
@@ -1322,6 +1447,13 @@ local function create_audio_headers()
                 build_track_header_btn_stylesheet(not current, "#4488aa"))
         end)
         qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(wave_btn, wave_handler)
+
+        track_button_refs[captured_track_id] = {
+            mute_btn      = mute_btn,
+            solo_btn      = solo_btn,
+            lock_btn      = lock_btn,
+            sync_mode_btn = sync_btn,
+        }
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
         audio_headers[i] = header

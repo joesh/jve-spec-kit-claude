@@ -44,7 +44,7 @@ assert(after_restart == 'per_clip', string.format(
 print("  value survives restart — OK")
 
 -- ── Invalid value must be rejected ───────────────────────────────────────────
-local ok, err = pcall(function() pref.set('invalid_mode') end)
+local ok = pcall(function() pref.set('invalid_mode') end)
 assert(not ok, "FAIL: pref.set('invalid_mode') must error — got success")
 local after_bad = pref.get()
 assert(after_bad == 'per_clip', string.format(
