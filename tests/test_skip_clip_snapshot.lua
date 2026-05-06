@@ -2,7 +2,7 @@
 
 -- Regression: commands that don't touch clips declare `skip_clip_snapshot`
 -- in their spec to avoid the ~few-MB per-command clone of every clip in
--- the active sequence. Verify that SetTrackProperty (which only modifies
+-- the active sequence. Verify that ToggleTrackPreference (which only modifies
 -- tracks) does NOT push a clip-state mutation snapshot, and that rollback
 -- behavior still works cleanly when no snapshot was taken.
 
@@ -49,16 +49,16 @@ assert(not clip_state.has_active_mutation_snapshot(),
 print("  pre-exec: no active snapshot — OK")
 
 -- --------------------------------------------------------------------------
--- Execute SetTrackProperty. It should succeed without pushing a snapshot.
+-- Execute ToggleTrackPreference. It should succeed without pushing a snapshot.
 -- --------------------------------------------------------------------------
-local r = command_manager.execute("SetTrackProperty", {
+local r = command_manager.execute("ToggleTrackPreference", {
     track_id = 'track_v1',
     property = 'muted',
     value = true,
     project_id = 'project',
 })
 assert(r.success,
-    string.format("SetTrackProperty failed: %s", tostring(r.error_message)))
+    string.format("ToggleTrackPreference failed: %s", tostring(r.error_message)))
 
 -- After execution, the snapshot stack should STILL be empty. If
 -- skip_clip_snapshot was ignored, the post-commit cleanup would have
@@ -73,7 +73,7 @@ print("  post-exec: no active snapshot — OK (skip_clip_snapshot respected)")
 -- Now force a failure: invalid property triggers an executor assert.
 -- The rollback path must not try to pop a snapshot that was never pushed.
 -- --------------------------------------------------------------------------
-local ok, err = pcall(command_manager.execute, "SetTrackProperty", {
+local ok, err = pcall(command_manager.execute, "ToggleTrackPreference", {
     track_id = 'track_v1',
     property = 'not_a_real_property',
     value = true,
@@ -93,7 +93,7 @@ print("  post-failure: no active snapshot leaked — OK")
 -- --------------------------------------------------------------------------
 -- Final sanity: another successful command still works (no corruption).
 -- --------------------------------------------------------------------------
-local r3 = command_manager.execute("SetTrackProperty", {
+local r3 = command_manager.execute("ToggleTrackPreference", {
     track_id = 'track_v1',
     property = 'soloed',
     value = true,
