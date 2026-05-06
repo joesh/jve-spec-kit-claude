@@ -404,6 +404,7 @@ function M.init(sequence_id, project_id)
     assert(sequence_id and sequence_id ~= "", "timeline_core_state.init: sequence_id is required")
     persist_gen = project_gen.current()
     data.state.sequence_id = sequence_id
+    data.state.displayed_tab_id = sequence_id
 
     -- Load Data
     data.state.tracks = db.load_tracks(sequence_id)
@@ -526,6 +527,7 @@ function M.clear()
     end
 
     data.state.sequence_id = nil
+    data.state.displayed_tab_id = nil
     data.state.tracks = {}
     data.set_clips({})
 

@@ -36,6 +36,13 @@ local function fresh_state()
         project_id = nil,
         sequence_id = nil,
 
+        -- Tab/sequence pointers (FR-005 / data-model.md §3)
+        -- active_sequence_id is the Record sequence targeted by edits; backed
+        -- by sequence_id (kept as the canonical internal name to avoid touching
+        -- every internal call site).  displayed_tab_id is the tab whose content
+        -- the timeline body is currently rendering — may differ (SourceTab).
+        displayed_tab_id = nil,
+
         -- Rate
         sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
         sequence_audio_rate = 48000,

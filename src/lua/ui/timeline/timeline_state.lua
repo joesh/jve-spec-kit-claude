@@ -333,6 +333,49 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 -- Project/Sequence Accessors (Proxied from data state)
 M.get_project_id = function() return data.state.project_id end
 M.get_sequence_id = function() return data.state.sequence_id end
+
+-- Tab / sequence pointer accessors (FR-005, data-model.md §3)
+--
+-- active_sequence_id: the Record sequence that edit commands target.
+--   Backed by data.state.sequence_id; exposed under the spec-canonical name.
+--   NEVER set to a SourceTab master sequence_id.
+-- displayed_tab_id: the tab whose content the timeline body renders.
+--   May be a source master sequence_id while active_sequence_id is unchanged.
+
+M.get_active_sequence_id = function() return data.state.sequence_id end
+M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
+
+-- Switch to the Source tab.  Only displayed_tab_id changes; active_sequence_id
+-- is untouched (FR-005).  No-op if the tab is already displayed.
+function M.switch_to_source_tab(source_seq_id)
+    assert(source_seq_id and source_seq_id ~= "",
+        "timeline_state.switch_to_source_tab: source_seq_id required")
+    local prev = data.state.displayed_tab_id
+    if prev == source_seq_id then return end
+    data.state.displayed_tab_id = source_seq_id
+    Signals.emit("displayed_tab_changed", source_seq_id, prev)
+end
+
+-- Switch to a Record tab.  Both displayed_tab_id and active_sequence_id
+-- are updated.  Emits displayed_tab_changed always (unless no-op).
+-- Emits active_sequence_changed only when the active sequence actually changes.
+function M.switch_to_record_tab(seq_id)
+    assert(seq_id and seq_id ~= "",
+        "timeline_state.switch_to_record_tab: seq_id required")
+    local prev_displayed = data.state.displayed_tab_id
+    local prev_active    = data.state.sequence_id
+    if prev_displayed == seq_id and prev_active == seq_id then return end
+
+    data.state.displayed_tab_id = seq_id
+    if prev_displayed ~= seq_id then
+        Signals.emit("displayed_tab_changed", seq_id, prev_displayed)
+    end
+
+    if prev_active ~= seq_id then
+        data.state.sequence_id = seq_id
+        Signals.emit("active_sequence_changed", seq_id, prev_active)
+    end
+end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
 M.get_video_scroll_offset = function() return data.state.video_scroll_offset or 0 end
