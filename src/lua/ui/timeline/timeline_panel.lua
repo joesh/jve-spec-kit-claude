@@ -2205,6 +2205,7 @@ function M.open_tab(sequence_id)
         return
     end
     ensure_tab_for_sequence(sequence_id)
+    persist_open_tabs()
 end
 
 --- Build a merged tab_order: saved IDs first (validated), then any extras.
