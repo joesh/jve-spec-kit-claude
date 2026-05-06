@@ -81,6 +81,7 @@ local r1 = command_manager.execute("SetPatch", {
     source_track_index = 0,
     record_track_index = 0,
     source_track_type  = "AUDIO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(r1 and r1.success, "create patch failed: " .. tostring(r1 and r1.error_message))
@@ -129,6 +130,7 @@ local rc = command_manager.execute("SetPatch", {
     source_track_index = 1,
     record_track_index = 1,
     source_track_type  = "AUDIO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(rc and rc.success, "create A2 patch failed")
@@ -139,6 +141,7 @@ local r4 = command_manager.execute("SetPatch", {
     source_track_index = 1,
     record_track_index = 3,
     source_track_type  = "AUDIO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(r4 and r4.success, "redirect failed: " .. tostring(r4 and r4.error_message))
@@ -149,20 +152,19 @@ print("  A2 redirected to A4 (rec=3) — OK")
 
 -- ── 5. Cross-track-type drag refusal ─────────────────────────────────────────
 print("-- 5. cross-type drag refused --")
--- Audio source (source_track_type="AUDIO") dragged onto a non-existent AUDIO row
--- (record_track_index=99). The executor must refuse because no AUDIO track exists
--- at index 99 on this sequence — equivalent to dropping onto a video row.
+-- AUDIO source dropped onto a VIDEO record row: must be refused regardless of index.
 local r5 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
-    record_track_index = 99,   -- no AUDIO track at index 99
+    record_track_index = 0,
     source_track_type  = "AUDIO",
+    record_track_type  = "VIDEO",
     project_id         = "proj",
 })
 assert(r5 and not r5.success,
     "cross-type drag must fail, but succeeded")
 assert(
-    r5.error_message:find("cross%-track%-type") or r5.error_message:find("no AUDIO track"),
+    r5.error_message:find("cross%-track%-type"),
     "error must mention cross-type refusal; got: " .. tostring(r5.error_message))
 print("  cross-type drag refused with explicit error — OK")
 

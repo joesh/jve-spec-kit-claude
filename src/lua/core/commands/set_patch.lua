@@ -12,7 +12,6 @@
 local M = {}
 
 local Patch = require("models.patch")
-local Track = require("models.track")
 local log   = require("core.logger").for_area("commands")
 
 -- Stable 12-hue palette per spec §4. Colors alternate enough that
@@ -38,16 +37,19 @@ local SPEC = {
         record_track_index = {},
         enabled            = {},
         source_track_type  = {},  -- "VIDEO"|"AUDIO"; when provided, cross-type check is enforced
+        record_track_type  = {},  -- "VIDEO"|"AUDIO"; required when source_track_type is provided
     },
 }
 
-local function assert_track_type_match(sequence_id, src_type, rec_idx)
-    local dst = Track.find_at(sequence_id, src_type, rec_idx)
-    assert(dst, string.format(
-        "SetPatch: cross-track-type drag refused — no %s track at index %d "
-        .. "in sequence %s; drag an audio source onto an audio record row "
-        .. "and a video source onto a video record row",
-        src_type, rec_idx, sequence_id))
+-- Cross-type guard: source and record must be the same track type.
+-- VIDEO sources must route to VIDEO record tracks; AUDIO to AUDIO.
+-- V1 and A1 share track_index=1, so index alone is ambiguous — both types must be passed.
+local function assert_track_type_match(src_type, rec_type, sequence_id, src_idx, rec_idx)
+    assert(src_type == rec_type, string.format(
+        "SetPatch: cross-track-type routing refused — source is %s (index %d) but "
+        .. "record track is %s (index %d) in sequence %s; "
+        .. "route audio sources to audio record rows and video to video",
+        src_type, src_idx, rec_type, rec_idx, sequence_id))
 end
 
 function M.execute(args)
@@ -62,7 +64,15 @@ function M.execute(args)
         assert(args.source_track_type == "VIDEO" or args.source_track_type == "AUDIO",
             "SetPatch: source_track_type must be 'VIDEO' or 'AUDIO', got: "
             .. tostring(args.source_track_type))
-        assert_track_type_match(args.sequence_id, args.source_track_type, args.record_track_index)
+        assert(args.record_track_type ~= nil, string.format(
+            "SetPatch: record_track_type required when source_track_type is provided "
+            .. "(sequence=%s src=%d rec=%d)",
+            args.sequence_id, args.source_track_index, args.record_track_index))
+        assert(args.record_track_type == "VIDEO" or args.record_track_type == "AUDIO",
+            "SetPatch: record_track_type must be 'VIDEO' or 'AUDIO', got: "
+            .. tostring(args.record_track_type))
+        assert_track_type_match(args.source_track_type, args.record_track_type,
+            args.sequence_id, args.source_track_index, args.record_track_index)
     end
 
     local existing = Patch.find_by_source(args.sequence_id, args.source_track_index)

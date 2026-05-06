@@ -1050,39 +1050,6 @@ local function find_drop_target(gx, gy)
     return nil
 end
 
--- Install a drag gesture on a src-id button so dropping onto a rec-id button calls
--- SetPatch(source=src_track_index, record=target.track_index).
--- src_track_type required for cross-type refusal inside SetPatch (FR-010a).
-local function wire_src_drag(src_btn, sequence_id, src_track_index, src_track_type)
-    assert(sequence_id and sequence_id ~= "",
-        "wire_src_drag: sequence_id required (src_track_index=" .. tostring(src_track_index) .. ")")
-    assert(type(src_track_index) == "number",
-        "wire_src_drag: src_track_index must be number, got " .. type(src_track_index))
-    assert(src_track_type == "VIDEO" or src_track_type == "AUDIO",
-        "wire_src_drag: src_track_type must be VIDEO or AUDIO, got " .. tostring(src_track_type))
-    local drag_handler = register_track_btn_handler(function(event_type, gx, gy, _mods)
-        if event_type ~= "end" then return end
-        local target = find_drop_target(gx, gy)
-        if not target then return end
-        if target.seq_id ~= sequence_id then return end
-        local project_id = timeline_state.get_project_id()
-        assert(project_id, "wire_src_drag: no project_id")
-        local cmd = require("core.command_manager")
-        local result = cmd.execute("SetPatch", {
-            sequence_id        = sequence_id,
-            source_track_index = src_track_index,
-            record_track_index = target.track_index,
-            source_track_type  = src_track_type,
-            project_id         = project_id,
-        })
-        if not result or not result.success then
-            log.warn("wire_src_drag: SetPatch refused (src=%d→rec=%d type=%s): %s",
-                src_track_index, target.track_index, tostring(src_track_type),
-                tostring(result and result.error_message))
-        end
-    end)
-    qt_constants.CONTROL.SET_WIDGET_DRAG_HANDLER(src_btn, drag_handler)
-end
 
 --- Wire a toggle-preference click: calls ToggleTrackPreference and re-pulls style.
 local function wire_toggle_preference(btn, track_id, property, active_color)
@@ -1179,11 +1146,17 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
     local function refresh_src_btn()
         -- Reverse lookup: which source track is patched to this record row?
         local p = Patch.find_by_record(sequence_id, rec_track_index)
-        local enabled = p and (p.enabled == 1 or p.enabled == true)
-        local src_label = p and format_source_label(track_type, p.source_track_index) or "—"
-        qt_constants.PROPERTIES.SET_TEXT(captured_src, src_label)
+        if not p then
+            -- No source routed here — show empty space, not a placeholder button.
+            qt_constants.DISPLAY.SET_VISIBLE(captured_src, false)
+            return
+        end
+        local enabled = p.enabled == 1 or p.enabled == true
+        qt_constants.PROPERTIES.SET_TEXT(captured_src,
+            format_source_label(track_type, p.source_track_index))
         qt_constants.PROPERTIES.SET_STYLE(captured_src,
             build_id_btn_stylesheet(enabled, source_tab_color))
+        qt_constants.DISPLAY.SET_VISIBLE(captured_src, true)
     end
 
     refresh_src_btn()
@@ -1280,17 +1253,19 @@ Signals.connect("patch_changed", function(sequence_id, source_track_index, chang
         if refs.seq_id == sequence_id and refs.rec_idx == rec_index then
             assert(refs.src_btn,
                 "patch_changed: src_btn nil for track " .. tostring(track_id))
-            local src_label
             if p and change_type ~= "deleted" then
-                src_label = format_source_label(refs.track_type, source_track_index)
+                local src_label = format_source_label(refs.track_type, source_track_index)
+                qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, src_label)
+                qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
+                    build_id_btn_stylesheet(enabled, source_tab_color))
+                qt_constants.DISPLAY.SET_VISIBLE(refs.src_btn, true)
+                log.event("patch_changed: src_btn rec_idx=%s → %s",
+                    tostring(rec_index), src_label)
             else
-                src_label = "—"
+                qt_constants.DISPLAY.SET_VISIBLE(refs.src_btn, false)
+                log.event("patch_changed: src_btn rec_idx=%s hidden (deleted/nil)",
+                    tostring(rec_index))
             end
-            qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, src_label)
-            qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
-                build_id_btn_stylesheet(enabled, source_tab_color))
-            log.event("patch_changed: src_btn on rec_idx=%s updated to %s",
-                tostring(rec_index), src_label)
             break
         end
     end
@@ -1363,7 +1338,6 @@ local function create_video_headers()
 
         local video_seq_id = state.get_sequence_id()
         wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index, "VIDEO")
-        wire_src_drag(src_btn, video_seq_id, track.track_index, "VIDEO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
             track_index = track.track_index,
@@ -1576,7 +1550,6 @@ local function create_audio_headers()
 
         local audio_seq_id = state.get_sequence_id()
         wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index, "AUDIO")
-        wire_src_drag(src_btn, audio_seq_id, track.track_index, "AUDIO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
             track_index = track.track_index,

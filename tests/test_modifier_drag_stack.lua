@@ -78,6 +78,7 @@ local r1 = command_manager.execute("SetPatch", {
     source_track_index = 0,
     record_track_index = 0,
     source_track_type  = "AUDIO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(r1 and r1.success, "create A1→A1 failed: " .. tostring(r1 and r1.error_message))
@@ -93,6 +94,7 @@ local r2 = command_manager.execute("SetPatch", {
     source_track_index = 1,   -- A2
     record_track_index = 0,   -- A1's record slot
     source_track_type  = "AUDIO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(r2 and r2.success, "stack A2→A1 failed: " .. tostring(r2 and r2.error_message))
@@ -133,18 +135,19 @@ print("  A1 patch record_track_index unchanged — OK")
 
 -- ── 4. Cross-type refusal on modifier-drag ────────────────────────────────────
 print("-- 4. cross-type refusal on modifier-drag --")
--- VIDEO source (V1, src=0) attempting to stack onto non-existent VIDEO row 99
+-- VIDEO source dropped onto an AUDIO record row: must be refused regardless of indices.
 local r4 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
-    record_track_index = 99,
+    record_track_index = 0,
     source_track_type  = "VIDEO",
+    record_track_type  = "AUDIO",
     project_id         = "proj",
 })
 assert(r4 and not r4.success,
     "cross-type modifier-drag must fail; got success=true")
 assert(
-    r4.error_message:find("cross%-track%-type") or r4.error_message:find("no VIDEO track"),
+    r4.error_message:find("cross%-track%-type"),
     "error must mention cross-type refusal; got: " .. tostring(r4.error_message))
 print("  cross-type modifier-drag refused — OK")
 
