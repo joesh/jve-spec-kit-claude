@@ -74,6 +74,7 @@ local selection_color = colors.SELECTION_BORDER_COLOR or "#e64b3d"
 local inactive_text_color = colors.GENERAL_LABEL_COLOR or "#9a9a9a"
 local active_text_color = selection_color
 local hover_text_color = colors.WHITE_TEXT_COLOR or "#ffffff"
+local source_tab_color = "#5cbacc"  -- --src accent from design mockup v4
 
 local function build_tab_button_style(text_color, border_color, font_weight)
     return string.format([[
@@ -389,12 +390,13 @@ local function normalize_timeline_selection(clips)
     return normalized
 end
 
-local function apply_tab_style(tab, is_active)
+local function apply_tab_style(tab, is_active, is_source)
     if not tab or not tab.button or not qt_constants.PROPERTIES.SET_STYLE then
         return
     end
-    local text_color = is_active and active_text_color or inactive_text_color
-    local border_color = is_active and selection_color or "transparent"
+    local accent = is_source and source_tab_color or selection_color
+    local text_color = is_active and accent or inactive_text_color
+    local border_color = is_active and accent or "transparent"
     local font_weight = is_active and "bold" or "normal"
     qt_constants.PROPERTIES.SET_STYLE(tab.button, build_tab_button_style(text_color, border_color, font_weight))
     if tab.close_button and qt_constants.PROPERTIES.SET_STYLE then
@@ -464,9 +466,18 @@ local function register_tab_handler(callback)
     return name
 end
 
+local function get_source_master_seq_id()
+    local ok, pm = pcall(require, "ui.panel_manager")
+    if not ok or not pm then return nil end
+    local ok2, monitor = pcall(pm.get_sequence_monitor, "source_monitor")
+    if not ok2 or not monitor then return nil end
+    return monitor:get_loaded_master_seq_id()
+end
+
 local function update_tab_styles(active_sequence_id)
+    local source_seq_id = get_source_master_seq_id()
     for id, tab in pairs(open_tabs) do
-        apply_tab_style(tab, id == active_sequence_id)
+        apply_tab_style(tab, id == active_sequence_id, id == source_seq_id)
     end
 end
 
@@ -986,6 +997,14 @@ end
 
 -- MVC: update button styles when track state changes externally (undo/redo)
 Signals.connect("track_mix_changed", refresh_track_button_styles)
+
+-- MVC: re-evaluate tab accent colors when the source monitor loads/unloads a master.
+-- source_seq_id changing means the Source tab's identity changed — update_tab_styles
+-- re-queries the monitor so the correct tab gets the --src teal accent.
+Signals.connect("source_loaded_changed", function()
+    local current = state.get_sequence_id and state.get_sequence_id()
+    update_tab_styles(current)
+end)
 
 -- Helper function to create video headers with splitters
 local function create_video_headers()

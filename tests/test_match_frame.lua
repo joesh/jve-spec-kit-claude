@@ -29,6 +29,9 @@ local stub_source_monitor = {
         self.sequence_id = sequence_id
         table.insert(load_calls, sequence_id)
     end,
+    get_loaded_master_seq_id = function(self)
+        return self.sequence_id
+    end,
 }
 
 package.loaded["ui.panel_manager"] = {

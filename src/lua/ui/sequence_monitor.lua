@@ -486,6 +486,12 @@ end
 --------------------------------------------------------------------------------
 
 --- Get container widget for layout embedding.
+--- Return the sequence_id currently loaded in this monitor, or nil if none.
+-- For the source_monitor, this is the master sequence id of the loaded clip.
+function SequenceMonitor:get_loaded_master_seq_id()
+    return self.sequence_id
+end
+
 function SequenceMonitor:get_widget()
     return self._container
 end
