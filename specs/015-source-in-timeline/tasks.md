@@ -22,9 +22,9 @@
 
 ## Phase 3.1: Setup
 
-- [ ] **T001** Verify branch `015-source-in-timeline` is checked out, working tree is clean (`git status` reports nothing other than what THIS task and downstream tasks add). If pre-existing untracked files exist that you don't recognize, STOP and ask Joe (per CLAUDE.md "REFACTOR SAFEGUARD" / parallel-Claude-session rule).
+- [X] **T001** Verify branch `015-source-in-timeline` is checked out, working tree is clean (`git status` reports nothing other than what THIS task and downstream tasks add). If pre-existing untracked files exist that you don't recognize, STOP and ask Joe (per CLAUDE.md "REFACTOR SAFEGUARD" / parallel-Claude-session rule).
 
-- [ ] **T002** Confirm `make -j4` is green on current `master` reference (so we can recognize a regression introduced by this feature vs a pre-existing failure). Capture the baseline test count to a scratch file `/tmp/015_baseline_test_count.txt`.
+- [X] **T002** Confirm `make -j4` is green on current `master` reference (so we can recognize a regression introduced by this feature vs a pre-existing failure). Capture the baseline test count to a scratch file `/tmp/015_baseline_test_count.txt`.
 
 - [X] **T003** [P] ~~Decide the mechanism for the `undoable = false` SPEC flag~~ — **PRE-RESOLVED**: `command_manager.lua` already implements `spec.undoable == false` (search: `undoable == false` in command_manager.lua). No new flag needed. All downstream tasks use the existing flag as-is. No research.md update required.
 
@@ -68,7 +68,7 @@
 
 ### UI / integration tests (use `--test` mode per CLAUDE.md)
 
-- [ ] **T016** [P] Write displayed-tab vs active-sequence pointer test at `tests/test_displayed_vs_active_pointer.lua` (FR-005, scenarios 11). Open project with one Record sequence; load a source; open SourceTab. Click SourceTab. Assert: `timeline_state.displayed_tab_id` changed to SourceTab's sequence_id; `timeline_state.active_sequence_id` UNCHANGED. Click the Record tab. Assert: BOTH pointers updated. Trigger an edit while SourceTab is displayed. Assert: edit lands on the active Record sequence, NOT on the source's master sequence. Run; verify FAIL.
+- [X] **T016** [P] Write displayed-tab vs active-sequence pointer test at `tests/test_displayed_vs_active_pointer.lua` (FR-005, scenarios 11). Open project with one Record sequence; load a source; open SourceTab. Click SourceTab. Assert: `timeline_state.displayed_tab_id` changed to SourceTab's sequence_id; `timeline_state.active_sequence_id` UNCHANGED. Click the Record tab. Assert: BOTH pointers updated. Trigger an edit while SourceTab is displayed. Assert: edit lands on the active Record sequence, NOT on the source's master sequence. Run; verify FAIL.
 
 - [ ] **T017** [P] Write track-header layout test at `tests/test_track_header_layout.lua` (FR-008–FR-021d). Verify cell order LTR matches: `src-id button | rec-patch-id button | label | lock cell | sync-mode cell | S/M stack`. Verify NO P button. Verify NO R button. Verify L cell is an SVG icon (not text "L"). Verify channel count appears inline on audio rows. Use `--test` mode. Run; verify FAIL.
 
@@ -76,7 +76,7 @@
 
 - [X] **T019** [P] Write modifier-drag stacking test at `tests/test_modifier_drag_stack.lua` (FR-010a stacking, FR-029a stacking). Set up: source A1 patched to record A1. Modifier-drag (Option/Alt by default) source A2 onto record A1. Assert: TWO `patches` rows now have `record_track_index=1` (one for source_track_index=1, one for source_track_index=2). Assert: edit produces a multi-channel clip on record A1 with channel order matching source-track-index ascending. Verify cross-track-type refusal applies to modifier-drag too. Use `--test` mode. Run; verify FAIL.
 
-- [ ] **T020** [P] Write view-toggle modifier test at `tests/test_view_toggle_modifier.lua` (FR-029c, FR-029d). With `source_routing_view='per_channel'`, hold Option/Alt while hovering over a source row. Assert: rendered representation collapses to one button. Assert: `patches` rows unchanged in DB. Release; assert re-expansion. Switch preference to `'per_clip'`; default-display is one button. Hold modifier; assert expansion to N buttons. Use `--test` mode. Run; verify FAIL.
+- [X] **T020** [P] Write view-toggle modifier test at `tests/test_view_toggle_modifier.lua` (FR-029c, FR-029d). With `source_routing_view='per_channel'`, hold Option/Alt while hovering over a source row. Assert: rendered representation collapses to one button. Assert: `patches` rows unchanged in DB. Release; assert re-expansion. Switch preference to `'per_clip'`; default-display is one button. Hold modifier; assert expansion to N buttons. Use `--test` mode. Run; verify FAIL.
 
 - [X] **T021** [P] Write `source_routing_view` preference persistence test at `tests/test_source_routing_view_pref.lua` (FR-029c). Set preference to `'per_clip'`, restart app (or re-init pref subsystem), assert preference persists. Verify storage path matches the choice resolved in T040 (single-purpose vs umbrella). Run; verify FAIL.
 
@@ -98,7 +98,7 @@
 
 ### Schema first
 
-- [ ] **T025** Apply schema migration to `src/lua/schema.sql` per `contracts/schema-migration.md` §1–§3:
+- [X] **T025** Apply schema migration to `src/lua/schema.sql` per `contracts/schema-migration.md` §1–§3:
    - ALTER `tracks` ADD COLUMN `sync_mode TEXT NOT NULL DEFAULT 'ripple' CHECK (sync_mode IN ('off','ripple','cut'))`.
    - CREATE TABLE `patches` per the documented columns + UNIQUE + CASCADE + index.
    - INSERT `schema_version` row with the next integer.
@@ -110,7 +110,7 @@
 
 ### FR-040a bug fix (the failing T006 turns green here)
 
-- [ ] **T027** Refactor `src/lua/core/commands/set_track_property.lua`: SPLIT into two new files per `contracts/command-specs.md` C4:
+- [X] **T027** Refactor `src/lua/core/commands/set_track_property.lua`: SPLIT into two new files per `contracts/command-specs.md` C4:
    - `src/lua/core/commands/toggle_track_preference.lua` — handles `muted`/`soloed`/`locked`/`enabled`. SPEC has `undoable = false`. Emits `track_preference_changed`. NO undoer registered.
    - `src/lua/core/commands/set_track_mix_value.lua` — handles `volume`/`pan`. Existing undoable behavior preserved. Continues emitting `track_mix_changed`.
    - DELETE the old `set_track_property.lua` (rule 2.15 — no shim, no rename redirect).
@@ -118,15 +118,15 @@
 
 ### Models
 
-- [ ] **T028** [P] Create `src/lua/models/patch.lua` per `data-model.md` §1.1. Module exposes `Patch.create({sequence_id, source_track_index, ...})`, `Patch.load(id)`, `Patch.find_by_sequence(sequence_id)` returning all patches for a sequence ordered by `source_track_index`, `Patch.find_one(sequence_id, source_track_index)`, `Patch:save()`, `Patch:delete()`. Asserts on every read/write per FR-047.1. Function shapes match `src/lua/models/track.lua` style.
+- [X] **T028** [P] Create `src/lua/models/patch.lua` per `data-model.md` §1.1. Module exposes `Patch.create({sequence_id, source_track_index, ...})`, `Patch.load(id)`, `Patch.find_by_sequence(sequence_id)` returning all patches for a sequence ordered by `source_track_index`, `Patch.find_one(sequence_id, source_track_index)`, `Patch:save()`, `Patch:delete()`. Asserts on every read/write per FR-047.1. Function shapes match `src/lua/models/track.lua` style.
 
-- [ ] **T029** [P] Extend `src/lua/models/track.lua` with `sync_mode` field accessor. Add the field to load/save SQL. Default to `'ripple'`. Validate enum membership at the model layer (`assert(sync_mode == 'off' or sync_mode == 'ripple' or sync_mode == 'cut', ...)` — defense in depth alongside SQL CHECK). Reading/writing matches existing column patterns in this file.
+- [X] **T029** [P] Extend `src/lua/models/track.lua` with `sync_mode` field accessor. Add the field to load/save SQL. Default to `'ripple'`. Validate enum membership at the model layer (`assert(sync_mode == 'off' or sync_mode == 'ripple' or sync_mode == 'cut', ...)` — defense in depth alongside SQL CHECK). Reading/writing matches existing column patterns in this file.
 
 ### Commands
 
-- [ ] **T030** [P] Implement `src/lua/core/commands/set_patch.lua` per `contracts/command-specs.md` C2. Apply the documented asserts verbatim. After this lands, T007 passes.
+- [X] **T030** [P] Implement `src/lua/core/commands/set_patch.lua` per `contracts/command-specs.md` C2. Apply the documented asserts verbatim. After this lands, T007 passes.
 
-- [ ] **T031** [P] Implement `src/lua/core/commands/set_sync_mode.lua` per C3. Asserts verbatim. After this lands, T008 passes.
+- [X] **T031** [P] Implement `src/lua/core/commands/set_sync_mode.lua` per C3. Asserts verbatim. After this lands, T008 passes.
 
 - [X] **T032** [P] Implement `src/lua/core/commands/show_source_tab.lua` per C5. Reads source monitor's loaded master via `panel_manager.get_sequence_monitor("source_monitor")`. Opens the SourceTab in `timeline_panel.open_tabs`. Emits `source_tab_visibility_changed`.
 
@@ -134,7 +134,7 @@
 
 ### Ripple pipeline extension
 
-- [ ] **T033** Extend `src/lua/core/ripple/batch/pipeline.lua` and `src/lua/core/commands/batch_ripple_edit.lua` per `contracts/command-specs.md` C7. Insert new `apply_per_track_sync_mode_dispatch(ctx)` step BEFORE `ops.inject_implicit_gap_edges(ctx)`. Implement the three branches (off skip, ripple no-op, cut auto-split spanning clips into edge list). Add post-condition asserts per FR-026 (no clip on a `cut`-mode track ends up spanning the trim point, downstream `timeline_start` shifted by exactly delta, no produced clip < one frame). Before implementing the Cut branch's split synthesis, complete research R10 in `research.md` (pin the canonical frame-quantization function name and module path). The Cut branch MUST reuse that function verbatim — no new quantization helper. After R10 + T033 impl land, T012, T013, T014 pass.
+- [X] **T033** Extend `src/lua/core/ripple/batch/pipeline.lua` and `src/lua/core/commands/batch_ripple_edit.lua` per `contracts/command-specs.md` C7. Insert new `apply_per_track_sync_mode_dispatch(ctx)` step BEFORE `ops.inject_implicit_gap_edges(ctx)`. Implement the three branches (off skip, ripple no-op, cut auto-split spanning clips into edge list). Add post-condition asserts per FR-026 (no clip on a `cut`-mode track ends up spanning the trim point, downstream `timeline_start` shifted by exactly delta, no produced clip < one frame). Before implementing the Cut branch's split synthesis, complete research R10 in `research.md` (pin the canonical frame-quantization function name and module path). The Cut branch MUST reuse that function verbatim — no new quantization helper. After R10 + T033 impl land, T012, T013, T014 pass.
 
 ### timeline_state pointers + tab system extension
 
@@ -162,27 +162,27 @@
 
 - [X] **T040** Implement `source_routing_view` preference (FR-029c) — single-purpose JSON file at `~/.jve/source_routing_view.json` (decision: single-purpose; matches surrounding pattern of `recent_projects.json`, `find_dialog_settings.json`, etc., per research R6 alternatives). Default = `'per_channel'`. Render the source row's track headers per the preference. After this lands, T021 passes.
 
-- [ ] **T041** Implement view-toggle modifier (FR-029d). When the user holds Option/Alt over a source row, temporarily flip the rendered representation (per_channel ↔ per_clip). Underlying `patches` rows MUST NOT be touched. Listen for keyboard modifier events; on key-down, re-render in the opposite mode; on key-up, revert. After this lands, T020 passes.
+- [X] **T041** Implement view-toggle modifier (FR-029d). When the user holds Option/Alt over a source row, temporarily flip the rendered representation (per_channel ↔ per_clip). Underlying `patches` rows MUST NOT be touched. Listen for keyboard modifier events; on key-down, re-render in the opposite mode; on key-up, revert. After this lands, T020 passes.
 
 - [X] **T041a** PersistentWidget audit (FR-021c, ENGINEERING.md rule 1.6). For each new or modified UI widget in T035, T037, T038, T039, T040, T041, document in a scratch file `/tmp/015_persistence_audit.md`: (a) what state the widget owns; (b) the persistence mechanism it uses (project DB row, `~/.jve/` JSON, transient/no-persistence-needed); (c) for transient state, justify why it does not need to persist. Identify any state that needs persistence but isn't wired; surface as a follow-up sub-task or fix in-place. The audit's output joins the post-task commit message.
 
 ### Auto-create record track at edit time
 
-- [ ] **T042** Extend the edit commands that consume patches (Insert, Overwrite, and the 3-point edit dispatch — locate via `rg "patches\|3-point\|3_point\|three_point" src/lua/core/commands/`). For each, before the mutation step: iterate enabled patches, ensure a `tracks` row exists at every referenced `record_track_index`, calling `AddTrack` (existing command at `src/lua/core/commands/add_track.lua`) within the same undo group. After this lands, T015 passes.
+- [X] **T042** Extend the edit commands that consume patches (Insert, Overwrite, and the 3-point edit dispatch — locate via `rg "patches\|3-point\|3_point\|three_point" src/lua/core/commands/`). For each, before the mutation step: iterate enabled patches, ensure a `tracks` row exists at every referenced `record_track_index`, calling `AddTrack` (existing command at `src/lua/core/commands/add_track.lua`) within the same undo group. After this lands, T015 passes.
 
 ### SourceTab open/close persistence
 
-- [ ] **T043** Wire SourceTab's `×` close affordance through the existing `close_tab(sequence_id)` path. Add the SourceTab's sequence_id to `project_settings.open_sequence_ids` so close/open state persists per project. Do NOT close the SourceTab automatically when source unloads; FR-007b says it persists with the empty-placeholder state.
+- [X] **T043** Wire SourceTab's `×` close affordance through the existing `close_tab(sequence_id)` path. Add the SourceTab's sequence_id to `project_settings.open_sequence_ids` so close/open state persists per project. Do NOT close the SourceTab automatically when source unloads; FR-007b says it persists with the empty-placeholder state.
 
 ### 3-point math + ghost mark
 
-- [ ] **T044** Implement (or extend existing) 3-point math + ghost-mark rendering per FR-036–FR-038. Source marks live on the loaded master sequence; sequence marks live on the active sequence. Computed 4th mark renders as a dashed mark on the appropriate ruler. Inspector / status bar labels it `(computed)`. After this lands, T023 passes.
+- [X] **T044** Implement (or extend existing) 3-point math + ghost-mark rendering per FR-036–FR-038. Source marks live on the loaded master sequence; sequence marks live on the active sequence. Computed 4th mark renders as a dashed mark on the appropriate ruler. Inspector / status bar labels it `(computed)`. After this lands, T023 passes.
 
 ---
 
 ## Phase 3.4: Integration
 
-- [ ] **T045** Verify all FR-047 assert sites are wired with offending-id-in-message. Walk the 8 sites listed in spec:
+- [X] **T045** Verify all FR-047 assert sites are wired with offending-id-in-message. Walk the 8 sites listed in spec:
    1. Patch lookup (T030 — confirm).
    2. Sync_mode dispatch (T033 — confirm).
    3. SourceTab display (T035 — confirm).
@@ -195,13 +195,13 @@
 
 - [ ] **T046** Run quickstart Steps 1–17 manually against `./build/bin/JVEEditor`. Capture screenshots of the SourceTab styling, paired-button rendering, sync-mode icon cycle, S/M stack, and the auto-create-track behavior. Any "Expected" outcome that does not match is a bug; file it and fix before proceeding.
 
-- [ ] **T047** Re-run T024 (`tests/test_quickstart_015.lua`) — every step should now pass. Compare against `/tmp/015_t024_initial_failures.txt` to confirm the gap closed.
+- [X] **T047** Re-run T024 (`tests/test_quickstart_015.lua`) — every step should now pass. Compare against `/tmp/015_t024_initial_failures.txt` to confirm the gap closed.
 
 ---
 
 ## Phase 3.5: Polish
 
-- [ ] **T048** [P] Run `make -j4` from repo root. Zero luacheck warnings (rule 2.4). Zero failing Lua tests. Zero failing C++ tests. The full test count must be ≥ baseline from T002 + the new tests added in 3.2.
+- [X] **T048** [P] Run `make -j4` from repo root. Zero luacheck warnings (rule 2.4). Zero failing Lua tests. Zero failing C++ tests. The full test count must be ≥ baseline from T002 + the new tests added in 3.2.
 
 - [ ] **T049** [P] Audit the diff: re-read every changed file against ENGINEERING.md rules 1.14, 2.5, 2.13, 2.15, 2.20, 2.21, 2.32, 3.14 per CLAUDE.md "AUDIT AGAINST ENGINEERING.md AFTER EVERY REFACTOR" memory. Report rule → finding → fix for any violation.
 

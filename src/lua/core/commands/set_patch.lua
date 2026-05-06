@@ -15,6 +15,20 @@ local Patch = require("models.patch")
 local Track = require("models.track")
 local log   = require("core.logger").for_area("commands")
 
+-- Stable 12-hue palette per spec §4. Colors alternate enough that
+-- adjacent-index patches are visually distinct even on overflow wrap.
+local PATCH_PALETTE = {
+    "#e64b3d", "#3d7ee6", "#27ae60", "#f39c12",
+    "#9b59b6", "#1abc9c", "#e67e22", "#2980b9",
+    "#d35400", "#16a085", "#8e44ad", "#c0392b",
+}
+
+local function pick_patch_color(sequence_id)
+    local existing = Patch.find_by_sequence(sequence_id)
+    local idx = (#existing % #PATCH_PALETTE) + 1
+    return PATCH_PALETTE[idx]
+end
+
 local SPEC = {
     undoable = false,
     args = {
@@ -72,11 +86,20 @@ function M.execute(args)
             "SetPatch: record_track_index required when creating a new patch "
             .. "(sequence=%s src=%d)",
             args.sequence_id, args.source_track_index))
+        -- New patches start enabled per spec §4 (user just wired a route).
+        -- enabled is optional in args; absence means "start enabled."
+        local initial_enabled
+        if args.enabled ~= nil then
+            initial_enabled = args.enabled
+        else
+            initial_enabled = 1
+        end
+        local color = pick_patch_color(args.sequence_id)
         local patch = Patch.create(
             args.sequence_id,
             args.source_track_index,
             args.record_track_index,
-            { enabled = args.enabled }
+            { enabled = initial_enabled, color = color }
         )
         patch:save()
     end
