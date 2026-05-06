@@ -124,8 +124,10 @@ function PlaybackEngine.new(config)
 
     -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer
     self._tmb = nil
-    self._video_track_indices = {}   -- track indices for Renderer iteration
-    self._audio_track_indices = {}   -- audio track indices for TMB audio path
+    self._video_track_indices = {}        -- all video track indices (for TMB clip feeding)
+    self._video_track_states = {}         -- {track_index, muted, soloed} per track (FR-019/020)
+    self._effective_video_track_indices = {} -- filtered indices for Renderer (mute/solo applied)
+    self._audio_track_indices = {}        -- audio track indices for TMB audio path
     -- Per-clip source range snapshot for the renderer. Populated when
     -- clips are fed to TMB; the renderer needs {source_in, source_out}
     -- to compose per-clip partial-coverage offline frames without
@@ -247,6 +249,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self._video_track_indices = self.sequence:get_track_indices("VIDEO")
     table.sort(self._video_track_indices, function(a, b) return a > b end)
     self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
+    self:_refresh_video_track_states()
 
     -- NOTE: No seek here. Caller (SequenceMonitor) is responsible for initial
     -- positioning via saved_playhead from DB. Hardcoding seek(0) is wrong when
@@ -348,6 +351,23 @@ function PlaybackEngine:_create_tmb()
     end
 end
 
+--- Build _video_track_states from sequence DB and recompute effective indices.
+-- Must be called whenever tracks are added/removed or mute/solo state changes.
+function PlaybackEngine:_refresh_video_track_states()
+    local Track = require("models.track")
+    local tracks = Track.find_by_sequence(self.sequence_id, "VIDEO")
+    local states = {}
+    for _, track in ipairs(tracks) do
+        states[#states + 1] = {
+            track_index = track.track_index,
+            muted       = track.muted,
+            soloed      = track.soloed,
+        }
+    end
+    self._video_track_states = states
+    self._effective_video_track_indices = Renderer.compute_effective_video_indices(states)
+end
+
 --- Close TMB instance if active.
 function PlaybackEngine:_close_tmb()
     if self._tmb then
@@ -355,6 +375,8 @@ function PlaybackEngine:_close_tmb()
         self._tmb = nil
     end
     self._video_track_indices = {}
+    self._video_track_states = {}
+    self._effective_video_track_indices = {}
     self._audio_track_indices = {}
     self._clip_info_by_id = {}
     self._active_media_paths = {}
@@ -380,6 +402,27 @@ function PlaybackEngine:notify_content_changed()
     self._video_track_indices = self.sequence:get_track_indices("VIDEO")
     table.sort(self._video_track_indices, function(a, b) return a > b end)
     self._audio_track_indices = self.sequence:get_track_indices("AUDIO")
+    self:_refresh_video_track_states()
+end
+
+--- Handler: a track's muted/soloed/locked/enabled flag changed.
+-- Recomputes _effective_video_track_indices when the track belongs to our
+-- sequence and the changed property affects composite selection (muted/soloed).
+function PlaybackEngine:_on_track_preference_changed_signal(track_id, property, _new_val, _prev_val)
+    assert(type(track_id) == "string" and track_id ~= "", string.format(
+        "PlaybackEngine:_on_track_preference_changed_signal: track_id must be non-empty string, got %s",
+        type(track_id)))
+    if property ~= "muted" and property ~= "soloed" then return end
+    if not self.sequence_id then return end
+    -- Only refresh if this track belongs to our sequence. Load is lightweight
+    -- (single-row SELECT); Track.load asserts presence.
+    local Track = require("models.track")
+    local track = Track.load(track_id)
+    assert(track, string.format(
+        "PlaybackEngine:_on_track_preference_changed_signal: track %s not found", track_id))
+    if track.sequence_id ~= self.sequence_id then return end
+    self:_refresh_video_track_states()
+    log.event("Video effective indices refreshed: track=%s %s changed", track_id, property)
 end
 
 --- Handler: timeline edit touched `seq_id`. Only react when it's our
@@ -500,6 +543,8 @@ function PlaybackEngine:_setup_playback_controller()
            "_on_media_content_changed_signal")
     rewire("_media_status_changed_conn",   "media_status_changed",
            "_on_media_status_changed_signal")
+    rewire("_track_preference_conn",       "track_preference_changed",
+           "_on_track_preference_changed_signal")
 
     log.event("PlaybackController created and configured")
 end
@@ -982,7 +1027,7 @@ function PlaybackEngine:_display_frame_from_renderer(frame)
     assert(self._tmb, "PlaybackEngine:_display_frame_from_renderer: no TMB")
 
     local frame_handle, metadata = Renderer.get_video_frame(
-        self._tmb, self._video_track_indices, frame, self._clip_info_by_id)
+        self._tmb, self._effective_video_track_indices, frame, self._clip_info_by_id)
 
     if frame_handle then
         self:_apply_rotation_par(metadata)
@@ -1159,6 +1204,10 @@ function PlaybackEngine:destroy()
     if self._media_status_changed_conn then
         Signals.disconnect(self._media_status_changed_conn)
         self._media_status_changed_conn = nil
+    end
+    if self._track_preference_conn then
+        Signals.disconnect(self._track_preference_conn)
+        self._track_preference_conn = nil
     end
     self:stop()
     self:_close_tmb()

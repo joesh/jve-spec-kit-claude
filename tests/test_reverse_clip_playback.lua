@@ -102,6 +102,12 @@ package.loaded["core.logger"] = {
 }
 
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 25, fps_den = 1,

@@ -19,6 +19,38 @@ local Sequence = require("models.sequence")
 
 local M = {}
 
+--- Compute effective video track indices given per-track mute/solo state.
+-- Mirrors the audio any_solo rule (audio_playback.lua:261-274):
+--   solo context (≥1 soloed): only soloed tracks participate; solo wins over mute.
+--   no-solo context: muted tracks are excluded, all others participate.
+-- Result is sorted descending (topmost track index first).
+-- @param tracks table  array of {track_index:int, muted:bool, soloed:bool}
+-- @return table  array of track_index integers, descending
+function M.compute_effective_video_indices(tracks)
+    assert(type(tracks) == "table",
+        "renderer.compute_effective_video_indices: tracks must be a table")
+    local any_solo = false
+    for _, track in ipairs(tracks) do
+        assert(type(track.track_index) == "number",
+            "renderer.compute_effective_video_indices: track_index must be a number")
+        assert(type(track.muted) == "boolean",
+            "renderer.compute_effective_video_indices: muted must be a boolean")
+        assert(type(track.soloed) == "boolean",
+            "renderer.compute_effective_video_indices: soloed must be a boolean")
+        if track.soloed then any_solo = true end
+    end
+
+    local indices = {}
+    for _, track in ipairs(tracks) do
+        local include = any_solo and track.soloed or (not any_solo and not track.muted)
+        if include then
+            indices[#indices + 1] = track.track_index
+        end
+    end
+    table.sort(indices, function(a, b) return a > b end)
+    return indices
+end
+
 --- Get video frame via TMB for tracks at a given playhead position.
 --- Pure function of its inputs — MUST NOT touch the DB on the render
 --- path. Partial-coverage diagnostics come from `media_status` (in-memory

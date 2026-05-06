@@ -157,6 +157,20 @@ package.loaded["models.sequence"] = {
     end,
 }
 
+-- Track model: stub find_by_sequence so _refresh_video_track_states doesn't hit DB.
+-- Returns one VIDEO track matching the mock clip entry (track_index=0, unmuted/unsoloed).
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id)
+        return { track_index = 0, muted = false, soloed = false, sequence_id = "seq1" }
+    end,
+}
+
 -- offline_frame_cache: use the real module (it calls COMPOSE_OFFLINE_FRAME mock)
 require("core.media.offline_frame_cache")
 

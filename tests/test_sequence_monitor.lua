@@ -156,6 +156,12 @@ package.loaded["core.logger"] = {
 -- Mock Renderer (returns info from DB-loaded sequence)
 local mock_renderer_info = {}
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function(seq_id)
         if mock_renderer_info[seq_id] then
             return mock_renderer_info[seq_id]

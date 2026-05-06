@@ -109,7 +109,23 @@ package.loaded["core.logger"] = {
     for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id) return nil end,
+}
+
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 24, fps_den = 1,
