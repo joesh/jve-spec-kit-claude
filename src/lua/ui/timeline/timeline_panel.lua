@@ -1098,8 +1098,52 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     return mute_btn, solo_btn
 end
 
+-- Wire src-id and rec-id buttons to SetPatch command (T038, FR-009, FR-010).
+-- src-id click: toggle patch enabled for this source track on the active sequence.
+-- rec-id label: shows the record track index this source track routes to (or "·" if unrouted).
+local function wire_patch_buttons(src_btn, rec_btn, sequence_id, src_track_index)
+    assert(sequence_id and sequence_id ~= "",
+        "wire_patch_buttons: sequence_id required (src_track_index=" .. tostring(src_track_index) .. ")")
+    assert(type(src_track_index) == "number",
+        "wire_patch_buttons: src_track_index must be number, got " .. type(src_track_index))
+    local captured_src = src_btn
+    local captured_rec = rec_btn
+    local Patch = require("models.patch")
+
+    local function refresh_patch_style()
+        local p = Patch.find_by_source(sequence_id, src_track_index)
+        local enabled = p and (p.enabled == 1 or p.enabled == true)
+        local rec_label = p and tostring(p.record_track_index) or "·"
+        qt_constants.PROPERTIES.SET_STYLE(captured_src,
+            build_id_btn_stylesheet(enabled, source_tab_color))
+        qt_constants.PROPERTIES.SET_TEXT(captured_rec, rec_label)
+        qt_constants.PROPERTIES.SET_STYLE(captured_rec,
+            build_id_btn_stylesheet(p ~= nil, selection_color))
+    end
+
+    refresh_patch_style()
+
+    local src_handler = register_track_btn_handler(function()
+        -- src-id click = toggle enabled on an EXISTING patch.
+        -- No patch means no route set yet (user must click rec-id first per T039).
+        local p = Patch.find_by_source(sequence_id, src_track_index)
+        if not p then return end
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "wire_patch_buttons: no project_id")
+        local current_enabled = p.enabled == 1 or p.enabled == true
+        local cmd = require("core.command_manager")
+        cmd.execute("SetPatch", {
+            sequence_id        = sequence_id,
+            source_track_index = src_track_index,
+            project_id         = project_id,
+            enabled            = not current_enabled,
+        })
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(src_btn, src_handler)
+end
+
 -- Track button references for MVC re-pull on undo/redo
--- { [track_id] = { mute_btn, solo_btn, lock_btn, sync_mode_btn } }
+-- { [track_id] = { mute_btn, solo_btn, lock_btn, sync_mode_btn, src_btn, rec_btn, seq_id, src_idx } }
 local track_button_refs = {}
 
 local function refresh_track_button_styles()
@@ -1157,6 +1201,28 @@ Signals.connect("sync_mode_changed", function(track_id, new_mode)
     qt_constants.PROPERTIES.SET_STYLE(refs.sync_mode_btn, build_sync_mode_btn_stylesheet(new_mode))
 end)
 
+-- MVC: patch_changed fires when SetPatch creates/updates/disables a patch.
+-- Re-pulls patch state for the affected source track and refreshes both buttons.
+Signals.connect("patch_changed", function(sequence_id, source_track_index, _change_type)
+    local Patch = require("models.patch")
+    local p = Patch.find_by_source(sequence_id, source_track_index)
+    local enabled = p and (p.enabled == 1 or p.enabled == true)
+    local rec_label = p and tostring(p.record_track_index) or "·"
+    for track_id, refs in pairs(track_button_refs) do
+        if refs.seq_id == sequence_id and refs.src_idx == source_track_index then
+            assert(refs.src_btn, "patch_changed: src_btn nil for track " .. tostring(track_id))
+            assert(refs.rec_btn, "patch_changed: rec_btn nil for track " .. tostring(track_id))
+            qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
+                build_id_btn_stylesheet(enabled, source_tab_color))
+            qt_constants.PROPERTIES.SET_TEXT(refs.rec_btn, rec_label)
+            qt_constants.PROPERTIES.SET_STYLE(refs.rec_btn,
+                build_id_btn_stylesheet(p ~= nil, selection_color))
+            log.event("patch_changed: refreshed buttons for track %s", track_id)
+            break
+        end
+    end
+end)
+
 -- MVC: re-evaluate tab accent colors when the source monitor loads/unloads a master.
 -- source_seq_id changing means the Source tab's identity changed — update_tab_styles
 -- re-queries the monitor so the correct tab gets the --src teal accent.
@@ -1205,15 +1271,16 @@ local function create_video_headers()
 
         local captured_track_id = track.id
 
-        -- src-id button (placeholder; T038 wires patch source toggle)
+        -- src-id button
         local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(src_btn, build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        -- rec-patch-id button (placeholder; T038 wires patch destination)
-        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_id_btn_stylesheet(false, selection_color))
+        -- rec-patch-id button
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("·")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        local video_seq_id = state.get_sequence_id()
+        wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index)
 
         -- Track name label (flex)
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
@@ -1237,10 +1304,14 @@ local function create_video_headers()
         local mute_btn, solo_btn = add_sm_stack_to_layout(header_layout, track, captured_track_id)
 
         track_button_refs[captured_track_id] = {
-            mute_btn     = mute_btn,
-            solo_btn     = solo_btn,
-            lock_btn     = lock_btn,
+            mute_btn      = mute_btn,
+            solo_btn      = solo_btn,
+            lock_btn      = lock_btn,
             sync_mode_btn = sync_btn,
+            src_btn       = src_btn,
+            rec_btn       = rec_btn,
+            seq_id        = video_seq_id,
+            src_idx       = track.track_index,
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
@@ -1401,15 +1472,16 @@ local function create_audio_headers()
 
         local captured_track_id = track.id
 
-        -- src-id button (placeholder; T038 wires patch source toggle)
+        -- src-id button
         local src_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(src_btn, build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
-        -- rec-patch-id button (placeholder; T038 wires patch destination)
-        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
-        qt_constants.PROPERTIES.SET_STYLE(rec_btn, build_id_btn_stylesheet(false, selection_color))
+        -- rec-patch-id button
+        local rec_btn = qt_constants.WIDGET.CREATE_BUTTON("·")
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        local audio_seq_id = state.get_sequence_id()
+        wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index)
 
         -- Track name label (flex); FR-021 channel count pending track model extension
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
@@ -1453,6 +1525,10 @@ local function create_audio_headers()
             solo_btn      = solo_btn,
             lock_btn      = lock_btn,
             sync_mode_btn = sync_btn,
+            src_btn       = src_btn,
+            rec_btn       = rec_btn,
+            seq_id        = audio_seq_id,
+            src_idx       = track.track_index,
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
@@ -2385,6 +2461,7 @@ function M.restore_tab_order(saved_order)
     assert(type(saved_order) == "table", "restore_tab_order: saved_order must be a table")
     tab_order = build_merged_tab_order(saved_order)
     reorder_tab_widgets()
+    persist_open_tabs()
 
     local current_sequence = state.get_sequence_id and state.get_sequence_id() or nil
     update_tab_styles(current_sequence)
