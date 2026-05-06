@@ -228,6 +228,12 @@ Format:
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
 
+## **Key Patterns — 015-source-in-timeline**
+
+- **Non-undoable commands**: set `SPEC.undoable = false` — track booleans (muted/soloed/locked/enabled via `ToggleTrackPreference`), patch routing (`SetPatch`), sync-mode (`SetSyncMode`) are NOT on the undo stack; `SetTrackMixValue` (volume/pan) IS undoable.
+- **Dual timeline pointers**: `displayed_tab_id` (which tab is rendered) ≠ `active_sequence_id` (which sequence receives edits). Clicking Source tab changes only `displayed_tab_id`; edits always target `active_sequence_id`. Never conflate them.
+- **Display-aware marks**: ruler and renderer must call `state.get_display_mark_in/out()` — returns source or record marks based on the visible tab. Never call `get_mark_in/out()` directly in rendering code.
+
 **REMEMBER**: The planning module always writes plans in ~/.claude/plans. The names are meaningless so just sort by modification time to find the latest plans. DONT proceed from a handoff if you can't find the plan for it! Ask Joe if you need help.
 
 ## **🪶 CONTEXT DISCIPLINE**
