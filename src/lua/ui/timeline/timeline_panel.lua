@@ -78,10 +78,16 @@ local active_text_color = selection_color
 local hover_text_color = colors.WHITE_TEXT_COLOR or "#ffffff"
 local source_tab_color = "#5cbacc"  -- --src accent from design mockup v4
 
-local function build_tab_button_style(text_color, border_color, font_weight)
+-- Tab styling per spec FR-002: source vs record distinction is always-on
+-- (determined by tab type, not just active state). Caller must pass an
+-- explicit background ("transparent" for record tabs, accent hex for the
+-- source tab). No fallback (rule 2.13).
+local function build_tab_button_style(text_color, border_color, font_weight, background)
+    assert(type(background) == "string" and background ~= "",
+        "build_tab_button_style: background required (e.g. 'transparent' or '#1e3338')")
     return string.format([[
         QPushButton {
-            background: transparent;
+            background: %s;
             color: %s;
             border: none;
             border-bottom: 2px solid %s;
@@ -91,7 +97,7 @@ local function build_tab_button_style(text_color, border_color, font_weight)
         QPushButton:hover {
             color: %s;
         }
-    ]], text_color, border_color, font_weight, hover_text_color)
+    ]], background, text_color, border_color, font_weight, hover_text_color)
 end
 
 local function build_close_button_style(text_color)
@@ -111,6 +117,14 @@ local open_tabs = {}
 local tab_handler_seq = 0
 local tab_command_listener = nil
 local ensure_tab_for_sequence
+
+-- Tracks the tab that source_loaded_changed AUTO-OPENED (FR-001b). On
+-- the next source change, the previous auto-source tab is evicted so
+-- the strip stays singleton-clean. Cleared when that tab is closed via
+-- × or when the project changes. User-opened record tabs that happen
+-- to point at a source-loaded master are NOT recorded here — we never
+-- close those out from under the user.
+local auto_source_tab_id = nil
 
 local function register_global_handler(name, callback)
     _G[name] = function(...)
@@ -392,6 +406,13 @@ local function normalize_timeline_selection(clips)
     return normalized
 end
 
+-- Tab background palette per spec FR-002. The source-vs-record distinction
+-- is always-on (it identifies tab type), so the source tab carries a blue
+-- background even when not active. The record tab keeps a transparent
+-- background to match JVE's existing visual language.
+local SOURCE_TAB_BG_INACTIVE = "#1e3338"   -- dim teal when source tab not active
+local SOURCE_TAB_BG_ACTIVE   = "#2c5862"   -- brighter teal when source tab active
+
 local function apply_tab_style(tab, is_active, is_source)
     if not tab or not tab.button or not qt_constants.PROPERTIES.SET_STYLE then
         return
@@ -400,7 +421,19 @@ local function apply_tab_style(tab, is_active, is_source)
     local text_color = is_active and accent or inactive_text_color
     local border_color = is_active and accent or "transparent"
     local font_weight = is_active and "bold" or "normal"
-    qt_constants.PROPERTIES.SET_STYLE(tab.button, build_tab_button_style(text_color, border_color, font_weight))
+    -- Source tab: always blue-tinted background so the type is identifiable
+    -- in the strip without clicking. Record tab: transparent (today's look).
+    local background
+    if is_source then
+        background = is_active and SOURCE_TAB_BG_ACTIVE or SOURCE_TAB_BG_INACTIVE
+        -- Source tab text stays the source-accent hue even when inactive,
+        -- so it reads "blue tab" at a glance rather than "grey label".
+        text_color = accent
+    else
+        background = "transparent"
+    end
+    qt_constants.PROPERTIES.SET_STYLE(tab.button,
+        build_tab_button_style(text_color, border_color, font_weight, background))
     if tab.close_button and qt_constants.PROPERTIES.SET_STYLE then
         qt_constants.PROPERTIES.SET_STYLE(tab.close_button, build_close_button_style(text_color))
     end
@@ -659,6 +692,12 @@ local function close_tab(sequence_id)
         return
     end
 
+    -- Detect source-tab close BEFORE the open_tabs entry is removed: the
+    -- visibility-changed signal needs to fire so FR-001b dismissal tracking
+    -- (and any other source-tab listeners) can respond. A tab is the
+    -- source tab iff its seq_id matches the source monitor's loaded master.
+    local was_source_tab = (sequence_id == get_source_master_seq_id())
+
     if qt_constants.WIDGET.SET_PARENT then
         qt_constants.WIDGET.SET_PARENT(tab.container, recycle_bin)
     end
@@ -673,8 +712,29 @@ local function close_tab(sequence_id)
         _G[tab.close_handler] = nil
     end
 
+    -- Mirror the close into the TimelineTabStrip — but ONLY if the strip
+    -- still "owns" this seq. When source master transitions A→B, the strip's
+    -- source-tab singleton is reloaded in place: strip_tab.sequence_id is
+    -- now B even though open_tabs[A] still holds a reference to it. If we
+    -- naively called close_source_tab() here we'd close B (current source)
+    -- instead of just doing Qt cleanup for A. The seq_id check guards that.
+    assert(tab.strip_tab, string.format(
+        "close_tab: open_tabs[%s] missing strip_tab — strip/open_tabs drift",
+        tostring(sequence_id)))
+    if tab.strip_tab.sequence_id == sequence_id then
+        local strip = timeline_state.get_tab_strip()
+        if tab.strip_tab.kind == "source" then
+            strip:close_source_tab()
+        else
+            strip:close_record_tab(tab.strip_tab)
+        end
+    end
+
     open_tabs[sequence_id] = nil
     remove_from_tab_order(sequence_id)
+    if auto_source_tab_id == sequence_id then
+        auto_source_tab_id = nil
+    end
 
     local current_sequence = state.get_sequence_id and state.get_sequence_id()
     if current_sequence == sequence_id then
@@ -690,6 +750,10 @@ local function close_tab(sequence_id)
     end
     update_tab_scroll_arrows()
     persist_open_tabs()
+
+    if was_source_tab then
+        Signals.emit("source_tab_visibility_changed", false)
+    end
 end
 
 -- Expose close_tab programmatically (for tests + any future script callers).
@@ -700,15 +764,30 @@ ensure_tab_for_sequence = function(sequence_id)
         return
     end
 
+    -- Keep the TimelineTabStrip in sync on every call. Idempotent on the
+    -- strip side: open_record_tab returns an existing tab for this seq if
+    -- any; open_source_tab reloads the singleton in place. Hoisted above
+    -- the early-return so a re-entrant call after a strip reset
+    -- re-establishes the strip-side tab.
+    local strip = timeline_state.get_tab_strip()
+    local strip_tab
+    if sequence_id == get_source_master_seq_id() then
+        strip_tab = strip:open_source_tab(sequence_id)
+    else
+        strip_tab = strip:open_record_tab(sequence_id)
+    end
+
     local display_name = get_sequence_display_name(sequence_id)
     local existing = open_tabs[sequence_id]
     if existing then
+        existing.strip_tab = strip_tab  -- repair if drifted
         if display_name ~= existing.name then
             qt_constants.PROPERTIES.SET_TEXT(existing.button, display_name)
             existing.name = display_name
         end
         return
     end
+
 
     local container = qt_constants.WIDGET.CREATE()
     local container_layout = qt_constants.LAYOUT.CREATE_HBOX()
@@ -718,7 +797,10 @@ ensure_tab_for_sequence = function(sequence_id)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(container, "Fixed", "Fixed")
 
     local text_button = qt_constants.WIDGET.CREATE_BUTTON(display_name)
-    qt_constants.PROPERTIES.SET_STYLE(text_button, build_tab_button_style(inactive_text_color, "transparent", "normal"))
+    -- Initial style: neutral inactive (apply_tab_style is invoked immediately
+    -- after creation in update_tab_styles to apply the type-specific palette).
+    qt_constants.PROPERTIES.SET_STYLE(text_button,
+        build_tab_button_style(inactive_text_color, "transparent", "normal", "transparent"))
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(text_button, "Fixed", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(container_layout, text_button)
 
@@ -727,12 +809,19 @@ ensure_tab_for_sequence = function(sequence_id)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(close_button, "Fixed", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(container_layout, close_button)
 
+    -- Tab-click routing (FR-005). A tab is THE source tab iff its seq_id
+    -- equals the source monitor's currently-loaded master — this is a
+    -- dynamic property of the source monitor, NOT of seq.kind (a master
+    -- can live in a record tab; a nested can be the source tab). Both
+    -- pointer-update entry points emit the appropriate signals; the
+    -- displayed_tab_changed listener does the timeline-view rebuild.
     local handler_name = register_tab_handler(function()
-        if state and state.get_sequence_id then
-            local current = state.get_sequence_id()
-            if current ~= sequence_id then
-                M.load_sequence(sequence_id)
-            end
+        local current_displayed = state and state.get_displayed_tab_id and state.get_displayed_tab_id()
+        if current_displayed == sequence_id then return end   -- already displayed
+        if sequence_id == get_source_master_seq_id() then
+            timeline_state.switch_to_source_tab(sequence_id)
+        else
+            M.load_sequence(sequence_id)
         end
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(text_button, handler_name)
@@ -750,7 +839,8 @@ ensure_tab_for_sequence = function(sequence_id)
         close_button = close_button,
         name = display_name,
         handler = handler_name,
-        close_handler = close_handler_name
+        close_handler = close_handler_name,
+        strip_tab = strip_tab,
     }
     table.insert(tab_order, sequence_id)
     update_tab_scroll_arrows()
@@ -932,37 +1022,31 @@ local function build_track_header_btn_stylesheet(active, active_color)
     if active and active_color then
         return string.format([[
             QPushButton {
-                background: %s;
-                color: #ffffff;
+                background: %s; color: #ffffff;
                 border: 1px solid #333333;
-                padding: 1px 3px;
-                font-size: 10px;
-                font-weight: bold;
-                min-width: 16px;
-                max-width: 16px;
-                min-height: 16px;
-                max-height: 16px;
+                padding: 1px 3px; font-size: 10px; font-weight: bold;
             }
         ]], active_color)
     end
     return [[
         QPushButton {
-            background: #2a2a2a;
-            color: #888888;
-            border: 1px solid #333333;
-            padding: 1px 3px;
-            font-size: 10px;
-            min-width: 16px;
-            max-width: 16px;
-            min-height: 16px;
-            max-height: 16px;
+            background: #2a2a2a; color: #888888;
+            border: 1px solid #333333; padding: 1px 3px; font-size: 10px;
         }
-        QPushButton:hover {
-            background: #3a3a3a;
-            color: #cccccc;
-        }
+        QPushButton:hover { background: #3a3a3a; color: #cccccc; }
     ]]
 end
+
+-- Track header column widths (px) — set once at widget creation via SET_MIN/MAX_WIDTH.
+-- CSS never specifies width; geometry is owned here, appearance is owned by CSS.
+local HDR = {
+    SRC  = 28,   -- src-id patch button
+    REC  = 28,   -- rec-id patch button
+    LOCK = 20,   -- lock toggle
+    SYNC = 20,   -- sync-mode toggle
+    SM   = 16,   -- each solo/mute button (stacked vertically)
+    WAVE = 16,   -- waveform toggle (audio only)
+}
 
 -- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
 local SYNC_CYCLE = { off = "ripple", ripple = "cut", cut = "off" }
@@ -973,10 +1057,7 @@ local function build_sm_btn_stylesheet(active, active_color)
         return string.format([[
             QPushButton {
                 background: %s; color: #ffffff;
-                border: 1px solid #333333; padding: 0px;
-                font-size: 9px; font-weight: bold;
-                min-width: 16px; max-width: 16px;
-                min-height: 12px; max-height: 12px;
+                border: 1px solid #333333; padding: 0px; font-size: 9px; font-weight: bold;
             }
         ]], active_color)
     end
@@ -984,12 +1065,16 @@ local function build_sm_btn_stylesheet(active, active_color)
         QPushButton {
             background: #2a2a2a; color: #888888;
             border: 1px solid #333333; padding: 0px; font-size: 9px;
-            min-width: 16px; max-width: 16px;
-            min-height: 12px; max-height: 12px;
         }
         QPushButton:hover { background: #3a3a3a; color: #cccccc; }
     ]]
 end
+
+-- Empty src-id slot: geometry held by Qt widget-level HDR.SRC width set at creation.
+-- No border, no color — purely invisible while preserving column alignment.
+local SRC_BTN_EMPTY_STYLESHEET = [[
+    QPushButton { background: transparent; border: none; color: transparent; }
+]]
 
 local function build_id_btn_stylesheet(filled, accent)
     if filled then
@@ -997,9 +1082,7 @@ local function build_id_btn_stylesheet(filled, accent)
             QPushButton {
                 background: %s; color: #ffffff;
                 border: 1px solid %s; padding: 0px 2px;
-                font-size: 9px; font-weight: bold;
-                min-width: 20px; max-width: 24px;
-                min-height: 16px; max-height: 16px;
+                font-size: 11px; font-weight: bold;
             }
         ]], accent, accent)
     end
@@ -1007,9 +1090,7 @@ local function build_id_btn_stylesheet(filled, accent)
         QPushButton {
             background: transparent; color: %s;
             border: 1px solid %s; padding: 0px 2px;
-            font-size: 9px; font-weight: bold;
-            min-width: 20px; max-width: 24px;
-            min-height: 16px; max-height: 16px;
+            font-size: 11px; font-weight: bold;
         }
         QPushButton:hover { color: #ffffff; border-color: #aaaaaa; }
     ]], accent, accent)
@@ -1108,11 +1189,15 @@ local function add_sm_stack_to_layout(header_layout, track, track_id)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(sm_container, "Fixed", "Fixed")
 
     local mute_btn = qt_constants.WIDGET.CREATE_BUTTON("M")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(mute_btn, HDR.SM)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(mute_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_STYLE(mute_btn, build_sm_btn_stylesheet(track.muted, "#cc3333"))
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, mute_btn)
     wire_toggle_preference(mute_btn, track_id, "muted", "#cc3333")
 
     local solo_btn = qt_constants.WIDGET.CREATE_BUTTON("S")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(solo_btn, HDR.SM)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(solo_btn, HDR.SM)
     qt_constants.PROPERTIES.SET_STYLE(solo_btn, build_sm_btn_stylesheet(track.soloed, "#ccaa00"))
     qt_constants.LAYOUT.ADD_WIDGET(sm_layout, solo_btn)
     wire_toggle_preference(solo_btn, track_id, "soloed", "#ccaa00")
@@ -1144,11 +1229,12 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
     local Patch = require("models.patch")
 
     local function refresh_src_btn()
-        -- Reverse lookup: which source track is patched to this record row?
-        local p = Patch.find_by_record(sequence_id, rec_track_index)
+        -- Reverse lookup: which source track of this type is patched to this record row?
+        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
         if not p then
-            -- No source routed here — show empty space, not a placeholder button.
-            qt_constants.DISPLAY.SET_VISIBLE(captured_src, false)
+            -- No source routed here — invisible placeholder keeps rec-id column aligned.
+            qt_constants.PROPERTIES.SET_TEXT(captured_src, "")
+            qt_constants.PROPERTIES.SET_STYLE(captured_src, SRC_BTN_EMPTY_STYLESHEET)
             return
         end
         local enabled = p.enabled == 1 or p.enabled == true
@@ -1156,15 +1242,14 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
             format_source_label(track_type, p.source_track_index))
         qt_constants.PROPERTIES.SET_STYLE(captured_src,
             build_id_btn_stylesheet(enabled, source_tab_color))
-        qt_constants.DISPLAY.SET_VISIBLE(captured_src, true)
     end
 
     refresh_src_btn()
 
     local src_handler = register_track_btn_handler(function()
         -- src-id click (record-tab mode): toggle enabled on the patch feeding this record row.
-        local p = Patch.find_by_record(sequence_id, rec_track_index)
-        if not p then return end  -- no patch yet; user must drag to create one
+        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
+        if not p then return end
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_patch_buttons: no project_id (rec_track_index=" .. tostring(rec_track_index) .. ")")
         local current_enabled = p.enabled == 1 or p.enabled == true
@@ -1172,6 +1257,7 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
         cmd.execute("SetPatch", {
             sequence_id        = sequence_id,
             source_track_index = p.source_track_index,
+            track_type         = track_type,
             project_id         = project_id,
             enabled            = not current_enabled,
         })
@@ -1239,44 +1325,99 @@ Signals.connect("sync_mode_changed", function(track_id, new_mode)
 end)
 
 -- MVC: patch_changed fires when SetPatch creates/updates/disables a patch.
+-- Signal: (sequence_id, track_type, source_track_index, change_type)
 -- Re-pulls patch state and refreshes the src-id button on the affected RECORD row.
 -- rec_btn label never changes (always the record track's own name).
-Signals.connect("patch_changed", function(sequence_id, source_track_index, change_type)
+Signals.connect("patch_changed", function(sequence_id, track_type, source_track_index, change_type)
     local Patch = require("models.patch")
-    local p = Patch.find_by_source(sequence_id, source_track_index)
+    local p = Patch.find_by_source(sequence_id, track_type, source_track_index)
 
-    -- Determine which record row to update.
     local rec_index = p and p.record_track_index
     local enabled   = p and (p.enabled == 1 or p.enabled == true)
 
     for track_id, refs in pairs(track_button_refs) do
-        if refs.seq_id == sequence_id and refs.rec_idx == rec_index then
+        if refs.seq_id == sequence_id
+                and refs.track_type == track_type
+                and refs.rec_idx == rec_index then
             assert(refs.src_btn,
                 "patch_changed: src_btn nil for track " .. tostring(track_id))
             if p and change_type ~= "deleted" then
-                local src_label = format_source_label(refs.track_type, source_track_index)
+                local src_label = format_source_label(track_type, source_track_index)
                 qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, src_label)
                 qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
                     build_id_btn_stylesheet(enabled, source_tab_color))
-                qt_constants.DISPLAY.SET_VISIBLE(refs.src_btn, true)
-                log.event("patch_changed: src_btn rec_idx=%s → %s",
-                    tostring(rec_index), src_label)
+                log.event("patch_changed: src_btn type=%s rec_idx=%s → %s",
+                    track_type, tostring(rec_index), src_label)
             else
-                qt_constants.DISPLAY.SET_VISIBLE(refs.src_btn, false)
-                log.event("patch_changed: src_btn rec_idx=%s hidden (deleted/nil)",
-                    tostring(rec_index))
+                qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, "")
+                qt_constants.PROPERTIES.SET_STYLE(refs.src_btn, SRC_BTN_EMPTY_STYLESHEET)
+                log.event("patch_changed: src_btn type=%s rec_idx=%s cleared",
+                    track_type, tostring(rec_index))
             end
             break
         end
     end
 end)
 
--- MVC: re-evaluate tab accent colors when the source monitor loads/unloads a master.
--- source_seq_id changing means the Source tab's identity changed — update_tab_styles
--- re-queries the monitor so the correct tab gets the --src teal accent.
-Signals.connect("source_loaded_changed", function()
-    local current = state.get_sequence_id and state.get_sequence_id()
-    update_tab_styles(current)
+local auto_patch_defaults = require("ui.timeline.auto_patch_defaults")
+
+-- FR-001b session-scoped dismissal. After the user closes the source tab
+-- via × in a session, no further auto-open occurs until project reopen.
+-- Tracked by listening to source_tab_visibility_changed(false) — the signal
+-- is emitted from close_tab when the closed tab IS the source tab. The
+-- flag is cleared on project_changed.
+local source_tab_dismissed = false
+
+Signals.connect("source_tab_visibility_changed", function(visible)
+    if visible then
+        source_tab_dismissed = false
+    else
+        source_tab_dismissed = true
+    end
+end)
+
+Signals.connect("project_changed", function()
+    source_tab_dismissed = false
+    auto_source_tab_id = nil
+end, 35)
+
+-- Source monitor loaded a new master. Four responsibilities:
+--   1. Enforce FR-001 source-tab singleton: if there's a tab pointing at
+--      the previous source master AND no record-tab user has explicitly
+--      opened that same seq_id (auto-source tracking), evict it.
+--   2. Refresh tab styles (the source tab's identity changed).
+--   3. Apply identity patch defaults if the active record has no patches yet.
+--   4. FR-001b: auto-switch the displayed tab to the new source if the
+--      user has not dismissed it this session. switch_to_source_tab
+--      emits displayed_tab_changed; the displayed_tab_changed listener does the rebuild.
+--
+-- auto_source_tab_id tracks the tab that source_loaded_changed AUTO-OPENED
+-- (FR-001b). User-opened record tabs are not in this var even if they
+-- happen to point at a master that's also the source — we must not close
+-- those out from under the user.
+Signals.connect("source_loaded_changed", function(new_master_seq_id, prev_seq_id)
+    if prev_seq_id and prev_seq_id ~= new_master_seq_id
+       and auto_source_tab_id == prev_seq_id
+       and open_tabs[prev_seq_id] then
+        close_tab(prev_seq_id)
+    end
+    if auto_source_tab_id and auto_source_tab_id ~= new_master_seq_id then
+        auto_source_tab_id = nil
+    end
+
+    local record_seq_id = state.get_sequence_id and state.get_sequence_id()
+    update_tab_styles(record_seq_id)
+
+    if new_master_seq_id and record_seq_id then
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "source_loaded_changed: no project_id")
+        auto_patch_defaults.apply_if_empty(record_seq_id, new_master_seq_id, project_id)
+
+        if not source_tab_dismissed then
+            auto_source_tab_id = new_master_seq_id
+            timeline_state.switch_to_source_tab(new_master_seq_id)
+        end
+    end
 end)
 
 -- Helper function to create video headers with splitters
@@ -1325,13 +1466,18 @@ local function create_video_headers()
 
         -- src-id button: shows which SOURCE track feeds this record row (filled when enabled).
         -- Label is populated by wire_patch_buttons via reverse patch lookup.
+        -- Width set at Qt widget level (HDR.SRC) — CSS never specifies width.
         local src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(src_btn, HDR.SRC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(src_btn, HDR.SRC)
         qt_constants.PROPERTIES.SET_STYLE(src_btn,
             build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
         -- rec-patch-id button: always shows this record track's name, filled with rec-red.
         local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_STYLE(rec_btn,
             build_id_btn_stylesheet(true, selection_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
@@ -1345,7 +1491,8 @@ local function create_video_headers()
             seq_id      = video_seq_id,
         })
 
-        -- Track name label (flex)
+        -- Track name label — flex element; grows/shrinks as header is resized.
+        -- Semantically distinct from the rec_btn ID: name is user-editable, ID is routing-fixed.
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
         qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
@@ -1353,12 +1500,16 @@ local function create_video_headers()
 
         -- Lock cell (unicode stand-in; proper QIcon pending binding)
         local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(lock_btn, HDR.LOCK)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
         qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
         wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
 
         -- Sync-mode cell (cycles Off→Ripple→Cut→Off)
         local sync_btn = qt_constants.WIDGET.CREATE_BUTTON(SYNC_ICONS[track.sync_mode] or "?")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(sync_btn, HDR.SYNC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(sync_btn, HDR.SYNC)
         qt_constants.PROPERTIES.SET_STYLE(sync_btn, build_sync_mode_btn_stylesheet(track.sync_mode))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
         wire_sync_mode_cycle(sync_btn, captured_track_id)
@@ -1538,12 +1689,16 @@ local function create_audio_headers()
 
         -- src-id button: shows which SOURCE track feeds this record row.
         local src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(src_btn, HDR.SRC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(src_btn, HDR.SRC)
         qt_constants.PROPERTIES.SET_STYLE(src_btn,
             build_id_btn_stylesheet(false, source_tab_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
 
         -- rec-patch-id button: always shows this record track's name, filled with rec-red.
         local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
         qt_constants.PROPERTIES.SET_STYLE(rec_btn,
             build_id_btn_stylesheet(true, selection_color))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
@@ -1557,7 +1712,7 @@ local function create_audio_headers()
             seq_id      = audio_seq_id,
         })
 
-        -- Track name label (flex); FR-021 channel count pending track model extension
+        -- Track name label — flex element; grows/shrinks as header is resized.
         local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
         qt_constants.PROPERTIES.SET_STYLE(name_label, build_track_header_label_stylesheet())
         qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
@@ -1565,12 +1720,16 @@ local function create_audio_headers()
 
         -- Lock cell (unicode stand-in; proper QIcon pending binding)
         local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(lock_btn, HDR.LOCK)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
         qt_constants.PROPERTIES.SET_STYLE(lock_btn, build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
         wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
 
         -- Sync-mode cell (cycles Off→Ripple→Cut→Off)
         local sync_btn = qt_constants.WIDGET.CREATE_BUTTON(SYNC_ICONS[track.sync_mode] or "?")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(sync_btn, HDR.SYNC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(sync_btn, HDR.SYNC)
         qt_constants.PROPERTIES.SET_STYLE(sync_btn, build_sync_mode_btn_stylesheet(track.sync_mode))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
         wire_sync_mode_cycle(sync_btn, captured_track_id)
@@ -1581,6 +1740,8 @@ local function create_audio_headers()
         -- Waveform toggle (audio-only, UI state — no undo, kept at right edge)
         local wave_enabled = track_state.get_waveform_enabled(captured_track_id)
         local wave_btn = qt_constants.WIDGET.CREATE_BUTTON("W")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(wave_btn, HDR.WAVE)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(wave_btn, HDR.WAVE)
         qt_constants.PROPERTIES.SET_STYLE(wave_btn,
             build_track_header_btn_stylesheet(wave_enabled, "#4488aa"))
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, wave_btn)
@@ -1730,7 +1891,8 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(headers_wrapper_layout, 0, 0, 0, 0)
 
     -- Top left header area aligned with the ruler; contains the timecode entry field.
-    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, create_timecode_header())
+    local tc_header = create_timecode_header()
+    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, tc_header)
 
     -- Main vertical splitter between video and audio header sections
     local headers_main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
@@ -1739,22 +1901,22 @@ local function create_headers_column()
     local video_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     local video_splitter, video_headers = create_video_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_splitter)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Fixed", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(video_scroll, true)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
     qt_set_scroll_area_anchor_bottom(video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Audio headers section with scroll area
     local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     local audio_splitter, audio_headers = create_audio_headers()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_splitter)
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Fixed", "Expanding")
+    qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(audio_scroll, true)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
 
     -- Add both sections to main splitter
     qt_constants.LAYOUT.ADD_WIDGET(headers_main_splitter, video_scroll)
@@ -1770,13 +1932,15 @@ local function create_headers_column()
     -- Set layout on wrapper
     qt_constants.LAYOUT.SET_ON_WIDGET(headers_wrapper, headers_wrapper_layout)
 
-    -- Constrain wrapper width to match scroll area widths
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(headers_wrapper, "Fixed", "Expanding")
+    -- Min-width enforces the column floor; no max lets the splitter drag it wider.
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(headers_wrapper, "MinimumExpanding", "Expanding")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(headers_wrapper, timeline_state.dimensions.track_header_width)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(headers_wrapper, timeline_state.dimensions.track_header_width)
 
-    -- Return wrapper widget, main splitter, and scroll areas for synchronization
-    return headers_wrapper, headers_main_splitter, video_scroll, audio_scroll
+    -- Return wrapper, main splitter, scroll areas, inner content splitters, and TC header.
+    -- Callers need the inner splitters and TC header to force-resize them when the
+    -- main horizontal splitter moves (widgetResizable cascade alone is unreliable).
+    return headers_wrapper, headers_main_splitter, video_scroll, audio_scroll,
+           video_splitter, audio_splitter, tc_header
 end
 
 function M.create(opts)
@@ -1921,7 +2085,8 @@ function M.create(opts)
     local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
 
     -- LEFT SIDE: Headers column (all headers stacked vertically)
-    local headers_column, headers_main_splitter, header_video_scroll, header_audio_scroll = create_headers_column()
+    local headers_column, headers_main_splitter, header_video_scroll, header_audio_scroll,
+          video_hdr_splitter, audio_hdr_splitter, tc_header = create_headers_column()
     M.headers_main_splitter = headers_main_splitter
     M.header_video_scroll = header_video_scroll
     M.header_audio_scroll = header_audio_scroll
@@ -2252,6 +2417,20 @@ function M.create(opts)
     -- qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(scrollbar_widget, "Expanding", "Fixed")
     -- qt_constants.LAYOUT.ADD_WIDGET(main_layout, scrollbar_widget)
 
+    -- When the main horizontal splitter moves, force-resize the inner header content
+    -- splitters.  widgetResizable=true should cascade the width automatically, but the
+    -- event-loop ordering is unreliable in practice.  Calling resize() directly on
+    -- video_hdr_splitter / audio_hdr_splitter is the authoritative path.
+    _G["main_splitter_moved"] = function(pos, _index)
+        local _, vh = qt_constants.PROPERTIES.GET_SIZE(video_hdr_splitter)
+        qt_constants.PROPERTIES.SET_SIZE(video_hdr_splitter, pos, vh)
+        local _, ah = qt_constants.PROPERTIES.GET_SIZE(audio_hdr_splitter)
+        qt_constants.PROPERTIES.SET_SIZE(audio_hdr_splitter, pos, ah)
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(tc_header, pos)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(tc_header, pos)
+    end
+    qt_set_splitter_moved_handler(main_splitter, "main_splitter_moved")
+
     -- Synchronize the headers splitter with the timeline splitter
     -- When headers video/audio boundary moves, update timeline
     local syncing = false  -- Prevent infinite loop
@@ -2370,29 +2549,51 @@ function M.create(opts)
         ))
     end
 
-    -- Bidirectional playhead sync between timeline_monitor (engine) and timeline_state.
-    -- last_viewer_playhead prevents feedback loops between the two listeners.
+    -- Bidirectional playhead sync between the timeline view (state) and
+    -- whichever monitor is currently the timeline view's "engine". When
+    -- the source tab is displayed, the source monitor IS that engine
+    -- (scrubbing the timeline view drives the source viewer). When a
+    -- record tab is displayed, the timeline monitor is the engine. The
+    -- timeline_monitor itself is BONDED to the active record sequence
+    -- regardless of which tab is displayed (see active_sequence_changed).
     local pm = require("ui.panel_manager")
-    local tl_view = pm.get_sequence_monitor("timeline_monitor")
+    local tl_monitor  = pm.get_sequence_monitor("timeline_monitor")
+    local src_monitor = pm.get_sequence_monitor("source_monitor")
 
     local last_viewer_playhead = nil
     local viewer_seek_pending = false
     local viewer_seek_target = nil
     local VIEWER_SEEK_DEFER_MS = ui_constants.TIMELINE.VIEWER_SEEK_DEFER_MS or 1
 
-    -- Viewer → State: engine position changes sync to timeline state.
-    -- Fires during playback (every tick) and parked operations (arrow keys via seek_to_frame).
-    -- set_playhead_position also calls ensure_playhead_visible (auto-scroll).
-    tl_view:add_listener(function()
-        local playhead_frame = tl_view.playhead
-        last_viewer_playhead = playhead_frame
-        state.set_playhead_position(playhead_frame)
-    end)
+    -- Resolve the monitor whose playhead the timeline view both reads
+    -- from and writes to right now. Determined by displayed_tab_id ==
+    -- source-monitor's loaded master.
+    local function get_view_engine()
+        local displayed = state.get_displayed_tab_id and state.get_displayed_tab_id()
+        if displayed and displayed == get_source_master_seq_id() then
+            return src_monitor
+        end
+        return tl_monitor
+    end
 
-    -- Load initial sequence into timeline_monitor (skipped when blank).
-    -- pcall: bad clip data in a sequence must not crash the app.
+    -- Viewer → State: only the CURRENT view-engine's playhead changes
+    -- propagate to timeline state. Both monitors fire ticks (timeline
+    -- monitor on record playback, source monitor on source scrubbing);
+    -- the guard ensures the off-screen monitor doesn't write into state.
+    local function bind_engine_to_state(monitor)
+        monitor:add_listener(function()
+            if get_view_engine() ~= monitor then return end
+            local playhead_frame = monitor.playhead
+            last_viewer_playhead = playhead_frame
+            state.set_playhead_position(playhead_frame)
+        end)
+    end
+    bind_engine_to_state(tl_monitor)
+    bind_engine_to_state(src_monitor)
+
+    -- Load initial active record into the timeline_monitor (skipped when blank).
     if initial_sequence_id and initial_sequence_id ~= "" then
-        local load_ok, load_err = pcall(tl_view.load_sequence, tl_view, initial_sequence_id)
+        local load_ok, load_err = pcall(tl_monitor.load_sequence, tl_monitor, initial_sequence_id)
         if not load_ok then
             log.error("Failed to load initial sequence %s: %s", tostring(initial_sequence_id), tostring(load_err))
         end
@@ -2422,11 +2623,12 @@ function M.create(opts)
         M.restore_scroll_with_targets(pending.video, pending.audio)
     end)
 
-    -- State → Viewer: when parked, state changes (from commands, ruler clicks, timecode entry)
-    -- propagate to the viewer for frame display.
+    -- State → Viewer: state changes (commands, ruler clicks, timecode entry)
+    -- propagate to whichever monitor is currently the timeline view's engine.
     -- Decimation: deferred via timer so timeline repaints aren't blocked by frame decode.
     state.add_listener(function()
-        if not tl_view.engine:is_playing() and tl_view.sequence_id then
+        local view_engine = get_view_engine()
+        if not view_engine.engine:is_playing() and view_engine.sequence_id then
             local playhead = state.get_playhead_position()
             if playhead == last_viewer_playhead then return end
             viewer_seek_target = playhead
@@ -2437,7 +2639,7 @@ function M.create(opts)
                 local target = viewer_seek_target
                 if target == last_viewer_playhead then return end
                 last_viewer_playhead = target
-                tl_view:seek_to_frame(target)
+                get_view_engine():seek_to_frame(target)
             end)
         end
     end)
@@ -2568,42 +2770,29 @@ function M.get_open_tab_ids()
     return copy
 end
 
-function M.load_sequence(sequence_id)
-    if not sequence_id or sequence_id == "" then
-        return
-    end
+--- Single canonical timeline-view rebuild path. Reads from the model
+--- (`state.get_displayed_tab_id()`) and refreshes the timeline view's
+--- track headers, tab widget, scroll restore, and engine load to match.
+--- Called by M.load_sequence (record path) AND by the displayed_tab_changed
+--- listener (source path). Both pointer-update entry points
+--- (switch_to_source_tab, switch_to_record_tab) emit the signal that
+--- triggers the listener; the rebuild is signal-driven and pull-based
+--- per CLAUDE.md MVC rule 3.0.
+local function rebuild_for_displayed_tab()
+    local displayed_id = timeline_state.get_displayed_tab_id()
+    assert(displayed_id and displayed_id ~= "",
+        "rebuild_for_displayed_tab: no displayed_tab_id set")
 
-    -- Guard: skip full reload if already loaded, but always restore scroll/splitter
-    local current = state.get_sequence_id and state.get_sequence_id()
-    if current == sequence_id and open_tabs[sequence_id] then
-        M.restore_scroll_and_splitter()
-        return
-    end
+    -- Skip if the panel hasn't been constructed yet (bootstrap sequencing).
+    if not M.header_video_scroll then return end
 
-    -- Persist outgoing scroll offsets NOW, while Qt scroll areas still have
-    -- the correct content and range for the outgoing sequence. Must happen
-    -- before state.init or any widget rebuild.
-    state.persist_scroll_offsets()
-
-    log.event("Loading sequence %s into timeline panel", sequence_id)
     local Sequence = require("models.sequence")
-    local sequence = Sequence.load(sequence_id)
-    assert(sequence, "timeline_panel.load_sequence: failed to load sequence " .. tostring(sequence_id))
-    local project_id = sequence.project_id
-    assert(project_id and project_id ~= "", "timeline_panel.load_sequence: missing project_id for sequence " .. tostring(sequence_id))
-    state.init(sequence_id, project_id)
-
-    -- First-open detection: if viewport is at defaults, zoom to fit content
-    zoom_to_fit_if_first_open(sequence)
-
-    database.set_project_setting(project_id, "last_open_sequence_id", sequence_id)
-
-    if command_manager and command_manager.activate_timeline_stack then
-        command_manager.activate_timeline_stack(sequence_id)
-    end
+    local displayed = Sequence.load(displayed_id)
+    assert(displayed, string.format(
+        "rebuild_for_displayed_tab: sequence %s not found", displayed_id))
 
     -- Suspend bottom-anchor filters during rebuild — their async singleShot(0)
-    -- callbacks would overwrite restored scroll positions
+    -- callbacks would overwrite restored scroll positions.
     if M.timeline_video_scroll then
         qt_suspend_scroll_area_anchor(M.timeline_video_scroll, true)
     end
@@ -2611,6 +2800,10 @@ function M.load_sequence(sequence_id)
         qt_suspend_scroll_area_anchor(M.header_video_scroll, true)
     end
 
+    -- Body data (tracks, clips, view-state) was already loaded into
+    -- data.state by core.activate_displayed before displayed_tab_changed
+    -- fired. This function does widget-level rebuild only — pull from
+    -- data.state which already reflects displayed_tab_id (MVC rule 3.0).
     if M.header_video_scroll and M.header_audio_scroll then
         local new_video_splitter = select(1, create_video_headers())
         qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_video_scroll, new_video_splitter)
@@ -2623,16 +2816,14 @@ function M.load_sequence(sequence_id)
         end
     end
 
-    -- Store pending scroll targets. The renderer (which fires async via
-    -- notify_listeners) will apply these AFTER it updates widget content/heights.
-    -- Setting scroll before the render would show stale content at the new position.
+    -- video/audio_scroll_offset are NOT NULL DEFAULT 0 in schema and
+    -- asserted non-nil by Sequence.load.
     M._pending_scroll_restore = {
-        seq_id = sequence_id,
-        video = sequence.video_scroll_offset or 0,
-        audio = sequence.audio_scroll_offset or 0,
+        seq_id = displayed_id,
+        video  = displayed.video_scroll_offset,
+        audio  = displayed.audio_scroll_offset,
     }
 
-    -- Resume anchor filters after restore
     if M.timeline_video_scroll then
         qt_suspend_scroll_area_anchor(M.timeline_video_scroll, false)
     end
@@ -2640,17 +2831,84 @@ function M.load_sequence(sequence_id)
         qt_suspend_scroll_area_anchor(M.header_video_scroll, false)
     end
 
-    local tab_existed = open_tabs[sequence_id] ~= nil
-    ensure_tab_for_sequence(sequence_id)
-    update_tab_styles(sequence_id)
+    -- Tab widget: ensure it exists in the strip and apply current styling.
+    -- Tab styling considers active vs source identity for FR-002 colors.
+    local tab_existed = open_tabs[displayed_id] ~= nil
+    ensure_tab_for_sequence(displayed_id)
+    update_tab_styles(timeline_state.get_active_sequence_id())
     if not tab_existed then
         persist_open_tabs()
     end
 
-    -- Load sequence into the timeline monitor
+    -- The timeline_monitor's loaded sequence is owned by active_sequence
+    -- (not displayed_tab) — it always shows the active record. The source
+    -- monitor is owned by source_viewer.load_master_clip. The timeline
+    -- view's "current view engine" is dispatched dynamically based on
+    -- which tab is displayed (see get_view_engine), so this function
+    -- does not load any monitor.
+end
+
+-- Body-rebuild listener: any pointer transition (record→record,
+-- record→source, source→record) flows through here.
+Signals.connect("displayed_tab_changed", function(_new, _prev)
+    state.persist_scroll_offsets()   -- prev sequence's offsets
+    rebuild_for_displayed_tab()
+end)
+
+-- Active-sequence-only side effects: project-level setting + activating
+-- the per-sequence undo stack. Fires only when the active sequence
+-- ACTUALLY transitions (FR-005: source-tab click does NOT fire this).
+Signals.connect("active_sequence_changed", function(new_active, _prev)
+    if not new_active or new_active == "" then return end
+    local project_id = state.get_project_id()
+    if project_id and project_id ~= "" then
+        database.set_project_setting(project_id, "last_open_sequence_id", new_active)
+    end
+    if command_manager and command_manager.activate_timeline_stack then
+        command_manager.activate_timeline_stack(new_active)
+    end
+
+    -- The timeline_monitor (record viewer) is BONDED to the active record
+    -- sequence, regardless of which tab the timeline view is currently
+    -- displaying. Source-tab display does NOT load the master into this
+    -- monitor — that's the source monitor's job (see source_viewer).
     local pm = require("ui.panel_manager")
-    local tl_view = pm.get_sequence_monitor("timeline_monitor")
-    tl_view:load_sequence(sequence_id)
+    local tl_monitor = pm.get_sequence_monitor("timeline_monitor")
+    if tl_monitor.sequence_id ~= new_active then
+        tl_monitor:load_sequence(new_active)
+    end
+end)
+
+function M.load_sequence(sequence_id)
+    if not sequence_id or sequence_id == "" then
+        return
+    end
+
+    -- Guard: same sequence already displayed → just restore viewport state.
+    local current_displayed = state.get_displayed_tab_id and state.get_displayed_tab_id()
+    if current_displayed == sequence_id and open_tabs[sequence_id] then
+        M.restore_scroll_and_splitter()
+        return
+    end
+
+    log.event("Loading sequence %s into timeline panel", sequence_id)
+    local Sequence = require("models.sequence")
+    local sequence = Sequence.load(sequence_id)
+    assert(sequence, "timeline_panel.load_sequence: failed to load sequence " .. tostring(sequence_id))
+    local project_id = sequence.project_id
+    assert(project_id and project_id ~= "", "timeline_panel.load_sequence: missing project_id for sequence " .. tostring(sequence_id))
+
+    state.persist_scroll_offsets()
+
+    -- state.init sets active+displayed to sequence_id, loads tracks/clips + view-state,
+    -- and emits active_sequence_changed when the active pointer transitions
+    -- (the listener handles project-level side effects: last_open setting,
+    -- activate_timeline_stack). It does NOT emit displayed_tab_changed —
+    -- that's reserved for source/record tab swaps via activate_displayed.
+    -- The timeline-view rebuild on the record-tab path is therefore explicit.
+    state.init(sequence_id, project_id)
+    zoom_to_fit_if_first_open(sequence)
+    rebuild_for_displayed_tab()
 end
 
 --- Restore scroll offsets from explicit target values (immune to async Qt clobbering).
