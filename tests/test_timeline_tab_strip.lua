@@ -144,6 +144,26 @@ ok, err = pcall(function() strip:close_record_tab(stranger) end)
 assert(not ok and err:find("not in strip"), "close_record_tab asserts on stranger")
 print("✓ pointer/close ops assert on tabs not in strip")
 
+-- ── 10b. find_record_tab_by_sequence_id ──────────────────────────────────
+strip = TimelineTabStrip.new()
+local fr1 = strip:open_record_tab("rec1")
+local fr2 = strip:open_record_tab("rec2")
+strip:open_source_tab("src")  -- source tab also points at a real seq
+
+assert(strip:find_record_tab_by_sequence_id("rec1") == fr1,
+    "finds record tab by sequence_id")
+assert(strip:find_record_tab_by_sequence_id("rec2") == fr2,
+    "finds the other record tab")
+assert(strip:find_record_tab_by_sequence_id("nonexistent") == nil,
+    "returns nil for unknown sequence_id")
+-- Source tab is NOT findable via this method even though it has a seq.
+assert(strip:find_record_tab_by_sequence_id("src") == nil,
+    "source tab is NOT returned (record-only lookup)")
+ok, err = pcall(function() strip:find_record_tab_by_sequence_id("") end)
+assert(not ok and err:find("sequence_id required"),
+    "rejects empty sequence_id")
+print("✓ find_record_tab_by_sequence_id")
+
 -- ── 11. listener notification ────────────────────────────────────────────
 strip = TimelineTabStrip.new()
 local notify_count = 0

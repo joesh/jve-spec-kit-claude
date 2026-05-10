@@ -157,6 +157,18 @@ function TimelineTabStrip:get_source_tab()
     return self.source_tab
 end
 
+--- Find the record tab matching the given sequence_id, or nil if none.
+--- Source-side lookup goes through get_source_tab() instead — the source
+--- tab is a singleton with mutable sequence_id (reload semantics).
+function TimelineTabStrip:find_record_tab_by_sequence_id(sequence_id)
+    assert(type(sequence_id) == "string" and #sequence_id > 0,
+        "TimelineTabStrip:find_record_tab_by_sequence_id: sequence_id required (non-empty string)")
+    for _, t in ipairs(self.tabs) do
+        if t.kind == "record" and t.sequence_id == sequence_id then return t end
+    end
+    return nil
+end
+
 function TimelineTabStrip:_first_record_tab()
     for _, t in ipairs(self.tabs) do
         if t.kind == "record" then return t end

@@ -356,16 +356,26 @@ M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
 -- Switch to the Source tab. Only displayed_tab_id changes; active_sequence_id
 -- is untouched (FR-005). Delegates to core.activate_displayed which persists
 -- outgoing displayed view-state, loads incoming, and emits displayed_tab_changed.
+-- Also keeps the TimelineTabStrip's displayed pointer in sync (Phase 2c).
 function M.switch_to_source_tab(source_seq_id)
     assert(source_seq_id and source_seq_id ~= "",
         "timeline_state.switch_to_source_tab: source_seq_id required")
     core.activate_displayed(source_seq_id)
+    -- Ensure the strip has a source tab pointing at this seq, then make it
+    -- the displayed pointer. open_source_tab is idempotent (reloads in
+    -- place if a source tab is already open).
+    local source_tab = tab_strip:get_source_tab()
+    if not source_tab or source_tab.sequence_id ~= source_seq_id then
+        source_tab = tab_strip:open_source_tab(source_seq_id)
+    end
+    tab_strip:switch_displayed(source_tab)
 end
 
 -- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
 -- updated. activate_displayed handles the displayed swap + signal; this
 -- function additionally manages the active edit target and emits
--- active_sequence_changed when it transitions.
+-- active_sequence_changed when it transitions. Also keeps the
+-- TimelineTabStrip's active+displayed pointers in sync (Phase 2c).
 function M.switch_to_record_tab(seq_id)
     assert(seq_id and seq_id ~= "",
         "timeline_state.switch_to_record_tab: seq_id required")
@@ -375,6 +385,11 @@ function M.switch_to_record_tab(seq_id)
         data.state.sequence_id = seq_id
         Signals.emit("active_sequence_changed", seq_id, prev_active)
     end
+    -- Ensure the strip has a record tab for this seq, then make it both
+    -- active and displayed (FR-004). open_record_tab is idempotent.
+    local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
+        or tab_strip:open_record_tab(seq_id)
+    tab_strip:switch_active_record(rec_tab)
 end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
