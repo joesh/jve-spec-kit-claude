@@ -454,26 +454,26 @@ M.get_source_mark_in  = function() return data.source_sequence and data.source_s
 M.get_source_mark_out = function() return data.source_sequence and data.source_sequence.mark_out end
 M.get_source_sequence_fps = function() return data.source_sequence and data.source_sequence.frame_rate end
 
--- Display-aware mark accessors (FR-038): returns the marks for whichever
--- sequence the ruler is currently rendering (source tab → source marks,
--- record tab → record marks).
-local function is_source_tab_displayed()
-    local displayed = data.state.displayed_tab_id
-    local active    = data.state.sequence_id
-    return displayed ~= nil and displayed ~= active
-end
-
+-- Display-aware mark accessors (FR-038): return the marks of whichever tab
+-- the timeline body is currently rendering. Phase 3: backed by the
+-- TimelineTabStrip's displayed tab — no flat-singleton dispatch helper.
+-- TimelineTab:get_marks() pulls fresh from the sequence row (MVC rule 3.0).
 M.get_display_mark_in = function()
-    if is_source_tab_displayed() then
-        return data.source_sequence and data.source_sequence.mark_in
-    end
-    return data.sequence and data.sequence.mark_in
+    local displayed = tab_strip:get_displayed()
+    return displayed and displayed:get_marks().in_frame or nil
 end
 M.get_display_mark_out = function()
-    if is_source_tab_displayed() then
-        return data.source_sequence and data.source_sequence.mark_out
-    end
-    return data.sequence and data.sequence.mark_out
+    local displayed = tab_strip:get_displayed()
+    return displayed and displayed:get_marks().out_frame or nil
+end
+
+-- Strip-backed predicate used by get_ghost_mark to decide whether the
+-- computed mark belongs to the side currently rendered (so the ruler renders
+-- it in the right coordinate space). Phase 3: kind-driven instead of the
+-- "displayed != active means source" flat-singleton heuristic.
+local function is_source_tab_displayed()
+    local displayed = tab_strip:get_displayed()
+    return displayed ~= nil and displayed.kind == "source"
 end
 
 -- Ghost mark (FR-036/FR-037): when exactly 3 of the 4 marks are set,

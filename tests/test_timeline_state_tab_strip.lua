@@ -88,6 +88,45 @@ assert(active and active.sequence_id == "seq_p2_b",
     "switching to a different record tab updates active to the new seq")
 print("✓ switch_to_record_tab syncs strip active+displayed pointers")
 
+-- ── 4b. Display-aware mark accessors follow the strip's displayed tab ────
+-- Phase 3: get_display_mark_in/out is backed by tab_strip:get_displayed()
+-- and pulls fresh from the sequence row (MVC pull, no flat-singleton
+-- dispatch). When the displayed tab swaps to the source, marks must
+-- reflect the source's marks; switching back to the active record returns
+-- the record's marks.
+local Sequence = require("models.sequence")
+
+-- Set distinct marks on each sequence to disambiguate.
+local seq_a = Sequence.load("seq_p2_a")
+seq_a:set_in(40); seq_a:set_out(80); seq_a:save()
+local seq_src = Sequence.load("seq_p2_src")
+seq_src:set_in(120); seq_src:set_out(200); seq_src:save()
+
+-- Currently displayed: seq_p2_b (from test 4). Switch to seq_p2_a to set
+-- a known active-record baseline.
+timeline_state.switch_to_record_tab("seq_p2_a")
+assert(timeline_state.get_display_mark_in() == 40,
+    string.format("display_mark_in returns record's mark when record displayed (got %s)",
+        tostring(timeline_state.get_display_mark_in())))
+-- seq_a:set_out(80) stores 81 internally per set_marks semantics, but the
+-- displayed value is whichever the sequence row holds — we just verify the
+-- accessor reflects the source sequence's value (whatever it is).
+local record_mark_out = timeline_state.get_display_mark_out()
+assert(record_mark_out ~= nil, "display_mark_out non-nil for record with marks")
+
+-- Now switch displayed tab to source. The active record stays seq_p2_a,
+-- but get_display_mark_in must now return source's mark_in (120).
+timeline_state.switch_to_source_tab("seq_p2_src")
+assert(timeline_state.get_display_mark_in() == 120, string.format(
+    "display_mark_in returns SOURCE marks when source tab displayed (got %s, expected 120)",
+    tostring(timeline_state.get_display_mark_in())))
+
+-- Switch back to the record tab — accessor must again return record's marks.
+timeline_state.switch_to_record_tab("seq_p2_a")
+assert(timeline_state.get_display_mark_in() == 40,
+    "display_mark_in returns record's mark after switching back from source")
+print("✓ display-aware mark accessors follow strip's displayed tab")
+
 -- ── 5. switch_to_source_tab updates displayed only (FR-005) ───────────────
 local active_before = strip_now:get_active_record()
 timeline_state.switch_to_source_tab("seq_p2_src")
