@@ -38,6 +38,13 @@ local tracks = require("ui.timeline.state.track_state")
 local clips = require("ui.timeline.state.clip_state")
 local Signals = require("core.signals")
 
+-- TimelineTabStrip — encapsulates the open-tab list + DisplayedTab /
+-- ActiveRecordTab pointers per spec 015 architectural foundation. Held
+-- module-private; accessed via M.get_tab_strip(). Reset on project_changed
+-- so each project gets a fresh strip (Phase 2a; consumer migration in 2b).
+local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
+local tab_strip = TimelineTabStrip.new()
+
 -- Shared Data & Constants
 M.dimensions = data.dimensions
 M.colors = {
@@ -77,6 +84,7 @@ M.set_project_id = core.set_project_id
 M.reset = data.reset
 M.persist_state_to_db = core.persist_state_to_db
 M.reload_clips = core.reload_clips
+M.activate_displayed = core.activate_displayed
 M.add_listener = data.add_listener
 M.remove_listener = data.remove_listener
 M.flush_pending_notify = data.flush_pending_notify
@@ -339,38 +347,30 @@ M.get_sequence_id = function() return data.state.sequence_id end
 -- active_sequence_id: the Record sequence that edit commands target.
 --   Backed by data.state.sequence_id; exposed under the spec-canonical name.
 --   NEVER set to a SourceTab master sequence_id.
--- displayed_tab_id: the tab whose content the timeline body renders.
+-- displayed_tab_id: the tab whose content the timeline view renders.
 --   May be a source master sequence_id while active_sequence_id is unchanged.
 
 M.get_active_sequence_id = function() return data.state.sequence_id end
 M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
 
--- Switch to the Source tab.  Only displayed_tab_id changes; active_sequence_id
--- is untouched (FR-005).  No-op if the tab is already displayed.
+-- Switch to the Source tab. Only displayed_tab_id changes; active_sequence_id
+-- is untouched (FR-005). Delegates to core.activate_displayed which persists
+-- outgoing displayed view-state, loads incoming, and emits displayed_tab_changed.
 function M.switch_to_source_tab(source_seq_id)
     assert(source_seq_id and source_seq_id ~= "",
         "timeline_state.switch_to_source_tab: source_seq_id required")
-    local prev = data.state.displayed_tab_id
-    if prev == source_seq_id then return end
-    data.state.displayed_tab_id = source_seq_id
-    Signals.emit("displayed_tab_changed", source_seq_id, prev)
+    core.activate_displayed(source_seq_id)
 end
 
--- Switch to a Record tab.  Both displayed_tab_id and active_sequence_id
--- are updated.  Emits displayed_tab_changed always (unless no-op).
--- Emits active_sequence_changed only when the active sequence actually changes.
+-- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
+-- updated. activate_displayed handles the displayed swap + signal; this
+-- function additionally manages the active edit target and emits
+-- active_sequence_changed when it transitions.
 function M.switch_to_record_tab(seq_id)
     assert(seq_id and seq_id ~= "",
         "timeline_state.switch_to_record_tab: seq_id required")
-    local prev_displayed = data.state.displayed_tab_id
-    local prev_active    = data.state.sequence_id
-    if prev_displayed == seq_id and prev_active == seq_id then return end
-
-    data.state.displayed_tab_id = seq_id
-    if prev_displayed ~= seq_id then
-        Signals.emit("displayed_tab_changed", seq_id, prev_displayed)
-    end
-
+    local prev_active = data.state.sequence_id
+    core.activate_displayed(seq_id)
     if prev_active ~= seq_id then
         data.state.sequence_id = seq_id
         Signals.emit("active_sequence_changed", seq_id, prev_active)
@@ -395,7 +395,9 @@ end
 -- Reads the ACTUAL Qt scroll bar values (not in-memory state, which can be
 -- clobbered by async events). Falls back to in-memory if widgets unavailable.
 M.persist_scroll_offsets = function()
-    local seq_id = data.state.sequence_id
+    -- Scroll offsets are view-state and belong to the DISPLAYED sequence
+    -- (FR-005, FR-007), not the active edit target.
+    local seq_id = data.state.displayed_tab_id
     if not seq_id then return end
     -- Read from Qt widgets (ground truth) if available
     local v_off = data.state.video_scroll_offset or 0
@@ -569,6 +571,17 @@ end
 --- correct (outgoing) DB.
 function M.on_project_change()
     core.reset_for_project_change()
+    -- Each project gets a fresh tab strip. Phase 2b will populate it from
+    -- the project's persisted `open_sequence_ids`; for now we just reset.
+    tab_strip = TimelineTabStrip.new()
+end
+
+--- Access the TimelineTabStrip that encapsulates this view's open-tab list.
+--- The strip is the source of truth for DisplayedTab / ActiveRecordTab
+--- pointers per spec 015. Phase 2a exposes it; Phase 2b migrates consumers
+--- (timeline_panel.lua tab open/close, mark accessors, etc.) to use it.
+function M.get_tab_strip()
+    return tab_strip
 end
 
 -- Pre-switch: flush pending timeline state to the OUTGOING DB before
