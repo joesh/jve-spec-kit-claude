@@ -1985,10 +1985,15 @@ function M.create(opts)
     local initial_selection = state.get_selected_clips and state.get_selected_clips() or {}
     broadcast_selection(initial_selection)
 
+    -- Re-broadcast when DISPLAYED marks change (not active marks). The
+    -- inspector shows the currently-rendered tab's sequence when nothing is
+    -- selected, so a mark change on the SourceTab while it's displayed must
+    -- repaint the inspector even if the active record sequence is unchanged
+    -- (FR-038 / display-aware marks per CLAUDE.md key pattern).
     local last_mark_signature = nil
     if #initial_selection == 0 then
-        local mark_in = state.get_mark_in and state.get_mark_in() or nil
-        local mark_out = state.get_mark_out and state.get_mark_out() or nil
+        local mark_in = state.get_display_mark_in and state.get_display_mark_in() or nil
+        local mark_out = state.get_display_mark_out and state.get_display_mark_out() or nil
         last_mark_signature = tostring(mark_in) .. ":" .. tostring(mark_out)
     end
     state.add_listener(profile_scope.wrap("timeline_panel.selection_listener", function()
@@ -1996,8 +2001,8 @@ function M.create(opts)
 
         -- Re-broadcast selection when only the timeline itself is selected and marks change.
         if #selected == 0 then
-            local mark_in = state.get_mark_in and state.get_mark_in() or nil
-            local mark_out = state.get_mark_out and state.get_mark_out() or nil
+            local mark_in = state.get_display_mark_in and state.get_display_mark_in() or nil
+            local mark_out = state.get_display_mark_out and state.get_display_mark_out() or nil
             local signature = tostring(mark_in) .. ":" .. tostring(mark_out)
             if signature ~= last_mark_signature then
                 last_mark_signature = signature
