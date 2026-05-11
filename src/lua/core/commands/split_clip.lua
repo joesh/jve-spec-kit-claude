@@ -207,11 +207,31 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local right = Clip.load_v13_row(result_or_err.second_clip_id)
         assert(left,  string.format("SplitClip executor: left half %s missing after create", args.clip_id))
         assert(right, string.format("SplitClip executor: right half %s missing after create", result_or_err.second_clip_id))
+
+        -- Hydrate the media chain leaf (resolved_media + media_path) so the
+        -- new right-half row carries the same waveform/peak/offline keys as
+        -- the source clip. Without this the timeline renderer reaches for
+        -- clip.resolved_media.id when fetching peaks, finds nil, and the
+        -- right half renders as a clip with no waveform. Both halves share
+        -- one media chain — load once from the left half.
+        local hydrated_left = Clip.load(args.clip_id)
+        assert(hydrated_left, string.format(
+            "SplitClip executor: chain-resolved left half %s missing after create",
+            args.clip_id))
+        local resolved_media = hydrated_left.resolved_media
+        local media_path     = hydrated_left.media_path
+        local function entry_with_media(row)
+            local e = mutation_entry(row)
+            e.resolved_media = resolved_media
+            e.media_path     = media_path
+            return e
+        end
+
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
-            inserts     = { mutation_entry(right) },
+            inserts     = { entry_with_media(right) },
             deletes     = {},
-            updates     = { mutation_entry(left) },
+            updates     = { entry_with_media(left) },
         })
         Signals.emit("sequence_content_changed", args.sequence_id)
         return { success = true, result_data = result_or_err }

@@ -126,6 +126,21 @@ print(string.format("  V1 right half OK: id=%s ts=%d dur=%d", right_id, right_ts
 -- (V2 itself moves as a side effect of the bulk shift on V2's track;
 -- exercising that is a separate concern from the cut bug this test owns.)
 
+-- ── In-memory clip_state must carry resolved_media on the right half.
+-- The renderer reaches for clip.resolved_media.id when fetching audio
+-- peaks; if it's nil the right half renders without a waveform. Both
+-- halves share the same media chain — the right-half mutation must
+-- hydrate it from the source clip.
+local timeline_state = require("ui.timeline.timeline_state")
+local right_in_state
+for _, c in ipairs(timeline_state.get_track_clip_index("trk_v1") or {}) do
+    if c.id == right_id then right_in_state = c; break end
+end
+assert(right_in_state, "FAIL: V1 right half missing from clip_state")
+assert(right_in_state.resolved_media and right_in_state.resolved_media.id,
+    "FAIL: V1 right half has no resolved_media in clip_state — renderer "
+    .. "can't fetch peaks → waveform blank")
+
 -- ── Step 3: undo. The nested SplitClip under this command's group must
 -- be reversed: right half deleted, original clip restored to full bounds.
 local undo_r = command_manager.undo()
