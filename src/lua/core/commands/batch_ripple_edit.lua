@@ -503,7 +503,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     --   'off':    mark the track in ctx.sync_off_tracks so
     --             collect_affected_tracks_from_cache excludes it from bulk-shift.
     --
-    --   'cut':    TODO T014 — filler insertion not yet implemented.
+    --   'cut':    split the spanning clip at the trim point; right half stays at
+    --             its original TC position (preserving downstream timecode).
+    --             A natural gap forms between the anchor's new out and the right half.
     --
     -- Runs after build_clip_cache (needs ctx.track_clip_map, ctx.clip_lookup)
     -- and before inject_implicit_gap_edges (reads the updated ctx.edge_infos).
@@ -619,6 +621,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
             for track_id, sync_mode in pairs(ctx.track_sync_modes) do
                 if covered[track_id] then goto continue_track end
+                assert(sync_mode == "off" or sync_mode == "ripple" or sync_mode == "cut",
+                    string.format("apply_sync_mode_dispatch: invalid sync_mode '%s' on track %s",
+                        tostring(sync_mode), tostring(track_id)))
                 if sync_mode == "off" then
                     ctx.sync_off_tracks[track_id] = true
                 elseif sync_mode == "ripple" and do_dispatch then
@@ -653,11 +658,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         end
                     end
 
-                    ctx.cut_left_halves     = ctx.cut_left_halves     or {}
-                    ctx.cut_dispatch_tracks = ctx.cut_dispatch_tracks  or {}
-                    ctx.cut_split_results   = ctx.cut_split_results    or {}
-
                     for _, c in ipairs(to_split) do
+                        -- Capture the left half's original state BEFORE SplitClip
+                        -- modifies it, so the undoer can restore it later.
+                        if not ctx.original_states_map[c.id] then
+                            ctx.original_states_map[c.id] = command_helper.capture_clip_state(c)
+                        end
                         local orig_duration = c.duration
                         local split_result = SplitClip.execute({
                             sequence_id = ctx.sequence_id,
@@ -678,6 +684,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         local right_source_in  = split_result.prior.source_in_frame
                                                + split_result.source_offset
                         local right_source_out = split_result.prior.source_out_frame
+
+                        -- Record undo order: UPDATE left half (restore original duration),
+                        -- then DELETE right half (it was inserted by SplitClip).
+                        table.insert(ctx.cut_order, {type = "update", clip_id = c.id})
+                        table.insert(ctx.cut_order, {type = "insert", clip_id = split_result.second_clip_id})
 
                         -- Record for emit_cut_split_timeline_mutations so the
                         -- in-memory timeline_state can be updated after the DB
@@ -853,7 +864,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local boundaries, selected_tracks = collect_ripple_boundaries(ctx)
         local injected = {}
-        local cut_tracks = ctx.cut_dispatch_tracks or {}
+        local cut_tracks = ctx.cut_dispatch_tracks
         for _, entry in ipairs(boundaries) do
             for track_id, track_clips in pairs(ctx.track_clip_map) do
                 if not selected_tracks[track_id] and not cut_tracks[track_id] then
@@ -869,17 +880,27 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- Derive the set of tracks that have clips in the bounded cache —
     -- these are the "affected" tracks the ripple/roll can touch.
-    -- Tracks marked sync_mode='off' by apply_sync_mode_dispatch are excluded:
-    -- their downstream clips must not shift.
+    -- sync_mode='off'  → excluded: downstream clips must not shift.
+    -- sync_mode='cut'  → excluded: cut mode preserves downstream TC.
+    --                    apply_sync_mode_dispatch splits the spanning clip
+    --                    at the trim point; the resulting right half stays
+    --                    at its original TC position. A natural gap forms
+    --                    between the anchor's new out-edge and the unmoved
+    --                    right half (implicit filler). Clips already past
+    --                    the split also stay put — rippling them would
+    --                    overlap the right half they were just split from.
     local function collect_affected_tracks_from_cache(ctx)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.affected_tracks = {}
         assert(ctx.sync_off_tracks, "collect_affected_tracks_from_cache: ctx.sync_off_tracks is nil")
-        local off_tracks = ctx.sync_off_tracks
+        local off_tracks   = ctx.sync_off_tracks
+        assert(ctx.track_sync_modes, "collect_affected_tracks_from_cache: ctx.track_sync_modes is nil")
+        local sync_modes   = ctx.track_sync_modes
         for _, clip in ipairs(ctx.all_clips) do
             assert(clip.track_id and clip.track_id ~= "",
                 string.format("assign_edge_tracks: clip %s missing track_id", tostring(clip.id)))
-            if not off_tracks[clip.track_id] then
+            local mode = sync_modes[clip.track_id]
+            if not off_tracks[clip.track_id] and mode ~= "cut" then
                 ctx.affected_tracks[clip.track_id] = true
             end
         end
@@ -2071,6 +2092,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local order = {}
+        -- Cut-mode splits run BEFORE the main trim, so their undo entries must
+        -- appear FIRST in the order list (revert_mutations iterates in reverse,
+        -- so the split is undone LAST — after the trim is restored). This ensures
+        -- the DB never enters an overlap state during undo.
+        for _, entry in ipairs(ctx.cut_order) do
+            table.insert(order, entry)
+        end
         for _, mut in ipairs(ctx.planned_mutations) do
             if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "gap_preview" then
                 -- Skip gap-clip mutations: gaps are recomputed by
@@ -2101,18 +2129,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 duration_value   = sr.left_duration_frames,
                 source_out_value = sr.left_source_out_frame,
             })
-            -- Right half: insert at the PRE-bulk_shift position.
-            -- The bulk_shift mutation that follows will move it to its
-            -- final timeline position.
-            command_helper.add_insert_mutation(ctx.command, seq_id, {
-                id             = sr.right_id,
-                track_id       = sr.track_id,
-                start_value    = sr.right_timeline_start,
-                duration_value = sr.right_duration_frames,
-                source_in      = sr.right_source_in_frame,
-                source_out     = sr.right_source_out_frame,
-                is_gap         = false,
-            })
+            -- Right half: load from DB (SplitClip already wrote it) and insert
+            -- with a full payload so the clip has frame_rate, fps_mismatch_policy,
+            -- nested_sequence_id, etc. required for future operations on the clip.
+            -- Mirrors the emit_timeline_mutations path for planned "insert" mutations.
+            local right_clip = Clip.load_optional(sr.right_id)
+            assert(right_clip, string.format(
+                "emit_cut_split_timeline_mutations: right half %s missing from DB after SplitClip",
+                tostring(sr.right_id)))
+            local payload = command_helper.clip_insert_payload(right_clip, seq_id)
+            assert(payload, string.format(
+                "emit_cut_split_timeline_mutations: clip_insert_payload returned nil for right half %s",
+                tostring(sr.right_id)))
+            command_helper.add_insert_mutation(ctx.command, seq_id, payload)
         end
     end
 

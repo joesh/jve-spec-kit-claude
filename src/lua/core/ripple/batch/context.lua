@@ -60,6 +60,11 @@ function M.create(command)
         shift_lookup = {},
         edited_lookup_for_shifts = {},
         bulk_shift_mutations = {},
+        sync_off_tracks = {},
+        cut_left_halves = {},
+        cut_dispatch_tracks = {},
+        cut_split_results = {},
+        cut_order = {},
     }
 
     if ctx.edge_infos_raw then
