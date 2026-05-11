@@ -460,20 +460,83 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.clip_track_lookup = {}
         ctx.track_clip_map = {}
 
+        -- Dry-run guard: timeline_state.get_track_clip_index returns the
+        -- internal sorted list — clips in it ARE the shared clip_state
+        -- objects. Mutating them (or inserting into the list) pollutes
+        -- timeline_state and breaks subsequent commands. Snapshot every
+        -- clip's mutable fields here; assert at end of dry-run that
+        -- nothing drifted. (Commit path legitimately mutates via nested
+        -- __timeline_mutations — the snapshot check is dry-run only.)
+        ctx.shared_clip_snapshots = {}
+        ctx.shared_track_clip_lists = {}
+
         for _, track in ipairs(timeline_state.get_all_tracks()) do
             assert(track.id and track.id ~= "",
                 "build_clip_cache: timeline_state returned track with empty id")
             local track_clips = timeline_state.get_track_clip_index(track.id)
             if track_clips then
                 ctx.track_clip_map[track.id] = track_clips
+                ctx.shared_track_clip_lists[track.id] = {
+                    list = track_clips,
+                    length = #track_clips,
+                }
                 for _, clip in ipairs(track_clips) do
                     assert(clip.id and clip.id ~= "", string.format(
                         "build_clip_cache: clip on track %s has empty id", track.id))
                     table.insert(ctx.all_clips, clip)
                     ctx.clip_lookup[clip.id] = clip
                     ctx.clip_track_lookup[clip.id] = clip.track_id
+                    ctx.shared_clip_snapshots[clip.id] = {
+                        ref            = clip,
+                        timeline_start = clip.timeline_start,
+                        duration       = clip.duration,
+                        source_in      = clip.source_in,
+                        source_out     = clip.source_out,
+                        track_id       = clip.track_id,
+                        is_gap         = clip.is_gap,
+                    }
                 end
             end
+        end
+    end
+
+    -- Dry-run footgun assert. ctx.clip_lookup / track_clip_map share clip
+    -- object references AND track-list references with timeline_state.
+    -- Any in-place mutation in dry-run silently corrupts timeline_state.
+    -- Snapshot at build time, verify at end of dry-run that every shared
+    -- clip's mutable fields and every track's clip-list length are
+    -- unchanged. Cut-branch et al. that need to mutate during dry-run
+    -- MUST swap in detached copies (clone clip + clone track_clips) so
+    -- the shared originals remain untouched.
+    local function assert_shared_state_untouched(ctx)
+        assert(ctx.shared_clip_snapshots,
+            "assert_shared_state_untouched: missing snapshots (build_clip_cache not run?)")
+        for clip_id, snap in pairs(ctx.shared_clip_snapshots) do
+            local ref = snap.ref
+            assert(ref.timeline_start == snap.timeline_start, string.format(
+                "dry-run polluted timeline_state: clip %s timeline_start changed %s → %s",
+                tostring(clip_id), tostring(snap.timeline_start), tostring(ref.timeline_start)))
+            assert(ref.duration == snap.duration, string.format(
+                "dry-run polluted timeline_state: clip %s duration changed %s → %s",
+                tostring(clip_id), tostring(snap.duration), tostring(ref.duration)))
+            assert(ref.source_in == snap.source_in, string.format(
+                "dry-run polluted timeline_state: clip %s source_in changed %s → %s",
+                tostring(clip_id), tostring(snap.source_in), tostring(ref.source_in)))
+            assert(ref.source_out == snap.source_out, string.format(
+                "dry-run polluted timeline_state: clip %s source_out changed %s → %s",
+                tostring(clip_id), tostring(snap.source_out), tostring(ref.source_out)))
+            assert(ref.track_id == snap.track_id, string.format(
+                "dry-run polluted timeline_state: clip %s track_id changed %s → %s",
+                tostring(clip_id), tostring(snap.track_id), tostring(ref.track_id)))
+            assert(ref.is_gap == snap.is_gap, string.format(
+                "dry-run polluted timeline_state: clip %s is_gap changed %s → %s",
+                tostring(clip_id), tostring(snap.is_gap), tostring(ref.is_gap)))
+        end
+        for track_id, snap in pairs(ctx.shared_track_clip_lists) do
+            assert(#snap.list == snap.length, string.format(
+                "dry-run polluted timeline_state: track %s clip-list length changed %d → %d "
+                .. "(must clone track_clips before insert/remove in dry-run)",
+                tostring(track_id), snap.length, #snap.list))
         end
     end
 
@@ -2457,6 +2520,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         persist_undo_parameters(ctx)
 
         if ctx.dry_run then
+            assert_shared_state_untouched(ctx)
             local clamped_edges = collect_clamped_edge_keys(ctx)
             local clamped_ms = frame_utils.frames_to_ms(
                 ctx.clamped_delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
