@@ -130,6 +130,7 @@ local function build_preview_from_payload(payload)
         affected_clips = {},
         shifted_clips = normalize_preview_entries(payload.shifted_clips) or {},
         shift_blocks = payload.shift_blocks or {},
+        off_tracks = payload.off_tracks or {},
         clamped_edges = payload.clamped_edges or {},
         edge_preview = payload.edge_preview
     }
@@ -362,10 +363,11 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
     local max_track_bottom = -math.huge
     local found_any = false
 
+    local off_tracks = preview_data.off_tracks or {}
     local visible_tracks = view.filtered_tracks or {}
     for _, track in ipairs(visible_tracks) do
         local track_id = track and track.id
-        if track_id then
+        if track_id and not off_tracks[track_id] then
             local block = per_track[track_id] or global_block
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
                 local track_clips = state_module.get_track_clip_index(track_id) or {}

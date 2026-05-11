@@ -2411,11 +2411,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local clamped_edges = collect_clamped_edge_keys(ctx)
             local clamped_ms = frame_utils.frames_to_ms(
                 ctx.clamped_delta_frames, ctx.seq_fps_num, ctx.seq_fps_den)
+            assert(ctx.sync_off_tracks, "BatchRippleEdit: ctx.sync_off_tracks missing for dry-run payload")
             return true, {
                 planned_mutations = ctx.planned_mutations,
                 affected_clips = ctx.preview_affected_clips,
                 shifted_clips = ctx.preview_shifted_clips,
                 shift_blocks = ctx.shift_blocks,
+                off_tracks = ctx.sync_off_tracks,
                 clamped_delta_ms = clamped_ms,
                 clamped_delta_frames = ctx.clamped_delta_frames,
                 materialized_gaps = ctx.materialized_gap_ids,
