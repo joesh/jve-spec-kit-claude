@@ -17,10 +17,11 @@ local ALLOWED = { volume = true, pan = true }
 
 local SPEC = {
     args = {
-        track_id   = { required = true },
-        property   = { required = true },
-        value      = { required = true },
-        project_id = { required = true },
+        track_id    = { required = true },
+        property    = { required = true },
+        value       = { required = true },
+        sequence_id = {},  -- injected by execute_interactive in UI context
+        project_id  = { required = true },
     },
     persisted = {
         prev_value = { kind = "number" },
@@ -76,14 +77,12 @@ function M.undo(capture)
         capture.track_id, capture.property, capture.prev_val, current_val)
 end
 
-function M.register(command_executors, command_undoers, _db, set_last_error)
+function M.register(command_executors, command_undoers, _db, _set_last_error)
+    -- Canonical command pattern: executor calls M.execute directly. Asserts
+    -- propagate to command_manager's xpcall logger (rule 2.32).
     command_executors["SetTrackMixValue"] = function(command)
         local args = command:get_all_parameters()
-        local ok, result = pcall(M.execute, args)
-        if not ok then
-            set_last_error("SetTrackMixValue: " .. tostring(result))
-            return false
-        end
+        local result = M.execute(args)
         command:set_parameter("property",   result.property)
         command:set_parameter("prev_value", result.prev_val)
         return true

@@ -4,13 +4,11 @@
 --
 -- Domain: after the 015 migration runs, the DB must enforce:
 --   * tracks.sync_mode IN ('off','ripple','cut')  NOT NULL  DEFAULT 'ripple'
---   * patches(id, sequence_id, source_track_index, record_track_index, enabled)
---     with UNIQUE(sequence_id, source_track_index) and CASCADE on seq delete
+--   * patches(id, sequence_id, track_type, source_track_index, record_track_index, enabled)
+--     with UNIQUE(sequence_id, track_type, source_track_index) and CASCADE on seq delete
 --   * schema_version bumped to 10
 --   * snapshots and clip_links tables unchanged (no regressions)
 --   * pre-existing tracks default to sync_mode='ripple'
---
--- Expected FAIL today: schema.sql does not yet contain sync_mode or patches.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -63,26 +61,26 @@ local bad_ok = db:exec([[
 assert(not bad_ok, "FAIL: sync_mode CHECK constraint did not reject 'invalid_mode'")
 print("  sync_mode CHECK rejects bad value — OK")
 
--- ── patches table exists ──────────────────────────────────────────────────
+-- ── patches table exists with track_type column ──────────────────────────
 local p1 = db:exec([[
-    INSERT INTO patches (id, sequence_id, source_track_index, record_track_index, enabled)
-    VALUES ('p1', 'seq', 0, 0, 1)
+    INSERT INTO patches (id, sequence_id, track_type, source_track_index, record_track_index, enabled)
+    VALUES ('p1', 'seq', 'AUDIO', 0, 0, 1)
 ]])
 assert(p1, "FAIL: patches table missing or columns wrong")
 print("  patches INSERT — OK")
 
--- ── UNIQUE(sequence_id, source_track_index) ───────────────────────────────
+-- ── UNIQUE(sequence_id, track_type, source_track_index) ──────────────────
 local dup = db:exec([[
-    INSERT INTO patches (id, sequence_id, source_track_index, record_track_index, enabled)
-    VALUES ('p_dup', 'seq', 0, 1, 1)
+    INSERT INTO patches (id, sequence_id, track_type, source_track_index, record_track_index, enabled)
+    VALUES ('p_dup', 'seq', 'AUDIO', 0, 1, 1)
 ]])
-assert(not dup, "FAIL: UNIQUE(sequence_id, source_track_index) not enforced")
+assert(not dup, "FAIL: UNIQUE(sequence_id, track_type, source_track_index) not enforced")
 print("  UNIQUE constraint blocks duplicate — OK")
 
 -- ── record_track_index may exceed track count (no FK) ────────────────────
 local p_far = db:exec([[
-    INSERT INTO patches (id, sequence_id, source_track_index, record_track_index, enabled)
-    VALUES ('p_far', 'seq', 1, 99, 1)
+    INSERT INTO patches (id, sequence_id, track_type, source_track_index, record_track_index, enabled)
+    VALUES ('p_far', 'seq', 'AUDIO', 1, 99, 1)
 ]])
 assert(p_far, "FAIL: record_track_index=99 (exceeds track count) must be allowed — no FK")
 print("  record_track_index may exceed track count — OK")

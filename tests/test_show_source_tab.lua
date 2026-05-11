@@ -54,8 +54,12 @@ db:exec(string.format([[
 command_manager.init("rec_seq", "proj")
 
 -- ── Stubs ─────────────────────────────────────────────────────────────────
-local stub_open_tab_calls  = {}
-local stub_switch_calls    = {}
+-- ShowSourceTab delegates to timeline_state.switch_to_source_tab — the
+-- canonical pointer-update entry point. switch emits displayed_tab_changed;
+-- the timeline_panel listener does all body work. The test pins the
+-- contract by stubbing switch_to_source_tab and asserting it's called
+-- with the loaded master's seq_id.
+local stub_switch_calls = {}
 
 local mock_monitor = { sequence_id = nil }
 function mock_monitor:get_loaded_master_seq_id() return self.sequence_id end
@@ -68,9 +72,7 @@ package.loaded["ui.panel_manager"] = {
     end,
 }
 package.loaded["ui.timeline.timeline_panel"] = {
-    open_tab = function(seq_id)
-        table.insert(stub_open_tab_calls, seq_id)
-    end,
+    open_tab = function() end,  -- not called by this path; safe no-op stub
 }
 package.loaded["ui.timeline.timeline_state"] = {
     switch_to_source_tab = function(seq_id)
@@ -104,26 +106,25 @@ assert(r1 and r1.success, "FAIL: ShowSourceTab failed: " .. tostring(r1 and r1.e
 
 assert(#vis_log >= 1 and vis_log[#vis_log] == true,
     "FAIL: source_tab_visibility_changed(true) not emitted")
-assert(#stub_open_tab_calls >= 1 and stub_open_tab_calls[#stub_open_tab_calls] == "src_master",
-    "FAIL: open_tab not called with src_master")
 assert(#stub_switch_calls >= 1 and stub_switch_calls[#stub_switch_calls] == "src_master",
-    "FAIL: switch_to_source_tab not called with src_master")
-print("  signal emitted, open_tab called, switch_to_source_tab called — OK")
+    "FAIL: switch_to_source_tab not called with src_master — ShowSourceTab "
+    .. "must delegate to the canonical pointer-update entry point")
+print("  signal emitted, switch_to_source_tab called with src_master — OK")
 
 -- ── (b) Execute with no source loaded: signal emitted, no error ──────────
 print("-- (b) ShowSourceTab with no source loaded --")
 mock_monitor.sequence_id = nil
 local n_vis = #vis_log
-local n_open = #stub_open_tab_calls
+local n_switch = #stub_switch_calls
 
 local r2 = command_manager.execute("ShowSourceTab", {})
 assert(r2 and r2.success,
     "FAIL: ShowSourceTab must not error when no source loaded (FR-007b)")
 assert(#vis_log == n_vis + 1 and vis_log[#vis_log] == true,
     "FAIL: source_tab_visibility_changed(true) must fire even with no source (FR-007b)")
-assert(#stub_open_tab_calls == n_open,
-    "FAIL: open_tab must NOT be called when no master is loaded")
-print("  signal emitted, no open_tab called — OK")
+assert(#stub_switch_calls == n_switch,
+    "FAIL: switch_to_source_tab must NOT be called when no master is loaded")
+print("  signal emitted, no switch_to_source_tab called — OK")
 
 -- ── (c) Idempotent: calling again when tab is already open ───────────────
 print("-- (c) idempotent re-open --")

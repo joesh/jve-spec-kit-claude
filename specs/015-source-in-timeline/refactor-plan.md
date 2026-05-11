@@ -20,6 +20,15 @@ Create two new modules. No existing file changes. Tests added for new modules in
 **Commit boundary reached.** New abstraction in place; zero existing consumers touched; sampled existing 015 tests still pass; luacheck 0 warnings.
 
 ### Phase 2 — Encapsulate existing tab state into the strip
+**Split into 4 sub-commits for safe incremental landing:**
+
+- **2a ✅ (commit `da1d1ebd`)** — instantiate `tab_strip` in `timeline_state.lua`; expose via `M.get_tab_strip()`; reset on `project_changed`. 3 sub-tests in `test_timeline_state_tab_strip.lua`.
+- **2b ✅ (commit `085b91ab`)** — mirror tab open/close from `timeline_panel.lua` into the strip. `ensure_tab_for_sequence` hoists `strip:open_*_tab` above the early-return so it runs on every call; `close_tab` mirrors via seq_id-equality guard (Option 3) to handle source-master transition (A→B singleton reload). Integration test deferred to Phase 9 (Qt-gated path).
+- **2c-i ✅ (commit `9419765d`)** — sync strip active+displayed pointers on `switch_to_record_tab` / `switch_to_source_tab`. Adds `TimelineTabStrip:find_record_tab_by_sequence_id` (kind-aware lookup). 2 new sub-tests cover FR-004 + FR-005.
+- **2c-ii ✅ (commit `73278d35`)** — fix display-aware mark bugs in `timeline_panel.lua` selection listener and `timeline_scrollbar.lua` overlay. Both were reading active marks instead of displayed marks; switched to `get_display_mark_in/out`. Integration test deferred to Phase 9.
+
+**Original plan (preserved for reference):**
+
 The current codebase **already has** record-tab state: `open_tabs` (Qt widget map) and `tab_order` (ordered list of sequence_ids) at module-scope in `timeline_panel.lua`, persisted as `open_sequence_ids` in `project_settings`. Per-tab display state (viewport, playhead, scroll, marks) lives on the **sequence row**, not on the tab. The job is to **encapsulate the existing state into the strip**, not invent parallel persistence.
 
 - Replace `timeline_panel.lua`'s module-local `open_tabs`/`tab_order` with a single `TimelineTabStrip` instance owned by TimelineView. The Qt widget bookkeeping (button, container, handlers) stays in `timeline_panel.lua` keyed by `tab.id`, but the strip is the source of truth for ordering + open/closed + pointers.
@@ -34,16 +43,13 @@ The current codebase **already has** record-tab state: `open_tabs` (Qt widget ma
 
 **Commit boundary**: `timeline_panel.lua` and `timeline_state.lua` refactored to use the strip; all other consumers untouched. Existing tests pass via facade.
 
-### Phase 3 — Collapse the display-aware accessor wrappers
-The whole reason `get_display_mark_in` and `get_source_mark_in` exist is the missing tab object. Now `get_mark_in()` means "the displayed tab's marks", uniformly.
+### Phase 3 ✅ (commit `c567b7aa`) — strip-back the display-aware accessors
 
-- Delete `M.get_display_mark_in/out` and `M.get_source_mark_in/out` from `timeline_state.lua`.
-- Update `timeline_view_renderer.lua:680`, `timeline_ruler.lua:87` to call plain `get_mark_in/out`.
-- Update `timeline_scrollbar.lua:72-73` (was unflagged display-aware bug — auto-fixed by collapse).
-- Update `timeline_panel.lua:1957-1967` selection listener (was the CRITICAL bug from the original review — auto-fixed).
-- Edit commands (`cut.lua`, `delete_selection.lua`, `clipboard_actions.lua`, `set_marks.lua`) get `sequence_id` from `tab_strip:get_active_record():sequence_id` (edits target active per FR-038), not from displayed.
+Smaller scope than originally planned: rewrote `get_display_mark_in/out` and `is_source_tab_displayed` to read off `tab_strip:get_displayed()` instead of dispatching via the `displayed_tab_id != sequence_id` heuristic. `TimelineTab:get_marks()` pulls fresh from the sequence row (MVC, rule 3.0). The flat-singleton dispatch helper is gone; the public accessor names stay (renaming touches too many callers and the Phase 2c-ii bug fixes already routed consumers correctly).
 
-**Commit boundary**: bug-fix-via-refactor. Tests catch regressions because mark routing is now uniform.
+`get_mark_in/out` and `get_source_mark_in/out` continue to read cached `data.sequence` / `data.source_sequence` because `get_ghost_mark` reads frame_rate at 60Hz and per-call `Sequence.load` would mean a DB hit per frame. Phase 6 can add a cached frame_rate accessor to TimelineTab if the cache becomes a maintenance burden.
+
+Test: integration sub-test in `test_timeline_state_tab_strip` verifies the source/record marks toggle correctly when displayed tab swaps (40 vs 120 to disambiguate).
 
 ### Phase 4 — Per-sequence-sticky patches + presets + shape-gating
 

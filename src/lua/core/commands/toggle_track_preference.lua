@@ -18,10 +18,11 @@ local ALLOWED = { muted = true, soloed = true, locked = true, enabled = true }
 local SPEC = {
     undoable = false,
     args = {
-        track_id   = { required = true },
-        property   = { required = true },
-        value      = {},  -- optional: if absent, flips the current value (toggle)
-        project_id = { required = true },
+        track_id    = { required = true },
+        property    = { required = true },
+        value       = {},  -- optional: if absent, flips the current value (toggle)
+        sequence_id = {},  -- injected by execute_interactive in UI context
+        project_id  = { required = true },
     },
 }
 
@@ -59,15 +60,14 @@ function M.execute(args)
     return true
 end
 
-function M.register(command_executors, _command_undoers, _db, set_last_error)
+function M.register(command_executors, _command_undoers, _db, _set_last_error)
+    -- Canonical command pattern: executor calls M.execute directly. Asserts
+    -- propagate to command_manager's xpcall (line 1007) which logs the
+    -- traceback as `[commands] ERROR: Executor failed (X)`. Pinned by
+    -- tests/test_015_command_pattern_no_swallowed_asserts.lua.
     command_executors["ToggleTrackPreference"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
-        if not ok then
-            set_last_error("ToggleTrackPreference: " .. tostring(err))
-            return false
-        end
-        return true
+        return M.execute(args)
     end
 
     return {

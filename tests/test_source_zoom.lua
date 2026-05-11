@@ -167,9 +167,10 @@ db:exec(string.format([[
     VALUES ('proj1', 'Test Project', 'resample', %d, %d);
 
     INSERT INTO media (id, project_id, file_path, name, duration_frames,
-        fps_numerator, fps_denominator, width, height, created_at, modified_at)
+        fps_numerator, fps_denominator, width, height,
+        audio_channels, audio_sample_rate, created_at, modified_at)
     VALUES ('media1', 'proj1', '/test/clip.mov', 'TestClip', 300, 24, 1,
-        1920, 1080, %d, %d);
+        1920, 1080, 2, 48000, %d, %d);
 ]], now, now, now, now))
 
 local mc_id = test_env.create_test_masterclip_sequence(

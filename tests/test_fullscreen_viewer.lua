@@ -235,10 +235,12 @@ package.loaded["core.database"] = {
 }
 
 package.loaded["models.sequence"] = {
-    load = function()
+    load = function(seq_id)
         return {
+            id = seq_id,
             name = "test",
             kind = "nested",
+            audio_sample_rate = 48000,  -- record/nested seqs carry the bus rate
             playhead_position = 0,
             mark_in = nil,
             mark_out = nil,

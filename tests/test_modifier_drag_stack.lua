@@ -3,12 +3,11 @@
 -- T019 (015) — modifier-drag stacking: two source tracks routed to same record row.
 --
 -- Domain behaviors (FR-010a stacking, FR-029a stacking):
---   1. Stacking: SetPatch(A1→A1), then SetPatch(A2→A1). Both patches must exist
---      with record_track_index=0. The UNIQUE constraint is on source_track_index,
+--   1. Stacking: SetPatch(AUDIO, A1→A1), then SetPatch(AUDIO, A2→A1). Both patches
+--      must exist with record_track_index=0. UNIQUE is per (type, source_track_index),
 --      so two *different* sources can share the same record_track_index.
 --   2. After stacking, both patches remain enabled=1.
---   3. Cross-type refusal applies to modifier-drag too: VIDEO source cannot stack
---      onto an AUDIO record row (and vice versa).
+--   3. Invalid track_type must be refused.
 --   4. Stacking does not destroy the pre-existing patch — it creates a second one.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
@@ -51,14 +50,13 @@ db:exec([[
 
 command_manager.init("seq", "proj")
 
-local function all_patches()
+local function audio_patches()
     local rows = {}
     local s = db:prepare(
         "SELECT source_track_index, record_track_index, enabled "
-        .. "FROM patches WHERE sequence_id='seq' "
+        .. "FROM patches WHERE sequence_id='seq' AND track_type='AUDIO' "
         .. "ORDER BY source_track_index ASC")
-    assert(s)
-    s:exec()
+    assert(s); s:exec()
     while s:next() do
         table.insert(rows, { src = s:value(0), rec = s:value(1), enabled = s:value(2) })
     end
@@ -67,8 +65,9 @@ local function all_patches()
 end
 
 local signals = {}
-Signals.connect("patch_changed", function(seq, src, change_type)
-    table.insert(signals, { seq = seq, src = src, change_type = change_type })
+Signals.connect("patch_changed", function(seq, track_type, src, change_type)
+    table.insert(signals, { seq = seq, track_type = track_type,
+                             src = src, change_type = change_type })
 end)
 
 -- ── 1. Create A1→A1 patch (pre-existing routing) ─────────────────────────────
@@ -77,13 +76,12 @@ local r1 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     record_track_index = 0,
-    source_track_type  = "AUDIO",
-    record_track_type  = "AUDIO",
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r1 and r1.success, "create A1→A1 failed: " .. tostring(r1 and r1.error_message))
-local rows1 = all_patches()
-assert(#rows1 == 1, "must have exactly 1 patch; got " .. #rows1)
+local rows1 = audio_patches()
+assert(#rows1 == 1, "must have exactly 1 AUDIO patch; got " .. #rows1)
 assert(rows1[1].rec == 0 and rows1[1].enabled == 1, "A1→A1 patch wrong state")
 print("  A1→A1 created, enabled=1 — OK")
 
@@ -93,17 +91,15 @@ local r2 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 1,   -- A2
     record_track_index = 0,   -- A1's record slot
-    source_track_type  = "AUDIO",
-    record_track_type  = "AUDIO",
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r2 and r2.success, "stack A2→A1 failed: " .. tostring(r2 and r2.error_message))
 
-local rows2 = all_patches()
+local rows2 = audio_patches()
 assert(#rows2 == 2,
-    "stacking must produce 2 patches (UNIQUE is per source_track_index); got " .. #rows2)
+    "stacking must produce 2 AUDIO patches (UNIQUE is per type+source_track_index); got " .. #rows2)
 
--- Both patches must target record_track_index=0
 local found_a1 = false
 local found_a2 = false
 for _, row in ipairs(rows2) do
@@ -123,41 +119,36 @@ print("  A1→A1 and A2→A1 both exist, both enabled=1 — OK")
 
 -- ── 3. Pre-existing patch A1 not destroyed by stacking ───────────────────────
 print("-- 3. pre-existing A1 patch unaffected --")
--- Verify A1's record_track_index was not changed by A2's stack operation
 local s = db:prepare(
     "SELECT record_track_index FROM patches "
-    .. "WHERE sequence_id='seq' AND source_track_index=0")
+    .. "WHERE sequence_id='seq' AND track_type='AUDIO' AND source_track_index=0")
 assert(s); s:exec(); assert(s:next())
 local a1_rec_after = s:value(0); s:finalize()
 assert(a1_rec_after == 0,
     "A1 record_track_index must remain 0 after A2 stacks; got " .. tostring(a1_rec_after))
 print("  A1 patch record_track_index unchanged — OK")
 
--- ── 4. Cross-type refusal on modifier-drag ────────────────────────────────────
-print("-- 4. cross-type refusal on modifier-drag --")
--- VIDEO source dropped onto an AUDIO record row: must be refused regardless of indices.
+-- ── 4. Invalid track_type must be refused ─────────────────────────────────────
+print("-- 4. invalid track_type refused --")
 local r4 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     record_track_index = 0,
-    source_track_type  = "VIDEO",
-    record_track_type  = "AUDIO",
+    track_type         = "MIDI",   -- not a valid type
     project_id         = "proj",
 })
 assert(r4 and not r4.success,
-    "cross-type modifier-drag must fail; got success=true")
-assert(
-    r4.error_message:find("cross%-track%-type"),
-    "error must mention cross-type refusal; got: " .. tostring(r4.error_message))
-print("  cross-type modifier-drag refused — OK")
+    "SetPatch with track_type='MIDI' must fail")
+print("  invalid track_type refused — OK")
 
 -- ── 5. Signal emitted for each stacking operation ─────────────────────────────
 print("-- 5. patch_changed signals emitted --")
--- Signals should have fired for: A1 create, A2 create (stack)
 local a1_sigs = 0; local a2_sigs = 0
 for _, sig in ipairs(signals) do
-    if sig.src == 0 then a1_sigs = a1_sigs + 1 end
-    if sig.src == 1 then a2_sigs = a2_sigs + 1 end
+    if sig.track_type == "AUDIO" then
+        if sig.src == 0 then a1_sigs = a1_sigs + 1 end
+        if sig.src == 1 then a2_sigs = a2_sigs + 1 end
+    end
 end
 assert(a1_sigs >= 1, "patch_changed must fire for A1 (src=0)")
 assert(a2_sigs >= 1, "patch_changed must fire for A2 stack (src=1)")

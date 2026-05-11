@@ -1,13 +1,13 @@
 #!/usr/bin/env luajit
 
 -- 015 — sync_mode='cut' shrink-trim: splits spanning clip; right half
--- preserves its original TC. Gap forms between ripple-track new out-edge
--- and the unmoved right half.
+-- preserves its original TC.
 --
--- Why right half does NOT ripple on a shrink-trim: rippling it backward
--- by the trim delta would move it into [trim_point - |delta|, trim_point),
--- overlapping the left half that was just split off at the same source
--- offset. Cut-mode preserves downstream TC precisely to avoid this.
+-- Per spec F3 cut should equal "split + ripple per current ripple rules",
+-- but on shrink-trim of a clip that spans the trim point, rippling the
+-- right half backward overlaps the left half it was just split from.
+-- The current implementation preserves TC on the split right half as a
+-- workaround until that design question is resolved.
 --
 -- Concrete setup (non-trivial, non-zero values):
 --   Dialog V1  (ripple): [0, 100). Trim right edge by -30 → [0, 70).
@@ -17,8 +17,6 @@
 --     Left  music: [40, 100), duration=60, source_in=2000, source_out=2060.
 --     Right music: [100, 200), duration=100, source_in=2060, source_out=2160.
 --                  (TC preserved — does NOT ripple)
---   Result: V1's new out-edge (70) leaves a 30-frame implicit gap on A1
---   between 70 and 100, where the music's right half still sits at 100.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -120,19 +118,16 @@ assert(left.dur == exp_left_dur, string.format(
 assert(left.dur >= 1, "FAIL: left music clip is sub-frame (duration < 1)")
 print(string.format("  left: ts=%d dur=%d — OK", left.ts, left.dur))
 
--- ── Right half: preserves TC at TRIM_POINT (cut-mode does not ripple) ────
--- Cut-mode keeps the right half at its original TC position. A gap forms
--- between V1's new out-edge (70) and the music's right half (100).
+-- ── Right half: preserves TC at TRIM_POINT (current workaround) ─────────
+-- See header docstring for the design question still open.
 local exp_right_ts  = TRIM_POINT          -- 100 (TC preserved)
-local exp_right_dur = 160 - exp_left_dur  -- 100 (duration preserved)
+local exp_right_dur = 160 - exp_left_dur  -- 100
 assert(right.ts == exp_right_ts, string.format(
-    "FAIL: right music timeline_start=%d, expected %d (cut-mode preserves TC; "
-    .. "rippling would overlap the left half)", right.ts, exp_right_ts))
+    "FAIL: right music timeline_start=%d, expected %d", right.ts, exp_right_ts))
 assert(right.dur == exp_right_dur, string.format(
     "FAIL: right music duration=%d, expected %d", right.dur, exp_right_dur))
 assert(right.dur >= 1, "FAIL: right music clip is sub-frame")
-print(string.format("  right: ts=%d dur=%d — OK (TC preserved; %d-frame gap on A1)",
-    right.ts, right.dur, TRIM_POINT - (TRIM_POINT - DELTA)))
+print(string.format("  right: ts=%d dur=%d — OK (TC preserved)", right.ts, right.dur))
 
 -- ── Source continuity: no dropped or duplicated frames ───────────────────
 -- Left source_out must equal right source_in (contiguous source content).

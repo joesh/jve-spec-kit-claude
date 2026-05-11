@@ -1,7 +1,6 @@
--- JVE Database Schema V9
--- Feature 013: Timeline placements as nested sequence references.
--- Three-table model (sequences, media_refs, clips) + sparse override tables.
--- No backward compatibility with V8 or earlier (FR-018).
+-- JVE Database Schema V10
+-- Feature 015: Source-in-Timeline — adds tracks.sync_mode column and patches table.
+-- No backward compatibility with V9 or earlier (rule 2.15: re-import on schema change).
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -15,7 +14,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (9);
+INSERT OR IGNORE INTO schema_version (version) VALUES (10);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -165,6 +164,12 @@ CREATE TABLE IF NOT EXISTS tracks (
     volume REAL NOT NULL DEFAULT 1.0,
     pan REAL NOT NULL DEFAULT 0.0,
 
+    -- 015: per-track ripple sync mode. DB DEFAULT 'ripple' matches spec §3 domain default.
+    -- Pre-015 tracks get 'ripple' from the schema.sql; migration T025 uses ALTER TABLE
+    -- which also defaults to 'ripple' for any rows that predate the column.
+    sync_mode TEXT NOT NULL DEFAULT 'ripple'
+        CHECK (sync_mode IN ('off','ripple','cut')),
+
     UNIQUE(sequence_id, track_type, track_index)
 );
 
@@ -289,6 +294,24 @@ CREATE TABLE IF NOT EXISTS clip_links (
 
 CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
 CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
+
+-- ============================================================================
+-- PATCHES (015 — per-sequence source-track → record-track routing)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS patches (
+    id                  TEXT    PRIMARY KEY,
+    sequence_id         TEXT    NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    track_type          TEXT    NOT NULL CHECK (track_type IN ('VIDEO','AUDIO')),
+    source_track_index  INTEGER NOT NULL CHECK (source_track_index >= 0),
+    record_track_index  INTEGER NOT NULL CHECK (record_track_index >= 0),
+    enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+    color               TEXT    NOT NULL DEFAULT '#888888',
+    created_at          INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (sequence_id, track_type, source_track_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_patches_sequence_id ON patches(sequence_id, track_type);
 
 -- ============================================================================
 -- OVERRIDE STATE (sparse — row exists only when explicitly set)

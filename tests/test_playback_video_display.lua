@@ -246,7 +246,7 @@ print("=== test_playback_video_display.lua ===")
 print("\n--- 1. seek after load_sequence: surface has non-black frame ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:seek(0)  -- caller's responsibility
 
     assert(surface._frame ~= nil,
@@ -262,7 +262,7 @@ end
 print("\n--- 2. seek: surface frame changes ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:seek(0)  -- initial park
     local parked_frame = surface._frame
 
@@ -289,7 +289,7 @@ end
 print("\n--- 3. seek into gap: surface shows black ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
 
     engine:seek(250)  -- gap frame
 

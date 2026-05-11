@@ -248,7 +248,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)
 
     assert(surface._frame == "frame_50", string.format(
@@ -274,7 +274,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(surface._frame ~= nil, "offline seek: surface must not be nil")
@@ -295,7 +295,7 @@ do
     tmb_responses[250] = nil
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(250)
 
     assert(surface._frame == BLACK_FRAME, string.format(
@@ -321,7 +321,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     -- Seek to frame 50 first (online, sets initial display)
     engine:seek(50)
     local online_frame = surface._frame
@@ -352,7 +352,7 @@ end
 print("\n--- 5. playback: clip transition to online (no Lua display) ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)
     local count_before = surface._frame_count
 
@@ -383,7 +383,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     -- Verify the offline frame was composed (offline_frame_cache handles error_msg)
@@ -421,7 +421,7 @@ do
     }
 
     local engine, surface = make_engine()  -- luacheck: no unused
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
@@ -464,7 +464,7 @@ do
     }
 
     local engine = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
@@ -481,7 +481,7 @@ end
 print("\n--- 9. NSF: negative frame asserts ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
 
     local ok, err = pcall(function()
         stored_clip_transition_cb("clipX", 0, 1, 1, false, "/test.mov", -1)
@@ -520,7 +520,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)  -- online first
 
     -- Now simulate playback clip transition to offline
@@ -568,7 +568,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     -- Must produce a frame (not nil, not black)

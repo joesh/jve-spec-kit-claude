@@ -197,7 +197,7 @@ print("=== test_reverse_clip_playback.lua ===")
 print("\n--- _compute_video_speed_ratio: reverse clip →  negative ratio ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: 50 source frames forward over 50 timeline frames = real-time (1.0x)
     local entry_fwd = {
@@ -240,7 +240,7 @@ end
 print("\n--- _build_tmb_clip: accepts negative speed_ratio ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     local entry = {
         clip_id = "rev1",
@@ -278,7 +278,7 @@ do
         },
     }
 
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:_provide_clips(0, 100, "video")
 
     assert(#tmb_clips == 1, "expected 1 TMB clip, got " .. #tmb_clips)
@@ -310,7 +310,7 @@ do
 
     mock_sequence.get_audio_in_range = function() return mock_clips end
 
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:_provide_clips(0, 100, "audio")
 
     assert(#tmb_clips == 1, "expected 1 TMB clip, got " .. #tmb_clips)

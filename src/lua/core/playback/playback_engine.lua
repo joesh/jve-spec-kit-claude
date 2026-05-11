@@ -193,11 +193,23 @@ end
 --------------------------------------------------------------------------------
 
 --- Load a sequence for playback (any kind: masterclip or timeline).
--- @param sequence_id string
--- @param total_frames number optional override (caller-provided content end)
-function PlaybackEngine:load_sequence(sequence_id, total_frames)
+-- @param sequence_id   string
+-- @param total_frames  number  optional override (caller-provided content end)
+-- @param output_audio_rate  number  REQUIRED positive Hz — the audio-bus output
+--   rate for TMB/SSE/AOP. The engine no longer infers this from the sequence
+--   itself: video-only masters legitimately carry NULL audio_sample_rate, so
+--   the caller (SequenceMonitor) must pass the project's audio bus rate
+--   explicitly. Mismatch with the running audio device forces SSE to resample
+--   every output buffer — the caller is responsible for choosing correctly.
+function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_rate)
     assert(sequence_id and sequence_id ~= "",
         "PlaybackEngine:load_sequence: sequence_id required")
+    assert(type(output_audio_rate) == "number" and output_audio_rate > 0,
+        string.format(
+            "PlaybackEngine:load_sequence: output_audio_rate must be a positive "
+            .. "Hz value, got %s (caller must compute the project audio bus "
+            .. "rate; engine no longer infers from sequence)",
+            tostring(output_audio_rate)))
 
     self:stop()
 
@@ -218,7 +230,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames)
     self.fps_num = info.fps_num
     self.fps_den = info.fps_den
     self.fps = info.fps_num / info.fps_den
-    self.audio_sample_rate = info.audio_sample_rate
+    self.audio_sample_rate = output_audio_rate
     self.current_clip_id = nil
     self.current_audio_clip_ids = {}
     self.start_frame = seq.start_timecode_frame or 0

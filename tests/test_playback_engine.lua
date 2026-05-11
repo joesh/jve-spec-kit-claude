@@ -299,7 +299,7 @@ print("\n--- load_sequence ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     assert(engine.fps_num == 24, "fps_num")
     assert(engine.fps_den == 1, "fps_den")
@@ -317,7 +317,7 @@ print("\n--- play delegates to C++ → position callback → stop ---")
 do
     local engine, log = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     playback_calls = {}  -- reset after load_sequence setup
 
     engine:play()
@@ -349,7 +349,7 @@ print("\n--- shuttle speed ramp ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:shuttle(1)  -- forward 1x
     assert(engine.speed == 1, "1x")
@@ -388,7 +388,7 @@ do
     mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 5)
+    engine:load_sequence("seq1", 5, 48000)
 
     engine:play()
     assert(engine:is_playing(), "should be playing")
@@ -408,7 +408,7 @@ do
     mock_content_end = 5
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 5)
+    engine:load_sequence("seq1", 5, 48000)
 
     engine:shuttle(1)  -- forward shuttle
     assert(engine:is_playing(), "playing")
@@ -444,7 +444,7 @@ print("\n--- seek triggers PLAYBACK.SEEK ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     playback_calls = {}
 
     engine:seek(150)
@@ -459,7 +459,7 @@ print("\n--- clip transition callback + rotation ---")
 do
     local engine, log = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     log.rotations = {}
 
     -- Simulate C++ clip transition: clipA with rotation=0
@@ -485,7 +485,7 @@ print("\n--- clip transition callback + PAR ---")
 do
     local engine, log = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     log.pars = {}
 
     -- clipC: square pixels (1:1)
@@ -512,7 +512,7 @@ print("\n--- seek while playing ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:play()
     playback_calls = {}
@@ -531,7 +531,7 @@ print("\n--- seek while stopped ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     playback_calls = {}
     engine:seek(25)
@@ -554,7 +554,7 @@ do
 
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Not owner initially → play_frame_audio should NOT burst
     mock_audio._calls = {}
@@ -592,7 +592,7 @@ print("\n--- slow_play ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     playback_calls = {}
 
     engine:slow_play(-1)
@@ -618,7 +618,7 @@ print("\n--- reverse latch at start (via position callback) ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:shuttle(-1)  -- reverse
     assert(engine.transport_mode == "shuttle", "shuttle mode")
@@ -637,7 +637,7 @@ print("\n--- get_status ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     assert(engine:get_status() == "stopped", "stopped status")
 
@@ -661,7 +661,7 @@ do
     local engine, _ = make_engine()
     assert(not engine:has_source(), "no source before load")
 
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     assert(engine:has_source(), "has source after load")
     print("  ok")
 end
@@ -690,7 +690,7 @@ print("\n--- shuttle dir=0 asserts ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     expect_assert(function() engine:shuttle(0) end,
         "shuttle dir=0")
     print("  ok")
@@ -701,7 +701,7 @@ print("\n--- seek nil frame asserts ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     expect_assert(function() engine:seek(nil) end,
         "seek nil frame")
     print("  ok")
@@ -712,7 +712,7 @@ print("\n--- seek negative frame asserts ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     expect_assert(function() engine:seek(-1) end,
         "seek negative frame")
     print("  ok")
@@ -723,7 +723,7 @@ print("\n--- slow_play dir=0 asserts ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     expect_assert(function() engine:slow_play(0) end,
         "slow_play dir=0")
     print("  ok")
@@ -748,7 +748,7 @@ do
     mock_content_end = 1
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 1)
+    engine:load_sequence("seq1", 1, 48000)
 
     assert(engine.total_frames == 1, "total_frames=1")
 
@@ -766,7 +766,7 @@ print("\n--- play when already playing ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:play()
     playback_calls = {}
@@ -783,7 +783,7 @@ print("\n--- stop when already stopped ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:stop()  -- already stopped, should not error
     engine:stop()  -- again, still fine
@@ -796,12 +796,12 @@ print("\n--- load_sequence while playing ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:play()
     assert(engine:is_playing(), "playing before reload")
 
-    engine:load_sequence("seq1", 50)
+    engine:load_sequence("seq1", 50, 48000)
     assert(not engine:is_playing(), "stopped after reload")
     assert(engine.total_frames == 50, "new total_frames")
     assert(engine:get_position() == 0, "position reset")
@@ -813,7 +813,7 @@ print("\n--- seek to frame 0 ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:seek(50)
     engine:seek(0)
@@ -828,7 +828,7 @@ print("\n--- seek to last frame ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:seek(99)
     assert(engine:get_position() == 99, "at frame 99")
@@ -843,7 +843,7 @@ do
     local engine, _ = make_engine()
     clear_timers()
 
-    engine:load_sequence("seq1")
+    engine:load_sequence("seq1", nil, 48000)
     assert(engine.total_frames == 1,
         "empty sequence: total_frames=" .. engine.total_frames .. " expected 1")
 
@@ -869,7 +869,7 @@ do
     local engine, _ = make_engine()
     clear_timers()
 
-    engine:load_sequence("seq1")
+    engine:load_sequence("seq1", nil, 48000)
     assert(engine.total_frames == 1, "empty")
 
     mock_content_end = 50
@@ -886,7 +886,7 @@ end
 print("\n--- load_sequence stores audio_sample_rate ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1")
+    engine:load_sequence("seq1", nil, 48000)
     assert(engine.audio_sample_rate == 48000,
         "audio_sample_rate should be 48000, got " .. tostring(engine.audio_sample_rate))
     print("  ok")
@@ -897,7 +897,7 @@ print("\n--- offline clip resets rotation + PAR ---")
 do
     local engine, log = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     log.rotations = {}
     log.pars = {}
 
@@ -922,7 +922,7 @@ print("\n--- _configure_and_start_audio: late ACTIVATE_AUDIO ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Inject a mock audio_playback with session already initialized
     -- (simulates _init_audio_session having been called by _if_clip_changed)
@@ -994,7 +994,7 @@ print("\n--- session init: no audio clips at park position ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Mock audio_playback with session NOT yet initialized
     local init_called = false
@@ -1072,7 +1072,7 @@ do
     local mock_audio_for_try = make_tracked_audio()
     PlaybackEngine.init_audio(mock_audio_for_try)
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     local ok, err = pcall(function()
@@ -1134,7 +1134,7 @@ do
     mock_sequence.get_audio_at = function() return {} end
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Init audio infrastructure
     local audio_pb = require("core.media.audio_playback")
@@ -1197,7 +1197,7 @@ print("\n--- on_model_changed ---")
 do
     local engine = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Seek to 50 — sets _last_committed_frame = 50
     engine:seek(50)
@@ -1219,7 +1219,7 @@ end
 do
     local engine = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- on_model_changed re-seeks → PARK called, position updated internally
     engine:on_model_changed(25)
@@ -1244,7 +1244,7 @@ end
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: at time 0, frame is 0 (trivial)
     local f0 = engine:calc_frame_from_time_us(0)
@@ -1281,7 +1281,7 @@ end
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Happy path: seek_to_frame floors and delegates to seek
     engine:seek_to_frame(10.7)
@@ -1302,7 +1302,7 @@ print("\n--- _compute_video_speed_ratio ---")
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: 100 source frames over 100 timeline frames = real-time (1.0x)
     local entry = { clip_id = "c1", source_in = 0, source_out = 100, duration = 100 }
@@ -1315,7 +1315,7 @@ end
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: source_in=100, source_out=0 means clip plays backwards
     local entry = { clip_id = "c2", source_in = 100, source_out = 0, duration = 100 }
@@ -1328,7 +1328,7 @@ end
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: 50 source frames stretched over 100 timeline frames = half-speed
     local entry = { clip_id = "c3", source_in = 0, source_out = 50, duration = 100 }
@@ -1341,7 +1341,7 @@ end
 do
     local engine, _ = make_engine()
     clear_timers()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     expect_assert(function()
         engine:_compute_video_speed_ratio({ clip_id = "bad", source_in = 0, source_out = nil, duration = 100 })

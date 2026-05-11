@@ -83,8 +83,9 @@ do
         }
     })
 
-    -- A1 clips are adjacent (no gap) — ripple should be blocked
-    -- Dry run to check if blocked (clamped to 0)
+    -- A1 clips are perfectly co-located with V1 clips (same start 0-1000, same
+    -- downstream start 1000). 015 co-trim fires: a1_left co-trims alongside
+    -- v1_left, opening upstream room for a1_right. Delta -200 applies fully.
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
@@ -96,9 +97,9 @@ do
     local executor = command_manager.get_executor("BatchRippleEdit")
     local ok, payload = executor(cmd)
     assert(ok, "Dry run should succeed")
-    -- The clamped delta should be 0 (blocked by adjacent clips on A1)
-    assert(payload.clamped_delta_frames == 0,
-        string.format("should be blocked (clamped to 0), got clamped_delta_frames=%s",
+    -- 015: co-trim removes the upstream constraint; full delta applies.
+    assert(payload.clamped_delta_frames == -200,
+        string.format("co-trim should allow full delta, got clamped_delta_frames=%s",
             tostring(payload.clamped_delta_frames)))
 
     layout:cleanup()

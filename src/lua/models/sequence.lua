@@ -397,6 +397,34 @@ function Sequence.update_scroll_offsets(seq_id, video_offset, audio_offset)
     end
 end
 
+--- Surgical playhead persist — touches only playhead_frame.
+-- Does NOT re-bind project_id, default_video_layer_track_id, or any
+-- other column on the sequences row. Persisting the playhead must not
+-- be coupled to the validity of unrelated fields on a cached in-memory
+-- sequence object — full Sequence:save() would re-bind every column
+-- and fail FK if any of them happen to be stale.
+function Sequence.update_playhead(seq_id, playhead_frame)
+    assert(seq_id and seq_id ~= "",
+        "Sequence.update_playhead: seq_id is required")
+    assert(type(playhead_frame) == "number" and playhead_frame == math.floor(playhead_frame),
+        "Sequence.update_playhead: playhead_frame must be an integer")
+    local db = require("core.database")
+    local conn = assert(db.get_connection(),
+        "Sequence.update_playhead: no database connection")
+    local stmt = assert(
+        conn:prepare("UPDATE sequences SET playhead_frame = ?, modified_at = ? WHERE id = ?"),
+        "Sequence.update_playhead: failed to prepare statement")
+    stmt:bind_value(1, playhead_frame)
+    stmt:bind_value(2, os.time())
+    stmt:bind_value(3, seq_id)
+    local ok = stmt:exec()
+    local err = ok and nil or conn:last_error()
+    stmt:finalize()
+    assert(ok, string.format(
+        "Sequence.update_playhead: UPDATE failed for %s: %s",
+        tostring(seq_id), tostring(err)))
+end
+
 -- Atomically increment a sequence's mutation_generation counter.
 -- Called after every successful sequence-scoped mutation; cached
 -- generation values held by nested-sequence references become stale

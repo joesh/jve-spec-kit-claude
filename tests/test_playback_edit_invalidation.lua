@@ -207,7 +207,7 @@ print("=== test_playback_edit_invalidation.lua ===")
 print("\n--- 1. content_changed for our sequence → reload ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     -- Verify controller is operational by checking seek works
     engine:seek(0)
     assert(find_call("PARK"), "controller must be operational (PARK callable)")
@@ -232,7 +232,7 @@ end
 print("\n--- 2. content_changed for different sequence → no reload ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     -- Verify controller is operational by checking seek works
     engine:seek(0)
     assert(find_call("PARK"), "controller must be operational (PARK callable)")
@@ -257,7 +257,7 @@ end
 print("\n--- 3. multiple edits → multiple reloads ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
 
     reset_playback_calls()
 
@@ -281,7 +281,7 @@ end
 print("\n--- 4. destroy() disconnects content_changed signal ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     engine:destroy()
 
     reset_playback_calls()
@@ -301,7 +301,7 @@ end
 print("\n--- 5. no controller → content_changed is safe no-op ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
 
     -- WHITE-BOX: Simulate no controller (test environment) — need to nil private
     -- field because there's no public API to remove the controller

@@ -301,7 +301,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     -- transport_mode starts "none"
@@ -334,7 +334,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:shuttle(1)  -- forward shuttle
 
@@ -367,7 +367,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Cycle 1: forward to end, unlatch backward
     engine:shuttle(1)
@@ -402,7 +402,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:activate_audio()
 
     engine:play()
@@ -434,7 +434,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -460,7 +460,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     playback_calls = {}
     engine:seek(30)
@@ -504,7 +504,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -538,7 +538,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -575,7 +575,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     engine:play()
@@ -600,7 +600,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     -- NOT calling activate_audio()
     mock_audio._calls = {}
 
@@ -625,12 +625,12 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine_a, _ = make_engine()
-    engine_a:load_sequence("seq1", 100)
+    engine_a:load_sequence("seq1", 100, 48000)
     local a_max = engine_a.max_media_time_us
     assert(a_max > 0, "Engine A max_media_time_us should be positive")
 
     local engine_b, _ = make_engine()
-    engine_b:load_sequence("seq1", 500)
+    engine_b:load_sequence("seq1", 500, 48000)
     local b_max = engine_b.max_media_time_us
     assert(b_max > a_max, "Engine B max should be > engine A max")
 
@@ -675,7 +675,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine_a, _ = make_engine()
-    engine_a:load_sequence("seq1", 100)
+    engine_a:load_sequence("seq1", 100, 48000)
 
     -- First activation → should apply_mix
     engine_a:activate_audio()
@@ -752,7 +752,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- nil volume on track → must assert
     local ok, err = pcall(function()
@@ -806,7 +806,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     local ok, err = pcall(function()
         engine:_compute_audio_speed_ratio({
@@ -858,7 +858,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     -- _try_audio with function that errors → must rethrow

@@ -19,6 +19,7 @@ local function reset_viewport(viewport_start, viewport_duration, playhead, conte
     data.state.is_playing = false
     data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
     data.state.sequence_id = "test_seq"
+    data.state.displayed_tab_id = "test_seq"
     data.state.project_id = "test_proj"
 end
 

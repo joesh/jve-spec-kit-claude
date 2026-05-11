@@ -92,6 +92,7 @@ print("-- Step 5: patch toggle (non-undoable) --")
 local r5a = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
+    track_type         = "AUDIO",
     source_track_index = 1,
     record_track_index = 1,
     enabled            = true,
@@ -102,6 +103,7 @@ assert(r5a and r5a.success,
 local r5b = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
+    track_type         = "AUDIO",
     source_track_index = 1,
     enabled            = false,
 })
@@ -130,6 +132,7 @@ print("-- Step 6: drag-redirect --")
 local r6 = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
+    track_type         = "AUDIO",
     source_track_index = 2,
     record_track_index = 4,
     enabled            = true,
@@ -267,8 +270,8 @@ end
 for i = 4, 8 do
     assert(db:exec(string.format([[
         INSERT INTO patches
-            (id, sequence_id, source_track_index, record_track_index, enabled, color, created_at)
-        VALUES ('p_%d', 'rec', %d, %d, 1, '#aabbcc', 0)
+            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
+        VALUES ('p_%d', 'rec', 'AUDIO', %d, %d, 1, '#aabbcc', 0)
     ]], i, i, i)), "FAIL Step 17: patches INSERT failed for source_track_index=" .. i)
 end
 

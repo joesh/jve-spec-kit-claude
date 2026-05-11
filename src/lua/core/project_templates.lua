@@ -41,23 +41,29 @@ local function template_filename(template)
     return template.name:lower():gsub("[%s%.]+", "_") .. ".jvp"
 end
 
---- Get path to template .jvp, generating it if missing (self-healing).
+--- Get path to a freshly-generated template .jvp.
+-- Always regenerates from the current schema.sql. Templates are cheap to
+-- build (~ms for one project + sequence + 6 tracks) and are not committed
+-- to the repo, so caching across runs has no benefit and creates a
+-- staleness class — a cached file with the right schema_version but
+-- columns added later (rule 2.15: schema changes must bump the version,
+-- but a parallel branch can ship a different V10-labelled schema). Always
+-- regenerating eliminates that whole class of bug.
 -- @param template table: entry from M.TEMPLATES
--- @return string: absolute path to .jvp file
+-- @return string: absolute path to freshly-generated .jvp file
 function M.get_template_path(template)
     assert(template and template.name, "project_templates.get_template_path: template required")
 
     local templates_dir = path_utils.resolve_repo_path("resources/templates")
     local path = templates_dir .. "/" .. template_filename(template)
 
-    -- Check if already exists
-    local f = io.open(path, "rb")
-    if f then
-        f:close()
-        return path
+    -- Remove any stale cached template before regenerating.
+    local existing = io.open(path, "rb")
+    if existing then
+        existing:close()
+        os.remove(path)
     end
 
-    -- Generate: open a temp database, create project + sequence + tracks, close
     log.event("Generating template: %s → %s", template.name, path)
 
     local database = require("core.database")

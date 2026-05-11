@@ -246,7 +246,7 @@ local function make_engine_with_controller()
     mock_next_audio_entries = {}
     timer_callbacks = {}
 
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:activate_audio()  -- claim audio ownership via public API
 
     -- Reset tracking AFTER load + audio activation
@@ -417,7 +417,7 @@ do
 
     local engine = make_engine()
     reset_playback_calls()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
 
     assert(find_call("SET_CLIP_PROVIDER"),
         "load_sequence must call SET_CLIP_PROVIDER")
@@ -435,7 +435,7 @@ do
     mock_next_video_entries = {}
     mock_audio_entries = {}
     mock_next_audio_entries = {}
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     -- WHITE-BOX: no public API to remove controller after load_sequence
     engine._playback_controller = nil  -- simulate no C++ controller
 

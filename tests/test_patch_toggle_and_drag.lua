@@ -1,13 +1,12 @@
 #!/usr/bin/env luajit
 
--- T018 (015) — patch on/off toggle + plain-drag redirect + cross-type refusal.
+-- T018 (015) — patch on/off toggle + plain-drag redirect + invalid-type refusal.
 --
 -- Domain behaviors under test (derive all expected values from spec, not code):
 --   1. Disabling a patch (enabled=0) persists and signals "deleted".
 --   2. Re-enabling (enabled=1) persists and signals "updated".
 --   3. Plain-drag redirect: SetPatch with record_track_index=N redirects routing.
---   4. Cross-track-type drag refused with an explicit error — audio source may
---      not be routed onto a video record row (and vice versa).
+--   4. Invalid track_type is refused.
 --
 -- NOT tested here: Insert/Overwrite behavior when channel is disabled (T042).
 
@@ -55,12 +54,12 @@ db:exec([[
 
 command_manager.init("seq", "proj")
 
-local function patch_row(src_idx)
+local function patch_row(track_type, src_idx)
     local s = db:prepare(
         "SELECT record_track_index, enabled FROM patches "
-        .. "WHERE sequence_id='seq' AND source_track_index=?")
+        .. "WHERE sequence_id='seq' AND track_type=? AND source_track_index=?")
     assert(s)
-    s:bind_value(1, src_idx)
+    s:bind_value(1, track_type); s:bind_value(2, src_idx)
     s:exec()
     if not s:next() then s:finalize(); return nil end
     local r = { rec = s:value(0), enabled = s:value(1) }
@@ -69,8 +68,9 @@ local function patch_row(src_idx)
 end
 
 local signals = {}
-Signals.connect("patch_changed", function(seq, src, change_type)
-    table.insert(signals, { seq = seq, src = src, change_type = change_type })
+Signals.connect("patch_changed", function(seq, track_type, src, change_type)
+    table.insert(signals, { seq = seq, track_type = track_type,
+                             src = src, change_type = change_type })
 end)
 local function last_signal() return signals[#signals] end
 
@@ -80,12 +80,11 @@ local r1 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     record_track_index = 0,
-    source_track_type  = "AUDIO",
-    record_track_type  = "AUDIO",
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r1 and r1.success, "create patch failed: " .. tostring(r1 and r1.error_message))
-local p1 = patch_row(0)
+local p1 = patch_row("AUDIO", 0)
 assert(p1 and p1.enabled == 1, "new patch must default enabled=1")
 assert(p1.rec == 0, "record_track_index must be 0")
 print("  A1→A1 created, enabled=1 — OK")
@@ -96,10 +95,11 @@ local r2 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     enabled            = 0,
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r2 and r2.success, "disable patch failed")
-local p2 = patch_row(0)
+local p2 = patch_row("AUDIO", 0)
 assert(p2 and p2.enabled == 0, "patch must be disabled after toggle OFF")
 local sig2 = last_signal()
 assert(sig2 and sig2.change_type == "deleted",
@@ -112,10 +112,11 @@ local r3 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     enabled            = 1,
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r3 and r3.success, "re-enable patch failed")
-local p3 = patch_row(0)
+local p3 = patch_row("AUDIO", 0)
 assert(p3 and p3.enabled == 1, "patch must be enabled after toggle ON")
 local sig3 = last_signal()
 assert(sig3 and sig3.change_type == "updated",
@@ -129,8 +130,7 @@ local rc = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 1,
     record_track_index = 1,
-    source_track_type  = "AUDIO",
-    record_track_type  = "AUDIO",
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(rc and rc.success, "create A2 patch failed")
@@ -140,39 +140,33 @@ local r4 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 1,
     record_track_index = 3,
-    source_track_type  = "AUDIO",
-    record_track_type  = "AUDIO",
+    track_type         = "AUDIO",
     project_id         = "proj",
 })
 assert(r4 and r4.success, "redirect failed: " .. tostring(r4 and r4.error_message))
-local p4 = patch_row(1)
+local p4 = patch_row("AUDIO", 1)
 assert(p4 and p4.rec == 3,
     "record_track_index must be 3 after redirect; got: " .. tostring(p4 and p4.rec))
 print("  A2 redirected to A4 (rec=3) — OK")
 
--- ── 5. Cross-track-type drag refusal ─────────────────────────────────────────
-print("-- 5. cross-type drag refused --")
--- AUDIO source dropped onto a VIDEO record row: must be refused regardless of index.
+-- ── 5. Invalid track_type refused ────────────────────────────────────────────
+print("-- 5. invalid track_type refused --")
 local r5 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     source_track_index = 0,
     record_track_index = 0,
-    source_track_type  = "AUDIO",
-    record_track_type  = "VIDEO",
+    track_type         = "MIDI",
     project_id         = "proj",
 })
 assert(r5 and not r5.success,
-    "cross-type drag must fail, but succeeded")
-assert(
-    r5.error_message:find("cross%-track%-type"),
-    "error must mention cross-type refusal; got: " .. tostring(r5.error_message))
-print("  cross-type drag refused with explicit error — OK")
+    "SetPatch with track_type='MIDI' must fail")
+print("  invalid track_type refused — OK")
 
 -- ── 6. SetPatch is not undoable ───────────────────────────────────────────────
 print("-- 6. SetPatch is not undoable --")
-local before_undo = patch_row(0)
+local before_undo = patch_row("AUDIO", 0)
 command_manager.undo()
-local after_undo = patch_row(0)
+local after_undo = patch_row("AUDIO", 0)
 assert(before_undo and after_undo and before_undo.enabled == after_undo.enabled,
     "SetPatch must not appear on undo stack (enabled changed after undo)")
 print("  undo did not revert patch — OK")

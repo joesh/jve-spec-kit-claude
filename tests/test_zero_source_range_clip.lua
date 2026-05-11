@@ -214,7 +214,7 @@ print("  PASS: assert fires correctly on zero source range")
 -- Test 2: _provide_clips with bad clip is catchable (pcall boundary works)
 --------------------------------------------------------------------------------
 print("TEST 2: _provide_clips with bad clip is catchable via pcall")
-engine:load_sequence("seq_with_bad_clip")
+engine:load_sequence("seq_with_bad_clip", nil, 48000)
 
 local provide_ok, provide_err = pcall(function()
     engine:_provide_clips(0, 1, "video")

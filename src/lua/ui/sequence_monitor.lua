@@ -347,6 +347,73 @@ end
 -- Sequence Loading
 --------------------------------------------------------------------------------
 
+--- Resolve the audio bus output rate to thread into PlaybackEngine for `seq`.
+--
+-- Both monitors (source + timeline) share one audio device, so they must
+-- output at the same rate. The project's audio bus rate is canonically
+-- the active record sequence's `audio_sample_rate` (record sequences must
+-- carry one — schema enforces NOT NULL on non-master kinds).
+--
+-- Two cases — both deterministic, neither a fallback:
+--   (a) `seq` itself is a record sequence (or a master that happens to
+--       have an audio_sample_rate set, e.g. it has audio media): use it.
+--   (b) `seq` is a video-only master: inherit from the active record sequence
+--       in timeline_state. Asserts the active record exists and has a rate
+--       — caller must establish a record sequence before loading a master
+--       into the source viewer.
+local function resolve_output_audio_rate(seq)
+    if seq.audio_sample_rate then
+        assert(type(seq.audio_sample_rate) == "number" and seq.audio_sample_rate > 0,
+            string.format(
+                "SequenceMonitor: sequence %s has invalid audio_sample_rate=%s",
+                tostring(seq.id), tostring(seq.audio_sample_rate)))
+        return seq.audio_sample_rate
+    end
+
+    -- audio_sample_rate=NULL is permitted only on video-only masters.
+    assert(seq:is_master(), string.format(
+        "SequenceMonitor: sequence %s has no audio_sample_rate but is not a "
+        .. "master — record/nested sequences must carry the bus rate "
+        .. "(schema NOT NULL)",
+        tostring(seq.id)))
+
+    local timeline_state = require("ui.timeline.timeline_state")
+    local active_id = timeline_state.get_active_sequence_id()
+    assert(active_id and active_id ~= "", string.format(
+        "SequenceMonitor: cannot resolve audio bus rate for video-only "
+        .. "master %s — no active record sequence is set; load a record "
+        .. "sequence into the timeline before loading a master into the "
+        .. "source viewer",
+        tostring(seq.id)))
+
+    local active_seq = Sequence.load(active_id)
+    assert(active_seq, string.format(
+        "SequenceMonitor: active_sequence_id=%s does not resolve to a sequence",
+        tostring(active_id)))
+    -- FR-005 invariant: a master sequence is NEVER the active sequence.
+    -- If active resolves to a master, the source-tab/click handlers leaked
+    -- master → active somewhere — surface that loudly rather than reading
+    -- the master's (legitimately nil) audio_sample_rate as a record's.
+    assert(not active_seq:is_master(), string.format(
+        "SequenceMonitor: active_sequence_id=%s resolves to a master "
+        .. "(name=%s) — masters must NEVER be the active sequence (FR-005). "
+        .. "Either source-tab click handler set active=master incorrectly, "
+        .. "or this project has no record sequence at all.",
+        tostring(active_id), tostring(active_seq.name)))
+    assert(active_seq.audio_sample_rate
+           and type(active_seq.audio_sample_rate) == "number"
+           and active_seq.audio_sample_rate > 0, string.format(
+        "SequenceMonitor: active record sequence %s (name=%s, kind=%s) has "
+        .. "invalid audio_sample_rate=%s — record sequences must carry a "
+        .. "positive audio bus rate. Likely cause: project file pre-dates "
+        .. "the schema_version=10 audio_sample_rate enforcement; re-import "
+        .. "from source per rule 2.15 (no in-place migration).",
+        tostring(active_id), tostring(active_seq.name),
+        tostring(active_seq.kind),
+        tostring(active_seq.audio_sample_rate)))
+    return active_seq.audio_sample_rate
+end
+
 --- Load a sequence (any kind: masterclip or timeline).
 -- @param sequence_id string
 -- @param opts table optional: { total_frames = number }
@@ -375,8 +442,12 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.sequence = seq
     self._project_gen = project_gen.current()
 
+    -- Resolve the audio bus rate THIS monitor will output at. Engine no longer
+    -- infers from the sequence — it requires an explicit positive rate.
+    local output_audio_rate = resolve_output_audio_rate(seq)
+
     -- Load engine (sets fps, total_frames, resets position)
-    self.engine:load_sequence(sequence_id, opts.total_frames)
+    self.engine:load_sequence(sequence_id, opts.total_frames, output_audio_rate)
 
     -- Sync state from engine
     self.start_frame = self.engine.start_frame or 0
@@ -700,8 +771,13 @@ function SequenceMonitor:save_playhead_to_db()
             self.playhead = self.start_frame
         end
     end
+    -- Surgical UPDATE — touches only playhead_frame. Full Sequence:save()
+    -- would re-bind every column on the cached sequence object, which
+    -- triggers spurious FK failures if any of those cached fields are
+    -- stale (e.g., project_id from a prior project). The playhead persist
+    -- must not be coupled to the validity of unrelated fields.
     self.sequence.playhead_position = self.playhead
-    self.sequence:save()
+    Sequence.update_playhead(self.sequence.id, self.playhead)
 end
 
 function SequenceMonitor:_schedule_persist()

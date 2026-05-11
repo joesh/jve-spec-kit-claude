@@ -121,11 +121,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 tostring(target_master_id))
         end
 
-        local ok, err = pcall(source_viewer.load_master_clip, target_master_id)
-        if not ok then
-            set_last_error("MatchFrame: " .. tostring(err))
-            return false
-        end
+        -- No pcall: source_viewer.load_master_clip uses fail-fast asserts
+        -- (rule 1.14). A missing audio bus rate, missing source monitor, or
+        -- engine config error is a bug to surface — wrapping in pcall and
+        -- routing through set_last_error is silent failure (rule 2.32).
+        source_viewer.load_master_clip(target_master_id)
 
         return true
     end

@@ -30,9 +30,11 @@ local function resolve_source_monitor()
 end
 
 local function open_source_tab(master_seq_id)
-    local timeline_panel = require("ui.timeline.timeline_panel")
     if master_seq_id and master_seq_id ~= "" then
-        timeline_panel.open_tab(master_seq_id)
+        -- Single canonical pointer-update entry point: switch_to_source_tab
+        -- emits displayed_tab_changed. The timeline_panel listener does the
+        -- body rebuild (headers + clips + engine + tab widget). Auto-open
+        -- (FR-001b) and this menu command share the same downstream path.
         local ts = require("ui.timeline.timeline_state")
         ts.switch_to_source_tab(master_seq_id)
     end

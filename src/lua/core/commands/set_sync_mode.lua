@@ -18,9 +18,10 @@ local VALID_MODES = { off = true, ripple = true, cut = true }
 local SPEC = {
     undoable = false,
     args = {
-        track_id   = { required = true },
-        sync_mode  = { required = true },
-        project_id = { required = true },
+        track_id    = { required = true },
+        sync_mode   = { required = true },
+        sequence_id = {},  -- injected by execute_interactive in UI context
+        project_id  = { required = true },
     },
 }
 
@@ -50,15 +51,12 @@ function M.execute(args)
     return true
 end
 
-function M.register(command_executors, _command_undoers, _db, set_last_error)
+function M.register(command_executors, _command_undoers, _db, _set_last_error)
+    -- Canonical command pattern: executor calls M.execute directly. Asserts
+    -- propagate to command_manager's xpcall logger (rule 2.32).
     command_executors["SetSyncMode"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
-        if not ok then
-            set_last_error("SetSyncMode: " .. tostring(err))
-            return false
-        end
-        return true
+        return M.execute(args)
     end
 
     return {

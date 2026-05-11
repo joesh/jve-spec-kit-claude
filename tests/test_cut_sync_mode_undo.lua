@@ -7,7 +7,9 @@
 -- T1 (cut-mode splits spanning clip):
 --   When a clip on V1 is ripple-trimmed, and V2 has sync_mode='cut', a V2 clip
 --   that spans the trim boundary is split at that boundary. The left half stays
---   anchored; the right half shifts with the downstream content.
+--   anchored; the right half stays at its original TC position (cut-mode
+--   preserves downstream TC under the current workaround — see
+--   test_ripple_sync_cut header).
 --
 -- T2 (undo restores exact pre-trim state):
 --   After undoing the ripple trim, the DB must return to exactly the pre-trim

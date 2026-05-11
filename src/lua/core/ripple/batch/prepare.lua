@@ -53,5 +53,29 @@ function M.snapshot_edge_infos(ctx)
     ctx.command:set_parameter("edge_infos", stored_edge_infos)
 end
 
+function M.load_track_sync_modes(ctx, db)
+    assert(ctx and ctx.sequence_id and ctx.sequence_id ~= "",
+        "BatchRippleEdit: missing sequence_id for load_track_sync_modes")
+    assert(db, "BatchRippleEdit: missing db handle")
+
+    local stmt = db:prepare("SELECT id, sync_mode FROM tracks WHERE sequence_id=?")
+    assert(stmt, "BatchRippleEdit: failed to prepare track sync_modes query")
+    stmt:bind_value(1, ctx.sequence_id)
+    assert(stmt:exec(), "BatchRippleEdit: failed to query track sync_modes")
+
+    ctx.track_sync_modes = {}
+    while stmt:next() do
+        local track_id = stmt:value(0)
+        local sync_mode = stmt:value(1)
+        assert(sync_mode and sync_mode ~= "", string.format(
+            "load_track_sync_modes: track %s has NULL sync_mode — project DB "
+            .. "is older than schema_version=10; re-import the project from "
+            .. "source (no in-place migration path per rule 2.15)",
+            tostring(track_id)))
+        ctx.track_sync_modes[track_id] = sync_mode
+    end
+    stmt:finalize()
+end
+
 return M
 
