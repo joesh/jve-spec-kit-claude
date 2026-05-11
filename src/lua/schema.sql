@@ -170,6 +170,15 @@ CREATE TABLE IF NOT EXISTS tracks (
     sync_mode TEXT NOT NULL DEFAULT 'ripple'
         CHECK (sync_mode IN ('off','ripple','cut')),
 
+    -- 015 FR-038: record-track auto-select (Avid "track auto-select" /
+    -- Premiere "track targeting"). Distinct from `enabled` (mix output)
+    -- and from patch.enabled (per-channel routing). AND-gated with
+    -- patch.enabled at edit time: a source channel participates in an
+    -- edit iff (no patch row OR patch.enabled=1) AND record_track.autoselect=1.
+    -- Domain default: on (1).
+    autoselect INTEGER NOT NULL DEFAULT 1
+        CHECK (autoselect IN (0,1)),
+
     UNIQUE(sequence_id, track_type, track_index)
 );
 

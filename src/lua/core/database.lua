@@ -902,7 +902,7 @@ function M.load_tracks(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked, sync_mode
+        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked, sync_mode, autoselect
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -932,6 +932,7 @@ function M.load_tracks(sequence_id)
                 soloed = query:value(6) == 1,
                 locked = query:value(7) == 1,
                 sync_mode = sync_mode,
+                autoselect = query:value(9) == 1,
             })
         end
     end

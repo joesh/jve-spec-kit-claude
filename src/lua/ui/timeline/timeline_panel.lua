@@ -1250,11 +1250,23 @@ local function render_src_btn(src_btn, sequence_id, track_type, rec_track_index)
         build_id_btn_stylesheet(enabled, source_tab_color))
 end
 
+-- Render the rec-patch-id button per its track's autoselect (FR-038):
+-- ON (filled) participates in selection-driven ops, OFF (outlined) is excluded.
+local function render_rec_btn(rec_btn, track_id)
+    local t = Track.load(track_id)
+    assert(t, string.format("render_rec_btn: track %s not found", tostring(track_id)))
+    qt_constants.PROPERTIES.SET_STYLE(rec_btn,
+        build_id_btn_stylesheet(t.autoselect, selection_color))
+end
+
 -- src_btn label: which SOURCE track feeds this record row (reverse-lookup from patches).
--- rec_btn label: this record track's own name — set at creation, never changed here.
-local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_index, track_type)
+-- rec_btn label: this record track's own name (text set at creation); style toggles
+-- per track.autoselect.
+local function wire_patch_buttons(src_btn, rec_btn, sequence_id, rec_track_id, rec_track_index, track_type)
     assert(sequence_id and sequence_id ~= "",
         "wire_patch_buttons: sequence_id required (rec_track_index=" .. tostring(rec_track_index) .. ")")
+    assert(rec_track_id and rec_track_id ~= "",
+        "wire_patch_buttons: rec_track_id required (rec_track_index=" .. tostring(rec_track_index) .. ")")
     assert(type(rec_track_index) == "number",
         "wire_patch_buttons: rec_track_index must be number, got " .. type(rec_track_index))
     assert(track_type == "VIDEO" or track_type == "AUDIO",
@@ -1262,6 +1274,22 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
     local Patch = require("models.patch")
 
     render_src_btn(src_btn, sequence_id, track_type, rec_track_index)
+    render_rec_btn(rec_btn, rec_track_id)
+
+    -- rec-id click toggles tracks.autoselect via the non-undoable
+    -- ToggleTrackPreference command (FR-040a). Outlined ↔ filled
+    -- mirrors the src-id button's enable/disable visual.
+    local rec_handler = register_track_btn_handler(function()
+        local project_id = timeline_state.get_project_id()
+        assert(project_id, "wire_patch_buttons: no project_id (rec_track_id="
+            .. tostring(rec_track_id) .. ")")
+        local cmd = require("core.command_manager")
+        cmd.execute("ToggleTrackPreference", {
+            track_id = rec_track_id, property = "autoselect", project_id = project_id,
+        })
+        render_rec_btn(rec_btn, rec_track_id)
+    end)
+    qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(rec_btn, rec_handler)
 
     local src_handler = register_track_btn_handler(function()
         -- src-id click toggles routing for this rec row.
@@ -1512,7 +1540,7 @@ local function create_video_headers()
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         local video_seq_id = state.get_sequence_id()
-        wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.track_index, "VIDEO")
+        wire_patch_buttons(src_btn, rec_btn, video_seq_id, track.id, track.track_index, "VIDEO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
             track_index = track.track_index,
@@ -1733,7 +1761,7 @@ local function create_audio_headers()
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
 
         local audio_seq_id = state.get_sequence_id()
-        wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.track_index, "AUDIO")
+        wire_patch_buttons(src_btn, rec_btn, audio_seq_id, track.id, track.track_index, "AUDIO")
         table.insert(rec_btn_hit_registry, {
             rec_btn     = rec_btn,
             track_index = track.track_index,

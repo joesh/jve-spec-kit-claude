@@ -13,7 +13,10 @@ local M = {}
 local Track = require("models.track")
 local log   = require("core.logger").for_area("commands")
 
-local ALLOWED = { muted = true, soloed = true, locked = true, enabled = true }
+-- autoselect (Avid track auto-select / Premiere track targeting): F4
+-- per spec §3, distinct from mix `enabled`. AND-gated with patch.enabled
+-- at edit time. Per FR-040a, also routed via this non-undoable command.
+local ALLOWED = { muted = true, soloed = true, locked = true, enabled = true, autoselect = true }
 
 local SPEC = {
     undoable = false,
