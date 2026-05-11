@@ -842,6 +842,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function resolve_gap_at_boundary(ctx, track_id, track_clips, boundary_frame, is_in_edge)
         local existing = find_gap_at_boundary(track_clips, boundary_frame)
         if existing then return existing end
+
+        -- A clip starts exactly at boundary_frame on this track → anchor
+        -- the implied gap at the boundary itself so the bulk_shift picks
+        -- up that boundary-coincident clip. Without this, the downstream-
+        -- anchor lookup uses a strict `>` preference and skips coincident
+        -- clips, shifting the propagated boundary past them (Joe's
+        -- V4-extends-but-V1-clip-doesn't-ripple bug).
+        for _, c in ipairs(track_clips) do
+            if not c.is_gap and c.timeline_start == boundary_frame then
+                return synthesize_implied_gap(ctx, track_id, boundary_frame)
+            end
+        end
+
+        -- Otherwise, fall back to the downstream-anchor's start. This
+        -- handles the case where boundary_frame lands INSIDE a spanning
+        -- content clip; "downstream content begins" only at the next
+        -- clip past the spanning one.
         local anchor_clip = find_implied_gap_anchor_clip(track_clips, boundary_frame, is_in_edge)
         if not anchor_clip then return nil end
         return synthesize_implied_gap(ctx, track_id, anchor_clip.timeline_start)
@@ -849,7 +866,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- Append a gap.in edge into edge_infos, capturing its original state
     -- for undo. No-op if we've already injected an edge for this gap.
-    local function inject_gap_edge(ctx, gap, track_id, injected_set)
+    local function inject_gap_edge(ctx, gap, track_id, injected_set, boundary_frame)
         if injected_set[gap.id] then return end
         injected_set[gap.id] = true
         ctx.original_states_map[gap.id] = command_helper.capture_clip_state(gap)
@@ -859,6 +876,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             track_id = track_id,
             trim_type = "ripple",
             is_implicit_injection = true,
+            -- The ripple boundary on this propagated track. Used by
+            -- compute_ripple_point so the propagation anchors at the
+            -- edit frame even when the injected edge belongs to a
+            -- spanning gap whose own timeline_start is far upstream
+            -- (which would otherwise collapse earliest_ripple_time to
+            -- the gap's start and shift unrelated clips).
+            implicit_boundary_frame = boundary_frame,
         })
     end
 
@@ -879,7 +903,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local gap = resolve_gap_at_boundary(
                         ctx, track_id, track_clips, entry.frame, entry.is_in_edge)
                     if gap then
-                        inject_gap_edge(ctx, gap, track_id, injected)
+                        inject_gap_edge(ctx, gap, track_id, injected, entry.frame)
                     end
                 end
             end
@@ -1445,12 +1469,38 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         })
     end
 
-    local function compute_ripple_point(original, clip, _normalized_edge)
-        local source = original or clip
-        if not source or not source.timeline_start then
-            return clip.timeline_start + clip.duration
+    -- The ripple boundary frame for a given edge — the timeline frame at
+    -- which downstream content begins to shift on every ripple track.
+    -- For an OUT-edge edit it's the clip's OUT (start+duration); for an
+    -- IN-edge edit it's the clip's IN (start). Using OUT for both was a
+    -- bug: in-edge extends produced a boundary past the dragged clip,
+    -- so co-located clips on other tracks that started at the IN edge
+    -- weren't included in the shift.
+    --
+    -- For implicit-injected gap edges (inject_implicit_gap_edges), the
+    -- carried `implicit_boundary_frame` wins: a spanning gap's own
+    -- timeline_start can sit far upstream of the edit's anchor and
+    -- would otherwise pull earliest_ripple_time down to that upstream
+    -- frame, shifting every unrelated clip on every track without a
+    -- per-track override.
+    local function compute_ripple_point(edge_info, original, clip, normalized_edge)
+        assert(normalized_edge == "in" or normalized_edge == "out",
+            string.format("compute_ripple_point: unexpected normalized_edge '%s'",
+                tostring(normalized_edge)))
+        if edge_info and edge_info.is_implicit_injection then
+            local b = edge_info.implicit_boundary_frame
+            assert(type(b) == "number", string.format(
+                "compute_ripple_point: implicit-injected edge for clip %s missing implicit_boundary_frame",
+                tostring(edge_info.clip_id)))
+            return b
         end
-        return source.timeline_start + source.duration
+        local source = original or clip
+        local ts = (source and source.timeline_start) or clip.timeline_start
+        local dur = (source and source.duration) or clip.duration
+        if normalized_edge == "in" then
+            return ts
+        end
+        return ts + dur
     end
 
     local function update_earliest_ripple_time(ctx, point)
@@ -1608,7 +1658,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         record_blocked_gap_edge(ctx, key, clip, original, applied_delta)
-        local ripple_point = compute_ripple_point(original, clip, normalized_edge)
+        local ripple_point = compute_ripple_point(edge_info, original, clip, normalized_edge)
 
         if edge_info.trim_type ~= "roll" then
             register_ripple_anchor(ctx, normalized_edge, clip.is_gap == true,
