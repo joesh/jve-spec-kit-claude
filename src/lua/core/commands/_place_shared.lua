@@ -195,10 +195,28 @@ local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
     return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
 end
 
+-- Resolve which record audio track index a given source channel routes to.
+-- Returns rec_idx (number) or nil if the channel is dropped.
+-- Per FR-049 (015): absence ⇒ identity-and-enabled.
+--   no patch         → identity (rec_idx = src_idx)
+--   patch.enabled=1  → patch.record_track_index
+--   patch.enabled=0  → nil (channel dropped)
+local function resolve_patch_routing(owner_id, src_idx)
+    local Patch = require("models.patch")
+    local p = Patch.find_by_source(owner_id, "AUDIO", src_idx)
+    if not p then return src_idx end
+    if p.enabled == 1 or p.enabled == true then
+        return p.record_track_index
+    end
+    return nil
+end
+
 -- Build the audio_targets list: one entry per A clip to create. Composite
 -- emits 1 entry with NULL master_audio_track_id; expanded emits N entries,
--- one per nested A track. Auto-creates missing owner A tracks for the
--- expanded path; refuses on collision (rule 1.14, FR-023).
+-- one per included nested A track. Auto-creates missing owner A tracks
+-- for the expanded path; refuses on collision (rule 1.14, FR-023).
+-- Per FR-049 AND-gate: a source channel is included iff
+--   (no patch OR patch.enabled=1) AND record_track.autoselect=1.
 local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
                                      owner_duration)
     if drop_mode == "composite" then
@@ -214,29 +232,41 @@ local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
     assert(#nested_a > 0, string.format(
         "place_shared: expanded audio_drop_mode requires nested %s to have "
         .. "at least one A track; got 0", nested.id))
-    local owner_a_by_index = {}
+    local owner_a_by_index, owner_a_autoselect = {}, {}
     for _, t in ipairs(Track.find_by_sequence(owner.id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
+        owner_a_autoselect[t.track_index] = (t.autoselect ~= false)
     end
 
     local targets = {}
     for _, nt in ipairs(nested_a) do
-        local owner_track_id = owner_a_by_index[nt.track_index]
-        if not owner_track_id then
-            local newt = Track.create_audio(
-                string.format("Audio %d", nt.track_index), owner.id,
-                { id = uuid.generate(), index = nt.track_index })
-            assert(newt:save(), string.format(
-                "place_shared: failed to auto-create owner A track at index %d "
-                .. "on sequence %s", nt.track_index, owner.id))
-            owner_track_id = newt.id
-            owner_a_by_index[nt.track_index] = owner_track_id
+        local rec_idx = resolve_patch_routing(owner.id, nt.track_index)
+        if rec_idx ~= nil then
+            local owner_track_id = owner_a_by_index[rec_idx]
+            local autoselect_on
+            if owner_track_id then
+                autoselect_on = owner_a_autoselect[rec_idx]
+            else
+                -- Track doesn't exist yet → auto-create (defaults autoselect=on).
+                local newt = Track.create_audio(
+                    string.format("Audio %d", rec_idx), owner.id,
+                    { id = uuid.generate(), index = rec_idx })
+                assert(newt:save(), string.format(
+                    "place_shared: failed to auto-create owner A track at index %d "
+                    .. "on sequence %s", rec_idx, owner.id))
+                owner_track_id = newt.id
+                owner_a_by_index[rec_idx] = owner_track_id
+                owner_a_autoselect[rec_idx] = true
+                autoselect_on = true
+            end
+            if autoselect_on then
+                targets[#targets + 1] = {
+                    track_id              = owner_track_id,
+                    master_audio_track_id = nt.id,
+                    source_out            = a_dur,
+                }
+            end
         end
-        targets[#targets + 1] = {
-            track_id              = owner_track_id,
-            master_audio_track_id = nt.id,
-            source_out            = a_dur,
-        }
     end
 
     -- Collision check across the owner-frame placement window.
