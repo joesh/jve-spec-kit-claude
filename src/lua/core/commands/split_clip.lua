@@ -203,7 +203,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             updates     = { mutation_entry(left) },
         })
         Signals.emit("sequence_content_changed", args.sequence_id)
-        return true, { second_clip_id = result_or_err.second_clip_id }
+        return { success = true, result_data = result_or_err }
     end
 
     command_undoers["SplitClip"] = function(command)

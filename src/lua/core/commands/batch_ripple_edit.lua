@@ -51,7 +51,6 @@ local ripple_undo = require("core.ripple.undo_hydrator")
 local gap_lifecycle = require("core.gap_lifecycle")
 local batch_context = require("core.ripple.batch.context")
 local batch_pipeline = require("core.ripple.batch.pipeline")
-local SplitClip = require("core.commands.split_clip")
 
 local compute_edge_boundary_time = ripple_edge.compute_edge_boundary_time
 local build_edge_key = ripple_edge.build_edge_key
@@ -646,6 +645,30 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local track_clips = ctx.track_clip_map[track_id]
                     if not track_clips then goto continue_track end
 
+                    -- Two cases:
+                    --   forward execute → spanning clip exists, split it.
+                    --   redo            → spanning clip is already split (the
+                    --                     nested SplitClip was redone earlier
+                    --                     in the group walk by redo_group);
+                    --                     just re-mark the left half so the
+                    --                     blocker check skips it.
+                    -- undo_redo_in_progress also short-circuits any nested
+                    -- command_manager.execute back to noop, so trying to
+                    -- re-run SplitClip here during redo would fail anyway.
+                    local command_manager = require("core.command_manager")
+                    if command_manager.is_undo_redo_in_progress() then
+                        for _, c in ipairs(track_clips) do
+                            if not c.is_gap then
+                                local c_end = c.timeline_start + c.duration
+                                if c_end == trim_point then
+                                    ctx.cut_left_halves[c.id] = true
+                                end
+                            end
+                        end
+                        ctx.cut_dispatch_tracks[track_id] = true
+                        goto continue_track
+                    end
+
                     -- Collect spanning clips first to avoid mutating the list
                     -- while iterating it.
                     local to_split = {}
@@ -658,58 +681,44 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         end
                     end
 
+                    -- Run each split as a nested SplitClip command. The nested
+                    -- command goes through the standard command_manager pipeline
+                    -- — it writes its own DB rows, applies its own clip_state
+                    -- mutations, and registers its own undo entry under this
+                    -- BatchRippleEdit's undo group. On undo the group walk
+                    -- reverses each SplitClip independently.
                     for _, c in ipairs(to_split) do
-                        -- Capture the left half's original state BEFORE SplitClip
-                        -- modifies it, so the undoer can restore it later.
-                        if not ctx.original_states_map[c.id] then
-                            ctx.original_states_map[c.id] = command_helper.capture_clip_state(c)
-                        end
                         local orig_duration = c.duration
-                        local split_result = SplitClip.execute({
+                        local split_res, _ = command_manager.execute("SplitClip", {
                             sequence_id = ctx.sequence_id,
+                            project_id  = ctx.project_id,
                             clip_id     = c.id,
                             split_frame = trim_point,
                         })
-                        -- The left half's duration is now split_offset frames.
-                        -- Mark it so find_track_boundary_neighbors skips it as
-                        -- a blocker (the right half overlaps it intentionally).
-                        ctx.cut_left_halves[c.id] = true
-                        c.duration = split_result.split_offset
+                        assert(split_res and split_res.success, string.format(
+                            "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
+                            tostring(c.id),
+                            tostring(split_res and split_res.error_message)))
+                        local split_data = split_res.result_data
+                        assert(split_data, "BatchRippleEdit cut: SplitClip returned no result_data")
 
-                        local right_duration = orig_duration - split_result.split_offset
+                        -- Mark the left half so find_track_boundary_neighbors
+                        -- skips it as a blocker for the right-half overlap.
+                        ctx.cut_left_halves[c.id] = true
+                        c.duration = split_data.split_offset
+
+                        local right_duration = orig_duration - split_data.split_offset
                         assert(right_duration >= 1, string.format(
                             "cut-mode split on clip %s produced sub-frame right half "
                             .. "(orig_dur=%d split_offset=%d)",
-                            tostring(c.id), orig_duration, split_result.split_offset))
-                        local right_source_in  = split_result.prior.source_in_frame
-                                               + split_result.source_offset
-                        local right_source_out = split_result.prior.source_out_frame
+                            tostring(c.id), orig_duration, split_data.split_offset))
 
-                        -- Record undo order: UPDATE left half (restore original duration),
-                        -- then DELETE right half (it was inserted by SplitClip).
-                        table.insert(ctx.cut_order, {type = "update", clip_id = c.id})
-                        table.insert(ctx.cut_order, {type = "insert", clip_id = split_result.second_clip_id})
-
-                        -- Record for emit_cut_split_timeline_mutations so the
-                        -- in-memory timeline_state can be updated after the DB
-                        -- apply without re-issuing any SQL.
-                        table.insert(ctx.cut_split_results, {
-                            left_id              = c.id,
-                            right_id             = split_result.second_clip_id,
-                            track_id             = track_id,
-                            left_duration_frames  = split_result.split_offset,
-                            left_source_out_frame = split_result.prior.source_in_frame
-                                                  + split_result.source_offset,
-                            right_timeline_start  = trim_point,
-                            right_duration_frames = right_duration,
-                            right_source_in_frame = right_source_in,
-                            right_source_out_frame = right_source_out,
-                        })
-
-                        -- Synthesize the right half in the ctx cache so that
-                        -- emit_bulk_shift_mutations finds it as first_downstream.
+                        -- Synthesize the right half in the ctx cache so the
+                        -- rest of the BatchRippleEdit pipeline sees it. (The
+                        -- nested SplitClip already updated clip_state; ctx is
+                        -- a separate in-flight cache.)
                         local right = {
-                            id             = split_result.second_clip_id,
+                            id             = split_data.second_clip_id,
                             track_id       = track_id,
                             timeline_start = trim_point,
                             duration       = right_duration,
@@ -719,7 +728,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         ctx.clip_lookup[right.id]       = right
                         ctx.clip_track_lookup[right.id] = track_id
 
-                        -- Insert right half into track_clip_map in timeline order.
                         local insert_pos = #track_clips + 1
                         for j, tc in ipairs(track_clips) do
                             if tc.timeline_start > trim_point then
@@ -881,14 +889,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Derive the set of tracks that have clips in the bounded cache —
     -- these are the "affected" tracks the ripple/roll can touch.
     -- sync_mode='off'  → excluded: downstream clips must not shift.
-    -- sync_mode='cut'  → excluded: cut mode preserves downstream TC.
-    --                    apply_sync_mode_dispatch splits the spanning clip
-    --                    at the trim point; the resulting right half stays
-    --                    at its original TC position. A natural gap forms
-    --                    between the anchor's new out-edge and the unmoved
-    --                    right half (implicit filler). Clips already past
-    --                    the split also stay put — rippling them would
-    --                    overlap the right half they were just split from.
+    -- sync_mode='cut'  → excluded for now. Per spec F3 cut should equal
+    --                    "ripple + cut", but on shrink-trim of a clip
+    --                    that spans the trim point, rippling the right
+    --                    half backward overlaps the left half it was
+    --                    just split from — VIDEO_OVERLAP fires. Until
+    --                    Joe decides between (a) allow overlap on audio,
+    --                    refuse on video via max-shift clamp, (b) keep
+    --                    preserve-TC for the split right half on shrink
+    --                    only, the cut track stays out of bulk_shift and
+    --                    the split right half is inserted at trim_point
+    --                    (preserves TC, gap forms on the ripple side).
     local function collect_affected_tracks_from_cache(ctx)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.affected_tracks = {}
@@ -2092,13 +2103,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local order = {}
-        -- Cut-mode splits run BEFORE the main trim, so their undo entries must
-        -- appear FIRST in the order list (revert_mutations iterates in reverse,
-        -- so the split is undone LAST — after the trim is restored). This ensures
-        -- the DB never enters an overlap state during undo.
-        for _, entry in ipairs(ctx.cut_order) do
-            table.insert(order, entry)
-        end
         for _, mut in ipairs(ctx.planned_mutations) do
             if type(mut) == "table" and mut.type and mut.clip_id and mut.type ~= "gap_preview" then
                 -- Skip gap-clip mutations: gaps are recomputed by
@@ -2112,37 +2116,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         ctx.command:set_parameter("executed_mutation_order", order)
         ctx.command:set_parameter("executed_mutations", nil)
-    end
-
-    -- Inject in-memory-only mutations for clips that the cut-mode dispatch
-    -- split via SplitClip.execute. SplitClip already wrote both halves to
-    -- the DB, so we must NOT add them to ctx.planned_mutations (which drives
-    -- the SQL layer). We add them directly to __timeline_mutations so that
-    -- clip_state can (a) shrink the left half's duration and (b) materialise
-    -- the right half at its PRE-shift position before the bulk_shift fires.
-    local function emit_cut_split_timeline_mutations(ctx, seq_id)
-        if not ctx.cut_split_results then return end
-        for _, sr in ipairs(ctx.cut_split_results) do
-            -- Left half: update duration and source_out in clip_state.
-            command_helper.add_update_mutation(ctx.command, seq_id, {
-                clip_id          = sr.left_id,
-                duration_value   = sr.left_duration_frames,
-                source_out_value = sr.left_source_out_frame,
-            })
-            -- Right half: load from DB (SplitClip already wrote it) and insert
-            -- with a full payload so the clip has frame_rate, fps_mismatch_policy,
-            -- nested_sequence_id, etc. required for future operations on the clip.
-            -- Mirrors the emit_timeline_mutations path for planned "insert" mutations.
-            local right_clip = Clip.load_optional(sr.right_id)
-            assert(right_clip, string.format(
-                "emit_cut_split_timeline_mutations: right half %s missing from DB after SplitClip",
-                tostring(sr.right_id)))
-            local payload = command_helper.clip_insert_payload(right_clip, seq_id)
-            assert(payload, string.format(
-                "emit_cut_split_timeline_mutations: clip_insert_payload returned nil for right half %s",
-                tostring(sr.right_id)))
-            command_helper.add_insert_mutation(ctx.command, seq_id, payload)
-        end
     end
 
     -- Walk ctx.planned_mutations and emit the incremental UI-sync
@@ -2408,7 +2381,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         assert(ctx.sequence_id and ctx.sequence_id ~= "",
             "BatchRippleEdit: missing sequence_id for timeline mutations")
-        emit_cut_split_timeline_mutations(ctx, ctx.sequence_id)
         emit_timeline_mutations(ctx, ctx.sequence_id)
 
         log.event("Batch ripple: processed %d edges, downstream shift %d frames",

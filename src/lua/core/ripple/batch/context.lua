@@ -63,8 +63,6 @@ function M.create(command)
         sync_off_tracks = {},
         cut_left_halves = {},
         cut_dispatch_tracks = {},
-        cut_split_results = {},
-        cut_order = {},
     }
 
     if ctx.edge_infos_raw then
