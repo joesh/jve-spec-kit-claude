@@ -693,14 +693,45 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     -- synthesize the split locally in ctx and skip the DB write.
                     -- The ripple math downstream uses only timeline_start/duration
                     -- so a structural stub is sufficient for the preview.
+                    -- ctx.clip_lookup, ctx.all_clips and ctx.track_clip_map
+                    -- entries are SHARED references with timeline_state's clip
+                    -- index. The commit path can mutate them because nested
+                    -- SplitClip's __timeline_mutations have already updated
+                    -- timeline_state to match. The dry-run path has no such
+                    -- mutation — mutating shared references would pollute
+                    -- timeline_state and break subsequent commands. Detach a
+                    -- per-track copy of the clip list (and clone the spanning
+                    -- clip in dry-run) so ctx-only edits stay isolated.
                     local uuid = require("uuid")
+                    if ctx.dry_run then
+                        local detached = {}
+                        for _, tc in ipairs(track_clips) do detached[#detached + 1] = tc end
+                        track_clips = detached
+                        ctx.track_clip_map[track_id] = detached
+                    end
+
                     for _, c in ipairs(to_split) do
                         local orig_duration = c.duration
                         local split_offset  = trim_point - c.timeline_start
                         local right_id
+                        local left
                         if ctx.dry_run then
+                            -- Shallow clone the spanning clip so the duration
+                            -- mutation lands on ctx only. Swap it into the
+                            -- detached track_clips and ctx.clip_lookup; the
+                            -- shared timeline_state object stays intact.
+                            left = {}
+                            for k, v in pairs(c) do left[k] = v end
+                            for j, tc in ipairs(track_clips) do
+                                if tc.id == c.id then track_clips[j] = left; break end
+                            end
+                            for j, ac in ipairs(ctx.all_clips) do
+                                if ac.id == c.id then ctx.all_clips[j] = left; break end
+                            end
+                            ctx.clip_lookup[c.id] = left
                             right_id = uuid.generate()
                         else
+                            left = c
                             local split_res = command_manager.execute("SplitClip", {
                                 sequence_id = ctx.sequence_id,
                                 project_id  = ctx.project_id,
@@ -722,14 +753,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                         -- Mark the left half so find_track_boundary_neighbors
                         -- skips it as a blocker for the right-half overlap.
-                        ctx.cut_left_halves[c.id] = true
-                        c.duration = split_offset
+                        ctx.cut_left_halves[left.id] = true
+                        left.duration = split_offset
 
                         local right_duration = orig_duration - split_offset
                         assert(right_duration >= 1, string.format(
                             "cut-mode split on clip %s produced sub-frame right half "
                             .. "(orig_dur=%d split_offset=%d)",
-                            tostring(c.id), orig_duration, split_offset))
+                            tostring(left.id), orig_duration, split_offset))
 
                         -- Synthesize the right half in the ctx cache so the
                         -- rest of the BatchRippleEdit pipeline sees it. (On

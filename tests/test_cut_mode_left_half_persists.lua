@@ -41,6 +41,7 @@ local layout = ripple_layout.create({
     },
 })
 
+layout:init_timeline_state()
 local db = database.get_connection()
 assert(db:exec("UPDATE tracks SET sync_mode='cut'    WHERE id='trk_v1'"))
 assert(db:exec("UPDATE tracks SET sync_mode='ripple' WHERE id='trk_v2'"))
@@ -61,12 +62,19 @@ end
 local pre_count = count_v1_clips()
 assert(pre_count == 1, "fixture should start with 1 clip on V1, got " .. pre_count)
 
-local dry = command_manager.execute("BatchRippleEdit", {
-    sequence_id  = layout.sequence_id, project_id = layout.project_id,
-    edge_infos   = {{clip_id="c_v2", edge_type="in", trim_type="ripple", track_id="trk_v2"}},
-    delta_frames = DELTA, dry_run = true,
-})
-assert(dry and dry.success, "dry_run BatchRippleEdit failed")
+-- Match production: the UI invokes the executor directly for dry-run so
+-- the command doesn't persist as an undo entry. Going through
+-- command_manager.execute would record a separate top-level command in
+-- history that interferes with subsequent undo.
+local Command = require("command")
+local dry_cmd = Command.create("BatchRippleEdit", layout.project_id)
+dry_cmd:set_parameter("sequence_id",  layout.sequence_id)
+dry_cmd:set_parameter("edge_infos",   {{clip_id="c_v2", edge_type="in", trim_type="ripple", track_id="trk_v2"}})
+dry_cmd:set_parameter("delta_frames", DELTA)
+dry_cmd:set_parameter("dry_run",      true)
+local dry_exec = command_manager.get_executor("BatchRippleEdit")
+local dry_ok = dry_exec(dry_cmd)
+assert(dry_ok, "dry_run BatchRippleEdit failed")
 local mid_count = count_v1_clips()
 assert(mid_count == 1, string.format(
     "FAIL: dry_run mutated DB — V1 clip count went from %d to %d. "
@@ -108,5 +116,30 @@ print(string.format("  V1 right half OK: id=%s ts=1000 dur=%d", right_id, right_
 
 -- (V2 itself moves as a side effect of the bulk shift on V2's track;
 -- exercising that is a separate concern from the cut bug this test owns.)
+
+-- ── Step 3: undo. The nested SplitClip under this command's group must
+-- be reversed: right half deleted, original clip restored to full bounds.
+local undo_r = command_manager.undo()
+assert(undo_r and undo_r.success, "undo failed: " .. tostring(undo_r and undo_r.error_message))
+
+local function count_v1()
+    local n = 0
+    for _, c in ipairs(Clip.list_in_sequence(layout.sequence_id) or {}) do
+        if c.track_id == "trk_v1" then n = n + 1 end
+    end
+    return n
+end
+local post_undo = count_v1()
+assert(post_undo == 1, string.format(
+    "FAIL: after undo V1 has %d clips, expected 1 (the nested SplitClip "
+    .. "was not reversed — right half lingers)", post_undo))
+
+local stmt4 = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
+assert(stmt4); stmt4:exec(); stmt4:next()
+local rts, rdur = stmt4:value(0), stmt4:value(1); stmt4:finalize()
+assert(rts == 500 and rdur == 2000, string.format(
+    "FAIL: after undo V1 original is ts=%s dur=%s, expected ts=500 dur=2000",
+    tostring(rts), tostring(rdur)))
+print(string.format("  undo restored V1: ts=%d dur=%d", rts, rdur))
 
 print("\n✅ test_cut_mode_left_half_persists.lua passed")

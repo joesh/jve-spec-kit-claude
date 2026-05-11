@@ -1212,7 +1212,16 @@ local function execute_nested_command(command, exec_scope)
         local saved = save_command_with_collision_retry(command, db)
         sequence_number = command.sequence_number  -- retry may have reallocated
         if saved then
-            history.set_current_sequence_number(sequence_number)
+            -- Advance, never regress: a parent nested command (e.g. BatchRippleEdit
+            -- at seq=N) that spawned its own deeper-nested child (e.g. SplitClip
+            -- at seq=N+k) must NOT pull the cursor back to N. The cursor is the
+            -- undo head; if it sits below the deepest child, find_group_members
+            -- (which clamps with sequence_number <= cursor) silently drops the
+            -- deeper child from the undo walk and its undoer never runs.
+            local current = history.get_current_sequence_number()
+            if not current or current < sequence_number then
+                history.set_current_sequence_number(sequence_number)
+            end
             log.event("Nested command %s (seq=%d) saved, group=%s",
                 command.type, sequence_number, tostring(root_command_sequence_number))
             apply_command_mutations(command)
