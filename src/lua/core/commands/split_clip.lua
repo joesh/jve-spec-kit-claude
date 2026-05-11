@@ -106,7 +106,17 @@ function M.execute(args)
     local left_new_source_out = clip.source_in_frame + source_offset
 
     local right_id           = args.second_clip_id or uuid.generate()
-    local right_timeline     = split_frame
+    -- right_half_offset: optional caller-supplied displacement of the right
+    -- half's timeline_start away from split_frame. Used by BatchRippleEdit's
+    -- cut-mode ripple to place the right half at its post-ripple position
+    -- in one shot (so BRE doesn't have to bulk-shift it afterwards, which
+    -- would entangle BRE's planned_mutations with SplitClip's own undo).
+    -- Default 0 = right half lives exactly at split_frame.
+    local right_half_offset  = args.right_half_offset or 0
+    assert(type(right_half_offset) == "number" and right_half_offset >= 0,
+        string.format("SplitClip: right_half_offset must be a non-negative integer; got %s",
+            tostring(right_half_offset)))
+    local right_timeline     = split_frame + right_half_offset
     local right_duration     = clip.duration_frames - split_offset
     local right_source_in    = clip.source_in_frame + source_offset
     local right_source_out   = clip.source_out_frame
@@ -173,7 +183,8 @@ local SPEC = {
         sequence_id    = { required = true },
         clip_id        = { required = true },
         split_frame    = { required = true },
-        second_clip_id = {},  -- caller-supplied id (optional); else uuid
+        second_clip_id    = {},  -- caller-supplied id (optional); else uuid
+        right_half_offset = {},  -- caller-supplied displacement (optional); else 0
     },
     persisted = {
         prior_state    = {},

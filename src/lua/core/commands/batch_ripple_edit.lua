@@ -546,14 +546,21 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- COMMIT: invoke the nested SplitClip command. SplitClip writes both
     -- halves to the DB, emits __timeline_mutations to update clip_state,
     -- and registers its own undo entry under this BatchRippleEdit's undo
-    -- group. Returns the new right half's id.
-    local function commit_invoke_split_clip(ctx, clip_id, trim_point, split_offset)
+    -- group. `right_half_offset` displaces the right half from split_frame
+    -- so the right half lands at its post-ripple position in one write —
+    -- BRE then has nothing to add to its own planned_mutations for this
+    -- clip, keeping the right-half lifecycle entirely on SplitClip and
+    -- preventing the undo-order conflict where BRE's bulk_shift undo
+    -- would try to revert a clip SplitClip's undo has already deleted.
+    -- Returns the new right half's id.
+    local function commit_invoke_split_clip(ctx, clip_id, trim_point, split_offset, right_half_offset)
         local cm = require("core.command_manager")
         local split_res = cm.execute("SplitClip", {
-            sequence_id = ctx.sequence_id,
-            project_id  = ctx.project_id,
-            clip_id     = clip_id,
-            split_frame = trim_point,
+            sequence_id       = ctx.sequence_id,
+            project_id        = ctx.project_id,
+            clip_id           = clip_id,
+            split_frame       = trim_point,
+            right_half_offset = right_half_offset,
         })
         assert(split_res and split_res.success, string.format(
             "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
@@ -566,6 +573,25 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "BatchRippleEdit cut: SplitClip split_offset=%s, expected %d",
             tostring(split_data.split_offset), split_offset))
         return split_data.second_clip_id
+    end
+
+    -- Cross-track ripple shift for a cut-mode track's right half. The cut
+    -- itself is not undoable as a delta — it's a structural split. What
+    -- matters is whether the right half should RIDE the ripple downstream
+    -- (extend direction → +shift) or STAY at trim_point preserving its TC
+    -- (shrink direction → 0; shifting would overlap the left half).
+    -- Computed from the user-input delta + edge orientation, not from
+    -- ripple_anchor which isn't populated until process_edge_trims runs.
+    local function cut_track_right_half_offset(ctx, anchor_edge)
+        local normalized = edge_utils.to_bracket(anchor_edge.edge_type)
+        local shift_factor = (normalized == "in") and -1 or 1
+        local raw_shift = ctx.delta_frames * shift_factor
+        -- Shrink direction (raw_shift < 0): right half would move into the
+        -- left half it was just split from. Spec §3 F3 workaround: preserve
+        -- TC, keep right half at trim_point. A visible gap forms between
+        -- the anchor's new OUT and the right half.
+        if raw_shift < 0 then return 0 end
+        return raw_shift
     end
 
     -- DRY-RUN: detach the track_clips list (clones the array once per
@@ -597,17 +623,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return left
     end
 
-    -- Insert a synthesized right half into the ctx caches at trim_point,
+    -- Insert a synthesized right half into the ctx caches at right_pos,
     -- in sort order. Shared by both paths — on commit the DB row already
-    -- exists (written by SplitClip) and clip_state will reflect it after
-    -- __timeline_mutations apply; on dry-run the ctx table is the only
-    -- record. Either way the downstream ripple pipeline needs to see it.
+    -- exists (written by SplitClip at the same right_pos) and clip_state
+    -- will reflect it after __timeline_mutations apply; on dry-run the
+    -- ctx table is the only record. Either way the downstream ripple
+    -- pipeline needs to see it.
     local function synthesize_right_half_in_ctx(ctx, track_clips, track_id,
-                                                right_id, trim_point, right_duration)
+                                                right_id, right_pos, right_duration)
         local right = {
             id             = right_id,
             track_id       = track_id,
-            timeline_start = trim_point,
+            timeline_start = right_pos,
             duration       = right_duration,
             is_gap         = false,
         }
@@ -617,7 +644,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local insert_pos = #track_clips + 1
         for j, tc in ipairs(track_clips) do
-            if tc.timeline_start > trim_point then
+            if tc.timeline_start > right_pos then
                 insert_pos = j
                 break
             end
@@ -626,14 +653,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     -- Split one spanning clip per the active path (dry-run vs commit).
-    -- Returns the left-half table (already shrunk to split_offset). Caller
-    -- continues to use this for subsequent ctx bookkeeping.
-    local function dispatch_cut_split(ctx, c, track_clips, trim_point)
+    -- The right half is placed at `right_pos` = trim_point + cut-shift;
+    -- on commit the offset is passed through to SplitClip so the row is
+    -- written there in a single transaction (no follow-up BRE shift).
+    -- Returns the left-half table (already shrunk to split_offset).
+    local function dispatch_cut_split(ctx, c, track_clips, trim_point, right_half_offset)
         local orig_duration = c.duration
         local split_offset  = trim_point - c.timeline_start
         assert(split_offset >= 1 and split_offset < orig_duration, string.format(
             "dispatch_cut_split: trim_point %d not strictly inside clip %s [%d, %d)",
             trim_point, tostring(c.id), c.timeline_start, c.timeline_start + orig_duration))
+        assert(type(right_half_offset) == "number" and right_half_offset >= 0, string.format(
+            "dispatch_cut_split: right_half_offset must be non-negative integer; got %s",
+            tostring(right_half_offset)))
 
         local left, right_id
         if ctx.dry_run then
@@ -641,7 +673,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             right_id = uuid.generate()
         else
             left    = c
-            right_id = commit_invoke_split_clip(ctx, c.id, trim_point, split_offset)
+            right_id = commit_invoke_split_clip(ctx, c.id, trim_point,
+                split_offset, right_half_offset)
         end
 
         ctx.cut_left_halves[left.id] = true
@@ -649,7 +682,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local right_duration = orig_duration - split_offset
         synthesize_right_half_in_ctx(ctx, track_clips, left.track_id,
-            right_id, trim_point, right_duration)
+            right_id, trim_point + right_half_offset, right_duration)
         return left
     end
 
@@ -852,8 +885,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if ctx.dry_run then
                         track_clips = dry_run_detach_track_clips(ctx, track_id)
                     end
+                    local right_half_offset = cut_track_right_half_offset(ctx, edge)
                     for _, c in ipairs(to_split) do
-                        dispatch_cut_split(ctx, c, track_clips, trim_point)
+                        dispatch_cut_split(ctx, c, track_clips, trim_point, right_half_offset)
                     end
 
                     -- Prevent inject_implicit_gap_edges from injecting a
@@ -1031,23 +1065,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Derive the set of tracks that have clips in the bounded cache —
     -- these are the "affected" tracks the ripple/roll can touch.
     -- sync_mode='off'  → excluded: downstream clips must not shift.
-    -- sync_mode='cut'  → excluded for now. Per spec F3 cut should equal
-    --                    "ripple + cut", but on shrink-trim of a clip
-    --                    that spans the trim point, rippling the right
-    --                    half backward overlaps the left half it was
-    --                    just split from — VIDEO_OVERLAP fires. Until
-    --                    Joe decides between (a) allow overlap on audio,
-    --                    refuse on video via max-shift clamp, (b) keep
-    --                    preserve-TC for the split right half on shrink
-    --                    only, the cut track stays out of bulk_shift and
-    --                    the split right half is inserted at trim_point
-    --                    (preserves TC, gap forms on the ripple side).
+    -- sync_mode='cut'  → excluded. The cut branch synthesizes the right
+    --                    half at its post-ripple position directly (see
+    --                    dispatch_cut_split), so BRE doesn't need a
+    --                    bulk_shift on this track. Excluding cut here
+    --                    also keeps the right-half-position update out
+    --                    of BRE's planned_mutations — it lives on the
+    --                    nested SplitClip command and undoes there
+    --                    independently of BRE's group walk.
     local function collect_affected_tracks_from_cache(ctx)
         assert(ctx.all_clips, "assign_edge_tracks: all_clips is nil")
         ctx.affected_tracks = {}
         assert(ctx.sync_off_tracks, "collect_affected_tracks_from_cache: ctx.sync_off_tracks is nil")
-        local off_tracks   = ctx.sync_off_tracks
         assert(ctx.track_sync_modes, "collect_affected_tracks_from_cache: ctx.track_sync_modes is nil")
+        local off_tracks   = ctx.sync_off_tracks
         local sync_modes   = ctx.track_sync_modes
         for _, clip in ipairs(ctx.all_clips) do
             assert(clip.track_id and clip.track_id ~= "",

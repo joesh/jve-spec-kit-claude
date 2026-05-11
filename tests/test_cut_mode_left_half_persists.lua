@@ -104,15 +104,24 @@ assert(left_dur == 500, string.format(
     "FAIL: V1 left half duration=%s, expected 500", tostring(left_dur)))
 print(string.format("  V1 left half OK: ts=%d dur=%d", left_ts, left_dur))
 
--- ── V1 right half: synthesized new clip at timeline_start=1000, dur=1500.
+-- ── V1 right half: extend-direction ripple. Trim_point=1000 is the cut.
+-- V2 IN extended by -100; the ripple bulk-shifts content downstream of
+-- the cut by +100 (the IN-edge propagation). The right half rides with
+-- the ripple — its source range stays the same (source_in=1000), only
+-- its timeline_start moves to 1000 + 100 = 1100. A 100-frame gap forms
+-- on V1 between left half (ends at 1000) and right half (starts 1100).
 local stmt2 = db:prepare(
-    "SELECT id, duration_frames FROM clips WHERE track_id='trk_v1' AND timeline_start_frame=1000")
+    "SELECT id, timeline_start_frame, duration_frames FROM clips "
+    .. "WHERE track_id='trk_v1' AND id != 'c_v1_wide'")
 assert(stmt2); stmt2:exec(); stmt2:next()
-local right_id, right_dur = stmt2:value(0), stmt2:value(1); stmt2:finalize()
-assert(right_id and right_id ~= "c_v1_wide", "FAIL: V1 right half not found at 1000")
+local right_id, right_ts, right_dur = stmt2:value(0), stmt2:value(1), stmt2:value(2); stmt2:finalize()
+assert(right_id, "FAIL: V1 right half not found")
+assert(right_ts == 1100, string.format(
+    "FAIL: V1 right half ts=%s, expected 1100 (cut+ripple extends → right rides +100)",
+    tostring(right_ts)))
 assert(right_dur == 1500, string.format(
     "FAIL: V1 right half duration=%s, expected 1500", tostring(right_dur)))
-print(string.format("  V1 right half OK: id=%s ts=1000 dur=%d", right_id, right_dur))
+print(string.format("  V1 right half OK: id=%s ts=%d dur=%d", right_id, right_ts, right_dur))
 
 -- (V2 itself moves as a side effect of the bulk shift on V2's track;
 -- exercising that is a separate concern from the cut bug this test owns.)
