@@ -51,6 +51,7 @@ local ripple_undo = require("core.ripple.undo_hydrator")
 local gap_lifecycle = require("core.gap_lifecycle")
 local batch_context = require("core.ripple.batch.context")
 local batch_pipeline = require("core.ripple.batch.pipeline")
+local uuid = require("uuid")
 
 local compute_edge_boundary_time = ripple_edge.compute_edge_boundary_time
 local build_edge_key = ripple_edge.build_edge_key
@@ -445,6 +446,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- plus pre-computed gap clips, both exposed via per-track indexes. No
     -- DB scan, no per-clip loads, no per-clip copies at this layer.
     -- (Mutable scratch copies are taken by load_clip_for_edit on demand.)
+    -- Fields on the shared timeline_state clip object that BRE must not
+    -- mutate during dry-run. Snapshot at build, verify at finalize.
+    local SHARED_CLIP_FIELDS = {
+        "timeline_start", "duration", "source_in", "source_out", "track_id", "is_gap",
+    }
+
     local function build_clip_cache(ctx)
         local timeline_state = package.loaded["ui.timeline.timeline_state"]
         assert(timeline_state
@@ -486,51 +493,33 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     table.insert(ctx.all_clips, clip)
                     ctx.clip_lookup[clip.id] = clip
                     ctx.clip_track_lookup[clip.id] = clip.track_id
-                    ctx.shared_clip_snapshots[clip.id] = {
-                        ref            = clip,
-                        timeline_start = clip.timeline_start,
-                        duration       = clip.duration,
-                        source_in      = clip.source_in,
-                        source_out     = clip.source_out,
-                        track_id       = clip.track_id,
-                        is_gap         = clip.is_gap,
-                    }
+                    local snap = { ref = clip }
+                    for _, field in ipairs(SHARED_CLIP_FIELDS) do
+                        snap[field] = clip[field]
+                    end
+                    ctx.shared_clip_snapshots[clip.id] = snap
                 end
             end
         end
     end
 
-    -- Dry-run footgun assert. ctx.clip_lookup / track_clip_map share clip
-    -- object references AND track-list references with timeline_state.
-    -- Any in-place mutation in dry-run silently corrupts timeline_state.
-    -- Snapshot at build time, verify at end of dry-run that every shared
-    -- clip's mutable fields and every track's clip-list length are
-    -- unchanged. Cut-branch et al. that need to mutate during dry-run
-    -- MUST swap in detached copies (clone clip + clone track_clips) so
-    -- the shared originals remain untouched.
+    -- ctx.clip_lookup, ctx.all_clips and ctx.track_clip_map entries are
+    -- SHARED references with timeline_state's clip index. Any in-place
+    -- mutation during dry-run silently corrupts timeline_state and
+    -- breaks every subsequent command. Snapshot at build time, verify
+    -- at end of dry-run that every shared clip's mutable fields and
+    -- every track's clip-list length are unchanged. Branches that need
+    -- to mutate during dry-run MUST swap in detached copies first.
     local function assert_shared_state_untouched(ctx)
         assert(ctx.shared_clip_snapshots,
             "assert_shared_state_untouched: missing snapshots (build_clip_cache not run?)")
         for clip_id, snap in pairs(ctx.shared_clip_snapshots) do
             local ref = snap.ref
-            assert(ref.timeline_start == snap.timeline_start, string.format(
-                "dry-run polluted timeline_state: clip %s timeline_start changed %s → %s",
-                tostring(clip_id), tostring(snap.timeline_start), tostring(ref.timeline_start)))
-            assert(ref.duration == snap.duration, string.format(
-                "dry-run polluted timeline_state: clip %s duration changed %s → %s",
-                tostring(clip_id), tostring(snap.duration), tostring(ref.duration)))
-            assert(ref.source_in == snap.source_in, string.format(
-                "dry-run polluted timeline_state: clip %s source_in changed %s → %s",
-                tostring(clip_id), tostring(snap.source_in), tostring(ref.source_in)))
-            assert(ref.source_out == snap.source_out, string.format(
-                "dry-run polluted timeline_state: clip %s source_out changed %s → %s",
-                tostring(clip_id), tostring(snap.source_out), tostring(ref.source_out)))
-            assert(ref.track_id == snap.track_id, string.format(
-                "dry-run polluted timeline_state: clip %s track_id changed %s → %s",
-                tostring(clip_id), tostring(snap.track_id), tostring(ref.track_id)))
-            assert(ref.is_gap == snap.is_gap, string.format(
-                "dry-run polluted timeline_state: clip %s is_gap changed %s → %s",
-                tostring(clip_id), tostring(snap.is_gap), tostring(ref.is_gap)))
+            for _, field in ipairs(SHARED_CLIP_FIELDS) do
+                assert(ref[field] == snap[field], string.format(
+                    "dry-run polluted timeline_state: clip %s %s changed %s → %s",
+                    tostring(clip_id), field, tostring(snap[field]), tostring(ref[field])))
+            end
         end
         for track_id, snap in pairs(ctx.shared_track_clip_lists) do
             assert(#snap.list == snap.length, string.format(
@@ -546,6 +535,122 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- and ripples see gap duration as a real constraint (not an invisible
         -- transparent region).
         ctx.neighbor_bounds_cache = build_neighbor_bounds_cache(ctx.track_clip_map)
+    end
+
+    -- ── cut-mode helpers ────────────────────────────────────────────────
+    -- The cut branch splits a spanning clip into left+right halves so the
+    -- right half can ride downstream with the ripple while the left half
+    -- stays at its original timeline position. Two paths share the same
+    -- shape — only how the split is realized differs.
+
+    -- COMMIT: invoke the nested SplitClip command. SplitClip writes both
+    -- halves to the DB, emits __timeline_mutations to update clip_state,
+    -- and registers its own undo entry under this BatchRippleEdit's undo
+    -- group. Returns the new right half's id.
+    local function commit_invoke_split_clip(ctx, clip_id, trim_point, split_offset)
+        local cm = require("core.command_manager")
+        local split_res = cm.execute("SplitClip", {
+            sequence_id = ctx.sequence_id,
+            project_id  = ctx.project_id,
+            clip_id     = clip_id,
+            split_frame = trim_point,
+        })
+        assert(split_res and split_res.success, string.format(
+            "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
+            tostring(clip_id),
+            tostring(split_res and split_res.error_message)))
+        local split_data = split_res.result_data
+        assert(type(split_data) == "table",
+            "BatchRippleEdit cut: SplitClip returned no result_data table")
+        assert(split_data.split_offset == split_offset, string.format(
+            "BatchRippleEdit cut: SplitClip split_offset=%s, expected %d",
+            tostring(split_data.split_offset), split_offset))
+        return split_data.second_clip_id
+    end
+
+    -- DRY-RUN: detach the track_clips list (clones the array once per
+    -- cut track) so synthesized inserts don't pollute timeline_state's
+    -- shared sorted list. Subsequent in-place mutations on this track
+    -- land on the detached copy.
+    local function dry_run_detach_track_clips(ctx, track_id)
+        local original = ctx.track_clip_map[track_id]
+        local detached = {}
+        for _, tc in ipairs(original) do detached[#detached + 1] = tc end
+        ctx.track_clip_map[track_id] = detached
+        return detached
+    end
+
+    -- DRY-RUN: shallow-clone the spanning clip and swap it into the
+    -- ctx caches in place of the shared timeline_state object. The
+    -- caller mutates the clone (sets duration to split_offset) instead
+    -- of the shared original. Returns the new (clone) left-half table.
+    local function dry_run_clone_spanning_clip(ctx, c, track_clips)
+        local left = {}
+        for k, v in pairs(c) do left[k] = v end
+        for j, tc in ipairs(track_clips) do
+            if tc.id == c.id then track_clips[j] = left; break end
+        end
+        for j, ac in ipairs(ctx.all_clips) do
+            if ac.id == c.id then ctx.all_clips[j] = left; break end
+        end
+        ctx.clip_lookup[c.id] = left
+        return left
+    end
+
+    -- Insert a synthesized right half into the ctx caches at trim_point,
+    -- in sort order. Shared by both paths — on commit the DB row already
+    -- exists (written by SplitClip) and clip_state will reflect it after
+    -- __timeline_mutations apply; on dry-run the ctx table is the only
+    -- record. Either way the downstream ripple pipeline needs to see it.
+    local function synthesize_right_half_in_ctx(ctx, track_clips, track_id,
+                                                right_id, trim_point, right_duration)
+        local right = {
+            id             = right_id,
+            track_id       = track_id,
+            timeline_start = trim_point,
+            duration       = right_duration,
+            is_gap         = false,
+        }
+        table.insert(ctx.all_clips, right)
+        ctx.clip_lookup[right.id]       = right
+        ctx.clip_track_lookup[right.id] = track_id
+
+        local insert_pos = #track_clips + 1
+        for j, tc in ipairs(track_clips) do
+            if tc.timeline_start > trim_point then
+                insert_pos = j
+                break
+            end
+        end
+        table.insert(track_clips, insert_pos, right)
+    end
+
+    -- Split one spanning clip per the active path (dry-run vs commit).
+    -- Returns the left-half table (already shrunk to split_offset). Caller
+    -- continues to use this for subsequent ctx bookkeeping.
+    local function dispatch_cut_split(ctx, c, track_clips, trim_point)
+        local orig_duration = c.duration
+        local split_offset  = trim_point - c.timeline_start
+        assert(split_offset >= 1 and split_offset < orig_duration, string.format(
+            "dispatch_cut_split: trim_point %d not strictly inside clip %s [%d, %d)",
+            trim_point, tostring(c.id), c.timeline_start, c.timeline_start + orig_duration))
+
+        local left, right_id
+        if ctx.dry_run then
+            left    = dry_run_clone_spanning_clip(ctx, c, track_clips)
+            right_id = uuid.generate()
+        else
+            left    = c
+            right_id = commit_invoke_split_clip(ctx, c.id, trim_point, split_offset)
+        end
+
+        ctx.cut_left_halves[left.id] = true
+        left.duration = split_offset
+
+        local right_duration = orig_duration - split_offset
+        synthesize_right_half_in_ctx(ctx, track_clips, left.track_id,
+            right_id, trim_point, right_duration)
+        return left
     end
 
     -- Inspect each edge's boundary frame and apply per-track sync_mode semantics:
@@ -744,110 +849,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         end
                     end
 
-                    -- COMMIT path: run each split as a nested SplitClip command
-                    -- under this BatchRippleEdit's undo group; SplitClip writes
-                    -- its own DB rows and __timeline_mutations, and undo reverses
-                    -- each SplitClip independently via the group walk.
-                    --
-                    -- DRY-RUN path: drag fires a dry-run BatchRippleEdit on every
-                    -- pixel; invoking real SplitClip would persist a split on the
-                    -- first tick (with a random right-half UUID) and leave it in
-                    -- the DB even if the user releases without committing. Instead,
-                    -- synthesize the split locally in ctx and skip the DB write.
-                    -- The ripple math downstream uses only timeline_start/duration
-                    -- so a structural stub is sufficient for the preview.
-                    -- ctx.clip_lookup, ctx.all_clips and ctx.track_clip_map
-                    -- entries are SHARED references with timeline_state's clip
-                    -- index. The commit path can mutate them because nested
-                    -- SplitClip's __timeline_mutations have already updated
-                    -- timeline_state to match. The dry-run path has no such
-                    -- mutation — mutating shared references would pollute
-                    -- timeline_state and break subsequent commands. Detach a
-                    -- per-track copy of the clip list (and clone the spanning
-                    -- clip in dry-run) so ctx-only edits stay isolated.
-                    local uuid = require("uuid")
                     if ctx.dry_run then
-                        local detached = {}
-                        for _, tc in ipairs(track_clips) do detached[#detached + 1] = tc end
-                        track_clips = detached
-                        ctx.track_clip_map[track_id] = detached
+                        track_clips = dry_run_detach_track_clips(ctx, track_id)
                     end
-
                     for _, c in ipairs(to_split) do
-                        local orig_duration = c.duration
-                        local split_offset  = trim_point - c.timeline_start
-                        local right_id
-                        local left
-                        if ctx.dry_run then
-                            -- Shallow clone the spanning clip so the duration
-                            -- mutation lands on ctx only. Swap it into the
-                            -- detached track_clips and ctx.clip_lookup; the
-                            -- shared timeline_state object stays intact.
-                            left = {}
-                            for k, v in pairs(c) do left[k] = v end
-                            for j, tc in ipairs(track_clips) do
-                                if tc.id == c.id then track_clips[j] = left; break end
-                            end
-                            for j, ac in ipairs(ctx.all_clips) do
-                                if ac.id == c.id then ctx.all_clips[j] = left; break end
-                            end
-                            ctx.clip_lookup[c.id] = left
-                            right_id = uuid.generate()
-                        else
-                            left = c
-                            local split_res = command_manager.execute("SplitClip", {
-                                sequence_id = ctx.sequence_id,
-                                project_id  = ctx.project_id,
-                                clip_id     = c.id,
-                                split_frame = trim_point,
-                            })
-                            assert(split_res and split_res.success, string.format(
-                                "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
-                                tostring(c.id),
-                                tostring(split_res and split_res.error_message)))
-                            local split_data = split_res.result_data
-                            assert(type(split_data) == "table",
-                                "BatchRippleEdit cut: SplitClip returned no result_data table")
-                            assert(split_data.split_offset == split_offset, string.format(
-                                "BatchRippleEdit cut: SplitClip split_offset=%s, expected %d",
-                                tostring(split_data.split_offset), split_offset))
-                            right_id = split_data.second_clip_id
-                        end
-
-                        -- Mark the left half so find_track_boundary_neighbors
-                        -- skips it as a blocker for the right-half overlap.
-                        ctx.cut_left_halves[left.id] = true
-                        left.duration = split_offset
-
-                        local right_duration = orig_duration - split_offset
-                        assert(right_duration >= 1, string.format(
-                            "cut-mode split on clip %s produced sub-frame right half "
-                            .. "(orig_dur=%d split_offset=%d)",
-                            tostring(left.id), orig_duration, split_offset))
-
-                        -- Synthesize the right half in the ctx cache so the
-                        -- rest of the BatchRippleEdit pipeline sees it. (On
-                        -- commit, the nested SplitClip already wrote the row to
-                        -- the DB; ctx is a separate in-flight cache.)
-                        local right = {
-                            id             = right_id,
-                            track_id       = track_id,
-                            timeline_start = trim_point,
-                            duration       = right_duration,
-                            is_gap         = false,
-                        }
-                        table.insert(ctx.all_clips, right)
-                        ctx.clip_lookup[right.id]       = right
-                        ctx.clip_track_lookup[right.id] = track_id
-
-                        local insert_pos = #track_clips + 1
-                        for j, tc in ipairs(track_clips) do
-                            if tc.timeline_start > trim_point then
-                                insert_pos = j
-                                break
-                            end
-                        end
-                        table.insert(track_clips, insert_pos, right)
+                        dispatch_cut_split(ctx, c, track_clips, trim_point)
                     end
 
                     -- Prevent inject_implicit_gap_edges from injecting a
