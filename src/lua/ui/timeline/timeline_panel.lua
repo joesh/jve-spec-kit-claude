@@ -1043,14 +1043,14 @@ local HDR = {
     SRC  = 28,   -- src-id patch button
     REC  = 28,   -- rec-id patch button
     LOCK = 20,   -- lock toggle
-    SYNC = 20,   -- sync-mode toggle
+    SYNC = 24,   -- sync-mode toggle (slightly wider to fit larger glyph)
     SM   = 16,   -- each solo/mute button (stacked vertically)
     WAVE = 16,   -- waveform toggle (audio only)
 }
 
 -- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
 local SYNC_CYCLE = { off = "ripple", ripple = "cut", cut = "off" }
-local SYNC_ICONS = { off = "🚫", ripple = "≋", cut = "/" }
+local SYNC_ICONS = { off = "🚫", ripple = "∿", cut = "/" }
 
 local function build_sm_btn_stylesheet(active, active_color)
     if active and active_color then
@@ -1097,8 +1097,21 @@ local function build_id_btn_stylesheet(filled, accent)
 end
 
 local function build_sync_mode_btn_stylesheet(mode)
-    local colors = { ripple = "#2a3a2a", cut = "#3a2a2a" }
-    return build_track_header_btn_stylesheet(mode ~= "off", colors[mode])
+    -- Match the lock-button neighbour: same neutral background + border
+    -- so the cell doesn't pop out of the header row. State is read off
+    -- the glyph, not a colour tint. Per-mode font-size because the text
+    -- glyphs (∿, /) need a bump to be legible while 🚫 is an emoji that
+    -- already renders large.
+    local font_sizes = { off = 11, ripple = 14, cut = 14 }
+    local font_size = font_sizes[mode]
+    assert(font_size, "build_sync_mode_btn_stylesheet: unknown sync mode " .. tostring(mode))
+    return string.format([[
+        QPushButton {
+            background: #2a2a2a; color: #cccccc;
+            border: 1px solid #333333; padding: 0px; font-size: %dpx;
+        }
+        QPushButton:hover { background: #3a3a3a; color: #ffffff; }
+    ]], font_size)
 end
 
 local track_btn_handler_seq = 0
@@ -1216,6 +1229,27 @@ end
 -- Wire src-id and rec-id buttons to SetPatch command (T038, FR-009, FR-010).
 -- rec_track_index: the index of the RECORD track this row represents.
 -- track_type: "VIDEO" or "AUDIO" — used to format the source-track label.
+-- Render the src-id button for the given record row. Three visual states:
+--   absent  (no patch row)        → invisible placeholder, no text
+--   enabled (row exists, on)      → filled background, source label, accent color
+--   disabled (row exists, off=0)  → outlined background, source label visible
+-- The disabled state must NOT collapse to "absent" — the routing is still
+-- configured, just silenced; the user needs to see the label to re-enable.
+local function render_src_btn(src_btn, sequence_id, track_type, rec_track_index)
+    local Patch = require("models.patch")
+    local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
+    if not p then
+        qt_constants.PROPERTIES.SET_TEXT(src_btn, "")
+        qt_constants.PROPERTIES.SET_STYLE(src_btn, SRC_BTN_EMPTY_STYLESHEET)
+        return
+    end
+    local enabled = p.enabled == 1 or p.enabled == true
+    qt_constants.PROPERTIES.SET_TEXT(src_btn,
+        format_source_label(track_type, p.source_track_index))
+    qt_constants.PROPERTIES.SET_STYLE(src_btn,
+        build_id_btn_stylesheet(enabled, source_tab_color))
+end
+
 -- src_btn label: which SOURCE track feeds this record row (reverse-lookup from patches).
 -- rec_btn label: this record track's own name — set at creation, never changed here.
 local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_index, track_type)
@@ -1225,42 +1259,45 @@ local function wire_patch_buttons(src_btn, _rec_btn, sequence_id, rec_track_inde
         "wire_patch_buttons: rec_track_index must be number, got " .. type(rec_track_index))
     assert(track_type == "VIDEO" or track_type == "AUDIO",
         "wire_patch_buttons: track_type must be VIDEO or AUDIO, got " .. tostring(track_type))
-    local captured_src = src_btn
     local Patch = require("models.patch")
 
-    local function refresh_src_btn()
-        -- Reverse lookup: which source track of this type is patched to this record row?
-        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
-        if not p then
-            -- No source routed here — invisible placeholder keeps rec-id column aligned.
-            qt_constants.PROPERTIES.SET_TEXT(captured_src, "")
-            qt_constants.PROPERTIES.SET_STYLE(captured_src, SRC_BTN_EMPTY_STYLESHEET)
-            return
-        end
-        local enabled = p.enabled == 1 or p.enabled == true
-        qt_constants.PROPERTIES.SET_TEXT(captured_src,
-            format_source_label(track_type, p.source_track_index))
-        qt_constants.PROPERTIES.SET_STYLE(captured_src,
-            build_id_btn_stylesheet(enabled, source_tab_color))
-    end
-
-    refresh_src_btn()
+    render_src_btn(src_btn, sequence_id, track_type, rec_track_index)
 
     local src_handler = register_track_btn_handler(function()
-        -- src-id click (record-tab mode): toggle enabled on the patch feeding this record row.
-        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
-        if not p then return end
+        -- src-id click toggles routing for this rec row.
+        --   row absent  → create with identity routing (src=rec) enabled=false
+        --                 (default state is "identity-and-enabled" per spec §3
+        --                 FR-049; the row materializes ONLY when the user
+        --                 overrides — and the first click IS the override).
+        --   row present → flip enabled (false ⇄ true).
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_patch_buttons: no project_id (rec_track_index=" .. tostring(rec_track_index) .. ")")
-        local current_enabled = p.enabled == 1 or p.enabled == true
+        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
+        local source_idx, new_enabled, params
+        if p then
+            source_idx = p.source_track_index
+            local current_enabled = p.enabled == 1 or p.enabled == true
+            new_enabled = not current_enabled
+            params = {
+                sequence_id        = sequence_id,
+                source_track_index = source_idx,
+                track_type         = track_type,
+                project_id         = project_id,
+                enabled            = new_enabled,
+            }
+        else
+            -- No row yet — first click materializes the override (disabled).
+            params = {
+                sequence_id        = sequence_id,
+                source_track_index = rec_track_index,
+                record_track_index = rec_track_index,
+                track_type         = track_type,
+                project_id         = project_id,
+                enabled            = false,
+            }
+        end
         local cmd = require("core.command_manager")
-        cmd.execute("SetPatch", {
-            sequence_id        = sequence_id,
-            source_track_index = p.source_track_index,
-            track_type         = track_type,
-            project_id         = project_id,
-            enabled            = not current_enabled,
-        })
+        cmd.execute("SetPatch", params)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(src_btn, src_handler)
 end
@@ -1327,13 +1364,15 @@ end)
 -- MVC: patch_changed fires when SetPatch creates/updates/disables a patch.
 -- Signal: (sequence_id, track_type, source_track_index, change_type)
 -- Re-pulls patch state and refreshes the src-id button on the affected RECORD row.
+-- The signal's change_type ("created"/"updated"/"deleted") names what HAPPENED;
+-- the rendering only cares about what IS — does the row exist, and is it enabled.
+-- A "deleted" signal that came from a soft-delete (enabled→0) still leaves the
+-- row in the DB; render_src_btn re-pulls and shows it outlined, not invisible.
 -- rec_btn label never changes (always the record track's own name).
-Signals.connect("patch_changed", function(sequence_id, track_type, source_track_index, change_type)
+Signals.connect("patch_changed", function(sequence_id, track_type, source_track_index, _change_type)
     local Patch = require("models.patch")
     local p = Patch.find_by_source(sequence_id, track_type, source_track_index)
-
     local rec_index = p and p.record_track_index
-    local enabled   = p and (p.enabled == 1 or p.enabled == true)
 
     for track_id, refs in pairs(track_button_refs) do
         if refs.seq_id == sequence_id
@@ -1341,19 +1380,9 @@ Signals.connect("patch_changed", function(sequence_id, track_type, source_track_
                 and refs.rec_idx == rec_index then
             assert(refs.src_btn,
                 "patch_changed: src_btn nil for track " .. tostring(track_id))
-            if p and change_type ~= "deleted" then
-                local src_label = format_source_label(track_type, source_track_index)
-                qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, src_label)
-                qt_constants.PROPERTIES.SET_STYLE(refs.src_btn,
-                    build_id_btn_stylesheet(enabled, source_tab_color))
-                log.event("patch_changed: src_btn type=%s rec_idx=%s → %s",
-                    track_type, tostring(rec_index), src_label)
-            else
-                qt_constants.PROPERTIES.SET_TEXT(refs.src_btn, "")
-                qt_constants.PROPERTIES.SET_STYLE(refs.src_btn, SRC_BTN_EMPTY_STYLESHEET)
-                log.event("patch_changed: src_btn type=%s rec_idx=%s cleared",
-                    track_type, tostring(rec_index))
-            end
+            render_src_btn(refs.src_btn, sequence_id, track_type, rec_index)
+            log.event("patch_changed: src_btn type=%s rec_idx=%s refreshed",
+                track_type, tostring(rec_index))
             break
         end
     end
