@@ -1,0 +1,112 @@
+#!/usr/bin/env luajit
+
+-- 015 — cut-mode regression: when track sync_mode='cut' and a clip on that
+-- track spans the ripple boundary, the cut splits the clip into left+right
+-- halves. After the BatchRippleEdit completes, BOTH halves must still be in
+-- the DB at the expected positions.
+--
+-- Reported bug: dragging V2's IN edge left by N frames with V1 in cut mode
+-- (V1 has a clip spanning V2's IN frame) — V1's upstream/left half
+-- "disappears" from the rendered timeline.
+
+package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
+require("test_env")
+
+local database        = require("core.database")
+local command_manager = require("core.command_manager")
+local ripple_layout   = require("tests.helpers.ripple_layout")
+
+_G.qt_create_single_shot_timer = function(_delay, cb) cb(); return nil end
+
+print("=== test_cut_mode_left_half_persists.lua ===")
+
+-- Fixture: V1 has one wide clip spanning [500, 2500). V2 has a clip at
+-- [1000, 2000) — drag its IN left. V1 must be split at 1000.
+local layout = ripple_layout.create({
+    db_path = "/tmp/jve/test_cut_mode_left_half_persists.db",
+    fps_numerator = 1000, fps_denominator = 1,
+    tracks = {
+        order = {"v1", "v2"},
+        v1 = {id="trk_v1", name="V1", track_type="VIDEO", track_index=1, enabled=1},
+        v2 = {id="trk_v2", name="V2", track_type="VIDEO", track_index=2, enabled=1},
+    },
+    clips = {
+        order = {"c_v1_wide", "c_v2"},
+        c_v1_wide = {id="c_v1_wide", name="V1Wide", track_key="v1", media_key="main",
+                     timeline_start=500,  duration=2000, source_in=500,
+                     fps_numerator=1000, fps_denominator=1},
+        c_v2      = {id="c_v2",      name="V2",     track_key="v2", media_key="main",
+                     timeline_start=1000, duration=1000, source_in=600,
+                     fps_numerator=1000, fps_denominator=1},
+    },
+})
+
+local db = database.get_connection()
+assert(db:exec("UPDATE tracks SET sync_mode='cut'    WHERE id='trk_v1'"))
+assert(db:exec("UPDATE tracks SET sync_mode='ripple' WHERE id='trk_v2'"))
+
+local DELTA = -100   -- V2 IN dragged left 100 frames; V2 extends, ripple delta = -100
+
+-- ── Step 1: dry_run preview. Must NOT mutate the DB.
+-- (Drag fires dry_run on every pixel — if dry_run mutates, V1 ends up
+-- pre-split with an orphaned right-half UUID before the commit even runs.)
+local Clip = require("models.clip")
+local function count_v1_clips()
+    local n = 0
+    for _, c in ipairs(Clip.list_in_sequence(layout.sequence_id) or {}) do
+        if c.track_id == "trk_v1" then n = n + 1 end
+    end
+    return n
+end
+local pre_count = count_v1_clips()
+assert(pre_count == 1, "fixture should start with 1 clip on V1, got " .. pre_count)
+
+local dry = command_manager.execute("BatchRippleEdit", {
+    sequence_id  = layout.sequence_id, project_id = layout.project_id,
+    edge_infos   = {{clip_id="c_v2", edge_type="in", trim_type="ripple", track_id="trk_v2"}},
+    delta_frames = DELTA, dry_run = true,
+})
+assert(dry and dry.success, "dry_run BatchRippleEdit failed")
+local mid_count = count_v1_clips()
+assert(mid_count == 1, string.format(
+    "FAIL: dry_run mutated DB — V1 clip count went from %d to %d. "
+    .. "dry_run must never write to disk; the cut branch's nested SplitClip "
+    .. "must be virtualized in dry-run mode.", pre_count, mid_count))
+print(string.format("  dry_run did not mutate DB: V1 still has %d clip(s)", mid_count))
+
+-- ── Step 2: commit. Now the split should actually happen.
+local r = command_manager.execute("RippleTrimEdge", {
+    sequence_id  = layout.sequence_id,
+    clip_id      = "c_v2",
+    edge         = "left",
+    delta_frames = DELTA,
+    project_id   = layout.project_id,
+})
+assert(r and r.success, "RippleTrimEdge failed: " .. tostring(r and r.error_message))
+
+-- ── V1 left half: was clip "c_v1_wide". After cut at 1000:
+--     timeline_start=500, duration=500 (covers [500, 1000)).
+local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
+assert(stmt); stmt:exec(); stmt:next()
+local left_ts, left_dur = stmt:value(0), stmt:value(1); stmt:finalize()
+assert(left_ts == 500, string.format(
+    "FAIL: V1 left half timeline_start=%s, expected 500 (clip disappeared or shifted)",
+    tostring(left_ts)))
+assert(left_dur == 500, string.format(
+    "FAIL: V1 left half duration=%s, expected 500", tostring(left_dur)))
+print(string.format("  V1 left half OK: ts=%d dur=%d", left_ts, left_dur))
+
+-- ── V1 right half: synthesized new clip at timeline_start=1000, dur=1500.
+local stmt2 = db:prepare(
+    "SELECT id, duration_frames FROM clips WHERE track_id='trk_v1' AND timeline_start_frame=1000")
+assert(stmt2); stmt2:exec(); stmt2:next()
+local right_id, right_dur = stmt2:value(0), stmt2:value(1); stmt2:finalize()
+assert(right_id and right_id ~= "c_v1_wide", "FAIL: V1 right half not found at 1000")
+assert(right_dur == 1500, string.format(
+    "FAIL: V1 right half duration=%s, expected 1500", tostring(right_dur)))
+print(string.format("  V1 right half OK: id=%s ts=1000 dur=%d", right_id, right_dur))
+
+-- (V2 itself moves as a side effect of the bulk shift on V2's track;
+-- exercising that is a separate concern from the cut bug this test owns.)
+
+print("\n✅ test_cut_mode_left_half_persists.lua passed")

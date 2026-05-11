@@ -681,44 +681,62 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         end
                     end
 
-                    -- Run each split as a nested SplitClip command. The nested
-                    -- command goes through the standard command_manager pipeline
-                    -- — it writes its own DB rows, applies its own clip_state
-                    -- mutations, and registers its own undo entry under this
-                    -- BatchRippleEdit's undo group. On undo the group walk
-                    -- reverses each SplitClip independently.
+                    -- COMMIT path: run each split as a nested SplitClip command
+                    -- under this BatchRippleEdit's undo group; SplitClip writes
+                    -- its own DB rows and __timeline_mutations, and undo reverses
+                    -- each SplitClip independently via the group walk.
+                    --
+                    -- DRY-RUN path: drag fires a dry-run BatchRippleEdit on every
+                    -- pixel; invoking real SplitClip would persist a split on the
+                    -- first tick (with a random right-half UUID) and leave it in
+                    -- the DB even if the user releases without committing. Instead,
+                    -- synthesize the split locally in ctx and skip the DB write.
+                    -- The ripple math downstream uses only timeline_start/duration
+                    -- so a structural stub is sufficient for the preview.
+                    local uuid = require("uuid")
                     for _, c in ipairs(to_split) do
                         local orig_duration = c.duration
-                        local split_res, _ = command_manager.execute("SplitClip", {
-                            sequence_id = ctx.sequence_id,
-                            project_id  = ctx.project_id,
-                            clip_id     = c.id,
-                            split_frame = trim_point,
-                        })
-                        assert(split_res and split_res.success, string.format(
-                            "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
-                            tostring(c.id),
-                            tostring(split_res and split_res.error_message)))
-                        local split_data = split_res.result_data
-                        assert(split_data, "BatchRippleEdit cut: SplitClip returned no result_data")
+                        local split_offset  = trim_point - c.timeline_start
+                        local right_id
+                        if ctx.dry_run then
+                            right_id = uuid.generate()
+                        else
+                            local split_res = command_manager.execute("SplitClip", {
+                                sequence_id = ctx.sequence_id,
+                                project_id  = ctx.project_id,
+                                clip_id     = c.id,
+                                split_frame = trim_point,
+                            })
+                            assert(split_res and split_res.success, string.format(
+                                "BatchRippleEdit cut: nested SplitClip failed on clip %s: %s",
+                                tostring(c.id),
+                                tostring(split_res and split_res.error_message)))
+                            local split_data = split_res.result_data
+                            assert(type(split_data) == "table",
+                                "BatchRippleEdit cut: SplitClip returned no result_data table")
+                            assert(split_data.split_offset == split_offset, string.format(
+                                "BatchRippleEdit cut: SplitClip split_offset=%s, expected %d",
+                                tostring(split_data.split_offset), split_offset))
+                            right_id = split_data.second_clip_id
+                        end
 
                         -- Mark the left half so find_track_boundary_neighbors
                         -- skips it as a blocker for the right-half overlap.
                         ctx.cut_left_halves[c.id] = true
-                        c.duration = split_data.split_offset
+                        c.duration = split_offset
 
-                        local right_duration = orig_duration - split_data.split_offset
+                        local right_duration = orig_duration - split_offset
                         assert(right_duration >= 1, string.format(
                             "cut-mode split on clip %s produced sub-frame right half "
                             .. "(orig_dur=%d split_offset=%d)",
-                            tostring(c.id), orig_duration, split_data.split_offset))
+                            tostring(c.id), orig_duration, split_offset))
 
                         -- Synthesize the right half in the ctx cache so the
-                        -- rest of the BatchRippleEdit pipeline sees it. (The
-                        -- nested SplitClip already updated clip_state; ctx is
-                        -- a separate in-flight cache.)
+                        -- rest of the BatchRippleEdit pipeline sees it. (On
+                        -- commit, the nested SplitClip already wrote the row to
+                        -- the DB; ctx is a separate in-flight cache.)
                         local right = {
-                            id             = split_data.second_clip_id,
+                            id             = right_id,
                             track_id       = track_id,
                             timeline_start = trim_point,
                             duration       = right_duration,
