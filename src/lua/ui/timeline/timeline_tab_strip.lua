@@ -51,6 +51,16 @@ function TimelineTabStrip:open_record_tab(sequence_id)
 
     local tab = TimelineTab.new("record", sequence_id)
     table.insert(self.tabs, tab)
+    -- First record tab auto-becomes active + displayed so consumers
+    -- (ruler, scrollbar, renderer) have a tab to pull from at startup.
+    -- Callers that want explicit control still drive switch_active_record /
+    -- switch_displayed afterwards (idempotent).
+    if not self.active_record_tab then
+        self.active_record_tab = tab
+    end
+    if not self.displayed_tab then
+        self.displayed_tab = tab
+    end
     self:_notify()
     return tab
 end

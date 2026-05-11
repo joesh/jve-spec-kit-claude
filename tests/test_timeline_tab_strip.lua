@@ -51,6 +51,13 @@ print("✓ empty strip")
 
 -- ── 2. open record tab is idempotent on same sequence ─────────────────────
 local r1 = strip:open_record_tab("rec1")
+-- First-opened record tab auto-sets active+displayed pointers. Without
+-- this, the timeline ruler / scrollbar / view get a nil displayed tab at
+-- project open and can't draw marks or content. Subsequent opens must NOT
+-- yank the pointers — caller drives those explicitly.
+assert(strip:get_active_record() == r1, "first opened record tab auto-becomes active")
+assert(strip:get_displayed() == r1, "first opened record tab auto-becomes displayed")
+
 local r1_again = strip:open_record_tab("rec1")
 assert(r1 == r1_again, "open_record_tab returns existing tab on same seq")
 assert(#strip.tabs == 1, "no duplicate tab created")
@@ -58,7 +65,9 @@ assert(#strip.tabs == 1, "no duplicate tab created")
 local r2 = strip:open_record_tab("rec2")
 assert(r2 ~= r1, "different seq → different tab")
 assert(#strip.tabs == 2, "two record tabs in strip")
-print("✓ open_record_tab idempotent + multiple")
+assert(strip:get_active_record() == r1, "opening a 2nd record tab does NOT yank active")
+assert(strip:get_displayed() == r1, "opening a 2nd record tab does NOT yank displayed")
+print("✓ open_record_tab idempotent + multiple + auto-pointer on first")
 
 -- ── 3. switch_active_record updates BOTH pointers (FR-004) ────────────────
 strip:switch_active_record(r1)
