@@ -133,26 +133,48 @@ local SPEC = {
     },
 }
 
--- T042: ensure the record sequence has audio tracks up to the count of the
--- source sequence's audio tracks. Creates tracks directly (not via nested
--- command) and returns their IDs so the undoer can delete them.
+-- Spec F2: ensure the record sequence has audio tracks 1..N where N is
+-- the highest record_track_index referenced by enabled patches from the
+-- source channels in this edit (identity-routed when no patch row
+-- exists). Disabled patches are excluded. This replaces the old "fill
+-- up to src_audio count" behavior, which produced extra tracks for
+-- routes the user had disabled or remapped to a higher record index.
 local function auto_create_record_audio_tracks(args)
     if not args.nested_sequence_id then return {} end
 
+    local Patch = require("models.patch")
     local src_audio = Track.find_by_sequence(args.nested_sequence_id, "AUDIO")
     local rec_audio = Track.find_by_sequence(args.sequence_id,        "AUDIO")
-    local src_count = #src_audio
     local rec_count = #rec_audio
 
+    -- Compute max rec_idx referenced by an INCLUDED source channel.
+    --   patch absent              → identity (rec_idx = src_idx); included.
+    --   patch present, enabled=1  → use patch.record_track_index.
+    --   patch present, enabled=0  → excluded (no contribution to max).
+    local max_rec_idx = 0
+    for _, src in ipairs(src_audio) do
+        local p = Patch.find_by_source(args.sequence_id, "AUDIO", src.track_index)
+        local rec_idx
+        if not p then
+            rec_idx = src.track_index
+        elseif p.enabled == 1 or p.enabled == true then
+            rec_idx = p.record_track_index
+        end
+        if rec_idx and rec_idx > max_rec_idx then
+            max_rec_idx = rec_idx
+        end
+    end
+
     local created_ids = {}
-    for i = rec_count + 1, src_count do
+    for i = rec_count + 1, max_rec_idx do
         local t = Track.create_audio(
             string.format("A%d", i), args.sequence_id, { sync_mode = "ripple" })
         assert(t:save(), string.format(
-            "Insert T042: failed to save auto-created audio track A%d "
+            "Insert: failed to save auto-created audio track A%d "
             .. "for sequence %s", i, tostring(args.sequence_id)))
         created_ids[#created_ids + 1] = t.id
-        log.event("Insert T042: auto-created audio track A%d id=%s", i, t.id)
+        log.event("Insert: auto-created audio track A%d id=%s "
+            .. "(max referenced rec_idx=%d)", i, t.id, max_rec_idx)
     end
     return created_ids
 end
