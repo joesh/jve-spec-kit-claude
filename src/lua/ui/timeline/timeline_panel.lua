@@ -1050,7 +1050,7 @@ local HDR = {
 
 -- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
 local SYNC_CYCLE = { off = "ripple", ripple = "cut", cut = "off" }
-local SYNC_ICONS = { off = "·", ripple = "≋", cut = "/" }
+local SYNC_ICONS = { off = "🚫", ripple = "≋", cut = "/" }
 
 local function build_sm_btn_stylesheet(active, active_color)
     if active and active_color then

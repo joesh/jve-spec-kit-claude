@@ -9,7 +9,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 9
+M.SCHEMA_VERSION = 10
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -902,7 +902,7 @@ function M.load_tracks(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked
+        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked, sync_mode
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -918,6 +918,10 @@ function M.load_tracks(sequence_id)
     local tracks = {}
     if query:exec() then
         while query:next() do
+            local sync_mode = query:value(8)
+            assert(sync_mode and sync_mode ~= "", string.format(
+                "load_tracks: track %s has NULL sync_mode — project DB is older than 015",
+                tostring(query:value(0))))
             table.insert(tracks, {
                 id = query:value(0),
                 name = query:value(1),
@@ -927,6 +931,7 @@ function M.load_tracks(sequence_id)
                 muted = query:value(5) == 1,
                 soloed = query:value(6) == 1,
                 locked = query:value(7) == 1,
+                sync_mode = sync_mode,
             })
         end
     end
@@ -1000,6 +1005,124 @@ function M.load_clips(sequence_id)
         end
     end
 
+    return clips
+end
+
+--- Load master sequence content as virtual clip-shaped rows.
+-- Master sequences hold no `clips` rows — their playable content lives in
+-- `media_refs` (each row is one continuous span of a media file pinned at
+-- the file's TC origin on a master track). The timeline view renders
+-- from `data.state.clips`, so to show a master in the timeline view we
+-- synthesize one clip-shaped row per media_ref. FR-007 is the consumer.
+--
+-- The synthesized rows are NOT persisted, NOT mutable through any clip
+-- command path, and carry id="mref:<media_ref_id>" so they're trivially
+-- distinguishable from real clips. Gap-recompute treats them as media
+-- clips (is_gap = nil/false), so gaps fill any unused span on the track.
+function M.load_master_virtual_clips(master_seq_id)
+    assert(master_seq_id and master_seq_id ~= "",
+        "load_master_virtual_clips: master_seq_id required")
+    assert(db_connection, "load_master_virtual_clips: no db connection")
+
+    local query = db_connection:prepare([[
+        SELECT mr.id, mr.project_id, mr.track_id,
+               mr.timeline_start_frame, mr.duration_frames,
+               mr.source_in_frame, mr.source_out_frame,
+               mr.enabled,
+               t.track_type, t.name AS track_name,
+               s.fps_numerator, s.fps_denominator, s.audio_sample_rate,
+               m.id, m.name, m.file_path, m.offline_note
+        FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        JOIN sequences s ON s.id = mr.owner_sequence_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE mr.owner_sequence_id = ?
+        ORDER BY mr.timeline_start_frame ASC
+    ]])
+    assert(query, "load_master_virtual_clips: failed to prepare query")
+    query:bind_value(1, master_seq_id)
+
+    local clips = {}
+    if query:exec() then
+        while query:next() do
+            local mref_id    = query:value(0)
+            local proj_id    = query:value(1)
+            local track_id   = query:value(2)
+            local tl_start   = query:value(3)
+            local duration   = query:value(4)
+            local src_in     = query:value(5)
+            local src_out    = query:value(6)
+            local enabled    = query:value(7) == 1
+            local track_type = query:value(8)
+            local fps_num    = query:value(10)
+            local fps_den    = query:value(11)
+            local audio_rate = query:value(12)
+            local media_id   = query:value(13)
+            local media_name = query:value(14)
+            local media_path = query:value(15)
+            local offline_note = query:value(16)
+
+            assert(tl_start, "load_master_virtual_clips: media_ref missing timeline_start_frame")
+            assert(duration, "load_master_virtual_clips: media_ref missing duration_frames")
+            assert(src_in and src_out, "load_master_virtual_clips: media_ref missing source range")
+
+            -- Audio media_refs store positions in the master's AUDIO timebase
+            -- (samples). Convert to the master's primary VIDEO timebase
+            -- (frames) — every clip in data.state.clips is interpreted in
+            -- the sequence's frame timebase by downstream consumers
+            -- (renderer, gap recompute, viewport math). Without this, an
+            -- audio span at sample N would land at frame N — ~2000× past
+            -- where it belongs at typical 48kHz/24fps.
+            local timeline_start = tl_start
+            local timeline_duration = duration
+            if track_type == "AUDIO" then
+                assert(audio_rate and audio_rate > 0, string.format(
+                    "load_master_virtual_clips: master %s has audio media_ref %s on "
+                    .. "track %s but audio_sample_rate is %s — schema invariant violated",
+                    tostring(master_seq_id), tostring(mref_id), tostring(track_id),
+                    tostring(audio_rate)))
+                -- frame = sample × fps / sample_rate
+                timeline_start = math.floor(tl_start * fps_num / (fps_den * audio_rate))
+                timeline_duration = math.floor(duration * fps_num / (fps_den * audio_rate))
+            end
+
+            local clip = {
+                id = "mref:" .. mref_id,
+                project_id = proj_id,
+                name = media_name or "",
+                track_id = track_id,
+                owner_sequence_id = master_seq_id,
+                track_sequence_id = master_seq_id,
+                nested_sequence_id = master_seq_id,
+                nested_sequence_kind = "master",
+                timeline_start = timeline_start,
+                duration = timeline_duration,
+                source_in = src_in,    -- source-media units (samples for audio, frames for video)
+                source_out = src_out,
+                frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
+                enabled = enabled,
+                track_type = track_type,
+                is_master_virtual = true,  -- mark for any consumer that needs to special-case
+            }
+            if media_id then
+                clip.resolved_media = {
+                    id = media_id,
+                    name = media_name,
+                    path = media_path,
+                    offline_note = offline_note,
+                }
+                clip.media_path = media_path
+                clip.offline = (offline_note ~= nil)
+            else
+                clip.offline = false
+            end
+            clip.label = media_name and media_name ~= "" and media_name
+                or (media_path and extract_filename(media_path))
+                or ("Media " .. tostring(mref_id):sub(1, 8))
+
+            table.insert(clips, clip)
+        end
+    end
     return clips
 end
 
