@@ -10,6 +10,7 @@ local M = {}
 
 local SPEC = {
     undoable = false,
+    mutates_clips = false,
     args = {
         _positional = {},  -- duration literal as first positional arg
         project_id = {},

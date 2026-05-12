@@ -8,6 +8,7 @@ local M = {}
 
 local SPEC = {
     undoable = false,  -- delegates to SetMarkIn/SetMarkOut (also non-undoable)
+    mutates_clips = false,
     args = {
         project_id = { required = true },
         sequence_id = {},

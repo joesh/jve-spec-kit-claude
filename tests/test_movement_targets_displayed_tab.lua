@@ -142,4 +142,66 @@ do
         tostring(target)))
 end
 
+-- ── Test 4: focus-driven injection: SetPlayhead with NO sequence_id arg
+-- and timeline-panel focus + source displayed → command lands on source.
+-- This exercises the command_manager.execute_interactive injection that
+-- backs keyboard shortcuts (I / O / J / etc.) — they go through TOML
+-- dispatch with no explicit sequence_id and rely on focus to resolve.
+print("\nTest 4: execute_interactive injects displayed for movement commands")
+timeline_state.switch_to_source_tab('src')
+
+-- Stub focus_manager to claim the timeline panel is focused.
+local fm = require("ui.focus_manager")
+local saved_get = fm.get_focused_panel
+fm.get_focused_panel = function() return "timeline" end
+
+local ok, err = pcall(function()
+    local r = command_manager.execute_interactive("SetPlayhead", {
+        playhead_position = 77,
+    })
+    assert(r and r.success,
+        "SetPlayhead via execute_interactive must succeed: "
+        .. tostring(r and r.error_message))
+end)
+
+fm.get_focused_panel = saved_get  -- restore even on failure
+assert(ok, "Test 4 inner block raised: " .. tostring(err))
+
+src_after = Sequence.load('src')
+rec_after = Sequence.load('rec')
+assert(src_after.playhead_position == 77, string.format(
+    "source playhead must be 77 (focus=timeline + displayed=src); got %s",
+    tostring(src_after.playhead_position)))
+-- The record's playhead before Test 4 was set to 42 in Test 1, then
+-- changed back to 42 when we switched displayed to rec in Test 3 (the
+-- switch doesn't move playheads). It must NOT have advanced to 77.
+assert(rec_after.playhead_position ~= 77, string.format(
+    "record playhead must NOT be 77; got %s",
+    tostring(rec_after.playhead_position)))
+print("  ✓ keyboard-style dispatch routes movement to displayed")
+
+-- ── Test 5: edit commands from timeline-panel focus stay on active record
+-- even when source tab is displayed. This is the architectural invariant:
+-- edits target active_sequence_id (FR-005); movement targets displayed.
+print("\nTest 5: edit commands stay on active even when source displayed")
+-- ClearMarks is undoable but mutates_clips=false (movement). Try an
+-- explicit non-movement, undoable command. SetSelectedClips is a
+-- selection write — let's use ClearMarks anyway and rely on the
+-- mutates_clips=true classifier-driven path via Insert? Insert needs
+-- a source_sequence_id which would be itself when displayed=src. So we
+-- instead use a synthetic check: assert command_manager classifies
+-- Insert/Overwrite as NOT movement and would NOT inject from
+-- timeline_state. (Verifies the spec.mutates_clips gate works.)
+local registry = require("core.command_registry")
+local insert_spec = registry.get_spec("Insert")
+assert(insert_spec, "Insert spec must be registered")
+assert(insert_spec.mutates_clips ~= false, string.format(
+    "Insert.mutates_clips must NOT be false — edits must NOT be routed to "
+    .. "displayed via get_movement_target_sequence_id. Spec says: %s",
+    tostring(insert_spec.mutates_clips)))
+local overwrite_spec = registry.get_spec("Overwrite")
+assert(overwrite_spec.mutates_clips ~= false,
+    "Overwrite.mutates_clips must NOT be false (same rationale)")
+print("  ✓ Insert / Overwrite specs are not classified as movement")
+
 print("\n✅ test_movement_targets_displayed_tab.lua passed")

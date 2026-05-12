@@ -395,20 +395,33 @@ function M.execute_interactive(command_name, params)
             active_monitor = pm.get_active_sequence_monitor()
         end
         if params.sequence_id == nil then
-            -- Timeline-panel focus: movement commands (marks, playhead) target
-            -- the *displayed* tab, not the active record (FR-005). When the
-            -- user clicks the source tab in the timeline panel and presses
-            -- I / O, the mark belongs on the source — the displayed tab — not
-            -- on the record being edited. timeline_monitor.sequence_id is
-            -- always the active record, so we can't lean on the upper-monitor
-            -- path here. The source viewer (focus = source_monitor) keeps the
-            -- existing active_monitor path.
-            local ok_fm, fm = pcall(require, "ui.focus_manager")
-            local panel_id = (ok_fm and fm and fm.get_focused_panel)
-                and fm.get_focused_panel() or nil
-            if panel_id == "timeline" or panel_id == "timeline_panel" then
-                local ok_ts, ts = pcall(require, "ui.timeline.timeline_state")
-                if ok_ts and ts and ts.get_movement_target_sequence_id then
+            -- FR-005 active/displayed split: edits target active_sequence_id
+            -- (the record), movement (marks, playhead) targets the displayed
+            -- tab (what the user is looking at — may be a source master).
+            -- We discriminate via the command's mutates_clips flag: false
+            -- means it's a non-mutating sequence-state write (marks, playhead,
+            -- view-state) and belongs on whatever the user sees. Edit
+            -- commands keep the existing active_monitor path so Insert /
+            -- Overwrite still land on the record even with the source tab
+            -- displayed in the timeline panel.
+            -- Movement commands (mutates_clips=false: marks, playhead, view
+            -- state) target what the user is *looking at*. For focused upper
+            -- monitors that's already what active_monitor returns
+            -- (source_monitor → loaded master; timeline_monitor → active
+            -- record). The timeline panel is special — it's not a monitor,
+            -- and timeline_monitor.sequence_id is always the active record
+            -- even when the panel's displayed tab is a source master. Bridge
+            -- the gap by asking timeline_state when timeline-panel-focused.
+            -- execute_interactive accepts a name STRING or a Command object;
+            -- only the string form is keyboard-shortcut dispatch where we
+            -- need this focus-aware injection. Object form already carries
+            -- the caller's chosen sequence_id (or has its own resolution).
+            local spec = type(command_name) == "string"
+                and registry.get_spec(command_name) or nil
+            local is_movement = spec ~= nil and spec.mutates_clips == false
+            if is_movement then
+                local panel_id = require("ui.focus_manager").get_focused_panel()
+                if panel_id == "timeline" or panel_id == "timeline_panel" then
                     params.sequence_id = ts.get_movement_target_sequence_id()
                 end
             end
