@@ -193,6 +193,16 @@ local function probe_result_from_emp_info(info)
                 result.duration_frames = math.floor(
                     info.duration_us * info.fps_num
                         / (info.fps_den * 1000000) + 0.5)
+                -- For V+A files, also surface the audio-sample extent so
+                -- the relink path can sync audio media_refs (their
+                -- duration_frames are in samples). EMP reports a single
+                -- container duration shared by both streams.
+                if info.has_audio and info.audio_sample_rate
+                    and info.audio_sample_rate > 0
+                then
+                    result.audio_duration_samples = math.floor(
+                        info.duration_us * info.audio_sample_rate / 1000000 + 0.5)
+                end
             end
         end
     elseif has_audio_only then
@@ -207,8 +217,14 @@ local function probe_result_from_emp_info(info)
             result.start_tc_rate = sr
         end
         if info.has_duration and info.duration_us and info.duration_us > 0 then
-            result.duration_frames = math.floor(
+            local samples = math.floor(
                 info.duration_us * sr / 1000000 + 0.5)
+            -- Convention for A-only files: duration_frames carries the
+            -- sample count (matches Media.create / media_refs).
+            -- Mirror to audio_duration_samples so the relink-duration
+            -- update can sync A media_refs in their sample units.
+            result.duration_frames = samples
+            result.audio_duration_samples = samples
         end
     end
 
@@ -357,6 +373,22 @@ local function probe_file_ffprobe(file_path)
                     elseif stream.nb_frames then
                         result.duration_frames = tonumber(stream.nb_frames)
                     end
+                    -- A-only convention (mirrors probe_result_from_emp_info):
+                    -- duration_frames here IS the sample count. Surface the
+                    -- same value as audio_duration_samples so the relink
+                    -- duration-update path can sync A media_refs.
+                    result.audio_duration_samples = result.duration_frames
+                end
+            elseif stream.codec_type == "audio" and result.width
+                and not result.audio_duration_samples
+            then
+                -- V+A file: mirror EMP path — derive audio sample extent
+                -- from the audio stream's own duration so A media_refs
+                -- can be synced in sample units.
+                local sample_rate = tonumber(stream.sample_rate)
+                if sample_rate and sample_rate > 0 and stream.duration then
+                    result.audio_duration_samples = math.floor(
+                        tonumber(stream.duration) * sample_rate + 0.5)
                 end
             end
         end
@@ -957,6 +989,23 @@ local function probed_tc_for_metadata(probe_result)
     }
 end
 
+-- Build a media_duration_updates entry from the probe — the probed
+-- file's extent is the source of truth for "how long is the linked
+-- file" (the DRP's NumFrames went stale when the file was re-cut on
+-- disk). nil when the probe carries no usable duration; the executor
+-- then leaves duration_frames alone. duration_frames is in V frames @
+-- the probed file's fps; audio_duration_samples is sample count.
+local function probed_duration_for_update(probe_result)
+    if not probe_result then return nil end
+    local v = probe_result.duration_frames
+    local a = probe_result.audio_duration_samples
+    if not v and not a then return nil end
+    return {
+        duration_frames = v,
+        audio_duration_samples = a,
+    }
+end
+
 -- Emit a relinked or ambiguous entry for the full-fit case. Single candidate
 -- → relinked; multiple → ambiguous (user must pick).
 local function classify_viable(out, media_info, viable)
@@ -966,6 +1015,7 @@ local function classify_viable(out, media_info, viable)
             new_path = viable[1].path,
             strategy = viable[1].is_segment and "segment" or "filename",
             probed_tc = probed_tc_for_metadata(viable[1].probe_result),
+            probed_duration = probed_duration_for_update(viable[1].probe_result),
         }
         return
     end
@@ -1143,6 +1193,7 @@ local function try_partial_fit_relink(out, media_info, partial_fit_candidates,
             new_path = best_cand.path,
             strategy = best_cand.is_segment and "segment" or "filename",
             probed_tc = probed_tc_for_metadata(best_cand.probe_result),
+            probed_duration = probed_duration_for_update(best_cand.probe_result),
         }
     else
         -- Split: the fitting clips will retarget to a clone of media at
@@ -1190,6 +1241,10 @@ local function try_partial_coverage_relink(out, media_info, partial_fit_candidat
         strategy  = "partial_coverage",
         coverage  = pc.coverage,
         probed_tc = probed_tc_for_metadata(pc.probe_result),
+        -- Update duration to match the (shorter) candidate. Clips that
+        -- reference frames past the new file's end fall into C++ TMB
+        -- EOF handling; the offline_note encodes the missing range.
+        probed_duration = probed_duration_for_update(pc.probe_result),
     }
     return true
 end
