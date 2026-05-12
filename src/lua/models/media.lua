@@ -868,6 +868,188 @@ function M.batch_restore_file_state(old_state)
     upd:finalize()
 end
 
+--- Atomically update each Media row's duration_frames AND every
+--- media_ref's duration_frames over that media. The relinker probes the
+--- candidate file's actual extent; that extent is the source of truth.
+--- Without this sync, the source viewer, ruler, and edit math run off a
+--- stale length.
+---
+--- Per-medium semantics:
+---   media.duration_frames    — video frames @ media.fps if video present,
+---                              else audio samples (matches Media.create).
+---   media_refs.duration_frames (V tracks) — video frames @ media.fps
+---   media_refs.duration_frames (A tracks) — audio samples
+---
+--- @param duration_changes table {[media_id] = {duration_frames=N,
+---                                              audio_duration_samples=N}}
+--- @return table  old_state for undo:
+---                  {[media_id] = { media_duration_frames = N,
+---                                  media_refs = {[mref_id] = N} }}
+function M.batch_set_durations(duration_changes)
+    assert(type(duration_changes) == "table",
+        "Media.batch_set_durations: duration_changes table required")
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_durations: no database connection")
+
+    -- Validate inputs up-front (rule 1.14 fail-fast): every entry must
+    -- supply at least one positive integer extent, and the medium it
+    -- supplies must exist on this media. We don't tolerate negative or
+    -- zero durations — schema CHECKs forbid them and silently writing
+    -- a degenerate row produces phantom-empty masters at decode time.
+    for mid, entry in pairs(duration_changes) do
+        assert(type(entry) == "table", string.format(
+            "Media.batch_set_durations: entry for %s must be a table",
+            tostring(mid)))
+        local has_v = entry.duration_frames ~= nil
+        local has_a = entry.audio_duration_samples ~= nil
+        assert(has_v or has_a, string.format(
+            "Media.batch_set_durations: entry for %s has neither "
+            .. "duration_frames nor audio_duration_samples", tostring(mid)))
+        if has_v then
+            assert(type(entry.duration_frames) == "number"
+                and entry.duration_frames > 0
+                and entry.duration_frames == math.floor(entry.duration_frames),
+                string.format("Media.batch_set_durations: %s.duration_frames "
+                    .. "must be a positive integer, got %s",
+                    tostring(mid), tostring(entry.duration_frames)))
+        end
+        if has_a then
+            assert(type(entry.audio_duration_samples) == "number"
+                and entry.audio_duration_samples > 0
+                and entry.audio_duration_samples == math.floor(entry.audio_duration_samples),
+                string.format("Media.batch_set_durations: "
+                    .. "%s.audio_duration_samples must be a positive integer, got %s",
+                    tostring(mid), tostring(entry.audio_duration_samples)))
+        end
+    end
+
+    local old_state = {}
+
+    -- Phase A: snapshot existing media.duration_frames + per-mref durations.
+    local read_media = assert(
+        db:prepare("SELECT duration_frames FROM media WHERE id = ?"),
+        "Media.batch_set_durations: prepare read_media failed")
+    local read_mrefs = assert(
+        db:prepare([[
+            SELECT mr.id, t.track_type, mr.duration_frames
+              FROM media_refs mr
+              JOIN tracks t ON t.id = mr.track_id
+             WHERE mr.media_id = ?
+        ]]),
+        "Media.batch_set_durations: prepare read_mrefs failed")
+    for mid in pairs(duration_changes) do
+        read_media:bind_value(1, mid)
+        assert(read_media:exec(),
+            "Media.batch_set_durations: read_media exec failed")
+        assert(read_media:next(), string.format(
+            "Media.batch_set_durations: media %s not found", tostring(mid)))
+        local rec = { media_duration_frames = read_media:value(0),
+                       media_refs = {}, mref_types = {} }
+        read_media:reset()
+
+        read_mrefs:bind_value(1, mid)
+        assert(read_mrefs:exec(),
+            "Media.batch_set_durations: read_mrefs exec failed")
+        while read_mrefs:next() do
+            local mref_id = read_mrefs:value(0)
+            rec.media_refs[mref_id] = read_mrefs:value(2)
+            rec.mref_types[mref_id] = read_mrefs:value(1)
+        end
+        read_mrefs:reset()
+        old_state[mid] = rec
+    end
+    read_media:finalize()
+    read_mrefs:finalize()
+
+    -- Phase B: apply updates. media row: prefer V extent if supplied,
+    -- else A. media_refs: per row, write the extent for THIS row's
+    -- track_type. A row whose track_type has no supplied extent in
+    -- duration_changes[mid] is left alone — caller chose not to touch
+    -- that medium.
+    local upd_media = assert(
+        db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_set_durations: prepare upd_media failed")
+    local upd_mref = assert(
+        db:prepare("UPDATE media_refs SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_set_durations: prepare upd_mref failed")
+    for mid, entry in pairs(duration_changes) do
+        -- media.duration_frames mirrors Media.create's convention: video
+        -- frames if the file has video, else audio samples. Caller may
+        -- supply both (videom+audio file) or one (V-only / A-only).
+        local media_dur
+        if entry.duration_frames ~= nil then
+            media_dur = entry.duration_frames
+        else
+            media_dur = entry.audio_duration_samples
+        end
+        upd_media:bind_value(1, media_dur)
+        upd_media:bind_value(2, mid)
+        assert(upd_media:exec(), string.format(
+            "Media.batch_set_durations: upd_media exec failed for %s",
+            tostring(mid)))
+        upd_media:reset()
+
+        local rec = old_state[mid]
+        for mref_id, track_type in pairs(rec.mref_types) do
+            local new_dur
+            if track_type == "VIDEO" then new_dur = entry.duration_frames
+            elseif track_type == "AUDIO" then new_dur = entry.audio_duration_samples
+            end
+            if new_dur ~= nil then
+                upd_mref:bind_value(1, new_dur)
+                upd_mref:bind_value(2, mref_id)
+                assert(upd_mref:exec(), string.format(
+                    "Media.batch_set_durations: upd_mref exec failed for %s",
+                    tostring(mref_id)))
+                upd_mref:reset()
+            end
+        end
+        mark_dirty(mid)
+    end
+    upd_media:finalize()
+    upd_mref:finalize()
+
+    return old_state
+end
+
+--- Undo counterpart: restore media.duration_frames and per-mref
+--- duration_frames from a table previously returned by batch_set_durations.
+function M.batch_restore_durations(old_state)
+    assert(type(old_state) == "table",
+        "Media.batch_restore_durations: old_state table required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_restore_durations: no database connection")
+
+    local upd_media = assert(
+        db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_restore_durations: prepare upd_media failed")
+    local upd_mref = assert(
+        db:prepare("UPDATE media_refs SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_restore_durations: prepare upd_mref failed")
+    for mid, rec in pairs(old_state) do
+        upd_media:bind_value(1, rec.media_duration_frames)
+        upd_media:bind_value(2, mid)
+        assert(upd_media:exec(), string.format(
+            "Media.batch_restore_durations: upd_media exec failed for %s",
+            tostring(mid)))
+        upd_media:reset()
+        for mref_id, old_dur in pairs(rec.media_refs) do
+            upd_mref:bind_value(1, old_dur)
+            upd_mref:bind_value(2, mref_id)
+            assert(upd_mref:exec(), string.format(
+                "Media.batch_restore_durations: upd_mref exec failed for %s",
+                tostring(mref_id)))
+            upd_mref:reset()
+        end
+        mark_dirty(mid)
+    end
+    upd_media:finalize()
+    upd_mref:finalize()
+end
+
 --- Batch-assign offline_note for a set of media rows. Same shape as
 --- batch_set_file_paths: pass {[media_id] = json_string_or_nil}. Values
 --- of nil clear the note (relink succeeded, no diagnostic to display).

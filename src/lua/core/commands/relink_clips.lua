@@ -44,6 +44,17 @@ local SPEC = {
         -- {start_tc_value, start_tc_rate, start_tc_audio_samples?,
         --  start_tc_audio_rate?}.
         media_tc_updates = { kind = "table", default = {} },
+        -- Probed file duration per changed media. The relinker probes
+        -- every candidate file's actual extent; that probe is the
+        -- source of truth for "how long is the linked file". Without
+        -- this, media.duration_frames + every media_ref over the
+        -- media keep the pre-relink file's extent — source viewer,
+        -- ruler, edit math run off a stale length. Shape:
+        --   {[media_id] = {duration_frames = N (video frames @ media.fps),
+        --                  audio_duration_samples = N}}
+        -- Both required when the media has both V and A; either alone
+        -- is allowed for V-only or A-only files.
+        media_duration_updates = { kind = "table", default = {} },
         new_media_records = { kind = "table", default = {} },
         -- media_id → offline_note JSON string. Sentinel "__clear__"
         -- means "explicitly clear any existing note" (used when a
@@ -160,6 +171,17 @@ function M.register(executors, undoers, db)
             media_path_changes, media_tc_updates)
         for _ in pairs(media_path_changes) do media_count = media_count + 1 end
 
+        -- Duration updates ride with path changes: a stray entry whose
+        -- media_id never moved would silently no-op the file relink it
+        -- accompanied. Same invariant as tc_updates (rule 1.14, mirrors
+        -- batch_set_file_paths' subset check).
+        for mid in pairs(args.media_duration_updates) do
+            assert(media_path_changes[mid] ~= nil, string.format(
+                "RelinkClips: media_duration_updates contains %s but "
+                .. "media_path_changes does not — duration update would "
+                .. "be orphaned", tostring(mid)))
+        end
+
         -- Phase 2b: Apply offline_note changes. Snapshot old values for
         -- undo, then partition the incoming map into "set to JSON" and
         -- "clear to NULL" — the "__clear__" string sentinel is how the
@@ -185,6 +207,14 @@ function M.register(executors, undoers, db)
         Media.batch_set_offline_notes(note_sets)
         Media.batch_clear_offline_notes(note_clears)
 
+        -- Phase 2c: Sync media.duration_frames + every media_ref's
+        -- duration_frames to the freshly-probed file extent. Without
+        -- this, the source viewer / ruler / edit math run off the
+        -- pre-relink file's length even though the row is now pointing
+        -- at a different file. (Rule 2.5: model owns the SQL.)
+        local old_media_durations = Media.batch_set_durations(
+            args.media_duration_updates)
+
         local t_p2_core = qt_monotonic_s()
         local t_p2_end = t_p2_core
 
@@ -209,6 +239,7 @@ function M.register(executors, undoers, db)
         -- Persist undo state
         command:set_parameter("old_clip_state", old_clip_state)
         command:set_parameter("old_media_file_state", old_media_file_state)
+        command:set_parameter("old_media_durations", old_media_durations)
         command:set_parameter("old_offline_notes", old_offline_notes)
 
         -- Clip writes don't call mark_dirty on media rows, but any clip
@@ -298,6 +329,13 @@ function M.register(executors, undoers, db)
         end
         Media.batch_set_offline_notes(restore_sets)
         Media.batch_clear_offline_notes(restore_clears)
+
+        -- Phase 2c: Restore media.duration_frames + media_refs' durations
+        -- to the pre-relink file's extents. Symmetric with the executor's
+        -- batch_set_durations call.
+        assert(type(args.old_media_durations) == "table",
+            "RelinkClips undo: old_media_durations missing")
+        Media.batch_restore_durations(args.old_media_durations)
 
         -- Phase 3: Delete new media records (and their clips)
         -- SPEC guarantees args.new_media_records is a table (default = {}).
