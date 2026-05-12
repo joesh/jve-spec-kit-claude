@@ -71,7 +71,7 @@ The ripple pipeline dispatches per-track before implicit-gap injection:
 - **cut** — same as ripple, but any clip spanning the trim point is split first; downstream half ripples normally; resulting empty interval renders via JVE's existing gap-clip mechanism. Splits use the existing blade/split quantization (sequence frame-rate).
 
 ### F4 · Track header redesign (S/M on video too)
-Header cells, left to right: **src-id button | lock icon | rec-patch-id button | label (flex) | sync-mode cell | Solo/Mute vertical stack**.
+Header cells, left to right: **src-id button | rec-patch-id button | label (flex) | lock icon | sync-mode cell | Solo/Mute vertical stack**. (Audio rows append a waveform toggle as a UI extension beyond the spec-required six.)
 
 - Solo and Mute are independent (a track can be both). **Solo always trumps Mute.**
 - **Solo/Mute applies to video** as well as audio. On video: Mute skips the track during compositing (next-lower non-muted becomes topmost). Solo uses additive-set semantics — only soloed tracks composite, muted excluded from the set, non-soloed-non-muted ignored when ≥1 track is soloed.

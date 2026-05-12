@@ -1643,6 +1643,13 @@ local function create_video_headers()
             seq_id        = video_seq_id,
             rec_idx       = track.track_index,
             track_type    = "VIDEO",
+            -- Layout snapshot for T017 inspection (FR-008): cell order
+            -- LTR as actually placed in header_layout above. Video rows
+            -- have no trailing waveform toggle.
+            cells         = {"src_btn", "rec_btn", "label", "lock",
+                             "sync_mode", "sm_stack"},
+            lock_kind     = "icon",  -- unicode 🔒 glyph; not text "L"
+            label_text    = track.name,
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(video_splitter, header)
@@ -1881,6 +1888,12 @@ local function create_audio_headers()
             seq_id        = audio_seq_id,
             rec_idx       = track.track_index,
             track_type    = "AUDIO",
+            -- Layout snapshot for T017 (FR-008). First 6 cells follow spec;
+            -- "wave" trails as an audio-only extension (waveform toggle).
+            cells         = {"src_btn", "rec_btn", "label", "lock",
+                             "sync_mode", "sm_stack", "wave"},
+            lock_kind     = "icon",
+            label_text    = track.name,
         }
 
         qt_constants.LAYOUT.ADD_WIDGET(audio_splitter, header)
@@ -3228,6 +3241,25 @@ function M:get_clips()
         return a.timeline_start_frame < b.timeline_start_frame
     end)
     return clips
+end
+
+--- TEST-ONLY: return a snapshot of how the track header is laid out for
+--- the given track id. Used by tests/binding/test_015_track_header_layout
+--- to verify spec FR-008–FR-021d invariants (cell order, banned cells,
+--- lock-not-text-L) without coupling to private Qt widget state.
+--- @param track_id string
+--- @return table|nil { cells = {string...}, lock_kind = string,
+---                    label_text = string } or nil if track not loaded
+function M.get_track_header_layout_for_test(track_id)
+    assert(track_id and track_id ~= "",
+        "get_track_header_layout_for_test: track_id required")
+    local refs = track_button_refs[track_id]
+    if not refs then return nil end
+    return {
+        cells      = refs.cells,
+        lock_kind  = refs.lock_kind,
+        label_text = refs.label_text,
+    }
 end
 
 return M
