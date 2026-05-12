@@ -70,7 +70,7 @@ db:exec(string.format([[
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200, %d, 1200, 1, 1.0, 0, %d, %d),
-      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 1200, %d, 1200, 1, 1.0, 0, %d, %d),
+      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, %d, 2400000, 1, 1.0, 0, %d, %d),
       ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0,  600, 0,    600, 1, 1.0, 0, %d, %d);
 ]], now,now,                              -- projects (2)
     now,now, now,now, now,now,            -- 3 sequences (6)
