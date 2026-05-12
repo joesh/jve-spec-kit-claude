@@ -353,6 +353,18 @@ M.get_sequence_id = function() return data.state.sequence_id end
 M.get_active_sequence_id = function() return data.state.sequence_id end
 M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
 
+-- Movement-class commands (SetPlayhead, SetMarkIn/Out, GoToMarkIn/Out, ...)
+-- fired from the timeline panel target the *displayed* tab. Movement is
+-- not an edit (FR-005): edits go to active_sequence_id, but marks and the
+-- playhead belong to whatever the user is looking at. When the source
+-- tab is displayed, displayed_tab_id is the source master; otherwise it
+-- equals the active record. Either way, displayed is the right answer
+-- for the timeline panel's ruler/key dispatchers. Returns nil when the
+-- panel is blank (no displayed tab).
+M.get_movement_target_sequence_id = function()
+    return data.state.displayed_tab_id
+end
+
 -- Switch to the Source tab. Only displayed_tab_id changes; active_sequence_id
 -- is untouched (FR-005). Delegates to core.activate_displayed which persists
 -- outgoing displayed view-state, loads incoming, and emits displayed_tab_changed.

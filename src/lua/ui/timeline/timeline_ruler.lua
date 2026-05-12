@@ -337,7 +337,7 @@ function M.create(widget, state_module)
                 state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
-                    sequence_id = state_module.get_sequence_id(),
+                    sequence_id = state_module.get_movement_target_sequence_id(),
                     playhead_position = snapped_frame,
                 })
                 state_module.set_dragging_playhead(true)
@@ -359,7 +359,7 @@ function M.create(widget, state_module)
                 state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
-                    sequence_id = state_module.get_sequence_id(),
+                    sequence_id = state_module.get_movement_target_sequence_id(),
                     playhead_position = snapped_frame,
                 })
             end

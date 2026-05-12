@@ -731,7 +731,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             state.set_playhead_position(time)
             command_manager.execute_interactive("SetPlayhead", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_movement_target_sequence_id(),
                 playhead_position = time,
             })
         elseif view.panel_drag_move then

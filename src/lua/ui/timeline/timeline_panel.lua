@@ -272,7 +272,7 @@ local function apply_timecode_entry_text()
     end
     command_manager.execute_interactive("SetPlayhead", {
         project_id = state.get_project_id(),
-        sequence_id = state.get_sequence_id(),
+        sequence_id = state.get_movement_target_sequence_id(),
         playhead_position = frame,
     })
     return true

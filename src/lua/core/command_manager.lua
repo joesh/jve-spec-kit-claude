@@ -395,10 +395,29 @@ function M.execute_interactive(command_name, params)
             active_monitor = pm.get_active_sequence_monitor()
         end
         if params.sequence_id == nil then
-            if active_monitor and active_monitor.sequence_id then
-                params.sequence_id = active_monitor.sequence_id
-            elseif active_sequence_id ~= nil and active_sequence_id ~= "" then
-                params.sequence_id = active_sequence_id
+            -- Timeline-panel focus: movement commands (marks, playhead) target
+            -- the *displayed* tab, not the active record (FR-005). When the
+            -- user clicks the source tab in the timeline panel and presses
+            -- I / O, the mark belongs on the source — the displayed tab — not
+            -- on the record being edited. timeline_monitor.sequence_id is
+            -- always the active record, so we can't lean on the upper-monitor
+            -- path here. The source viewer (focus = source_monitor) keeps the
+            -- existing active_monitor path.
+            local ok_fm, fm = pcall(require, "ui.focus_manager")
+            local panel_id = (ok_fm and fm and fm.get_focused_panel)
+                and fm.get_focused_panel() or nil
+            if panel_id == "timeline" or panel_id == "timeline_panel" then
+                local ok_ts, ts = pcall(require, "ui.timeline.timeline_state")
+                if ok_ts and ts and ts.get_movement_target_sequence_id then
+                    params.sequence_id = ts.get_movement_target_sequence_id()
+                end
+            end
+            if params.sequence_id == nil then
+                if active_monitor and active_monitor.sequence_id then
+                    params.sequence_id = active_monitor.sequence_id
+                elseif active_sequence_id ~= nil and active_sequence_id ~= "" then
+                    params.sequence_id = active_sequence_id
+                end
             end
         end
         if params.playhead == nil then
