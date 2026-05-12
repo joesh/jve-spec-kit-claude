@@ -1226,6 +1226,8 @@ local function format_source_label(track_type, src_idx)
     return prefix .. tostring(src_idx)
 end
 
+local patch_drag_logic = require("ui.timeline.patch_drag_logic")
+
 -- Wire src-id and rec-id buttons to SetPatch command (T038, FR-009, FR-010).
 -- rec_track_index: the index of the RECORD track this row represents.
 -- track_type: "VIDEO" or "AUDIO" — used to format the source-track label.
@@ -1328,6 +1330,55 @@ local function wire_patch_buttons(src_btn, rec_btn, sequence_id, rec_track_id, r
         cmd.execute("SetPatch", params)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(src_btn, src_handler)
+
+    -- Drag handler (FR-010a): on "end", geometry-hit-test the target row
+    -- via find_drop_target, then run the pure resolver. Plain-drag and
+    -- modifier-drag (Option) produce IDENTICAL data-layer actions —
+    -- modifier semantics are absorbed by SQLite's UNIQUE(sequence_id,
+    -- source_track_index): two drops with the same record_track_index
+    -- and different source_track_index naturally stack. So the handler
+    -- doesn't branch on modifier; it just fires SetPatch.
+    --
+    -- Drag-source identity (which source_track_index this row currently
+    -- represents) is resolved at drag-end against the live patch row —
+    -- if no row exists yet, identity is the rec row's own index per
+    -- the seeded-routing default (Patch.ensure_identity_for_source).
+    local drag_handler = register_track_btn_handler(function(event_type, gx, gy, _modifiers)
+        if event_type ~= "end" then return end
+        local target_entry = find_drop_target(gx, gy)
+        if not target_entry then
+            log.detail("patch-drag: drop landed outside any rec_btn — ignored")
+            return
+        end
+        local project_id = timeline_state.get_project_id()
+        assert(project_id and project_id ~= "",
+            "patch-drag: no project_id (rec_track_index=" .. tostring(rec_track_index) .. ")")
+        local p = Patch.find_by_record(sequence_id, track_type, rec_track_index)
+        local source_track_index
+        if p then
+            source_track_index = p.source_track_index
+        else
+            -- No patch row yet: row represents implicit identity per
+            -- seeded-routing contract. Drag materializes a patch row
+            -- (same way as the click handler's first-click flow).
+            source_track_index = rec_track_index
+        end
+        local result = patch_drag_logic.compute_patch_drop_action(
+            { sequence_id = sequence_id, track_type = track_type,
+              source_track_index = source_track_index,
+              home_rec_track_index = rec_track_index,
+              project_id = project_id },
+            { sequence_id = target_entry.seq_id,
+              track_type = target_entry.track_type,
+              rec_track_index = target_entry.track_index })
+        if result.refusal then
+            log.event("patch-drag refused: %s", result.refusal)
+            return
+        end
+        local cmd = require("core.command_manager")
+        cmd.execute("SetPatch", result.params)
+    end)
+    qt_constants.CONTROL.SET_WIDGET_DRAG_HANDLER(src_btn, drag_handler)
 end
 
 -- Track button references for MVC re-pull on undo/redo
