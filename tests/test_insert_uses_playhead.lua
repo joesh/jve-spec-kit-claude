@@ -106,7 +106,7 @@ mc_seq:save()
 
 command_manager.begin_command_event("script")
 local result = command_manager.execute("Insert", {
-    nested_sequence_id = nested_sequence_id,
+    source_sequence_id = nested_sequence_id,
     target_video_track_id = video_track_id,
     sequence_id = seq.id,
     project_id = project.id,

@@ -1,16 +1,16 @@
 #!/usr/bin/env luajit
 
--- 015 F2: execute_interactive injects nested_sequence_id from
+-- 015 F2: execute_interactive injects source_sequence_id from
 -- effective_source ONLY for commands whose SPEC declares that arg.
 -- Without spec gating, every command call would receive the param and
 -- command_schema would reject it as "unknown param" — surfaced as a UI
 -- error on first browser click (regression reported 2026-05-12).
 --
 -- Domain behavior under test:
---   T1: dispatch a command whose SPEC does NOT declare nested_sequence_id
+--   T1: dispatch a command whose SPEC does NOT declare source_sequence_id
 --       (SelectBrowserItems). Must succeed even when effective_source has
 --       a value — no injection should happen, so no schema rejection.
---   T2: dispatch a command whose SPEC declares nested_sequence_id but
+--   T2: dispatch a command whose SPEC declares source_sequence_id but
 --       caller omits it (a hypothetical Insert path). Verified indirectly
 --       by the existing F10/Overwrite test plumbing — this test focuses
 --       on the negative case that broke browser clicks.
@@ -56,8 +56,8 @@ assert(effective.get() == "some-master-seq",
     "fixture: effective_source must be primed for this regression test")
 
 -- T1: SelectBrowserItems must dispatch cleanly. Its SPEC does NOT declare
--- nested_sequence_id, so the injection must be skipped for this command.
-print("\n-- T1: dispatch a command without nested_sequence_id in SPEC")
+-- source_sequence_id, so the injection must be skipped for this command.
+print("\n-- T1: dispatch a command without source_sequence_id in SPEC")
 local r = command_manager.execute_interactive("SelectBrowserItems", {
     project_id = "proj",
     items      = {},  -- empty selection is a valid argument

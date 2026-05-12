@@ -116,7 +116,7 @@ print(string.format("  initial audio tracks: %d — OK", before))
 local r = command_manager.execute("Insert", {
     sequence_id        = "rec_seq",
     project_id         = "proj",
-    nested_sequence_id = "src_seq",
+    source_sequence_id = "src_seq",
     timeline_start_frame = 0,
 })
 assert(r and r.success,

@@ -63,7 +63,7 @@ do
     local before_links = link_count(db)
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e",
-        nested_sequence_id    = "e",     -- same as owner — direct cycle
+        source_sequence_id    = "e",     -- same as owner — direct cycle
         timeline_start_frame  = 0,
         target_video_track_id = "e-v1",
     })
@@ -135,7 +135,7 @@ do
     local before_links = link_count(db)
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e2",
-        nested_sequence_id    = "e1",    -- e1 already references e2
+        source_sequence_id    = "e1",    -- e1 already references e2
         timeline_start_frame  = 0,
         target_video_track_id = "e2-v1",
     })

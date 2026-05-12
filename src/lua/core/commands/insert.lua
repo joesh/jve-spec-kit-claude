@@ -49,7 +49,7 @@ function M.execute(args)
     -- the API-layer guarantee that pre-patch source→record identity
     -- behavior still works without explicit user setup.
     require("models.patch").ensure_identity_for_source(
-        args.sequence_id, args.nested_sequence_id)
+        args.sequence_id, args.source_sequence_id)
 
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
@@ -116,7 +116,7 @@ end
 local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
-        nested_sequence_id    = { required = true,  kind = "string" },
+        source_sequence_id    = { required = true,  kind = "string" },
         -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
         -- No silent default-to-0 (rule 2.13).
         timeline_start_frame  = { kind = "number" },
@@ -146,7 +146,7 @@ local SPEC = {
 -- row contribute nothing (they don't participate in the edit). Disabled
 -- patches likewise contribute nothing.
 local function auto_create_record_audio_tracks(args)
-    if not args.nested_sequence_id then return {} end
+    if not args.source_sequence_id then return {} end
 
     local Patch = require("models.patch")
     local rec_audio = Track.find_by_sequence(args.sequence_id, "AUDIO")
@@ -376,10 +376,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local args = command:get_all_parameters()
 
         -- Validate the source sequence exists before any content checks.
-        if not Sequence.find(args.nested_sequence_id) then
+        if not Sequence.find(args.source_sequence_id) then
             set_last_error(string.format(
-                "Insert: nested_sequence_id '%s' not found",
-                tostring(args.nested_sequence_id)))
+                "Insert: source_sequence_id '%s' not found",
+                tostring(args.source_sequence_id)))
             return false
         end
 
@@ -390,7 +390,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         -- If the source sequence has no clips, track creation was the only
         -- goal (T042 path). Persist empty clip-insertion state and return.
-        local src_mediums = Sequence.contained_mediums(args.nested_sequence_id)
+        local src_mediums = Sequence.contained_mediums(args.source_sequence_id)
         if not next(src_mediums) then
             local Signals = require("core.signals")
             command:set_parameter("created_clip_ids",      {})

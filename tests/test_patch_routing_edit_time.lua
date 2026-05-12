@@ -103,7 +103,7 @@ do
     local db = build_fixture()
     local r = Insert.execute({
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "expanded",
     })

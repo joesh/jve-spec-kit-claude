@@ -81,7 +81,7 @@ assert(count_audio_tracks() == 1, "fixture: expected 1 audio track on rec_seq")
 local r = command_manager.execute("Insert", {
     sequence_id          = "rec_seq",
     project_id           = "proj",
-    nested_sequence_id   = "src_seq",
+    source_sequence_id   = "src_seq",
     timeline_start_frame = 0,
 })
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))

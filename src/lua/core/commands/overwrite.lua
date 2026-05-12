@@ -51,7 +51,7 @@ function M.execute(args)
     -- nested sequence. Same rationale as Insert.execute — patches are the
     -- sole routing mechanism; pre-patch identity behavior is preserved.
     require("models.patch").ensure_identity_for_source(
-        args.sequence_id, args.nested_sequence_id)
+        args.sequence_id, args.source_sequence_id)
 
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
@@ -92,7 +92,7 @@ end
 local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
-        nested_sequence_id    = { required = true,  kind = "string" },
+        source_sequence_id    = { required = true,  kind = "string" },
         -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
         timeline_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },

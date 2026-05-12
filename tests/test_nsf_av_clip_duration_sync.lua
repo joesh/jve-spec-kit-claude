@@ -167,7 +167,7 @@ local function test_timeline_clips_visual_sync()
         project_id = project_id,
         sequence_id = timeline.id,
         target_video_track_id = video_track.id,
-        nested_sequence_id = masterclip.id,
+        source_sequence_id = masterclip.id,
         timeline_start_frame = 0,
     })
     assert(result and result.success, "Insert failed: " .. tostring(result and result.error_message))

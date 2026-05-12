@@ -126,7 +126,7 @@ do
     -- Default — no audio_drop_mode arg.
     local result = Insert.execute({
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
     })
     local clips = clips_in_seq(db, "e")
@@ -143,7 +143,7 @@ do
     local db2 = build_fixture()
     Insert.execute({
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "composite",
     })
@@ -158,7 +158,7 @@ do
     local db = build_fixture()
     local result = Insert.execute({
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "expanded",
     })
@@ -232,7 +232,7 @@ do
 
     local ok, err = pcall(Insert.execute, {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "expanded",
     })
@@ -253,7 +253,7 @@ do
     build_fixture()
     local ok = pcall(Insert.execute, {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "channels",
     })

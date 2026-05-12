@@ -282,7 +282,7 @@ assert(rec_before == 3,
 local r17 = command_manager.execute("Insert", {
     sequence_id        = "rec",
     project_id         = "proj",
-    nested_sequence_id = "src",
+    source_sequence_id = "src",
     timeline_start_frame = 0,
 })
 assert(r17 and r17.success,

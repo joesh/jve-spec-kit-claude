@@ -132,7 +132,7 @@ do
     -- Insert at frame 50 — V+A master, 60 owner frames under passthrough.
     -- Target tracks: V1 (explicit) + A1 (default pick).
     Insert.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 50,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
@@ -202,7 +202,7 @@ do
     ]]))
 
     local result = Insert.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 0,
         fps_mismatch_policy = "passthrough",
     })
@@ -255,7 +255,7 @@ do
     ]]))
 
     local result = Insert.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 0,
         fps_mismatch_policy = "passthrough",
     })

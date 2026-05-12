@@ -611,7 +611,7 @@ local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
         local result = command_manager.execute_interactive("Overwrite", {
             project_id            = project_id,
             sequence_id           = seq_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            source_sequence_id    = clip.nested_sequence_id,
             target_video_track_id = v1_track_id,
             timeline_start_frame  = playhead,
             advance_playhead      = false,

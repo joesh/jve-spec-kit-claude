@@ -148,7 +148,7 @@ do
     -- [30, 90) — fully contains [40, 80).
     seed_pre_clip(db, "pre", 40, 40, 0)
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 30,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
@@ -177,7 +177,7 @@ do
     -- with 60-frame passthrough master.
     seed_pre_clip(db, "pre", 100, 100, 50)
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 80,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
@@ -212,7 +212,7 @@ do
     -- with 60-frame passthrough. Range [120, 180) is fully inside [50, 250).
     seed_pre_clip(db, "pre", 50, 200, 100)
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 120,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
@@ -282,7 +282,7 @@ do
     seed_pre_clip(db, "pre_c", 85, 65, 700)
 
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 30,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 60 frames at [30, 90)
@@ -331,7 +331,7 @@ do
     local db = build_fixture()
     seed_pre_clip(db, "pre", 100, 60, 0)
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 160,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
@@ -358,7 +358,7 @@ do
     local db = build_fixture()
     seed_pre_clip(db, "pre", 100, 60, 0)
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m",
+        sequence_id = "e", source_sequence_id = "m",
         timeline_start_frame = 100,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 60, [100, 160)
@@ -406,7 +406,7 @@ do
             1, 1.0, 0, 0, 0);
     ]])
     Overwrite.execute({
-        sequence_id = "e", nested_sequence_id = "m120",
+        sequence_id = "e", source_sequence_id = "m120",
         timeline_start_frame = 40,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 120, [40, 160)

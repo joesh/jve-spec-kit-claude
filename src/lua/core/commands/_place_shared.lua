@@ -82,7 +82,7 @@ end
 --- per-medium native durations, owner-timebase duration, target tracks,
 --- clip name. Returns a struct the caller consumes to execute.
 ---
----   args: { sequence_id, nested_sequence_id, timeline_start_frame,
+---   args: { sequence_id, source_sequence_id, timeline_start_frame,
 ---           target_video_track_id?, target_audio_track_id?,
 ---           fps_mismatch_policy?, clip_name? }
 ---
@@ -98,8 +98,8 @@ local function validate_plan_args(args)
         "place_shared.plan_placement: args table required")
     assert(args.sequence_id and args.sequence_id ~= "",
         "place_shared: sequence_id required")
-    assert(args.nested_sequence_id and args.nested_sequence_id ~= "",
-        "place_shared: nested_sequence_id required")
+    assert(args.source_sequence_id and args.source_sequence_id ~= "",
+        "place_shared: source_sequence_id required")
     assert(type(args.timeline_start_frame) == "number"
         and args.timeline_start_frame >= 0,
         "place_shared: timeline_start_frame must be non-negative integer")
@@ -111,9 +111,9 @@ local function resolve_endpoints(args)
     local owner  = Sequence.find(args.sequence_id)
     assert(owner, string.format(
         "place_shared: owner %s not found", args.sequence_id))
-    local nested = Sequence.find(args.nested_sequence_id)
+    local nested = Sequence.find(args.source_sequence_id)
     assert(nested, string.format(
-        "place_shared: nested %s not found", args.nested_sequence_id))
+        "place_shared: nested %s not found", args.source_sequence_id))
     assert(owner.kind == "nested", string.format(
         "place_shared: owner %s has kind='%s' (expected 'nested' — clips must be owned by a kind='nested' sequence)",
         owner.id, owner.kind))

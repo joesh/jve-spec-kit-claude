@@ -406,24 +406,16 @@ function M.execute_interactive(command_name, params)
                 params.playhead = active_monitor.engine:get_position()
             end
         end
-        -- 015 F2: inject nested_sequence_id from the effective source
+        -- 015 F2: inject source_sequence_id from the effective source
         -- (browser selection if browser is active, else source viewer's
         -- loaded master). Keymaps like F10 ("Overwrite advance_playhead=true")
         -- don't carry a source argument — execute_interactive supplies it.
-        -- Only inject for commands that actually accept the param; otherwise
-        -- command_schema.validate_and_normalize would reject the extra key
-        -- ("unknown param"). effective_source is pure Lua (no Qt deps); a
-        -- require failure here is a real bug, so no pcall.
-        -- 015 F2: inject nested_sequence_id from the effective source
-        -- (browser selection if browser is active, else source viewer's
-        -- loaded master). Keymaps like F10 ("Overwrite advance_playhead=true")
-        -- don't carry a source argument — execute_interactive supplies it.
-        -- The schema's GLOBAL_ALLOWED_KEYS whitelists nested_sequence_id so
-        -- commands that don't declare it simply ignore the extra param
-        -- (same pattern as sequence_id/project_id/playhead). No spec-gating
-        -- here. effective_source is pure Lua; require failure is a real bug.
-        if params.nested_sequence_id == nil then
-            params.nested_sequence_id = require("core.effective_source").get()
+        -- GLOBAL_ALLOWED_KEYS whitelists source_sequence_id so commands that
+        -- don't declare it simply ignore the extra param (same pattern as
+        -- sequence_id/project_id/playhead). effective_source is pure Lua;
+        -- require failure is a real bug, so no pcall.
+        if params.source_sequence_id == nil then
+            params.source_sequence_id = require("core.effective_source").get()
         end
         result, executed_command = M.execute(command_name, params)
     end, debug.traceback)
