@@ -2513,8 +2513,18 @@ function Sequence.native_duration_for_medium(id, track_type)
     assert(track_type == "VIDEO" or track_type == "AUDIO",
         "Sequence.native_duration_for_medium: track_type must be VIDEO or AUDIO")
     local conn = resolve_db()
+    -- Return the SPAN (length), not the absolute end frame. Master-sequence
+    -- media_refs sit at timeline_start_frame = file_tc_origin (TIMECODE-IS-
+    -- TRUTH memory), so MAX(start+duration) on its own equals
+    -- tc_origin + actual_duration — wrong as a "how long is this content"
+    -- answer. Callers (place_shared.compute_owner_duration et al.) treat
+    -- the result as a duration; multiplying by a resample ratio against
+    -- the end-frame produces wildly oversized clips.
     local stmt = conn:prepare([[
-        SELECT COALESCE(MAX(r.timeline_start_frame + r.duration_frames), 0)
+        SELECT COALESCE(
+            MAX(r.timeline_start_frame + r.duration_frames)
+              - MIN(r.timeline_start_frame),
+            0)
         FROM (
             SELECT track_id, timeline_start_frame, duration_frames
               FROM media_refs WHERE owner_sequence_id = ?
