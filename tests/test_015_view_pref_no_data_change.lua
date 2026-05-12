@@ -64,14 +64,14 @@ end
 local function snapshot_patches()
     local out = {}
     local s = db:prepare(
-        "SELECT track_type, source_track_index, record_track_index, enabled, color "
+        "SELECT track_type, source_track_index, record_track_index, enabled "
         .. "FROM patches WHERE sequence_id='seq' "
         .. "ORDER BY track_type, source_track_index")
     s:exec()
     while s:next() do
         table.insert(out, {
             type = s:value(0), src = s:value(1), rec = s:value(2),
-            enabled = s:value(3), color = s:value(4),
+            enabled = s:value(3),
         })
     end
     s:finalize()
@@ -82,8 +82,7 @@ local function rows_equal(a, b)
     if #a ~= #b then return false end
     for i = 1, #a do
         if a[i].type ~= b[i].type or a[i].src ~= b[i].src
-           or a[i].rec ~= b[i].rec or a[i].enabled ~= b[i].enabled
-           or a[i].color ~= b[i].color then
+           or a[i].rec ~= b[i].rec or a[i].enabled ~= b[i].enabled then
             return false
         end
     end

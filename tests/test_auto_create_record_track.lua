@@ -75,26 +75,26 @@ end
 -- Patches: A1→1 (rec track exists), A4→4, A5→5, A8→8 (rec tracks missing).
 assert(db:exec([[
     INSERT INTO patches
-        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-    VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, '#ff0000', 0)
+        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+    VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, 0)
 ]]), "FAIL: patches table missing — schema migration T025 not applied")
 
 assert(db:exec([[
     INSERT INTO patches
-        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-    VALUES ('p_a4', 'rec_seq', 'AUDIO', 4, 4, 1, '#00ff00', 0)
+        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+    VALUES ('p_a4', 'rec_seq', 'AUDIO', 4, 4, 1, 0)
 ]]), "patches INSERT A4 failed")
 
 assert(db:exec([[
     INSERT INTO patches
-        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-    VALUES ('p_a5', 'rec_seq', 'AUDIO', 5, 5, 1, '#0000ff', 0)
+        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+    VALUES ('p_a5', 'rec_seq', 'AUDIO', 5, 5, 1, 0)
 ]]), "patches INSERT A5 failed")
 
 assert(db:exec([[
     INSERT INTO patches
-        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-    VALUES ('p_a8', 'rec_seq', 'AUDIO', 8, 8, 1, '#ffff00', 0)
+        (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+    VALUES ('p_a8', 'rec_seq', 'AUDIO', 8, 8, 1, 0)
 ]]), "patches INSERT A8 failed")
 
 print("  patches inserted — schema OK")

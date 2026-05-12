@@ -44,6 +44,13 @@ function M.execute(args)
         args.timeline_start_frame = owner.playhead_position
     end
 
+    -- 015 F2: ensure identity patches exist for every source track in the
+    -- nested sequence. Patches are the sole routing mechanism; this is
+    -- the API-layer guarantee that pre-patch source→record identity
+    -- behavior still works without explicit user setup.
+    require("models.patch").ensure_identity_for_source(
+        args.sequence_id, args.nested_sequence_id)
+
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
     plan.preset_ids = args.created_clip_ids
@@ -134,34 +141,23 @@ local SPEC = {
 }
 
 -- Spec F2: ensure the record sequence has audio tracks 1..N where N is
--- the highest record_track_index referenced by enabled patches from the
--- source channels in this edit (identity-routed when no patch row
--- exists). Disabled patches are excluded. This replaces the old "fill
--- up to src_audio count" behavior, which produced extra tracks for
--- routes the user had disabled or remapped to a higher record index.
+-- the highest record_track_index referenced by an ENABLED patch row.
+-- Patches are the sole routing mechanism: source channels with no patch
+-- row contribute nothing (they don't participate in the edit). Disabled
+-- patches likewise contribute nothing.
 local function auto_create_record_audio_tracks(args)
     if not args.nested_sequence_id then return {} end
 
     local Patch = require("models.patch")
-    local src_audio = Track.find_by_sequence(args.nested_sequence_id, "AUDIO")
-    local rec_audio = Track.find_by_sequence(args.sequence_id,        "AUDIO")
+    local rec_audio = Track.find_by_sequence(args.sequence_id, "AUDIO")
     local rec_count = #rec_audio
 
-    -- Compute max rec_idx referenced by an INCLUDED source channel.
-    --   patch absent              → identity (rec_idx = src_idx); included.
-    --   patch present, enabled=1  → use patch.record_track_index.
-    --   patch present, enabled=0  → excluded (no contribution to max).
     local max_rec_idx = 0
-    for _, src in ipairs(src_audio) do
-        local p = Patch.find_by_source(args.sequence_id, "AUDIO", src.track_index)
-        local rec_idx
-        if not p then
-            rec_idx = src.track_index
-        elseif p.enabled == 1 or p.enabled == true then
-            rec_idx = p.record_track_index
-        end
-        if rec_idx and rec_idx > max_rec_idx then
-            max_rec_idx = rec_idx
+    for _, p in ipairs(Patch.find_by_sequence(args.sequence_id)) do
+        if p.track_type == "AUDIO"
+           and (p.enabled == 1 or p.enabled == true)
+           and p.record_track_index > max_rec_idx then
+            max_rec_idx = p.record_track_index
         end
     end
 
@@ -174,7 +170,7 @@ local function auto_create_record_audio_tracks(args)
             .. "for sequence %s", i, tostring(args.sequence_id)))
         created_ids[#created_ids + 1] = t.id
         log.event("Insert: auto-created audio track A%d id=%s "
-            .. "(max referenced rec_idx=%d)", i, t.id, max_rec_idx)
+            .. "(max enabled patch rec_idx=%d)", i, t.id, max_rec_idx)
     end
     return created_ids
 end
@@ -379,11 +375,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
 
-        -- T042: auto-create any missing record audio tracks (within this undo
-        -- entry so Cmd-Z removes them together with the inserted clip).
-        local auto_ids = auto_create_record_audio_tracks(args)
-        command:set_parameter("auto_track_ids", auto_ids)
-
         -- Validate the source sequence exists before any content checks.
         if not Sequence.find(args.nested_sequence_id) then
             set_last_error(string.format(
@@ -391,6 +382,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 tostring(args.nested_sequence_id)))
             return false
         end
+
+        -- T042: auto-create any missing record audio tracks (within this undo
+        -- entry so Cmd-Z removes them together with the inserted clip).
+        local auto_ids = auto_create_record_audio_tracks(args)
+        command:set_parameter("auto_track_ids", auto_ids)
 
         -- If the source sequence has no clips, track creation was the only
         -- goal (T042 path). Persist empty clip-insertion state and return.

@@ -14,25 +14,6 @@ local M = {}
 local Patch = require("models.patch")
 local log   = require("core.logger").for_area("commands")
 
--- Stable 12-hue palette per spec §4. Colors alternate enough that
--- adjacent-index patches are visually distinct even on overflow wrap.
-local PATCH_PALETTE = {
-    "#e64b3d", "#3d7ee6", "#27ae60", "#f39c12",
-    "#9b59b6", "#1abc9c", "#e67e22", "#2980b9",
-    "#d35400", "#16a085", "#8e44ad", "#c0392b",
-}
-
-local function pick_patch_color(sequence_id, track_type)
-    local existing = Patch.find_by_sequence(sequence_id)
-    -- Count only patches of this type for palette offset (keeps video/audio colors distinct).
-    local count = 0
-    for _, p in ipairs(existing) do
-        if p.track_type == track_type then count = count + 1 end
-    end
-    local idx = (count % #PATCH_PALETTE) + 1
-    return PATCH_PALETTE[idx]
-end
-
 local SPEC = {
     undoable = false,
     args = {
@@ -80,13 +61,12 @@ function M.execute(args)
         else
             initial_enabled = 1
         end
-        local color = pick_patch_color(args.sequence_id, args.track_type)
         local patch = Patch.create(
             args.sequence_id,
             args.track_type,
             args.source_track_index,
             args.record_track_index,
-            { enabled = initial_enabled, color = color }
+            { enabled = initial_enabled }
         )
         patch:save()
     end

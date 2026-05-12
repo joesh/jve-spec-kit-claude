@@ -270,8 +270,8 @@ end
 for i = 4, 8 do
     assert(db:exec(string.format([[
         INSERT INTO patches
-            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-        VALUES ('p_%d', 'rec', 'AUDIO', %d, %d, 1, '#aabbcc', 0)
+            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+        VALUES ('p_%d', 'rec', 'AUDIO', %d, %d, 1, 0)
     ]], i, i, i)), "FAIL Step 17: patches INSERT failed for source_track_index=" .. i)
 end
 

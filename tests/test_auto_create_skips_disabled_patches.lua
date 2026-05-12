@@ -1,17 +1,15 @@
 #!/usr/bin/env luajit
 
--- 015 Phase 5: auto-create record audio tracks must NOT include disabled
--- patches in the max-rec-index computation. A disabled patch is the user
--- explicitly saying "drop this channel" — auto-creating a record track
--- for a channel that won't be inserted is wrong (orphan empty track).
+-- 015 F2: auto-create record audio tracks driven solely by enabled patch
+-- rows. Disabled patches contribute nothing; source channels with no
+-- patch row contribute nothing (patches are the sole routing mechanism).
 --
 -- Setup: source has A1, A2, A3. Record has A1 only. Patches:
 --   A1 → 1, enabled=1
---   A2 → 5, enabled=0  (disabled — should NOT contribute)
+--   A2 → 5, enabled=0  (disabled — must NOT contribute)
 --   A3 → 3, enabled=1
 -- Expected after Insert: record has A1..A3 (max enabled rec_idx = 3).
--- Without the gate, the old code or a naive impl would create A1..A5
--- (because the user once routed A2→5).
+-- The disabled A2→5 must not auto-create A4/A5.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -61,14 +59,14 @@ end
 
 -- Patches: A1→1 enabled, A2→5 DISABLED, A3→3 enabled.
 db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, color, created_at) "
-    .. "VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, '#ff0000', 0)")
+    .. "record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, 0)")
 db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, color, created_at) "
-    .. "VALUES ('p_a2', 'rec_seq', 'AUDIO', 2, 5, 0, '#00ff00', 0)")
+    .. "record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a2', 'rec_seq', 'AUDIO', 2, 5, 0, 0)")
 db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, color, created_at) "
-    .. "VALUES ('p_a3', 'rec_seq', 'AUDIO', 3, 3, 1, '#0000ff', 0)")
+    .. "record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a3', 'rec_seq', 'AUDIO', 3, 3, 1, 0)")
 
 command_manager.init("rec_seq", "proj")
 
@@ -88,22 +86,16 @@ local r = command_manager.execute("Insert", {
 })
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 
--- Max enabled rec_idx = 3 (from A3→3). A2→5 is disabled and must NOT count.
--- A1→1 already exists. A2 and A3 created (identity rec_idx=2 for A2's source
--- index falls through since the patch overrides it but the patch is disabled
--- — A2 source channel is excluded entirely; A3 contributes rec_idx=3.
--- Result: A1, A2, A3 — 3 tracks total. NO A4 or A5.
+-- Max enabled rec_idx = 3 (from A3→3 enabled). A2→5 is disabled and
+-- contributes nothing. Auto-create fills 1..3, so A2 and A3 are created
+-- to keep indices contiguous. Result: A1, A2, A3 — 3 tracks. No A4/A5.
 local after = count_audio_tracks()
 assert(after == 3, string.format(
     "FAIL: expected 3 audio tracks after Insert (A1+A2+A3, max enabled rec_idx=3); "
     .. "got %d. Disabled A2→5 patch must not auto-create A4/A5.", after))
 print(string.format("  audio tracks after Insert: %d (A1..A3) — OK", after))
 
--- Verify A2 exists (identity routing via source A2 with no enabled patch
--- contribution... wait, A2 patch IS the disabled one; per spec the SOURCE
--- channel A2 is excluded entirely. But identity routing through A3 gives
--- rec_idx=3 which forces tracks 1..3 to exist. So A2 record track does
--- get created as filler to keep the index contiguous.
+-- Auto-create fills indices contiguously up to max enabled rec_idx = 3.
 local s = db:prepare(
     "SELECT track_index FROM tracks WHERE sequence_id='rec_seq' AND track_type='AUDIO' "
     .. "ORDER BY track_index")

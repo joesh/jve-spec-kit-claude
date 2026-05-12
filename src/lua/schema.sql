@@ -315,7 +315,6 @@ CREATE TABLE IF NOT EXISTS patches (
     source_track_index  INTEGER NOT NULL CHECK (source_track_index >= 0),
     record_track_index  INTEGER NOT NULL CHECK (record_track_index >= 0),
     enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
-    color               TEXT    NOT NULL DEFAULT '#888888',
     created_at          INTEGER NOT NULL DEFAULT 0,
     UNIQUE (sequence_id, track_type, source_track_index)
 );

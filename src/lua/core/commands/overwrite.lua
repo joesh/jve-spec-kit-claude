@@ -47,6 +47,12 @@ function M.execute(args)
         args.timeline_start_frame = owner.playhead_position
     end
 
+    -- 015 F2: ensure identity patches exist for every source track in the
+    -- nested sequence. Same rationale as Insert.execute — patches are the
+    -- sole routing mechanism; pre-patch identity behavior is preserved.
+    require("models.patch").ensure_identity_for_source(
+        args.sequence_id, args.nested_sequence_id)
+
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
     plan.preset_ids = args.created_clip_ids

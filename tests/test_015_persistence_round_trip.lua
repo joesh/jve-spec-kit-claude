@@ -90,14 +90,14 @@ command_manager.execute("SetSyncMode", {
 local function snapshot()
     local out = { patches = {}, sync_modes = {} }
     local s = db:prepare(
-        "SELECT track_type, source_track_index, record_track_index, enabled, color "
+        "SELECT track_type, source_track_index, record_track_index, enabled "
         .. "FROM patches WHERE sequence_id='seq' "
         .. "ORDER BY track_type, source_track_index")
     s:exec()
     while s:next() do
         table.insert(out.patches, {
             type = s:value(0), src = s:value(1), rec = s:value(2),
-            enabled = s:value(3), color = s:value(4),
+            enabled = s:value(3),
         })
     end
     s:finalize()
@@ -132,11 +132,11 @@ assert(#after.patches == #before.patches, string.format(
 for i, b in ipairs(before.patches) do
     local a = after.patches[i]
     assert(a.type == b.type and a.src == b.src and a.rec == b.rec
-           and a.enabled == b.enabled and a.color == b.color, string.format(
-        "FAIL: patch[%d] differs after reopen — before=(%s/%d→%d en=%d %s) "
-        .. "after=(%s/%d→%d en=%d %s)",
-        i, b.type, b.src, b.rec, b.enabled, b.color,
-        a.type, a.src, a.rec, a.enabled, a.color))
+           and a.enabled == b.enabled, string.format(
+        "FAIL: patch[%d] differs after reopen — before=(%s/%d→%d en=%d) "
+        .. "after=(%s/%d→%d en=%d)",
+        i, b.type, b.src, b.rec, b.enabled,
+        a.type, a.src, a.rec, a.enabled))
 end
 print(string.format("  all %d patches restored verbatim — OK", #after.patches))
 

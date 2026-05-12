@@ -1416,8 +1416,6 @@ Signals.connect("patch_changed", function(sequence_id, track_type, source_track_
     end
 end)
 
-local auto_patch_defaults = require("ui.timeline.auto_patch_defaults")
-
 -- FR-001b session-scoped dismissal. After the user closes the source tab
 -- via × in a session, no further auto-open occurs until project reopen.
 -- Tracked by listening to source_tab_visibility_changed(false) — the signal
@@ -1466,16 +1464,26 @@ Signals.connect("source_loaded_changed", function(new_master_seq_id, prev_seq_id
     update_tab_styles(record_seq_id)
 
     if new_master_seq_id and record_seq_id then
-        local project_id = timeline_state.get_project_id()
-        assert(project_id, "source_loaded_changed: no project_id")
-        auto_patch_defaults.apply_if_empty(record_seq_id, new_master_seq_id, project_id)
-
         if not source_tab_dismissed then
             auto_source_tab_id = new_master_seq_id
             timeline_state.switch_to_source_tab(new_master_seq_id)
         end
     end
 end)
+
+-- 015 F2: identity-patch seeding follows the EFFECTIVE source (source
+-- viewer OR active-browser master_clip selection). source_loaded_changed
+-- above handles tab management — distinct concern. The seed below fires
+-- for both source-viewer load AND browser-selection changes via the
+-- single effective_source_changed signal.
+Signals.connect("effective_source_changed",
+    function(new_master_seq_id, _prev_master_seq_id)
+        if not new_master_seq_id then return end
+        local record_seq_id = state.get_sequence_id and state.get_sequence_id()
+        if not record_seq_id then return end
+        require("models.patch").ensure_identity_for_source(
+            record_seq_id, new_master_seq_id)
+    end)
 
 -- Helper function to create video headers with splitters
 local function create_video_headers()

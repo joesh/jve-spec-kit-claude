@@ -16,7 +16,7 @@ local function resolve_db()
     return conn
 end
 
-local COLS = "id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at"
+local COLS = "id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at"
 
 local function row_to_patch(stmt)
     return setmetatable({
@@ -26,8 +26,7 @@ local function row_to_patch(stmt)
         source_track_index = stmt:value(3),
         record_track_index = stmt:value(4),
         enabled            = stmt:value(5),
-        color              = stmt:value(6),
-        created_at         = stmt:value(7),
+        created_at         = stmt:value(6),
     }, Patch)
 end
 
@@ -141,8 +140,6 @@ function Patch.create(sequence_id, track_type, src_idx, rec_idx, opts)
     assert(opts ~= nil, "Patch.create: opts table required (pass {} to use defaults)")
     assert(opts.enabled ~= nil,
         "Patch.create: opts.enabled required; caller must supply explicit enabled state (1=on, 0=off)")
-    assert(type(opts.color) == "string" and opts.color ~= "",
-        "Patch.create: opts.color required; caller must supply a palette color string")
     local p = {
         id                 = opts.id or uuid.generate(),
         sequence_id        = sequence_id,
@@ -150,25 +147,65 @@ function Patch.create(sequence_id, track_type, src_idx, rec_idx, opts)
         source_track_index = src_idx,
         record_track_index = rec_idx,
         enabled            = opts.enabled,
-        color              = opts.color,
         created_at         = os.time(),
     }
     return setmetatable(p, Patch)
+end
+
+--- Ensure identity patches exist for every track in src_seq_id on rec_seq_id.
+--- Per-channel idempotent: only creates a row when (rec_seq, track_type,
+--- src_idx) has no patch. Existing patches are NEVER touched, including
+--- user-rerouted or disabled ones. Called by Insert/Overwrite at the top
+--- of execute() and by source_loaded_changed for UI rendering.
+---
+--- Identity = source N → record N, enabled=1. This is what Insert/Overwrite
+--- did implicitly before the patches table existed; preserving that
+--- invariant is the whole point of seeding.
+---
+--- @param rec_seq_id  string  Record (owner) sequence id.
+--- @param src_seq_id  string  Source (nested) sequence id whose tracks
+---                            define which (src_idx) tuples we cover.
+function Patch.ensure_identity_for_source(rec_seq_id, src_seq_id)
+    assert(type(rec_seq_id) == "string" and rec_seq_id ~= "",
+        "Patch.ensure_identity_for_source: rec_seq_id required")
+    assert(type(src_seq_id) == "string" and src_seq_id ~= "",
+        "Patch.ensure_identity_for_source: src_seq_id required")
+
+    local Track = require("models.track")
+    local Signals = require("core.signals")
+
+    local created_any = false
+    local function ensure_for_type(track_type)
+        local src_tracks = Track.find_by_sequence(src_seq_id, track_type)
+        for _, t in ipairs(src_tracks) do
+            if not Patch.find_by_source(rec_seq_id, track_type, t.track_index) then
+                local p = Patch.create(rec_seq_id, track_type, t.track_index, t.track_index,
+                    { enabled = 1 })
+                p:save()
+                created_any = true
+                Signals.emit("patch_changed",
+                    rec_seq_id, track_type, t.track_index, "created")
+            end
+        end
+    end
+
+    ensure_for_type("VIDEO")
+    ensure_for_type("AUDIO")
+    return created_any
 end
 
 function Patch:save()
     local conn = resolve_db()
     local stmt = conn:prepare([[
         INSERT INTO patches
-            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, color, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             sequence_id        = excluded.sequence_id,
             track_type         = excluded.track_type,
             source_track_index = excluded.source_track_index,
             record_track_index = excluded.record_track_index,
-            enabled            = excluded.enabled,
-            color              = excluded.color
+            enabled            = excluded.enabled
     ]])
     assert(stmt, "Patch:save: prepare failed")
     stmt:bind_value(1, self.id)
@@ -179,9 +216,8 @@ function Patch:save()
     stmt:bind_value(4, self.source_track_index)
     stmt:bind_value(5, self.record_track_index)
     stmt:bind_value(6, self.enabled)
-    stmt:bind_value(7, self.color)
     assert(self.created_at, "Patch:save: created_at missing on patch id=" .. tostring(self.id))
-    stmt:bind_value(8, self.created_at)
+    stmt:bind_value(7, self.created_at)
     assert(stmt:exec(), string.format(
         "Patch:save: exec failed for seq=%s type=%s src=%d",
         tostring(self.sequence_id), tostring(self.track_type), self.source_track_index))

@@ -1,30 +1,23 @@
 #!/usr/bin/env luajit
 
--- 015 Phase 4 FR-049: edit-time patch routing AND-gate (expanded mode).
+-- 015 F2: edit-time patch routing — patches are the SOLE routing mechanism.
 --
--- Domain rule:
---   For each source AUDIO channel of the nested master, the channel lands
---   on a record AUDIO track iff:
---     (no patch present  → identity rec_idx = src_idx; included)
---     OR
---     (patch present, enabled=1 → rec_idx = patch.record_track_index)
---   AND additionally the resolved record track has autoselect=1.
---   Patch.enabled=0 → source channel dropped (no clip placed).
+-- Domain rules:
+--   - A source channel participates in an edit iff a patch row exists with
+--     enabled=1. Routing target = patch.record_track_index.
+--   - patch.enabled=0 drops the source channel.
+--   - Identity patches are auto-seeded at Insert/Overwrite time
+--     (Patch.ensure_identity_for_source) — pre-patch identity behavior
+--     survives without explicit setup.
+--   - autoselect is unrelated to patching (gates selection-driven ops only).
 --
--- Fixture:
---   master m has V1 + A1..A3 (each its own media_ref).
---   edit e has V1 + A1..A3.
---   Patches on edit:
---     A1: no patch       → identity → rec A1
---     A2: A2→A3 enabled  → routes to rec A3
---     A3: A3→A3 enabled=0 → DROPPED
---
--- Expected after expanded Insert:
---   rec_a1 receives 1 A clip (identity).
---   rec_a3 receives 1 A clip (A2 source routed here).
---   rec_a2 receives 0 (no source routes here).
---
--- Then: turn rec_a3.autoselect=0, re-run → only rec_a1 receives a clip.
+-- Fixture: master m has V1 + A1..A3 (each its own media_ref).
+--          edit e has V1 + A1..A3.
+--   Pre-existing patches on edit:
+--     A2: A2→A3 enabled  → routes to rec A3 (custom).
+--     A3: A3→A3 enabled=0 → dropped.
+--   A1 gets identity-seeded automatically → rec A1.
+-- Expected after expanded Insert: rec_a1 gets A1, rec_a3 gets A2, no A3.
 
 require("test_env")
 local database = require("core.database")
@@ -72,11 +65,13 @@ local function build_fixture()
                ('mr-a1','p1','m','m-a1','a1',  0,200000, 0,200000, 1,1.0,0,0,0),
                ('mr-a2','p1','m','m-a2','a2',  0,200000, 0,200000, 1,1.0,0,0,0),
                ('mr-a3','p1','m','m-a3','a3',  0,200000, 0,200000, 1,1.0,0,0,0);
-        -- Patches: A2→A3 enabled, A3 disabled. A1 unpatched → identity.
+        -- Seed pre-existing patches for A2 and A3. Identity for A1 will be
+        -- seeded automatically at the top of Insert.execute via
+        -- Patch.ensure_identity_for_source.
         INSERT INTO patches (id, sequence_id, track_type, source_track_index,
-            record_track_index, enabled, color, created_at)
-        VALUES ('p-a2','e','AUDIO',2,3,1,'#00ff00',0),
-               ('p-a3','e','AUDIO',3,3,0,'#0000ff',0);
+            record_track_index, enabled, created_at)
+        VALUES ('p-a2','e','AUDIO',2,3,1,0),  -- A2 routes to A3 (custom)
+               ('p-a3','e','AUDIO',3,3,0,0);  -- A3 disabled → dropped
     ]]))
     require("test_env").touch_media_fixtures()
     return db
@@ -103,7 +98,7 @@ local Insert = require("core.commands.insert")
 
 print("=== test_patch_routing_edit_time.lua ===")
 
-print("-- Part 1: AND-gate, all rec autoselect=on --")
+print("-- seeded identity + custom routing + disabled drop --")
 do
     local db = build_fixture()
     local r = Insert.execute({
@@ -117,31 +112,13 @@ do
     print(string.format("  rec a1=%d a2=%d a3=%d",
         c[1] or 0, c[2] or 0, c[3] or 0))
     assert(c[1] == 1, string.format(
-        "FAIL: A1 identity-routed → rec_a1 expected 1; got %d", c[1] or 0))
+        "FAIL: A1 identity-seeded by Insert → rec_a1 expected 1; got %d",
+        c[1] or 0))
     assert((c[2] or 0) == 0, string.format(
-        "FAIL: rec_a2 has no source routed to it; expected 0, got %d", c[2] or 0))
+        "FAIL: rec_a2 has no source routed to it; expected 0, got %d",
+        c[2] or 0))
     assert(c[3] == 1, string.format(
-        "FAIL: A2 patched → A3 expected 1 clip on rec_a3; got %d", c[3] or 0))
-    print("  ok")
-end
-
-print("-- Part 2: AND-gate, rec_a3 autoselect=off → drop --")
-do
-    local db = build_fixture()
-    db:exec("UPDATE tracks SET autoselect=0 WHERE id='e-a3'")
-    Insert.execute({
-        sequence_id          = "e",
-        nested_sequence_id   = "m",
-        timeline_start_frame = 0,
-        audio_drop_mode      = "expanded",
-    })
-    local c = audio_clips_by_rec_track(db, "e")
-    print(string.format("  rec a1=%d a2=%d a3=%d",
-        c[1] or 0, c[2] or 0, c[3] or 0))
-    assert(c[1] == 1,
-        "FAIL: A1 still routes to autoselect-on rec_a1")
-    assert((c[3] or 0) == 0, string.format(
-        "FAIL: rec_a3 autoselect=off must drop A2's routed clip; got %d",
+        "FAIL: A2→A3 enabled patch must place 1 clip on rec_a3; got %d",
         c[3] or 0))
     print("  ok")
 end
