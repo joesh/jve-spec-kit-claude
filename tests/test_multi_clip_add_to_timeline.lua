@@ -31,7 +31,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -129,12 +129,12 @@ print("Test: Multi-clip insert (3 clips, serial arrangement)")
 -- Build groups for 3 clips
 local groups = {
     {
-        nested_sequence_id = master_1,
+        sequence_id = master_1,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                nested_sequence_id = master_1,
+                sequence_id = master_1,
                 project_id = "project",
                 name = "Video 1",
                 source_in = 0,
@@ -148,12 +148,12 @@ local groups = {
         duration = 100,
     },
     {
-        nested_sequence_id = master_2,
+        sequence_id = master_2,
         clips = {
             {
                 role = "video",
                 media_id = "media_2",
-                nested_sequence_id = master_2,
+                sequence_id = master_2,
                 project_id = "project",
                 name = "Video 2",
                 source_in = 0,
@@ -167,12 +167,12 @@ local groups = {
         duration = 50,
     },
     {
-        nested_sequence_id = master_3,
+        sequence_id = master_3,
         clips = {
             {
                 role = "video",
                 media_id = "media_3",
-                nested_sequence_id = master_3,
+                sequence_id = master_3,
                 project_id = "project",
                 name = "Video 3",
                 source_in = 0,

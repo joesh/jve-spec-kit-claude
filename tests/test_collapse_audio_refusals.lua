@@ -6,7 +6,7 @@
 --   * Empty selection.
 --   * sequence_id mismatch (rule 2.29).
 --   * Already-composite clip in selection (master_audio_track_id IS NULL).
---   * Different nested_sequence_id across selection.
+--   * Different source_sequence_id across selection.
 --   * Divergent source windows (per-track slip — refused, the genuine
 --     expressiveness Expand buys).
 --   * Different timeline_start/duration across selection.
@@ -43,7 +43,7 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
@@ -77,7 +77,7 @@ local function build_fixture()
                ('mr-a3', 'p1', 'm', 'm-a3', 'a3',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
                ('mr-a4', 'p1', 'm', 'm-a4', 'a4',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
@@ -146,7 +146,7 @@ refuse_test("different nested", function(db)
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr2-a1', 'p1', 'm2', 'm2-a1', 'a1', 0, 200000, 0, 200000,
                 1, 1.0, 0, 0, 0);
-        UPDATE clips SET nested_sequence_id = 'm2', master_audio_track_id = 'm2-a1'
+        UPDATE clips SET sequence_id = 'm2', master_audio_track_id = 'm2-a1'
             WHERE id = 'ca2';
     ]])))
 end, { sequence_id = "e", clip_ids = { "ca1", "ca2" } }, "master")

@@ -29,7 +29,7 @@ local now = os.time()
 local BASE_DATA_SQL = string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj', 'Test Project', 'resample', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Timeline', 'nested', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
+    VALUES ('seq', 'proj', 'Timeline', 'sequence', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('a1', 'seq', 'A1', 'AUDIO', 1, 1);
 ]], now, now, now, now)
@@ -90,10 +90,10 @@ local function create_media_and_masterclip(media_id, duration_frames)
         audio_channels = 0,
     })
     media:save(database.get_connection())
-    local nested_sequence_id = test_env.create_test_masterclip_sequence(
+    local source_sequence_id = test_env.create_test_masterclip_sequence(
         'proj', media_id .. ' MC', 25, 1, duration_frames, media_id)
-    masterclip_cache[media_id] = nested_sequence_id
-    return nested_sequence_id
+    masterclip_cache[media_id] = source_sequence_id
+    return source_sequence_id
 end
 
 -- Map test-friendly aliases ('orig', 'clip_a', …) to V13-generated clip
@@ -106,11 +106,11 @@ local function resolve_clip_id(id) return clip_alias[id] or id end
 -- Sets marks on the masterclip sequence to define the source range.
 local function insert_clip(params)
     local Sequence = require("models.sequence")
-    local nested_sequence_id = create_media_and_masterclip(params.media_id, params.media_duration)
+    local source_sequence_id = create_media_and_masterclip(params.media_id, params.media_duration)
 
     -- Set in/out marks on the masterclip sequence (the source range)
     if params.source_in or params.source_out then
-        local mc_seq = assert(Sequence.load(nested_sequence_id), "insert_clip: masterclip not found")
+        local mc_seq = assert(Sequence.load(source_sequence_id), "insert_clip: masterclip not found")
         mc_seq.mark_in = params.source_in
         mc_seq.mark_out = params.source_out
         assert(mc_seq:save(), "insert_clip: failed to save masterclip marks")
@@ -118,7 +118,7 @@ local function insert_clip(params)
 
     local cmd = Command.create("Insert", "proj")
     cmd:set_parameters({
-        nested_sequence_id = nested_sequence_id,
+        source_sequence_id = source_sequence_id,
         target_video_track_id = params.track_id,
         sequence_id = "seq",
         timeline_start_frame = params.timeline_start,

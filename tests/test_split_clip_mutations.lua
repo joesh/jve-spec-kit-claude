@@ -42,7 +42,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'nested',
+        'default_sequence', 'default_project', 'Default Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 240, 0,
         '[]', '[]', '[]', 0, %d, %d
     );
@@ -73,7 +73,7 @@ local _MC = _Sequence.ensure_master("media_stub", "default_project")
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
-        owner_sequence_id, nested_sequence_id,
+        owner_sequence_id, sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at) VALUES

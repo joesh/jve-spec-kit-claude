@@ -46,7 +46,7 @@ db:exec(string.format([[
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested',
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 10000, 2500,
         '[]', '[]', '[]', 0, %d, %d);
 
@@ -108,16 +108,16 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_clip_d' WHER
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_clip_d', 'default_project', 'master_media_clip_d', 'master_v_media_clip_d', 'media_clip_d', 0, 1200, 0, 1200, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_clip_a', 'default_sequence', 0, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_b', 'default_project', 'Clip B', 'track_v1', 'master_media_clip_b', 'default_sequence', 3000, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_c', 'default_project', 'Clip C', 'track_v2', 'master_media_clip_c', 'default_sequence', 1200, 1200, 0, 1200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_d', 'default_project', 'Clip D', 'track_v2', 'master_media_clip_d', 'default_sequence', 5000, 1200, 0, 1200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now,

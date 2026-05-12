@@ -2,23 +2,23 @@
 --
 -- Responsibilities:
 -- - would_create_cycle(owner_seq_id, candidate_nested_seq_id): return true iff
---   adding a clip row { owner_sequence_id=owner, nested_sequence_id=candidate }
+--   adding a clip row { owner_sequence_id=owner, sequence_id=candidate }
 --   would create a direct or transitive cycle in the containment DAG.
 --
 -- Algorithm: depth-first walk of the sub-graph reachable from candidate via
--- clips.nested_sequence_id. If owner appears in that reachable set (including
+-- clips.sequence_id. If owner appears in that reachable set (including
 -- as candidate itself), adding this edge closes a cycle. Uncached; runs at
 -- mutation time per research.md §3. O(|reachable from candidate|); real
 -- projects rarely exceed depth 3.
 --
--- Master sequences never appear as "owner" in clips (clips must be kind='nested'), so their subtree
--- is terminal: no outgoing nested_sequence_id edges.
+-- Master sequences never appear as "owner" in clips (clips must be kind='sequence'), so their subtree
+-- is terminal: no outgoing sequence_id edges.
 
 local database = require("core.database")
 
 local M = {}
 
---- Return true iff { owner_sequence_id=owner_seq_id, nested_sequence_id=candidate_target_id }
+--- Return true iff { owner_sequence_id=owner_seq_id, sequence_id=candidate_target_id }
 --- would create a cycle. Refuse to add the clip in that case.
 function M.would_create_cycle(owner_seq_id, candidate_target_id)
     assert(owner_seq_id and owner_seq_id ~= "",
@@ -33,7 +33,7 @@ function M.would_create_cycle(owner_seq_id, candidate_target_id)
 
     local db = database.get_connection()
     local stmt = db:prepare(
-        "SELECT nested_sequence_id FROM clips WHERE owner_sequence_id = ?")
+        "SELECT sequence_id FROM clips WHERE owner_sequence_id = ?")
     assert(stmt, "would_create_cycle: failed to prepare traversal query")
 
     local visited = { [candidate_target_id] = true }

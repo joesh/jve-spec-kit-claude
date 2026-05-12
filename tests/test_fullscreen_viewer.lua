@@ -239,7 +239,7 @@ package.loaded["models.sequence"] = {
         return {
             id = seq_id,
             name = "test",
-            kind = "nested",
+            kind = "sequence",
             audio_sample_rate = 48000,  -- record/nested seqs carry the bus rate
             playhead_position = 0,
             mark_in = nil,

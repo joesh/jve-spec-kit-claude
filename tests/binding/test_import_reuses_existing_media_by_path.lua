@@ -79,7 +79,7 @@ exec(db, [[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Default', 'nested',
+        'default_sequence', 'default_project', 'Default', 'sequence',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,
@@ -142,7 +142,7 @@ local referenced = scalar(db, [[
     SELECT COUNT(*) FROM clips c
     WHERE EXISTS (
         SELECT 1 FROM media_refs mr
-        WHERE mr.owner_sequence_id = c.nested_sequence_id
+        WHERE mr.owner_sequence_id = c.sequence_id
           AND mr.media_id = ?
     )
 ]], "media_existing")

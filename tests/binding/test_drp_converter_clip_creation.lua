@@ -37,7 +37,7 @@ local function scalar(sql, param)
     return val
 end
 
--- V13: all clips live in a nested sequence (clips must be owned by a kind='nested' sequence). owner_sequence_id +
+-- V13: all clips live in a nested sequence (clips must be owned by a kind='sequence' sequence). owner_sequence_id +
 -- project_id are NOT NULL at schema level, so the original orphan/no-project
 -- queries are unfalsifiable — INSERT would have failed before reaching this
 -- assertion. We keep the count-positive check; structural integrity is the

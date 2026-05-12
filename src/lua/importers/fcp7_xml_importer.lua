@@ -723,8 +723,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 remember_master_mapping(key, existing_id)
             end
             -- V13: clip_info points the FCP7 import bridge at the master
-            -- sequence id under nested_sequence_id (replaces master_clip_id).
-            clip_info.nested_sequence_id = existing_id
+            -- sequence id under sequence_id (replaces master_clip_id).
+            clip_info.sequence_id = existing_id
             return existing_id
         end
 
@@ -741,7 +741,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             return nil
         end
 
-        clip_info.nested_sequence_id = master_seq_id
+        clip_info.sequence_id = master_seq_id
         if key then
             master_lookup[key] = master_seq_id
         end
@@ -926,7 +926,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
 
-        -- V13: nested_sequence_id is the master sequence id.
+        -- V13: sequence_id is the master sequence id.
         local nested_seq_id = ensure_master_clip(clip_info, clip_key, media_id)
         assert(nested_seq_id and nested_seq_id ~= "",
             string.format("create_clip: ensure_master_clip returned nil for clip '%s' (media_id=%s, key=%s)",
@@ -980,7 +980,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             reuse_id = clip_info.original_id
         end
 
-        -- V13 Clip.create: single-table form. nested_sequence_id required.
+        -- V13 Clip.create: single-table form. sequence_id required.
         -- Returns the new clip id (string) — INSERT happens inside.
         local now = os.time()
         local clip_id = Clip.create({
@@ -988,7 +988,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             project_id = project_id,
             track_id = track_id,
             owner_sequence_id = clip_info.owner_sequence_id,
-            nested_sequence_id = nested_seq_id,
+            sequence_id = nested_seq_id,
             name = clip_info.name or "Clip",
             timeline_start_frame = start_value,
             duration_frames = duration,
@@ -1160,7 +1160,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         for seq_index, seq_info in ipairs(parsed_result.sequences or {}) do
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
-            -- 013: edit timelines from FCP7 XML are kind='nested'.
+            -- 013: edit timelines from FCP7 XML are kind='sequence'.
             -- <samplecharacteristics> is OPTIONAL per FCP7 spec; 48000 Hz is the
             -- FCP7-documented implied default when absent.
             local seq_audio_rate = seq_info.audio_sample_rate
@@ -1178,7 +1178,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 seq_info.height,
                 {
                     id = reuse_id or seq_info.original_id,
-                    kind = "nested",
+                    kind = "sequence",
                     audio_sample_rate = seq_audio_rate,
                 }
             )

@@ -78,11 +78,11 @@ end
 -- owner_track_id yet) cannot collide. Returns plan[] (entries get
 -- owner_track_id filled in here when one already exists).
 local function build_placement_plan(clip, clip_id, sequence_id)
-    local nested_a = Track.find_by_sequence(clip.nested_sequence_id, "AUDIO")
+    local nested_a = Track.find_by_sequence(clip.sequence_id, "AUDIO")
     assert(#nested_a >= 2, string.format(
         "ExpandAudio: nested sequence %s has %d audio track(s); ExpandAudio "
         .. "requires >= 2 (nothing to expand).",
-        clip.nested_sequence_id, #nested_a))
+        clip.sequence_id, #nested_a))
     local owner_a_by_index = {}
     for _, t in ipairs(Track.find_by_sequence(sequence_id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
@@ -148,7 +148,7 @@ local function insert_expanded_clips(plan, clip, sequence_id)
             project_id            = clip.project_id,
             owner_sequence_id     = sequence_id,
             track_id              = p.owner_track_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            sequence_id    = clip.sequence_id,
             name                  = clip.name,
             timeline_start_frame  = outer_lo,
             duration_frames       = clip.duration_frames,

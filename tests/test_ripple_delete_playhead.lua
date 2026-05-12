@@ -26,14 +26,14 @@ db:exec([[
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, 0, 0);
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 240, 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v2', 'default_sequence', 'Video 2', 'VIDEO', 2, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 
-    -- V13 placeholder master sequence (test references nested_sequence_id='mc_test' literally)
+    -- V13 placeholder master sequence (test references source_sequence_id='mc_test' literally)
     db:exec(string.format([[INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('mc_test_media', 'default_project', 'placeholder', '_placeholder', 10000, 30, 1, 1920, 1080, 0, 'raw', 0, 0)]]))
     db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
@@ -68,7 +68,7 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         project_id = 'default_project',
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
-        nested_sequence_id = "mc_test",
+        sequence_id = "mc_test",
         timeline_start_frame = start_value,
         duration_frames = duration_value,
         source_in_frame = 0,

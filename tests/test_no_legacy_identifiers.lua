@@ -2,11 +2,11 @@
 --
 -- Scans src/lua for identifiers that the 013 schema refactor retired:
 --   * clip_kind
---   * master_clip_id         (renamed to nested_sequence_id)
+--   * master_clip_id         (renamed to source_sequence_id)
 --   * clip.media_id / c.media_id / clips.media_id  (column dropped)
 --   * clip.offline / c.offline / clips.offline     (column dropped)
 --   * sequences.kind legacy string literals: 'timeline', 'masterclip',
---     'compound', 'multicam'  (narrowed to 'master'/'nested')
+--     'compound', 'multicam'  (narrowed to 'master'/'sequence')
 --
 -- Expected to fail until T109 completes the scoped legacy purge. Once
 -- T109 lands, this test stays green forever and fails loudly on any

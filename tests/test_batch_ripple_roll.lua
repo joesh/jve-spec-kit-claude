@@ -25,7 +25,7 @@ local seed = string.format([[
     VALUES ('default_project', 'Default Project', 'resample', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Timeline', 'nested', 30, 1, 48000, 1920, 1080, 0, '[]', '[]', 0, 240, %d, %d);
+    VALUES ('default_sequence', 'default_project', 'Timeline', 'sequence', 30, 1, 48000, 1920, 1080, 0, '[]', '[]', 0, 240, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('track_v1', 'default_sequence', 'Video 1', 'VIDEO', 1, 1);
@@ -41,7 +41,7 @@ UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHE
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'default_project', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 600, 0, 600, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_a', 'default_project', 'A', 'track_v1', '_v13_placeholder_master', 'default_sequence', 0, 30, 0, 30, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_b', 'default_project', 'B', 'track_v1', '_v13_placeholder_master', 'default_sequence', 30, 30, 0, 30, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_c', 'default_project', 'C', 'track_v1', '_v13_placeholder_master', 'default_sequence', 60, 30, 0, 30, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);

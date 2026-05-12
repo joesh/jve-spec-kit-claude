@@ -37,7 +37,7 @@ local function setup_db(path)
             width, height, playhead_frame,
             view_start_frame, view_duration_frames,
             created_at, modified_at)
-        VALUES ('seq', 'proj', 'Timeline', 'nested',
+        VALUES ('seq', 'proj', 'Timeline', 'sequence',
             24, 1, 48000, 1920, 1080, 0, 0, 10000, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
@@ -77,7 +77,7 @@ local function insert_clip(conn, id, track_id, start_frames, dur_frames, media_i
     assert(conn:exec(string.format([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id,
+            owner_sequence_id, sequence_id,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,

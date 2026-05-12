@@ -55,7 +55,7 @@ local function place_clip(args, master_seq_id, media_name, fps_mismatch_policy)
     return Clip.create({
         project_id           = args.project_id,
         owner_sequence_id    = args.sequence_id,
-        nested_sequence_id   = master_seq_id,
+        sequence_id   = master_seq_id,
         track_id             = args.track_id,
         name                 = media_name,
         timeline_start_frame = args.timeline_start_frame,

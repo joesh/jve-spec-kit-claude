@@ -39,7 +39,7 @@ VALUES ('%s', 'Project A', 'resample', strftime('%%s','now'), strftime('%%s','no
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
     created_at, modified_at)
-VALUES ('%s', '%s', 'Seq A', 'nested', 24, 1, 48000, 1920, 1080, 0, 240, 0,
+VALUES ('%s', '%s', 'Seq A', 'sequence', 24, 1, 48000, 1920, 1080, 0, 240, 0,
     strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('tr-A', '%s', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);

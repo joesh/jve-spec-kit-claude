@@ -64,7 +64,7 @@ local function bootstrap_project(db, project_id, sequence_id)
 
     ok = db:exec(string.format([[
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-        VALUES ('%s', '%s', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+        VALUES ('%s', '%s', 'Seq', 'sequence', 25, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
     ]], sequence_id, project_id))
     expect("sequence row", ok, "sequence insert")
 end
@@ -97,7 +97,7 @@ local function make_track(db, project_id, sequence_id, track_id, track_type)
 end
 
 -- V13: a clip references a master sequence (kind='master') via
--- nested_sequence_id; the master's media_refs row carries the media_id.
+-- source_sequence_id; the master's media_refs row carries the media_id.
 -- find_clips_for_media (used by the planner) walks that path. So per media,
 -- create the master once via test_env helper, then Clip.create per clip.
 local _clip_placement = setmetatable({}, { __index = function() return 0 end })
@@ -118,7 +118,7 @@ local function make_clip(db, project_id, sequence_id, track_id, clip_id, media_i
     local _id = Clip.create({
         id = clip_id, project_id = project_id,
         owner_sequence_id = sequence_id, track_id = track_id,
-        nested_sequence_id = nested_seq_id,
+        sequence_id = nested_seq_id,
         name = "c_" .. clip_id:sub(1, 6),
         timeline_start_frame = start, duration_frames = 100,
         source_in_frame = 0, source_out_frame = 100,

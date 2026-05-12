@@ -31,9 +31,9 @@ do
     -- Compute gaps for the track
     local clips_on_track = {
         { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
         { id = "clip_v1_right", track_id = "track_v1", timeline_start = 2000, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, string.format("expected 1 gap, got %d", #gaps))
@@ -74,9 +74,9 @@ do
 
     local clips_on_track = {
         { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
         { id = "clip_v1_right", track_id = "track_v1", timeline_start = 2000, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, "expected 1 gap")
@@ -115,9 +115,9 @@ do
 
     local clips_on_track = {
         { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
         { id = "clip_v1_right", track_id = "track_v1", timeline_start = 1500, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, "expected 1 gap")

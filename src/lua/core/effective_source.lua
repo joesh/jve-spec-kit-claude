@@ -15,7 +15,7 @@
 --- on selection events that don't move the effective source).
 ---
 --- Consumers:
----   - `command_manager.execute_interactive` injects `nested_sequence_id`
+---   - `command_manager.execute_interactive` injects `sequence_id`
 ---     from `effective_source.get()` when params lacks it. This is how
 ---     Insert/Overwrite invoked from keymaps (e.g. F10) acquire their
 ---     source argument.

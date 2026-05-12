@@ -22,7 +22,7 @@ local media_clip = {
     track_id = "track_v1",
     timeline_start = 2000,
     duration = 600,
-    clip_kind = "nested"
+    clip_kind = "sequence"
 }
 
 local track_clips = {gap_clip, media_clip}

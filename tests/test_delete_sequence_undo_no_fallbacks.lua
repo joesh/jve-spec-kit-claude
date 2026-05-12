@@ -36,7 +36,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         created_at, modified_at
     ) VALUES (
-        'seq_custom', 'proj1', 'Custom Seq', 'nested',
+        'seq_custom', 'proj1', 'Custom Seq', 'sequence',
         25, 1, 44100,
         3840, 2160,
         50, 500, 120,
@@ -125,7 +125,7 @@ cmd2:set_parameters({
             id = "seq_corrupt",
             project_id = "proj1",
             name = "Corrupt",
-            kind = "nested",
+            kind = "sequence",
             fps_numerator = 24,
             fps_denominator = 1,
             audio_sample_rate = 48000,

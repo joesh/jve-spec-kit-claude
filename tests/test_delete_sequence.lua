@@ -34,7 +34,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('default_sequence', 'project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('default_sequence', 'project', 'Default Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -106,7 +106,7 @@ end
 local function create_test_sequence(id, name)
     local seq = Sequence.create(name, "project",
         { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-        { audio_sample_rate = 48000,id = id, kind = "nested"})
+        { audio_sample_rate = 48000,id = id, kind = "sequence"})
     assert(seq:save(), "Failed to save sequence " .. id)
 
     local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
@@ -118,7 +118,7 @@ local function create_test_sequence(id, name)
         project_id = "project",
         track_id = track.id,
         owner_sequence_id = id,
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
@@ -167,7 +167,7 @@ local function clip_exists(clip_id)
 end
 
 -- Helper: reset test sequences (keep default_sequence + the master MC_TEST
--- whose media_refs are referenced by every test clip's nested_sequence_id)
+-- whose media_refs are referenced by every test clip's source_sequence_id)
 local function reset_test_sequences()
     db:exec(string.format(
         "DELETE FROM clips WHERE owner_sequence_id NOT IN ('default_sequence', '%s')",
@@ -284,7 +284,7 @@ reset_test_sequences()
 -- Create sequence with multiple tracks
 local seq = Sequence.create("Multi Track Seq", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_sample_rate = 48000,id = "multi_seq", kind = "nested"})
+    { audio_sample_rate = 48000,id = "multi_seq", kind = "sequence"})
 assert(seq:save(), "Failed to save sequence")
 
 -- Create multiple video tracks
@@ -300,7 +300,7 @@ for i = 1, 3 do
         project_id = "project",
         track_id = "multi_track_" .. i,
         owner_sequence_id = "multi_seq",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = (j-1) * 100,
         duration_frames = 100,
         source_in_frame = 0,

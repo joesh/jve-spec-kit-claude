@@ -24,7 +24,7 @@ assert(db:exec(string.format([[
 ]], now, now)))
 assert(db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('init_sequence', 'init_project', 'Init Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('init_sequence', 'init_project', 'Init Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now)))
 
 command_manager.init('init_sequence', 'init_project')

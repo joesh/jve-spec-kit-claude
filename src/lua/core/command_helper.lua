@@ -206,7 +206,7 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
         owner_sequence_id = source.owner_sequence_id or track_sequence_id,
-        nested_sequence_id = source.nested_sequence_id,
+        sequence_id = source.sequence_id,
         master_layer_track_id = source.master_layer_track_id,
         master_audio_track_id = source.master_audio_track_id,
         fps_mismatch_policy = source.fps_mismatch_policy,
@@ -443,9 +443,9 @@ function M.restore_clip_state(state)
         -- V13: Clip.create takes a single fields table. State carries V13
         -- names only (no master_clip_id alias). capture_clip_state asserts
         -- the same fields non-nil at write — read straight here too.
-        local nested_id = state.nested_sequence_id
+        local nested_id = state.sequence_id
         assert(nested_id and nested_id ~= "",
-            "restore_clip_state: state missing nested_sequence_id")
+            "restore_clip_state: state missing sequence_id")
         assert(type(state.name) == "string" and state.name ~= "",
             "restore_clip_state: state.name required")
         assert(type(state.fps_mismatch_policy) == "string"
@@ -463,7 +463,7 @@ function M.restore_clip_state(state)
             name = state.name,
             track_id = state.track_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
-            nested_sequence_id = nested_id,
+            sequence_id = nested_id,
             timeline_start_frame = state.timeline_start,
             duration_frames = state.duration,
             source_in_frame = state.source_in,
@@ -527,7 +527,7 @@ function M.capture_clip_state(clip)
         is_gap = is_gap or nil,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
-        nested_sequence_id = clip.nested_sequence_id,
+        sequence_id = clip.sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
         fps_mismatch_policy = clip.fps_mismatch_policy,
@@ -703,7 +703,7 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, name, track_id,
-                owner_sequence_id, nested_sequence_id,
+                owner_sequence_id, sequence_id,
                 timeline_start_frame, duration_frames,
                 source_in_frame, source_out_frame,
                 master_layer_track_id, master_audio_track_id,
@@ -817,12 +817,12 @@ function M.apply_mutations(db, mutations)
                 finalize_all_stmts()
                 return false, stmt_err
             end
-            -- V13 INSERT: callers must provide nested_sequence_id (the
+            -- V13 INSERT: callers must provide sequence_id (the
             -- referenced sequence) and fps_mismatch_policy. No V8 alias.
-            local nested_id = mut.nested_sequence_id
+            local nested_id = mut.sequence_id
             if not nested_id or nested_id == "" then
                 finalize_all_stmts()
-                return false, "INSERT mutation missing nested_sequence_id for clip " .. tostring(mut.clip_id)
+                return false, "INSERT mutation missing sequence_id for clip " .. tostring(mut.clip_id)
             end
             local policy = mut.fps_mismatch_policy or "resample"
             if mut.created_at == nil or mut.modified_at == nil then
@@ -1114,9 +1114,9 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     if prev.created_at == nil or prev.modified_at == nil then
         return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
     end
-    local nested_id = prev.nested_sequence_id
+    local nested_id = prev.sequence_id
     if not nested_id or nested_id == "" then
-        return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
+        return false, "undo delete: missing sequence_id for clip " .. tostring(prev.id)
     end
     local cmd_type = command and command.type or nil
     local ts = require_int_frame(prev.timeline_start or prev.start_value, "timeline_start", cmd_type)
@@ -1128,7 +1128,7 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id,
+            owner_sequence_id, sequence_id,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
@@ -1177,7 +1177,7 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
         M.add_insert_mutation(command, sequence_id, {
             id                 = prev.id,
             track_id           = prev.track_id,
-            nested_sequence_id = nested_id,
+            sequence_id = nested_id,
             start_value        = ts,
             duration_value     = dur,
             source_in_value    = src_in,

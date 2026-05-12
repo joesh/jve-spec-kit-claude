@@ -170,7 +170,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     owner_sequence_id     = row.owner_sequence_id,
                     track_sequence_id     = row.owner_sequence_id,
                     track_id              = row.track_id,
-                    nested_sequence_id    = row.nested_sequence_id,
+                    sequence_id    = row.sequence_id,
                     start_value           = row.timeline_start_frame,
                     timeline_start        = row.timeline_start_frame,
                     duration_value        = row.duration_frames,

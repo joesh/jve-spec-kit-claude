@@ -37,7 +37,7 @@ db:exec(string.format([[
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
          created_at, modified_at)
     VALUES
-        ('seq', 'proj', 'TestSeq', 'nested', 25, 1, 48000,
+        ('seq', 'proj', 'TestSeq', 'sequence', 25, 1, 48000,
          1920, 1080, 42, 0, 1000,
          91500, 93000, 90000,
          0, 0, 0.5,

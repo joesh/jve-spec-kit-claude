@@ -42,7 +42,7 @@ local function seed_project(db, project_id, sequence_id, track_id)
             playhead_frame, view_start_frame, view_duration_frames,
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at)
-          VALUES ('%s', '%s', 'S', 'nested', 25, 1, 48000, 1920, 1080,
+          VALUES ('%s', '%s', 'S', 'sequence', 25, 1, 48000, 1920, 1080,
                   0, 0, 240, '[]', '[]', '[]', 0, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
             enabled, locked, muted, soloed, volume, pan)
@@ -89,7 +89,7 @@ local function insert_clip(project_id, sequence_id, track_id, master_id, clip_id
     local c = Command.create("Insert", project_id)
     c:set_parameter("sequence_id", sequence_id)
     c:set_parameter("target_video_track_id", track_id)
-    c:set_parameter("nested_sequence_id", master_id)
+    c:set_parameter("source_sequence_id", master_id)
     c:set_parameter("clip_name", clip_id)
     c:set_parameter("timeline_start_frame", t)
     local r = command_manager.execute(c)

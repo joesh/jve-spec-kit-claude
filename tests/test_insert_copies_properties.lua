@@ -41,7 +41,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
-    VALUES ('timeline_seq', 'proj', 'Timeline', 'nested',
+    VALUES ('timeline_seq', 'proj', 'Timeline', 'sequence',
         24, 1, 48000, 1920, 1080, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('tv1', 'timeline_seq', 'V1', 'VIDEO', 1, 1);
@@ -69,7 +69,7 @@ local master_id = test_env.create_test_masterclip_sequence(
 -- Drive Insert with the standard command interface.
 local insert_cmd = Command.create("Insert", "proj")
 insert_cmd:set_parameter("sequence_id", "timeline_seq")
-insert_cmd:set_parameter("nested_sequence_id", master_id)
+insert_cmd:set_parameter("source_sequence_id", master_id)
 insert_cmd:set_parameter("target_video_track_id", "tv1")
 insert_cmd:set_parameter("timeline_start_frame", 0)
 insert_cmd:set_parameter("clip_name", "Inserted Clip")

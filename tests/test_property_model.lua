@@ -79,7 +79,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24000, 1001, 48000,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24000, 1001, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -98,10 +98,10 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = '
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_num, timeline_start_den, timeline_start_rate_num, timeline_start_rate_den, duration_num, duration_den, duration_rate_num, duration_rate_den, source_in_num, source_in_den, source_in_rate_num, source_in_rate_den, source_out_num, source_out_den, source_out_rate_num, source_out_rate_den, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, timeline_start_num, timeline_start_den, timeline_start_rate_num, timeline_start_rate_den, duration_num, duration_den, duration_rate_num, duration_rate_den, source_in_num, source_in_den, source_in_rate_num, source_in_rate_den, source_out_num, source_out_den, source_out_rate_num, source_out_rate_den, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip1', 'proj1', 'Clip1', 'trk1', 'master_med1', 0, 1, 24000, 1001, 100, 1, 24000, 1001, 0, 1, 24000, 1001, 100, 1, 24000, 1001, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, timeline_start_num, timeline_start_den, timeline_start_rate_num, timeline_start_rate_den, duration_num, duration_den, duration_rate_num, duration_rate_den, source_in_num, source_in_den, source_in_rate_num, source_in_rate_den, source_out_num, source_out_den, source_out_rate_num, source_out_rate_den, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, timeline_start_num, timeline_start_den, timeline_start_rate_num, timeline_start_rate_den, duration_num, duration_den, duration_rate_num, duration_rate_den, source_in_num, source_in_den, source_in_rate_num, source_in_rate_den, source_out_num, source_out_den, source_out_rate_num, source_out_rate_den, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip2', 'proj1', 'Clip2', 'trk1', 'master_med1', 100, 1, 24000, 1001, 50, 1, 24000, 1001, 100, 1, 24000, 1001, 150, 1, 24000, 1001, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now, now, now))

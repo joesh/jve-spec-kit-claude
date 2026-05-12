@@ -213,7 +213,7 @@ local function build_insert_mutation_entry(clip_id)
         owner_sequence_id     = clip.owner_sequence_id,
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
-        nested_sequence_id    = clip.nested_sequence_id,
+        sequence_id    = clip.sequence_id,
         start_value           = clip.timeline_start,
         timeline_start        = clip.timeline_start,
         duration_value        = clip.duration,

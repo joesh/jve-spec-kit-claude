@@ -85,8 +85,8 @@ function M.execute(args)
 
     local owner = Sequence.find(args.sequence_id)
     assert(owner, "Roll: owner sequence not found")
-    local a_nested = Sequence.find(a.nested_sequence_id)
-    local b_nested = Sequence.find(b.nested_sequence_id)
+    local a_nested = Sequence.find(a.sequence_id)
+    local b_nested = Sequence.find(b.sequence_id)
     assert(a_nested and b_nested,
         "Roll: outgoing or incoming nested sequence not found")
 
@@ -104,7 +104,7 @@ function M.execute(args)
     local new_b_source_in    = b.source_in_frame + b_source_delta
 
     if N > 0 then
-        Clip.assert_within_master_coverage(a.nested_sequence_id, new_a_source_out,
+        Clip.assert_within_master_coverage(a.sequence_id, new_a_source_out,
             "Roll outgoing=" .. args.outgoing_clip_id)
     end
 

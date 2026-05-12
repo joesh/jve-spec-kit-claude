@@ -37,7 +37,7 @@ local function base_fixture()
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+               ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('e-v1', 'e', 'V1', 'VIDEO', 1),
@@ -58,7 +58,7 @@ end
 local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
@@ -131,7 +131,7 @@ do
         local cmd = {
             params = {
                 sequence_id           = "e",
-                nested_sequence_id    = "m",
+                source_sequence_id    = "m",
                 timeline_start_frame  = 0,
                 target_video_track_id = "e-v1",
             },
@@ -179,7 +179,7 @@ do
     assert_emit_for("Overwrite", "e", function()
         drive(Overwrite, "Overwrite", {
             sequence_id           = "e",
-            nested_sequence_id    = "m",
+            source_sequence_id    = "m",
             timeline_start_frame  = 0,
             target_video_track_id = "e-v1",
         })
@@ -377,7 +377,7 @@ do  -- ToggleClipChannel (T054)
     -- Audio clip in `e` referencing the master.
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -397,7 +397,7 @@ do  -- SetClipChannelGain (T055)
     local db = override_fixture()
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -429,7 +429,7 @@ do  -- ClearClipOverride (channel + layer) (T056)
     -- Channel variant.
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -534,7 +534,7 @@ do  -- ExpandAudio (T056i) — emits on parent.
         VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
                ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
@@ -570,7 +570,7 @@ do  -- CollapseAudio (T056j) — emits on parent.
         VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
                ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,

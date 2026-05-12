@@ -21,7 +21,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq 1', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('seq1', 'proj1', 'Seq 1', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 
 -- Insert tracks with muted/soloed/locked set to TRUE and distinct sync_mode

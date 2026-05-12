@@ -38,7 +38,7 @@ db:exec([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('seq', 'proj', 'Sequence', 'nested', 24, 1, 48000, 1920, 1080, 0, 10000, 0,
+    VALUES ('seq', 'proj', 'Sequence', 'sequence', 24, 1, 48000, 1920, 1080, 0, 10000, 0,
         '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -112,7 +112,7 @@ local function create_clip(id, track_id, start, duration, source_in)
         project_id = 'proj',
         owner_sequence_id = 'seq',
         track_id = track_id,
-        nested_sequence_id = master_seq_id,
+        sequence_id = master_seq_id,
         name = "Clip " .. id,
         timeline_start_frame = start,
         duration_frames = duration,

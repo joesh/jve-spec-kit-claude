@@ -67,7 +67,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq1', 'nested', 24, 1, 48000,
+    VALUES ('seq1', 'proj1', 'Seq1', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -96,7 +96,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 24, 1, 48000,
+    VALUES ('seq_empty', 'proj1', 'Empty', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -337,7 +337,7 @@ local so = 100
 
 -- 7a. Video-only (0 audio channels)
 local sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 0,
 })
@@ -351,7 +351,7 @@ check("video.duration", sc.video.duration == dur)
 
 -- 7b. With audio channels
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 2,
 })
@@ -380,7 +380,7 @@ end, "invalid audio channel")
 
 -- 7f. Default audio_channels = 0 when nil
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "Test",
 })

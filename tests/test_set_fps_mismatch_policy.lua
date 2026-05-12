@@ -36,7 +36,7 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             fps_mismatch_policy, created_at, modified_at)
-        VALUES ('s', 'p1', 's', 'nested', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
+        VALUES ('s', 'p1', 's', 'sequence', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
     ]]))
     return db
 end

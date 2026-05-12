@@ -36,7 +36,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, created_at, modified_at)
-    VALUES ('seq', 'proj', 'S', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('seq', 'proj', 'S', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 -- 4 video tracks (V1–V4) and 4 audio tracks (A1–A4) for routing tests
 db:exec([[

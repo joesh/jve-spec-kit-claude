@@ -30,7 +30,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
+    VALUES('seq', 'proj', 'TestTimeline', 'sequence', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            0, 0)
 ]]))
 
@@ -56,7 +56,7 @@ Sequence.ensure_master("media_a", "proj", { id = "master_a" })
 --   clip_3: frames [200, 300) (timeline_start=200, duration=100, DISABLED)
 --   clip_4: frames [300, 400) (timeline_start=300, duration=100)
 assert(db:exec([[
-    INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
+    INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, sequence_id,
                      timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                      master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                      enabled, volume, playhead_frame, created_at, modified_at)

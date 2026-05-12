@@ -40,7 +40,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('test_seq', 'test_project', 'Test Seq', 'nested',
+    VALUES ('test_seq', 'test_project', 'Test Seq', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT OR IGNORE INTO tag_namespaces (id, display_name) VALUES ('bin', 'Bins');

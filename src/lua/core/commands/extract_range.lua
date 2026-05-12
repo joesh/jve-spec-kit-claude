@@ -35,7 +35,7 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
                 name = mut.name,
-                nested_sequence_id = mut.nested_sequence_id,
+                sequence_id = mut.sequence_id,
                 master_layer_track_id = mut.master_layer_track_id,
                 master_audio_track_id = mut.master_audio_track_id,
                 fps_mismatch_policy = mut.fps_mismatch_policy,

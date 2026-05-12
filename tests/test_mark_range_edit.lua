@@ -27,7 +27,7 @@ local BASE_SQL = string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj', 'Test', 'resample', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('seq', 'proj', 'TL', 'nested', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
+    VALUES ('seq', 'proj', 'TL', 'sequence', 25, 1, 48000, 1920, 1080, 0, 0, 8000, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -90,7 +90,7 @@ local function insert_clip(p)
     mc_seq:save()
     local cmd = Command.create("Overwrite", "proj")
     cmd:set_parameters({
-        nested_sequence_id = mc, target_video_track_id = p.track_id, sequence_id = "seq",
+        source_sequence_id = mc, target_video_track_id = p.track_id, sequence_id = "seq",
         timeline_start_frame = p.start,
         advance_playhead = false,
     })

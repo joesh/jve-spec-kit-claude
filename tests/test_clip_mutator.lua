@@ -40,7 +40,7 @@ do
         id = "c1", project_id = "p1", name = "Clip",
         track_id = "t1",
         owner_sequence_id = "owner_seq",
-        nested_sequence_id = "nested_seq",
+        sequence_id = "nested_seq",
         timeline_start = 0,
         duration = 100,
         source_in = 0,

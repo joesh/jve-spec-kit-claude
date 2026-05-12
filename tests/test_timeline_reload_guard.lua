@@ -25,8 +25,8 @@ local DATA_SQL = [[
         current_sequence_number, created_at, modified_at
     )
     VALUES
-        ('seq_a', 'default_project', 'Active Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, 0, 0),
-        ('seq_b', 'default_project', 'Background Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, 0, 0);
+        ('seq_a', 'default_project', 'Active Seq', 'sequence', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, 0, 0),
+        ('seq_b', 'default_project', 'Background Seq', 'sequence', 30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES
         ('seq_a_v1', 'seq_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),

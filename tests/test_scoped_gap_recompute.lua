@@ -31,14 +31,14 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq 1', 'nested', 25, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('seq1', 'proj1', 'Seq 1', 'sequence', 25, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 
 -- Create tracks
 db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1)")
 db:exec("INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_a1', 'seq1', 'A1', 'AUDIO', 2, 1)")
 
--- V13 placeholder master sequence + media_ref (clip nested_sequence_id FK).
+-- V13 placeholder master sequence + media_ref (clip source_sequence_id FK).
 db:exec(string.format([[
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, width, height, audio_channels, codec,
@@ -61,7 +61,7 @@ db:exec(string.format([[
 -- Create clips: V1 has clips at 0-100 and 200-400 (gap 100-200). A1 has clip at 0-300 and 400-500 (gap 300-400).
 local function insert_clip(id, track_id, start, dur)
     assert(db:exec(string.format(
-        "INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, " ..
+        "INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, " ..
         "timeline_start_frame, duration_frames, source_in_frame, source_out_frame, " ..
         "master_layer_track_id, master_audio_track_id, fps_mismatch_policy, " ..
         "enabled, volume, playhead_frame, created_at, modified_at) " ..

@@ -1,4 +1,4 @@
--- T001 (013): sequences.kind must accept only 'master' and 'nested'.
+-- T001 (013): sequences.kind must accept only 'master' and 'sequence'.
 -- Pre-013 kind values ('timeline', 'masterclip', 'compound', 'multicam') must be rejected.
 -- This test is expected to FAIL until T008 lands; proves T008 does what data-model.md §sequences says.
 
@@ -29,7 +29,7 @@ end
 
 -- Good: accepted values.
 assert(kind_insert("master"), "kind='master' must be accepted")
-assert(kind_insert("nested"), "kind='nested' must be accepted")
+assert(kind_insert("sequence"), "kind='sequence' must be accepted")
 
 -- Bad: every pre-013 kind must be rejected.
 for _, bad in ipairs({"timeline", "masterclip", "compound", "multicam", "garbage", ""}) do

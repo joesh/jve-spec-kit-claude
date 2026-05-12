@@ -80,9 +80,9 @@ CREATE TABLE IF NOT EXISTS sequences (
 
     -- Structural kind. Exactly two values after 013:
     --   'master' — sequence's tracks hold media_refs (direct file references).
-    --   'nested' — sequence's tracks hold clips (references to other sequences).
+    --   'sequence' — sequence's tracks hold clips (references to other sequences).
     -- Old values ('timeline','masterclip','compound','multicam') collapse into these.
-    kind TEXT NOT NULL CHECK(kind IN ('master', 'nested')),
+    kind TEXT NOT NULL CHECK(kind IN ('master', 'sequence')),
 
     -- Sequence Video Timebase (The Master Clock)
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
@@ -235,7 +235,7 @@ CREATE TABLE IF NOT EXISTS clips (
 
     -- What sequence this clip references (any kind). Replaces the pre-013
     -- master_clip_id column with clearer semantics.
-    nested_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
 
     -- Window into the nested sequence's timebase.
     source_in_frame INTEGER NOT NULL,
@@ -245,7 +245,7 @@ CREATE TABLE IF NOT EXISTS clips (
     -- duration_frames are in the OWNER sequence's timebase; source_in/out are
     -- in the NESTED sequence's timebase. The ratio between them is set by
     -- fps_mismatch_policy below. Neither timebase is carried on this row —
-    -- callers dereference owner_sequence_id / nested_sequence_id as needed.
+    -- callers dereference owner_sequence_id / sequence_id as needed.
     timeline_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
@@ -259,7 +259,7 @@ CREATE TABLE IF NOT EXISTS clips (
     -- of the nested sequence's audio tracks (FR-023/FR-024 — Expand/Collapse).
     -- Symmetric to master_layer_track_id but for audio. Non-NULL only
     -- on clips whose owner-side track is itself an audio track, and the
-    -- referenced track must belong to nested_sequence_id and have kind='audio'
+    -- referenced track must belong to sequence_id and have kind='audio'
     -- (model-layer asserts; FK takes care of dangling-on-delete).
     master_audio_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
 
@@ -285,7 +285,7 @@ CREATE TABLE IF NOT EXISTS clips (
 
 CREATE INDEX IF NOT EXISTS idx_clips_owner_sequence ON clips(owner_sequence_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
-CREATE INDEX IF NOT EXISTS idx_clips_nested_sequence ON clips(nested_sequence_id);
+CREATE INDEX IF NOT EXISTS idx_clips_sequence ON clips(sequence_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
 
 -- ============================================================================
@@ -490,7 +490,7 @@ END;
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_insert;
 CREATE TRIGGER trg_clips_owner_kind_insert
 BEFORE INSERT ON clips
-WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
     SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
 END;
@@ -498,7 +498,7 @@ END;
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_update;
 CREATE TRIGGER trg_clips_owner_kind_update
 BEFORE UPDATE ON clips
-WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
     SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
 END;

@@ -168,7 +168,7 @@ package.loaded["core.renderer"] = {
         end
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test",
+            kind = "sequence", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -265,7 +265,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('timeline1', 'proj', 'MyTimeline', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES('timeline1', 'proj', 'MyTimeline', 'sequence', 24, 1, 48000, 1920, 1080,
            0, 2000, 0, 0, 0)
 ]]))
 
@@ -285,12 +285,12 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id =
 INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('tclip1', 'proj', 'Clip1', 'tv1', 'timeline1', 'master_media1', 0, 50, 0, 50, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
 mock_renderer_info["timeline1"] = {
     fps_num = 24, fps_den = 1,
-    kind = "nested", name = "MyTimeline",
+    kind = "sequence", name = "MyTimeline",
     audio_sample_rate = 48000,
 }
 

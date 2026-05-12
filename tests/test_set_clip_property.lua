@@ -87,7 +87,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         created_at, modified_at)
-    VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'nested',
+    VALUES ('timeline_seq', 'test_project', 'Timeline Seq', 'sequence',
         1000, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -149,7 +149,7 @@ insert_cmd:set_parameters({
     project_id = "test_project",
     sequence_id = "timeline_seq",
     target_video_track_id = "track_v1",
-    nested_sequence_id = master_seq_id,
+    source_sequence_id = master_seq_id,
     timeline_start_frame = 0,
 })
 local insert_res = command_manager.execute(insert_cmd)

@@ -6,7 +6,7 @@
 --   * V2 → NULL: clip override clears; undo restores V2.
 --   * sequence_id arg required (rule 2.29 regression): an args table that
 --     omits sequence_id is refused.
---   * track_id must belong to clip.nested_sequence_id (rule 1.14): a
+--   * track_id must belong to clip.source_sequence_id (rule 1.14): a
 --     track on a DIFFERENT sequence is refused with a loud message.
 --
 -- Black-box DB-state assertions; bypasses command_manager for unit
@@ -36,7 +36,7 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -50,7 +50,7 @@ local function build_fixture()
         UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
         UPDATE sequences SET default_video_layer_track_id = 'other-v1' WHERE id = 'other';
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -129,7 +129,7 @@ do
     print("  ok")
 end
 
-print("-- track_id must belong to clip.nested_sequence_id --")
+print("-- track_id must belong to clip.source_sequence_id --")
 do
     build_fixture()
     local ok, err = pcall(SetClipLayer.execute, {
@@ -139,7 +139,7 @@ do
     })
     assert(not ok,
         "track_id from a different sequence must be refused (G-R5 / INV-?)")
-    assert(tostring(err):find("nested_sequence_id")
+    assert(tostring(err):find("source_sequence_id")
         or tostring(err):find("track")
         or tostring(err):find("layer"),
         "error must name the bad track or the constraint; got " .. tostring(err))

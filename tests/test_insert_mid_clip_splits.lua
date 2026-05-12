@@ -35,7 +35,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at)
-        VALUES ('seq', 'proj', 'TL', 'nested', 24, 1, 48000, 1920, 1080, 0, 5000, 0, %d, %d);
+        VALUES ('seq', 'proj', 'TL', 'sequence', 24, 1, 48000, 1920, 1080, 0, 5000, 0, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
 ]], now, now, now, now))
@@ -57,7 +57,7 @@ local master = Sequence.ensure_master("med", "proj")
 local Clip = require('models.clip')
 local clip_a_id = Clip.create({
     name = "A", project_id = "proj",
-    track_id = "v1", owner_sequence_id = "seq", nested_sequence_id = master,
+    track_id = "v1", owner_sequence_id = "seq", sequence_id = master,
     timeline_start_frame = 0, duration_frames = 100,
     source_in_frame = 100, source_out_frame = 200,
     fps_mismatch_policy = "resample", enabled = true, volume = 1.0,
@@ -69,7 +69,7 @@ local clip_a_id = Clip.create({
 -- from "split of A").
 local clip_c_id = Clip.create({
     name = "C", project_id = "proj",
-    track_id = "v1", owner_sequence_id = "seq", nested_sequence_id = master,
+    track_id = "v1", owner_sequence_id = "seq", sequence_id = master,
     timeline_start_frame = 200, duration_frames = 100,
     source_in_frame = 400, source_out_frame = 500,
     fps_mismatch_policy = "resample", enabled = true, volume = 1.0,
@@ -91,7 +91,7 @@ timeline_state.reload_clips('seq')
 
 -- Insert at frame 50 (strictly inside A: 0 < 50 < 100).
 local cmd = Command.create("Insert", "proj")
-cmd:set_parameter("nested_sequence_id", master)
+cmd:set_parameter("source_sequence_id", master)
 cmd:set_parameter("target_video_track_id", "v1")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("timeline_start_frame", 50)

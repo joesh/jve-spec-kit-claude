@@ -3,11 +3,11 @@
 -- Per FR-010 / commands.md §Unnest:
 --   Args: { sequence_id, clip_id }. sequence_id is the clip's
 --     owner_sequence_id (rule 2.29).
---   Pre: clip exists; clip.nested_sequence_id.kind == 'nested'.
+--   Pre: clip exists; clip.source_sequence_id.kind == 'sequence'.
 --     Masters CANNOT be unnested (their tracks hold media_refs which
---     can't live in a kind='nested' sequence).
+--     can't live in a kind='sequence' sequence).
 --   Mutation:
---     1. For each clip C inside clip.nested_sequence_id: UPDATE
+--     1. For each clip C inside clip.source_sequence_id: UPDATE
 --        owner_sequence_id ← parent; track_id ← parent's equivalent
 --        track; timeline_start_frame ← C.timeline_start_frame +
 --        (clip.timeline_start_frame - clip.source_in_frame).
@@ -42,7 +42,7 @@ local function build_master_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('e-v1', 'e', 'V1', 'VIDEO', 1);
@@ -57,7 +57,7 @@ local function build_master_fixture()
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         -- Clip on edit referencing the master directly.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -82,7 +82,7 @@ local function build_nested_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('e-v1', 'e', 'V1', 'VIDEO', 1);
@@ -96,7 +96,7 @@ local function build_nested_fixture()
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -155,7 +155,7 @@ do
         clip_id     = "c-master",
     })
     assert(not ok, "Unnest on master must refuse")
-    assert(tostring(err):find("master") or tostring(err):find("nested"),
+    assert(tostring(err):find("master") or tostring(err):find("sequence"),
         "error names the kind constraint; got: " .. tostring(err))
     print("  ok")
 end
@@ -202,7 +202,7 @@ do
     -- Add a second referencing clip to the nested.
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,

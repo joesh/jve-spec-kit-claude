@@ -32,7 +32,7 @@ local function build_fixture()
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+               ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
@@ -56,7 +56,7 @@ end
 local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,

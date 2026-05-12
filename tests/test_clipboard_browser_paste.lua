@@ -49,7 +49,7 @@ local function setup_db(path)
             width, height, playhead_frame,
             view_start_frame, view_duration_frames,
             created_at, modified_at)
-        VALUES ('seq', 'proj', 'Timeline', 'nested',
+        VALUES ('seq', 'proj', 'Timeline', 'sequence',
             24, 1, 48000, 1920, 1080, 0, 0, 10000, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);

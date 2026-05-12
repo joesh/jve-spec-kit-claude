@@ -49,7 +49,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                            audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Test Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq1', 'proj1', 'Test Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 db:exec([[
@@ -78,7 +78,7 @@ print("\n--- create: required fps fields ---")
 -- the clip's source-side timebase is read from its nested sequence; media
 -- comes via the master sequence's media_ref. The pre-013 "missing fps"
 -- and "missing media_id auto-resolve master_clip_id" error paths are
--- therefore no longer applicable. Coverage moved to nested_sequence_id +
+-- therefore no longer applicable. Coverage moved to source_sequence_id +
 -- ownership + source-window model assertions.
 
 -- ============================================================================
@@ -91,7 +91,7 @@ expect_error("timeline clip missing track_id", function()
     Clip.create({
         name = "TestClip",
         project_id = "proj1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
         timeline_start_frame = 0,
         duration_frames = 100,
@@ -109,7 +109,7 @@ expect_error("timeline clip missing owner_sequence_id", function()
         name = "TestClip",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         timeline_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
@@ -136,7 +136,7 @@ local valid_id = Clip.create({
         id = "valid_clip_1",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
         timeline_start_frame = 0,
         duration_frames = 100,
@@ -165,7 +165,7 @@ local bad_clip_id = Clip.create({
         id = "bad_clip_1",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
         timeline_start_frame = 200,
         duration_frames = 100,
@@ -200,7 +200,7 @@ print("\n--- load: returns integers ---")
 
 -- First save a valid clip via raw SQL (mc1 master sequence already exists from earlier ensure_master)
 db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id,
                     timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
                     enabled, created_at, modified_at,
                     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,

@@ -41,7 +41,7 @@ function M.resolve_media_id_from_ui(media_id, command)
     return media_id
 end
 
---- Resolve nested_sequence_id from browser selection.
+--- Resolve sequence_id from browser selection.
 --- Resolve sequence_id from args, track_id, or timeline_state
 -- @param args table Command arguments
 -- @param track_id string|nil Track ID to resolve from
@@ -290,7 +290,7 @@ function M.resolve_clip_name_for_sequence(args, source_sequence, media)
 end
 
 --- Create a selected_clip object with video and audio support
--- @param params table {media_id, nested_sequence_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
+-- @param params table {media_id, sequence_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
 -- @return table selected_clip object with has_video, has_audio, audio_channel_count, audio methods
 function M.create_selected_clip(params)
     local audio_channels = params.audio_channels or 0
@@ -298,7 +298,7 @@ function M.create_selected_clip(params)
     local clip_payload = {
         role = "video",
         media_id = params.media_id,
-        nested_sequence_id = params.nested_sequence_id,
+        sequence_id = params.sequence_id,
         project_id = params.project_id,
         duration = params.duration,
         source_in = params.source_in,
@@ -328,7 +328,7 @@ function M.create_selected_clip(params)
         return {
             role = "audio",
             media_id = params.media_id,
-            nested_sequence_id = params.nested_sequence_id,
+            sequence_id = params.sequence_id,
             project_id = params.project_id,
             duration = params.duration,
             source_in = params.source_in,

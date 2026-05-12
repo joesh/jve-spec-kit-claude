@@ -34,7 +34,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('seq1', 'p1', 'S1', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
+    VALUES ('seq1', 'p1', 'S1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now))
 
 -- ── 1. strip is exposed and is a real TimelineTabStrip ────────────────────
@@ -68,8 +68,8 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('seq_p2_a', 'p2', 'A', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
-           ('seq_p2_b', 'p2', 'B', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
+    VALUES ('seq_p2_a', 'p2', 'A', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
+           ('seq_p2_b', 'p2', 'B', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
            ('seq_p2_src', 'p2', 'S', 'master', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now, now, now, now, now))
 

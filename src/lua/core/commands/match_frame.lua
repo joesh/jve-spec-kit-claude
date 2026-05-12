@@ -58,10 +58,10 @@ local SPEC = {
     }
 }
 
-local function extract_nested_sequence_id(clip)
+local function extract_sequence_id(clip)
     if type(clip) ~= "table" then return nil end
-    if clip.nested_sequence_id and clip.nested_sequence_id ~= "" then
-        return clip.nested_sequence_id
+    if clip.sequence_id and clip.sequence_id ~= "" then
+        return clip.sequence_id
     end
     return nil
 end
@@ -77,7 +77,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local target_clip = command_helper.pick_best_clip(target_clips)
 
-        local target_master_id = extract_nested_sequence_id(target_clip)
+        local target_master_id = extract_sequence_id(target_clip)
         if not target_master_id then
             set_last_error("MatchFrame: Clip has no nested sequence")
             return false

@@ -77,7 +77,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Sequence', 'nested',
+        'default_sequence', 'default_project', 'Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 500, 0,
         '[]', '[]', '[]', 0, %d, %d
     );
@@ -135,7 +135,7 @@ VALUES ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_aud
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_empty', 'default_project', 'Empty Master', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_v1', 'default_project', 'Clip V1', 'track_v1', 'master_clip_a', 'default_sequence', 0, 200, 10, 210, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2', 'default_project', 'Clip V2', 'track_v2', 'master_clip_b', 'default_sequence', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
@@ -179,7 +179,7 @@ assert(not result.success, "Should fail when no clips under playhead")
 assert(result.error_message:find("No clips under playhead"), "Error: " .. tostring(result.error_message))
 
 -- Test 2 (V13-obsolete): the original test verified V8's
--- 'clip without master_clip_id → MatchFrame fails'. V13's nested_sequence_id
+-- 'clip without master_clip_id → MatchFrame fails'. V13's source_sequence_id
 -- is NOT NULL and clips always reference a master sequence — there's no
 -- 'no master' state to assert on.
 
@@ -338,7 +338,7 @@ assert(master_b.playhead_position == 50,
 print("Test 14: Out-of-range playhead is clamped, not asserted")
 db:exec(string.format([[
     INSERT INTO clips (
-        id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+        id, project_id, name, track_id, sequence_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at

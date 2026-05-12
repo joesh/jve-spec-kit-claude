@@ -664,8 +664,8 @@ function M:get_source_extent(target_rate)
         SELECT c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator
         FROM clips c
-        JOIN sequences nested ON nested.id = c.nested_sequence_id
-        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         WHERE mr.media_id = ?
     ]]), "Media:get_source_extent: failed to prepare query")
     stmt:bind_value(1, self.id)
@@ -1062,8 +1062,8 @@ local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rat
                nested.fps_numerator, nested.fps_denominator,
                nested.audio_sample_rate, t.track_type
         FROM clips c
-        JOIN sequences nested ON nested.id = c.nested_sequence_id
-        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         JOIN tracks t ON t.id = c.track_id
         WHERE mr.media_id IN (%s)
     ]], table.concat(phs, ","))
@@ -1238,12 +1238,12 @@ function M:delete()
     assert(self.id and self.id ~= "", "Media:delete: id required")
 
     -- V13: clips don't carry media_id directly. The reachable clips are
-    -- those whose nested_sequence_id points at a master sequence that has
+    -- those whose sequence_id points at a master sequence that has
     -- a media_ref to this media. Find them via media_refs.
     -- properties table has no FK cascade — must clean up explicitly.
     local clip_ids_stmt = db:prepare([[
         SELECT c.id FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
          WHERE mr.media_id = ?
     ]])
     if clip_ids_stmt then

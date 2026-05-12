@@ -33,7 +33,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Timeline 1', 'nested', 24, 1, 48000,
+    VALUES ('seq1', 'proj1', 'Timeline 1', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 10, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -52,7 +52,7 @@ db:exec(string.format([[
 ]], now, now))
 
 -- V13 master sequence + track + media_ref for med1 (clip references it
--- via nested_sequence_id). The 'master_seq_for_med1' literal id matches
+-- via sequence_id). The 'master_seq_for_med1' literal id matches
 -- the clip fixture below.
 db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
@@ -85,7 +85,7 @@ local clips = {
         project_id = "proj1",
         track_id = "trk1",
         owner_sequence_id = "seq1",
-        nested_sequence_id = "master_seq_for_med1",
+        sequence_id = "master_seq_for_med1",
         master_layer_track_id = nil,
         master_audio_track_id = nil,
         fps_mismatch_policy = "resample",
@@ -154,7 +154,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 -- Create corrupt snapshot payload with missing field
 local bad_payload = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
+        id = "seq1", project_id = "proj1", name = "T", kind = "sequence",
         fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -164,7 +164,7 @@ local bad_payload = json.encode({
         {
             id = "clip_bad", track_type = "VIDEO", name = "Bad",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            nested_sequence_id = "master_seq_for_med1",
+            sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
             -- Missing timeline_start_frame!
             duration_frames = 100,
@@ -191,7 +191,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 
 local bad_payload2 = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
+        id = "seq1", project_id = "proj1", name = "T", kind = "sequence",
         fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -201,7 +201,7 @@ local bad_payload2 = json.encode({
         {
             id = "clip_no_dur", track_type = "VIDEO", name = "No Duration",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            nested_sequence_id = "master_seq_for_med1",
+            sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
             timeline_start_frame = 0,
             -- Missing duration_frames!

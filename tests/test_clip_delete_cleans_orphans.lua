@@ -39,7 +39,7 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -63,7 +63,7 @@ UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHE
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame) VALUES
     ('vid1', 'proj1', 'Video', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, 1.0, %d, %d, NULL, NULL, 'resample', 0),
     ('aud1', 'proj1', 'Audio', 'a1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, 1.0, %d, %d, NULL, NULL, 'resample', 0);
 ]], now, now, now, now))

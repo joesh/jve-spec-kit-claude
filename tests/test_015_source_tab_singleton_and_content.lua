@@ -45,7 +45,7 @@ db:exec(string.format([[
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
     VALUES
-      ('rec',     'proj', 'Record',   'nested', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d),
+      ('rec',     'proj', 'Record',   'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d),
       ('mst_a',   'proj', 'A008.mov', 'master', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d),
       ('mst_b',   'proj', 'A037.mov', 'master', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d);
 
@@ -167,7 +167,7 @@ print("  active_sequence_id stayed on record while viewing master — OK")
 print("-- (f) Sequence:is_master semantics --")
 local rec = Sequence.load("rec")
 local mst_a = Sequence.load("mst_a")
-assert(not rec:is_master(), "FAIL: 'rec' is kind='nested', not master")
+assert(not rec:is_master(), "FAIL: 'rec' is kind='sequence', not master")
 assert(mst_a:is_master(), "FAIL: 'mst_a' is kind='master'")
 print("  kind classification — OK")
 

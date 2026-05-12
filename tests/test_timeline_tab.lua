@@ -34,8 +34,8 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('seqA', 'proj', 'A', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
-           ('seqB', 'proj', 'B', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
+    VALUES ('seqA', 'proj', 'A', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
+           ('seqB', 'proj', 'B', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now, now, now))
 
 -- ── 1. construction ───────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('seqB', 'proj', 'B', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
+    VALUES ('seqB', 'proj', 'B', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now))
 
 local notify_count = 0

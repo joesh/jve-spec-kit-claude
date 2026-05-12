@@ -148,7 +148,7 @@ end
 
 --- Check fps values are positive.
 local function check_fps_positive(db, result)
-    -- V13: clips no longer carry fps; rate derives from nested_sequence_id.
+    -- V13: clips no longer carry fps; rate derives from source_sequence_id.
     local tables = {
         {"sequences", "fps_numerator", "fps_denominator"},
         {"media", "fps_numerator", "fps_denominator"},
@@ -214,7 +214,7 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
-        JOIN sequences nested ON c.nested_sequence_id = nested.id
+        JOIN sequences nested ON c.sequence_id = nested.id
         WHERE 1=1
           AND c.source_in_frame IS NOT NULL
           AND c.source_out_frame IS NOT NULL

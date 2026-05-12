@@ -44,7 +44,7 @@ db:exec(string.format([[
 
 local seq = Sequence.create("Test Timeline", "project",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested",id = "seq_1", audio_sample_rate = 48000})
+    { kind = "sequence",id = "seq_1", audio_sample_rate = 48000})
 assert(seq:save(), "setup: failed to save sequence")
 
 command_manager.init('seq_1', 'project')

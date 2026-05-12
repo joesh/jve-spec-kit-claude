@@ -242,7 +242,7 @@ print("=== Category 6: Find & Replace ===")
 
 -- Insert test clips into DB for replace tests
 local seq_stmt = db:prepare(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)",
     now, now))
 seq_stmt:exec()
 seq_stmt:finalize()
@@ -267,7 +267,7 @@ db:exec([[
 for i, name in ipairs({"Scene01_v1", "Scene02_v1", "Scene03_v2"}) do
     local cid = string.format("rc%d", i)
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name,
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name,
             timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
             enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy, volume, playhead_frame)

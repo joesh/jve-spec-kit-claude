@@ -71,7 +71,7 @@ function M.execute(args)
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
             track_id              = args.target_track_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            sequence_id    = clip.sequence_id,
             name                  = clip.name,
             timeline_start_frame  = new_timeline_start,
             duration_frames       = clip.duration_frames,

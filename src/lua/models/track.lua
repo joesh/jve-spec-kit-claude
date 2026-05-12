@@ -437,7 +437,7 @@ function Track.delete(track_id)
             -- No other V track. If any clip anywhere references this sequence
             -- (acyclic DAG + last video track: we'd orphan the clip's visual content), refuse.
             local ref = db:prepare(
-                "SELECT 1 FROM clips WHERE nested_sequence_id = ? LIMIT 1")
+                "SELECT 1 FROM clips WHERE sequence_id = ? LIMIT 1")
             assert(ref, "Track.delete: ref prepare failed")
             ref:bind_value(1, seq_id)
             assert(ref:exec(), "Track.delete: ref exec failed")

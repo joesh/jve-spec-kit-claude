@@ -1176,7 +1176,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             track_type = base.track_type,
             owner_sequence_id = base.owner_sequence_id,
             track_sequence_id = base.track_sequence_id,
-            nested_sequence_id = base.nested_sequence_id,
+            sequence_id = base.sequence_id,
             master_layer_track_id = base.master_layer_track_id,
             master_audio_track_id = base.master_audio_track_id,
             fps_mismatch_policy = base.fps_mismatch_policy,

@@ -252,7 +252,7 @@ end
 --   2: c.name
 --   3: c.track_id
 --   4: c.owner_sequence_id
---   5: c.nested_sequence_id
+--   5: c.sequence_id
 --   6: c.timeline_start_frame
 --   7: c.duration_frames
 --   8: c.source_in_frame
@@ -267,7 +267,7 @@ end
 --   17: t.track_type             ('VIDEO' or 'AUDIO')
 --   18: owner_seq.fps_numerator  (owner sequence timebase)
 --   19: owner_seq.fps_denominator
---   20: nested_seq.kind          ('master' or 'nested')
+--   20: nested_seq.kind          ('master' or 'sequence')
 --   21: nested_seq.fps_numerator (clip-side / source-side timebase = nested seq's rate)
 --   22: nested_seq.fps_denominator
 --   23: mr.media_id              (NULL when nested is itself nested, or master has no media_ref)
@@ -304,10 +304,10 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local nested_sequence_id = query:value(5)
-    if not nested_sequence_id then
+    local sequence_id = query:value(5)
+    if not sequence_id then
         error(string.format(
-            "FATAL: load_clips: clip %s missing nested_sequence_id",
+            "FATAL: load_clips: clip %s missing sequence_id",
             tostring(clip_id)
         ))
     end
@@ -318,7 +318,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
     if not nested_fps_num or not nested_fps_den then
         error(string.format(
             "FATAL: load_clips: missing nested-sequence fps for clip %s (nested=%s)",
-            tostring(clip_id), tostring(nested_sequence_id)
+            tostring(clip_id), tostring(sequence_id)
         ))
     end
 
@@ -345,7 +345,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         track_id = query:value(3),
         owner_sequence_id = owner_sequence_id,
         track_sequence_id = owner_sequence_id,
-        nested_sequence_id = nested_sequence_id,
+        sequence_id = sequence_id,
         nested_sequence_kind = nested_kind,
         master_layer_track_id = query:value(10),
         master_audio_track_id = query:value(11),
@@ -958,7 +958,7 @@ function M.load_clips(sequence_id)
     -- only, otherwise the LEFT JOIN multiplies clips by media_ref count.
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
+               c.owner_sequence_id, c.sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -971,8 +971,8 @@ function M.load_clips(sequence_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
                                 AND EXISTS (
                                     SELECT 1 FROM tracks mt
@@ -1094,7 +1094,7 @@ function M.load_master_virtual_clips(master_seq_id)
                 track_id = track_id,
                 owner_sequence_id = master_seq_id,
                 track_sequence_id = master_seq_id,
-                nested_sequence_id = master_seq_id,
+                sequence_id = master_seq_id,
                 nested_sequence_kind = "master",
                 timeline_start = timeline_start,
                 duration = timeline_duration,
@@ -1138,7 +1138,7 @@ function M.load_clip_entry(clip_id)
 
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
+               c.owner_sequence_id, c.sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -1151,8 +1151,8 @@ function M.load_clip_entry(clip_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.id = ?
@@ -1433,7 +1433,7 @@ function M.load_sequences(project_id)
         SELECT id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
-        WHERE project_id = ? AND kind = 'nested'
+        WHERE project_id = ? AND kind = 'sequence'
         ORDER BY name
     ]])
     if not query then

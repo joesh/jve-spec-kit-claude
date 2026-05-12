@@ -177,7 +177,7 @@ local seq_assignments = query_pairs([[
 ]], project_id)
 
 local timelines = query_pairs(
-    "SELECT id, name FROM sequences WHERE kind = 'nested' AND project_id = ?",
+    "SELECT id, name FROM sequences WHERE kind = 'sequence' AND project_id = ?",
     project_id)
 
 print(string.format("  %d timeline(s), %d sequence bin assignment(s)", #timelines, #seq_assignments))

@@ -39,7 +39,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'p1', 'Seq1', 'nested', 24000, 1001, 48000, 1920, 1080,
+    VALUES ('seq1', 'p1', 'Seq1', 'sequence', 24000, 1001, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -62,7 +62,7 @@ VALUES ('_v13_placeholder_mr', 'p1', '_v13_placeholder_master', '_v13_placeholde
 -- Two clips to select between.
 for i, cid in ipairs({"c1", "c2"}) do
     local stmt = db:prepare([[
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     (?, 'p1', 'seq1', 't1', '_v13_placeholder_master', ?, ?, 120, 0, 120, 1, ?, ?, NULL, NULL, 'resample', 1.0, 0);
     ]])
     stmt:bind_value(1, cid)

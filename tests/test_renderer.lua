@@ -26,7 +26,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
+    VALUES('seq', 'proj', 'TestTimeline', 'sequence', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            0, 0)
 ]]))
 
@@ -88,7 +88,7 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_b' WHERE id 
 INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_b', 'proj', 'master_media_b', 'master_v_media_b', 'media_b', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_v2', 'proj', 'ClipV2', 'v2', 'seq', 'master_media_b', 0, 48, 0, 48, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v1', 'proj', 'ClipV1', 'v1', 'seq', 'master_media_a', 24, 48, 10, 58, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
@@ -96,7 +96,7 @@ INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_seq
 -- A1: audio clip at frames 0-96
 -- A2: audio clip at frames 48-144 (overlapping A1)
 assert(db:exec([[
-    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_a1', 'proj', 'ClipA1', 'a1', 'seq', 'master_media_audio', 0, 96, 0, 96000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_a2', 'proj', 'ClipA2', 'a2', 'seq', 'master_media_b', 48, 96, 0, 96, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
@@ -198,7 +198,7 @@ local function test_get_sequence_info()
     assert(info.width == 1920, "Expected width=1920")
     assert(info.height == 1080, "Expected height=1080")
     assert(info.name == "TestTimeline", "Expected name=TestTimeline")
-    assert(info.kind == "nested", "Expected kind=nested")
+    assert(info.kind == "sequence", "Expected kind=nested")
     assert(info.audio_sample_rate == 48000, "Expected audio_sample_rate=48000")
     print("  test_get_sequence_info passed")
 end

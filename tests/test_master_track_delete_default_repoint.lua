@@ -81,13 +81,13 @@ assert(db:exec(string.format(
     .. "VALUES ('mr', 'p1', '%s', '%s', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)",
     mC, mC_v1)))
 
-local edit = make_sequence("edit", "nested")
+local edit = make_sequence("edit", "sequence")
 local edit_v1 = add_track("edit", edit, "VIDEO", 1)
 Clip.create({
     project_id = "p1",
     owner_sequence_id = edit,
     track_id = edit_v1,
-    nested_sequence_id = mC,
+    sequence_id = mC,
     name = "c",
     timeline_start_frame = 0,
     duration_frames = 100,

@@ -40,7 +40,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                           audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 25, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -88,7 +88,7 @@ assert(mc_seq:save(), "failed to save masterclip marks")
 
 -- Insert clip at timeline position 50
 local insert_cmd = Command.create("Insert", "proj1")
-insert_cmd:set_parameter("nested_sequence_id", mc_id)
+insert_cmd:set_parameter("source_sequence_id", mc_id)
 insert_cmd:set_parameter("target_video_track_id", "vt1")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("timeline_start_frame", 50)

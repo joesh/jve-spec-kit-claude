@@ -49,7 +49,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-edit', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-edit', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
@@ -58,7 +58,7 @@ assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-a1', 'seq-edit', 'A1', 'AUDIO', 1)"))
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('clip-1', 'p1', 'seq-edit', 'trk-a1', 'seq-master', "

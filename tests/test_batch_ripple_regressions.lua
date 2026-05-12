@@ -39,7 +39,7 @@ local function build_manual_timeline(config)
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
                                width, height, view_start_frame, view_duration_frames, playhead_frame,
                                created_at, modified_at)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'nested',
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'sequence',
                 1000, 1, 48000, 1920, 1080, 0, 6000, 0, %d, %d);
 
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
@@ -66,7 +66,7 @@ VALUES ('mr_media_main', 'default_project', 'master_media_main', 'master_v_media
 
     for _, clip in ipairs(config.clips or {}) do
         assert(db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('%s', 'default_project', '%s', '%s', 'master_media_main', 'default_sequence', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);]],
             clip.id, clip.name, clip.track_id, clip.timeline_start, clip.duration, clip.source_out or clip.duration,

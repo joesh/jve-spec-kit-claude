@@ -52,7 +52,7 @@ local function mutation_entry(row)
         owner_sequence_id     = row.owner_sequence_id,
         track_sequence_id     = row.owner_sequence_id,
         track_id              = row.track_id,
-        nested_sequence_id    = row.nested_sequence_id,
+        sequence_id    = row.sequence_id,
         start_value           = row.timeline_start_frame,
         timeline_start        = row.timeline_start_frame,
         duration_value        = row.duration_frames,
@@ -93,7 +93,7 @@ function M.execute(args)
             split_frame, clip.timeline_start_frame, clip_end))
 
     local owner  = Sequence.find(args.sequence_id)
-    local nested = Sequence.find(clip.nested_sequence_id)
+    local nested = Sequence.find(clip.sequence_id)
     assert(owner and nested, "SplitClip: owner or nested sequence not found")
 
     local split_offset  = split_frame - clip.timeline_start_frame
@@ -135,7 +135,7 @@ function M.execute(args)
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
             track_id              = clip.track_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            sequence_id    = clip.sequence_id,
             name                  = clip.name,
             timeline_start_frame  = right_timeline,
             duration_frames       = right_duration,

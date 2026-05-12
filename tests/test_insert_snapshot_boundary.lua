@@ -31,7 +31,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -62,12 +62,12 @@ local media = Media.create({
 assert(media:save(db), "Failed to save media_1")
 
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 240, "media_1")
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(24)
@@ -80,7 +80,7 @@ for _ = 1, interval - 1 do
 end
 
 local cmd = Command.create("Insert", "project")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("timeline_start_frame", 0)

@@ -83,15 +83,15 @@ do
 end
 local _Sequence_for_master = require("models.sequence")
 -- V13: master sequence wrapping the media; export to module-level via _G
--- so the main body can pass it to Clip.create as nested_sequence_id.
+-- so the main body can pass it to Clip.create as source_sequence_id.
 rawset(_G, "MC_TEST", _Sequence_for_master.ensure_master("media_ripple", "project"))
 
 
     -- V5 Schema INSERT
-    local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
+    local seq1_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('sequence', 'project', 'Seq', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
     exec_safe(seq1_sql, "Insert Sequence 1")
 
-    local seq2_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('selection_sequence', 'project', 'Selection Seq', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
+    local seq2_sql = string.format("INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at) VALUES ('selection_sequence', 'project', 'Selection Seq', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);", now, now)
     exec_safe(seq2_sql, "Insert Sequence 2")
 
     exec_safe([[ 
@@ -184,7 +184,7 @@ local function ensure_media_record(db, media_id, duration_frames)
     assert(stmt:exec(), "media insert failed")
     stmt:finalize()
     -- V13: also build the master sequence wrapping this media so clips can
-    -- reference it via nested_sequence_id.
+    -- reference it via source_sequence_id.
     local Sequence = require("models.sequence")
     Sequence.ensure_master(media_id, "project", { id = "master_" .. media_id })
 end
@@ -210,7 +210,7 @@ local clip_a = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 120,
         source_in_frame = 0,
@@ -227,7 +227,7 @@ local _clip_b = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 180,
         duration_frames = 90 - 0,
         source_in_frame = 0,
@@ -248,7 +248,7 @@ local mover_clip = Clip.create({
         project_id = "project",
         track_id = "track_v2",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 60,
         duration_frames = 120 - 0,
         source_in_frame = 0,
@@ -293,7 +293,7 @@ local _base_left = Clip.create({
         project_id = "project",
         track_id = "track_nudge_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 30,
         duration_frames = 90 - 0,
         source_in_frame = 0,
@@ -310,7 +310,7 @@ local _base_right = Clip.create({
         project_id = "project",
         track_id = "track_nudge_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 180,
         duration_frames = 180 - 0,
         source_in_frame = 0,
@@ -327,7 +327,7 @@ local mover_for_nudge = Clip.create({
         project_id = "project",
         track_id = "track_nudge_v2",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 105,
         duration_frames = 120 - 0,
         source_in_frame = 0,
@@ -387,7 +387,7 @@ local ripple_clip = Clip.create({
         track_id = "track_ripple_test",
         project_id = "project",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 120,
         source_in_frame = 0,
@@ -441,7 +441,7 @@ local new_media = Media.create({
 assert(new_media:save(db), "failed to save new media")
 
 -- Create masterclip sequence for the new media (required for Insert)
-local split_nested_sequence_id = test_env.create_test_masterclip_sequence(
+local split_source_sequence_id = test_env.create_test_masterclip_sequence(
     'project', 'Split New Master', 30, 1, 30, 'media_split_new')
 
 local base_clip = Clip.create({
@@ -449,7 +449,7 @@ local base_clip = Clip.create({
         track_id = "track_v3",
         project_id = "project",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 180,
         source_in_frame = 0,
@@ -466,7 +466,7 @@ do
 end
 
 local insert_split = Command.create("Insert", "project")
-insert_split:set_parameter("nested_sequence_id", split_nested_sequence_id)
+insert_split:set_parameter("source_sequence_id", split_source_sequence_id)
 insert_split:set_parameter("target_video_track_id", "track_v3")
 insert_split:set_parameter("timeline_start_frame", 60) -- 2000ms
 insert_split:set_parameter("sequence_id", "sequence")

@@ -46,7 +46,7 @@ function M.execute(args)
     local new_source_in  = clip.source_in_frame  + delta
     local new_source_out = clip.source_out_frame + delta
 
-    Clip.assert_within_master_coverage(clip.nested_sequence_id, new_source_out,
+    Clip.assert_within_master_coverage(clip.sequence_id, new_source_out,
         "Slip clip=" .. args.clip_id)
 
     Clip.update_bounds(args.clip_id,

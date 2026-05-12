@@ -40,7 +40,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             set_error(set_last_error, "DeleteSequence: Sequence not found")
             return false
         end
-        if row.kind and row.kind ~= "nested" then
+        if row.kind and row.kind ~= "sequence" then
             set_error(set_last_error,
                 "DeleteSequence: Only nested (edit timeline) sequences can be deleted")
             return false
@@ -370,11 +370,11 @@ fetch_sequence_clips = function(db, sequence_id)
     -- V13 columns: clips no longer carry clip_kind / media_id /
     -- fps_numerator / fps_denominator / offline (those moved to the
     -- nested sequence + media_refs + media chain). master_clip_id
-    -- renamed to nested_sequence_id; new columns master_layer_track_id /
+    -- renamed to sequence_id; new columns master_layer_track_id /
     -- master_audio_track_id / fps_mismatch_policy.
     local clip_stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.nested_sequence_id, c.owner_sequence_id,
+               c.sequence_id, c.owner_sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -402,7 +402,7 @@ fetch_sequence_clips = function(db, sequence_id)
                 project_id = clip_stmt:value(1),
                 name = clip_stmt:value(2),
                 track_id = clip_stmt:value(3),
-                nested_sequence_id = clip_stmt:value(4),
+                sequence_id = clip_stmt:value(4),
                 owner_sequence_id = clip_stmt:value(5),
                 start_value = assert(tonumber(clip_stmt:value(6)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
                 duration_value = assert(tonumber(clip_stmt:value(7)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
@@ -491,10 +491,10 @@ fetch_sequence_snapshot = function(db, sequence_id)
 end
 
 count_sequence_references = function(db, sequence_id)
-    -- V13: clips reference other sequences via nested_sequence_id.
+    -- V13: clips reference other sequences via sequence_id.
     local stmt = db:prepare([[
         SELECT COUNT(*) FROM clips
-        WHERE nested_sequence_id = ?
+        WHERE sequence_id = ?
           AND (owner_sequence_id IS NULL OR owner_sequence_id <> ?)
     ]])
     if not stmt then
@@ -660,7 +660,7 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            nested_sequence_id, owner_sequence_id,
+            sequence_id, owner_sequence_id,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
@@ -672,9 +672,9 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
     if not stmt then return false, "UndoDeleteSequence: Failed to prepare clip insert" end
 
     for _, clip in ipairs(clips) do
-        if not clip.nested_sequence_id or clip.nested_sequence_id == "" then
+        if not clip.sequence_id or clip.sequence_id == "" then
             stmt:finalize()
-            return false, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing nested_sequence_id"
+            return false, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing sequence_id"
         end
         assert(clip.name and clip.fps_mismatch_policy
             and clip.created_at and clip.modified_at
@@ -687,7 +687,7 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
         stmt:bind_value(2, clip.project_id)
         stmt:bind_value(3, clip.name)
         stmt:bind_value(4, clip.track_id)
-        stmt:bind_value(5, clip.nested_sequence_id)
+        stmt:bind_value(5, clip.sequence_id)
         stmt:bind_value(6, clip.owner_sequence_id)
         stmt:bind_value(7, clip.start_value)
         stmt:bind_value(8, clip.duration_value)

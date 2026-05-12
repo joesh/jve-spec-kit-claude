@@ -54,7 +54,7 @@ do
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('e-v1', 'e', 'V1', 'VIDEO', 1);
     ]]))
@@ -95,8 +95,8 @@ do
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
         VALUES ('m',  'p1', 'm',  'master', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e1', 'p1', 'e1', 'nested', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e2', 'p1', 'e2', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+               ('e1', 'p1', 'e1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0),
+               ('e2', 'p1', 'e2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1',  'm',  'V1', 'VIDEO', 1),
                ('e1-v1', 'e1', 'V1', 'VIDEO', 1),
@@ -112,17 +112,17 @@ do
         VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
         -- E2 contains a clip referencing master M (non-zero effective duration).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('c-e2-uses-m', 'p1', 'e2', 'e2-v1', 'm', 'c2',
             0, 50, 0, 50, 'passthrough', 1, 1.0, 0, 0, 0);
-        -- E1 contains a clip whose nested_sequence_id is E2 — closes the
+        -- E1 contains a clip whose sequence_id is E2 — closes the
         -- reachability E1 -> E2.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,

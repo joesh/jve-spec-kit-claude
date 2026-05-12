@@ -107,7 +107,7 @@ db:exec(string.format([[
     INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 1000, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 1000, 1, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', %d, %d)
 ]], now, now))
 
@@ -139,7 +139,7 @@ VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeho
 
 for i, cid in ipairs(clip_ids) do
     local rc, err = db:exec(string.format([[
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('%s', 'proj1', 'seq1', 'track1', '_v13_placeholder_master', '%s', %d, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
     ]], cid, clip_names[i], (i - 1) * 100, now, now))
     assert(rc, "clip insert failed for " .. cid .. ": " .. tostring(err))

@@ -105,7 +105,7 @@ local function validate_plan_args(args)
         "place_shared: timeline_start_frame must be non-negative integer")
 end
 
--- Load the owner+nested sequences, enforce that owner is kind='nested', project
+-- Load the owner+nested sequences, enforce that owner is kind='sequence', project
 -- consistency, and cycle absence. Returns owner, nested.
 local function resolve_endpoints(args)
     local owner  = Sequence.find(args.sequence_id)
@@ -114,8 +114,8 @@ local function resolve_endpoints(args)
     local nested = Sequence.find(args.source_sequence_id)
     assert(nested, string.format(
         "place_shared: nested %s not found", args.source_sequence_id))
-    assert(owner.kind == "nested", string.format(
-        "place_shared: owner %s has kind='%s' (expected 'nested' — clips must be owned by a kind='nested' sequence)",
+    assert(owner.kind == "sequence", string.format(
+        "place_shared: owner %s has kind='%s' (expected 'sequence' — clips must be owned by a kind='sequence' sequence)",
         owner.id, owner.kind))
     assert(owner.project_id == nested.project_id, string.format(
         "place_shared: owner project %s != nested project %s",
@@ -358,7 +358,7 @@ local function insert_video_clip(plan, next_id)
         project_id            = plan.owner.project_id,
         owner_sequence_id     = plan.owner.id,
         track_id              = plan.targets.VIDEO,
-        nested_sequence_id    = plan.nested.id,
+        sequence_id    = plan.nested.id,
         name                  = plan.base_name,
         timeline_start_frame  = plan.start_frame,
         duration_frames       = plan.owner_duration,
@@ -385,7 +385,7 @@ local function insert_audio_clips(plan, next_id)
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = tgt.track_id,
-            nested_sequence_id    = plan.nested.id,
+            sequence_id    = plan.nested.id,
             name                  = plan.base_name,
             timeline_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
@@ -539,7 +539,7 @@ local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
         project_id            = e.project_id,
         owner_sequence_id     = e.owner_sequence_id,
         track_id              = e.track_id,
-        nested_sequence_id    = e.nested_sequence_id,
+        sequence_id    = e.sequence_id,
         name                  = e.name,
         timeline_start_frame  = n_end,
         duration_frames       = right_duration,
@@ -573,10 +573,10 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
 
     local deleted_rows, trimmed, split_new_ids = {}, {}, {}
     for _, e in ipairs(Clip.find_overlapping_on_track(track_id, n_start, n_end)) do
-        local nested = Sequence.find(e.nested_sequence_id)
+        local nested = Sequence.find(e.sequence_id)
         assert(nested, string.format(
             "place_shared.occlude_track: nested %s of clip %s not found",
-            tostring(e.nested_sequence_id), tostring(e.id)))
+            tostring(e.sequence_id), tostring(e.id)))
         local e_end = e.timeline_start_frame + e.duration_frames
         local kind  = classify_overlap(e.timeline_start_frame, e_end, n_start, n_end)
         local out
@@ -642,10 +642,10 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
         local e_start = e.timeline_start_frame
         local e_end   = e_start + e.duration_frames
         if e_start < position and e_end > position then
-            local nested = Sequence.find(e.nested_sequence_id)
+            local nested = Sequence.find(e.sequence_id)
             assert(nested, string.format(
                 "place_shared.split_track_at_insertion: nested %s of clip %s not found",
-                tostring(e.nested_sequence_id), tostring(e.id)))
+                tostring(e.sequence_id), tostring(e.id)))
 
             local left_duration  = position - e_start
             local right_duration = e_end - position
@@ -677,7 +677,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
                 project_id            = e.project_id,
                 owner_sequence_id     = e.owner_sequence_id,
                 track_id              = e.track_id,
-                nested_sequence_id    = e.nested_sequence_id,
+                sequence_id    = e.sequence_id,
                 name                  = e.name,
                 timeline_start_frame  = position,
                 duration_frames       = right_duration,

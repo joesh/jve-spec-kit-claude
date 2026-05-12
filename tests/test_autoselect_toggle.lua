@@ -13,7 +13,6 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
 
-local database        = require("core.database")
 local command_manager = require("core.command_manager")
 local Track           = require("models.track")
 local ripple_layout   = require("tests.helpers.ripple_layout")

@@ -39,7 +39,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000,
+        'seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d
     );
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,

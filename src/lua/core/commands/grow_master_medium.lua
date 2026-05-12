@@ -176,7 +176,7 @@ local function build_companion_for_video_clip(c, master, sample_rate)
         project_id            = c.project_id,
         owner_sequence_id     = c.owner_sequence_id,
         track_id              = dst_a_track_id,
-        nested_sequence_id    = master.id,
+        sequence_id    = master.id,
         name                  = (c.name or "Clip") .. " (audio)",
         timeline_start_frame  = c.timeline_start_frame,
         duration_frames       = c.duration_frames,

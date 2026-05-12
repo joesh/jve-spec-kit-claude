@@ -75,7 +75,7 @@ local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -177,7 +177,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
@@ -207,7 +207,7 @@ local groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Test Clip",
                 source_in = 0,
@@ -245,7 +245,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,
@@ -287,7 +287,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Overwritten",
                 source_in = 0,
@@ -327,7 +327,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip A",
                 source_in = 0,
@@ -344,7 +344,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip B",
                 source_in = 0,
@@ -392,7 +392,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip",
                 source_in = 0,
@@ -405,7 +405,7 @@ groups = {
             {
                 role = "audio",
                 channel = 0,
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip (Audio)",
                 source_in = 0,
@@ -480,7 +480,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,

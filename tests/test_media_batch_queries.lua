@@ -86,10 +86,10 @@ local now = os.time()
 db:exec(string.format(
     "INSERT INTO sequences (id, project_id, name, kind, created_at, modified_at, "
     .. "fps_numerator, fps_denominator, audio_sample_rate, width, height) "
-    .. "VALUES ('seq1', '%s', 'Seq', 'nested', %d, %d, 25, 1, 48000, 1920, 1080)",
+    .. "VALUES ('seq1', '%s', 'Seq', 'sequence', %d, %d, 25, 1, 48000, 1920, 1080)",
     project.id, now, now))
 
--- V13: each clip's nested_sequence_id ('mc_<media_id>') references a
+-- V13: each clip's source_sequence_id ('mc_<media_id>') references a
 -- master sequence wrapping the media. Create those masters via
 -- ensure_master with a stable id, plus add audio_sample_rate metadata
 -- that ensure_master requires.
@@ -135,7 +135,7 @@ local function make_clip(params)
         id = params.id,
         project_id = project.id,
         track_id = params.track_id,
-        nested_sequence_id = "mc_" .. params.media_id,
+        sequence_id = "mc_" .. params.media_id,
         owner_sequence_id = "seq1",
         timeline_start_frame = params.timeline_start,
         duration_frames = params.source_out - params.source_in,

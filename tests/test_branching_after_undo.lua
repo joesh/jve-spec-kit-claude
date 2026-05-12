@@ -39,7 +39,7 @@ local function init_db(path)
     assert(ok, err)
     ok, err = db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                                                playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d);]], now, now))
+                        VALUES ('default_sequence', 'default_project', 'Default Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d);]], now, now))
     assert(ok, err)
     ok, err = db:exec([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
                         VALUES ('track_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1);]])

@@ -51,7 +51,7 @@ db:exec(string.format(
     project_id, now, now
 ))
 db:exec(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('%s', '%s', 'Seq1', 'nested', 30, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('%s', '%s', 'Seq1', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d)",
     sequence_id, project_id, now, now
 ))
 db:exec(string.format(
@@ -60,7 +60,7 @@ db:exec(string.format(
 ))
 
 -- V13 placeholder master sequence + media_ref + media so clips below
--- can reference '_v13_placeholder_master' as their nested_sequence_id.
+-- can reference '_v13_placeholder_master' as their source_sequence_id.
 db:exec(string.format([[
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', '%s', 'placeholder', '_placeholder', 1000, 30, 1, 1920, 1080, 0, 'raw', %d, %d);
@@ -76,7 +76,7 @@ VALUES ('_v13_placeholder_mr', '%s', '_v13_placeholder_master', '_v13_placeholde
 -- Helper: insert a V13 clip row.
 local function insert_clip(id, opts)
     opts = opts or {}
-    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)")
+    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)")
     stmt:bind_value(1, id)
     stmt:bind_value(2, project_id)
     stmt:bind_value(3, sequence_id)

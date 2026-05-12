@@ -38,7 +38,7 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Sequence 1', 'nested',
+        'default_sequence', 'default_project', 'Sequence 1', 'sequence',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -73,7 +73,7 @@ local media = Media.create({
 assert(media:save(db), "failed to save media")
 
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "default_project", "Long Clip Master", 25, 1, 114567, "media_insert_origin")
 
 command_manager.init("default_sequence", "default_project")
@@ -83,7 +83,7 @@ local playhead = timeline_state.get_playhead_position()
 assert(playhead == 0, "playhead should start at frame 0 for new sequence")
 
 local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 insert_cmd:set_parameter("target_video_track_id", "video1")
 insert_cmd:set_parameter("timeline_start_frame", playhead)

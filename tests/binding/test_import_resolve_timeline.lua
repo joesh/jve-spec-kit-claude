@@ -56,7 +56,7 @@ assert_true("bootstrap project", db:exec([[
 ]]))
 assert_true("bootstrap sequence", db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'nested', 30, 1, 48000, 1920, 1080, 0, 0);
+    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0);
 ]]))
 
 command_manager.init('host_sequence', 'host_project')

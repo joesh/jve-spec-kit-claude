@@ -39,7 +39,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('rec_seq', 'proj', 'Timeline', 'nested',
+    VALUES ('rec_seq', 'proj', 'Timeline', 'sequence',
         24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now))
 db:exec(string.format([[

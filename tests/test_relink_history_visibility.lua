@@ -50,7 +50,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('%s', '%s', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
+    VALUES ('%s', '%s', 'Seq', 'sequence', 25, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('%s', '%s', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -68,9 +68,9 @@ local _Sequence = require("models.sequence")
 local master_seq_id = _Sequence.ensure_master(media_id, project_id)
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
     VALUES ('%s', '%s', 'Clip1', '%s', '%s', '%s', 0, 100, 100, 200, 1, 0, %d, %d, NULL, NULL, 'resample', 1.0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
     VALUES ('%s', '%s', 'Clip2', '%s', '%s', '%s', 100, 50, 300, 350, 1, 0, %d, %d, NULL, NULL, 'resample', 1.0);
 ]], clip_id_1, project_id, track_id, master_seq_id, seq_id, now, now,
     clip_id_2, project_id, track_id, master_seq_id, seq_id, now, now))

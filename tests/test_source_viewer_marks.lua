@@ -63,7 +63,7 @@ do
 end
 -- V13: ensure_master creates the master Sequence + V/A tracks + media_refs
 -- in one shot. video_stream / audio_streams read from media_refs (no
--- 'clips inside master' table — clips must be owned by a kind='nested' sequence).
+-- 'clips inside master' table — clips must be owned by a kind='sequence' sequence).
 local MC_TEST = Sequence.ensure_master("media_1", "project")
 local mc = Sequence.load(MC_TEST)
 assert(mc, "ensure_master should produce a loadable master")
@@ -188,7 +188,7 @@ check("nil mark_out persists after clear+reload", mc_reloaded.mark_out == nil)
 print("\n--- Marks on timeline (any sequence kind) ---")
 local tl = Sequence.create("Timeline", "project",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    {kind = "nested", audio_sample_rate = 48000 })
+    {kind = "sequence", audio_sample_rate = 48000 })
 assert(tl:save(), "Failed to save timeline")
 
 tl:set_in(10)

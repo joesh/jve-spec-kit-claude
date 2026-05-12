@@ -29,7 +29,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-edit', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-edit', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-master-v1', 'seq-master', 'V1', 'VIDEO', 1)"))
@@ -54,7 +54,7 @@ local clip_id = Clip.create({
     project_id = "p1",
     owner_sequence_id = "seq-edit",
     track_id = "trk-edit-v1",
-    nested_sequence_id = "seq-master",
+    sequence_id = "seq-master",
     name = "c",
     timeline_start_frame = 0,
     duration_frames = 100,
@@ -98,12 +98,12 @@ end)
 assert(not ok3, "source_in == source_out must refuse (source window must be non-empty)")
 
 -- assert_within_master_coverage: input validation.
--- nested_sequence_id is required.
+-- source_sequence_id is required.
 local ok_no_seq = pcall(Clip.assert_within_master_coverage, nil, 50, "test")
-assert(not ok_no_seq, "nil nested_sequence_id must refuse")
+assert(not ok_no_seq, "nil source_sequence_id must refuse")
 
 local ok_empty_seq = pcall(Clip.assert_within_master_coverage, "", 50, "test")
-assert(not ok_empty_seq, "empty nested_sequence_id must refuse")
+assert(not ok_empty_seq, "empty source_sequence_id must refuse")
 
 -- new_source_out must be a number; nil must produce an actionable error.
 local ok_nil_out, err_nil_out = pcall(Clip.assert_within_master_coverage, "seq-master", nil, "test-label")

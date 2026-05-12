@@ -20,7 +20,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-edit', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-edit', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-v1', 'seq-edit', 'V1', 'VIDEO', 1)"))
@@ -62,7 +62,7 @@ assert(type(good_id) == "string" and good_id ~= "",
 local ok, err = pcall(function()
     MediaRef.create({
         project_id = "p1",
-        owner_sequence_id = "seq-edit",  -- kind='nested' — violates "media_refs must be kind='master'"
+        owner_sequence_id = "seq-edit",  -- kind='sequence' — violates "media_refs must be kind='master'"
         track_id = "trk-v1",
         media_id = "med1",
         source_in_frame = 0,
@@ -79,8 +79,8 @@ assert(tostring(err):find("INV%-1"),
     "MediaRef.create error must name INV-1; got: " .. tostring(err))
 assert(tostring(err):find("seq%-edit"),
     "MediaRef.create error must name the offending owner_sequence_id; got: " .. tostring(err))
-assert(tostring(err):find("nested"),
-    "MediaRef.create error must name the actual kind ('nested'); got: " .. tostring(err))
+assert(tostring(err):find("sequence"),
+    "MediaRef.create error must name the actual kind ('sequence'); got: " .. tostring(err))
 
 -- Bad: owner_sequence_id references a sequence that doesn't exist. Model should
 -- assert with a clear "not found" message, not surface a raw FK error.

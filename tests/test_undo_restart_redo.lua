@@ -34,7 +34,7 @@ local function init_database(path)
             selected_clip_ids, selected_edge_infos, selected_gap_infos,
             current_sequence_number, created_at, modified_at
         ) VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'nested',
+            'default_sequence', 'default_project', 'Default Sequence', 'sequence',
             30, 1, 48000,
             1920, 1080, 0, 300, 0,
             '[]', '[]', '[]',

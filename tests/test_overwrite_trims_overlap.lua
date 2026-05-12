@@ -63,7 +63,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))
 
     assert(db:exec([[
@@ -114,7 +114,7 @@ local function build_fixture(project_policy, existing_clip_policy)
     -- within m-pre's 200-frame native duration.
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name, timeline_start_frame, duration_frames,
+            sequence_id, name, timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -136,7 +136,7 @@ local function load_clip(db, id)
     local stmt = db:prepare([[
         SELECT timeline_start_frame, duration_frames,
                source_in_frame, source_out_frame,
-               nested_sequence_id, fps_mismatch_policy, enabled
+               sequence_id, fps_mismatch_policy, enabled
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
@@ -181,7 +181,7 @@ local function run_case(label, new_clip_policy_arg, expected_new_policy,
 
     local result = overwrite.execute({
         sequence_id = ids.edit_id,
-        nested_sequence_id = ids.master_id,
+        source_sequence_id = ids.master_id,
         timeline_start_frame = 100,
         target_video_track_id = ids.edit_v1,
         fps_mismatch_policy = new_clip_policy_arg,

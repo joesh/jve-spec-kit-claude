@@ -44,7 +44,7 @@ db:exec(string.format([[
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
     VALUES
-      ('rec', 'proj', 'Record', 'nested', 24, 1, 48000, 1920, 1080,
+      ('rec', 'proj', 'Record', 'sequence', 24, 1, 48000, 1920, 1080,
        4242, 0, 1000, %d, %d),
       ('src', 'proj', 'SourceMaster', 'master', 24, 1, NULL, 1920, 1080,
        0, 0, 1000, %d, %d);

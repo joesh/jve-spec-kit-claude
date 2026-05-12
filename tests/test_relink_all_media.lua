@@ -41,7 +41,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('%s', '%s', 'Main', 'nested', 25, 1, 48000, 1920, 1080, 0, 500, 0, '[]', '[]', '[]', 0, %d, %d);
+    VALUES ('%s', '%s', 'Main', 'sequence', 25, 1, 48000, 1920, 1080, 0, 500, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('%s', '%s', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -120,21 +120,21 @@ local online_master = _Sequence.ensure_master(online_media.id, project_id)
 local offline_master = _Sequence.ensure_master(offline_media.id, project_id)
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Online-Shot', '%s', '%s', '%s',
         0, 100, 100, 200, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Offline-Shot1', '%s', '%s', '%s',
         100, 80, 50, 130, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id,
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)

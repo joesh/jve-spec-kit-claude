@@ -4,7 +4,7 @@
 -- nested edit sequence, the clips table has exactly 2 new rows (one V, one A —
 -- NOT per-channel — channels live in media_refs_channel_state / clip_channel_
 -- override and are resolved at playback, per FR-003 and resolver.md §CT-R5).
--- Both clips reference the master via nested_sequence_id; master_layer_track_id
+-- Both clips reference the master via source_sequence_id; master_layer_track_id
 -- is NULL (tracks master default); fps_mismatch_policy is non-NULL (frozen at
 -- Insert per data-model.md §Decisions). One clip_links.link_group_id groups
 -- them.
@@ -52,7 +52,7 @@ local function build_fixture(project_fps_mismatch_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))
 
     -- Tracks.
@@ -124,7 +124,7 @@ end
 
 local function load_clip_row(db, clip_id)
     local stmt = db:prepare([[
-        SELECT id, owner_sequence_id, track_id, nested_sequence_id,
+        SELECT id, owner_sequence_id, track_id, sequence_id,
                source_in_frame, source_out_frame,
                timeline_start_frame, duration_frames,
                master_layer_track_id, fps_mismatch_policy,
@@ -138,7 +138,7 @@ local function load_clip_row(db, clip_id)
         id                     = stmt:value(0),
         owner_sequence_id      = stmt:value(1),
         track_id               = stmt:value(2),
-        nested_sequence_id     = stmt:value(3),
+        source_sequence_id     = stmt:value(3),
         source_in_frame        = stmt:value(4),
         source_out_frame       = stmt:value(5),
         timeline_start_frame   = stmt:value(6),
@@ -186,7 +186,7 @@ local function run_case(label, project_policy, explicit_arg_policy,
 
     local result = insert_mod.execute({
         sequence_id = ids.edit_id,
-        nested_sequence_id = ids.master_id,
+        source_sequence_id = ids.master_id,
         timeline_start_frame = 0,
         target_video_track_id = ids.edit_v1,
         target_audio_track_id = ids.edit_a1,
@@ -226,9 +226,9 @@ local function run_case(label, project_policy, explicit_arg_policy,
         assert(c.owner_sequence_id == ids.edit_id, string.format(
             "clip %s owner_sequence_id=%s expected=%s",
             c.id, c.owner_sequence_id, ids.edit_id))
-        assert(c.nested_sequence_id == ids.master_id, string.format(
-            "clip %s nested_sequence_id=%s expected=%s",
-            c.id, c.nested_sequence_id, ids.master_id))
+        assert(c.source_sequence_id == ids.master_id, string.format(
+            "clip %s source_sequence_id=%s expected=%s",
+            c.id, c.source_sequence_id, ids.master_id))
         assert(c.master_layer_track_id == nil,
             string.format("clip %s master_layer_track_id must be NULL (inherit master default); got %s",
                 c.id, tostring(c.master_layer_track_id)))

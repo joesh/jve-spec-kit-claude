@@ -69,14 +69,14 @@ print("\n--- 1: Video clips with non-zero source_in ---")
 -- Source coords are at native media rate: 2189 * 60/24 = 5473 (rounded).
 -- clip rate = native media rate = 60/1 (not sequence rate).
 -- V13: clips no longer carry fps_*; rate comes from the nested master
--- sequence (kind='master') the clip references via nested_sequence_id.
+-- sequence (kind='master') the clip references via source_sequence_id.
 local video_clips = query_all([[
     SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
            ns.fps_numerator, ns.fps_denominator
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
-    JOIN sequences ns ON c.nested_sequence_id = ns.id
+    JOIN sequences ns ON c.sequence_id = ns.id
     WHERE s.name = 'resolve audio tracks tutorial'
       AND t.track_type = 'VIDEO' AND t.name = 'V1'
     ORDER BY c.timeline_start_frame
@@ -120,7 +120,7 @@ local audio_clips = query_all([[
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
-    JOIN sequences ns ON c.nested_sequence_id = ns.id
+    JOIN sequences ns ON c.sequence_id = ns.id
     JOIN media_refs mr ON mr.owner_sequence_id = ns.id
     JOIN media m ON mr.media_id = m.id
     WHERE s.name = 'resolve audio tracks tutorial'
@@ -206,7 +206,7 @@ local fog_v1 = query_all([[
       AND c.source_in_frame != 0
       AND EXISTS (
         SELECT 1 FROM media_refs mr JOIN media m ON mr.media_id = m.id
-        WHERE mr.owner_sequence_id = c.nested_sequence_id
+        WHERE mr.owner_sequence_id = c.sequence_id
           AND m.name = 'FogTL.mp4'
       )
     ORDER BY c.timeline_start_frame
@@ -224,7 +224,7 @@ local fog_v2 = query_all([[
     WHERE s.name = 'Timeline 1' AND t.name = 'V2'
       AND EXISTS (
         SELECT 1 FROM media_refs mr JOIN media m ON mr.media_id = m.id
-        WHERE mr.owner_sequence_id = c.nested_sequence_id
+        WHERE mr.owner_sequence_id = c.sequence_id
           AND m.name = 'FogTL.mp4'
       )
 ]])
@@ -270,7 +270,7 @@ print(string.format("  PASS: WAV TC = %.1fs (01:00:03.6)", wav_tc))
 -- 6. Total clip count (sanity)
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 6: Total counts ---")
--- V13: every row in clips is a "timeline" row (clips must be owned by a kind='nested' sequence).
+-- V13: every row in clips is a "timeline" row (clips must be owned by a kind='sequence' sequence).
 local r3 = query_one("SELECT COUNT(*) FROM clips")
 assert(r3[1] == 126, "expected 126 timeline clips, got " .. tostring(r3[1]))
 local r4 = query_one("SELECT COUNT(*) FROM media")

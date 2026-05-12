@@ -25,7 +25,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -97,7 +97,7 @@ local ok2, err2 = pcall(function()
     command_manager.begin_command_event("test")
     command_manager.execute("AddClipsToSequence", {
         groups = {{duration = 50, clips = {{
-            role = "video", media_id = "media_1", nested_sequence_id = master_1,
+            role = "video", media_id = "media_1", sequence_id = master_1,
             project_id = "project", name = "Clip", source_in = 0, source_out = 50,
             duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
         }}}},
@@ -120,7 +120,7 @@ local ok3, err3 = pcall(function()
     command_manager.begin_command_event("test")
     command_manager.execute("AddClipsToSequence", {
         groups = {{duration = 50, clips = {{
-            role = "video", media_id = "media_1", nested_sequence_id = master_1,
+            role = "video", media_id = "media_1", sequence_id = master_1,
             project_id = "project", name = "Clip", source_in = 0, source_out = 50,
             duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
         }}}},
@@ -142,7 +142,7 @@ print("\nTest: AddClipsToSequence with invalid edit_type asserts")
 command_manager.begin_command_event("test")
 local result2 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
     }}}},
@@ -164,7 +164,7 @@ print("\nTest: AddClipsToSequence with invalid arrangement asserts")
 command_manager.begin_command_event("test")
 local result3 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
     }}}},
@@ -187,7 +187,7 @@ print("\nTest: AddClipsToSequence with non-integer position asserts")
 command_manager.begin_command_event("test")
 local result4 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
     }}}},
@@ -209,7 +209,7 @@ print("\nTest: AddClipsToSequence with clip missing target_track_id asserts")
 command_manager.begin_command_event("test")
 local result5 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1,
         -- target_track_id = nil (missing)
@@ -232,7 +232,7 @@ print("\nTest: AddClipsToSequence with non-integer group.duration asserts")
 command_manager.begin_command_event("test")
 local result6 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = "fifty", clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = 0, source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
     }}}},
@@ -254,7 +254,7 @@ print("\nTest: AddClipsToSequence with non-integer clip.source_in asserts")
 command_manager.begin_command_event("test")
 local result7 = command_manager.execute("AddClipsToSequence", {
     groups = {{duration = 50, clips = {{
-        role = "video", media_id = "media_1", nested_sequence_id = master_1,
+        role = "video", media_id = "media_1", sequence_id = master_1,
         project_id = "project", name = "Clip", source_in = "zero", source_out = 50,
         duration = 50, fps_numerator = 24, fps_denominator = 1, target_track_id = "track_v1"
     }}}},

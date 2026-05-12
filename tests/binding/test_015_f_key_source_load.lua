@@ -45,8 +45,8 @@ db:exec(string.format([[
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
     VALUES
-      ('rec', 'proj', 'Record', 'nested', 25, 1, 48000, 1920, 1080, 100, 0, 1500, %d, %d),
-      ('msa', 'proj', 'A012',   'master', 24, 1,  NULL, 1920, 1080,   0, 0,  300, %d, %d),
+      ('rec', 'proj', 'Record', 'sequence', 25, 1, 48000, 1920, 1080, 100, 0, 1500, %d, %d),
+      ('msa', 'proj', 'A012',   'master', 24, 1, 48000, 1920, 1080,   0, 0,  300, %d, %d),
       ('msb', 'proj', 'A037',   'master', 24, 1,  NULL, 1920, 1080,   0, 0,  300, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

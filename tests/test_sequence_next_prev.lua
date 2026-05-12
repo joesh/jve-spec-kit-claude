@@ -30,7 +30,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('seq', 'proj', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
+    VALUES('seq', 'proj', 'Timeline', 'sequence', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            0, 0)
 ]]))
 
@@ -74,7 +74,7 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_v' WHERE id 
 INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_v', 'proj', 'master_media_v', 'master_v_media_v', 'media_v', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', 'master_media_v', 0, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', 'master_media_v', 200, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', 'master_media_v', 50, 100, 10, 110, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),

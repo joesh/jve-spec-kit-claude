@@ -32,7 +32,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[ 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[ 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -75,7 +75,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 -- Create masterclip sequence for this media (required for Overwrite)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 1000, "media_1")
 
 -- Create Clip A (0-100 frames)
@@ -84,7 +84,7 @@ local clip_a = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
@@ -102,7 +102,7 @@ local clip_b = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         timeline_start_frame = 100,
         duration_frames = 100,
         source_in_frame = 100,
@@ -123,14 +123,14 @@ print("Created Clip A (0-100) and Clip B (100-200)")
 
 -- Set marks on masterclip sequence — Overwrite reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(100)
 mc_seq:save()
 
 local cmd = Command.create("Overwrite", "project")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("timeline_start_frame", 50)

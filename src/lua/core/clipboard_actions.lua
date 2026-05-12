@@ -98,7 +98,7 @@ local function copy_mark_range()
             original_id = clip.id,
             track_id = clip.track_id,
             frame_rate = clip.frame_rate,
-            nested_sequence_id = clip.nested_sequence_id,
+            sequence_id = clip.sequence_id,
             master_layer_track_id = clip.master_layer_track_id,
             master_audio_track_id = clip.master_audio_track_id,
             fps_mismatch_policy = clip.fps_mismatch_policy,
@@ -161,7 +161,7 @@ local function copy_timeline_selection()
             assert(type(clip.timeline_start) == "number", "clipboard_actions: clip.timeline_start must be integer")
             local start_frame = clip.timeline_start
 
-            if clip.nested_sequence_id == nil then
+            if clip.sequence_id == nil then
                 goto continue
             end
 
@@ -176,7 +176,7 @@ local function copy_timeline_selection()
                 original_id = clip.id,
                 track_id = clip.track_id,
                 frame_rate = clip.frame_rate,
-                nested_sequence_id = clip.nested_sequence_id,
+                sequence_id = clip.sequence_id,
                 master_layer_track_id = clip.master_layer_track_id,
                 master_audio_track_id = clip.master_audio_track_id,
                 fps_mismatch_policy = clip.fps_mismatch_policy,

@@ -30,7 +30,7 @@ assert(db:exec([[
     VALUES ('proj1', 'Test Project', 'resample', 0, 0);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                           audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Timeline', 'sequence', 24, 1, 48000, 1920, 1080,
             0, 0);
 ]]))
 

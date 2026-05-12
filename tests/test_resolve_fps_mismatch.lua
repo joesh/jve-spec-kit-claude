@@ -30,7 +30,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('e24', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('e24', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('m-v1', 'm25', 'V1', 'VIDEO', 1)"))
@@ -51,12 +51,12 @@ assert(db:exec(
 -- Clip A: resample.    Expected duration_frames (outer 24fps) = round(100 * 24/25) = 96.
 -- Clip B: passthrough. Expected duration_frames (outer 24fps) = 100 (same int).
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-resample', 'p1', 'e24', 'e-v1', 'm25', 'A', 0, 96, 0, 100, 'resample', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-passthru', 'p1', 'e24', 'e-v1', 'm25', 'B', 200, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))

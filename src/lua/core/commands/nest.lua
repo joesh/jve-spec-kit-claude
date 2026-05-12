@@ -2,7 +2,7 @@
 ---
 --- Per FR-010 / contracts/commands.md §Nest:
 ---   Args: { sequence_id, selected_clip_ids }
----     sequence_id MUST reference a kind='nested' sequence (rule 2.29).
+---     sequence_id MUST reference a kind='sequence' sequence (rule 2.29).
 ---     all selected_clip_ids belong to that sequence.
 ---
 --- First-landing scope: all selected clips must be on the same track.
@@ -10,14 +10,14 @@
 --- is a follow-up — refused with a clear message.
 ---
 --- Mutation:
----   1. Create new sequence S (kind='nested'; timebase + dimensions
+---   1. Create new sequence S (kind='sequence'; timebase + dimensions
 ---      copied from the parent).
 ---   2. Create one track on S matching the source track's type/index.
 ---   3. Move each selected clip into S: owner_sequence_id ← S;
 ---      track_id ← S's new track; timeline_start_frame translated by
 ---      -min_selected_start (so S's content starts at frame 0).
 ---   4. INSERT one new clip on the parent at min_selected_start with
----      nested_sequence_id = S; duration = (max_end - min_start);
+---      sequence_id = S; duration = (max_end - min_start);
 ---      source_in = 0; source_out = duration.
 ---
 --- Undo capture: new_sequence_id, new_clip_id, moved clips' priors,
@@ -46,7 +46,7 @@ end
 -- selected clip into the newly-created nested sequence. Goes via the
 -- model-layer SQL so it stays out of command code.
 local function migrate_clip_to_S(clip_id, new_owner, new_track, new_start)
-    -- clips must be owned by a kind='nested' sequence — new_owner has kind='nested'. The
+    -- clips must be owned by a kind='sequence' sequence — new_owner has kind='sequence'. The
     -- video-overlap trigger fires on UPDATE; new_track is empty (we just
     -- created the track) so no collision is possible.
     Clip.update(clip_id, {
@@ -59,15 +59,15 @@ local function migrate_clip_to_S(clip_id, new_owner, new_track, new_start)
     Clip.transfer_owner(clip_id, new_owner)
 end
 
--- Resolve the parent sequence and refuse if it isn't a non-master ('nested').
+-- Resolve the parent sequence and refuse if it isn't a non-master ('sequence').
 -- Masters hold media_refs, not clips, so Nest doesn't apply to them.
 local function load_parent_sequence(sequence_id)
     local parent = Sequence.find(sequence_id)
     assert(parent, string.format(
         "Nest: parent sequence %s not found", sequence_id))
-    assert(parent.kind == "nested", string.format(
+    assert(parent.kind == "sequence", string.format(
         "Nest: parent sequence %s has kind='%s'; Nest is valid only on "
-        .. "non-master (kind='nested') sequences (masters hold media_refs, "
+        .. "non-master (kind='sequence') sequences (masters hold media_refs, "
         .. "not clips).", sequence_id, tostring(parent.kind)))
     return parent
 end
@@ -121,7 +121,7 @@ local function create_nested_sequence(parent, new_seq_id)
           fps_denominator = parent.fps_denominator },
         parent.width, parent.height,
         { id          = new_seq_id,
-          kind        = "nested",
+          kind        = "sequence",
           audio_sample_rate  = parent.audio_sample_rate,
         })
     assert(s:save(), "Nest: failed to save new nested sequence")
@@ -170,7 +170,7 @@ local function insert_replacement_clip(parent, sequence_id, track_id,
         project_id            = parent.project_id,
         owner_sequence_id     = sequence_id,
         track_id              = track_id,
-        nested_sequence_id    = new_seq_id,
+        sequence_id    = new_seq_id,
         name                  = "Nested",
         timeline_start_frame  = min_start,
         duration_frames       = span,

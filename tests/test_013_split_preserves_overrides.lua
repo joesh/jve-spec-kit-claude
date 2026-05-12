@@ -40,7 +40,7 @@ local function build_fixture(owner_fps_num, nested_fps_num)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', %d, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', %d, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-v2', 'm', 'V2', 'VIDEO', 2),
@@ -64,7 +64,7 @@ local function seed_clip(db, clip_id, policy, master_layer_track_id,
     local master_val = master_layer_track_id and ("'" .. master_layer_track_id .. "'") or "NULL"
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -89,7 +89,7 @@ local function load_clip(db, id)
         SELECT timeline_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy, track_id,
-               owner_sequence_id, nested_sequence_id
+               owner_sequence_id, sequence_id
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
@@ -103,7 +103,7 @@ local function load_clip(db, id)
         fps_mismatch_policy   = stmt:value(5),
         track_id              = stmt:value(6),
         owner_sequence_id     = stmt:value(7),
-        nested_sequence_id    = stmt:value(8),
+        source_sequence_id    = stmt:value(8),
     }
     stmt:finalize()
     return r
@@ -175,7 +175,7 @@ do
     assert(left.track_id == right.track_id and left.track_id == "e-v1",
         "both halves on the same owner track")
     assert(left.owner_sequence_id  == "e" and right.owner_sequence_id  == "e")
-    assert(left.nested_sequence_id == "m" and right.nested_sequence_id == "m")
+    assert(left.source_sequence_id == "m" and right.source_sequence_id == "m")
 
     -- Channel overrides — same rows on both halves.
     local left_ovs  = load_overrides(db, "c")

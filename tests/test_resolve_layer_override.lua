@@ -22,7 +22,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 
 for _, name in ipairs({"V1", "V2", "V3"}) do
     local idx = tonumber(name:sub(2))
@@ -51,14 +51,14 @@ assert(db:exec(
 
 -- Clip A: no override, should pick default (V1 → angle-V1.mov).
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "master_layer_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, "
     .. "created_at, modified_at) "
     .. "VALUES ('c-A', 'p1', 'e', 'e-v1', 'm', 'A', 0, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0)"))
 -- Clip B: override to V2.
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
     .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "master_layer_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, "
     .. "created_at, modified_at) "

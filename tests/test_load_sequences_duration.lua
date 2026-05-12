@@ -39,7 +39,7 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Timeline', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Timeline', 'sequence', 24, 1, 48000, 1920, 1080,
         50, 500, 100, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -63,13 +63,13 @@ UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHE
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 200505, 0, 200505, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_a', 'proj1', 'A', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Clip B: frames 200-499 (duration 300, ends at 500)
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_b', 'proj1', 'B', 'v2', '_v13_placeholder_master', 'seq1', 200, 300, 0, 300, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
@@ -84,7 +84,7 @@ check("duration = 500 (max of 100, 500)", s.duration == 500)
 print("\n--- Field presence ---")
 check("id", s.id == "seq1")
 check("name", s.name == "Timeline")
-check("kind", s.kind == "nested")
+check("kind", s.kind == "sequence")
 check("frame_rate table", type(s.frame_rate) == "table")
 check("fps_numerator=24", s.frame_rate.fps_numerator == 24)
 check("fps_denominator=1", s.frame_rate.fps_denominator == 1)
@@ -99,7 +99,7 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 25, 1, 48000, 1920, 1080,
+    VALUES ('seq_empty', 'proj1', 'Empty', 'sequence', 25, 1, 48000, 1920, 1080,
         0, 250, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -119,7 +119,7 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq_drp', 'proj1', 'DRP', 'nested', 25, 1, 48000, 1920, 1080,
+    VALUES ('seq_drp', 'proj1', 'DRP', 'sequence', 25, 1, 48000, 1920, 1080,
         0, 250, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 db:exec([[
@@ -127,7 +127,7 @@ db:exec([[
     VALUES ('v_drp', 'seq_drp', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('drp_clip', 'proj1', 'DRP', 'v_drp', '_v13_placeholder_master', 'seq_drp', 89849, 12345, 188160, 200505, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 

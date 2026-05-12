@@ -289,7 +289,7 @@ function M.create(opts)
     local frame_rate = {fps_numerator = cfg.fps_numerator, fps_denominator = cfg.fps_denominator}
     local sequence = Sequence.create(cfg.sequence_name, cfg.project_id, frame_rate, cfg.width, cfg.height, {
         id = cfg.sequence_id,
-        kind = "nested",
+        kind = "sequence",
         audio_sample_rate = cfg.audio_sample_rate,
         view_start_frame = cfg.view_start_frame,
         view_duration_frames = cfg.view_duration_frames,
@@ -350,7 +350,7 @@ function M.create(opts)
     end
 
 
-    -- Create clips (V13: nested_sequence_id references a master sequence,
+    -- Create clips (V13: source_sequence_id references a master sequence,
     -- source_in/out are in that master's timebase).
     for _, key in ipairs(cfg.clips.order or {}) do
         local c = cfg.clips[key]
@@ -364,7 +364,7 @@ function M.create(opts)
             name = c.name,
             track_id = track.id,
             owner_sequence_id = cfg.sequence_id,
-            nested_sequence_id = nested_seq_id,
+            sequence_id = nested_seq_id,
             timeline_start_frame = c.timeline_start,
             duration_frames = c.duration,
             source_in_frame = c.source_in,

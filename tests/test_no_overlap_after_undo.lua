@@ -39,7 +39,7 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080,
         0, 1000, 0, '[]', '[]', '[]', 0, %d, %d);
 ]], now, now))
 
@@ -111,7 +111,7 @@ UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHE
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('c1', 'proj1', 'A', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('c2', 'proj1', 'B', 'v1', '_v13_placeholder_master', 'seq1', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('c3', 'proj1', 'C', 'v1', '_v13_placeholder_master', 'seq1', 200, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
@@ -143,7 +143,7 @@ db:exec("DELETE FROM clips")
 -- ── Test 2: Delete first clip then undo — positions preserved ──
 print("\n--- Delete first clip + undo ---")
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('d1', 'proj1', 'First', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('d2', 'proj1', 'Second', 'v1', '_v13_placeholder_master', 'seq1', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now))
@@ -172,7 +172,7 @@ db:exec("DELETE FROM clips")
 -- ── Test 3: Multiple undo/redo cycles — invariant holds throughout ──
 print("\n--- Multiple undo/redo cycles ---")
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('m1', 'proj1', 'A', 'v1', '_v13_placeholder_master', 'seq1', 0, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('m2', 'proj1', 'B', 'v1', '_v13_placeholder_master', 'seq1', 50, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('m3', 'proj1', 'C', 'v1', '_v13_placeholder_master', 'seq1', 100, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);

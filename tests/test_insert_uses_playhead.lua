@@ -44,7 +44,7 @@ project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,
     {  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000 })
+    { kind = "sequence", audio_sample_rate = 48000 })
 seq:save()
 
 Track.create_video("V1", seq.id, { index = 1 }):save()
@@ -65,7 +65,7 @@ local media = Media.create({
 })
 media:save(db)
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     project.id, "Video Master", 30, 1, 100, "media_video")
 
 -- Init command system + real timeline_state
@@ -98,7 +98,7 @@ assert(video_track_id, "Should have a VIDEO track")
 print("Test: Insert without timeline_start_frame uses playhead position")
 
 -- Set marks on masterclip sequence — Insert reads timing from these
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(50)
@@ -106,7 +106,7 @@ mc_seq:save()
 
 command_manager.begin_command_event("script")
 local result = command_manager.execute("Insert", {
-    source_sequence_id = nested_sequence_id,
+    source_sequence_id = source_sequence_id,
     target_video_track_id = video_track_id,
     sequence_id = seq.id,
     project_id = project.id,

@@ -41,13 +41,13 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, created_at, modified_at)
-    VALUES ('rec', 'proj', 'Record', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('rec', 'proj', 'Record', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, created_at, modified_at)
-    VALUES ('src', 'proj', 'Source', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('src', 'proj', 'Source', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 
 -- Record tracks: V1 + A1-A3

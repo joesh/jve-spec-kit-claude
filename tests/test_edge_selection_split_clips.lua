@@ -25,7 +25,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24000, 1001, 48000,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24000, 1001, 48000,
         1920, 1080, 0, 3000, 500, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -57,7 +57,7 @@ local _MC = _Sequence.ensure_master("med1", "proj1")
 -- Create linked clips: V1 [video 0..1000] linked to A1 [audio 0..1000]
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
-        owner_sequence_id, nested_sequence_id,
+        owner_sequence_id, sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
@@ -69,7 +69,7 @@ db:exec(string.format([[
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
-        owner_sequence_id, nested_sequence_id,
+        owner_sequence_id, sequence_id,
         timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)

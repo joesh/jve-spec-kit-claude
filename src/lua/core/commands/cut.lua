@@ -82,7 +82,7 @@ local function build_clipboard_payload(clip_ids)
     local payloads, earliest = {}, math.huge
     for _, clip_id in ipairs(clip_ids) do
         local clip = Clip.load_optional(clip_id)
-        if clip and clip.nested_sequence_id then
+        if clip and clip.sequence_id then
             earliest = math.min(earliest, clip.timeline_start)
             assert(clip.frame_rate
                 and clip.frame_rate.fps_numerator
@@ -93,7 +93,7 @@ local function build_clipboard_payload(clip_ids)
                 original_id           = clip.id,
                 track_id              = clip.track_id,
                 frame_rate            = clip.frame_rate,
-                nested_sequence_id    = clip.nested_sequence_id,
+                sequence_id    = clip.sequence_id,
                 master_layer_track_id = clip.master_layer_track_id,
                 master_audio_track_id = clip.master_audio_track_id,
                 fps_mismatch_policy   = clip.fps_mismatch_policy,

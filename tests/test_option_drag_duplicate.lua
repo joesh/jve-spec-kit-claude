@@ -20,7 +20,7 @@ local BASE_DATA_SQL = [[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested',
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence',
             30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES
         ('video1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0),
@@ -60,9 +60,9 @@ local function create_clip(params)
     assert(media:save(db))
 
     -- Create masterclip sequence for this media (required for Overwrite)
-    local nested_sequence_id = test_env.create_test_masterclip_sequence(
+    local source_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', params.media_id .. ' Master', 30, 1, params.duration_value, params.media_id)
-    masterclip_ids[params.media_id] = nested_sequence_id
+    masterclip_ids[params.media_id] = source_sequence_id
 
     local Clip = require('models.clip')
     local clip_id = Clip.create({
@@ -75,7 +75,7 @@ local function create_clip(params)
         duration_frames = params.duration_value or 0,
         source_in_frame = params.source_in_value or 0,
         source_out_frame = params.source_out_value or params.duration_value or 0,
-        nested_sequence_id = nested_sequence_id,
+        sequence_id = source_sequence_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -97,7 +97,7 @@ do
     mc:set_in(0); mc:set_out(1000); mc:save()
 end
 local overwrite_cmd = Command.create('Overwrite', 'default_project')
-overwrite_cmd:set_parameter('nested_sequence_id', masterclip_ids['media_src'])
+overwrite_cmd:set_parameter('source_sequence_id', masterclip_ids['media_src'])
 overwrite_cmd:set_parameter('target_video_track_id', 'video2')
 overwrite_cmd:set_parameter('timeline_start_frame', 1000)
 overwrite_cmd:set_parameter('project_id', 'default_project')
@@ -145,7 +145,7 @@ local command_specs = {
         parameters = {
             target_video_track_id = 'video2',
             timeline_start_frame = 500,
-            nested_sequence_id = masterclip_ids['media_src_a'],
+            source_sequence_id = masterclip_ids['media_src_a'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,
@@ -156,7 +156,7 @@ local command_specs = {
         parameters = {
             target_video_track_id = 'video2',
             timeline_start_frame = 3200,
-            nested_sequence_id = masterclip_ids['media_src_b'],
+            source_sequence_id = masterclip_ids['media_src_b'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
             advance_playhead = false,

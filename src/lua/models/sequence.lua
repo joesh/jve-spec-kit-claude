@@ -74,9 +74,9 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     start_tc = math.floor(start_tc)
 
     -- Rule 2.13: kind is required, no default. Schema V9 CHECK restricts to
-    -- ('master', 'nested'); caller must pick.
-    assert(opts.kind == "master" or opts.kind == "nested",
-        "Sequence.create: opts.kind must be 'master' or 'nested' (V9 schema); got "
+    -- ('master', 'sequence'); caller must pick.
+    assert(opts.kind == "master" or opts.kind == "sequence",
+        "Sequence.create: opts.kind must be 'master' or 'sequence' (V9 schema); got "
         .. tostring(opts.kind))
     -- audio_sample_rate is required for every sequence EXCEPT a master
     -- whose source media has no audio (kind='master' + no audio media_refs
@@ -235,8 +235,8 @@ end
 -- Enforce the master-only NULL window for audio_sample_rate / width / height
 -- and the kind whitelist. Throws actionable assertions on violation.
 local function validate_save_invariants(self)
-    assert(self.kind == "master" or self.kind == "nested",
-        "Sequence.save: kind must be 'master' or 'nested' (V9); got " .. tostring(self.kind))
+    assert(self.kind == "master" or self.kind == "sequence",
+        "Sequence.save: kind must be 'master' or 'sequence' (V9); got " .. tostring(self.kind))
 
     if self.audio_sample_rate ~= nil then
         assert(type(self.audio_sample_rate) == "number" and self.audio_sample_rate > 0,
@@ -520,10 +520,10 @@ function Sequence.set_undo_cursor_for_project(project_id, cursor_value)
     -- Per-sequence undo cursor was scoped to non-master sequences (the
     -- user's edit timelines). V13 narrowed `kind` from {timeline,
     -- masterclip,compound,multicam} to {master,nested}; the
-    -- non-master set is now exactly kind='nested'.
+    -- non-master set is now exactly kind='sequence'.
     local stmt = assert(conn:prepare([[
         UPDATE sequences SET current_sequence_number = ?
-        WHERE project_id = ? AND kind = 'nested'
+        WHERE project_id = ? AND kind = 'sequence'
     ]]), "Sequence.set_undo_cursor_for_project: failed to prepare")
     stmt:bind_value(1, cursor_value)
     stmt:bind_value(2, project_id)
@@ -555,12 +555,12 @@ end
 function Sequence.find_most_recent()
     local conn = resolve_db()
 
-    -- Filter to non-master sequences (kind='nested'). Per V13 the
-    -- "timeline" kind narrows to 'nested'; masters are not listed in
+    -- Filter to non-master sequences (kind='sequence'). Per V13 the
+    -- "timeline" kind narrows to 'sequence'; masters are not listed in
     -- the recent-sequences UI surface this serves.
     local stmt = assert(conn:prepare([[
         SELECT id FROM sequences
-        WHERE kind = 'nested'
+        WHERE kind = 'sequence'
         ORDER BY modified_at DESC, created_at DESC, id ASC
         LIMIT 1
     ]]), "Sequence.find_most_recent: failed to prepare query")
@@ -1262,7 +1262,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
                 local mr = {
                     id                = row.id,
                     track_id          = track.id,
-                    nested_sequence_id = self.id,
+                    sequence_id = self.id,
                     timeline_start    = row.timeline_start,
                     duration          = row.duration,
                     source_in         = row.source_in,
@@ -1708,7 +1708,7 @@ end
 --   media_refs' max if no video.) Computed via the existing
 --   Sequence.native_duration_for_medium helper which already returns
 --   the correct value for either medium.
--- For non-master sequences (kind='nested'): max(timeline_start +
+-- For non-master sequences (kind='sequence'): max(timeline_start +
 --   duration) across track clips, computed by compute_content_end().
 -- @return integer  0 if no content
 function Sequence:content_duration()
@@ -1756,7 +1756,7 @@ end
 -- Walks the clip → nested sequence → (recurse) → media_ref → media chain for
 -- a given sequence and time range. Single code path for playback + export
 -- (FR-019). Dispatches on sequences.kind: 'master' iterates media_refs,
--- 'nested' iterates clips + recurses.
+-- 'sequence' iterates clips + recurses.
 --
 -- Rule 2.5: top-level reads as a high-level algorithm; each piece of intent
 -- is a named helper.
@@ -1938,7 +1938,7 @@ end
 -- with many clips is deterministic (G-R11).
 local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
     local stmt = db:prepare([[
-        SELECT c.id, c.track_id, c.nested_sequence_id,
+        SELECT c.id, c.track_id, c.sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -1964,7 +1964,7 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
         rows[#rows + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            nested_sequence_id = stmt:value(2),
+            sequence_id = stmt:value(2),
             timeline_start = stmt:value(3),
             duration = stmt:value(4),
             source_in = stmt:value(5),
@@ -2151,13 +2151,13 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                        and c.track_id ~= audio_filter_for_a
         if not v_filtered and not a_filtered then
             -- G-R5 selector validation: both V layer and A audio track,
-            -- if non-NULL, must point at a live track of c.nested_sequence_id.
+            -- if non-NULL, must point at a live track of c.sequence_id.
             if c.master_layer_track_id then
-                assert_track_ref_valid(db, c.id, c.nested_sequence_id,
+                assert_track_ref_valid(db, c.id, c.sequence_id,
                     c.master_layer_track_id, "master_layer_track_id")
             end
             if c.master_audio_track_id then
-                assert_track_ref_valid(db, c.id, c.nested_sequence_id,
+                assert_track_ref_valid(db, c.id, c.sequence_id,
                     c.master_audio_track_id, "master_audio_track_id")
             end
 
@@ -2172,14 +2172,14 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                 local kind_stmt = db:prepare(
                     "SELECT kind FROM sequences WHERE id = ?")
                 assert(kind_stmt, "Sequence.resolve (channel_index < master audio channel count): kind prepare failed")
-                kind_stmt:bind_value(1, c.nested_sequence_id)
+                kind_stmt:bind_value(1, c.sequence_id)
                 assert(kind_stmt:exec(), "Sequence.resolve (channel_index < master audio channel count): kind exec failed")
                 local nk
                 if kind_stmt:next() then nk = kind_stmt:value(0) end
                 kind_stmt:finalize()
                 if nk == "master" then
                     local channel_count = Sequence.count_master_audio_channels(
-                        c.nested_sequence_id)
+                        c.sequence_id)
                     local Override = require("models.clip_channel_override")
                     for _, ov in ipairs(Override.find_all(c.id)) do
                         assert(ov.channel_index < channel_count, string.format(
@@ -2190,7 +2190,7 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
                             .. "shrank since the override was set; clear "
                             .. "or migrate the override.",
                             c.id, ov.channel_index,
-                            c.nested_sequence_id, channel_count))
+                            c.sequence_id, channel_count))
                     end
                 end
             end
@@ -2200,7 +2200,7 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             -- this clip's per-clip override.
             local layer_for_inner = c.master_layer_track_id
             if layer_for_inner == nil then
-                layer_for_inner = fetch_default_video_layer(db, c.nested_sequence_id)
+                layer_for_inner = fetch_default_video_layer(db, c.sequence_id)
             end
 
             -- Audio-track selector at THIS clip's directly-referenced level.
@@ -2226,7 +2226,7 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             for i, v in ipairs(outer_chain) do inner_chain[i] = v end
             inner_chain[#inner_chain + 1] = c.id
 
-            local inner = resolve_seq_range(db, c.nested_sequence_id,
+            local inner = resolve_seq_range(db, c.sequence_id,
                 c.source_in, c.source_out, context, inner_chain,
                 layer_for_inner, audio_for_inner)
 

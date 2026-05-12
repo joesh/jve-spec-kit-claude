@@ -69,7 +69,7 @@ function M.calculate_state_hash(project_id, sequence_id)
         append_query([[
             SELECT c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
                    c.enabled, c.source_in_frame, c.source_out_frame,
-                   c.nested_sequence_id, c.master_layer_track_id,
+                   c.sequence_id, c.master_layer_track_id,
                    c.master_audio_track_id, c.fps_mismatch_policy
             FROM clips c
             JOIN tracks t ON c.track_id = t.id
@@ -103,7 +103,7 @@ function M.calculate_state_hash(project_id, sequence_id)
         append_query([[
             SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
                    c.enabled, c.source_in_frame, c.source_out_frame,
-                   c.nested_sequence_id, c.master_layer_track_id,
+                   c.sequence_id, c.master_layer_track_id,
                    c.master_audio_track_id, c.fps_mismatch_policy
             FROM clips c
             JOIN tracks t ON c.track_id = t.id

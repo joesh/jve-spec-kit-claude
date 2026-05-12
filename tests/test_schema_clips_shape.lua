@@ -1,5 +1,5 @@
 -- T003 (013): clips column changes per data-model.md.
--- DROPPED: clip_kind, media_id, offline. RENAMED: master_clip_id → nested_sequence_id.
+-- DROPPED: clip_kind, media_id, offline. RENAMED: master_clip_id → sequence_id.
 -- ADDED: master_layer_track_id (FK, ON DELETE SET NULL), fps_mismatch_policy (nullable).
 -- NO DEFAULT on state columns (rule 2.13); name is NOT NULL.
 -- Expected to FAIL until T008 lands.
@@ -40,12 +40,12 @@ for _, dead in ipairs({"clip_kind", "media_id", "offline", "master_clip_id"}) do
 end
 
 -- New columns must exist.
-assert(cols["nested_sequence_id"], "clips.nested_sequence_id missing")
+assert(cols["sequence_id"], "clips.sequence_id missing")
 assert(cols["master_layer_track_id"], "clips.master_layer_track_id missing")
 assert(cols["fps_mismatch_policy"], "clips.fps_mismatch_policy missing")
 
 -- Nullability.
-assert(cols["nested_sequence_id"].notnull == 1, "clips.nested_sequence_id must be NOT NULL")
+assert(cols["sequence_id"].notnull == 1, "clips.sequence_id must be NOT NULL")
 assert(cols["master_layer_track_id"].notnull == 0, "clips.master_layer_track_id must be nullable")
 -- fps_mismatch_policy is NOT NULL on the clip: Insert computes duration_frames
 -- under a specific policy and writes it here; flipping later is a structural
@@ -53,7 +53,7 @@ assert(cols["master_layer_track_id"].notnull == 0, "clips.master_layer_track_id 
 assert(cols["fps_mismatch_policy"].notnull == 1, "clips.fps_mismatch_policy must be NOT NULL")
 
 -- Source timebase (fps_numerator/fps_denominator) must NOT live on clips —
--- it's dereferenced from nested_sequence_id to avoid denormalization.
+-- it's dereferenced from sequence_id to avoid denormalization.
 assert(cols["fps_numerator"] == nil, "clips.fps_numerator should not exist (dereferenceable)")
 assert(cols["fps_denominator"] == nil, "clips.fps_denominator should not exist (dereferenceable)")
 

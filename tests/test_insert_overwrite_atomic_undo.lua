@@ -36,7 +36,7 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
@@ -96,7 +96,7 @@ do
     -- bucket via set_parameter.
     local args = {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
     }
     local cmd = {
@@ -135,7 +135,7 @@ do
     -- Owner has only A1 → 2 tracks auto-created in plan (A2, A3).
     local args = {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
+        source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "expanded",
     }

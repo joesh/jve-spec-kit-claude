@@ -109,7 +109,7 @@ INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominato
     view_start_frame, view_duration_frames, playhead_frame,
     selected_clip_ids, selected_edge_infos, selected_gap_infos,
     current_sequence_number, created_at, modified_at, start_timecode_frame)
-VALUES ('seq', 'p', 'Edit', 'nested', 30, 1, 48000, 1920, 1080,
+VALUES ('seq', 'p', 'Edit', 'sequence', 30, 1, 48000, 1920, 1080,
     0, 1000, 0, '[]', '[]', '[]', 0, %d, %d, 0);
 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
@@ -163,7 +163,7 @@ VALUES ('mr_missing', 'p', 'master_missing', 'mm_v', 'm_missing',
 --   c_partial: source_in=10 → 40f BEFORE master valid range start (50).
 --              source_out=210 → 60f past master valid range end (150).
 --   c_missing: any range; the file just isn't there.
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id,
+INSERT INTO clips (id, project_id, name, track_id, sequence_id,
     owner_sequence_id, timeline_start_frame, duration_frames,
     source_in_frame, source_out_frame, enabled, created_at, modified_at,
     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
@@ -267,7 +267,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
 VALUES ('mr_stale', 'p', 'master_stale', 'ms_v', 'm_stale_volume',
     50, 150, 0, 100, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id,
+INSERT INTO clips (id, project_id, name, track_id, sequence_id,
     owner_sequence_id, timeline_start_frame, duration_frames,
     source_in_frame, source_out_frame, enabled, created_at, modified_at,
     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,

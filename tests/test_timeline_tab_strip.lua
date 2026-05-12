@@ -35,8 +35,8 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('rec1', 'proj', 'Rec 1', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
-           ('rec2', 'proj', 'Rec 2', 'nested', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
+    VALUES ('rec1', 'proj', 'Rec 1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
+           ('rec2', 'proj', 'Rec 2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
            ('src',  'proj', 'Src',   'master', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
            ('src2', 'proj', 'Src2',  'master', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now, now, now, now, now, now, now))

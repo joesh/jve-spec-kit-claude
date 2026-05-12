@@ -520,7 +520,7 @@ local function resolve_master_bin(clip_data, media_by_uuid, media_by_path,
     return unorganized_bin_id
 end
 
--- Build and persist a kind='nested' sequence row for one parsed timeline.
+-- Build and persist a kind='sequence' sequence row for one parsed timeline.
 -- Asserts the save (rule 2.13). Returns the saved Sequence instance.
 local function create_imported_sequence(project_id, timeline_data, fps_num, fps_den,
                                         seq_width, seq_height, seq_audio_rate,
@@ -533,7 +533,7 @@ local function create_imported_sequence(project_id, timeline_data, fps_num, fps_
         seq_width,
         seq_height,
         {
-            kind                 = "nested",
+            kind                 = "sequence",
             audio_sample_rate    = seq_audio_rate,
             start_timecode_frame = start_timecode_frame,
             view_start_frame     = view_start,
@@ -694,7 +694,7 @@ function M.import_into_project(project_id, parse_result, opts)
             compute_viewport(timeline_data, fps_num, fps_den, start_timecode_frame,
                              min_start_frame, max_end_frame)
 
-        -- 013: edit timelines created by import are kind='nested' (they
+        -- 013: edit timelines created by import are kind='sequence' (they
         -- hold clips referencing master sequences). Master sequences for
         -- source media are created separately via Sequence.ensure_master.
         local seq_width, seq_height = resolve_sequence_dimensions(timeline_data, project_settings)
@@ -774,7 +774,7 @@ function M.import_into_project(project_id, parse_result, opts)
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
                         track_id              = track.id,
-                        nested_sequence_id    = master_seq_id,
+                        sequence_id    = master_seq_id,
                         name                  = clip_data.name or "Untitled Clip",
                         timeline_start_frame  = clip_data.start_value,
                         duration_frames       = clip_data.duration,
@@ -807,7 +807,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     -- Assign the master sequence to its folder bin (V13:
-                    -- clip.nested_sequence_id is the master ref).
+                    -- clip.sequence_id is the master ref).
                     local bin = resolve_master_bin(clip_data, media_by_uuid, media_by_path,
                         pool_uuid_to_bin, pool_name_to_bin, unorganized_bin_id)
                     if bin then

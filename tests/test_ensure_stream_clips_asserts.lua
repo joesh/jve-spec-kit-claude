@@ -38,7 +38,7 @@ end, "missing frame_rate")
 -- Sequence.create: nested timelines REQUIRE audio_sample_rate.
 expect_error("nested sequence without audio_sample_rate refused", function()
     Sequence.create("e", "p1", FR, 1920, 1080,
-        { id = "e", kind = "nested" })
+        { id = "e", kind = "sequence" })
 end, "audio_sample_rate is required for non%-master")
 
 -- Sequence.create: zero/negative audio_sample_rate is rejected even on master.

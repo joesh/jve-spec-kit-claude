@@ -55,7 +55,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('rec1', 'proj', 'Timeline 1', 'nested',
+    VALUES ('rec1', 'proj', 'Timeline 1', 'sequence',
         24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now))
 -- Record sequence 2 (for scenario e: switch between two record sequences)
@@ -64,7 +64,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('rec2', 'proj', 'Timeline 2', 'nested',
+    VALUES ('rec2', 'proj', 'Timeline 2', 'sequence',
         24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now))
 -- Source (master) sequence

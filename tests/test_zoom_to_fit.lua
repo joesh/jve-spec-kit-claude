@@ -37,7 +37,7 @@ db:exec(string.format([[
                            playhead_frame, view_start_frame, view_duration_frames,
                            selected_clip_ids, selected_edge_infos, selected_gap_infos,
                            current_sequence_number, created_at, modified_at)
-    VALUES ('seq', 'proj', 'S', 'nested', 25, 1, 48000, 1920, 1080,
+    VALUES ('seq', 'proj', 'S', 'sequence', 25, 1, 48000, 1920, 1080,
             0, 0, 240, '[]', '[]', '[]', 0, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -62,7 +62,7 @@ local mc_id = test_env.create_test_masterclip_sequence('proj', 'MC1', 25, 1, 500
 local cmd = Command.create("Insert", "proj")
 cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("target_video_track_id", "v1")
-cmd:set_parameter("nested_sequence_id", mc_id)
+cmd:set_parameter("source_sequence_id", mc_id)
 cmd:set_parameter("clip_name", "clip_a")
 cmd:set_parameter("created_clip_ids", {"clip_a"})
 cmd:set_parameter("timeline_start_frame", 100)

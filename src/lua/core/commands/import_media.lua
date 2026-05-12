@@ -7,7 +7,7 @@
 -- - Build (or reuse) a kind='master' sequence per media file via
 --   Sequence.ensure_master. The master holds media_refs (V + per-channel
 --   A) directly referencing the file. Timeline clips on edit sequences
---   reference the master via clips.nested_sequence_id.
+--   reference the master via clips.sequence_id.
 -- - Track created entity ids in command state for deterministic redo
 --   replay; reverse them on undo (media_refs, tracks, master sequence,
 --   media row).

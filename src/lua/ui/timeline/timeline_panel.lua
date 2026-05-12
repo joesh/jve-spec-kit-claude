@@ -601,9 +601,9 @@ end
 local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
     local playhead = 0
     for index, clip in ipairs(clips) do
-        assert(clip.nested_sequence_id and clip.nested_sequence_id ~= "",
+        assert(clip.source_sequence_id and clip.source_sequence_id ~= "",
             string.format("handle_drop_on_blank_timeline: clip[%d] missing "
-                .. "nested_sequence_id", index))
+                .. "source_sequence_id", index))
         assert(type(clip.duration) == "number" and clip.duration > 0,
             string.format("handle_drop_on_blank_timeline: clip[%d] duration "
                 .. "must be a positive integer", index))
@@ -611,7 +611,7 @@ local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
         local result = command_manager.execute_interactive("Overwrite", {
             project_id            = project_id,
             sequence_id           = seq_id,
-            source_sequence_id    = clip.nested_sequence_id,
+            source_sequence_id    = clip.source_sequence_id,
             target_video_track_id = v1_track_id,
             timeline_start_frame  = playhead,
             advance_playhead      = false,
@@ -633,7 +633,7 @@ end
 ---
 --- @param payload table: {
 ---     sequences = { {id=...}, ... },   -- existing sequences to open as tabs
----     clips     = { {nested_sequence_id=..., name=..., duration=...,
+---     clips     = { {sequence_id=..., name=..., duration=...,
 ---                    fps_numerator=..., fps_denominator=...,
 ---                    width=..., height=...}, ... },
 --- }

@@ -44,7 +44,7 @@ with_db(function(db)
                               audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_ntsc', 'proj', 'NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_ntsc', 'proj', 'NTSC Timeline', 'sequence', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)
@@ -88,7 +88,7 @@ with_db(function(db)
                               audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_pal', 'proj', 'PAL Timeline', 'nested', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_pal', 'proj', 'PAL Timeline', 'sequence', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)
@@ -119,7 +119,7 @@ with_db(function(db)
                               audio_sample_rate, width, height,
                               playhead_frame, view_start_frame, view_duration_frames,
                               created_at, modified_at)
-        VALUES ('seq_30ntsc', 'proj', '30 NTSC Timeline', 'nested', %d, %d, 48000, 1920, 1080,
+        VALUES ('seq_30ntsc', 'proj', '30 NTSC Timeline', 'sequence', %d, %d, 48000, 1920, 1080,
                 0, 0, %d,
                 strftime('%%s','now'), strftime('%%s','now'))
     ]], fps_num, fps_den, default_view_dur)

@@ -2074,13 +2074,13 @@ show_browser_context_menu = function(event)
         table.insert(actions, {
             label = "Insert Into Timeline",
             handler = function()
-                -- Insert requires the master sequence to insert as nested_sequence_id;
+                -- Insert requires the master sequence to insert as sequence_id;
                 -- execute_interactive only injects active project/sequence/playhead.
                 assert(selected_master.clip_id and selected_master.clip_id ~= "",
                     "ProjectBrowser Insert: selected master has no clip_id (master sequence id)")
                 command_manager.execute_interactive("Insert", {
                     advance_playhead   = true,
-                    nested_sequence_id = selected_master.clip_id,
+                    sequence_id = selected_master.clip_id,
                 })
             end
         })

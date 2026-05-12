@@ -1,5 +1,5 @@
 -- T011 (013): would_create_cycle DFS per research §3.
--- Every command that writes a clip's nested_sequence_id must run this check first;
+-- Every command that writes a clip's source_sequence_id must run this check first;
 -- refusing a cycle at mutation time is FR-010 (containment DAG must be acyclic).
 -- Expected to FAIL until T016 (cycle.lua) lands.
 
@@ -20,7 +20,7 @@ for _, id in ipairs({"A", "B", "C", "D"}) do
     assert(db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
         .. "audio_sample_rate, width, height, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', '%s', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
+        .. "VALUES ('%s', 'p1', '%s', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
     assert(db:exec(string.format(
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('trk-%s-v1', '%s', 'V1', 'VIDEO', 1)", id, id)))
@@ -33,7 +33,7 @@ assert(db:exec(
 -- Insert a chain A → B → C (via clips). D is isolated; M is a master leaf.
 local function insert_clip(id, owner, nested, track)
     assert(db:exec(string.format(
-        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
+        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
         .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
         .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', '%s', '%s', '%s', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)",

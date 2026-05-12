@@ -45,9 +45,9 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES
-        ('default_sequence', 'default_project', 'Default Sequence', 'nested',
+        ('default_sequence', 'default_project', 'Default Sequence', 'sequence',
          30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d),
-        ('imported_sequence', 'default_project', 'Imported Sequence', 'nested',
+        ('imported_sequence', 'default_project', 'Imported Sequence', 'sequence',
          30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
@@ -114,7 +114,7 @@ assert(media_insert and media_insert:save(db))
 
 -- V13: media_insert needs a master sequence so Insert can find one to plant.
 -- ensure_master attaches the media_ref; the original V8 'stream clip inside
--- master' construction is gone (clips must be owned by a kind='nested' sequence).
+-- master' construction is gone (clips must be owned by a kind='sequence' sequence).
 local Sequence = require("models.sequence")
 local masterclip_insert_id = Sequence.ensure_master("media_insert", "default_project")
 
@@ -122,7 +122,7 @@ local base_clip_id = Clip.create({
         name = "Existing Clip",
         id = "clip_existing",
         project_id = "default_project",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         track_id = "imported_v1",
         owner_sequence_id = "imported_sequence",
         timeline_start_frame = 0,
@@ -157,7 +157,7 @@ local baseline = clip_count('imported_sequence')
 assert(baseline == 1, string.format("Expected baseline clip count 1, got %d", baseline))
 
 local insert_cmd = Command.create("Insert", 'default_project')
-insert_cmd:set_parameter("nested_sequence_id", masterclip_insert_id)
+insert_cmd:set_parameter("source_sequence_id", masterclip_insert_id)
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
 insert_cmd:set_parameter("target_video_track_id", "imported_v1")
 insert_cmd:set_parameter("timeline_start_frame", 111400)

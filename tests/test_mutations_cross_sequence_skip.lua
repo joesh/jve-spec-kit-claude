@@ -57,9 +57,9 @@ db:exec(string.format([[
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
     VALUES
-        ('seqA', 'p1', 'A', 'nested', 24000, 1001, 48000, 1920, 1080,
+        ('seqA', 'p1', 'A', 'sequence', 24000, 1001, 48000, 1920, 1080,
             0, 240, 0, '[]', '[]', %d, %d),
-        ('seqB', 'p1', 'B', 'nested', 24000, 1001, 48000, 1920, 1080,
+        ('seqB', 'p1', 'B', 'sequence', 24000, 1001, 48000, 1920, 1080,
             0, 240, 0, '[]', '[]', %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
@@ -70,7 +70,7 @@ db:exec(string.format([[
 ]], now, now, now, now, now, now))
 
 -- V13 placeholder master sequence + media_ref + media — clips below
--- reference '_v13_placeholder_master' as their nested_sequence_id.
+-- reference '_v13_placeholder_master' as their source_sequence_id.
 db:exec([[
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'p1', 'placeholder', '_placeholder', 1000, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
@@ -89,7 +89,7 @@ for _, row in ipairs({
     {id="cB", tid="tB", owner="seqB", tl=0,   dur=60 },
 }) do
     local stmt = db:prepare([[
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     (?, 'p1', ?, ?, '_v13_placeholder_master', ?, ?, ?, 0, ?, 1, ?, ?, NULL, NULL, 'resample', 1.0, 0);
     ]])
     stmt:bind_value(1, row.id)

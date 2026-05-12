@@ -29,7 +29,7 @@ local seed = string.format([[
         width, height, view_start_frame, view_duration_frames, playhead_frame,
         created_at, modified_at
     )
-    VALUES ('seq', 'proj', 'Sequence 1', 'nested',
+    VALUES ('seq', 'proj', 'Sequence 1', 'sequence',
             24, 1, 48000, 1920, 1080, 0, 20000, 0, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -46,7 +46,7 @@ UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHE
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 4000, 0, 4000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_a', 'proj', 'A', 'v1', '_v13_placeholder_master', 'seq', 0, 4000, 0, 4000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_b', 'proj', 'B', 'v1', '_v13_placeholder_master', 'seq', 4500, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now)

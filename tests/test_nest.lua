@@ -2,11 +2,11 @@
 --
 -- Per FR-010 / commands.md §Nest:
 --   Args: { sequence_id, selected_clip_ids }
---     sequence_id MUST reference a kind='nested' sequence (rule 2.29).
+--     sequence_id MUST reference a kind='sequence' sequence (rule 2.29).
 --     all selected_clip_ids MUST belong to that sequence.
 --
 --   Mutation:
---     1. Create new sequence S with kind='nested' (timebase + dimensions
+--     1. Create new sequence S with kind='sequence' (timebase + dimensions
 --        copied from the parent).
 --     2. Create matching tracks on S for each track_type/track_index of
 --        the selected clips.
@@ -14,7 +14,7 @@
 --        track_id ← S's equivalent track; timeline_start_frame
 --        translated by -min_selected_start so clips are relative to S.
 --     4. INSERT one new clip on the parent at min_selected_start, with
---        nested_sequence_id = S, source_in=0, source_out=S.duration,
+--        source_sequence_id = S, source_in=0, source_out=S.duration,
 --        duration = the selection span.
 --
 -- First-landing scope: all selected clips must be on the same track.
@@ -46,7 +46,7 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('e-v1', 'e', 'V1', 'VIDEO', 1);
@@ -62,7 +62,7 @@ local function build_fixture()
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         -- Three clips on edit V1 starting at 100, 200, 300; each 100 frames.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
+            sequence_id, name,
             timeline_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
@@ -80,7 +80,7 @@ end
 local function clips_in_sequence(db, seq_id)
     local stmt = db:prepare([[
         SELECT id, track_id, timeline_start_frame, duration_frames,
-               source_in_frame, source_out_frame, nested_sequence_id
+               source_in_frame, source_out_frame, sequence_id
         FROM clips WHERE owner_sequence_id = ?
         ORDER BY timeline_start_frame ASC, id ASC
     ]])
@@ -95,7 +95,7 @@ local function clips_in_sequence(db, seq_id)
             duration = stmt:value(3),
             source_in = stmt:value(4),
             source_out = stmt:value(5),
-            nested_sequence_id = stmt:value(6),
+            source_sequence_id = stmt:value(6),
         }
     end
     stmt:finalize()
@@ -128,9 +128,9 @@ do
         "Nest must return new_clip_id (the parent's replacement)")
     local s_id = result.new_sequence_id
 
-    -- (1) New sequence S exists with kind='nested'.
-    assert(load_sequence_kind(db, s_id) == "nested",
-        "new sequence has kind='nested'")
+    -- (1) New sequence S exists with kind='sequence'.
+    assert(load_sequence_kind(db, s_id) == "sequence",
+        "new sequence has kind='sequence'")
 
     -- (2) S contains exactly 3 clips at translated positions.
     local s_clips = clips_in_sequence(db, s_id)
@@ -155,8 +155,8 @@ do
         "replacement starts at min_selected_start (100)")
     assert(rep.duration == 300,
         "replacement covers the full selection span (100..400)")
-    assert(rep.nested_sequence_id == s_id,
-        "replacement nested_sequence_id = new sequence")
+    assert(rep.source_sequence_id == s_id,
+        "replacement source_sequence_id = new sequence")
     assert(rep.source_in == 0,
         "replacement source_in = 0 (start of new sequence)")
     assert(rep.source_out == 300,
@@ -175,7 +175,7 @@ do
     print("  ok")
 end
 
-print("-- master sequence as parent: refused (kind='nested' required) --")
+print("-- master sequence as parent: refused (kind='sequence' required) --")
 do
     build_fixture()
     local ok, err = pcall(Nest.execute, {
@@ -183,7 +183,7 @@ do
         selected_clip_ids  = { "c1" },
     })
     assert(not ok, "master parent refused")
-    assert(tostring(err):find("nested") or tostring(err):find("master"),
+    assert(tostring(err):find("sequence") or tostring(err):find("master"),
         "error names the kind constraint; got: " .. tostring(err))
     print("  ok")
 end

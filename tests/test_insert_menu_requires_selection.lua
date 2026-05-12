@@ -5,7 +5,7 @@
 --
 -- Scenario: User clicks Timeline > Insert with media selected but without marks set.
 -- The Insert command gets media_id from project browser but cannot infer duration
--- without: duration param, source_out param, or nested_sequence_id with duration.
+-- without: duration param, source_out param, or source_sequence_id with duration.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 local test_env = require("test_env")
@@ -29,7 +29,7 @@ db:exec(string.format([[
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -45,7 +45,7 @@ db:exec(string.format([[
 command_manager.init("sequence", "project")
 
 -- Create masterclip sequence for the media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     'project', 'Valid Media Master', 30, 1, 300, 'media_valid')
 
 -- Register Insert command
@@ -55,14 +55,14 @@ command_manager.register_executor("Insert", ret.executor, ret.undoer)
 
 print("\n=== Insert with media_id but no duration/source_out ===")
 
--- Simulate menu dispatch: nested_sequence_id is known but no duration info provided.
+-- Simulate menu dispatch: source_sequence_id is known but no duration info provided.
 -- This happens when user clicks Insert without setting in/out marks.
 -- Insert should infer duration from the masterclip's stream clips.
 local cmd = Command.create("Insert", "project")
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("sequence_id", "sequence")
 cmd:set_parameter("target_video_track_id", "track_v1")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 -- NOTE: no duration, source_in, source_out provided - should infer from masterclip
 
 command_manager.begin_command_event("script")

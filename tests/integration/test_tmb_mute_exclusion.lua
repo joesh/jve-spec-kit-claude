@@ -133,7 +133,7 @@ assert(db:exec(string.format(
 -- Create sequence + audio track
 local seq = Sequence.create("MuteTestSeq", project_id,
     {fps_numerator = 25, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000 })
+    { kind = "sequence", audio_sample_rate = 48000 })
 assert(seq:save())
 
 local track = Track.create_audio("A1", seq.id, {index = 1})
@@ -163,7 +163,7 @@ Clip.create({
         source_in_frame = 0,
         source_out_frame = 100,
         enabled = true,
-        nested_sequence_id = mc_seq_id,
+        sequence_id = mc_seq_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -179,7 +179,7 @@ Clip.create({
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
-        nested_sequence_id = mc_seq_id,
+        sequence_id = mc_seq_id,
         enabled = false,
         fps_mismatch_policy = "resample",
         volume = 1.0,

@@ -34,7 +34,7 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'seq', 'proj', 'Sequence', 'nested',
+        'seq', 'proj', 'Sequence', 'sequence',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -85,7 +85,7 @@ local MC_TEST = _Sequence_for_master.ensure_master("media1", "proj")
 -- Test 1: Create clip with non-unity volume, save, reload, verify
 -- =========================================================================
 local clip1_id = Clip.create({
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = "Quiet Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
@@ -112,7 +112,7 @@ print("  ✓ Clip volume persists through save/reload (0.501187 ≈ -6dB)")
 -- Test 2: Default volume is 1.0 (unity gain)
 -- =========================================================================
 local clip2_id = Clip.create({
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = "Unity Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
@@ -149,7 +149,7 @@ local snapshot_manager = require("core.snapshot_manager")
 
 -- Create a clip with interesting volume
 local clip3_id = Clip.create({
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = "Snapshot Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
@@ -194,7 +194,7 @@ print("  ✓ Volume round-trips through snapshot")
 -- =========================================================================
 local ok, err = pcall(function()
     local bad = Clip.create({
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = "Bad Clip",
         project_id = "proj",
         owner_sequence_id = "seq",
@@ -218,7 +218,7 @@ print("  ✓ Negative volume fails validation")
 -- Test 6: Volume = 0.0 (silence) persists and round-trips
 -- =========================================================================
 local clip_silent_id = Clip.create({
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = "Silent Clip",
         project_id = "proj",
         owner_sequence_id = "seq",

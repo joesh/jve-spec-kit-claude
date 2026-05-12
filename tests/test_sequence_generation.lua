@@ -42,7 +42,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         created_at, modified_at
-    ) VALUES ('seq1', 'proj1', 'Seq 1', 'nested',
+    ) VALUES ('seq1', 'proj1', 'Seq 1', 'sequence',
               25, 1, 48000,
               1920, 1080,
               %d, %d);
@@ -129,7 +129,7 @@ expect_generation(0, "baseline before Insert")
 local insert_cmd = Command.create("Insert", "proj1")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("target_video_track_id", "v1")
-insert_cmd:set_parameter("nested_sequence_id", mc_id)
+insert_cmd:set_parameter("source_sequence_id", mc_id)
 insert_cmd:set_parameter("clip_name", "clip_a")
 insert_cmd:set_parameter("timeline_start_frame", 100)
 

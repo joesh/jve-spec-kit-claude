@@ -47,7 +47,7 @@ db:exec(string.format([[
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
     VALUES
-      ('rec',  'proj', 'Record', 'nested', 25, 1, 48000, 1920, 1080, 200, 0, 1500, %d, %d),
+      ('rec',  'proj', 'Record', 'sequence', 25, 1, 48000, 1920, 1080, 200, 0, 1500, %d, %d),
       -- Master A: video + audio. Schema requires audio_sample_rate non-NULL
       -- when there's an audio media_ref. Camera-original media at TC origin
       -- 1,324,752 video frames (= 15:19:58:00 @ 24fps).
@@ -188,7 +188,6 @@ db:exec("UPDATE sequences SET view_start_frame=0, view_duration_frames=270000000
 timeline_state.activate_displayed("rec")
 timeline_state.activate_displayed("msa")
 local content_extent = 1200
-local vs2 = timeline_state.get_viewport_start_time()
 local vd2 = timeline_state.get_viewport_duration()
 check("absurd persisted viewport (2.7B frames) is normalized on activation",
     vd2 < content_extent * 100,

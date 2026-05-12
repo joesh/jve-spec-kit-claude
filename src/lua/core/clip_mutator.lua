@@ -38,7 +38,7 @@ end
             track_type = row.track_type,
             name = row.name,
             track_id = row.track_id,
-            nested_sequence_id = row.nested_sequence_id,
+            sequence_id = row.sequence_id,
             master_layer_track_id = row.master_layer_track_id,
             master_audio_track_id = row.master_audio_track_id,
             fps_mismatch_policy = assert(row.fps_mismatch_policy,
@@ -138,18 +138,18 @@ local function plan_insert(row)
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
     assert(row.source_out, "clip_mutator: insert mutation missing source_out")
-    -- V13: nested_sequence_id replaces master_clip_id; clip_kind/media_id/
+    -- V13: sequence_id replaces master_clip_id; clip_kind/media_id/
     -- offline are gone from clips.
-    local nested_id = row.nested_sequence_id
+    local nested_id = row.sequence_id
     assert(nested_id and nested_id ~= "",
-        "clip_mutator.plan_insert: missing nested_sequence_id for clip " .. tostring(row.id))
+        "clip_mutator.plan_insert: missing sequence_id for clip " .. tostring(row.id))
     return {
         type = "insert",
         clip_id = row.id,
         project_id = row.project_id,
         name = row.name or "",
         track_id = row.track_id,
-        nested_sequence_id = nested_id,
+        sequence_id = nested_id,
         master_layer_track_id = row.master_layer_track_id,
         master_audio_track_id = row.master_audio_track_id,
         fps_mismatch_policy = assert(row.fps_mismatch_policy,
@@ -187,7 +187,7 @@ local function load_track_clips(db, track_id)
     -- duplicates. GROUP BY collapses to one row per clip.
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
+               c.owner_sequence_id, c.sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -200,8 +200,8 @@ local function load_track_clips(db, track_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
                                 AND EXISTS (
                                     SELECT 1 FROM tracks mt
@@ -239,7 +239,7 @@ local function load_track_clips(db, track_id)
             name = stmt:value(2),
             track_id = stmt:value(3),
             owner_sequence_id = stmt:value(4),
-            nested_sequence_id = nested_id,
+            sequence_id = nested_id,
             nested_sequence_kind = stmt:value(20),
             master_layer_track_id = stmt:value(10),
             master_audio_track_id = stmt:value(11),
@@ -425,7 +425,7 @@ local function plan_straddle_split_actions(row, original, start_value, end_time,
         frame_rate            = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
         enabled               = original.enabled,
         volume                = original.volume,
-        nested_sequence_id    = original.nested_sequence_id,
+        sequence_id    = original.sequence_id,
         master_layer_track_id = original.master_layer_track_id,
         master_audio_track_id = original.master_audio_track_id,
         fps_mismatch_policy   = original.fps_mismatch_policy,
@@ -643,7 +643,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     track_type = original.track_type,
                     name = original.name,
                     track_id = original.track_id,
-                    nested_sequence_id = original.nested_sequence_id,
+                    sequence_id = original.sequence_id,
                     master_layer_track_id = original.master_layer_track_id,
                     master_audio_track_id = original.master_audio_track_id,
                     fps_mismatch_policy = original.fps_mismatch_policy,
@@ -740,7 +740,7 @@ function ClipMutator.resolve_ripple(db, params)
                 track_type = row.track_type,
                 name = row.name .. " (2)",
                 track_id = row.track_id,
-                nested_sequence_id = original.nested_sequence_id,
+                sequence_id = original.sequence_id,
                 master_layer_track_id = original.master_layer_track_id,
                 master_audio_track_id = original.master_audio_track_id,
                 fps_mismatch_policy = assert(original.fps_mismatch_policy,
@@ -885,7 +885,7 @@ end
 local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
+               c.owner_sequence_id, c.sequence_id,
                c.timeline_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
@@ -898,8 +898,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
         WHERE c.id = ?
     ]])
@@ -936,7 +936,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         name = stmt:value(2),
         track_id = stmt:value(3),
         owner_sequence_id = owning_sequence_id,
-        nested_sequence_id = nested_id,
+        sequence_id = nested_id,
         master_layer_track_id = stmt:value(10),
         master_audio_track_id = stmt:value(11),
         fps_mismatch_policy = stmt:value(12),
@@ -1003,7 +1003,7 @@ local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_
         name                  = clip.name,
         track_id              = mapped_track.id,
         owner_sequence_id     = sequence_id,
-        nested_sequence_id    = clip.nested_sequence_id,
+        sequence_id    = clip.sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
         fps_mismatch_policy   = clip.fps_mismatch_policy,

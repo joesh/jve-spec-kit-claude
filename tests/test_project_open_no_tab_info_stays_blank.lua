@@ -44,9 +44,9 @@ INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominato
     audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
     created_at, modified_at)
 VALUES
-('%s', '%s', 'Oldest', 'nested', 24, 1, 48000, 1920, 1080, 0, 240, 0,
+('%s', '%s', 'Oldest', 'sequence', 24, 1, 48000, 1920, 1080, 0, 240, 0,
     strftime('%%s','now') - 100, strftime('%%s','now') - 100),
-('%s', '%s', 'Newest', 'nested', 24, 1, 48000, 1920, 1080, 0, 240, 0,
+('%s', '%s', 'Newest', 'sequence', 24, 1, 48000, 1920, 1080, 0, 240, 0,
     strftime('%%s','now'), strftime('%%s','now'));
 ]], PROJ, SEQ_OLDEST, PROJ, SEQ_NEWEST, PROJ)), "seed insert failed")
 
