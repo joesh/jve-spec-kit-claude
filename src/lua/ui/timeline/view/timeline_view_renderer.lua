@@ -17,6 +17,7 @@ local log = require("core.logger").for_area("timeline")
 local perf_log = require("core.logger").for_area("ui.scroll_perf")
 local waveform_color = require("core.media.waveform_color")
 local waveform_utils = require("core.media.waveform_utils")
+local waveform_layout = require("ui.timeline.view.waveform_layout")
 local track_state = require("ui.timeline.state.track_state")
 local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
@@ -786,9 +787,12 @@ function M.render(view)
         if not outline_only then
             timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
 
-            -- Layout: label at bottom (16px), waveform in remaining upper area
-            local LABEL_RESERVE = 16
+            -- waveform_layout.compute() decides label vs full-body waveform
+            -- based on clip height (LABEL_RESERVE + MIN_WAVE_HEIGHT live in
+            -- that module). Without this the wave gets squashed against the
+            -- top of small audio clips.
             local has_waveform = false
+            local label_visible = true
 
             -- Waveform display (audio clips only, when enabled and peaks available).
             -- Required-data invariants (source_in/source_out presence, non-zero range)
@@ -824,8 +828,11 @@ function M.render(view)
                         peak_start, peak_end, actual_start, actual_end, max_drift)
 
                     local wave_col = waveform_color.derive(body_color)
-                    local wave_height = math.max(4, clip_height - LABEL_RESERVE)
-                    timeline.add_waveform(view.widget, visible_x, y, draw_width, wave_height, peaks, count, wave_col, reversed)
+                    local wave_y_offset, wave_height, lbl_vis =
+                        waveform_layout.compute(clip_height)
+                    label_visible = lbl_vis
+                    timeline.add_waveform(view.widget, visible_x, y + wave_y_offset,
+                        draw_width, wave_height, peaks, count, wave_col, reversed)
                     has_waveform = true
                 end
             end
@@ -861,7 +868,7 @@ function M.render(view)
                 local display_label = truncate_label(
                     label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
                     max_label_width)
-                if display_label ~= "" then
+                if display_label ~= "" and label_visible then
                     local label_baseline
                     if has_waveform then
                         label_baseline = y + clip_height - 4
@@ -1160,6 +1167,37 @@ function M.render(view)
             end
         end
     end
+
+    -- Locked-track hash overlay (Premiere-style). Diagonal stripes
+    -- across each locked track row so the read-only state is visible
+    -- regardless of clip content. Drawn over clips (so it's never
+    -- obscured) but before mark/playhead so transport overlays still
+    -- read clearly.
+    local function draw_lock_overlay()
+        local LOCK_HASH_COLOR = 0x55ccaa00   -- ARGB-style; same hue as lock btn
+        local LOCK_HASH_SPACING = 12         -- px between diagonals
+        for i, track in ipairs(view.filtered_tracks) do
+            if track.locked then
+                local entry = layout_by_index[i]
+                if entry and entry.y + entry.height > 0 and entry.y < height then
+                    local row_y = entry.y
+                    local row_h = entry.height
+                    -- 45° lines: each diagonal is (row_h × row_h). Start x
+                    -- offset so the pattern tiles cleanly across the row.
+                    local start_x = -row_h
+                    local x = start_x
+                    while x < width do
+                        timeline.add_line(view.widget,
+                            x, row_y + row_h,
+                            x + row_h, row_y,
+                            LOCK_HASH_COLOR, 1)
+                        x = x + LOCK_HASH_SPACING
+                    end
+                end
+            end
+        end
+    end
+    draw_lock_overlay()
 
     -- Mark In/Out highlight (on top of clips, behind playhead)
     local function draw_mark_overlay()

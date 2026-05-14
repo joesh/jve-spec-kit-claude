@@ -425,6 +425,16 @@ function M.create(widget, state_module)
     end
     timeline.set_mouse_event_handler(widget, handler_name)
 
+    -- Re-render on widget resize. Without this, the ruler retains its
+    -- previous frame of pixels when the headers-column width drag shrinks
+    -- or grows the ruler's width: time_to_pixel(playhead, width) depends on
+    -- the widget's current width, so a stale render leaves the playhead at
+    -- its old x while the timeline view (which already listens for resize)
+    -- redraws at the new x — yielding two visible playhead lines.
+    local resize_name = "ruler_resize_" .. tostring(widget):gsub("[^%w]", "_")
+    _G[resize_name] = function() render() end
+    timeline.set_resize_event_handler(widget, resize_name)
+
     -- Listen to state changes
     state_module.add_listener(profile_scope.wrap("timeline_ruler.render", render))
 
