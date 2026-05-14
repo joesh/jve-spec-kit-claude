@@ -752,4 +752,46 @@ end, 40)
 -- Register for project_changed signal
 Signals.connect("project_changed", M.on_project_change, 40)
 
+-- Prune timeline tabs whose sequence was deleted (DeleteSequence command,
+-- undo of CreateSequence). Without this, the tab strip carries a zombie
+-- pointer to a deleted sequence_id; the panel's next render falls back
+-- to loading a master sequence (FR-005 violation) and the playback /
+-- emp.clip_provider stack crashes. The strip's own close_record_tab /
+-- close_source_tab repair displayed_tab + active_record_tab pointers
+-- automatically, so this handler is purely "walk + close."
+--
+-- Filter by project_id: the signal is project-scoped, and the strip is
+-- only authoritative for the currently-open project (project_changed
+-- resets it).
+Signals.connect("sequence_list_changed", function(project_id)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "timeline_state.sequence_list_changed: emitter must pass non-empty project_id "
+        .. "(see core/commands/delete_sequence.lua + create_sequence.lua)")
+    if project_id ~= M.get_project_id() then return end
+
+    local strip = M.get_tab_strip()
+    if not strip then return end
+
+    local Sequence = require("models.sequence")
+    -- Snapshot dead tabs before mutating the list — close_*_tab mutates
+    -- strip.tabs in place, so iterating while closing would skip entries.
+    local dead = {}
+    for _, tab in ipairs(strip.tabs) do
+        if not Sequence.load(tab.sequence_id) then
+            table.insert(dead, tab)
+        end
+    end
+    for _, tab in ipairs(dead) do
+        if tab.kind == "record" then
+            strip:close_record_tab(tab)
+        elseif tab.kind == "source" then
+            strip:close_source_tab()
+        else
+            error(string.format(
+                "timeline_state.sequence_list_changed: unknown tab kind=%q for sequence %s",
+                tostring(tab.kind), tostring(tab.sequence_id)))
+        end
+    end
+end, 45)
+
 return M
