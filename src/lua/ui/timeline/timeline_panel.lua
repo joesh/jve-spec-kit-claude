@@ -51,13 +51,6 @@ local function content_to_header(track_height)
     return track_height - RESIZE_EDGE_PX
 end
 
-local function header_to_content(header_height)
-    assert(type(header_height) == "number" and header_height > 0,
-        string.format("header_to_content: header_height must be positive number, got %s",
-            tostring(header_height)))
-    return header_height + RESIZE_EDGE_PX
-end
-
 -- Exposed for tests / alignment audits. header_row_total and lane_row_total
 -- both collapse mathematically to `track_height`, but kept named-separately
 -- to document the per-column structure (header column = widget + edge;

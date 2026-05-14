@@ -417,6 +417,8 @@ local function load_displayed_sequence(seq_id)
     -- invariant doesn't leave data.state half-rewritten (rule 1.14).
     assert(sequence.project_id and sequence.project_id ~= "",
         string.format("load_displayed_sequence: sequence missing project_id (seq_id=%s)", tostring(seq_id)))
+    assert(type(sequence.frame_rate) == "table",
+        string.format("load_displayed_sequence: sequence %s missing frame_rate table", tostring(seq_id)))
     assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(seq_id)))
     assert(type(sequence.start_timecode_frame) == "number", string.format(

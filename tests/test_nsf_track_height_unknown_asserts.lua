@@ -56,13 +56,24 @@ assert(type(err2) == "string" and err2:find("no_such_track"),
     "FAIL: set assert message must include the offending track_id; got: " .. tostring(err2))
 
 -- ── set with bad height type must assert (NSF half-1) ────────────────────
-for _, bad in ipairs({ "80", true, {}, nil }) do
-    local ok_bad = pcall(timeline_state.set_track_height, "v1", bad)
+-- ipairs stops at the first nil, so nil cases are spelled out explicitly
+-- to avoid silently skipping coverage.
+local bad_cases = {
+    { label = "string",  value = "80"  },
+    { label = "boolean", value = true  },
+    { label = "table",   value = {}    },
+    { label = "nil",     value = nil   },  -- explicit field; never iterated by ipairs
+}
+local function check_bad(label, value)
+    local ok_bad = pcall(timeline_state.set_track_height, "v1", value)
     assert(not ok_bad, string.format(
-        "FAIL: set_track_height(\"v1\", %s) of type %s must assert. "
-        .. "A non-number silently written into track.height corrupts every "
-        .. "downstream layout call.", tostring(bad), type(bad)))
+        "FAIL: set_track_height(\"v1\", <%s>) must assert. A non-number "
+        .. "silently written into track.height corrupts every downstream "
+        .. "layout call.", label))
 end
+for _, case in ipairs(bad_cases) do check_bad(case.label, case.value) end
+-- ipairs above iterates 4 entries (each is a non-nil table); the nil
+-- VALUE field inside the case=4 table still reaches the function.
 
 print("  unknown tracks surface as assert; known tracks unaffected — OK")
 print("\n✅ test_nsf_track_height_unknown_asserts.lua passed")
