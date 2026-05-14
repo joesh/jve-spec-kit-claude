@@ -107,6 +107,9 @@ int lua_set_scroll_area_v_scroll(lua_State* L);
 int lua_set_scroll_area_v_scroll_handler(lua_State* L);
 int lua_set_context_menu_handler(lua_State* L);
 int lua_set_widget_drag_handler(lua_State* L);
+int lua_install_drag_source(lua_State* L);
+int lua_install_drop_target(lua_State* L);
+int lua_synthetic_drop(lua_State* L);
 int lua_widget_at_global(lua_State* L);
 
 // Tree widget functions

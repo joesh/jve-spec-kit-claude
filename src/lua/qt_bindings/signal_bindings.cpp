@@ -1,10 +1,17 @@
 #include "binding_macros.h"
 #include "../../jve_log.h"
+#include "../../assert_handler.h"
 #include <QAbstractButton>
+#include <QByteArray>
 #include <QCoreApplication>
 #include <QContextMenuEvent>
+#include <QDrag>
+#include <QDragEnterEvent>
+#include <QDragMoveEvent>
+#include <QDropEvent>
 #include <QLineEdit>
 #include <QKeyEvent>
+#include <QMimeData>
 #include <QMouseEvent>
 #include <QScrollArea>
 #include <QScrollBar>
@@ -605,6 +612,248 @@ int lua_set_widget_drag_handler(lua_State* L) {
     widget->setMouseTracking(true);
     DragMouseEventFilter* filter = new DragMouseEventFilter(handler_name, L, widget);
     widget->installEventFilter(filter);
+    return 0;
+}
+
+// ============================================================================
+// Row-level patch routing drag-and-drop (FR-010, FR-010a).
+// Real Qt drag-and-drop (QDrag/QDropEvent), unlike the synthetic
+// DragMouseEventFilter above. Drop targets can be ANY QWidget (a track
+// header, a timeline-strip widget, etc.) — Qt handles cross-widget
+// dispatch, cursor feedback, and event routing.
+// ============================================================================
+
+// Drag source: starts a QDrag with a mime payload provided by a Lua callback
+// when the user drags past DRAG_THRESHOLD_PX. The payload is an opaque string
+// (JSON in practice); Qt's mime system just carries bytes.
+class DragSourceFilter : public QObject {
+public:
+    DragSourceFilter(const std::string& mime, const std::string& provider,
+                     lua_State* L_ptr, QWidget* parent)
+        : QObject(parent), source_widget(parent),
+          mime_type(QString::fromStdString(mime)),
+          payload_provider(provider), lua_state(L_ptr),
+          press_x(0), press_y(0), pressed(false), dragging(false) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        // Re-entrancy guard: QDrag::exec runs a nested event loop and may
+        // surface stray events through this filter during the drag. Ignore
+        // them until exec returns.
+        if (dragging) return QObject::eventFilter(obj, event);
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                QPoint gp = me->globalPosition().toPoint();
+                press_x = gp.x();
+                press_y = gp.y();
+                pressed = true;
+            }
+        } else if (event->type() == QEvent::MouseMove) {
+            if (!pressed) return QObject::eventFilter(obj, event);
+            auto* me = static_cast<QMouseEvent*>(event);
+            if (!(me->buttons() & Qt::LeftButton)) {
+                pressed = false;
+                return QObject::eventFilter(obj, event);
+            }
+            QPoint gp = me->globalPosition().toPoint();
+            int dx = gp.x() - press_x;
+            int dy = gp.y() - press_y;
+            if (dx*dx + dy*dy < DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+                return QObject::eventFilter(obj, event);
+            }
+            pressed = false;
+            startDrag();
+            return true;
+        } else if (event->type() == QEvent::MouseButtonRelease) {
+            pressed = false;
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    void startDrag() {
+        lua_getglobal(lua_state, payload_provider.c_str());
+        if (!lua_isfunction(lua_state, -1)) {
+            jve_discard_non_function_handler(lua_state,
+                payload_provider.c_str(), "signal.drag_source");
+            return;
+        }
+        if (lua_pcall(lua_state, 0, 1, 0) != LUA_OK) {
+            jve_handle_lua_callback_error(lua_state, "signal.drag_source");
+            return;
+        }
+        JVE_ASSERT(lua_isstring(lua_state, -1),
+            "drag source payload provider must return a string");
+        size_t len = 0;
+        const char* str = lua_tolstring(lua_state, -1, &len);
+        QByteArray payload(str, static_cast<int>(len));
+        lua_pop(lua_state, 1);
+
+        QMimeData* mime = new QMimeData;
+        mime->setData(mime_type, payload);
+        QDrag* drag = new QDrag(source_widget);
+        drag->setMimeData(mime);
+        dragging = true;
+        drag->exec(Qt::CopyAction);
+        dragging = false;
+    }
+
+    QWidget* source_widget;
+    QString mime_type;
+    std::string payload_provider;
+    lua_State* lua_state;
+    int press_x, press_y;
+    bool pressed;
+    bool dragging;
+};
+
+// Drop target: accepts drags whose mime payload matches `mime_type` and fires
+// the Lua handler with (local_x, local_y, payload_string) on drop. Caller
+// must install this on a widget that should receive drops (header, strip).
+class DropTargetFilter : public QObject {
+public:
+    DropTargetFilter(const std::string& mime, const std::string& handler,
+                     lua_State* L_ptr, QWidget* parent)
+        : QObject(parent), mime_type(QString::fromStdString(mime)),
+          handler_name(handler), lua_state(L_ptr) {}
+
+    // Public so test code (qt_synthetic_drop) can invoke the same code
+    // path the Qt event system would, bypassing QApplication::notify which
+    // in Qt 6 short-circuits synthetic QDropEvent dispatch outside an
+    // active QDrag operation. Production drops still flow through Qt's
+    // notify pipeline (driven by QDrag::exec); this entry point exists
+    // solely for in-process testing.
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        const QEvent::Type t = event->type();
+        if (t == QEvent::DragEnter) {
+            auto* de = static_cast<QDragEnterEvent*>(event);
+            if (de->mimeData()->hasFormat(mime_type)) {
+                de->acceptProposedAction();
+                return true;
+            }
+        } else if (t == QEvent::DragMove) {
+            auto* de = static_cast<QDragMoveEvent*>(event);
+            if (de->mimeData()->hasFormat(mime_type)) {
+                de->acceptProposedAction();
+                return true;
+            }
+        } else if (t == QEvent::Drop) {
+            auto* de = static_cast<QDropEvent*>(event);
+            if (de->mimeData()->hasFormat(mime_type)) {
+                QByteArray payload = de->mimeData()->data(mime_type);
+                QPoint pos = de->position().toPoint();
+                fireDrop(pos.x(), pos.y(), payload);
+                de->acceptProposedAction();
+                return true;
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    void fireDrop(int x, int y, const QByteArray& payload) {
+        lua_getglobal(lua_state, handler_name.c_str());
+        if (!lua_isfunction(lua_state, -1)) {
+            jve_discard_non_function_handler(lua_state, handler_name.c_str(),
+                "signal.drop_target");
+            return;
+        }
+        lua_pushinteger(lua_state, x);
+        lua_pushinteger(lua_state, y);
+        lua_pushlstring(lua_state, payload.constData(), payload.size());
+        if (lua_pcall(lua_state, 3, 0, 0) != LUA_OK) {
+            jve_handle_lua_callback_error(lua_state, "signal.drop_target");
+        }
+    }
+
+    QString mime_type;
+    std::string handler_name;
+    lua_State* lua_state;
+};
+
+// Install a drag-source event filter on a widget.
+// Lua: qt_install_drag_source(widget, mime_type, payload_provider_handler_name)
+// The provider handler is called as: handler() → returns payload string.
+int lua_install_drag_source(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* mime = luaL_checkstring(L, 2);
+    const char* provider = luaL_checkstring(L, 3);
+    if (!widget) {
+        return luaL_error(L, "qt_install_drag_source: widget required");
+    }
+    DragSourceFilter* filter = new DragSourceFilter(mime, provider, L, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}
+
+// Install a drop-target event filter on a widget.
+// Lua: qt_install_drop_target(widget, mime_type, handler_name)
+// The handler is called as: handler(local_x, local_y, payload_string).
+// Calls setAcceptDrops(true) on the widget so Qt routes drag events to it.
+int lua_install_drop_target(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* mime = luaL_checkstring(L, 2);
+    const char* handler = luaL_checkstring(L, 3);
+    if (!widget) {
+        return luaL_error(L, "qt_install_drop_target: widget required");
+    }
+    widget->setAcceptDrops(true);
+    DropTargetFilter* filter = new DropTargetFilter(mime, handler, L, widget);
+    widget->installEventFilter(filter);
+    return 0;
+}
+
+// Test-only: invoke the installed DropTargetFilter directly with a
+// freshly-constructed QDropEvent. Bypasses QApplication::notify, whose
+// Qt 6 implementation short-circuits synthetic QDropEvent dispatch when
+// no QDrag operation is active in the system event queue. Production
+// drops still flow through Qt's notify pipeline, driven by QDrag::exec
+// during a real user gesture — see DragSourceFilter::startDrag.
+//
+// This test entry point exercises the filter's mime parse + Lua dispatch
+// code (the only production-relevant logic in the drop bridge) without
+// depending on the OS event loop or real mouse input. It does NOT test
+// Qt's own routing — that's Qt's responsibility, covered by manual UI
+// verification of the real drag-drop gesture.
+//
+// Asserts on no installed filter so the test fails loudly rather than
+// silently no-op'ing.
+// Lua: qt_synthetic_drop(widget, mime_type, payload_str, local_x, local_y)
+int lua_synthetic_drop(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    const char* mime = luaL_checkstring(L, 2);
+    size_t plen = 0;
+    const char* pstr = luaL_checklstring(L, 3, &plen);
+    int x = static_cast<int>(luaL_checkinteger(L, 4));
+    int y = static_cast<int>(luaL_checkinteger(L, 5));
+    if (!widget) {
+        return luaL_error(L, "qt_synthetic_drop: widget required");
+    }
+    // The filter is parented to the widget at install time, so it lives
+    // among the widget's direct children. Iterate via QObject::children()
+    // (Qt's children() returns a const QObjectList& with no Q_OBJECT
+    // requirement, unlike findChildren). dynamic_cast routes to QObject's
+    // RTTI which works for any subclass with virtual methods.
+    QMimeData mime_data;
+    mime_data.setData(QString::fromUtf8(mime),
+        QByteArray(pstr, static_cast<int>(plen)));
+    QPointF pos(x, y);
+    QDropEvent drop(pos, Qt::CopyAction, &mime_data, Qt::NoButton,
+        Qt::NoModifier, QEvent::Drop);
+    int invoked = 0;
+    for (QObject* child : widget->children()) {
+        DropTargetFilter* f = dynamic_cast<DropTargetFilter*>(child);
+        if (f) {
+            f->eventFilter(widget, &drop);
+            ++invoked;
+        }
+    }
+    if (invoked == 0) {
+        return luaL_error(L,
+            "qt_synthetic_drop: no DropTargetFilter installed on widget — "
+            "call qt_install_drop_target first");
+    }
     return 0;
 }
 
