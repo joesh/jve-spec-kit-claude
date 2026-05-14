@@ -80,12 +80,22 @@ package.loaded["ui.timeline.timeline_state"] = {
     end,
     get_sequence_id        = function() return "rec_seq" end,
     get_active_sequence_id = function() return "rec_seq" end,
+    get_project_id         = function() return "proj" end,
     get_playhead_position   = function() return 0 end,
     get_sequence_frame_rate = function() return {numerator=24, denominator=1} end,
     get_selected_clips      = function() return {} end,
     get_selected_edges      = function() return {} end,
     get_selected_gaps       = function() return {} end,
     switch_to_record_tab   = function() end,
+}
+
+-- ShowSourceTab seeds the source monitor with the first project master
+-- when none is loaded. Stub source_viewer to mirror that load into the
+-- mock_monitor so subsequent get_loaded_master_seq_id() returns it.
+package.loaded["ui.source_viewer"] = {
+    load_master_clip = function(clip_id)
+        mock_monitor.sequence_id = clip_id
+    end,
 }
 
 -- Force fresh load of show_source_tab (clears any cached version).
@@ -111,20 +121,28 @@ assert(#stub_switch_calls >= 1 and stub_switch_calls[#stub_switch_calls] == "src
     .. "must delegate to the canonical pointer-update entry point")
 print("  signal emitted, switch_to_source_tab called with src_master — OK")
 
--- ── (b) Execute with no source loaded: signal emitted, no error ──────────
-print("-- (b) ShowSourceTab with no source loaded --")
+-- ── (b) Execute with no source loaded: seed first project master ───────────
+-- New behavior (2026-05-13): rather than no-op, ShowSourceTab seeds the
+-- source monitor with the first master in the project and opens the tab.
+-- This gives Window→Source Tab a useful effect on a clean session instead
+-- of silently doing nothing.
+print("-- (b) ShowSourceTab with no source loaded seeds first master --")
 mock_monitor.sequence_id = nil
 local n_vis = #vis_log
 local n_switch = #stub_switch_calls
 
 local r2 = command_manager.execute("ShowSourceTab", {})
 assert(r2 and r2.success,
-    "FAIL: ShowSourceTab must not error when no source loaded (FR-007b)")
+    "FAIL: ShowSourceTab failed: " .. tostring(r2 and r2.error_message))
 assert(#vis_log == n_vis + 1 and vis_log[#vis_log] == true,
-    "FAIL: source_tab_visibility_changed(true) must fire even with no source (FR-007b)")
-assert(#stub_switch_calls == n_switch,
-    "FAIL: switch_to_source_tab must NOT be called when no master is loaded")
-print("  signal emitted, no switch_to_source_tab called — OK")
+    "FAIL: source_tab_visibility_changed(true) must fire")
+-- The fixture's only master is 'src_master'. Seed must pick it up.
+assert(#stub_switch_calls == n_switch + 1,
+    "FAIL: switch_to_source_tab must be called after seeding the first master")
+assert(stub_switch_calls[#stub_switch_calls] == "src_master",
+    "FAIL: seeded master must be the first project master ('src_master'); got "
+    .. tostring(stub_switch_calls[#stub_switch_calls]))
+print("  seeded first project master + opened tab — OK")
 
 -- ── (c) Idempotent: calling again when tab is already open ───────────────
 print("-- (c) idempotent re-open --")

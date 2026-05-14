@@ -205,6 +205,10 @@ function M.create(widget, state_module, track_filter_fn, options)
         end,
         get_vertical_scroll = function() return view.vertical_scroll_offset end,
         ensure_tracks_visible = view.ensure_tracks_visible,
+        -- Coord → track query; consumed by external drop handlers
+        -- (patch-drag strip drops, FR-010a). Same function the view's
+        -- internal input/renderer helpers already use.
+        get_track_id_at_y = view.get_track_id_at_y,
         on_mouse_event = on_mouse,
         on_wheel_event = on_wheel
     }

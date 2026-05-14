@@ -39,9 +39,10 @@ local function fresh_state()
         -- Tab/sequence pointers (FR-005 / data-model.md §3)
         -- active_sequence_id is the Record sequence targeted by edits; backed
         -- by sequence_id (kept as the canonical internal name to avoid touching
-        -- every internal call site).  displayed_tab_id is the tab whose content
-        -- the timeline body is currently rendering — may differ (SourceTab).
-        displayed_tab_id = nil,
+        -- every internal call site). The displayed tab id is NOT carried in
+        -- data.state — it lives exclusively on the TimelineTabStrip (015 #6).
+        -- Use timeline_state.get_displayed_tab_id() (or strip_holder for
+        -- modules that can't import timeline_state directly).
 
         -- Rate
         sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
@@ -96,7 +97,8 @@ M.dimensions = {
 function M.reset()
     M.state = fresh_state()
     M.sequence = nil
-    M.source_sequence = nil
+    -- Strip-authoritative (015 #6): data.source_sequence cache removed;
+    -- readers pull via tab_strip:get_source_tab() then Sequence.load.
     listeners = {}
     notify_timer = nil
 end
@@ -109,7 +111,8 @@ end
 function M.reset_state_preserve_listeners()
     M.state = fresh_state()
     M.sequence = nil
-    M.source_sequence = nil
+    -- Strip-authoritative (015 #6): data.source_sequence cache removed;
+    -- readers pull via tab_strip:get_source_tab() then Sequence.load.
     notify_timer = nil
 end
 

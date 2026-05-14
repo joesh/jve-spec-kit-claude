@@ -8,7 +8,22 @@ require('test_env')
 -- together correctly.
 
 local viewport_policy = require("ui.timeline.viewport_policy")
-local data = require("ui.timeline.state.timeline_state_data")
+local data            = require("ui.timeline.state.timeline_state_data")
+-- Pre-require timeline_state so its module-load `strip_holder.set(...)`
+-- with a fresh empty strip happens BEFORE we install the stub. Otherwise
+-- viewport_policy's internal `require("ui.timeline.timeline_state")` at
+-- apply_post_command time would clobber the stub.
+require("ui.timeline.timeline_state")
+local strip_holder    = require("ui.timeline.state.strip_holder")
+
+-- Stub strip: persist machinery reads displayed_sequence_id() — supply a
+-- minimal table that satisfies it. Avoids dragging in full Sequence.load
+-- plumbing for a viewport-policy unit test.
+local function install_stub_strip(seq_id)
+    strip_holder.set({
+        get_displayed = function() return { sequence_id = seq_id } end,
+    })
+end
 
 local function reset_viewport(viewport_start, viewport_duration, playhead, content_end)
     data.state.clips = { { timeline_start = 0, duration = content_end or 10000 } }
@@ -19,8 +34,8 @@ local function reset_viewport(viewport_start, viewport_duration, playhead, conte
     data.state.is_playing = false
     data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
     data.state.sequence_id = "test_seq"
-    data.state.displayed_tab_id = "test_seq"
     data.state.project_id = "test_proj"
+    install_stub_strip("test_seq")
 end
 
 local function make_cmd(mutations)

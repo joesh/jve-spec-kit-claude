@@ -43,7 +43,9 @@ local Signals = require("core.signals")
 -- module-private; accessed via M.get_tab_strip(). Reset on project_changed
 -- so each project gets a fresh strip (Phase 2a; consumer migration in 2b).
 local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
+local strip_holder     = require("ui.timeline.state.strip_holder")
 local tab_strip = TimelineTabStrip.new()
+strip_holder.set(tab_strip)
 
 -- Shared Data & Constants
 M.dimensions = data.dimensions
@@ -78,13 +80,78 @@ M.colors = {
 }
 
 -- Core Lifecycle
-M.init = core.init
-M.clear = core.clear
+-- Strip-authoritative (015 #6): init opens a record/source tab for the
+-- sequence and sets it active+displayed BEFORE delegating to core, so the
+-- strip is the source of truth from the first frame. core.init still
+-- loads tracks/clips/view-state into data.state.
+function M.init(sequence_id, project_id)
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "timeline_state.init: sequence_id required")
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(sequence_id)
+    assert(seq, string.format(
+        "timeline_state.init: sequence %s not found", sequence_id))
+    -- FR-005: the active sequence (edit target) must NEVER be a master.
+    -- timeline_state.init sets active=sequence_id unconditionally inside
+    -- core.init, so a master id here would poison data.state.sequence_id
+    -- AND the persisted `last_open_sequence_id` setting (active_sequence_changed
+    -- listener writes it). Refuse loudly — the caller (project restore) is
+    -- responsible for picking a record sequence id; use M.activate_displayed
+    -- afterwards if you also want a master to be the displayed SourceTab.
+    assert(not seq:is_master(), string.format(
+        "timeline_state.init: sequence %s (%q) is a master — masters cannot "
+        .. "be the active edit target (FR-005). Pass a record sequence id "
+        .. "and use activate_displayed/switch_to_source_tab to show a master.",
+        sequence_id, tostring(seq.name)))
+    local rec_tab = tab_strip:find_record_tab_by_sequence_id(sequence_id)
+        or tab_strip:open_record_tab(sequence_id)
+    tab_strip:switch_active_record(rec_tab)
+    return core.init(sequence_id, project_id)
+end
+-- Strip-authoritative: clearing the active-sequence reference also drops
+-- the strip's displayed pointer so external readers see "no displayed tab".
+M.clear = function()
+    tab_strip:clear_displayed()
+    return core.clear()
+end
 M.set_project_id = core.set_project_id
 M.reset = data.reset
 M.persist_state_to_db = core.persist_state_to_db
 M.reload_clips = core.reload_clips
-M.activate_displayed = core.activate_displayed
+-- Strip-authoritative displayed pointer (015 #6): every call routes through
+-- the TimelineTabStrip first so the strip's `displayed_tab` is the SOLE
+-- source of truth for "which sequence is the timeline view rendering".
+-- Master id → SourceTab (singleton, opened on demand). Non-master → record
+-- tab (opened on demand, idempotent). Once the strip is synced we delegate
+-- to `core.activate_displayed` to load tracks/clips/marks into data.state.
+-- The flush-before-swap ordering inside core still works: it reads the
+-- previous displayed via the strip below before the load swaps it.
+function M.activate_displayed(seq_id)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "timeline_state.activate_displayed: seq_id required")
+    -- Capture prev BEFORE we mutate the strip — core needs the OUTGOING
+    -- sequence id to flush its view-state to the right DB row, and the
+    -- strip is now the only place that holds it.
+    local prev_tab = tab_strip:get_displayed()
+    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(seq_id)
+    assert(seq, string.format(
+        "timeline_state.activate_displayed: sequence %s not found", seq_id))
+    if seq:is_master() then
+        local source_tab = tab_strip:get_source_tab()
+        if not source_tab or source_tab.sequence_id ~= seq_id then
+            source_tab = tab_strip:open_source_tab(seq_id)
+        end
+        tab_strip:switch_displayed(source_tab)
+    else
+        local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
+            or tab_strip:open_record_tab(seq_id)
+        tab_strip:switch_displayed(rec_tab)
+    end
+    return core.activate_displayed(seq_id, prev_seq_id)
+end
 M.add_listener = data.add_listener
 M.remove_listener = data.remove_listener
 M.flush_pending_notify = data.flush_pending_notify
@@ -175,7 +242,19 @@ M.get_all_tracks = tracks.get_all
 M.get_video_tracks = tracks.get_video_tracks
 M.get_audio_tracks = tracks.get_audio_tracks
 M.get_track_height = tracks.get_height
-M.set_track_height = tracks.set_height
+-- Every real height change must trigger a persist flush. Without this
+-- wrapping, the splitter-release handler (the sole interactive caller)
+-- only marks track_layout_dirty=true and waits for an unrelated state
+-- change to flush — quit between resize and the next event loses the
+-- height. The persist_callback indirection mirrors what
+-- selection/viewport setters use.
+M.set_track_height = function(track_id, height)
+    assert(core and core.persist_state_to_db,
+        "timeline_state.set_track_height: timeline_core_state.persist_state_to_db missing — wiring broken")
+    tracks.set_height(track_id, height, function(_force)
+        core.persist_state_to_db()
+    end)
+end
 M.get_track_by_id = tracks.get_by_id
 M.get_primary_track_id = tracks.get_primary_id
 M.get_default_video_track_id = function() return tracks.get_primary_id("VIDEO") end
@@ -351,7 +430,13 @@ M.get_sequence_id = function() return data.state.sequence_id end
 --   May be a source master sequence_id while active_sequence_id is unchanged.
 
 M.get_active_sequence_id = function() return data.state.sequence_id end
-M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
+-- Strip-authoritative: the displayed tab lives on TimelineTabStrip; this
+-- accessor is a pure projection. Returns nil when no tab is displayed
+-- (project-changed reset, blank panel).
+M.get_displayed_tab_id   = function()
+    local displayed = tab_strip:get_displayed()
+    return displayed and displayed.sequence_id or nil
+end
 
 -- Movement-class commands (SetPlayhead, SetMarkIn/Out, GoToMarkIn/Out, ...)
 -- fired from the timeline panel target the *displayed* tab. Movement is
@@ -362,7 +447,8 @@ M.get_displayed_tab_id   = function() return data.state.displayed_tab_id end
 -- for the timeline panel's ruler/key dispatchers. Returns nil when the
 -- panel is blank (no displayed tab).
 M.get_movement_target_sequence_id = function()
-    return data.state.displayed_tab_id
+    local displayed = tab_strip:get_displayed()
+    return displayed and displayed.sequence_id or nil
 end
 
 -- Switch to the Source tab. Only displayed_tab_id changes; active_sequence_id
@@ -372,7 +458,10 @@ end
 function M.switch_to_source_tab(source_seq_id)
     assert(source_seq_id and source_seq_id ~= "",
         "timeline_state.switch_to_source_tab: source_seq_id required")
-    core.activate_displayed(source_seq_id)
+    -- Capture prev from the strip BEFORE the swap so core knows where to
+    -- flush outgoing view-state.
+    local prev_tab = tab_strip:get_displayed()
+    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
     -- Ensure the strip has a source tab pointing at this seq, then make it
     -- the displayed pointer. open_source_tab is idempotent (reloads in
     -- place if a source tab is already open).
@@ -381,6 +470,7 @@ function M.switch_to_source_tab(source_seq_id)
         source_tab = tab_strip:open_source_tab(source_seq_id)
     end
     tab_strip:switch_displayed(source_tab)
+    core.activate_displayed(source_seq_id, prev_seq_id)
 end
 
 -- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
@@ -392,16 +482,18 @@ function M.switch_to_record_tab(seq_id)
     assert(seq_id and seq_id ~= "",
         "timeline_state.switch_to_record_tab: seq_id required")
     local prev_active = data.state.sequence_id
-    core.activate_displayed(seq_id)
-    if prev_active ~= seq_id then
-        data.state.sequence_id = seq_id
-        Signals.emit("active_sequence_changed", seq_id, prev_active)
-    end
+    local prev_tab = tab_strip:get_displayed()
+    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
     -- Ensure the strip has a record tab for this seq, then make it both
     -- active and displayed (FR-004). open_record_tab is idempotent.
     local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
         or tab_strip:open_record_tab(seq_id)
     tab_strip:switch_active_record(rec_tab)
+    core.activate_displayed(seq_id, prev_seq_id)
+    if prev_active ~= seq_id then
+        data.state.sequence_id = seq_id
+        Signals.emit("active_sequence_changed", seq_id, prev_active)
+    end
 end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
@@ -423,8 +515,12 @@ end
 -- clobbered by async events). Falls back to in-memory if widgets unavailable.
 M.persist_scroll_offsets = function()
     -- Scroll offsets are view-state and belong to the DISPLAYED sequence
-    -- (FR-005, FR-007), not the active edit target.
-    local seq_id = data.state.displayed_tab_id
+    -- (FR-005, FR-007), not the active edit target. With option A
+    -- (source-tab persistence to the master row, decided 2026-05-13),
+    -- this writes to whatever sequence the strip's displayed tab points
+    -- at — including masters when the SourceTab is shown.
+    local displayed = tab_strip:get_displayed()
+    local seq_id = displayed and displayed.sequence_id or nil
     if not seq_id then return end
     -- Read from Qt widgets (ground truth) if available
     local v_off = data.state.video_scroll_offset or 0
@@ -462,12 +558,30 @@ M.get_mark_in  = function() return data.sequence and data.sequence.mark_in end
 M.get_mark_out = function() return data.sequence and data.sequence.mark_out end
 
 -- Source-sequence marks (FR-038): marks on the loaded master sequence.
-M.get_source_mark_in  = function() return data.source_sequence and data.source_sequence.mark_in end
-M.get_source_mark_out = function() return data.source_sequence and data.source_sequence.mark_out end
-M.get_source_sequence_fps = function() return data.source_sequence and data.source_sequence.frame_rate end
+-- Strip-authoritative (015 #6): pull from the SourceTab via TimelineTab
+-- rather than from a parallel data.source_sequence cache. TimelineTab
+-- pulls fresh from the sequence row each call (Sequence.load ≈ 21µs,
+-- well within frame budget — see test_timeline_tab_get_marks_perf.lua).
+local function source_tab_marks()
+    local source_tab = tab_strip:get_source_tab()
+    return source_tab and source_tab:get_marks() or nil
+end
+M.get_source_mark_in  = function()
+    local m = source_tab_marks(); return m and m.in_frame
+end
+M.get_source_mark_out = function()
+    local m = source_tab_marks(); return m and m.out_frame
+end
+M.get_source_sequence_fps = function()
+    local source_tab = tab_strip:get_source_tab()
+    if not source_tab then return nil end
+    local Sequence = require("models.sequence")
+    local seq = Sequence.load(source_tab.sequence_id)
+    return seq and seq.frame_rate
+end
 
 -- Display-aware mark accessors (FR-038): return the marks of whichever tab
--- the timeline body is currently rendering. Phase 3: backed by the
+-- the timeline view is currently rendering. Phase 3: backed by the
 -- TimelineTabStrip's displayed tab — no flat-singleton dispatch helper.
 -- TimelineTab:get_marks() pulls fresh from the sequence row (MVC rule 3.0).
 M.get_display_mark_in = function()
@@ -494,8 +608,16 @@ end
 -- caller renders it on the visible ruler in the correct coordinate space).
 -- Returns { frame = integer, key = string } or nil.
 M.get_ghost_mark = function()
-    local src_seq = data.source_sequence
-    local rec_seq = data.sequence
+    -- Strip-authoritative pull: source from the SourceTab (singleton),
+    -- record from the active record tab. Both Sequence.load calls cost
+    -- ~21µs; ghost computation only runs when 3 marks are set so frequency
+    -- is interaction-driven, not per-frame.
+    local source_tab = tab_strip:get_source_tab()
+    local record_tab = tab_strip:get_active_record()
+    if not source_tab or not record_tab then return nil end
+    local Sequence = require("models.sequence")
+    local src_seq = Sequence.load(source_tab.sequence_id)
+    local rec_seq = Sequence.load(record_tab.sequence_id)
     if not src_seq or not rec_seq then return nil end
 
     local src_fps = src_seq.frame_rate
@@ -601,6 +723,7 @@ function M.on_project_change()
     -- Each project gets a fresh tab strip. Phase 2b will populate it from
     -- the project's persisted `open_sequence_ids`; for now we just reset.
     tab_strip = TimelineTabStrip.new()
+    strip_holder.set(tab_strip)
 end
 
 --- Access the TimelineTabStrip that encapsulates this view's open-tab list.

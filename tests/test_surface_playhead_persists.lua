@@ -7,7 +7,21 @@ require('test_env')
 -- sequence persistence — identical to scrolling via the scrollbar.
 
 local viewport_state = require("ui.timeline.state.viewport_state")
-local data = require("ui.timeline.state.timeline_state_data")
+local data           = require("ui.timeline.state.timeline_state_data")
+-- Pre-require timeline_state so its module-load `strip_holder.set(fresh)`
+-- happens BEFORE we install the stub; otherwise scenario 5's lazy
+-- require would clobber it.
+require("ui.timeline.timeline_state")
+local strip_holder   = require("ui.timeline.state.strip_holder")
+
+-- Stub strip: persist machinery only needs displayed_sequence_id(), so a
+-- minimal table with the same shape as TimelineTabStrip's displayed_tab
+-- pointer suffices. Avoids pulling in Sequence.load for this unit test.
+local function install_stub_strip(seq_id)
+    strip_holder.set({
+        get_displayed = function() return { sequence_id = seq_id } end,
+    })
+end
 
 local function reset(viewport_start, viewport_duration, playhead)
     data.state.clips = { { timeline_start = 0, duration = 100000 } }
@@ -18,8 +32,8 @@ local function reset(viewport_start, viewport_duration, playhead)
     data.state.is_playing = false
     data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
     data.state.sequence_id = "test_seq"
-    data.state.displayed_tab_id = "test_seq"
     data.state.project_id = "test_proj"
+    install_stub_strip("test_seq")
 end
 
 print("=== surface_* invokes persist_callback on viewport change ===")

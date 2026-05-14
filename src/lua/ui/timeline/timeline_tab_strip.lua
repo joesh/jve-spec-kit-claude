@@ -1,7 +1,7 @@
 --- TimelineTabStrip — holder for TimelineTabs displayed in the timeline panel.
 --
 -- Per spec 015 architectural foundation: two pointers select tabs.
---   DisplayedTab     — the tab whose content the timeline body renders. Exactly one.
+--   DisplayedTab     — the tab whose content the timeline view renders. Exactly one.
 --   ActiveRecordTab  — the Record tab targeted by edits. Never the SourceTab.
 --
 -- Per spec F1: SourceTab is a singleton; when open it is always the FIRST
@@ -137,6 +137,15 @@ function TimelineTabStrip:switch_displayed(tab)
     assert(idx, string.format(
         "TimelineTabStrip:switch_displayed: tab id=%s not in strip", tostring(tab.id)))
     self.displayed_tab = tab
+    self:_notify()
+end
+
+--- Drop the displayed pointer entirely (timeline goes blank). Used by
+--- `timeline_state.clear()` when the project's active sequence reference
+--- is being released without tearing down the whole strip. Other tabs
+--- remain open; only the displayed pointer is nilled.
+function TimelineTabStrip:clear_displayed()
+    self.displayed_tab = nil
     self:_notify()
 end
 

@@ -38,6 +38,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 local Signals = require("core.signals")
 local project_gen = require("core.project_generation")
+local strip_holder = require("ui.timeline.state.strip_holder")
 local gap_lifecycle = require("core.gap_lifecycle")
 local log = require("core.logger").for_area("timeline")
 
@@ -242,9 +243,9 @@ local function flush_state_to_db()
     -- writes to displayed_tab_id's DB row. When source tab is displayed,
     -- the active record's row is untouched by viewport/playhead changes
     -- the user makes while viewing source.
-    local sequence_id = data.state.displayed_tab_id
+    local sequence_id = strip_holder.displayed_sequence_id()
     assert(sequence_id and sequence_id ~= "",
-        "timeline_core_state.flush_state_to_db: missing displayed_tab_id")
+        "timeline_core_state.flush_state_to_db: no displayed tab on strip")
 
     local project_id = data.state.project_id
     assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
@@ -402,8 +403,10 @@ end
 local function load_displayed_sequence(seq_id)
     assert(seq_id and seq_id ~= "",
         "load_displayed_sequence: seq_id required")
-
-    data.state.displayed_tab_id = seq_id
+    -- Strip-authoritative (015 #6): the strip is the canonical store for
+    -- "which tab is displayed". Caller (timeline_state) has already
+    -- updated the strip pointer; we just load the sequence's view-state
+    -- into data.state below.
 
     local Sequence = require("models.sequence")
     local sequence = Sequence.load(seq_id)
@@ -579,21 +582,28 @@ end
 --- the incoming sequence's tracks/clips + view-state, and emits displayed_tab_changed
 --- so view-layer listeners rebuild widgets. Does NOT touch active edit
 --- target (FR-005). Idempotent — no-op when already on `seq_id`.
-function M.activate_displayed(seq_id)
+--- Swap the displayed sequence. `prev_seq_id` MUST be the strip's current
+--- displayed sequence_id as observed BEFORE the caller (timeline_state's
+--- public wrapper) swaps the strip pointer. Passing it in eliminates
+--- core_state's parallel `data.state.displayed_tab_id` tracking — the
+--- strip is the sole external store.
+function M.activate_displayed(seq_id, prev_seq_id)
     assert(seq_id and seq_id ~= "",
         "timeline_core_state.activate_displayed: seq_id required")
-    local prev = data.state.displayed_tab_id
-    if prev == seq_id then return false end
+    assert(prev_seq_id == nil
+           or (type(prev_seq_id) == "string" and prev_seq_id ~= ""),
+        "timeline_core_state.activate_displayed: prev_seq_id must be string or nil")
+    if prev_seq_id == seq_id then return false end
 
     -- Flush outgoing displayed view-state BEFORE swap so persistence
-    -- writes to the OLD displayed_tab_id's row.
-    if persist_dirty and prev then
+    -- writes to the OLD displayed sequence's row.
+    if persist_dirty and prev_seq_id then
         M.persist_state_to_db(true)
     end
     persist_dirty = false
 
     load_displayed_sequence(seq_id)
-    Signals.emit("displayed_tab_changed", seq_id, prev)
+    Signals.emit("displayed_tab_changed", seq_id, prev_seq_id)
     data.notify_listeners()
     return true
 end
@@ -612,7 +622,6 @@ function M.clear()
     end
 
     data.state.sequence_id = nil
-    data.state.displayed_tab_id = nil
     data.state.tracks = {}
     data.set_clips({})
 
@@ -670,9 +679,9 @@ function M.reload_clips(target_sequence_id, opts)
     -- what the timeline view shows; we return false (timeline view unchanged). Once the user
     -- switches back to the active record tab, displayed_tab_changed fires
     -- and rebuild_for_displayed_tab reloads at that point.
-    local displayed = data.state.displayed_tab_id
+    local displayed = strip_holder.displayed_sequence_id()
     assert(displayed and displayed ~= "",
-        "timeline_core_state.reload_clips: missing displayed_tab_id")
+        "timeline_core_state.reload_clips: no displayed tab on strip")
     if target_sequence_id and target_sequence_id ~= "" and target_sequence_id ~= displayed then
         if opts and opts.allow_sequence_switch then
             local project_id = data.state.project_id
@@ -729,33 +738,45 @@ Signals.connect("marks_changed", function(sequence_id)
         data.sequence.mark_out = fresh.mark_out
         changed = true
     end
-    if data.source_sequence and data.source_sequence.id == sequence_id then
-        local Sequence = require("models.sequence")
-        local fresh = Sequence.load(sequence_id)
-        assert(fresh, string.format(
-            "timeline_core_state: marks_changed: failed to reload source sequence_id=%s",
-            tostring(sequence_id)))
-        data.source_sequence.mark_in  = fresh.mark_in
-        data.source_sequence.mark_out = fresh.mark_out
-        changed = true
-    end
+    -- Strip-authoritative (015 #6): the SourceTab branch used to refresh a
+    -- parallel data.source_sequence cache. That cache is gone — readers
+    -- now go through tab_strip:get_source_tab() and Sequence.load. So we
+    -- only need to notify here when the marks_changed event corresponds
+    -- to the source tab, so view-layer listeners re-render the ruler.
+    -- Notification is unconditional; cheap pull-on-redraw absorbs it.
     if changed then data.notify_listeners() end
 end)
 
--- Track the source sequence (loaded master clip) for 3-point mark access.
--- Loads the full sequence model so mark_in/mark_out and frame_rate are available.
-Signals.connect("source_loaded_changed", function(new_seq_id, _prev_seq_id)
-    if not new_seq_id then
-        data.source_sequence = nil
-    else
-        local Sequence = require("models.sequence")
-        local seq = Sequence.load(new_seq_id)
-        assert(seq, string.format(
-            "timeline_core_state: source_loaded_changed: failed to load source sequence_id=%s",
-            tostring(new_seq_id)))
-        data.source_sequence = seq
-    end
+-- Source-loaded notification: rerender on load/unload. Strip-authoritative
+-- (015 #6) — no longer caches a Sequence row; readers pull fresh via
+-- tab_strip:get_source_tab() then Sequence.load (≈21µs per call).
+Signals.connect("source_loaded_changed", function(_new_seq_id, _prev_seq_id)
     data.notify_listeners()
+end)
+
+-- Sync the in-memory track row when ToggleTrackPreference flips muted /
+-- soloed / locked / enabled. ToggleTrackPreference mutates a freshly-
+-- loaded Track instance and writes the DB column; the renderer reads
+-- from data.state.tracks (populated by load_displayed_sequence) and
+-- without this sync the visual hash overlay / future per-row state
+-- would only flip on next sequence load. Signal value is INTEGER 0/1
+-- per toggle_track_preference; data.state.tracks stores booleans.
+Signals.connect("track_preference_changed", function(track_id, property, new_val)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "track_preference_changed listener: track_id must be a non-empty string")
+    assert(type(property) == "string" and property ~= "",
+        "track_preference_changed listener: property must be a non-empty string")
+    assert(new_val == 0 or new_val == 1, string.format(
+        "track_preference_changed listener: new_val must be 0 or 1; got %s",
+        tostring(new_val)))
+    if not data.state.tracks then return end
+    for _, t in ipairs(data.state.tracks) do
+        if t.id == track_id then
+            t[property] = (new_val == 1)
+            data.notify_listeners()
+            return
+        end
+    end
 end)
 
 -- Update playhead when SetPlayhead command fires.
@@ -763,7 +784,7 @@ end)
 -- (the one the timeline view's ruler renders). SetPlayhead writes per-sequence, and
 -- the active and displayed sequences may differ when the source tab is open.
 Signals.connect("playhead_changed", function(sequence_id, frame)
-    if data.state.displayed_tab_id == sequence_id and type(frame) == "number" then
+    if strip_holder.displayed_sequence_id() == sequence_id and type(frame) == "number" then
         data.state.playhead_position = frame
         data.notify_listeners()
     end
@@ -793,7 +814,7 @@ end)
 Signals.connect("media_changed", function(_changed_media_ids)
     -- The clip cache reflects the DISPLAYED sequence (FR-005, FR-007).
     -- Reload against displayed so the visible view picks up new media paths.
-    local displayed = data.state.displayed_tab_id
+    local displayed = strip_holder.displayed_sequence_id()
     if not displayed or displayed == "" then return end
     M.reload_clips(displayed)
     -- Propagate to playback engine so TMB re-fetches clips with updated media paths

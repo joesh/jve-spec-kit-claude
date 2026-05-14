@@ -8,7 +8,7 @@
 --
 -- Selection and drag state are NOT per-tab. Both are global on
 -- timeline_state. Selection is global by design; drag is global because
--- cross-timeline drags (drag a clip from one tab's body to another's) are
+-- cross-timeline drags (drag a clip from one tab's view to another's) are
 -- supported.
 --
 -- Two kinds:
