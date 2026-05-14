@@ -65,12 +65,18 @@ db:exec(string.format([[
     TC_ORIGIN_25 * SAMPLE_RATE / 25, SAMPLE_RATE, now, now))
 
 -- Master sequence + V/A media_refs sized to the old (stale) duration.
+-- A bootstrap record sequence is added below so command_manager.init can
+-- be called with a record id (FR-005: active edit target must never be a
+-- master). The relink path under test is project-scoped — it touches the
+-- master row directly and is agnostic to which sequence is active.
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, start_timecode_frame, playhead_frame,
         view_start_frame, view_duration_frames, created_at, modified_at)
-    VALUES ('msa', 'proj', 'A023 Master', 'master', 25, 1, %d, 1920, 1080,
+    VALUES ('rec_bootstrap', 'proj', 'Bootstrap', 'sequence', 25, 1, %d, 1920, 1080,
+            0, 0, 0, 300, %d, %d),
+           ('msa', 'proj', 'A023 Master', 'master', 25, 1, %d, 1920, 1080,
             %d, 0, 0, %d, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -87,12 +93,12 @@ db:exec(string.format([[
             %d, %d, 1, 1.0, 0, %d, %d),
       ('mref_a', 'proj', 'msa', 'msa_a', 'media_a023', 0, %d,
             %d, %d, 1, 1.0, 0, %d, %d);
-]], SAMPLE_RATE, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
+]], SAMPLE_RATE, now, now, SAMPLE_RATE, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
     OLD_DUR_FRAMES, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
     OLD_DUR_SAMPLES, TC_ORIGIN_25 * SAMPLE_RATE / 25, OLD_DUR_SAMPLES,
     now, now))
 
-command_manager.init('msa', 'proj')
+command_manager.init('rec_bootstrap', 'proj')
 
 -- Drive RelinkClips with a freshly-probed file: same TC origin, but the
 -- new file is 755 frames (matches the ffprobe of the actual fixture).
