@@ -39,11 +39,15 @@ local RESIZE_EDGE_PX = 4
 -- Pure math. State owns the "what's this track's height" question (with
 -- its own asserts); the drag handler enforces MIN_TRACK_HEIGHT at the
 -- input boundary. These helpers just convert between row and header
--- pixel counts — passing nil / non-number is a caller bug.
+-- pixel counts — passing nil / non-number / under-MIN is a caller bug.
+local function assert_track_height(h, caller)
+    assert(type(h) == "number" and h >= MIN_TRACK_HEIGHT,
+        string.format("%s: track_height must be number >= %d, got %s",
+            caller, MIN_TRACK_HEIGHT, tostring(h)))
+end
+
 local function content_to_header(track_height)
-    assert(type(track_height) == "number" and track_height >= MIN_TRACK_HEIGHT,
-        string.format("content_to_header: track_height must be number >= %d, got %s",
-            MIN_TRACK_HEIGHT, tostring(track_height)))
+    assert_track_height(track_height, "content_to_header")
     return track_height - RESIZE_EDGE_PX
 end
 
@@ -54,17 +58,18 @@ local function header_to_content(header_height)
     return header_height + RESIZE_EDGE_PX
 end
 
--- Exposed for tests / alignment audits.
+-- Exposed for tests / alignment audits. header_row_total and lane_row_total
+-- both collapse mathematically to `track_height`, but kept named-separately
+-- to document the per-column structure (header column = widget + edge;
+-- lane column = single lane).
 M.metrics = {
     RESIZE_EDGE_PX   = RESIZE_EDGE_PX,
     MIN_TRACK_HEIGHT = MIN_TRACK_HEIGHT,
-    -- Total pixels a track row occupies in the headers column.
-    header_row_total = function(track_height) return content_to_header(track_height) + RESIZE_EDGE_PX end,
-    -- Total pixels the same track occupies as a clip lane.
-    lane_row_total   = function(track_height)
-        assert(type(track_height) == "number" and track_height >= MIN_TRACK_HEIGHT,
-            string.format("lane_row_total: track_height must be number >= %d, got %s",
-                MIN_TRACK_HEIGHT, tostring(track_height)))
+    header_row_total = function(track_height)
+        return content_to_header(track_height) + RESIZE_EDGE_PX
+    end,
+    lane_row_total = function(track_height)
+        assert_track_height(track_height, "lane_row_total")
         return track_height
     end,
 }
@@ -1228,7 +1233,7 @@ end
 -- The handler must NOT restyle directly: it would push the WRONG style for
 -- S/M stack buttons (which use build_sm_btn_stylesheet, not the header
 -- style) and would double-render every click.
-local dispatch_or_fail = require("ui.timeline.dispatch_or_fail")
+local command_dispatch = require("core.command_dispatch")
 
 local function wire_toggle_preference(btn, track_id, property, _active_color)
     local handler = register_track_btn_handler(function()
@@ -1236,7 +1241,7 @@ local function wire_toggle_preference(btn, track_id, property, _active_color)
             "wire_toggle_preference: track %s not found", tostring(track_id)))
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_toggle_preference: no project_id")
-        dispatch_or_fail.execute_or_fail("ToggleTrackPreference", {
+        command_dispatch.execute_or_fail("ToggleTrackPreference", {
             track_id = track_id, property = property, project_id = project_id,
         }, "track-header " .. property .. " click")
     end)
@@ -1253,7 +1258,7 @@ local function wire_waveform_display_toggle(btn, track_id)
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_waveform_display_toggle: no project_id (track_id="
             .. tostring(track_id) .. ")")
-        dispatch_or_fail.execute_or_fail("ToggleTrackWaveformDisplay", {
+        command_dispatch.execute_or_fail("ToggleTrackWaveformDisplay", {
             track_id = track_id, project_id = project_id,
         }, "waveform-display btn click")
     end)
@@ -1274,7 +1279,7 @@ local function wire_sync_mode_cycle(btn, track_id)
             tostring(t.sync_mode), tostring(track_id)))
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_sync_mode_cycle: no project_id")
-        dispatch_or_fail.execute_or_fail("SetSyncMode", {
+        command_dispatch.execute_or_fail("SetSyncMode", {
             track_id = track_id, sync_mode = next_mode, project_id = project_id,
         }, "sync-mode cycle click")
     end)

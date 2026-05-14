@@ -25,41 +25,36 @@ function M.get_audio_tracks()
     return result
 end
 
-function M.get_height(track_id)
+-- Find a track row by id; raise with `caller` in the message when absent.
+-- Centralises the assert-on-unknown-track contract (rule 2.5).
+local function require_track(track_id, caller)
     assert(type(track_id) == "string" and track_id ~= "",
-        "track_state.get_height: track_id required")
+        caller .. ": track_id required")
     for _, track in ipairs(data.state.tracks) do
-        if track.id == track_id then
-            -- track.height nil = "exists but never resized" → DEFAULT is
-            -- the correct semantic. Unknown track is a different story
-            -- (see assert below).
-            return track.height or data.dimensions.default_track_height
-        end
+        if track.id == track_id then return track end
     end
     error(string.format(
-        "track_state.get_height: track %s not in state — caller is asking "
-        .. "about a track that does not exist on the active sequence",
-        tostring(track_id)))
+        "%s: track %s not in state — caller is referencing a track that "
+        .. "does not exist on the active sequence", caller, track_id))
+end
+
+function M.get_height(track_id)
+    local track = require_track(track_id, "track_state.get_height")
+    -- track.height nil = "exists but never resized" → DEFAULT is the
+    -- correct semantic; UNKNOWN track already raised in require_track.
+    return track.height or data.dimensions.default_track_height
 end
 
 function M.set_height(track_id, height, persist_callback)
-    assert(type(track_id) == "string" and track_id ~= "",
-        "track_state.set_height: track_id required")
-    for _, track in ipairs(data.state.tracks) do
-        if track.id == track_id then
-            if track.height ~= height then
-                track.height = height
-                track_layout_dirty = true
-                data.notify_listeners()
-                if persist_callback then persist_callback(true) end -- force persist layout
-            end
-            return
-        end
-    end
-    error(string.format(
-        "track_state.set_height: track %s not in state — caller is trying "
-        .. "to size a track that does not exist on the active sequence",
-        tostring(track_id)))
+    local track = require_track(track_id, "track_state.set_height")
+    assert(type(height) == "number", string.format(
+        "track_state.set_height: height must be number (track=%s), got %s",
+        track_id, type(height)))
+    if track.height == height then return end
+    track.height = height
+    track_layout_dirty = true
+    data.notify_listeners()
+    if persist_callback then persist_callback(true) end -- force persist layout
 end
 
 function M.is_layout_dirty() return track_layout_dirty end

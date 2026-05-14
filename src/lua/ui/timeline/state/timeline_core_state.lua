@@ -413,6 +413,17 @@ local function load_displayed_sequence(seq_id)
     assert(sequence, string.format(
         "load_displayed_sequence: failed to load seq_id=%s", tostring(seq_id)))
 
+    -- Validate every required field BEFORE any state mutation so a failed
+    -- invariant doesn't leave data.state half-rewritten (rule 1.14).
+    assert(sequence.project_id and sequence.project_id ~= "",
+        string.format("load_displayed_sequence: sequence missing project_id (seq_id=%s)", tostring(seq_id)))
+    assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
+        string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(seq_id)))
+    assert(type(sequence.start_timecode_frame) == "number", string.format(
+        "load_displayed_sequence: sequence %s missing start_timecode_frame "
+        .. "(schema declares NOT NULL DEFAULT 0; Sequence.load asserts non-null — "
+        .. "if this fires, a caller bypassed both invariants)", tostring(seq_id)))
+
     data.state.tracks = db.load_tracks(seq_id)
     -- Body content source depends on sequence kind:
     --   nested → real clips rows
@@ -423,16 +434,8 @@ local function load_displayed_sequence(seq_id)
         data.set_clips(db.load_clips(seq_id))
     end
     clip_state.invalidate_indexes()
-    assert(sequence.project_id and sequence.project_id ~= "",
-        string.format("load_displayed_sequence: sequence missing project_id (seq_id=%s)", tostring(seq_id)))
-    assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
-        string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(seq_id)))
 
     data.state.sequence_frame_rate = sequence.frame_rate
-    assert(type(sequence.start_timecode_frame) == "number", string.format(
-        "load_displayed_sequence: sequence %s missing start_timecode_frame "
-        .. "(schema declares NOT NULL DEFAULT 0; Sequence.load asserts non-null — "
-        .. "if this fires, a caller bypassed both invariants)", tostring(seq_id)))
     data.state.sequence_timecode_start_frame = sequence.start_timecode_frame
     data.sequence = sequence
 
