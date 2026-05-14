@@ -85,6 +85,18 @@ function M.ensure_stack_state(stack_id)
             current_branch_path = {},
             sequence_id = nil,
             position_initialized = false,
+            -- Optimistic-CAS baselines: the cursor values we last
+            -- *confirmed* in the DB (last successful read or write).
+            -- Writes compare against these; mismatch means a sibling
+            -- session moved the cursor and we must fail loudly rather
+            -- than silently overwrite. Two fields because a single
+            -- stack-state can hold both: GLOBAL_STACK_ID's state
+            -- carries the project's global_undo_cursor AND (for
+            -- legacy/active-sequence compatibility) writes to
+            -- sequences.current_sequence_number via save_undo_position.
+            -- nil sentinel = "no DB row read yet".
+            persisted_seq_cursor = nil,
+            persisted_global_cursor = nil,
         }
         undo_stack_states[stack_id] = state
     end
@@ -244,6 +256,10 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
 
     local saved_value, has_row = M.load_sequence_undo_position(sequence_id)
     local state = M.ensure_stack_state(stack_id)
+    -- Seed CAS baseline from the raw DB column. Subsequent save_undo_position
+    -- calls will use this as the expected-prev value. Captured BEFORE the
+    -- orphan-repair path below so a stale row gets caught next save.
+    state.persisted_seq_cursor = has_row and saved_value or nil
 
     -- NSF: Validate that saved cursor points to an existing command
     -- If orphaned (e.g., commands table was cleared), reset to actual last command
@@ -257,14 +273,33 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
             log.warn("Orphaned undo cursor: sequence %s has current_sequence_number=%d but command doesn't exist. Resetting to %s.",
                 sequence_id, saved_value, last_sequence_number > 0 and tostring(last_sequence_number) or "nil")
             saved_value = last_sequence_number > 0 and last_sequence_number or nil
-            -- Persist the fix
-            local fix = db:prepare("UPDATE sequences SET current_sequence_number = ? WHERE id = ?")
-            assert(fix, "initialize_stack_position_from_db: failed to prepare orphan fix query")
+            -- Persist the orphan-repair. CAS against the stale value we
+            -- just read (state.persisted_seq_cursor) — load_sequence_undo_position
+            -- always seeded it above when has_row is true, which it must
+            -- be here (we observed saved_value > 0). If the row was
+            -- moved by a sibling writer between the read and now, fail
+            -- loudly rather than silently overwrite.
+            assert(state.persisted_seq_cursor ~= nil, string.format(
+                "initialize_stack_position_from_db: orphan-repair entered with "
+                .. "no CAS baseline for sequence %s (load_sequence_undo_position "
+                .. "should have seeded persisted_seq_cursor; row existence is "
+                .. "implied by saved_value=%s > 0)", sequence_id, tostring(saved_value)))
+            local fix = assert(db:prepare(
+                "UPDATE sequences SET current_sequence_number = ? WHERE id = ? AND current_sequence_number = ?"),
+                "initialize_stack_position_from_db: failed to prepare orphan fix query")
             fix:bind_value(1, saved_value or 0)
             fix:bind_value(2, sequence_id)
+            fix:bind_value(3, state.persisted_seq_cursor)
             local ok = fix:exec()
             fix:finalize()
-            assert(ok, string.format("initialize_stack_position_from_db: failed to persist orphan fix for sequence %s", sequence_id))
+            assert(ok, string.format(
+                "initialize_stack_position_from_db: failed to persist orphan fix for sequence %s",
+                sequence_id))
+            assert(db:changes() == 1, string.format(
+                "initialize_stack_position_from_db: orphan-repair UPDATE for sequence %s "
+                .. "found cursor changed by another writer (expected_prev=%s). Re-init required.",
+                sequence_id, tostring(state.persisted_seq_cursor)))
+            state.persisted_seq_cursor = saved_value or 0
         end
         M.set_current_sequence_number(saved_value)
     elseif saved_value == 0 then
@@ -282,7 +317,27 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
     state.position_initialized = true
 end
 
--- Save current undo position to database (persists across sessions)
+-- Invalidate the optimistic-CAS baselines so the next write is a
+-- first-touch (unguarded, baseline-seeding) write. Call this from paths
+-- that just rolled the DB back to a savepoint — the rollback unwinds
+-- any in-progress cursor write but `persisted_*_cursor` is pure in-memory
+-- state that the savepoint can't touch, so the next CAS would compare
+-- against a stale "we wrote X" value and assert.
+function M.invalidate_cas_baseline()
+    for _, state in pairs(undo_stack_states) do
+        state.persisted_seq_cursor = nil
+        state.persisted_global_cursor = nil
+    end
+end
+
+-- Save current undo position to database (persists across sessions).
+--
+-- Uses optimistic CAS: the UPDATE's WHERE clause pins the expected previous
+-- column value to `state.persisted_seq_cursor`. If a sibling session (or
+-- direct DB poke) moved the cursor since we last read/wrote, db:changes()
+-- returns 0 and we assert with context so the caller can re-read and
+-- recover. Silent last-write-wins would let two sessions desync the
+-- cursor and resurface stale-redo bugs.
 function M.save_undo_position()
     assert(db, "CommandHistory.save_undo_position: no database connection")
 
@@ -290,25 +345,39 @@ function M.save_undo_position()
     assert(sequence_id and sequence_id ~= "",
         "CommandHistory.save_undo_position: no active sequence_id")
 
-    local update = db:prepare([[
-        UPDATE sequences
-        SET current_sequence_number = ?
-        WHERE id = ?
-    ]])
-    assert(update, "CommandHistory.save_undo_position: failed to prepare update")
+    local state = M.ensure_stack_state(active_stack_id)
+    local expected_prev = state.persisted_seq_cursor
+    local new_value = current_sequence_number or 0
 
-    local stored_position = current_sequence_number
-    if stored_position == nil then
-        stored_position = 0
+    -- First-touch (no baseline): unguarded write + seed baseline. We accept
+    -- a tiny first-write race in exchange for not forcing every caller to
+    -- load first. From the second write onward CAS protects against
+    -- sibling-session drift, which is the case that actually bites.
+    local sql, has_prev = "UPDATE sequences SET current_sequence_number = ? WHERE id = ?", false
+    if expected_prev ~= nil then
+        sql = "UPDATE sequences SET current_sequence_number = ? WHERE id = ? AND current_sequence_number = ?"
+        has_prev = true
     end
-    update:bind_value(1, stored_position)
+
+    local update = assert(db:prepare(sql),
+        "CommandHistory.save_undo_position: failed to prepare update")
+    update:bind_value(1, new_value)
     update:bind_value(2, sequence_id)
-    local success = update:exec()
+    if has_prev then update:bind_value(3, expected_prev) end
+    local exec_ok = update:exec()
     update:finalize()
+    assert(exec_ok, string.format(
+        "CommandHistory.save_undo_position: UPDATE failed for sequence %s",
+        tostring(sequence_id)))
 
-    assert(success, string.format(
-        "CommandHistory.save_undo_position: UPDATE failed for sequence %s", tostring(sequence_id)))
+    if has_prev then
+        assert(db:changes() == 1, string.format(
+            "CommandHistory.save_undo_position: cursor moved by another writer "
+            .. "(sequence=%s expected_prev=%s new=%d). Re-read DB and retry.",
+            tostring(sequence_id), tostring(expected_prev), new_value))
+    end
 
+    state.persisted_seq_cursor = new_value
     return true
 end
 
@@ -480,23 +549,58 @@ function M.get_global_cursor()
 end
 
 --- Set the global cursor (in-memory + DB persistence).
+--
+-- Uses optimistic CAS against `global_state.persisted_global_cursor`: a sibling
+-- session (or external write) that moved the cursor since our last
+-- confirmed value causes db:changes()=0 and we assert. Silent overwrite
+-- would let two sessions stomp each other's global cursor.
 function M.set_global_cursor(value)
     assert(db, "set_global_cursor: no database connection")
     assert(_active_project_id and _active_project_id ~= "",
         "set_global_cursor: no active project_id")
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+    local expected_prev = global_state.persisted_global_cursor
+    local new_value = value or 0
+
+    -- First-touch (no baseline) = unguarded write that seeds the baseline;
+    -- from the second write onward CAS guards against sibling-session
+    -- drift. projects.global_undo_cursor is NOT NULL DEFAULT 0, so once
+    -- load_global_cursor has run, expected_prev is a real number.
+    local sql, has_prev = "UPDATE projects SET global_undo_cursor = ? WHERE id = ?", false
+    if expected_prev ~= nil then
+        sql = "UPDATE projects SET global_undo_cursor = ? WHERE id = ? AND global_undo_cursor = ?"
+        has_prev = true
+    end
+
+    local update = assert(db:prepare(sql),
+        "set_global_cursor: failed to prepare UPDATE")
+    update:bind_value(1, new_value)
+    update:bind_value(2, _active_project_id)
+    if has_prev then update:bind_value(3, expected_prev) end
+    local exec_ok = update:exec()
+    update:finalize()
+    assert(exec_ok, string.format(
+        "set_global_cursor: UPDATE failed for project %s", _active_project_id))
+
+    if has_prev then
+        assert(db:changes() == 1, string.format(
+            "set_global_cursor: cursor moved by another writer "
+            .. "(project=%s expected_prev=%s new=%d). Re-read DB and retry.",
+            _active_project_id, tostring(expected_prev), new_value))
+    end
+
     global_state.current_sequence_number = value
     global_state.position_initialized = true
-    local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
-    assert(update, "set_global_cursor: failed to prepare UPDATE")
-    update:bind_value(1, value or 0)
-    update:bind_value(2, _active_project_id)
-    assert(update:exec(), string.format(
-        "set_global_cursor: UPDATE failed for project %s", _active_project_id))
-    update:finalize()
+    global_state.persisted_global_cursor = new_value
 end
 
 --- Load the global cursor from the projects table on init.
+--
+-- Seeds `persisted_global_cursor` from the DB column verbatim — that is the
+-- value against which the next set_global_cursor will CAS. Note that
+-- in-memory `current_sequence_number` uses nil-for-zero semantics ("no
+-- commands undone yet"), but `persisted_global_cursor` mirrors the raw column
+-- so the CAS matches whatever is actually on disk.
 function M.load_global_cursor()
     assert(db, "load_global_cursor: no database connection")
     assert(_active_project_id and _active_project_id ~= "",
@@ -514,6 +618,7 @@ function M.load_global_cursor()
     else
         global_state.current_sequence_number = nil
     end
+    global_state.persisted_global_cursor = value or 0
     global_state.position_initialized = true
     query:finalize()
 end

@@ -537,8 +537,13 @@ local function rollback_mutations()
 end
 
 -- Rollback an undo group: DB savepoint, cursor, in-memory mutations, abort flag.
+-- The savepoint rollback unwinds any cursor write performed during the failed
+-- command, so `history.invalidate_cas_baseline()` must run before save_undo_position
+-- — otherwise the next CAS compares against a baseline reflecting a write that
+-- no longer exists in the DB and the assertion fires spuriously.
 local function rollback_undo_group(group_id)
     db_module.rollback_to_savepoint("undo_group_" .. group_id)
+    history.invalidate_cas_baseline()
     local cursor_on_entry = history.get_undo_group_cursor_on_entry()
     history.set_current_sequence_number(cursor_on_entry)
     history.save_undo_position()
@@ -557,6 +562,9 @@ local function rollback_transaction()
         rollback_undo_group(group_id)
     else
         db_module.rollback()
+        -- Standalone rollback also unwinds any in-progress cursor write; the
+        -- CAS baseline must be re-seeded from DB on the next save.
+        history.invalidate_cas_baseline()
         rollback_mutations()
     end
     discard_post_commit_emits()

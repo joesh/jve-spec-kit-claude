@@ -18,7 +18,6 @@ print("=== test_ruler_rerenders_on_resize.lua ===")
 
 local widget_width = 400
 local registered_resize_handler = nil
-local registered_mouse_handler = nil
 local clear_calls = 0
 local last_lines_at_width = {}   -- width -> count of add_line() calls in that render
 
@@ -36,7 +35,7 @@ _G.timeline = {
     add_text      = function() end,
     update        = function() end,
     set_lua_state = function() end,
-    set_mouse_event_handler  = function(_w, name) registered_mouse_handler = name end,
+    set_mouse_event_handler  = function() end,
     set_resize_event_handler = function(_w, name) registered_resize_handler = name end,
     set_desired_height = function() end,
 }
