@@ -6,7 +6,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cozempic guard --daemon 2>/dev/null || true"
+            "command": "/Users/joe/Local/jve-spec-kit-claude/.claude/hooks/session_pid.sh 2>/dev/null || true"
+          },
+          {
+            "type": "command",
+            "command": "cozempic guard --daemon --threshold 3 --soft-threshold 2 --threshold-tokens 350000 --soft-threshold-tokens 200000 -rx aggressive --interval 30 2>/dev/null || true"
           }
         ]
       }
@@ -27,6 +31,15 @@
           {
             "type": "command",
             "command": "cozempic checkpoint 2>/dev/null || true"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/joe/Local/jve-spec-kit-claude/.claude/hooks/audit_reminder.sh"
           }
         ]
       }
