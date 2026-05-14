@@ -1,18 +1,26 @@
 #!/usr/bin/env luajit
 
--- 015 F2: effective source = browser-selected master_clip (when browser
--- is the active panel) OR source-viewer loaded master (otherwise).
+-- 015 F2: effective source = recency rule among {source_viewer, browser}.
+--
+-- Whichever of the two was activated most recently wins, provided it has a
+-- value. If the recency winner has no value, the other (if any) is the
+-- answer. Activating any OTHER panel (timeline, inspector, ...) does NOT
+-- change recency — the browser's selected source must survive a focus
+-- shift to the timeline (so a user can click a src-btn to drag it).
 --
 -- Domain behavior under test:
 --   T1: initial state — no source loaded, no browser selection → nil.
---   T2: source-viewer load → effective source updates to loaded master.
---   T3: browser becomes active w/ no selection → effective source unchanged.
---   T4: browser-selected master_clip → effective source flips to that clip.
---   T5: panel switches away from browser → effective source reverts to
---       source-viewer's master.
---   T6: panel switches back to browser → effective source flips again.
---   T7: spurious selection_hub fires that don't change the computed value
---       do NOT emit effective_source_changed.
+--   T2: source-viewer load → effective source = loaded master.
+--   T3: browser becomes active w/ no selection → unchanged (no browser value).
+--   T4: browser selects master_clip while browser is active → flips to it
+--       (recency = browser, has value).
+--   T5: focus shifts to TIMELINE (neither source input) → browser-selected
+--       source SURVIVES; effective stays the browser pick.
+--   T6: source viewer panel becomes active → recency flips, effective = SV master.
+--   T7: browser becomes active again → recency flips back to browser pick.
+--   T8: idempotent — re-emit same selection produces no emit.
+--   T9: timeline (nested-seq) item is a valid source.
+--   T10: master_seq_id_of predicate.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -68,86 +76,102 @@ clear_emits()
 selection_hub.update_selection("project_browser", {})
 selection_hub.set_active_panel("project_browser")
 assert(effective_src.get() == "master-A",
-    "T3: browser active without master_clip selection must NOT shadow source-viewer master")
+    "T3: browser active without value cannot shadow source-viewer master")
 assert(#emit_log == 0,
     "T3: no emit expected — computed value unchanged")
 
 -- ── T4: browser selects a master_clip → effective source flips ──────────
--- Use the real shape that browser_state.normalize_master_clip emits:
---   item_type = "master_clip"; master_sequence_id is the field that names
---   the master sequence. (Earlier draft of this test invented a {type,
---   clip_id} shape that doesn't exist in the selection plumbing — rule
---   2.34: don't derive expected values from your own model.)
-print("-- T4: browser master_clip selection wins")
+print("-- T4: browser master_clip selection, browser active → browser wins")
 clear_emits()
 selection_hub.update_selection("project_browser",
     { { item_type = "master_clip", master_sequence_id = "master-B" } })
 assert(effective_src.get() == "master-B", string.format(
-    "T4: browser master_clip overrides source viewer; got %s",
+    "T4: recency=browser + browser has master-B → effective is master-B; got %s",
     tostring(effective_src.get())))
 local e2 = last_emit()
 assert(e2 and e2.new == "master-B" and e2.prev == "master-A",
     "T4: emit must be (master-B, master-A)")
 
--- ── T5: switch active panel back to timeline → reverts to source-viewer ─
-print("-- T5: leaving browser reverts to source-viewer master")
+-- ── T5: focus shift to timeline → browser-selected source SURVIVES ──────
+print("-- T5: focus → timeline (not a source input) — browser pick survives")
 clear_emits()
 selection_hub.set_active_panel("timeline")
-assert(effective_src.get() == "master-A",
-    "T5: with browser inactive, source-viewer master is effective")
-local e5 = last_emit()
-assert(e5 and e5.new == "master-A" and e5.prev == "master-B",
-    "T5: emit must be (master-A, master-B)")
+assert(effective_src.get() == "master-B",
+    "T5: timeline is not a source input — recency unchanged, browser-B still wins")
+assert(#emit_log == 0,
+    "T5: no emit — effective source unchanged across non-source-input focus shift")
 
--- ── T6: switch back to browser — selection still there → flips again ───
-print("-- T6: re-activating browser restores browser-master priority")
+-- ── T6: source viewer becomes active → recency flips to source viewer ──
+print("-- T6: source viewer active → SV master wins (recency rule)")
+clear_emits()
+selection_hub.set_active_panel("source_monitor")
+assert(effective_src.get() == "master-A",
+    "T6: recency=source_monitor + SV has master-A → effective is master-A")
+local e6 = last_emit()
+assert(e6 and e6.new == "master-A" and e6.prev == "master-B",
+    "T6: emit must be (master-A, master-B)")
+
+-- ── T7: browser active again → recency flips back ──────────────────────
+print("-- T7: re-activate browser → flips back to browser pick")
 clear_emits()
 selection_hub.set_active_panel("project_browser")
 assert(effective_src.get() == "master-B",
-    "T6: browser active with master-B selected → effective is master-B")
-local e6 = last_emit()
-assert(e6 and e6.new == "master-B" and e6.prev == "master-A",
-    "T6: emit must be (master-B, master-A)")
+    "T7: recency=browser + browser has master-B → master-B")
+local e7 = last_emit()
+assert(e7 and e7.new == "master-B" and e7.prev == "master-A",
+    "T7: emit must be (master-B, master-A)")
 
--- ── T7: no-op selection refire must not emit ─────────────────────────────
-print("-- T7: idempotent — re-emitting same selection produces no emit")
+-- ── T8: no-op selection refire must not emit ────────────────────────────
+print("-- T8: idempotent — re-emitting same selection produces no emit")
 clear_emits()
 selection_hub.update_selection("project_browser",
     { { item_type = "master_clip", master_sequence_id = "master-B" } })
 assert(effective_src.get() == "master-B",
-    "T7: still master-B after no-op selection refire")
+    "T8: still master-B after no-op selection refire")
 assert(#emit_log == 0,
-    "T7: re-asserting same selection must not emit effective_source_changed")
+    "T8: re-asserting same selection must not emit effective_source_changed")
 
--- ── T8: nested-sequence (timeline) selection counts as a source ─────────
-print("-- T8: timeline item with id is also insertable")
+-- ── T9: nested-sequence (timeline) selection counts as a source ─────────
+print("-- T9: timeline item with id is also insertable")
 clear_emits()
-selection_hub.set_active_panel("timeline")   -- clear browser-source first
 selection_hub.update_selection("project_browser",
     { { item_type = "timeline", id = "nested-seq-Q" } })
-selection_hub.set_active_panel("project_browser")
 assert(effective_src.get() == "nested-seq-Q", string.format(
-    "T8: timeline (nested sequence) selection must be the effective source; got %s",
+    "T9: timeline (nested sequence) selection must be the effective source; got %s",
     tostring(effective_src.get())))
 
--- ── T9: master_seq_id_of predicate directly ─────────────────────────────
-print("-- T9: master_seq_id_of predicate")
+-- ── T10: master_seq_id_of predicate directly ────────────────────────────
+print("-- T10: master_seq_id_of predicate")
 assert(effective_src.master_seq_id_of(
     { item_type = "master_clip", master_sequence_id = "m1" }) == "m1",
-    "T9a: master_clip with master_sequence_id returns it")
+    "T10a: master_clip with master_sequence_id returns it")
 assert(effective_src.master_seq_id_of(
     { item_type = "timeline", id = "seq2" }) == "seq2",
-    "T9b: timeline with id returns it")
+    "T10b: timeline with id returns it")
 assert(effective_src.master_seq_id_of(
     { item_type = "bin", id = "binX" }) == nil,
-    "T9c: bin is not insertable → nil")
+    "T10c: bin is not insertable → nil")
 assert(effective_src.master_seq_id_of(
     { item_type = "master_clip", master_sequence_id = "" }) == nil,
-    "T9d: master_clip with empty master_sequence_id → nil")
+    "T10d: master_clip with empty master_sequence_id → nil")
 assert(effective_src.master_seq_id_of("not a table") == nil,
-    "T9e: non-table input → nil (predicate contract, not failure)")
+    "T10e: non-table input → nil (predicate contract, not failure)")
 assert(effective_src.master_seq_id_of(nil) == nil,
-    "T9f: nil input → nil")
+    "T10f: nil input → nil")
+
+-- ── T11: _reset_for_tests clears recency state ──────────────────────────
+-- Regression: an earlier revision of _reset_for_tests forgot to clear
+-- _last_active_source_input. That made cross-test isolation broken — a
+-- later test that called the reset would inherit "browser" or
+-- "source_monitor" recency from a previous test, masking real bugs.
+-- Black-box assertion: after reset + re-seeding ONLY a browser value
+-- (no panel-active emit, no source-load emit), the effective source
+-- must reflect the browser pick — meaning recency is back to its
+-- empty-initial-state fallthrough (browser if sv is nil).
+print("-- T11: _reset_for_tests clears recency state")
+effective_src._reset_for_tests()
+assert(effective_src.get() == nil,
+    "T11: after _reset_for_tests, get() must be nil — recency state must be cleared too")
 
 Signals.disconnect(listener_token)
 

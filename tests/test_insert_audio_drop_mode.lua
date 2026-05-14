@@ -120,36 +120,43 @@ end
 
 local Insert = require("core.commands.insert")
 
-print("-- composite (default + explicit): 1 V + 1 A clip, A has NULL selector --")
+-- Default is 'expanded' per spec §F2 — patches are the sole routing
+-- mechanism, and patches route per-channel, so a default that collapses
+-- channels (composite) cannot honor them. Explicit 'composite' still works
+-- as a legacy mixdown opt-in (see next case).
+print("-- default is expanded: 1 V + 4 A clips (one per source A track) --")
 do
     local db = build_fixture()
-    -- Default — no audio_drop_mode arg.
     local result = Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
         timeline_start_frame = 0,
     })
     local clips = clips_in_seq(db, "e")
-    assert(#clips == 2, "composite default emits exactly 2 clips (1 V + 1 A)")
-    local v = clips[1]
-    local a = clips[2]
-    assert(v.track_type == "VIDEO" and a.track_type == "AUDIO")
-    assert(a.master_audio_track_id == nil,
-        "composite A clip has NULL master_audio_track_id")
-    assert(result.created_clip_ids and #result.created_clip_ids == 2,
-        "result reports 2 created clip ids")
+    assert(#clips == 5, string.format(
+        "expanded default emits 1 V + 4 A = 5 clips; got %d", #clips))
+    -- Result reports exactly the same count.
+    assert(result.created_clip_ids and #result.created_clip_ids == 5,
+        "result reports 5 created clip ids")
+end
 
-    -- And explicit 'composite' is identical.
-    local db2 = build_fixture()
+print("-- explicit composite: 1 V + 1 A clip, A has NULL selector --")
+do
+    local db = build_fixture()
     Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "composite",
     })
-    local clips2 = clips_in_seq(db2, "e")
-    assert(#clips2 == 2)
-    assert(clips2[2].master_audio_track_id == nil)
+    local clips = clips_in_seq(db, "e")
+    assert(#clips == 2, string.format(
+        "composite emits exactly 2 clips (1 V + 1 A); got %d", #clips))
+    local v = clips[1]
+    local a = clips[2]
+    assert(v.track_type == "VIDEO" and a.track_type == "AUDIO")
+    assert(a.master_audio_track_id == nil,
+        "composite A clip has NULL master_audio_track_id")
     print("  ok")
 end
 
@@ -210,12 +217,14 @@ do
     print("  ok")
 end
 
-print("-- expanded: collision on auto-create target track refuses --")
+-- Pre-existing clip on a routed track: Insert's ripple shifts it forward
+-- to make room. Refusing here would defeat the whole point of patches
+-- driving routing (a user with a populated timeline could never F9).
+print("-- expanded: pre-existing clip on routed rec track → ripple makes room --")
 do
     local db = build_fixture()
-    -- Pre-place a clip on the auto-create-target A2 area (we'll seed it
-    -- on what WILL be A2 — but A2 doesn't exist yet on edit, so create
-    -- it manually first, then a clip that overlaps the Insert's range).
+    -- Pre-place a blocker on rec A2 (a track the source's A2 patch will
+    -- identity-route into). Manually create A2 so the blocker has a home.
     assert(db:exec([[
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('e-a2', 'e', 'A2', 'AUDIO', 2);
@@ -230,22 +239,23 @@ do
                 1, 1.0, 0, 0, 0);
     ]]))
 
-    local ok, err = pcall(Insert.execute, {
+    local r = Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
         timeline_start_frame = 0,
         audio_drop_mode      = "expanded",
     })
-    assert(not ok, "expanded must refuse on collision")
-    assert(tostring(err):find("collision")
-        or tostring(err):find("blocker")
-        or tostring(err):find("overlap"),
-        "error must name the collision; got: " .. tostring(err))
-    -- DB unchanged: still only the blocker + nothing on A1.
-    local clips = clips_in_seq(db, "e")
-    assert(#clips == 1, string.format(
-        "no clips created on refusal; got %d", #clips))
-    print("  ok")
+    assert(r, "Insert with expanded must succeed when ripple can clear the way")
+
+    -- Blocker shifted forward; new expanded clips occupy frame 0.
+    local s = db:prepare(
+        "SELECT timeline_start_frame FROM clips WHERE id='blocker'")
+    s:exec(); s:next()
+    local blocker_start = s:value(0); s:finalize()
+    assert(blocker_start > 0, string.format(
+        "ripple must have shifted the blocker forward; got start=%d",
+        blocker_start))
+    print("  blocker rippled forward — OK")
 end
 
 print("-- unknown audio_drop_mode value: refused --")

@@ -57,8 +57,10 @@ command_manager.init("seq", "proj")
 print("-- 1: VIDEO src=1,rec=1 and AUDIO src=1,rec=1 coexist --")
 local rv = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 1,
+    enabled            = 1,
     track_type         = "VIDEO",
     project_id         = "proj",
 })
@@ -67,8 +69,10 @@ assert(rv and rv.success,
 
 local ra = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 1,
+    enabled            = 1,
     track_type         = "AUDIO",
     project_id         = "proj",
 })
@@ -84,14 +88,14 @@ print("  two distinct patch rows exist — OK")
 
 -- ── Test 2: find_by_record returns VIDEO patch for VIDEO row ──────────────
 print("-- 2: find_by_record returns correct type --")
-local pv = Patch.find_by_record("seq", "VIDEO", 1)
+local pv = Patch.find_by_record("seq", "VIDEO", 1, 1)
 assert(pv, "find_by_record(seq, VIDEO, 1) must return a patch")
 assert(pv.source_track_index == 1,
     "VIDEO patch must have source_track_index=1; got " .. tostring(pv.source_track_index))
 assert(pv.track_type == "VIDEO",
     "patch.track_type must be VIDEO; got " .. tostring(pv.track_type))
 
-local pa = Patch.find_by_record("seq", "AUDIO", 1)
+local pa = Patch.find_by_record("seq", "AUDIO", 1, 1)
 assert(pa, "find_by_record(seq, AUDIO, 1) must return a patch")
 assert(pa.source_track_index == 1,
     "AUDIO patch must have source_track_index=1; got " .. tostring(pa.source_track_index))
@@ -101,7 +105,7 @@ print("  VIDEO and AUDIO patches returned correctly — OK")
 
 -- ── Test 3: find_by_record returns nil for unpatched row ──────────────────
 print("-- 3: find_by_record nil for unpatched row --")
-local pnil = Patch.find_by_record("seq", "VIDEO", 2)
+local pnil = Patch.find_by_record("seq", "VIDEO", 1, 2)
 assert(pnil == nil,
     "find_by_record(seq, VIDEO, 2) must be nil (no VIDEO patch at rec=2)")
 print("  nil for unpatched VIDEO row — OK")
@@ -110,6 +114,7 @@ print("  nil for unpatched VIDEO row — OK")
 print("-- 4: disabling VIDEO patch leaves AUDIO patch untouched --")
 local rd = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = 1,
     source_track_index = 1,
     enabled            = 0,
     track_type         = "VIDEO",
@@ -117,11 +122,11 @@ local rd = command_manager.execute("SetPatch", {
 })
 assert(rd and rd.success, "disable VIDEO patch failed")
 
-local pv2 = Patch.find_by_record("seq", "VIDEO", 1)
+local pv2 = Patch.find_by_record("seq", "VIDEO", 1, 1)
 assert(pv2 and (pv2.enabled == 0),
     "VIDEO patch must be disabled; got enabled=" .. tostring(pv2 and pv2.enabled))
 
-local pa2 = Patch.find_by_record("seq", "AUDIO", 1)
+local pa2 = Patch.find_by_record("seq", "AUDIO", 1, 1)
 assert(pa2 and (pa2.enabled == 1 or pa2.enabled == true),
     "AUDIO patch must still be enabled after VIDEO patch disabled; got enabled="
     .. tostring(pa2 and pa2.enabled))

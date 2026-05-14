@@ -6,9 +6,19 @@
 ---   1. The source viewer's loaded master (via `source_loaded_changed`).
 ---   2. The project browser's current selection (via `selection_hub`).
 ---
---- Priority: if the project browser is the active panel AND its selection
---- contains a master_clip item, that wins. Otherwise the source viewer's
---- loaded master (which may be nil) is the answer.
+--- Priority — recency rule among the two source inputs:
+---
+---   "Most-recently-activated among {source_viewer, browser} wins,
+---    provided it has a valid value. If the most-recent winner has no
+---    value, fall back to whichever of the two does."
+---
+--- Activating means becoming the focused panel (selection_hub's active
+--- panel). Activating any OTHER panel (e.g. timeline) does NOT change
+--- the recency — clicking a src-btn on the timeline shifts focus there
+--- but the previously-selected source survives.
+---
+--- "Valid value" = source viewer has a clip loaded, or browser has a
+--- master_clip/timeline item selected.
 ---
 --- Emits `effective_source_changed(new_master_seq_id, prev_master_seq_id)`
 --- whenever the computed value changes (and only then — no spurious fires
@@ -36,18 +46,26 @@ local M = {}
 -- Internal state — only the derived `_current` is observable via M.get().
 -- The two underlying inputs are kept so a change in either recomputes the
 -- effective answer without re-asking source_viewer / selection_hub.
+local SOURCE_INPUT_PANELS = { source_monitor = true, project_browser = true }
+
 local _source_viewer_seq_id    = nil
-local _browser_master_seq_id   = nil  -- nil unless browser is active AND has master_clip selected
+local _browser_master_seq_id   = nil  -- current browser-selected master (nil if none)
+local _last_active_source_input = nil  -- "source_monitor" | "project_browser" | nil
 local _current                 = nil
 
 local function compute_effective()
-    -- Browser-selected master takes priority when the browser is the active
-    -- panel and has a master_clip selected. Otherwise the source viewer's
-    -- loaded master (which may be nil). Written as explicit priority, not
-    -- as a logical-or, so it's clear this is a choice rule, not a fallback
-    -- for a missing required value (rule 2.13).
-    if _browser_master_seq_id ~= nil then return _browser_master_seq_id end
-    return _source_viewer_seq_id
+    -- Recency rule: between the two source inputs, whichever was activated
+    -- most recently wins — provided it has a value. If the recency winner
+    -- has no value, the other input is the answer (this is the recency
+    -- rule's tiebreaker, not a fallback for a missing required value).
+    local sv  = _source_viewer_seq_id
+    local br  = _browser_master_seq_id
+    if _last_active_source_input == "source_monitor" and sv ~= nil then return sv end
+    if _last_active_source_input == "project_browser" and br ~= nil then return br end
+    -- Recency winner has no value (or neither has been activated yet) —
+    -- pick whichever has a value; nil if neither does.
+    if sv ~= nil then return sv end
+    return br
 end
 
 local function recompute_and_emit()
@@ -59,6 +77,12 @@ local function recompute_and_emit()
 end
 
 local function on_source_loaded_changed(new_master_seq_id, _prev_seq_id)
+    -- nil = source viewer cleared; non-nil must be a non-empty string id.
+    assert(new_master_seq_id == nil
+           or (type(new_master_seq_id) == "string" and new_master_seq_id ~= ""),
+        string.format("effective_source.on_source_loaded_changed: "
+            .. "new_master_seq_id must be string or nil; got %s (%s)",
+            type(new_master_seq_id), tostring(new_master_seq_id)))
     _source_viewer_seq_id = new_master_seq_id
     recompute_and_emit()
 end
@@ -103,16 +127,17 @@ local function pick_master_seq_id_from_items(items)
     return nil
 end
 
-local function on_selection_changed(items, panel_id)
-    -- Browser-as-source applies only while the browser is the active panel.
-    -- selection_hub.notify is called with (items_of_active_panel, active_panel_id);
-    -- a panel switch fires this same callback with the new active panel's
-    -- items. So this single listener handles both "selection changed in
-    -- browser" and "panel switched to/from browser."
-    if panel_id == "project_browser" then
-        _browser_master_seq_id = pick_master_seq_id_from_items(items)
-    else
-        _browser_master_seq_id = nil
+local function on_selection_changed(_items, panel_id)
+    -- Always recompute browser-selected source from the hub's persisted
+    -- selection — independent of which panel is currently active. The
+    -- browser's selection survives focus shifts (e.g. clicking a src-btn
+    -- on the timeline).
+    _browser_master_seq_id = pick_master_seq_id_from_items(
+        selection_hub.get_selection("project_browser"))
+    -- Track recency among the two source inputs. Activating any other
+    -- panel (timeline, etc.) does NOT change recency.
+    if SOURCE_INPUT_PANELS[panel_id] then
+        _last_active_source_input = panel_id
     end
     recompute_and_emit()
 end
@@ -128,9 +153,10 @@ end
 
 --- Test-only reset. Restores module state without re-subscribing.
 function M._reset_for_tests()
-    _source_viewer_seq_id  = nil
-    _browser_master_seq_id = nil
-    _current               = nil
+    _source_viewer_seq_id    = nil
+    _browser_master_seq_id   = nil
+    _last_active_source_input = nil
+    _current                 = nil
 end
 
 return M

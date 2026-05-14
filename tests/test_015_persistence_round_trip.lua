@@ -50,9 +50,11 @@ db:exec(string.format([[
 command_manager.init("seq", "proj")
 
 -- Write three patches (one VIDEO, two AUDIO; one with non-identity rec).
+-- Shapes: 1 VIDEO source track, 2 AUDIO source tracks (matches fixture).
 command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "VIDEO",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 1,
     project_id         = "proj",
@@ -61,6 +63,7 @@ command_manager.execute("SetPatch", {
 command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "AUDIO",
+    source_shape       = 2,
     source_track_index = 1,
     record_track_index = 2,   -- non-identity dragged route
     project_id         = "proj",
@@ -69,6 +72,7 @@ command_manager.execute("SetPatch", {
 command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "AUDIO",
+    source_shape       = 2,
     source_track_index = 2,
     record_track_index = 2,
     project_id         = "proj",

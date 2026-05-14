@@ -1,8 +1,13 @@
---- Patch model — per-sequence, per-type source-track → record-track routing (Feature 015).
+--- Patch model — per-(sequence, source-shape, type, src_idx) → rec_idx routing (Feature 015).
 ---
---- A patch binds one source-track-index to one record-track-index on a
---- sequence for a specific track_type (VIDEO or AUDIO).
---- UNIQUE constraint: one patch per (sequence_id, track_type, source_track_index).
+--- A patch row binds one (record_sequence, track_type, source_shape,
+--- source_track_index) tuple to a record_track_index + enabled flag.
+--- `source_shape` is the count of source tracks of `track_type` at the
+--- time the routing was established. Different-shape sources have
+--- INDEPENDENT remembered maps on the same record sequence.
+--- See `specs/015-source-in-timeline/spec.md` F2.
+---
+--- UNIQUE constraint: (sequence_id, track_type, source_shape, source_track_index).
 
 local database = require("core.database")
 local uuid     = require("uuid")
@@ -10,80 +15,81 @@ local uuid     = require("uuid")
 local Patch = {}
 Patch.__index = Patch
 
-local function resolve_db()
+local function lookup_db()
     local conn = database.get_connection()
     assert(conn, "Patch: no database connection")
     return conn
 end
 
-local COLS = "id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at"
+local COLS = "id, sequence_id, track_type, source_shape, source_track_index, "
+    .. "record_track_index, enabled, created_at"
 
 local function row_to_patch(stmt)
     return setmetatable({
         id                 = stmt:value(0),
         sequence_id        = stmt:value(1),
         track_type         = stmt:value(2),
-        source_track_index = stmt:value(3),
-        record_track_index = stmt:value(4),
-        enabled            = stmt:value(5),
-        created_at         = stmt:value(6),
+        source_shape       = stmt:value(3),
+        source_track_index = stmt:value(4),
+        record_track_index = stmt:value(5),
+        enabled            = stmt:value(6),
+        created_at         = stmt:value(7),
     }, Patch)
 end
 
---- Find a patch by (sequence_id, track_type, source_track_index). Returns table or nil.
-function Patch.find_by_source(sequence_id, track_type, src_idx)
+-- Shared validation. Shape is the source's track count of this type; must
+-- always be > 0 (a row exists only when a source is actually loaded).
+local function assert_key(sequence_id, track_type, source_shape, idx_name, idx_value)
     assert(sequence_id and sequence_id ~= "",
-        "Patch.find_by_source: sequence_id required")
+        "Patch: sequence_id required")
     assert(track_type == "VIDEO" or track_type == "AUDIO",
-        "Patch.find_by_source: track_type must be VIDEO or AUDIO, got: " .. tostring(track_type))
-    assert(type(src_idx) == "number",
-        "Patch.find_by_source: source_track_index must be number")
+        "Patch: track_type must be VIDEO|AUDIO, got " .. tostring(track_type))
+    assert(type(source_shape) == "number" and source_shape > 0,
+        "Patch: source_shape must be positive number, got " .. tostring(source_shape))
+    assert(type(idx_value) == "number",
+        "Patch: " .. idx_name .. " must be number, got " .. type(idx_value))
+end
 
-    local conn = resolve_db()
+--- Find a patch by (sequence_id, track_type, source_shape, source_track_index).
+function Patch.find_by_source(sequence_id, track_type, source_shape, src_idx)
+    assert_key(sequence_id, track_type, source_shape, "source_track_index", src_idx)
+    local conn = lookup_db()
     local stmt = conn:prepare(
         "SELECT " .. COLS .. " FROM patches "
-        .. "WHERE sequence_id = ? AND track_type = ? AND source_track_index = ?")
-    assert(stmt, "Patch.find_by_source: prepare failed for seq="
-        .. tostring(sequence_id) .. " type=" .. track_type .. " src=" .. tostring(src_idx))
+        .. "WHERE sequence_id = ? AND track_type = ? "
+        .. "AND source_shape = ? AND source_track_index = ?")
+    assert(stmt, "Patch.find_by_source: prepare failed: "
+        .. tostring(conn:last_error() or "unknown"))
     stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, track_type)
-    stmt:bind_value(3, src_idx)
-    assert(stmt:exec(), "Patch.find_by_source: exec failed for seq="
-        .. tostring(sequence_id) .. " type=" .. track_type .. " src=" .. tostring(src_idx))
-
+    stmt:bind_value(3, source_shape)
+    stmt:bind_value(4, src_idx)
+    assert(stmt:exec(), "Patch.find_by_source: exec failed")
     if not stmt:next() then stmt:finalize(); return nil end
     local p = row_to_patch(stmt)
     stmt:finalize()
     return p
 end
 
---- Find ALL patches targeting (sequence_id, track_type, record_track_index).
---- Reverse lookup. Returns an ordered (by source_track_index) array — possibly
---- empty. Multiple sources MAY route to one record (FR-010a stacking-drag);
---- callers that want to render a single indicator must explicitly decide
---- which source to show or render a stack. There is no UNIQUE constraint
---- on the record side; do not assume cardinality≤1.
-function Patch.find_all_by_record(sequence_id, track_type, rec_idx)
-    assert(sequence_id and sequence_id ~= "",
-        "Patch.find_all_by_record: sequence_id required")
-    assert(track_type == "VIDEO" or track_type == "AUDIO",
-        "Patch.find_all_by_record: track_type must be VIDEO or AUDIO, got: " .. tostring(track_type))
-    assert(type(rec_idx) == "number",
-        "Patch.find_all_by_record: record_track_index must be number")
-
-    local conn = resolve_db()
+--- Find ALL patches at (sequence_id, track_type, source_shape) targeting
+--- record_track_index. Reverse lookup for the current shape. Multiple
+--- sources may route to one record (FR-010a stacking); ordered by
+--- source_track_index.
+function Patch.find_all_by_record(sequence_id, track_type, source_shape, rec_idx)
+    assert_key(sequence_id, track_type, source_shape, "record_track_index", rec_idx)
+    local conn = lookup_db()
     local stmt = conn:prepare(
         "SELECT " .. COLS .. " FROM patches "
-        .. "WHERE sequence_id = ? AND track_type = ? AND record_track_index = ? "
+        .. "WHERE sequence_id = ? AND track_type = ? "
+        .. "AND source_shape = ? AND record_track_index = ? "
         .. "ORDER BY source_track_index ASC")
-    assert(stmt, "Patch.find_all_by_record: prepare failed for seq=" .. tostring(sequence_id)
-        .. " type=" .. track_type .. " rec=" .. tostring(rec_idx))
+    assert(stmt, "Patch.find_all_by_record: prepare failed: "
+        .. tostring(conn:last_error() or "unknown"))
     stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, track_type)
-    stmt:bind_value(3, rec_idx)
-    assert(stmt:exec(), "Patch.find_all_by_record: exec failed for seq=" .. tostring(sequence_id)
-        .. " type=" .. track_type .. " rec=" .. tostring(rec_idx))
-
+    stmt:bind_value(3, source_shape)
+    stmt:bind_value(4, rec_idx)
+    assert(stmt:exec(), "Patch.find_all_by_record: exec failed")
     local results = {}
     while stmt:next() do
         table.insert(results, row_to_patch(stmt))
@@ -92,31 +98,27 @@ function Patch.find_all_by_record(sequence_id, track_type, rec_idx)
     return results
 end
 
---- Find the single patch targeting (sequence_id, track_type, record_track_index).
---- Asserts that at most one patch exists for this record cell — use this when
---- the caller's UI/logic cannot represent multi-source stacking. Returns the
---- patch or nil. Once FR-010a stacking-drag is implemented end-to-end, callers
---- should migrate to find_all_by_record. The assert is the loud-failure path
---- replacing the previous silent LIMIT 1.
-function Patch.find_by_record(sequence_id, track_type, rec_idx)
-    local results = Patch.find_all_by_record(sequence_id, track_type, rec_idx)
+--- Single-source helper. Asserts at most one row targets (seq,type,shape,rec).
+function Patch.find_by_record(sequence_id, track_type, source_shape, rec_idx)
+    local results = Patch.find_all_by_record(sequence_id, track_type, source_shape, rec_idx)
     assert(#results <= 1, string.format(
-        "Patch.find_by_record: %d patches target seq=%s type=%s rec=%d — "
+        "Patch.find_by_record: %d patches target seq=%s type=%s shape=%d rec=%d — "
         .. "caller assumed single-source but multiple sources are routed here. "
         .. "Use Patch.find_all_by_record and decide explicitly.",
-        #results, tostring(sequence_id), track_type, rec_idx))
+        #results, tostring(sequence_id), track_type, source_shape, rec_idx))
     return results[1]
 end
 
---- Return all patches for a sequence, ordered by track_type then source_track_index.
+--- Return all patches for a sequence (across all shapes), ordered by
+--- track_type, shape, source_track_index.
 function Patch.find_by_sequence(sequence_id)
     assert(sequence_id and sequence_id ~= "",
         "Patch.find_by_sequence: sequence_id required")
-    local conn = resolve_db()
+    local conn = lookup_db()
     local stmt = conn:prepare(
         "SELECT " .. COLS .. " FROM patches "
         .. "WHERE sequence_id = ? "
-        .. "ORDER BY track_type ASC, source_track_index ASC")
+        .. "ORDER BY track_type ASC, source_shape ASC, source_track_index ASC")
     assert(stmt, "Patch.find_by_sequence: prepare failed for seq=" .. tostring(sequence_id))
     stmt:bind_value(1, sequence_id)
     assert(stmt:exec(), "Patch.find_by_sequence: exec failed for seq=" .. tostring(sequence_id))
@@ -128,63 +130,72 @@ function Patch.find_by_sequence(sequence_id)
     return results
 end
 
---- Create a new unsaved patch. Call :save() to persist.
-function Patch.create(sequence_id, track_type, src_idx, rec_idx, opts)
-    assert(sequence_id and sequence_id ~= "", "Patch.create: sequence_id required")
-    assert(track_type == "VIDEO" or track_type == "AUDIO",
-        "Patch.create: track_type must be VIDEO or AUDIO, got: " .. tostring(track_type))
-    assert(type(src_idx) == "number" and src_idx >= 0,
-        "Patch.create: source_track_index must be >= 0")
+-- Coerce caller-provided enabled flag (0/1 or false/true) to the canonical
+-- INTEGER form stored by SQLite. Reject anything else loudly so we don't
+-- silently round-trip a junk value. Centralizing this on the model means
+-- callers can keep using whichever form is most readable at the callsite,
+-- but reads (find_*) always come back as INTEGER 0/1.
+local function normalize_enabled(value)
+    if value == 1 or value == true  then return 1 end
+    if value == 0 or value == false then return 0 end
+    error(string.format(
+        "Patch: enabled must be 0/1/true/false; got %s (%s)",
+        type(value), tostring(value)))
+end
+
+--- Create a new unsaved patch row. Call :save() to persist.
+--- All key fields explicit; opts.enabled required.
+function Patch.create(sequence_id, track_type, source_shape, src_idx, rec_idx, opts)
+    assert_key(sequence_id, track_type, source_shape, "source_track_index", src_idx)
     assert(type(rec_idx) == "number" and rec_idx >= 0,
-        "Patch.create: record_track_index must be >= 0")
-    assert(opts ~= nil, "Patch.create: opts table required (pass {} to use defaults)")
+        "Patch.create: record_track_index must be >= 0, got " .. tostring(rec_idx))
+    assert(src_idx >= 0,
+        "Patch.create: source_track_index must be >= 0, got " .. tostring(src_idx))
+    assert(opts ~= nil, "Patch.create: opts table required (pass {} for defaults)")
     assert(opts.enabled ~= nil,
-        "Patch.create: opts.enabled required; caller must supply explicit enabled state (1=on, 0=off)")
+        "Patch.create: opts.enabled required (1=on, 0=off)")
     local p = {
         id                 = opts.id or uuid.generate(),
         sequence_id        = sequence_id,
         track_type         = track_type,
+        source_shape       = source_shape,
         source_track_index = src_idx,
         record_track_index = rec_idx,
-        enabled            = opts.enabled,
+        enabled            = normalize_enabled(opts.enabled),
         created_at         = os.time(),
     }
     return setmetatable(p, Patch)
 end
 
---- Ensure identity patches exist for every track in src_seq_id on rec_seq_id.
---- Per-channel idempotent: only creates a row when (rec_seq, track_type,
---- src_idx) has no patch. Existing patches are NEVER touched, including
---- user-rerouted or disabled ones. Called by Insert/Overwrite at the top
---- of execute() and by source_loaded_changed for UI rendering.
+--- Ensure identity rows exist for every source track in src_seq_id under
+--- the CURRENT shape (count of source tracks of each type). Per-channel
+--- idempotent: only creates rows when missing. Existing rows (user-
+--- rerouted or disabled) are NEVER touched.
 ---
---- Identity = source N → record N, enabled=1. This is what Insert/Overwrite
---- did implicitly before the patches table existed; preserving that
---- invariant is the whole point of seeding.
----
---- @param rec_seq_id  string  Record (owner) sequence id.
---- @param src_seq_id  string  Source (nested) sequence id whose tracks
----                            define which (src_idx) tuples we cover.
+--- Called from `effective_source_changed` (UI render path) and from
+--- `Insert.execute` / `Overwrite.execute` (API edit path).
 function Patch.ensure_identity_for_source(rec_seq_id, src_seq_id)
     assert(type(rec_seq_id) == "string" and rec_seq_id ~= "",
         "Patch.ensure_identity_for_source: rec_seq_id required")
     assert(type(src_seq_id) == "string" and src_seq_id ~= "",
         "Patch.ensure_identity_for_source: src_seq_id required")
 
-    local Track = require("models.track")
+    local Track   = require("models.track")
     local Signals = require("core.signals")
 
     local created_any = false
     local function ensure_for_type(track_type)
         local src_tracks = Track.find_by_sequence(src_seq_id, track_type)
+        local shape = #src_tracks
+        if shape == 0 then return end  -- source has none of this type
         for _, t in ipairs(src_tracks) do
-            if not Patch.find_by_source(rec_seq_id, track_type, t.track_index) then
-                local p = Patch.create(rec_seq_id, track_type, t.track_index, t.track_index,
-                    { enabled = 1 })
+            if not Patch.find_by_source(rec_seq_id, track_type, shape, t.track_index) then
+                local p = Patch.create(rec_seq_id, track_type, shape,
+                    t.track_index, t.track_index, { enabled = 1 })
                 p:save()
                 created_any = true
                 Signals.emit("patch_changed",
-                    rec_seq_id, track_type, t.track_index, "created")
+                    rec_seq_id, track_type, shape, t.track_index, "created")
             end
         end
     end
@@ -194,15 +205,85 @@ function Patch.ensure_identity_for_source(rec_seq_id, src_seq_id)
     return created_any
 end
 
+--- Render-projection primitive: given a record sequence + effective source
+--- sequence, return one entry per source track describing where (and how)
+--- that track is currently routed. Used by timeline_panel to render
+--- src-btns: iterate this list, draw one btn per entry at entry.record_track_index.
+---
+--- `src_seq_id == nil` (no source loaded) ⇒ returns empty table. This is
+--- the gate that enforces spec §2b-i ("no source ⇒ zero src-btns rendered").
+---
+--- Entries have shape `{track_type, source_track_index, record_track_index,
+--- enabled, source_label}` where source_label is e.g. "V1"/"A3" formatted
+--- per `track_type`.
+---
+--- Pull-based (MVC rule 3.0): no side effects. Caller is responsible for
+--- calling ensure_identity_for_source FIRST if it wants seeding.
+function Patch.source_routing_for_rec(rec_seq_id, src_seq_id)
+    assert(type(rec_seq_id) == "string" and rec_seq_id ~= "",
+        "Patch.source_routing_for_rec: rec_seq_id required")
+    if src_seq_id == nil then return {} end
+    assert(type(src_seq_id) == "string" and src_seq_id ~= "",
+        "Patch.source_routing_for_rec: src_seq_id must be string or nil")
+
+    local Track = require("models.track")
+    local out = {}
+
+    local function project_for_type(track_type, prefix)
+        local src_tracks = Track.find_by_sequence(src_seq_id, track_type)
+        local shape = #src_tracks
+        if shape == 0 then return end
+        for _, t in ipairs(src_tracks) do
+            local p = Patch.find_by_source(rec_seq_id, track_type, shape, t.track_index)
+            if p then
+                table.insert(out, {
+                    track_type         = track_type,
+                    source_track_index = t.track_index,
+                    record_track_index = p.record_track_index,
+                    -- Stored value is INTEGER 0/1 (normalized on write). Read as bool
+            -- for ergonomic UI/render-side use.
+            enabled            = p.enabled == 1,
+                    source_label       = prefix .. tostring(t.track_index),
+                })
+            end
+            -- If p is nil the row hasn't been seeded yet. Caller should have
+            -- run ensure_identity_for_source first; we don't auto-seed here
+            -- to keep this function pure. The missing entry just means no
+            -- src-btn is drawn — which is the correct visual signal that
+            -- routing is undefined, surfacing the bug at the caller.
+        end
+    end
+
+    project_for_type("VIDEO", "V")
+    project_for_type("AUDIO", "A")
+    return out
+end
+
+--- Delete every patch row for a record sequence across all shapes.
+--- Implements spec §2c "Restore Default Patch". Non-undoable (per F6).
+function Patch.restore_defaults_for_sequence(rec_seq_id)
+    assert(type(rec_seq_id) == "string" and rec_seq_id ~= "",
+        "Patch.restore_defaults_for_sequence: rec_seq_id required")
+    local conn = lookup_db()
+    local stmt = conn:prepare("DELETE FROM patches WHERE sequence_id = ?")
+    assert(stmt, "Patch.restore_defaults_for_sequence: prepare failed")
+    stmt:bind_value(1, rec_seq_id)
+    assert(stmt:exec(), "Patch.restore_defaults_for_sequence: exec failed")
+    stmt:finalize()
+    require("core.signals").emit("patches_reset", rec_seq_id)
+end
+
 function Patch:save()
-    local conn = resolve_db()
+    local conn = lookup_db()
     local stmt = conn:prepare([[
         INSERT INTO patches
-            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (id, sequence_id, track_type, source_shape, source_track_index,
+             record_track_index, enabled, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             sequence_id        = excluded.sequence_id,
             track_type         = excluded.track_type,
+            source_shape       = excluded.source_shape,
             source_track_index = excluded.source_track_index,
             record_track_index = excluded.record_track_index,
             enabled            = excluded.enabled
@@ -211,16 +292,24 @@ function Patch:save()
     stmt:bind_value(1, self.id)
     stmt:bind_value(2, self.sequence_id)
     assert(self.track_type == "VIDEO" or self.track_type == "AUDIO",
-        "Patch:save: track_type must be VIDEO or AUDIO on patch id=" .. tostring(self.id))
+        "Patch:save: track_type must be VIDEO|AUDIO on patch id=" .. tostring(self.id))
     stmt:bind_value(3, self.track_type)
-    stmt:bind_value(4, self.source_track_index)
-    stmt:bind_value(5, self.record_track_index)
-    stmt:bind_value(6, self.enabled)
+    assert(type(self.source_shape) == "number" and self.source_shape > 0,
+        "Patch:save: source_shape must be positive on patch id="
+        .. tostring(self.id) .. " got=" .. tostring(self.source_shape))
+    stmt:bind_value(4, self.source_shape)
+    stmt:bind_value(5, self.source_track_index)
+    stmt:bind_value(6, self.record_track_index)
+    -- Normalize at the write boundary; SetPatch mutators may set self.enabled
+    -- to bool, but the column is INTEGER and all readers should see 0/1.
+    self.enabled = normalize_enabled(self.enabled)
+    stmt:bind_value(7, self.enabled)
     assert(self.created_at, "Patch:save: created_at missing on patch id=" .. tostring(self.id))
-    stmt:bind_value(7, self.created_at)
+    stmt:bind_value(8, self.created_at)
     assert(stmt:exec(), string.format(
-        "Patch:save: exec failed for seq=%s type=%s src=%d",
-        tostring(self.sequence_id), tostring(self.track_type), self.source_track_index))
+        "Patch:save: exec failed for seq=%s type=%s shape=%d src=%d",
+        tostring(self.sequence_id), tostring(self.track_type),
+        self.source_shape, self.source_track_index))
     stmt:finalize()
     return true
 end

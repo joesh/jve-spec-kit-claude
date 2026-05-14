@@ -75,9 +75,15 @@ local function patch_count()
     s:exec(); s:next(); local n = s:value(0); s:finalize(); return n
 end
 
-local function patch_for(track_type, src_idx)
-    return Patch.find_by_source("rec_seq", track_type, src_idx)
+local function patch_for(track_type, shape, src_idx)
+    return Patch.find_by_source("rec_seq", track_type, shape, src_idx)
 end
+
+-- src_seq: VIDEO=1 track, AUDIO=2 tracks → shapes (1, 2).
+-- src2:    VIDEO=1 track, AUDIO=4 tracks → shapes (1, 4).
+local V_SHAPE_1 = 1   -- both sources have 1 video track
+local A_SHAPE_2 = 2   -- src_seq audio shape
+local A_SHAPE_4 = 4   -- src2 audio shape
 
 -- ── T1: first call seeds identity for every source track ────────────────────
 print("\n-- T1: empty rec → identity patches for source tracks")
@@ -88,21 +94,21 @@ Patch.ensure_identity_for_source("rec_seq", "src_seq")
 assert(patch_count() == 3, string.format(
     "T1: expected 3 patches (V1+A1+A2 from source), got %d", patch_count()))
 
-local pV1 = patch_for("VIDEO", 1)
+local pV1 = patch_for("VIDEO", V_SHAPE_1, 1)
 assert(pV1 and pV1.record_track_index == 1,
     "T1: VIDEO V1 → record V1 identity")
 assert(pV1.enabled == 1 or pV1.enabled == true,
     "T1: seeded patch must be enabled")
 
-local pA1 = patch_for("AUDIO", 1)
-local pA2 = patch_for("AUDIO", 2)
+local pA1 = patch_for("AUDIO", A_SHAPE_2, 1)
+local pA2 = patch_for("AUDIO", A_SHAPE_2, 2)
 assert(pA1 and pA1.record_track_index == 1, "T1: AUDIO A1 identity")
 assert(pA2 and pA2.record_track_index == 2, "T1: AUDIO A2 identity")
 
 -- Source has no V2 → no patch for it.
-assert(not patch_for("VIDEO", 2), "T1: no VIDEO patch for src V2 (source has none)")
+assert(not patch_for("VIDEO", V_SHAPE_1, 2), "T1: no VIDEO patch for src V2 (source has none)")
 -- Source has no A3 → no patch for it.
-assert(not patch_for("AUDIO", 3), "T1: no AUDIO patch for src A3 (source has none)")
+assert(not patch_for("AUDIO", A_SHAPE_2, 3), "T1: no AUDIO patch for src A3 (source has none)")
 
 -- ── T2: full idempotence — second call adds nothing ─────────────────────────
 print("\n-- T2: second call is a no-op (all rows present)")
@@ -115,24 +121,24 @@ assert(patch_count() == 3, "T2: count unchanged on repeat call")
 -- alone — neither rewritten to identity, nor re-enabled.
 print("\n-- T3: per-channel idempotence — existing customisations preserved")
 do
-    local p = patch_for("AUDIO", 2)
+    local p = patch_for("AUDIO", A_SHAPE_2, 2)
     p.record_track_index = 3
     p:save()
 end
 do
-    local p = patch_for("AUDIO", 1)
+    local p = patch_for("AUDIO", A_SHAPE_2, 1)
     p.enabled = 0
     p:save()
 end
 
 Patch.ensure_identity_for_source("rec_seq", "src_seq")
 
-local pA1_after = patch_for("AUDIO", 1)
+local pA1_after = patch_for("AUDIO", A_SHAPE_2, 1)
 assert(pA1_after.record_track_index == 1,
     "T3: A1 record index untouched (still identity by row, just disabled)")
 assert(pA1_after.enabled == 0,
     "T3: A1 disabled state preserved across seed call")
-local pA2_after = patch_for("AUDIO", 2)
+local pA2_after = patch_for("AUDIO", A_SHAPE_2, 2)
 assert(pA2_after.record_track_index == 3,
     "T3: A2 customised routing (→A3) preserved across seed call")
 
@@ -157,15 +163,18 @@ Patch.ensure_identity_for_source("rec_seq", "src2")
 
 -- A3 and A4 are new — they get identity-seeded. A1 (disabled), A2 (rerouted),
 -- V1 unchanged.
-local pA3 = patch_for("AUDIO", 3)
+local pA3 = patch_for("AUDIO", A_SHAPE_4, 3)
 assert(pA3 and pA3.record_track_index == 3 and pA3.enabled == 1,
     "T4: A3 newly seeded as identity-enabled")
-local pA4 = patch_for("AUDIO", 4)
+local pA4 = patch_for("AUDIO", A_SHAPE_4, 4)
 assert(pA4 and pA4.record_track_index == 4 and pA4.enabled == 1,
     "T4: A4 newly seeded as identity-enabled")
-assert(patch_for("AUDIO", 1).enabled == 0, "T4: A1 disabled flag preserved")
-assert(patch_for("AUDIO", 2).record_track_index == 3,
-    "T4: A2 custom routing preserved")
+-- A1 disabled / A2 rerouted were customised under src_seq (shape 2). Loading
+-- src2 (shape 4) gets an INDEPENDENT remembered map — the shape-2 customisations
+-- must survive untouched.
+assert(patch_for("AUDIO", A_SHAPE_2, 1).enabled == 0, "T4: A1 disabled flag preserved at shape 2")
+assert(patch_for("AUDIO", A_SHAPE_2, 2).record_track_index == 3,
+    "T4: A2 custom routing preserved at shape 2")
 
 -- ── T5: assert guards ───────────────────────────────────────────────────────
 print("\n-- T5: empty args fail loudly")

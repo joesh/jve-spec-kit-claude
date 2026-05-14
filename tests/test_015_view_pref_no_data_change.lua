@@ -49,11 +49,12 @@ command_manager.init("seq", "proj")
 view_pref.init(PREF)
 view_state.init(view_pref)
 
--- Create three patches.
+-- Create three patches at shape=3 (3 AUDIO source tracks in the fixture).
 for _, idx in ipairs({1, 2, 3}) do
     command_manager.execute("SetPatch", {
         sequence_id        = "seq",
         track_type         = "AUDIO",
+        source_shape       = 3,
         source_track_index = idx,
         record_track_index = idx,
         project_id         = "proj",

@@ -65,6 +65,7 @@ local snaps0 = snapshot_count()
 local r1 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "AUDIO",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 1,
     project_id         = "proj",
@@ -82,6 +83,7 @@ local snaps1 = snapshot_count()
 local r2 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "AUDIO",
+    source_shape       = 1,
     source_track_index = 1,
     project_id         = "proj",
     enabled            = 0,   -- toggle off
@@ -91,7 +93,7 @@ assert(snapshot_count() == snaps1, string.format(
     "FAIL: SetPatch (toggle) wrote a snapshots row — must be non-snapshotting. "
     .. "before=%d after=%d", snaps1, snapshot_count()))
 
-local p_after_toggle = Patch.find_by_source("seq", "AUDIO", 1)
+local p_after_toggle = Patch.find_by_source("seq", "AUDIO", 1, 1)
 assert(p_after_toggle.enabled == 0, string.format(
     "FAIL: enabled not toggled to 0, got %s", tostring(p_after_toggle.enabled)))
 print("  no snapshot row from toggle; enabled=0 persisted — OK")
@@ -102,6 +104,7 @@ local snaps2 = snapshot_count()
 local r3 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
     track_type         = "AUDIO",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 2,   -- redirect
     project_id         = "proj",
@@ -111,7 +114,7 @@ assert(snapshot_count() == snaps2, string.format(
     "FAIL: SetPatch (redirect) wrote a snapshots row — must be non-snapshotting. "
     .. "before=%d after=%d", snaps2, snapshot_count()))
 
-local p_after_redirect = Patch.find_by_source("seq", "AUDIO", 1)
+local p_after_redirect = Patch.find_by_source("seq", "AUDIO", 1, 1)
 assert(p_after_redirect.record_track_index == 2, string.format(
     "FAIL: record_track_index not redirected to 2, got %s",
     tostring(p_after_redirect.record_track_index)))
@@ -123,7 +126,7 @@ command_manager.undo()
 command_manager.undo()
 command_manager.undo()
 
-local p_after_undo = Patch.find_by_source("seq", "AUDIO", 1)
+local p_after_undo = Patch.find_by_source("seq", "AUDIO", 1, 1)
 assert(p_after_undo, "FAIL: patch removed by undo — patches must survive Cmd-Z")
 assert(p_after_undo.enabled == 0, string.format(
     "FAIL: undo reverted enabled toggle — got enabled=%s, expected 0 "

@@ -58,15 +58,16 @@ for i = 1, 3 do
 end
 
 -- Patches: A1→1 enabled, A2→5 DISABLED, A3→3 enabled.
-db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, created_at) "
-    .. "VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, 0)")
-db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, created_at) "
-    .. "VALUES ('p_a2', 'rec_seq', 'AUDIO', 2, 5, 0, 0)")
-db:exec("INSERT INTO patches (id, sequence_id, track_type, source_track_index, "
-    .. "record_track_index, enabled, created_at) "
-    .. "VALUES ('p_a3', 'rec_seq', 'AUDIO', 3, 3, 1, 0)")
+-- Source has 3 audio tracks → source_shape=3 for AUDIO routing.
+db:exec("INSERT INTO patches (id, sequence_id, track_type, source_shape, "
+    .. "source_track_index, record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a1', 'rec_seq', 'AUDIO', 3, 1, 1, 1, 0)")
+db:exec("INSERT INTO patches (id, sequence_id, track_type, source_shape, "
+    .. "source_track_index, record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a2', 'rec_seq', 'AUDIO', 3, 2, 5, 0, 0)")
+db:exec("INSERT INTO patches (id, sequence_id, track_type, source_shape, "
+    .. "source_track_index, record_track_index, enabled, created_at) "
+    .. "VALUES ('p_a3', 'rec_seq', 'AUDIO', 3, 3, 3, 1, 0)")
 
 command_manager.init("rec_seq", "proj")
 

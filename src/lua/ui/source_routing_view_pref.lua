@@ -6,6 +6,7 @@
 --- @file source_routing_view_pref.lua
 
 local json = require("dkjson")
+local log  = require("core.logger").for_area("ui")
 
 local M = {}
 
@@ -17,6 +18,9 @@ local _value = DEFAULT
 
 local function load_from_disk()
     assert(_path and _path ~= "", "source_routing_view_pref: not initialized")
+    -- First launch (file absent) is the legitimate quiet-default path.
+    -- A present-but-corrupt JSON is a real problem and gets a warning so
+    -- the silent fallback doesn't mask a serializer regression.
     local f = io.open(_path, "r")
     if not f then return DEFAULT end
     local raw = f:read("*a")
@@ -25,13 +29,21 @@ local function load_from_disk()
     if type(t) == "table" and VALID[t.value] then
         return t.value
     end
+    log.warn("source_routing_view_pref: corrupt or invalid pref at %s — falling back to default %q",
+        _path, DEFAULT)
     return DEFAULT
 end
 
 local function save_to_disk(value)
     assert(_path and _path ~= "", "source_routing_view_pref: not initialized")
     local dir = _path:match("^(.+)/[^/]+$")
-    if dir then os.execute("mkdir -p " .. dir) end
+    if dir then
+        -- Quote dir to survive path components with spaces. os.execute
+        -- returns 0 (luajit/Lua 5.1) or true (Lua 5.2+) on success.
+        local rc = os.execute(string.format("mkdir -p %q", dir))
+        assert(rc == 0 or rc == true,
+            "source_routing_view_pref: mkdir -p failed for " .. dir)
+    end
     local f = io.open(_path, "w")
     assert(f, string.format("source_routing_view_pref: cannot write to '%s'", _path))
     f:write(json.encode({ value = value }))

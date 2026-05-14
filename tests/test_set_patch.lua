@@ -2,10 +2,15 @@
 
 -- T007 (015) — SetPatch command contract (C2).
 --
--- Domain: a patch is a per-track src→rec routing persisted on the sequence.
+-- Domain: a patch is a per-(track_type, source_shape, src_idx) → rec_idx
+-- routing persisted on the sequence (spec §F2; shape = count of source
+-- tracks of track_type, see acceptance §2a/2b).
 -- SetPatch must: create-on-first-touch, update fields, enforce UNIQUE per
--- (sequence_id, track_type, source_track_index), not land on undo stack,
--- emit patch_changed(seq, track_type, src_idx, change_type).
+-- (sequence_id, track_type, source_shape, source_track_index), not land on
+-- undo stack, emit patch_changed(seq, type, shape, src_idx, change_type).
+--
+-- This test exercises SetPatch's contract with a fixed shape=2 throughout,
+-- which keeps the test small but still exercises src_idx ∈ {0,1}.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -44,12 +49,15 @@ db:exec([[
 command_manager.init("seq", "proj")
 
 -- ── Helper ────────────────────────────────────────────────────────────────
+local SHAPE = 2  -- fixed source shape used throughout this test
 local function patch_row(track_type, src_idx)
     local s = db:prepare(
         "SELECT id, record_track_index, enabled FROM patches "
-        .. "WHERE sequence_id=? AND track_type=? AND source_track_index=?")
+        .. "WHERE sequence_id=? AND track_type=? AND source_shape=? "
+        .. "AND source_track_index=?")
     assert(s)
-    s:bind_value(1, "seq"); s:bind_value(2, track_type); s:bind_value(3, src_idx)
+    s:bind_value(1, "seq"); s:bind_value(2, track_type)
+    s:bind_value(3, SHAPE); s:bind_value(4, src_idx)
     s:exec()
     if not s:next() then s:finalize(); return nil end
     local r = {id=s:value(0), rec=s:value(1), enabled=s:value(2)}
@@ -57,17 +65,21 @@ local function patch_row(track_type, src_idx)
 end
 
 local signal_payloads = {}
-Signals.connect("patch_changed", function(seq_id, track_type, src_idx, change_type)
-    table.insert(signal_payloads, {seq_id=seq_id, track_type=track_type,
-                                   src_idx=src_idx, change_type=change_type})
-end)
+Signals.connect("patch_changed",
+    function(seq_id, track_type, source_shape, src_idx, change_type)
+        table.insert(signal_payloads, {
+            seq_id=seq_id, track_type=track_type,
+            source_shape=source_shape, src_idx=src_idx, change_type=change_type})
+    end)
 
 -- ── Create on first touch ─────────────────────────────────────────────────
 print("-- create on first touch --")
 local r1 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     record_track_index = 0,
+    enabled            = 1,
     track_type         = "VIDEO",
     project_id         = "proj",
 })
@@ -75,7 +87,7 @@ assert(r1 and r1.success, "SetPatch create failed: " .. tostring(r1 and r1.error
 local p1 = patch_row("VIDEO", 0)
 assert(p1, "patch row must exist after first SetPatch")
 assert(p1.rec == 0, "record_track_index must be 0")
-assert(p1.enabled == 1, "new patch must default to enabled=1")
+assert(p1.enabled == 1, "explicit enabled=1 persisted")
 print("  created: rec=0 enabled=1 — OK")
 
 -- ── signal emitted ────────────────────────────────────────────────────────
@@ -91,6 +103,7 @@ print("  signal patch_changed emitted — OK")
 print("-- update record_track_index --")
 local r2 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     record_track_index = 3,
     track_type         = "VIDEO",
@@ -105,6 +118,7 @@ print("  updated rec=3 — OK")
 print("-- disable patch --")
 local r3 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     enabled            = 0,
     track_type         = "VIDEO",
@@ -127,8 +141,10 @@ print("  undo did not revert — OK")
 print("-- second patch on same sequence --")
 local r4 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 1,
     record_track_index = 1,
+    enabled            = 1,
     track_type         = "VIDEO",
     project_id         = "proj",
 })
@@ -141,8 +157,10 @@ print("  second patch inserted — OK")
 print("-- VIDEO and AUDIO patches at same index coexist --")
 local ra = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     record_track_index = 0,
+    enabled            = 1,
     track_type         = "AUDIO",
     project_id         = "proj",
 })
@@ -157,8 +175,10 @@ print("  VIDEO and AUDIO patches coexist — OK")
 print("-- bad inputs refused --")
 local r_neg = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = -1,
     record_track_index = 0,
+    enabled            = 1,
     track_type         = "VIDEO",
     project_id         = "proj",
 })

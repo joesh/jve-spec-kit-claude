@@ -26,7 +26,7 @@ print("=== test_patch_drop_action.lua ===")
 -- Happy path: A2 (source_track_index=1) dragged onto A4 (rec_track_index=3).
 do
     local result = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 1, home_rec_track_index = 1,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 3 })
@@ -36,6 +36,8 @@ do
         "record_track_index must be target.rec_track_index")
     assert(result.params.source_track_index == 1,
         "source_track_index must be dragged source")
+    assert(result.params.source_shape == 4,
+        "source_shape must propagate from source-table snapshot")
     assert(result.params.track_type == "AUDIO", "track_type must propagate")
     assert(result.params.sequence_id == "rec", "sequence_id must be target's")
     assert(result.params.project_id == "proj", "project_id must propagate")
@@ -48,7 +50,7 @@ end
 -- Cross-type refused: audio source onto video record.
 do
     local result = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 0, home_rec_track_index = 0,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "VIDEO", rec_track_index = 0 })
@@ -62,7 +64,7 @@ end
 -- Cross-type refused: video source onto audio record.
 do
     local result = compute(
-        { sequence_id = "rec", track_type = "VIDEO",
+        { sequence_id = "rec", track_type = "VIDEO", source_shape = 1,
           source_track_index = 0, home_rec_track_index = 0,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 0 })
@@ -73,7 +75,7 @@ end
 -- Cross-sequence refused.
 do
     local result = compute(
-        { sequence_id = "rec_a", track_type = "AUDIO",
+        { sequence_id = "rec_a", track_type = "AUDIO", source_shape = 4,
           source_track_index = 0, home_rec_track_index = 0,
           project_id = "proj" },
         { sequence_id = "rec_b", track_type = "AUDIO", rec_track_index = 0 })
@@ -84,7 +86,7 @@ end
 -- Self-drop: dragging onto own home row is a refusal (no-op).
 do
     local result = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 1, home_rec_track_index = 2,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 2 })
@@ -97,18 +99,18 @@ end
 -- params with same record_track_index, different source_track_index.
 do
     local r1 = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 0, home_rec_track_index = 0,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 0 })
     local r2 = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 1, home_rec_track_index = 1,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 0 })
     -- r1 is self-drop (src=0, home=0, target=0) → refusal. Use src=2 home=2 instead.
     local r1b = compute(
-        { sequence_id = "rec", track_type = "AUDIO",
+        { sequence_id = "rec", track_type = "AUDIO", source_shape = 4,
           source_track_index = 2, home_rec_track_index = 2,
           project_id = "proj" },
         { sequence_id = "rec", track_type = "AUDIO", rec_track_index = 0 })

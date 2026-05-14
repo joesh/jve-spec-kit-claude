@@ -68,10 +68,11 @@ local function build_fixture()
         -- Seed pre-existing patches for A2 and A3. Identity for A1 will be
         -- seeded automatically at the top of Insert.execute via
         -- Patch.ensure_identity_for_source.
-        INSERT INTO patches (id, sequence_id, track_type, source_track_index,
-            record_track_index, enabled, created_at)
-        VALUES ('p-a2','e','AUDIO',2,3,1,0),  -- A2 routes to A3 (custom)
-               ('p-a3','e','AUDIO',3,3,0,0);  -- A3 disabled → dropped
+        -- Source has 3 audio tracks → source_shape = 3 for AUDIO routing.
+        INSERT INTO patches (id, sequence_id, track_type, source_shape,
+            source_track_index, record_track_index, enabled, created_at)
+        VALUES ('p-a2','e','AUDIO',3,2,3,1,0),  -- A2 routes to A3 (custom)
+               ('p-a3','e','AUDIO',3,3,3,0,0);  -- A3 disabled → dropped
     ]]))
     require("test_env").touch_media_fixtures()
     return db

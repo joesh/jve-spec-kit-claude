@@ -308,18 +308,23 @@ CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
 -- PATCHES (015 — per-sequence source-track → record-track routing)
 -- ============================================================================
 
+-- Patch routing is keyed by source_shape so different-shape sources (e.g. a
+-- 2-ch stereo boom vs a 4-ch surround) on the same record sequence maintain
+-- independent remembered maps. See specs/015-source-in-timeline/spec.md F2.
 CREATE TABLE IF NOT EXISTS patches (
     id                  TEXT    PRIMARY KEY,
     sequence_id         TEXT    NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
     track_type          TEXT    NOT NULL CHECK (track_type IN ('VIDEO','AUDIO')),
+    source_shape        INTEGER NOT NULL CHECK (source_shape > 0),
     source_track_index  INTEGER NOT NULL CHECK (source_track_index >= 0),
     record_track_index  INTEGER NOT NULL CHECK (record_track_index >= 0),
     enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
     created_at          INTEGER NOT NULL DEFAULT 0,
-    UNIQUE (sequence_id, track_type, source_track_index)
+    UNIQUE (sequence_id, track_type, source_shape, source_track_index)
 );
 
-CREATE INDEX IF NOT EXISTS idx_patches_sequence_id ON patches(sequence_id, track_type);
+CREATE INDEX IF NOT EXISTS idx_patches_sequence_id
+    ON patches(sequence_id, track_type, source_shape);
 
 -- ============================================================================
 -- OVERRIDE STATE (sparse — row exists only when explicitly set)
