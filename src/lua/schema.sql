@@ -23,8 +23,17 @@ CREATE TABLE IF NOT EXISTS projects (
     modified_at INTEGER NOT NULL,
     settings TEXT DEFAULT '{}',
 
-    -- Per-Sequence Undo: global cursor for project-level commands
+    -- Per-Sequence Undo: global cursor for project-level commands.
+    -- `global_undo_tip` is the sequence_number of the LEAF of the user's
+    -- current branch on the global stack. Redo walks from cursor toward
+    -- tip (descends through `parent_sequence_number`). When the user
+    -- commits after undoing, both cursor and tip advance to the new
+    -- command, orphaning the prior leaf — its branch remains in the DB
+    -- (preserved for the future branch-picker UI) but is unreachable via
+    -- Cmd+Shift+Z. Without this, an old undone DeleteSequence could
+    -- resurface as a redo target on the user's current branch.
     global_undo_cursor INTEGER DEFAULT 0,
+    global_undo_tip INTEGER DEFAULT 0,
     global_branch_path TEXT DEFAULT '',
 
     -- FR-015: project-level default for how the resolver treats a clip whose
@@ -124,8 +133,13 @@ CREATE TABLE IF NOT EXISTS sequences (
     selected_edge_infos TEXT DEFAULT '[]',
     selected_gap_infos TEXT DEFAULT '[]',
 
-    -- Undo/Redo State
+    -- Undo/Redo State. `current_undo_tip` is the leaf of the user's
+    -- current branch on this sequence's stack. Redo walks from
+    -- current_sequence_number toward this tip via parent_sequence_number.
+    -- New commits at non-tip positions orphan the prior leaf (still
+    -- preserved in the commands tree, just unreachable via Cmd+Shift+Z).
     current_sequence_number INTEGER DEFAULT 0,
+    current_undo_tip INTEGER DEFAULT 0,
     current_branch_path TEXT DEFAULT '',
 
     -- Mutation Generation (one bump per user-visible action; see pre-013 docs).

@@ -1318,6 +1318,13 @@ local function execute_nested_command(command, exec_scope)
             local current = history.get_current_sequence_number()
             if not current or current < sequence_number then
                 history.set_current_sequence_number(sequence_number)
+                -- Advance the tip alongside the cursor on the stack the
+                -- nested command lands on (matches column, not active stack
+                -- — see the top-level commit comment for why).
+                local tip_stack = command.sequence_id
+                    and history.stack_id_for_sequence(command.sequence_id)
+                    or history.GLOBAL_STACK_ID
+                history.set_branch_tip_on_stack(tip_stack, sequence_number)
             end
             log.event("Nested command %s (seq=%d) saved, group=%s",
                 command.type, sequence_number, tostring(root_command_sequence_number))
@@ -1740,16 +1747,31 @@ function M._execute_body(command_or_name, params)
             result.result_data = command:serialize()
 
             -- Move HEAD - but only if nested commands haven't already advanced past us
-            -- (nested commands chain their parent_sequence_number through the cursor)
+            -- (nested commands chain their parent_sequence_number through the cursor).
+            -- New commits advance BOTH cursor and tip: tip = leaf of the user's
+            -- current branch, which is exactly the just-committed command. If the
+            -- user had undone before committing, the prior subtree is orphaned
+            -- (still in the commands table, but unreachable via Cmd+Shift+Z because
+            -- the tip no longer points there). Tip MUST be set on the stack where
+            -- the command actually lands (command.sequence_id column), NOT the
+            -- active stack — SetClipProperty has sequence_id in its spec so active
+            -- stack is per-seq, but the column ends up NULL and the command lands
+            -- on GLOBAL; tip on per-seq would be a no-op for that command's redo.
+            local current_cursor = history.get_current_sequence_number()
+            local should_advance = not current_cursor or current_cursor < sequence_number
             if command.sequence_id then
-                -- Sequence-scoped: advance the sequence's cursor
-                local current_cursor = history.get_current_sequence_number()
-                if not current_cursor or current_cursor < sequence_number then
+                if should_advance then
                     history.set_current_sequence_number(sequence_number)
+                    history.set_branch_tip_on_stack(
+                        history.stack_id_for_sequence(command.sequence_id),
+                        sequence_number)
                 end
                 history.save_undo_position()
             else
-                -- Project-level: advance the global cursor
+                if should_advance then
+                    history.set_branch_tip_on_stack(
+                        history.GLOBAL_STACK_ID, sequence_number)
+                end
                 history.set_global_cursor(sequence_number)
             end
 

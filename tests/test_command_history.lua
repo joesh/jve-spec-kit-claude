@@ -312,28 +312,29 @@ do
     local saved = command_history.save_undo_position()
     check("save returns true", saved == true)
 
-    -- Load back
-    local val, has_row = command_history.load_sequence_undo_position(sequence_id)
+    -- Load back. load_sequence_undo_position returns (cursor, tip, has_row)
+    -- since the tip-pointer fix landed the branch-tip column.
+    local val, _, has_row = command_history.load_sequence_undo_position(sequence_id)
     check("loaded value = 25", val == 25)
     check("has_row = true", has_row == true)
 
     -- nil current → saves 0
     command_history.set_current_sequence_number(nil)
     command_history.save_undo_position()
-    local val2, _ = command_history.load_sequence_undo_position(sequence_id)
+    local val2 = command_history.load_sequence_undo_position(sequence_id)
     check("nil current saved as 0", val2 == 0)
 
     -- Load nonexistent sequence
-    local val3, has3 = command_history.load_sequence_undo_position("nonexistent_seq")
+    local val3, _, has3 = command_history.load_sequence_undo_position("nonexistent_seq")
     check("nonexistent → nil value", val3 == nil)
     check("nonexistent → no row", has3 == false)
 
     -- nil/empty sequence_id
-    local val4, has4 = command_history.load_sequence_undo_position(nil)
+    local val4, _, has4 = command_history.load_sequence_undo_position(nil)
     check("nil seq → nil", val4 == nil)
     check("nil seq → false", has4 == false)
 
-    local val5, has5 = command_history.load_sequence_undo_position("")
+    local val5, _, has5 = command_history.load_sequence_undo_position("")
     check("empty seq → nil", val5 == nil)
     check("empty seq → false", has5 == false)
 end
