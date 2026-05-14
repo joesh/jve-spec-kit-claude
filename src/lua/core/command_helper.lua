@@ -638,6 +638,24 @@ function M.apply_mutations(db, mutations)
         return true
     end
 
+    -- Locked-track gate. Refuses if any mutation targets a tracks.locked=1
+    -- row; undo/redo bypass so a track locked AFTER an edit can still be
+    -- reverted. Implemented in core.track_lock_guard.
+    local guard = require("core.track_lock_guard")
+    local track_ids = {}
+    local seen = {}
+    local function add(tid)
+        if type(tid) == "string" and tid ~= "" and not seen[tid] then
+            seen[tid] = true; track_ids[#track_ids + 1] = tid
+        end
+    end
+    for _, m in ipairs(mutations) do
+        add(m.track_id)
+        if m.previous then add(m.previous.track_id) end
+    end
+    local ok_lock, lock_err = guard.check_writable(db, track_ids)
+    if not ok_lock then return false, lock_err end
+
     local now = os.time()
     local update_stmt = nil
     local delete_stmt = nil

@@ -64,8 +64,13 @@ function M.execute(args)
     -- whose start >= insertion frame) would leave the straddler untouched
     -- and the new clip's INSERT would collide with it on the
     -- video-overlap trigger.
+    -- Every target track (VIDEO + each audio destination) must split + ripple
+    -- before the new clip rows land. Walker is in place_shared so Overwrite
+    -- shares it.
+    local target_track_ids = place_shared.iter_target_track_ids(plan)
+
     local split_captures = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(target_track_ids) do
         local cap = place_shared.split_track_at_insertion(
             track_id, plan.owner, plan.start_frame)
         if cap and (#cap.trimmed > 0 or #cap.split_new_ids > 0) then
@@ -78,7 +83,7 @@ function M.execute(args)
     -- == plan.start_frame) get picked up here and shifted along with all
     -- downstream clips.
     local rippled = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(target_track_ids) do
         local ids = Clip.ripple_track_forward(
             track_id, plan.start_frame, plan.owner_duration)
         if #ids > 0 then
@@ -146,31 +151,43 @@ local SPEC = {
 -- row contribute nothing (they don't participate in the edit). Disabled
 -- patches likewise contribute nothing.
 local function auto_create_record_audio_tracks(args)
-    if not args.source_sequence_id then return {} end
+    assert(args.source_sequence_id and args.source_sequence_id ~= "",
+        "Insert.auto_create_record_audio_tracks: source_sequence_id required "
+        .. "(SPEC declares it required=true; reaching this helper without it "
+        .. "is a programming error in the executor wiring)")
 
     local Patch = require("models.patch")
     local rec_audio = Track.find_by_sequence(args.sequence_id, "AUDIO")
-    local rec_count = #rec_audio
 
     local max_rec_idx = 0
     for _, p in ipairs(Patch.find_by_sequence(args.sequence_id)) do
         if p.track_type == "AUDIO"
-           and (p.enabled == 1 or p.enabled == true)
+           and p.enabled == 1  -- normalized to INTEGER by Patch.save
            and p.record_track_index > max_rec_idx then
             max_rec_idx = p.record_track_index
         end
     end
 
+    -- Walk only the indices that don't already have a track. Using
+    -- rec_count+1..max_rec_idx silently misroutes whenever existing
+    -- record tracks are non-contiguous (e.g. user deleted A2 leaving
+    -- A1+A3): Track.determine_next_index would assign MAX+1 ignoring
+    -- the patch's record_track_index. Pin track_index explicitly.
+    local existing_by_idx = {}
+    for _, t in ipairs(rec_audio) do existing_by_idx[t.track_index] = true end
     local created_ids = {}
-    for i = rec_count + 1, max_rec_idx do
-        local t = Track.create_audio(
-            string.format("A%d", i), args.sequence_id, { sync_mode = "ripple" })
-        assert(t:save(), string.format(
-            "Insert: failed to save auto-created audio track A%d "
-            .. "for sequence %s", i, tostring(args.sequence_id)))
-        created_ids[#created_ids + 1] = t.id
-        log.event("Insert: auto-created audio track A%d id=%s "
-            .. "(max enabled patch rec_idx=%d)", i, t.id, max_rec_idx)
+    for i = 1, max_rec_idx do
+        if not existing_by_idx[i] then
+            local t = Track.create_audio(
+                string.format("A%d", i), args.sequence_id,
+                { sync_mode = "ripple", index = i })
+            assert(t:save(), string.format(
+                "Insert: failed to save auto-created audio track A%d "
+                .. "for sequence %s", i, tostring(args.sequence_id)))
+            created_ids[#created_ids + 1] = t.id
+            log.event("Insert: auto-created audio track A%d id=%s "
+                .. "(max enabled patch rec_idx=%d)", i, t.id, max_rec_idx)
+        end
     end
     return created_ids
 end

@@ -79,7 +79,8 @@ for _, prop in ipairs(PROPS) do
     local sig = signal_log[#signal_log]
     assert(sig.track_id == "trk", "signal track_id wrong for " .. prop)
     assert(sig.prop == prop, "signal property wrong: " .. tostring(sig.prop))
-    assert(sig.new == 1 or sig.new == true, "signal new_value wrong for " .. prop)
+    -- Signal payload is INTEGER 0/1 per command emit (boolean coerced at boundary).
+    assert(sig.new == 1, "signal new_value must be INTEGER 1 (boundary normalization) for " .. prop)
 
     -- Undo must NOT revert.
     command_manager.undo()

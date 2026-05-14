@@ -725,16 +725,25 @@ local function populate_tree()
         qt_constants.CONTROL.SET_TREE_ITEM_ICON(M.tree, tree_id, ICONS.timeline)
     end
 
-    -- Collect timeline sequences for bin-aware placement
+    -- Collect timeline sequences for bin-aware placement. db.load_sequences
+    -- already filters WHERE kind='sequence' at the SQL layer (only valid
+    -- non-master kind per schema CHECK constraint), so no second client-side
+    -- filter is needed — and the previous one looked for kind=='timeline',
+    -- a stale name that rejected every actual row.
     local timeline_sequences = {}
     for _, sequence in ipairs(sequences) do
-        if not sequence.kind or sequence.kind == "timeline" then
-            -- Enrich with sort-friendly fields
-            sequence.type = sequence.type or "timeline"
-            sequence.fps_float = get_fps_float(sequence.frame_rate)
-            sequence.codec = "Timeline"
-            table.insert(timeline_sequences, sequence)
-        end
+        -- db.load_sequences does not populate `.type`; this loop stamps it.
+        -- "timeline" is the browser-display type tag for kind='sequence' rows
+        -- (master clips use type='master_clip' via a separate path). No
+        -- `or` fallback — load_sequences is the only source of these rows
+        -- and an upstream that pre-set `.type` would be a contract breach.
+        assert(sequence.type == nil, string.format(
+            "project_browser: load_sequences row %s arrived with type=%q already set",
+            tostring(sequence.id), tostring(sequence.type)))
+        sequence.type = "timeline"
+        sequence.fps_float = get_fps_float(sequence.frame_rate)
+        sequence.codec = "Timeline"
+        table.insert(timeline_sequences, sequence)
     end
 
     -- Enrich master clips with sort-friendly fields
@@ -2601,6 +2610,19 @@ end
 -- Register for project_changed signal
 local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
+
+-- Sequence-list mutations (CreateSequence, DeleteSequence, importer batch).
+-- The browser tree is otherwise built once at project-open and never
+-- repopulated, so any newly-created sequence (or undo of a delete) would
+-- be invisible until the project was reopened. Project_id mismatch ⇒ noop
+-- (signal is for some other open project).
+Signals.connect("sequence_list_changed", function(project_id)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "project_browser: sequence_list_changed emitter must pass non-empty project_id")
+    if project_id == M.project_id then
+        M.refresh()
+    end
+end)
 
 -- Per-row refresh for any media-level change. Called from both
 -- media_status_changed (offline icon flip) and media_content_changed

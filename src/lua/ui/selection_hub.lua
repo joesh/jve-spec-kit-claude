@@ -7,6 +7,17 @@ local listeners = {}
 local next_token = 0
 local active_panel_id = nil
 
+-- Last broadcast (panel_id, items_signature) — guards against redundant
+-- notifications. Both set_active_panel and update_selection fire notify
+-- unconditionally on their own; without this, a click in an already-
+-- active panel + the immediately-following focus event each retrigger
+-- listeners with the exact same payload. TSO 2026-05-12 recorded 4–5x
+-- inspector.update_selection calls per focus toggle for this reason.
+-- Dedup at the hub so every listener (inspector, effective_source, …)
+-- benefits without per-listener guards.
+local last_broadcast_panel = nil
+local last_broadcast_signature = nil
+
 local function get_items(panel_id)
     if not panel_id then
         return {}
@@ -14,8 +25,29 @@ local function get_items(panel_id)
     return selections[panel_id] or {}
 end
 
+--- Stable order-independent signature of a selection items list.
+--- Items are {type, id} pairs; the listener-visible identity is the SET,
+--- not the order. Sort + concat so reordered-but-equivalent lists
+--- compare equal.
+local function items_signature(items)
+    if type(items) ~= "table" or #items == 0 then return "" end
+    local parts = {}
+    for i, it in ipairs(items) do
+        parts[i] = string.format("%s:%s",
+            tostring(it and it.type), tostring(it and it.id))
+    end
+    table.sort(parts)
+    return table.concat(parts, "|")
+end
+
 local function notify(panel_id)
     local items = get_items(panel_id)
+    local sig = items_signature(items)
+    if panel_id == last_broadcast_panel and sig == last_broadcast_signature then
+        return
+    end
+    last_broadcast_panel = panel_id
+    last_broadcast_signature = sig
     for token, callback in pairs(listeners) do
         if type(callback) == "function" then
             -- Fail-fast: don't swallow errors from listeners
@@ -83,6 +115,8 @@ function M._reset_for_tests()
     listeners = {}
     next_token = 0
     active_panel_id = nil
+    last_broadcast_panel = nil
+    last_broadcast_signature = nil
 end
 
 return M

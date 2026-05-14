@@ -26,10 +26,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         "CreateSequence: ui_constants.TIMELINE.TRACK_HEIGHT not defined")
     local TRACK_TEMPLATE_KEY = "track_height_template"
 
+    -- Templates may legitimately omit a per-track entry (nil); only
+    -- present-but-wrong values are a corruption to assert on.
     local function normalize_height(value)
-        if type(value) ~= "number" then
-            return DEFAULT_TRACK_HEIGHT
-        end
+        if value == nil then return DEFAULT_TRACK_HEIGHT end
+        assert(type(value) == "number", string.format(
+            "CreateSequence: track-height template entry must be number; got %s (%s)",
+            type(value), tostring(value)))
         local clamped = math.floor(value)
         if clamped < MIN_TRACK_HEIGHT then
             clamped = MIN_TRACK_HEIGHT
@@ -38,10 +41,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     local function seed_default_tracks(sequence_id, project_id)
-        local template = nil
-        if database.get_project_setting then
-            template = database.get_project_setting(project_id, TRACK_TEMPLATE_KEY)
-        end
+        assert(type(database.get_project_setting) == "function",
+            "CreateSequence: database.get_project_setting missing — required API")
+        local template = database.get_project_setting(project_id, TRACK_TEMPLATE_KEY)
         local template_video = type(template) == "table" and template.video or {}
         local template_audio = type(template) == "table" and template.audio or {}
 
@@ -69,9 +71,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             height_map[track.id] = normalize_height(desired_height)
         end
 
-        if database.set_sequence_track_heights then
-            database.set_sequence_track_heights(sequence_id, height_map)
-        end
+        assert(type(database.set_sequence_track_heights) == "function",
+            "CreateSequence: database.set_sequence_track_heights missing — required API")
+        database.set_sequence_track_heights(sequence_id, height_map)
 
         return true
     end
@@ -126,6 +128,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             })
         end
         command:set_parameter("__allow_empty_mutations", true)
+        -- Sequence-list mutation → browser tree must rebuild. Queued post-
+        -- commit so the browser refreshes only after the row is durable in
+        -- the DB (rollback discards the queued emit). project_browser
+        -- subscribes; no other consumer should be added without thinking
+        -- about whether `sequence_content_changed` is what they want instead.
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", project_id)
         return true
     end
 
@@ -147,6 +156,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
         log.event("Undo CreateSequence: removed sequence %s", tostring(args.sequence_id))
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", args.project_id)
         return true
     end
     command_executors["UndoCreateSequence"] = command_undoers["CreateSequence"]

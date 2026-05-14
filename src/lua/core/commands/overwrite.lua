@@ -59,10 +59,12 @@ function M.execute(args)
     local n_start = plan.start_frame
     local n_end   = plan.start_frame + plan.owner_duration
 
-    -- Occlude BEFORE inserting the new rows so their INSERT doesn't collide
-    -- with the clip we're about to trim/remove.
+    -- Occlude every target track (VIDEO + each audio destination) BEFORE
+    -- the new clip rows land, so the INSERTs don't collide with what's
+    -- being trimmed/removed. iter_target_track_ids de-dupes — keyed map
+    -- below is incidental.
     local occluded = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(place_shared.iter_target_track_ids(plan)) do
         occluded[track_id] = occlude_track(
             track_id, plan.owner, n_start, n_end)
     end

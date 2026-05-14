@@ -98,6 +98,10 @@ do
         sequence_id          = "e",
         source_sequence_id   = "m",
         timeline_start_frame = 0,
+        -- Pin composite explicitly. Default is now 'expanded' (spec §F2 —
+        -- patches drive routing); this test exercises the V+A composite
+        -- atomic-undo path so it asks for that mode by name.
+        audio_drop_mode      = "composite",
     }
     local cmd = {
         params = args,

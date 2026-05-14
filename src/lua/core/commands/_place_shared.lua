@@ -23,9 +23,9 @@ local Clip      = require("models.clip")
 local clip_link = require("models.clip_link")
 local Cycle     = require("models.cycle")
 
---- Resolve the effective fps-mismatch policy for a place operation.
+--- Pick the effective fps-mismatch policy for a place operation.
 --- Chain: explicit arg → owner sequence override (non-NULL) → project default.
-function M.resolve_policy(explicit, owner_seq)
+function M.pick_policy(explicit, owner_seq)
     if explicit ~= nil then
         assert(explicit == "resample" or explicit == "passthrough", string.format(
             "place_shared: fps_mismatch_policy arg must be 'resample' or "
@@ -78,7 +78,7 @@ function M.pick_target_track(owner_id, track_type, explicit_track_id)
     return tracks[1].id
 end
 
---- Plan a placement: resolve owner+nested, cycle check, policy, mediums,
+--- Plan a placement: look up owner+nested, cycle check, policy, mediums,
 --- per-medium native durations, owner-timebase duration, target tracks,
 --- clip name. Returns a struct the caller consumes to execute.
 ---
@@ -91,8 +91,8 @@ end
 ---             targets = { VIDEO?, AUDIO? }, base_name,
 ---             start_frame }
 -- Validate the place_placement input shape. Caller invariants only — the
--- field-level assertions on referenced sequences happen inside resolve_*
--- helpers below.
+-- field-level assertions on referenced sequences happen inside the
+-- pick_endpoints / compute_*_target helpers below.
 local function validate_plan_args(args)
     assert(type(args) == "table",
         "place_shared.plan_placement: args table required")
@@ -107,7 +107,7 @@ end
 
 -- Load the owner+nested sequences, enforce that owner is kind='sequence', project
 -- consistency, and cycle absence. Returns owner, nested.
-local function resolve_endpoints(args)
+local function pick_endpoints(args)
     local owner  = Sequence.find(args.sequence_id)
     assert(owner, string.format(
         "place_shared: owner %s not found", args.sequence_id))
@@ -195,18 +195,18 @@ local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
     return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
 end
 
--- Route one source AUDIO channel via the patch table.
+-- Route one source channel via the patch table at the current source's
+-- shape (count of source tracks of this type; see spec §F2).
 -- Returns rec_idx (number) or nil when the channel does not participate.
 -- Patches are the sole routing mechanism — no implicit identity.
 --   no patch row     → nil (source not routed; channel dropped)
 --   patch.enabled=1  → patch.record_track_index
 --   patch.enabled=0  → nil (channel dropped)
--- autoselect is unrelated to patching and is NOT consulted here.
-local function route_audio_via_patch(owner_id, src_idx)
+local function route_via_patch(owner_id, track_type, source_shape, src_idx)
     local Patch = require("models.patch")
-    local p = Patch.find_by_source(owner_id, "AUDIO", src_idx)
+    local p = Patch.find_by_source(owner_id, track_type, source_shape, src_idx)
     if not p then return nil end
-    if p.enabled == 1 or p.enabled == true then
+    if p.enabled == 1 then  -- Patch.save normalizes; INTEGER 0/1 only.
         return p.record_track_index
     end
     return nil
@@ -217,7 +217,28 @@ end
 -- one per nested A track that has an enabled patch routing it to a record
 -- track. Auto-creates missing owner A tracks for the expanded path;
 -- refuses on collision (rule 1.14, FR-023).
-local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
+-- Ensure an owner track at the patch-dictated `rec_idx` exists, creating
+-- it on demand with an explicit `index = rec_idx`. Used by both audio
+-- (per-channel) and video (single-target) routing paths. The by-index
+-- map is mutated in place so subsequent lookups in the same call hit
+-- the cache.
+local function ensure_owner_track_at_idx(owner_id, track_type, rec_idx,
+                                         by_index, label_fmt)
+    local existing = by_index[rec_idx]
+    if existing then return existing end
+    local creator = (track_type == "AUDIO") and Track.create_audio
+                                              or Track.create_video
+    local newt = creator(
+        string.format(label_fmt, rec_idx), owner_id,
+        { id = uuid.generate(), index = rec_idx })
+    assert(newt:save(), string.format(
+        "place_shared: failed to auto-create owner %s track at index %d "
+        .. "on sequence %s", track_type, rec_idx, owner_id))
+    by_index[rec_idx] = newt.id
+    return newt.id
+end
+
+local function compute_audio_targets(owner, nested, drop_mode, args, a_dur,
                                      owner_duration)
     if drop_mode == "composite" then
         return { {
@@ -232,6 +253,10 @@ local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
     assert(#nested_a > 0, string.format(
         "place_shared: expanded audio_drop_mode requires nested %s to have "
         .. "at least one A track; got 0", nested.id))
+    -- Source audio shape = count of nested audio tracks. Routing rows are
+    -- keyed by this shape so a 2-ch boom and a 4-ch surround on the same
+    -- owner sequence pick up independent maps (spec §F2 / §2b).
+    local audio_shape = #nested_a
     local owner_a_by_index = {}
     for _, t in ipairs(Track.find_by_sequence(owner.id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
@@ -239,19 +264,10 @@ local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
 
     local targets = {}
     for _, nt in ipairs(nested_a) do
-        local rec_idx = route_audio_via_patch(owner.id, nt.track_index)
+        local rec_idx = route_via_patch(owner.id, "AUDIO", audio_shape, nt.track_index)
         if rec_idx ~= nil then
-            local owner_track_id = owner_a_by_index[rec_idx]
-            if not owner_track_id then
-                local newt = Track.create_audio(
-                    string.format("Audio %d", rec_idx), owner.id,
-                    { id = uuid.generate(), index = rec_idx })
-                assert(newt:save(), string.format(
-                    "place_shared: failed to auto-create owner A track at index %d "
-                    .. "on sequence %s", rec_idx, owner.id))
-                owner_track_id = newt.id
-                owner_a_by_index[rec_idx] = owner_track_id
-            end
+            local owner_track_id = ensure_owner_track_at_idx(
+                owner.id, "AUDIO", rec_idx, owner_a_by_index, "Audio %d")
             targets[#targets + 1] = {
                 track_id              = owner_track_id,
                 master_audio_track_id = nt.id,
@@ -260,22 +276,42 @@ local function resolve_audio_targets(owner, nested, drop_mode, args, a_dur,
         end
     end
 
-    -- Collision check across the owner-frame placement window.
-    local hi = args.timeline_start_frame + owner_duration
-    for _, tgt in ipairs(targets) do
-        local overlapping = Clip.find_overlapping_on_track(
-            tgt.track_id, args.timeline_start_frame, hi)
-        if #overlapping > 0 then
-            error(string.format(
-                "place_shared: expanded-audio collision on owner track %s — "
-                .. "existing clip %s overlaps [%d, %d). Auto-creating tracks "
-                .. "is non-destructive but overwriting an existing clip is. "
-                .. "Clear the track or pick another start frame.",
-                tgt.track_id, overlapping[1].id,
-                args.timeline_start_frame, hi))
-        end
-    end
+    -- Caller-side collision handling: Insert ripples the routed tracks
+    -- forward before write_clips; Overwrite occludes (delete/trim/split).
+    -- A pre-emptive refusal here would defeat both — and would break F10
+    -- / F9 on any non-empty timeline. Auto-created tracks are empty by
+    -- construction so they need no check either.
     return targets
+end
+
+-- Pick the owner VIDEO target via patches at the source's V-shape.
+-- Mirror of compute_audio_targets' expanded path, but video is a single
+-- clip per Insert so we return one track_id (or nil to drop video).
+-- Explicit target_video_track_id wins (per pick_target_track contract).
+local function compute_video_target(owner, nested, args)
+    if args.target_video_track_id and args.target_video_track_id ~= "" then
+        return M.pick_target_track(
+            owner.id, "VIDEO", args.target_video_track_id)
+    end
+    local nested_v = Track.find_by_sequence(nested.id, "VIDEO")
+    assert(#nested_v > 0, string.format(
+        "place_shared: nested %s has VIDEO medium but no V tracks", nested.id))
+    -- Multi-source-video would require expanded-style multi-V-clip writes
+    -- (analogous to expanded audio). Out of scope until a test/spec needs it.
+    assert(#nested_v == 1, string.format(
+        "place_shared: multi-source-video routing not yet supported "
+        .. "(nested %s has %d V tracks). Pass target_video_track_id to override.",
+        nested.id, #nested_v))
+    local video_shape = #nested_v
+    local rec_idx = route_via_patch(
+        owner.id, "VIDEO", video_shape, nested_v[1].track_index)
+    if rec_idx == nil then return nil end  -- no patch or disabled → drop video
+    local owner_v_by_index = {}
+    for _, t in ipairs(Track.find_by_sequence(owner.id, "VIDEO")) do
+        owner_v_by_index[t.track_index] = t.id
+    end
+    return ensure_owner_track_at_idx(
+        owner.id, "VIDEO", rec_idx, owner_v_by_index, "V%d")
 end
 
 local function derive_base_name(nested, args)
@@ -289,8 +325,8 @@ end
 
 function M.plan_placement(args)
     validate_plan_args(args)
-    local owner, nested = resolve_endpoints(args)
-    local policy        = M.resolve_policy(args.fps_mismatch_policy, owner)
+    local owner, nested = pick_endpoints(args)
+    local policy        = M.pick_policy(args.fps_mismatch_policy, owner)
 
     local mediums = Sequence.contained_mediums(nested.id)
     assert(next(mediums) ~= nil, string.format(
@@ -307,17 +343,26 @@ function M.plan_placement(args)
 
     local targets = {}
     if mediums.VIDEO then
-        targets.VIDEO = M.pick_target_track(
-            owner.id, "VIDEO", args.target_video_track_id)
+        -- Patch-routed video target. May be nil when the source V channel's
+        -- patch is disabled or absent — in which case no V clip is written
+        -- (audio-only edit). Per spec §F2 patches are sole routing.
+        targets.VIDEO = compute_video_target(owner, nested, args)
     end
 
-    local drop_mode = args.audio_drop_mode or "composite"
+    -- Default = "expanded": patches drive per-channel audio routing (spec §F2).
+    -- Callers that want the legacy mixdown behavior pass "composite" explicitly.
+    local drop_mode = args.audio_drop_mode or "expanded"
     assert(drop_mode == "composite" or drop_mode == "expanded", string.format(
         "place_shared: audio_drop_mode must be 'composite' or 'expanded'; "
         .. "got %s", tostring(drop_mode)))
-    local audio_targets = mediums.AUDIO
-        and resolve_audio_targets(owner, nested, drop_mode, args, a_dur, owner_duration)
-        or {}
+    -- Always a table — empty when no AUDIO medium. plan.audio_targets is a
+    -- contract: callers (Insert, Overwrite) iterate it directly without nil
+    -- guards (rule 2.13).
+    local audio_targets = {}
+    if mediums.AUDIO then
+        audio_targets = compute_audio_targets(
+            owner, nested, drop_mode, args, a_dur, owner_duration)
+    end
 
     return {
         owner            = owner,
@@ -334,6 +379,32 @@ function M.plan_placement(args)
         base_name        = derive_base_name(nested, args),
         start_frame      = args.timeline_start_frame,
     }
+end
+
+--- Collect every owner-side track that will receive a clip from this plan
+--- — VIDEO (when present) plus each entry's track_id in plan.audio_targets,
+--- de-duplicated (multiple source channels may stack onto one rec row per
+--- spec §F2 FR-010a). Order: VIDEO first, then audio targets in plan order.
+---
+--- Insert.execute iterates this list for split+ripple; Overwrite.execute
+--- iterates it for occlude. Centralizing the walk here means a future
+--- plan-extending medium (subtitles, etc.) only touches plan_placement +
+--- this helper, not every command.
+function M.iter_target_track_ids(plan)
+    assert(type(plan.audio_targets) == "table",
+        "place_shared.iter_target_track_ids: plan.audio_targets missing")
+    local ids = {}
+    if plan.targets.VIDEO then
+        ids[#ids + 1] = plan.targets.VIDEO
+    end
+    local seen = {}
+    for _, tgt in ipairs(plan.audio_targets) do
+        if not seen[tgt.track_id] then
+            seen[tgt.track_id] = true
+            ids[#ids + 1] = tgt.track_id
+        end
+    end
+    return ids
 end
 
 -- Optional preset_ids let callers (e.g. command redo replaying a

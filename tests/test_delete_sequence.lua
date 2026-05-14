@@ -225,20 +225,10 @@ assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.erro
 -- Verify deleted again
 assert(not sequence_exists("seq_1"), "Sequence should be deleted after redo")
 
--- =============================================================================
--- TEST 4: Cannot delete default_sequence
--- =============================================================================
-print("Test 4: Cannot delete default_sequence")
-asserts._set_enabled_for_tests(false)
-result = execute_command("DeleteSequence", {
-    project_id = "project",
-    sequence_id = "default_sequence"
-})
-asserts._set_enabled_for_tests(true)
-assert(not result.success, "DeleteSequence should fail for default_sequence")
-
--- default_sequence should still exist
-assert(sequence_exists("default_sequence"), "Default sequence should not be deleted")
+-- (Former Test 4 — "Cannot delete default_sequence" — removed. The
+-- Sequence.ensure_default mechanism it guarded was removed during the
+-- new-project work; there is no longer a privileged "default sequence"
+-- id and DeleteSequence has no per-id refusal.)
 
 -- =============================================================================
 -- TEST 5: Cannot delete master sequence

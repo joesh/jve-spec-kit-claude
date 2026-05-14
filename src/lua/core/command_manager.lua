@@ -37,6 +37,49 @@ local command_event_depth = 0
 -- Depth > 0 = nested execution (record to DB but skip transaction/UI refresh)
 local execution_depth = 0
 
+-- Post-commit signal-emit queue.
+--
+-- Some signals (notably `sequence_list_changed`) drive UI consumers that
+-- re-pull from the DB. Emitting from inside a command executor would let
+-- those consumers see in-progress transaction state — and worse, would
+-- leave them with a stale view if the command later rolls back. The queue
+-- defers emits until the transaction (or undo group) commits; rollback
+-- discards them.
+--
+-- Use M.queue_post_commit_emit(signal, ...) from within an executor. The
+-- flush points are wired to the per-command commit (no undo group) and to
+-- end_undo_group's outermost commit; discard points are the rollback paths.
+local _post_commit_emits = {}
+
+local function flush_post_commit_emits()
+    if #_post_commit_emits == 0 then return end
+    local pending = _post_commit_emits
+    _post_commit_emits = {}
+    for _, entry in ipairs(pending) do
+        Signals.emit(unpack(entry))
+    end
+end
+
+local function discard_post_commit_emits()
+    _post_commit_emits = {}
+end
+
+--- Queue a signal emit to fire after the surrounding command's
+--- transaction commits. Argument list mirrors Signals.emit.
+---
+--- Safe to call from any context: when no command is executing
+--- (execution_depth == 0, e.g. initial project open's importer pass),
+--- there's no commit to defer to, so the emit fires immediately.
+function M.queue_post_commit_emit(signal_name, ...)
+    assert(type(signal_name) == "string" and signal_name ~= "",
+        "queue_post_commit_emit: signal_name required")
+    if execution_depth == 0 then
+        Signals.emit(signal_name, ...)
+        return
+    end
+    _post_commit_emits[#_post_commit_emits + 1] = { signal_name, ... }
+end
+
 -- Root command tracking for automatic undo grouping
 -- When a command executes nested commands, they all share the root's sequence_number as undo_group_id
 -- Nested commands also inherit the root's playhead and pre-selection context (same user action)
@@ -505,6 +548,8 @@ end
 
 -- SAVEPOINT-aware rollback: undo group → rollback to savepoint; standalone → full rollback.
 -- Both paths restore in-memory clip state from the mutation transaction snapshot.
+-- Also drops any queued post-commit signal emits: a command that rolled back
+-- must not notify listeners about state that's no longer in the DB.
 local function rollback_transaction()
     assert(db_module.has_connection(), "rollback_transaction: no database connection")
     local group_id = history.get_current_undo_group_id()
@@ -514,6 +559,7 @@ local function rollback_transaction()
         db_module.rollback()
         rollback_mutations()
     end
+    discard_post_commit_emits()
 end
 
 local function normalize_command(command_or_name, params)
@@ -1770,6 +1816,10 @@ function M._execute_body(command_or_name, params)
                     clip_state.commit_mutation_transaction()
                     snapshot_taken = false
                 end
+                -- Transaction is committed. Any post-commit emits queued by
+                -- the executor (e.g. CreateSequence's sequence_list_changed)
+                -- can now fire — DB state is authoritative.
+                flush_post_commit_emits()
             end
             perf.log("db_commit")
             perf.reset()
@@ -2800,6 +2850,10 @@ function M.end_undo_group()
     -- Commit + notify once the outermost group closes
     if not history.get_current_undo_group_id() then
         db_module.commit()
+        -- Outermost group is now committed. Flush queued post-commit emits
+        -- accumulated by member commands. Discard happens via rollback paths
+        -- when the group was aborted.
+        flush_post_commit_emits()
         -- Notify listeners (edit history, etc.). Nested commands don't fire
         -- notify_command_event, and the non-undoable wrapper (e.g. DeleteSelection)
         -- goes through execute_non_recording which doesn't notify either.

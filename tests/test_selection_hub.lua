@@ -292,6 +292,48 @@ do
 end
 
 -- ============================================================
+-- Dedup: redundant notifications must not fire
+-- ============================================================
+-- TSO 2026-05-12: inspector.update_selection fired 4-5x per focus toggle
+-- (Browser↔Timeline) even when the selection itself hadn't changed.
+-- Root structural issue: set_active_panel + update_selection paths each
+-- fire notify unconditionally, so a click in an already-active panel +
+-- the immediately-following focus event each retrigger the listener
+-- with the exact same payload. Hub must dedup by (panel_id, items
+-- signature) and skip listener calls when nothing changed.
+do
+    fresh()
+    local calls = 0
+    local last_panel, last_items
+    selection_hub.register_listener(function(items, panel)
+        calls = calls + 1
+        last_panel = panel
+        last_items = items
+    end)
+    -- register_listener fires once for the active panel (which is nil at
+    -- this point) — that's a documented setup notify; reset the counter.
+    calls = 0
+
+    selection_hub.set_active_panel("project_browser")
+    local clip = { type = "clip", id = "c1" }
+    selection_hub.update_selection("project_browser", { clip })
+    local after_initial = calls
+    assert(after_initial >= 1, "FAIL: listener must fire at least once on real change")
+    -- Now: 4 redundant events that change nothing. Hub must dedup all.
+    selection_hub.set_active_panel("project_browser")       -- same panel
+    selection_hub.update_selection("project_browser", { clip })  -- same items
+    selection_hub.set_active_panel("project_browser")       -- same again
+    selection_hub.update_selection("project_browser", { { type = "clip", id = "c1" } })  -- equivalent items
+    check("dedup: redundant set_active_panel + update_selection no-op", calls == after_initial)
+
+    -- A real change MUST still fire.
+    selection_hub.update_selection("project_browser", { { type = "clip", id = "c2" } })
+    check("real selection change fires listener", calls == after_initial + 1)
+    check("real change carries the new items", last_items[1].id == "c2")
+    check("real change carries the panel", last_panel == "project_browser")
+end
+
+-- ============================================================
 -- Summary
 -- ============================================================
 print(string.format("\n=== Selection Hub: %d passed, %d failed ===", pass_count, fail_count))

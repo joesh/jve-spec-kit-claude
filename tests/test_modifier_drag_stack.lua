@@ -50,13 +50,15 @@ db:exec([[
 
 command_manager.init("seq", "proj")
 
+local SHAPE = 2  -- two source audio channels in this test (A1 + A2)
+
 local function audio_patches()
     local rows = {}
     local s = db:prepare(
         "SELECT source_track_index, record_track_index, enabled "
         .. "FROM patches WHERE sequence_id='seq' AND track_type='AUDIO' "
-        .. "ORDER BY source_track_index ASC")
-    assert(s); s:exec()
+        .. "AND source_shape=? ORDER BY source_track_index ASC")
+    assert(s); s:bind_value(1, SHAPE); s:exec()
     while s:next() do
         table.insert(rows, { src = s:value(0), rec = s:value(1), enabled = s:value(2) })
     end
@@ -65,17 +67,20 @@ local function audio_patches()
 end
 
 local signals = {}
-Signals.connect("patch_changed", function(seq, track_type, src, change_type)
-    table.insert(signals, { seq = seq, track_type = track_type,
-                             src = src, change_type = change_type })
-end)
+Signals.connect("patch_changed",
+    function(seq, track_type, shape, src, change_type)
+        table.insert(signals, { seq = seq, track_type = track_type,
+                                shape = shape, src = src, change_type = change_type })
+    end)
 
 -- ── 1. Create A1→A1 patch (pre-existing routing) ─────────────────────────────
 print("-- 1. create A1→A1 --")
 local r1 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     record_track_index = 0,
+    enabled            = 1,
     track_type         = "AUDIO",
     project_id         = "proj",
 })
@@ -89,8 +94,10 @@ print("  A1→A1 created, enabled=1 — OK")
 print("-- 2. modifier-drag: A2 stacks onto A1's record row --")
 local r2 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 1,   -- A2
     record_track_index = 0,   -- A1's record slot
+    enabled            = 1,
     track_type         = "AUDIO",
     project_id         = "proj",
 })
@@ -132,8 +139,10 @@ print("  A1 patch record_track_index unchanged — OK")
 print("-- 4. invalid track_type refused --")
 local r4 = command_manager.execute("SetPatch", {
     sequence_id        = "seq",
+    source_shape       = SHAPE,
     source_track_index = 0,
     record_track_index = 0,
+    enabled            = 1,
     track_type         = "MIDI",   -- not a valid type
     project_id         = "proj",
 })

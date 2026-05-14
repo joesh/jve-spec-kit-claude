@@ -89,10 +89,13 @@ print("  Step 4: SourceTab absent by default — OK")
 -- ── Step 5: patch on/off toggle — non-undoable ───────────────────────────────
 print("-- Step 5: patch toggle (non-undoable) --")
 -- Requires patches table (schema migration) and SetPatch command (T028).
+-- source_shape is the source audio track count at gesture time; the rec
+-- fixture-setup creates a single AUDIO source track upstream.
 local r5a = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
     track_type         = "AUDIO",
+    source_shape       = 1,
     source_track_index = 1,
     record_track_index = 1,
     enabled            = true,
@@ -104,6 +107,7 @@ local r5b = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
     track_type         = "AUDIO",
+    source_shape       = 1,
     source_track_index = 1,
     enabled            = false,
 })
@@ -133,6 +137,7 @@ local r6 = command_manager.execute("SetPatch", {
     sequence_id        = "rec",
     project_id         = "proj",
     track_type         = "AUDIO",
+    source_shape       = 4,
     source_track_index = 2,
     record_track_index = 4,
     enabled            = true,
@@ -266,12 +271,14 @@ local function count_rec_audio()
     assert(s); s:exec(); s:next(); local n = s:value(0); s:finalize(); return n
 end
 
--- Add patches for A4-A8 (record tracks don't exist yet).
+-- Add patches for A4-A8 (record tracks don't exist yet). source_shape=8
+-- matches the count of source audio channels the Insert will see.
 for i = 4, 8 do
     assert(db:exec(string.format([[
         INSERT INTO patches
-            (id, sequence_id, track_type, source_track_index, record_track_index, enabled, created_at)
-        VALUES ('p_%d', 'rec', 'AUDIO', %d, %d, 1, 0)
+            (id, sequence_id, track_type, source_shape,
+             source_track_index, record_track_index, enabled, created_at)
+        VALUES ('p_%d', 'rec', 'AUDIO', 8, %d, %d, 1, 0)
     ]], i, i, i)), "FAIL Step 17: patches INSERT failed for source_track_index=" .. i)
 end
 

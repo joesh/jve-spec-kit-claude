@@ -60,10 +60,15 @@ end
 print("-- patch_changed --")
 local patch_log = capture("patch_changed")
 
+-- Patch signal payload contract (set_patch.lua):
+--   (sequence_id, track_type, source_shape, source_track_index, change_type)
+local SHAPE = 4
+
 local r1 = command_manager.execute("SetPatch", {
     sequence_id         = "seq",
     project_id          = "proj",
     track_type          = "AUDIO",
+    source_shape        = SHAPE,
     source_track_index  = 1,
     record_track_index  = 2,
     enabled             = true,
@@ -72,8 +77,9 @@ assert(r1 and r1.success, "SetPatch create failed: " .. tostring(r1 and r1.error
 assert(#patch_log == 1, string.format("patch_changed: expected 1 emission, got %d", #patch_log))
 assert(patch_log[1][1] == "seq",     "patch_changed payload[1] must be sequence_id")
 assert(patch_log[1][2] == "AUDIO",   "patch_changed payload[2] must be track_type")
-assert(patch_log[1][3] == 1,         "patch_changed payload[3] must be source_track_index=1")
-assert(patch_log[1][4] == "created", "patch_changed payload[4] must be 'created'")
+assert(patch_log[1][3] == SHAPE,     "patch_changed payload[3] must be source_shape")
+assert(patch_log[1][4] == 1,         "patch_changed payload[4] must be source_track_index=1")
+assert(patch_log[1][5] == "created", "patch_changed payload[5] must be 'created'")
 print("  patch_changed (created) payload — OK")
 
 -- Update.
@@ -81,27 +87,30 @@ local r1b = command_manager.execute("SetPatch", {
     sequence_id         = "seq",
     project_id          = "proj",
     track_type          = "AUDIO",
+    source_shape        = SHAPE,
     source_track_index  = 1,
     record_track_index  = 3,
     enabled             = true,
 })
 assert(r1b and r1b.success, "SetPatch update failed")
 assert(#patch_log == 2,             "patch_changed: expected 2 emissions after update")
-assert(patch_log[2][4] == "updated", "patch_changed payload[4] must be 'updated'")
+assert(patch_log[2][5] == "updated", "patch_changed payload[5] must be 'updated'")
 print("  patch_changed (updated) payload — OK")
 
--- Disable = delete.
+-- Disable (row is kept; src-btn keeps rendering in dimmed state).
 local r1c = command_manager.execute("SetPatch", {
     sequence_id         = "seq",
     project_id          = "proj",
     track_type          = "AUDIO",
+    source_shape        = SHAPE,
     source_track_index  = 1,
     enabled             = false,
 })
 assert(r1c and r1c.success, "SetPatch disable failed")
 assert(#patch_log == 3,             "patch_changed: expected 3 emissions after disable")
-assert(patch_log[3][4] == "deleted", "patch_changed payload[4] must be 'deleted'")
-print("  patch_changed (deleted) payload — OK")
+assert(patch_log[3][5] == "disabled",
+    "patch_changed payload[5] must be 'disabled' (row is kept so src-btn keeps rendering)")
+print("  patch_changed (disabled) payload — OK")
 
 -- ── sync_mode_changed ─────────────────────────────────────────────────────────
 print("-- sync_mode_changed --")

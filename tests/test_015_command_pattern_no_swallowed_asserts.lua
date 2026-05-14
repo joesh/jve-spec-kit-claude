@@ -77,6 +77,7 @@ local cases = {
         params = {
             sequence_id        = "seq",
             track_type         = "INVALID",       -- triggers VIDEO/AUDIO assert
+            source_shape       = 1,
             source_track_index = 0,
             record_track_index = 0,
             project_id         = "proj",
