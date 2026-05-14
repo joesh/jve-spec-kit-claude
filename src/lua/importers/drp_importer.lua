@@ -171,6 +171,20 @@ local function get_text(elem)
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
 end
 
+-- Read a numeric XML element's text. nil element → 0 (missing is a valid
+-- "absent" signal). Element present but text non-numeric → assert (rule
+-- 2.13: missing data fails loud, doesn't silently become 0). `label` is
+-- surfaced in the error message so a bad fixture is diagnosable.
+local function get_number_or_assert(elem, label)
+    if not elem then return 0 end
+    local txt = get_text(elem)
+    local n = tonumber(txt)
+    assert(n, string.format(
+        "DRP: <%s> text is not numeric: %q (parser bug or malformed input)",
+        tostring(label), tostring(txt)))
+    return n
+end
+
 -- Local aliases for frequently-used drp_binary functions
 local decode_hex_double_at = drp_binary.decode_hex_double_at
 local decode_hex_double = drp_binary.decode_hex_double
@@ -621,7 +635,7 @@ local function parse_media_pool(media_pool_elem)
         local media_item = {
             name = name_elem and get_text(name_elem) or "Untitled",
             file_path = file_elem and get_text(file_elem) or "",
-            duration = duration_elem and tonumber(get_text(duration_elem)) or 0
+            duration = get_number_or_assert(duration_elem, "Duration"),
         }
 
         -- Extract media ID if present
@@ -1612,7 +1626,7 @@ local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_re
 
     local timeline = {
         name = name_elem and get_text(name_elem) or "Untitled Timeline",
-        duration = duration_elem and tonumber(get_text(duration_elem)) or 0,
+        duration = get_number_or_assert(duration_elem, "Duration"),
         tracks = {}
     }
 

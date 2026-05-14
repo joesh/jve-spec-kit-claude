@@ -428,6 +428,7 @@ local function save_internal(self, _opts)
     assert(db, "Clip.save: No database connection available")
 
     assert_clip_save_invariants(self)
+    require("core.track_lock_guard").assert_writable(db, { self.track_id })
 
     ensure_project_context(self, db)
     local nested_id = self.sequence_id
@@ -488,6 +489,7 @@ function M:delete()
     local database = require("core.database")
     local db = database.get_connection()
     assert(db, "Clip.delete: No database connection available")
+    require("core.track_lock_guard").assert_writable(db, { self.track_id })
 
     -- Clean up properties and clip_links (no FK cascade on these tables)
     local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
@@ -945,6 +947,7 @@ function M._create_v13_row(fields)
     local db = require("core.database").get_connection()
     local id = fields.id or uuid.generate()
 
+    require("core.track_lock_guard").assert_writable(db, { fields.track_id })
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
     assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
 
@@ -1007,14 +1010,25 @@ function M.update(id, fields)
     local db = require("core.database").get_connection()
 
     local fetch = db:prepare(
-        "SELECT source_in_frame, source_out_frame FROM clips WHERE id = ?")
+        "SELECT source_in_frame, source_out_frame, track_id FROM clips WHERE id = ?")
     assert(fetch, "Clip.update: fetch prepare failed")
     fetch:bind_value(1, id)
     assert(fetch:exec(), "Clip.update: fetch exec failed")
     assert(fetch:next(), string.format("Clip.update: clip %s not found", tostring(id)))
     local cur_in = fetch:value(0)
     local cur_out = fetch:value(1)
+    local cur_track = fetch:value(2)
     fetch:finalize()
+
+    -- Lock gate: refuse if the clip's current track is locked, and if the
+    -- update targets a new (locked) track. Both endpoints must be writable
+    -- for a cross-track move.
+    local guard = require("core.track_lock_guard")
+    local guard_tracks = { cur_track }
+    if fields.track_id and fields.track_id ~= cur_track then
+        guard_tracks[#guard_tracks + 1] = fields.track_id
+    end
+    guard.assert_writable(db, guard_tracks)
 
     local new_in  = fields.source_in_frame  ~= nil and fields.source_in_frame  or cur_in
     local new_out = fields.source_out_frame ~= nil and fields.source_out_frame or cur_out
@@ -1293,6 +1307,7 @@ function M.transfer_owner(id, new_owner_sequence_id)
     assert(new_owner_sequence_id and new_owner_sequence_id ~= "",
         "Clip.transfer_owner: new_owner_sequence_id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, id)
     local stmt = db:prepare(
         "UPDATE clips SET owner_sequence_id = ?, modified_at = ? WHERE id = ?")
     assert(stmt, "Clip.transfer_owner: prepare failed")
@@ -1319,6 +1334,7 @@ end
 function M.set_master_layer_track_id(id, track_id)
     assert(id and id ~= "", "Clip.set_master_layer_track_id: id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, id)
     local stmt = db:prepare(
         "UPDATE clips SET master_layer_track_id = ?, modified_at = ? WHERE id = ?")
     assert(stmt, "Clip.set_master_layer_track_id: prepare failed")
@@ -1348,6 +1364,7 @@ function M.ripple_track_forward(track_id, from_frame, shift)
         "Clip.ripple_track_forward: shift must be non-zero integer")
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_writable(db, { track_id })
     -- Order matters for the video-overlap trigger:
     --   negative shift: process clips in ASC order (lowest-start first
     --     moves left into now-empty space), no transient overlap.
@@ -1401,6 +1418,7 @@ function M.shift_many_by(clip_ids, delta)
     if #clip_ids == 0 then return end
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
     local upd = db:prepare([[
         UPDATE clips
         SET timeline_start_frame = timeline_start_frame + ?,
@@ -1427,6 +1445,7 @@ function M.delete_by_ids(clip_ids)
     if #clip_ids == 0 then return end
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
     local del_props = db:prepare("DELETE FROM properties WHERE clip_id = ?")
     local del_clips = db:prepare("DELETE FROM clips WHERE id = ?")
     assert(del_props and del_clips, "Clip.delete_by_ids: prepare failed")
@@ -1524,6 +1543,7 @@ end
 function M.delete_one(clip_id)
     assert(clip_id and clip_id ~= "", "Clip.delete_one: clip_id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, clip_id)
     local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
     assert(stmt, "Clip.delete_one: prepare failed")
     stmt:bind_value(1, clip_id)

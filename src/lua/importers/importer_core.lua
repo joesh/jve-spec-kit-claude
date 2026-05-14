@@ -886,6 +886,17 @@ function M.import_into_project(project_id, parse_result, opts)
     log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
         #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)
 
+    -- Sequences (master + timeline) were inserted in bulk above. Emit once
+    -- at the end so the project browser rebuilds its tree to include the
+    -- new rows. Per-row emits would cause N rebuilds for an N-sequence DRP.
+    -- queue_post_commit_emit defers to the surrounding command's commit
+    -- when invoked from the Import command; emits immediately for the
+    -- Open-path importer pass (no transaction to defer to).
+    if #result.sequence_ids > 0 then
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", project_id)
+    end
+
     -- Return lookup tables for format-specific post-import steps
     result.media_by_uuid = media_by_uuid
     result.media_by_path = media_by_path
