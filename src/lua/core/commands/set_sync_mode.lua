@@ -17,6 +17,12 @@ local VALID_MODES = { off = true, ripple = true, cut = true }
 
 local SPEC = {
     undoable = false,
+    keyboard = {
+        category     = "Timeline ▸ Track Header",
+        display_name = "Set Track Sync Mode",
+        description  = "Set a track's sync mode (off | ripple | cut). "
+            .. "Bind with sync_mode=off|ripple|cut.",
+    },
     args = {
         track_id    = { required = true },
         sync_mode   = { required = true },
@@ -40,7 +46,8 @@ function M.execute(args)
     if prev_mode == args.sync_mode then return true end
 
     track.sync_mode = args.sync_mode
-    track:save()
+    assert(track:save(), string.format(
+        "SetSyncMode: track:save() failed for track=%s", tostring(args.track_id)))
 
     log.event("SetSyncMode: track=%s %s -> %s",
         args.track_id, tostring(prev_mode), args.sync_mode)

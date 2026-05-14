@@ -1,11 +1,17 @@
 --- SetPatch command (Feature 015, T028).
 ---
 --- Creates or updates a patch (source-track → record-track routing) on a
---- sequence. Patches are routing configuration — NOT on the undo stack.
---- UNIQUE constraint: one patch per (sequence_id, track_type, source_track_index).
+--- sequence under a specific source shape. Patches are routing
+--- configuration — NOT on the undo stack (per F6, spec §6).
+--- UNIQUE constraint: one patch per
+--- (sequence_id, track_type, source_shape, source_track_index).
 ---
---- Signal: patch_changed(sequence_id, track_type, source_track_index, change_type)
----   change_type: "created" | "updated" | "deleted"
+--- Signal: patch_changed(sequence_id, track_type, source_shape,
+---                       source_track_index, change_type)
+---   change_type: "created" | "updated" | "disabled"
+---   Note: "disabled" sets enabled=0 on the row but does NOT delete it —
+---   the src-btn must continue rendering (in dimmed state) so the user
+---   can re-enable it. Deletion would hide the btn entirely.
 ---
 --- @file set_patch.lua
 
@@ -16,9 +22,18 @@ local log   = require("core.logger").for_area("commands")
 
 local SPEC = {
     undoable = false,
+    keyboard = {
+        category     = "Timeline ▸ Track Header",
+        display_name = "Set Source→Record Patch",
+        description  = "Enable, disable, or reroute the source→record patch for "
+            .. "a track. Routed from the src-id header button.",
+    },
     args = {
         sequence_id        = { required = true },
+        source_shape       = { required = true },  -- count of source tracks of track_type
         source_track_index = { required = true },
+        -- project_id is auto-injected by command_manager; required so the
+        -- framework's ambient-context wiring stays mandatory at the SPEC layer.
         project_id         = { required = true },
         track_type         = { required = true },  -- "VIDEO" | "AUDIO"
         record_track_index = {},
@@ -29,6 +44,9 @@ local SPEC = {
 function M.execute(args)
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SetPatch: sequence_id required")
+    assert(type(args.source_shape) == "number" and args.source_shape > 0, string.format(
+        "SetPatch: source_shape must be positive number, got %s",
+        tostring(args.source_shape)))
     assert(type(args.source_track_index) == "number",
         "SetPatch: source_track_index must be a number")
     assert(args.source_track_index >= 0, string.format(
@@ -36,7 +54,8 @@ function M.execute(args)
     assert(args.track_type == "VIDEO" or args.track_type == "AUDIO",
         "SetPatch: track_type must be 'VIDEO' or 'AUDIO', got: " .. tostring(args.track_type))
 
-    local existing = Patch.find_by_source(args.sequence_id, args.track_type, args.source_track_index)
+    local existing = Patch.find_by_source(args.sequence_id, args.track_type,
+        args.source_shape, args.source_track_index)
     local change_type
 
     if existing then
@@ -46,37 +65,47 @@ function M.execute(args)
         if args.enabled ~= nil then
             existing.enabled = args.enabled
         end
-        existing:save()
-        local enabled_val = existing.enabled
-        change_type = (enabled_val == false or enabled_val == 0) and "deleted" or "updated"
+        -- save() normalizes existing.enabled to INTEGER 0/1 in place.
+        assert(existing:save(), string.format(
+            "SetPatch: patch:save() failed (seq=%s type=%s shape=%d src=%d)",
+            args.sequence_id, args.track_type,
+            args.source_shape, args.source_track_index))
+        change_type = existing.enabled == 0 and "disabled" or "updated"
     else
         change_type = "created"
         assert(args.record_track_index ~= nil, string.format(
             "SetPatch: record_track_index required when creating a new patch "
-            .. "(sequence=%s type=%s src=%d)",
-            args.sequence_id, args.track_type, args.source_track_index))
-        local initial_enabled
-        if args.enabled ~= nil then
-            initial_enabled = args.enabled
-        else
-            initial_enabled = 1
-        end
+            .. "(sequence=%s type=%s shape=%d src=%d)",
+            args.sequence_id, args.track_type,
+            args.source_shape, args.source_track_index))
+        assert(args.enabled ~= nil, string.format(
+            "SetPatch: enabled required when creating a new patch "
+            .. "(sequence=%s type=%s shape=%d src=%d) — caller must supply "
+            .. "explicit enabled state (1=on, 0=off, true/false also accepted)",
+            args.sequence_id, args.track_type,
+            args.source_shape, args.source_track_index))
         local patch = Patch.create(
             args.sequence_id,
             args.track_type,
+            args.source_shape,
             args.source_track_index,
             args.record_track_index,
-            { enabled = initial_enabled }
+            { enabled = args.enabled }
         )
-        patch:save()
+        assert(patch:save(), string.format(
+            "SetPatch: new patch:save() failed (seq=%s type=%s shape=%d src=%d)",
+            args.sequence_id, args.track_type,
+            args.source_shape, args.source_track_index))
     end
 
-    log.event("SetPatch: seq=%s type=%s src=%d %s",
-        args.sequence_id, args.track_type, args.source_track_index, change_type)
+    log.event("SetPatch: seq=%s type=%s shape=%d src=%d %s",
+        args.sequence_id, args.track_type,
+        args.source_shape, args.source_track_index, change_type)
 
     local Signals = require("core.signals")
     Signals.emit("patch_changed",
-        args.sequence_id, args.track_type, args.source_track_index, change_type)
+        args.sequence_id, args.track_type,
+        args.source_shape, args.source_track_index, change_type)
 
     return true
 end

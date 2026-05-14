@@ -394,6 +394,10 @@ local menu_path = layout_dir .. "../../../menus.xml"
 local menu_success, menu_error = menu_system.load_from_file(menu_path)
 assert(menu_success, string.format(
     "layout: failed to load menu system from %s: %s", menu_path, tostring(menu_error)))
+-- SPEC.keyboard metadata for non-menu commands surfaces in the dialog
+-- via ShowKeyboardCustomization's eager load on open. No eager startup
+-- load needed — keymap dispatch and dialog discovery are both fed
+-- on-demand by command_registry.
 
 -- 2. Source + Timeline Monitors (center)
 local SequenceMonitor = require("ui.sequence_monitor")
@@ -529,12 +533,24 @@ local project_id = active_project_id
 assert(project_id and project_id ~= "", "FATAL: missing active_project_id during sequence restore")
 local sequences = db_module.load_sequences(project_id)
 
+-- Pick an initial sequence id that is safe to pass to timeline_state.init:
+-- must exist AND must be a record (kind='sequence'), never a master. FR-005:
+-- masters can never be the active edit target. A poisoned
+-- `last_open_sequence_id` (pointing at a master) is silently ignored so
+-- the editor falls back to the no-active-sequence state instead of
+-- crashing or corrupting the setting further.
 local function find_sequence_id(candidate_id, list)
     if not candidate_id or candidate_id == "" then
         return nil
     end
     for _, seq in ipairs(list or {}) do
         if seq.id == candidate_id then
+            if seq.kind == "master" then
+                log.warn("last_open_sequence_id=%s is a master sequence; "
+                    .. "ignoring (FR-005 — masters cannot be the active edit target)",
+                    tostring(candidate_id))
+                return nil
+            end
             return candidate_id
         end
     end
@@ -567,6 +583,19 @@ if open_ids and #open_ids > 0 then
     end
     timeline_panel_mod.restore_tab_order(open_ids)
     log.event("Restored %d tabs in saved order", #open_ids)
+end
+
+-- Restore the source monitor's loaded master. The tab strip recognizes the
+-- persisted source-tab seq_id and renders the tab as "source", but the
+-- source_monitor has nothing loaded until source_viewer.load_master_clip
+-- runs — so transport (TogglePlay) and source-tab display would fall back
+-- to a placeholder. Reload here so the source view comes back from a quit.
+local source_tab_seq_id =
+    db_module.get_project_setting(project_id, "source_tab_sequence_id")
+if type(source_tab_seq_id) == "string" and source_tab_seq_id ~= "" then
+    local source_viewer = require("ui.source_viewer")
+    source_viewer.load_master_clip(source_tab_seq_id)
+    log.event("Restored source monitor master: %s", source_tab_seq_id)
 end
 
 if initial_sequence_id and project_browser_mod.focus_sequence then

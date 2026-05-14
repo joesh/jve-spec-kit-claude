@@ -20,6 +20,12 @@ local ALLOWED = { muted = true, soloed = true, locked = true, enabled = true, au
 
 local SPEC = {
     undoable = false,
+    keyboard = {
+        category     = "Timeline ▸ Track Header",
+        display_name = "Toggle Track Preference",
+        description  = "Flip mute, solo, lock, enable, or autoselect on a track. "
+            .. "Bind with property=muted|soloed|locked|enabled|autoselect.",
+    },
     args = {
         track_id    = { required = true },
         property    = { required = true },
@@ -48,7 +54,9 @@ function M.execute(args)
         new_val = args.value and true or false
     end
     track[args.property] = new_val
-    track:save()
+    assert(track:save(), string.format(
+        "ToggleTrackPreference: track:save() failed for track=%s property=%s",
+        tostring(args.track_id), tostring(args.property)))
 
     local db_new = new_val and 1 or 0
     local db_prev = prev_val and 1 or 0

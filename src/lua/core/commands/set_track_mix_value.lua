@@ -16,6 +16,12 @@ local log   = require("core.logger").for_area("commands")
 local ALLOWED = { volume = true, pan = true }
 
 local SPEC = {
+    keyboard = {
+        category     = "Timeline ▸ Track Header",
+        display_name = "Set Track Mix Value",
+        description  = "Set a track's volume or pan. Undoable. "
+            .. "Bind with property=volume|pan and value=NUMBER.",
+    },
     args = {
         track_id    = { required = true },
         property    = { required = true },
@@ -44,7 +50,9 @@ function M.execute(args)
 
     local prev_val       = track[args.property]
     track[args.property] = args.value
-    track:save()
+    assert(track:save(), string.format(
+        "SetTrackMixValue: track:save() failed for track=%s property=%s",
+        tostring(args.track_id), tostring(args.property)))
 
     log.event("SetTrackMixValue: track=%s %s %s->%s",
         args.track_id, args.property, tostring(prev_val), tostring(args.value))
@@ -70,7 +78,9 @@ function M.undo(capture)
 
     local current_val        = track[capture.property]
     track[capture.property]  = capture.prev_val
-    track:save()
+    assert(track:save(), string.format(
+        "SetTrackMixValue.undo: track:save() failed for track=%s property=%s",
+        tostring(capture.track_id), tostring(capture.property)))
 
     local Signals = require("core.signals")
     Signals.emit("track_mix_changed",
