@@ -445,9 +445,17 @@ local function load_displayed_sequence(seq_id)
     clip_state.invalidate_indexes()
 
     data.state.playhead_position = sequence.playhead_position
-    data.state.video_scroll_offset = sequence.video_scroll_offset or 0
-    data.state.audio_scroll_offset = sequence.audio_scroll_offset or 0
-    data.state.video_audio_split_ratio = sequence.video_audio_split_ratio or 0.5
+    -- Schema enforces NOT NULL DEFAULT on all three; Sequence.load asserts
+    -- non-null at lines 197-203. No `or 0` / `or 0.5` defensive fallback.
+    assert(type(sequence.video_scroll_offset) == "number",
+        "load_displayed_sequence: video_scroll_offset must be number")
+    assert(type(sequence.audio_scroll_offset) == "number",
+        "load_displayed_sequence: audio_scroll_offset must be number")
+    assert(type(sequence.video_audio_split_ratio) == "number",
+        "load_displayed_sequence: video_audio_split_ratio must be number")
+    data.state.video_scroll_offset = sequence.video_scroll_offset
+    data.state.audio_scroll_offset = sequence.audio_scroll_offset
+    data.state.video_audio_split_ratio = sequence.video_audio_split_ratio
 
     data.state.selected_clips = {}
     if sequence.selected_clip_ids_json and sequence.selected_clip_ids_json ~= "" then

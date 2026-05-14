@@ -29,28 +29,26 @@ local function pick_clip_under_playhead(timeline_state, playhead)
     local best_clip, best_priority
 
     for _, clip in ipairs(clips) do
-        local clip_start = clip.timeline_start or clip.start_value
-        assert(clip_start, string.format(
+        assert(type(clip.timeline_start) == "number", string.format(
             "MarkClipExtent: clip %s missing timeline_start", tostring(clip.id)))
-        assert(clip.duration, string.format(
+        assert(type(clip.duration) == "number", string.format(
             "MarkClipExtent: clip %s missing duration", tostring(clip.id)))
-        local clip_end = clip_start + clip.duration
+        local clip_end = clip.timeline_start + clip.duration
 
-        if playhead >= clip_start and playhead <= clip_end then
-            local track = timeline_state.get_track_by_id
-                and timeline_state.get_track_by_id(clip.track_id)
-            if track then
-                local type_priority = (track.track_type == "VIDEO") and 0 or 1
-                local track_index = track.track_index
-                    or (timeline_state.get_track_index
-                        and timeline_state.get_track_index(clip.track_id))
-                assert(track_index, string.format(
-                    "MarkClipExtent: track %s missing track_index", tostring(clip.track_id)))
-                local priority = type_priority * 1000 + track_index
-                if not best_priority or priority < best_priority then
-                    best_priority = priority
-                    best_clip = clip
-                end
+        if playhead >= clip.timeline_start and playhead <= clip_end then
+            local track = timeline_state.get_track_by_id(clip.track_id)
+            assert(track, string.format(
+                "MarkClipExtent: clip %s references unknown track %s",
+                tostring(clip.id), tostring(clip.track_id)))
+            assert(type(track.track_index) == "number", string.format(
+                "MarkClipExtent: track %s missing track_index "
+                .. "(schema enforces NOT NULL — corrupt row)",
+                tostring(clip.track_id)))
+            local type_priority = (track.track_type == "VIDEO") and 0 or 1
+            local priority = type_priority * 1000 + track.track_index
+            if not best_priority or priority < best_priority then
+                best_priority = priority
+                best_clip = clip
             end
         end
     end
@@ -92,9 +90,9 @@ function M.register(executors, undoers, db)
         local best_clip = pick_clip_under_playhead(timeline_state, playhead)
         if not best_clip then return true end
 
-        local clip_start = best_clip.timeline_start or best_clip.start_value
-        -- mark_out is stored exclusive; inclusive last frame = start + dur - 1.
-        local clip_last_frame = clip_start + best_clip.duration - 1
+        -- best_clip came from pick_clip_under_playhead → already asserted to
+        -- have numeric timeline_start + duration.
+        local clip_last_frame = best_clip.timeline_start + best_clip.duration - 1
 
         local args = command:get_all_parameters()
         -- MarkClipExtent is a movement command (mutates_clips=false). For
@@ -109,7 +107,8 @@ function M.register(executors, undoers, db)
             .. "UI dispatch auto-injects via execute_interactive; "
             .. "scripted callers must pass it explicitly")
 
-        dispatch_grouped_marks(args.project_id, args.sequence_id, clip_start, clip_last_frame)
+        dispatch_grouped_marks(args.project_id, args.sequence_id,
+            best_clip.timeline_start, clip_last_frame)
         return true
     end
 

@@ -50,25 +50,45 @@ local function assert_key(sequence_id, track_type, source_shape, idx_name, idx_v
         "Patch: " .. idx_name .. " must be number, got " .. type(idx_value))
 end
 
+-- Prepare + bind + exec; return the open statement. Caller owns finalize().
+-- Centralises the failure messages and conn:last_error() formatting that
+-- every find_* helper used to inline.
+local function prepare_and_bind(caller, sql, binds)
+    local conn = lookup_db()
+    local stmt = conn:prepare(sql)
+    assert(stmt, caller .. ": prepare failed: "
+        .. tostring(conn:last_error() or "unknown"))
+    for i, v in ipairs(binds) do stmt:bind_value(i, v) end
+    assert(stmt:exec(), caller .. ": exec failed")
+    return stmt
+end
+
+-- Read at most one row; finalize before returning.
+local function fetch_one_patch(stmt)
+    if not stmt:next() then stmt:finalize(); return nil end
+    local row = row_to_patch(stmt)
+    stmt:finalize()
+    return row
+end
+
+-- Read every row; finalize before returning.
+local function fetch_all_patches(stmt)
+    local results = {}
+    while stmt:next() do table.insert(results, row_to_patch(stmt)) end
+    stmt:finalize()
+    return results
+end
+
+local SELECT_COLS = "SELECT " .. COLS .. " FROM patches "
+
 --- Find a patch by (sequence_id, track_type, source_shape, source_track_index).
 function Patch.find_by_source(sequence_id, track_type, source_shape, src_idx)
     assert_key(sequence_id, track_type, source_shape, "source_track_index", src_idx)
-    local conn = lookup_db()
-    local stmt = conn:prepare(
-        "SELECT " .. COLS .. " FROM patches "
-        .. "WHERE sequence_id = ? AND track_type = ? "
-        .. "AND source_shape = ? AND source_track_index = ?")
-    assert(stmt, "Patch.find_by_source: prepare failed: "
-        .. tostring(conn:last_error() or "unknown"))
-    stmt:bind_value(1, sequence_id)
-    stmt:bind_value(2, track_type)
-    stmt:bind_value(3, source_shape)
-    stmt:bind_value(4, src_idx)
-    assert(stmt:exec(), "Patch.find_by_source: exec failed")
-    if not stmt:next() then stmt:finalize(); return nil end
-    local p = row_to_patch(stmt)
-    stmt:finalize()
-    return p
+    local stmt = prepare_and_bind("Patch.find_by_source",
+        SELECT_COLS .. "WHERE sequence_id = ? AND track_type = ? "
+        .. "AND source_shape = ? AND source_track_index = ?",
+        { sequence_id, track_type, source_shape, src_idx })
+    return fetch_one_patch(stmt)
 end
 
 --- Find ALL patches at (sequence_id, track_type, source_shape) targeting
@@ -77,25 +97,12 @@ end
 --- source_track_index.
 function Patch.find_all_by_record(sequence_id, track_type, source_shape, rec_idx)
     assert_key(sequence_id, track_type, source_shape, "record_track_index", rec_idx)
-    local conn = lookup_db()
-    local stmt = conn:prepare(
-        "SELECT " .. COLS .. " FROM patches "
-        .. "WHERE sequence_id = ? AND track_type = ? "
+    local stmt = prepare_and_bind("Patch.find_all_by_record",
+        SELECT_COLS .. "WHERE sequence_id = ? AND track_type = ? "
         .. "AND source_shape = ? AND record_track_index = ? "
-        .. "ORDER BY source_track_index ASC")
-    assert(stmt, "Patch.find_all_by_record: prepare failed: "
-        .. tostring(conn:last_error() or "unknown"))
-    stmt:bind_value(1, sequence_id)
-    stmt:bind_value(2, track_type)
-    stmt:bind_value(3, source_shape)
-    stmt:bind_value(4, rec_idx)
-    assert(stmt:exec(), "Patch.find_all_by_record: exec failed")
-    local results = {}
-    while stmt:next() do
-        table.insert(results, row_to_patch(stmt))
-    end
-    stmt:finalize()
-    return results
+        .. "ORDER BY source_track_index ASC",
+        { sequence_id, track_type, source_shape, rec_idx })
+    return fetch_all_patches(stmt)
 end
 
 --- Single-source helper. Asserts at most one row targets (seq,type,shape,rec).
@@ -114,20 +121,11 @@ end
 function Patch.find_by_sequence(sequence_id)
     assert(sequence_id and sequence_id ~= "",
         "Patch.find_by_sequence: sequence_id required")
-    local conn = lookup_db()
-    local stmt = conn:prepare(
-        "SELECT " .. COLS .. " FROM patches "
-        .. "WHERE sequence_id = ? "
-        .. "ORDER BY track_type ASC, source_shape ASC, source_track_index ASC")
-    assert(stmt, "Patch.find_by_sequence: prepare failed for seq=" .. tostring(sequence_id))
-    stmt:bind_value(1, sequence_id)
-    assert(stmt:exec(), "Patch.find_by_sequence: exec failed for seq=" .. tostring(sequence_id))
-    local results = {}
-    while stmt:next() do
-        table.insert(results, row_to_patch(stmt))
-    end
-    stmt:finalize()
-    return results
+    local stmt = prepare_and_bind("Patch.find_by_sequence",
+        SELECT_COLS .. "WHERE sequence_id = ? "
+        .. "ORDER BY track_type ASC, source_shape ASC, source_track_index ASC",
+        { sequence_id })
+    return fetch_all_patches(stmt)
 end
 
 -- Coerce caller-provided enabled flag (0/1 or false/true) to the canonical

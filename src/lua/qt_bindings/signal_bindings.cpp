@@ -25,6 +25,58 @@
 #include <QMetaObject>  // For metaObject()->className()
 #include <QPushButton>  // For PanelFocusTrap (qobject_cast)
 
+// Helper to invoke a named Lua global handler with strict error handling.
+// Centralises the (lua_getglobal → check function → push args → pcall →
+// dispatch error) pattern that every event filter in this file otherwise
+// repeats ~13 times (rule 2.5 / DRY).
+//
+// Usage:
+//     LuaHandlerCaller cb(L, handler_name, "signal.drag");
+//     if (cb.ready()) {
+//         lua_pushinteger(L, x);
+//         lua_pushinteger(L, y);
+//         cb.invoke(2);   // 2 args, 0 results
+//     }
+//
+// Non-function handlers route to jve_discard_non_function_handler (the
+// callback was registered but later overwritten / cleared on the Lua side).
+// pcall failures route to jve_handle_lua_callback_error so the standard
+// log path captures them. `ready()` is false in either failure mode so the
+// caller can skip arg-pushing.
+class LuaHandlerCaller {
+public:
+    LuaHandlerCaller(lua_State* L, const char* handler_name, const char* tag)
+        : L_(L), name_(handler_name), tag_(tag), ready_(false) {
+        lua_getglobal(L_, name_);
+        if (!lua_isfunction(L_, -1)) {
+            jve_discard_non_function_handler(L_, name_, tag_);
+            return;
+        }
+        ready_ = true;
+    }
+
+    bool ready() const { return ready_; }
+
+    // Invokes the handler with `nargs` already on the stack and `nresults`
+    // expected. Returns true on success; false if pcall raised (already
+    // reported via jve_handle_lua_callback_error).
+    bool invoke(int nargs, int nresults = 0) {
+        if (!ready_) return false;
+        ready_ = false;  // consumed regardless of pcall outcome
+        if (lua_pcall(L_, nargs, nresults, 0) != LUA_OK) {
+            jve_handle_lua_callback_error(L_, tag_);
+            return false;
+        }
+        return true;
+    }
+
+private:
+    lua_State*  L_;
+    const char* name_;
+    const char* tag_;
+    bool        ready_;
+};
+
 // Helper to determine if a widget accepts text input
 static bool widget_accepts_text_input(QWidget* widget)
 {
@@ -253,8 +305,9 @@ protected:
             // dispatches via the TOML registry, falling back to false (Qt
             // native cycling) when nothing is bound.
 
-            lua_getglobal(lua_state, handler_name.c_str());
-            if (lua_isfunction(lua_state, -1)) {
+            LuaHandlerCaller cb(lua_state, handler_name.c_str(),
+                                "signal.global_key_press");
+            if (cb.ready()) {
                 lua_newtable(lua_state);
 
                 lua_pushstring(lua_state, "key");
@@ -316,26 +369,22 @@ protected:
                 lua_pushboolean(lua_state, outside);
                 lua_settable(lua_state, -3);
 
-                if (lua_pcall(lua_state, 1, 1, 0) == LUA_OK) {
+                if (cb.invoke(1, 1)) {
                     bool handled = lua_toboolean(lua_state, -1);
                     lua_pop(lua_state, 1);
                     if (handled) {
                         return true;  // Event consumed
                     }
-                } else {
-                    jve_handle_lua_callback_error(lua_state, "signal.global_key_press");
                 }
-            } else {
-                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                    "signal.global_key_press");
             }
         }
         // Handle key release for K held state (JKL shuttle)
         else if (event->type() == QEvent::KeyRelease && lua_state) {
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
 
-            lua_getglobal(lua_state, "global_key_release_handler");
-            if (lua_isfunction(lua_state, -1)) {
+            LuaHandlerCaller cb(lua_state, "global_key_release_handler",
+                                "signal.global_key_release");
+            if (cb.ready()) {
                 lua_newtable(lua_state);
 
                 lua_pushstring(lua_state, "key");
@@ -346,14 +395,9 @@ protected:
                 lua_pushboolean(lua_state, keyEvent->isAutoRepeat());
                 lua_settable(lua_state, -3);
 
-                if (lua_pcall(lua_state, 1, 1, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(lua_state, "signal.global_key_release");
-                } else {
+                if (cb.invoke(1, 1)) {
                     lua_pop(lua_state, 1);  // Pop return value
                 }
-            } else {
-                jve_discard_non_function_handler(lua_state, "global_key_release_handler",
-                    "signal.global_key_release");
             }
         }
         return QObject::eventFilter(obj, event);
@@ -376,8 +420,8 @@ protected:
         if ((event->type() == QEvent::FocusIn || event->type() == QEvent::FocusOut) && lua_state) {
             bool focus_in = (event->type() == QEvent::FocusIn);
 
-            lua_getglobal(lua_state, handler_name.c_str());
-            if (lua_isfunction(lua_state, -1)) {
+            LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.focus_change");
+            if (cb.ready()) {
                 lua_newtable(lua_state);
 
                 lua_pushstring(lua_state, "focus_in");
@@ -388,12 +432,7 @@ protected:
                 lua_push_widget(lua_state, tracked_widget);
                 lua_settable(lua_state, -3);
 
-                if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(lua_state, "signal.focus_change");
-                }
-            } else {
-                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                    "signal.focus_change");
+                cb.invoke(1, 0);
             }
         }
         return QObject::eventFilter(obj, event);
@@ -416,8 +455,8 @@ protected:
         if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonRelease) {
             QMouseEvent* mouseEvent = static_cast<QMouseEvent*>(event);
             if (mouseEvent->button() == Qt::LeftButton) {
-                lua_getglobal(lua_state, handler_name.c_str());
-                if (lua_isfunction(lua_state, -1)) {
+                LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.panel_click");
+                if (cb.ready()) {
                     if (event->type() == QEvent::MouseButtonPress) {
                         lua_pushstring(lua_state, "press");
                     } else {
@@ -425,12 +464,7 @@ protected:
                     }
                     lua_pushinteger(lua_state, mouseEvent->pos().y());
 
-                    if (lua_pcall(lua_state, 2, 0, 0) != LUA_OK) {
-                        jve_handle_lua_callback_error(lua_state, "signal.panel_click");
-                    }
-                } else {
-                    jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                        "signal.panel_click");
+                    cb.invoke(2, 0);
                 }
                 return false; // Let the event propagate for other handlers (e.g., splitter)
             }
@@ -499,18 +533,13 @@ protected:
 
 private:
     void fire(const char* ev_type, int gx, int gy, int mods) {
-        lua_getglobal(lua_state, handler_name.c_str());
-        if (!lua_isfunction(lua_state, -1)) {
-            jve_discard_non_function_handler(lua_state, handler_name.c_str(), "signal.drag");
-            return;
-        }
+        LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.drag");
+        if (!cb.ready()) return;
         lua_pushstring(lua_state, ev_type);
         lua_pushinteger(lua_state, gx);
         lua_pushinteger(lua_state, gy);
         lua_pushinteger(lua_state, mods);
-        if (lua_pcall(lua_state, 4, 0, 0) != LUA_OK) {
-            jve_handle_lua_callback_error(lua_state, "signal.drag");
-        }
+        cb.invoke(4);
     }
 
     std::string handler_name;
@@ -576,14 +605,9 @@ int lua_set_button_click_handler(lua_State* L) {
 
     std::string handler_str(handler_name);
     QObject::connect(button, &QAbstractButton::clicked, [L, handler_str]() {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
-
-            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.button_clicked");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.button_clicked");
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.button_clicked");
+        if (cb.ready()) {
+            cb.invoke(0, 0);
         }
     });
     return 0;
@@ -673,16 +697,9 @@ protected:
 
 private:
     void startDrag() {
-        lua_getglobal(lua_state, payload_provider.c_str());
-        if (!lua_isfunction(lua_state, -1)) {
-            jve_discard_non_function_handler(lua_state,
-                payload_provider.c_str(), "signal.drag_source");
-            return;
-        }
-        if (lua_pcall(lua_state, 0, 1, 0) != LUA_OK) {
-            jve_handle_lua_callback_error(lua_state, "signal.drag_source");
-            return;
-        }
+        LuaHandlerCaller cb(lua_state, payload_provider.c_str(), "signal.drag_source");
+        if (!cb.ready()) return;
+        if (!cb.invoke(0, 1)) return;
         JVE_ASSERT(lua_isstring(lua_state, -1),
             "drag source payload provider must return a string");
         size_t len = 0;
@@ -753,18 +770,12 @@ public:
 
 private:
     void fireDrop(int x, int y, const QByteArray& payload) {
-        lua_getglobal(lua_state, handler_name.c_str());
-        if (!lua_isfunction(lua_state, -1)) {
-            jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                "signal.drop_target");
-            return;
-        }
+        LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.drop_target");
+        if (!cb.ready()) return;
         lua_pushinteger(lua_state, x);
         lua_pushinteger(lua_state, y);
         lua_pushlstring(lua_state, payload.constData(), payload.size());
-        if (lua_pcall(lua_state, 3, 0, 0) != LUA_OK) {
-            jve_handle_lua_callback_error(lua_state, "signal.drop_target");
-        }
+        cb.invoke(3);
     }
 
     QString mime_type;
@@ -877,8 +888,8 @@ int lua_set_context_menu_handler(lua_State* L) {
 
     QObject::connect(widget, &QWidget::customContextMenuRequested,
         [widget, L, handler_str](const QPoint& pos) {
-            lua_getglobal(L, handler_str.c_str());
-            if (!lua_isfunction(L, -1)) { lua_pop(L, 1); return; }
+            LuaHandlerCaller cb(L, handler_str.c_str(), "signal.context_menu");
+            if (!cb.ready()) return;
 
             lua_newtable(L);
             lua_pushstring(L, "x"); lua_pushinteger(L, pos.x()); lua_settable(L, -3);
@@ -887,12 +898,7 @@ int lua_set_context_menu_handler(lua_State* L) {
             lua_pushstring(L, "global_x"); lua_pushinteger(L, global_pos.x()); lua_settable(L, -3);
             lua_pushstring(L, "global_y"); lua_pushinteger(L, global_pos.y()); lua_settable(L, -3);
 
-            {
-    
-                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(L, "signal.context_menu");
-                }
-            }
+            cb.invoke(1, 0);
         });
     return 0;
 }
@@ -904,14 +910,9 @@ int lua_set_line_edit_text_changed_handler(lua_State* L) {
 
     std::string handler_str(handler_name);
     QObject::connect(le, &QLineEdit::textChanged, [L, handler_str](const QString& /*text*/) {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
-
-            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.line_edit_text_changed");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_text_changed");
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.line_edit_text_changed");
+        if (cb.ready()) {
+            cb.invoke(0, 0);
         }
     });
     return 0;
@@ -924,14 +925,9 @@ int lua_set_line_edit_editing_finished_handler(lua_State* L) {
 
     std::string handler_str(handler_name);
     QObject::connect(le, &QLineEdit::editingFinished, [L, handler_str]() {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
-
-            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.line_edit_editing_finished");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_editing_finished");
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.line_edit_editing_finished");
+        if (cb.ready()) {
+            cb.invoke(0, 0);
         }
     });
     return 0;
@@ -944,13 +940,9 @@ int lua_set_line_edit_return_pressed_handler(lua_State* L) {
 
     std::string handler_str(handler_name);
     QObject::connect(le, &QLineEdit::returnPressed, [L, handler_str]() {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
-            if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.line_edit_return_pressed");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.line_edit_return_pressed");
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.line_edit_return_pressed");
+        if (cb.ready()) {
+            cb.invoke(0, 0);
         }
     });
     return 0;
@@ -1117,15 +1109,11 @@ protected:
         while (w) {
             for (size_t i = 0; i < panel_widgets.size(); ++i) {
                 if (w == panel_widgets[i]) {
-                    lua_getglobal(lua_state, handler_name.c_str());
-                    if (lua_isfunction(lua_state, -1)) {
+                    LuaHandlerCaller cb(lua_state, handler_name.c_str(),
+                        "signal.panel_focus_trap_click");
+                    if (cb.ready()) {
                         lua_pushstring(lua_state, panel_ids[i].c_str());
-                        if (lua_pcall(lua_state, 1, 0, 0) != LUA_OK) {
-                            jve_handle_lua_callback_error(lua_state, "signal.panel_focus_trap_click");
-                        }
-                    } else {
-                        jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                            "signal.panel_focus_trap_click");
+                        cb.invoke(1, 0);
                     }
                     return QObject::eventFilter(obj, event);
                 }
@@ -1210,16 +1198,11 @@ int lua_set_splitter_moved_handler(lua_State* L) {
 
     std::string handler_str = std::string(handler_name);
     QObject::connect(splitter, &QSplitter::splitterMoved, [L, handler_str](int pos, int index) {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.splitter_moved");
+        if (cb.ready()) {
             lua_pushinteger(L, pos);
             lua_pushinteger(L, index);
-
-            if (lua_pcall(L, 2, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.splitter_moved");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.splitter_moved");
+            cb.invoke(2, 0);
         }
     });
     return 0;
@@ -1236,14 +1219,10 @@ int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
 
     std::string handler_str = std::string(handler_name);
     QObject::connect(sb, &QScrollBar::valueChanged, [L, handler_str](int value) {
-        lua_getglobal(L, handler_str.c_str());
-        if (lua_isfunction(L, -1)) {
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_vscroll");
+        if (cb.ready()) {
             lua_pushinteger(L, value);
-            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                jve_handle_lua_callback_error(L, "signal.scroll_area_vscroll");
-            }
-        } else {
-            jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_vscroll");
+            cb.invoke(1, 0);
         }
     });
     return 0;
@@ -1288,15 +1267,10 @@ int lua_set_scroll_area_scroll_handler(lua_State* L) {
     QScrollBar* vScrollBar = sa->verticalScrollBar();
     if (vScrollBar) {
         QObject::connect(vScrollBar, &QScrollBar::valueChanged, [L, handler_str](int value) {
-            lua_getglobal(L, handler_str.c_str());
-            if (lua_isfunction(L, -1)) {
+            LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_scroll_v");
+            if (cb.ready()) {
                 lua_pushinteger(L, value);
-    
-                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(L, "signal.scroll_area_scroll_v");
-                }
-            } else {
-                jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_scroll_v");
+                cb.invoke(1, 0);
             }
         });
     }
@@ -1312,15 +1286,10 @@ int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
     QScrollBar* hScrollBar = sa->horizontalScrollBar();
     if (hScrollBar) {
         QObject::connect(hScrollBar, &QScrollBar::valueChanged, [L, handler_str](int value) {
-            lua_getglobal(L, handler_str.c_str());
-            if (lua_isfunction(L, -1)) {
+            LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_scroll_h");
+            if (cb.ready()) {
                 lua_pushinteger(L, value);
-    
-                if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(L, "signal.scroll_area_scroll_h");
-                }
-            } else {
-                jve_discard_non_function_handler(L, handler_str.c_str(), "signal.scroll_area_scroll_h");
+                cb.invoke(1, 0);
             }
         });
     }
@@ -1369,14 +1338,9 @@ public:
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
         if ((event->type() == QEvent::Resize || event->type() == QEvent::Move) && lua_state) {
-            lua_getglobal(lua_state, handler_name.c_str());
-            if (lua_isfunction(lua_state, -1)) {
-                if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(lua_state, "signal.geometry_change");
-                }
-            } else {
-                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                    "signal.geometry_change");
+            LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.geometry_change");
+            if (cb.ready()) {
+                cb.invoke(0, 0);
             }
         }
         return QObject::eventFilter(obj, event);
@@ -1397,14 +1361,9 @@ public:
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override {
         if (event->type() == QEvent::Close && lua_state) {
-            lua_getglobal(lua_state, handler_name.c_str());
-            if (lua_isfunction(lua_state, -1)) {
-                if (lua_pcall(lua_state, 0, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(lua_state, "signal.close_event");
-                }
-            } else {
-                jve_discard_non_function_handler(lua_state, handler_name.c_str(),
-                    "signal.close_event");
+            LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.close_event");
+            if (cb.ready()) {
+                cb.invoke(0, 0);
             }
         }
         return QObject::eventFilter(obj, event);
