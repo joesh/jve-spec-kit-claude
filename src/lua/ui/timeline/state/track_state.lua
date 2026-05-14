@@ -26,15 +26,25 @@ function M.get_audio_tracks()
 end
 
 function M.get_height(track_id)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "track_state.get_height: track_id required")
     for _, track in ipairs(data.state.tracks) do
         if track.id == track_id then
+            -- track.height nil = "exists but never resized" → DEFAULT is
+            -- the correct semantic. Unknown track is a different story
+            -- (see assert below).
             return track.height or data.dimensions.default_track_height
         end
     end
-    return data.dimensions.default_track_height
+    error(string.format(
+        "track_state.get_height: track %s not in state — caller is asking "
+        .. "about a track that does not exist on the active sequence",
+        tostring(track_id)))
 end
 
 function M.set_height(track_id, height, persist_callback)
+    assert(type(track_id) == "string" and track_id ~= "",
+        "track_state.set_height: track_id required")
     for _, track in ipairs(data.state.tracks) do
         if track.id == track_id then
             if track.height ~= height then
@@ -46,6 +56,10 @@ function M.set_height(track_id, height, persist_callback)
             return
         end
     end
+    error(string.format(
+        "track_state.set_height: track %s not in state — caller is trying "
+        .. "to size a track that does not exist on the active sequence",
+        tostring(track_id)))
 end
 
 function M.is_layout_dirty() return track_layout_dirty end

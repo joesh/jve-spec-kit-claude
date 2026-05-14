@@ -429,7 +429,11 @@ local function load_displayed_sequence(seq_id)
         string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(seq_id)))
 
     data.state.sequence_frame_rate = sequence.frame_rate
-    data.state.sequence_timecode_start_frame = sequence.start_timecode_frame or 0
+    assert(type(sequence.start_timecode_frame) == "number", string.format(
+        "load_displayed_sequence: sequence %s missing start_timecode_frame "
+        .. "(schema declares NOT NULL DEFAULT 0; Sequence.load asserts non-null — "
+        .. "if this fires, a caller bypassed both invariants)", tostring(seq_id)))
+    data.state.sequence_timecode_start_frame = sequence.start_timecode_frame
     data.sequence = sequence
 
     recompute_gap_clips()
@@ -512,9 +516,11 @@ local function load_displayed_sequence(seq_id)
 
     local min_start, max_end = content_bounds()
     if viewport_needs_fit(min_start, max_end) and min_start and max_end and max_end > min_start then
-        local tc_floor = data.state.sequence_timecode_start_frame or 0
-        local fit_start, fit_duration =
-            ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
+        assert(type(data.state.sequence_timecode_start_frame) == "number",
+            "viewport-fit: sequence_timecode_start_frame not initialised — "
+            .. "load_displayed_sequence must run before viewport fit")
+        local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(
+            min_start, max_end, data.state.sequence_timecode_start_frame)
         data.state.viewport_start_time = fit_start
         data.state.viewport_duration = fit_duration
         -- Do NOT touch the playhead — viewport-fit is purely a view

@@ -27,7 +27,6 @@ local View = require("ui.view")
 local M = View.new("timeline")
 
 -- Constants
-local DEFAULT_TRACK_HEIGHT = timeline_state.dimensions.default_track_height or ui_constants.TIMELINE.TRACK_HEIGHT or 50
 local MIN_TRACK_HEIGHT = 30
 -- A track row in the headers column is laid out as
 --   [ header widget ][ RESIZE_EDGE_PX-tall drag edge widget ]
@@ -36,29 +35,38 @@ local MIN_TRACK_HEIGHT = 30
 -- columns, the header widget must therefore be `track_height - RESIZE_EDGE_PX`
 -- — the edge widget IS the separator now, not an extra delta on top.
 local RESIZE_EDGE_PX = 4
-local MIN_HEADER_HEIGHT = math.max(12, MIN_TRACK_HEIGHT - RESIZE_EDGE_PX)
 
-local function clamp_track_height(height)
-    return math.max(MIN_TRACK_HEIGHT, height or DEFAULT_TRACK_HEIGHT)
-end
-
+-- Pure math. State owns the "what's this track's height" question (with
+-- its own asserts); the drag handler enforces MIN_TRACK_HEIGHT at the
+-- input boundary. These helpers just convert between row and header
+-- pixel counts — passing nil / non-number is a caller bug.
 local function content_to_header(track_height)
-    local clamped = clamp_track_height(track_height)
-    return math.max(MIN_HEADER_HEIGHT, clamped - RESIZE_EDGE_PX)
+    assert(type(track_height) == "number" and track_height >= MIN_TRACK_HEIGHT,
+        string.format("content_to_header: track_height must be number >= %d, got %s",
+            MIN_TRACK_HEIGHT, tostring(track_height)))
+    return track_height - RESIZE_EDGE_PX
 end
 
 local function header_to_content(header_height)
-    local clamped_header = math.max(MIN_HEADER_HEIGHT, header_height or content_to_header(DEFAULT_TRACK_HEIGHT))
-    return clamp_track_height(clamped_header + RESIZE_EDGE_PX)
+    assert(type(header_height) == "number" and header_height > 0,
+        string.format("header_to_content: header_height must be positive number, got %s",
+            tostring(header_height)))
+    return header_height + RESIZE_EDGE_PX
 end
 
 -- Exposed for tests / alignment audits.
 M.metrics = {
-    RESIZE_EDGE_PX = RESIZE_EDGE_PX,
+    RESIZE_EDGE_PX   = RESIZE_EDGE_PX,
+    MIN_TRACK_HEIGHT = MIN_TRACK_HEIGHT,
     -- Total pixels a track row occupies in the headers column.
     header_row_total = function(track_height) return content_to_header(track_height) + RESIZE_EDGE_PX end,
     -- Total pixels the same track occupies as a clip lane.
-    lane_row_total   = function(track_height) return clamp_track_height(track_height) end,
+    lane_row_total   = function(track_height)
+        assert(type(track_height) == "number" and track_height >= MIN_TRACK_HEIGHT,
+            string.format("lane_row_total: track_height must be number >= %d, got %s",
+                MIN_TRACK_HEIGHT, tostring(track_height)))
+        return track_height
+    end,
 }
 
 -- Store references
@@ -1220,15 +1228,17 @@ end
 -- The handler must NOT restyle directly: it would push the WRONG style for
 -- S/M stack buttons (which use build_sm_btn_stylesheet, not the header
 -- style) and would double-render every click.
+local dispatch_or_fail = require("ui.timeline.dispatch_or_fail")
+
 local function wire_toggle_preference(btn, track_id, property, _active_color)
     local handler = register_track_btn_handler(function()
         assert(Track.load(track_id), string.format(
             "wire_toggle_preference: track %s not found", tostring(track_id)))
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_toggle_preference: no project_id")
-        command_manager.execute_interactive("ToggleTrackPreference", {
+        dispatch_or_fail.execute_or_fail("ToggleTrackPreference", {
             track_id = track_id, property = property, project_id = project_id,
-        })
+        }, "track-header " .. property .. " click")
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -1243,9 +1253,9 @@ local function wire_waveform_display_toggle(btn, track_id)
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_waveform_display_toggle: no project_id (track_id="
             .. tostring(track_id) .. ")")
-        command_manager.execute_interactive("ToggleTrackWaveformDisplay", {
+        dispatch_or_fail.execute_or_fail("ToggleTrackWaveformDisplay", {
             track_id = track_id, project_id = project_id,
-        })
+        }, "waveform-display btn click")
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -1264,9 +1274,9 @@ local function wire_sync_mode_cycle(btn, track_id)
             tostring(t.sync_mode), tostring(track_id)))
         local project_id = timeline_state.get_project_id()
         assert(project_id, "wire_sync_mode_cycle: no project_id")
-        command_manager.execute_interactive("SetSyncMode", {
+        dispatch_or_fail.execute_or_fail("SetSyncMode", {
             track_id = track_id, sync_mode = next_mode, project_id = project_id,
-        })
+        }, "sync-mode cycle click")
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(btn, handler)
     return handler
@@ -1764,9 +1774,11 @@ local function build_track_header_row(track, track_type, header_color)
         string.format("build_track_header_row: track_type must be VIDEO|AUDIO; got %s",
             tostring(track_type)))
 
-    local track_height = clamp_track_height(
-        state.get_track_height and state.get_track_height(track.id)
-        or DEFAULT_TRACK_HEIGHT)
+    -- state.get_track_height asserts when the track is unknown; the
+    -- track here came from state.get_all_tracks so the call is safe.
+    -- DEFAULT_TRACK_HEIGHT is returned for tracks that exist but have
+    -- never been resized (legitimate "unset" semantic on a known row).
+    local track_height = state.get_track_height(track.id)
     local header_height = content_to_header(track_height)
 
     local header = qt_constants.WIDGET.CREATE()

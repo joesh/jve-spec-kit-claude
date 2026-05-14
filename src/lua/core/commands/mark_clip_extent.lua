@@ -97,10 +97,19 @@ function M.register(executors, undoers, db)
         local clip_last_frame = clip_start + best_clip.duration - 1
 
         local args = command:get_all_parameters()
-        local seq_id = args.sequence_id or timeline_state.get_sequence_id()
-        assert(seq_id, "MarkClipExtent: sequence_id missing from args and timeline_state")
+        -- MarkClipExtent is a movement command (mutates_clips=false). For
+        -- UI/keymap dispatch the framework auto-injects sequence_id from
+        -- the focused panel via execute_interactive (command_manager.lua
+        -- §movement-injection). Scripted callers must pass it explicitly.
+        -- No `or get_sequence_id()` fallback — the framework injection and
+        -- the executor reading from a different state-getter were two
+        -- sources of truth that could disagree on Source-tab dispatch
+        -- (display-aware vs active-record).
+        assert(args.sequence_id, "MarkClipExtent: sequence_id required — "
+            .. "UI dispatch auto-injects via execute_interactive; "
+            .. "scripted callers must pass it explicitly")
 
-        dispatch_grouped_marks(args.project_id, seq_id, clip_start, clip_last_frame)
+        dispatch_grouped_marks(args.project_id, args.sequence_id, clip_start, clip_last_frame)
         return true
     end
 

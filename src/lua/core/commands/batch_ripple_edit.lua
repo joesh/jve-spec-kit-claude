@@ -480,25 +480,28 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, track in ipairs(timeline_state.get_all_tracks()) do
             assert(track.id and track.id ~= "",
                 "build_clip_cache: timeline_state returned track with empty id")
-            local track_clips = timeline_state.get_track_clip_index(track.id)
-            if track_clips then
-                ctx.track_clip_map[track.id] = track_clips
-                ctx.shared_track_clip_lists[track.id] = {
-                    list = track_clips,
-                    length = #track_clips,
-                }
-                for _, clip in ipairs(track_clips) do
-                    assert(clip.id and clip.id ~= "", string.format(
-                        "build_clip_cache: clip on track %s has empty id", track.id))
-                    table.insert(ctx.all_clips, clip)
-                    ctx.clip_lookup[clip.id] = clip
-                    ctx.clip_track_lookup[clip.id] = clip.track_id
-                    local snap = { ref = clip }
-                    for _, field in ipairs(SHARED_CLIP_FIELDS) do
-                        snap[field] = clip[field]
-                    end
-                    ctx.shared_clip_snapshots[clip.id] = snap
+            -- get_track_clip_index returns nil for tracks with no clips.
+            -- Coerce to an empty list so EVERY known track has an entry
+            -- in track_clip_map — downstream code can then `assert(map[id])`
+            -- (cache invariant) and treat empty-list as "no clips here"
+            -- without conflating it with "unknown track".
+            local track_clips = timeline_state.get_track_clip_index(track.id) or {}
+            ctx.track_clip_map[track.id] = track_clips
+            ctx.shared_track_clip_lists[track.id] = {
+                list   = track_clips,
+                length = #track_clips,
+            }
+            for _, clip in ipairs(track_clips) do
+                assert(clip.id and clip.id ~= "", string.format(
+                    "build_clip_cache: clip on track %s has empty id", track.id))
+                table.insert(ctx.all_clips, clip)
+                ctx.clip_lookup[clip.id] = clip
+                ctx.clip_track_lookup[clip.id] = clip.track_id
+                local snap = { ref = clip }
+                for _, field in ipairs(SHARED_CLIP_FIELDS) do
+                    snap[field] = clip[field]
                 end
+                ctx.shared_clip_snapshots[clip.id] = snap
             end
         end
     end
@@ -817,7 +820,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             assert(primary_track_id and primary_track_id ~= "",
                 string.format("apply_sync_mode_dispatch: cannot resolve track for clip %s",
                     tostring(edge.clip_id)))
-            local primary_clips = ctx.track_clip_map[primary_track_id] or {}
+            local primary_clips = ctx.track_clip_map[primary_track_id]
+            assert(primary_clips, string.format(
+                "apply_sync_mode_dispatch: track %s missing from track_clip_map "
+                .. "— the trimmed edge lives on this track so build_clip_cache "
+                .. "must have populated it. Cache-construction bug.",
+                tostring(primary_track_id)))
 
             for track_id, sync_mode in pairs(ctx.track_sync_modes) do
                 if covered[track_id] then goto continue_track end
@@ -827,11 +835,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 if sync_mode == "off" then
                     ctx.sync_off_tracks[track_id] = true
                 elseif sync_mode == "ripple" and do_dispatch then
+                    -- track_sync_modes lists tracks on the active sequence;
+                    -- build_clip_cache populated every such track with at
+                    -- least an empty list. Missing entry = cache bug.
                     local track_clips = ctx.track_clip_map[track_id]
-                    if track_clips then
-                        dispatch_colocated_edge(track_id, track_clips,
-                            base_clip, primary_clips, edge.edge_type)
-                    end
+                    assert(track_clips, string.format(
+                        "apply_sync_mode_dispatch: track %s has sync_mode "
+                        .. "but no track_clip_map entry — build_clip_cache "
+                        .. "didn't populate this track.", tostring(track_id)))
+                    dispatch_colocated_edge(track_id, track_clips,
+                        base_clip, primary_clips, edge.edge_type)
                 elseif sync_mode == "cut" then
                     -- Compute the trim_point: the frame where the cut happens.
                     -- For an out-edge the cut is at the anchor's right boundary;
