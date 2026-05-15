@@ -908,35 +908,18 @@ end
 ---                                  media_refs = {[mref_id] = {
 ---                                    duration_frames, timeline_start_frame,
 ---                                    source_in_frame, source_out_frame }} }}
-function M.batch_set_durations(duration_changes, tc_updates)
-    assert(type(duration_changes) == "table",
-        "Media.batch_set_durations: duration_changes table required")
-    assert(tc_updates == nil or type(tc_updates) == "table",
-        "Media.batch_set_durations: tc_updates must be table or nil")
+-- Per-track-type column map. The two media kinds carry their extent
+-- and TC origin in different fields of the caller's entries, but the
+-- write-side logic is otherwise identical — looking up by track_type
+-- keeps the row loop generic.
+local DURATION_FIELDS = {
+    VIDEO = { dur_key = "duration_frames",        tc_key = "start_tc_value"         },
+    AUDIO = { dur_key = "audio_duration_samples", tc_key = "start_tc_audio_samples" },
+}
 
-    -- tc_updates keys must be a subset of duration_changes keys. A TC
-    -- shift without a matching duration update would leave source_out
-    -- inconsistent (new_origin + old_duration), and the relinker always
-    -- knows both extents when it knows the new TC — so an orphaned
-    -- tc_updates entry is a planner bug worth surfacing.
-    if tc_updates then
-        for mid in pairs(tc_updates) do
-            assert(duration_changes[mid] ~= nil, string.format(
-                "Media.batch_set_durations: tc_updates contains %s but "
-                .. "duration_changes does not — TC rebase would be orphaned",
-                tostring(mid)))
-        end
-    end
-
-    local database = require("core.database")
-    local db = assert(database.get_connection(),
-        "Media.batch_set_durations: no database connection")
-
-    -- Validate inputs up-front (rule 1.14 fail-fast): every entry must
-    -- supply at least one positive integer extent, and the medium it
-    -- supplies must exist on this media. We don't tolerate negative or
-    -- zero durations — schema CHECKs forbid them and silently writing
-    -- a degenerate row produces phantom-empty masters at decode time.
+-- Validate caller-supplied duration_changes shape (rule 1.14: fail
+-- fast on bad inputs at the boundary).
+local function validate_duration_changes(duration_changes)
     for mid, entry in pairs(duration_changes) do
         assert(type(entry) == "table", string.format(
             "Media.batch_set_durations: entry for %s must be a table",
@@ -963,11 +946,32 @@ function M.batch_set_durations(duration_changes, tc_updates)
                     tostring(mid), tostring(entry.audio_duration_samples)))
         end
     end
+end
 
-    local old_state = {}
+-- tc_updates keys must be a subset of duration_changes keys. A TC
+-- shift without a matching duration update would leave source_out
+-- inconsistent (new_origin + old_duration), and the relinker always
+-- knows both extents when it knows the new TC — so an orphaned
+-- tc_updates entry is a planner bug worth surfacing.
+local function validate_tc_updates_subset(tc_updates, duration_changes)
+    if not tc_updates then return end
+    for mid in pairs(tc_updates) do
+        assert(duration_changes[mid] ~= nil, string.format(
+            "Media.batch_set_durations: tc_updates contains %s but "
+            .. "duration_changes does not — TC rebase would be orphaned",
+            tostring(mid)))
+    end
+end
 
-    -- Phase A: snapshot existing media.duration_frames + per-mref state
-    -- (duration AND TC coordinates, so undo can restore the full row).
+-- Snapshot media.duration_frames + per-mref state (duration + TC
+-- coordinates) so undo can restore the full row. Shape:
+--   { [mid] = { media_duration_frames = N,
+--               mref_types = {[mref_id] = "VIDEO"|"AUDIO"},
+--               media_refs = {[mref_id] = {duration_frames,
+--                                          timeline_start_frame,
+--                                          source_in_frame,
+--                                          source_out_frame}} } }
+local function snapshot_pre_update_state(db, duration_changes)
     local read_media = assert(
         db:prepare("SELECT duration_frames FROM media WHERE id = ?"),
         "Media.batch_set_durations: prepare read_media failed")
@@ -981,6 +985,8 @@ function M.batch_set_durations(duration_changes, tc_updates)
              WHERE mr.media_id = ?
         ]]),
         "Media.batch_set_durations: prepare read_mrefs failed")
+
+    local out = {}
     for mid in pairs(duration_changes) do
         read_media:bind_value(1, mid)
         assert(read_media:exec(),
@@ -1005,21 +1011,85 @@ function M.batch_set_durations(duration_changes, tc_updates)
             }
         end
         read_mrefs:reset()
-        old_state[mid] = rec
+        out[mid] = rec
     end
     read_media:finalize()
     read_mrefs:finalize()
+    return out
+end
 
-    -- Phase B: apply updates. media row: prefer V extent if supplied,
-    -- else A. media_refs: per row, write the extent AND (when tc_updates
-    -- supplied) rebase the TC anchor for THIS row's track_type. A row
-    -- whose track_type has no supplied extent is left alone — caller
-    -- chose not to touch that medium.
-    --
-    -- Even when tc_updates is absent, source_out_frame is recomputed
-    -- to source_in_frame + new_duration so the row stays self-consistent
-    -- (it would otherwise be source_in + OLD duration, an invariant
-    -- break called out by the TIMECODE-IS-TRUTH doctrine).
+-- Compute the (origin, duration) the row should land at, given the
+-- caller's entry, an optional tc_entry, and the row's old snapshot.
+-- Returns nil when the caller didn't supply an extent for this row's
+-- track_type (so the row is to be left alone).
+local function pick_new_mref_coords(track_type, entry, tc_entry, old_mref)
+    local fields = DURATION_FIELDS[track_type]
+    assert(fields, string.format(
+        "Media.batch_set_durations: unknown track_type '%s' on media_ref",
+        tostring(track_type)))
+    local new_dur = entry[fields.dur_key]
+    if new_dur == nil then return nil end
+    local new_origin
+    if tc_entry ~= nil and tc_entry[fields.tc_key] ~= nil then
+        new_origin = tc_entry[fields.tc_key]
+    else
+        new_origin = old_mref.source_in_frame
+    end
+    return new_origin, new_dur
+end
+
+-- Apply media.duration_frames + media_refs.{duration_frames,
+-- timeline_start_frame, source_in_frame, source_out_frame} for one
+-- media_id. media.duration_frames mirrors Media.create: V extent if
+-- supplied, else A. media_refs land at (origin, origin + duration).
+-- Even without a tc_entry, source_out_frame is recomputed to track
+-- the new duration — leaving the old source_out would break the
+-- TIMECODE-IS-TRUTH invariant.
+local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
+    local media_dur
+    if entry.duration_frames ~= nil then
+        media_dur = entry.duration_frames
+    else
+        media_dur = entry.audio_duration_samples
+    end
+    upd_media:bind_value(1, media_dur)
+    upd_media:bind_value(2, mid)
+    assert(upd_media:exec(), string.format(
+        "Media.batch_set_durations: upd_media exec failed for %s",
+        tostring(mid)))
+    upd_media:reset()
+
+    for mref_id, track_type in pairs(rec.mref_types) do
+        local new_origin, new_dur = pick_new_mref_coords(
+            track_type, entry, tc_entry, rec.media_refs[mref_id])
+        if new_dur ~= nil then
+            upd_mref:bind_value(1, new_dur)
+            upd_mref:bind_value(2, new_origin)              -- timeline_start_frame
+            upd_mref:bind_value(3, new_origin)              -- source_in_frame
+            upd_mref:bind_value(4, new_origin + new_dur)    -- source_out_frame
+            upd_mref:bind_value(5, mref_id)
+            assert(upd_mref:exec(), string.format(
+                "Media.batch_set_durations: upd_mref exec failed for %s",
+                tostring(mref_id)))
+            upd_mref:reset()
+        end
+    end
+end
+
+function M.batch_set_durations(duration_changes, tc_updates)
+    assert(type(duration_changes) == "table",
+        "Media.batch_set_durations: duration_changes table required")
+    assert(tc_updates == nil or type(tc_updates) == "table",
+        "Media.batch_set_durations: tc_updates must be table or nil")
+    validate_tc_updates_subset(tc_updates, duration_changes)
+    validate_duration_changes(duration_changes)
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_durations: no database connection")
+
+    local old_state = snapshot_pre_update_state(db, duration_changes)
+
     local upd_media = assert(
         db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
         "Media.batch_set_durations: prepare upd_media failed")
@@ -1032,51 +1102,9 @@ function M.batch_set_durations(duration_changes, tc_updates)
         ]]),
         "Media.batch_set_durations: prepare upd_mref failed")
     for mid, entry in pairs(duration_changes) do
-        -- media.duration_frames mirrors Media.create's convention: video
-        -- frames if the file has video, else audio samples. Caller may
-        -- supply both (V+A file) or one (V-only / A-only).
-        local media_dur
-        if entry.duration_frames ~= nil then
-            media_dur = entry.duration_frames
-        else
-            media_dur = entry.audio_duration_samples
-        end
-        upd_media:bind_value(1, media_dur)
-        upd_media:bind_value(2, mid)
-        assert(upd_media:exec(), string.format(
-            "Media.batch_set_durations: upd_media exec failed for %s",
-            tostring(mid)))
-        upd_media:reset()
-
-        local tc_entry = tc_updates and tc_updates[mid] or nil
-        local rec = old_state[mid]
-        for mref_id, track_type in pairs(rec.mref_types) do
-            local new_dur, new_origin
-            local old_mref = rec.media_refs[mref_id]
-            if track_type == "VIDEO" then
-                new_dur = entry.duration_frames
-                if tc_entry and tc_entry.start_tc_value ~= nil then
-                    new_origin = tc_entry.start_tc_value
-                end
-            elseif track_type == "AUDIO" then
-                new_dur = entry.audio_duration_samples
-                if tc_entry and tc_entry.start_tc_audio_samples ~= nil then
-                    new_origin = tc_entry.start_tc_audio_samples
-                end
-            end
-            if new_dur ~= nil then
-                local origin = new_origin or old_mref.source_in_frame
-                upd_mref:bind_value(1, new_dur)
-                upd_mref:bind_value(2, origin)        -- timeline_start_frame
-                upd_mref:bind_value(3, origin)        -- source_in_frame
-                upd_mref:bind_value(4, origin + new_dur)  -- source_out_frame
-                upd_mref:bind_value(5, mref_id)
-                assert(upd_mref:exec(), string.format(
-                    "Media.batch_set_durations: upd_mref exec failed for %s",
-                    tostring(mref_id)))
-                upd_mref:reset()
-            end
-        end
+        local tc_entry
+        if tc_updates ~= nil then tc_entry = tc_updates[mid] end
+        apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, old_state[mid])
         mark_dirty(mid)
     end
     upd_media:finalize()

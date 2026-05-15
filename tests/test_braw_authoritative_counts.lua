@@ -93,51 +93,12 @@ print(string.format("  ✓ video_frame_count=%d audio_sample_count=%d (fps=%d/%d
     info.video_frame_count, info.audio_sample_count,
     info.fps_num, info.fps_den, info.audio_sample_rate))
 
--- 23.976fps BRAW: this is the case where the round-trip lies. SDK gives
--- 570000; duration-derived gives 570570. The test FAILS without the
--- authoritative field because every audio-extent consumer trusts the
--- derived count and reads past the actual audio sample window.
-print("\n--- Case 2: 23.976fps BRAW (round-trip overshoots) ---")
-local braw_2398 = "/Users/joe/Library/Mobile Documents/com~apple~CloudDocs/"
-    .. "frames for BM Support/A004_05231552_C024.braw"
-
-if not file_exists(braw_2398) then
-    print("SKIP Case 2: 23.976 BRAW fixture not present at " .. braw_2398)
-else
-    local info2, err2 = EMP.MEDIA_PROBE(braw_2398)
-    assert(info2, string.format("MEDIA_PROBE failed: %s", tostring(err2)))
-    assert(info2.fps_num == 24000 and info2.fps_den == 1001,
-        "fixture must be 23.976 fps")
-
-    -- Derivation per current media_relinker.probe_result_from_emp_info:
-    local derived_audio = math.floor(
-        info2.duration_us * info2.audio_sample_rate / 1e6 + 0.5)
-
-    -- The SDK-authoritative number must NOT equal the derived number —
-    -- if they did, this fixture wouldn't exercise the bug.
-    assert(info2.audio_sample_count ~= nil,
-        "BRAW 23.976 probe must surface audio_sample_count")
-    assert(info2.audio_sample_count ~= derived_audio, string.format(
-        "Fixture invariant: SDK audio_sample_count (%d) must differ from "
-        .. "derived-from-duration_us (%d) — otherwise the round-trip is "
-        .. "not exercised and the test is uninformative. If you've "
-        .. "changed BRAW fixtures, pick one where the SDK reports a "
-        .. "round-number sample count at 23.976 fps.",
-        info2.audio_sample_count, derived_audio))
-
-    -- The shape of the BRAW bug: derivation OVERSHOOTS by the
-    -- pulldown factor 1001/1000. So derived > authoritative.
-    assert(derived_audio > info2.audio_sample_count, string.format(
-        "Expected derived (%d) > SDK (%d) at 23.976: derivation uses "
-        .. "video duration which overshoots because BRAW audio is at "
-        .. "the nominal rate.",
-        derived_audio, info2.audio_sample_count))
-
-    print(string.format(
-        "  ✓ SDK audio_sample_count=%d, derived=%d (drift=%d at 23.976) — "
-        .. "downstream must use the SDK value.",
-        info2.audio_sample_count, derived_audio,
-        derived_audio - info2.audio_sample_count))
-end
+-- Case 2 (23.976 BRAW with round-number SDK audio count exposing the
+-- pulldown drift in the duration round-trip) used to live here against
+-- an iCloud fixture under ~/Library/Mobile Documents/. That path is
+-- per-machine and shouldn't appear in repo tests. The 25fps fixture in
+-- Case 1 already pins the contract that BRAW surfaces SDK-authoritative
+-- video_frame_count + audio_sample_count; the 23.976 drift is asserted
+-- mathematically in the relinker tests, not by re-probing the SDK here.
 
 print("\n✅ test_braw_authoritative_counts.lua passed")
