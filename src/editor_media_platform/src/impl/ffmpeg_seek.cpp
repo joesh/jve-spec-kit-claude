@@ -40,14 +40,24 @@ Result<void> seek_with_backoff(AVFormatContext* fmt_ctx, AVStream* stream,
     return Result<void>();
 }
 
-// Check if we need to seek (current position is too far from target)
+// Check if we need to seek (current position is too far from target).
+//
+// `current_pts_us` is the PTS of the last frame the decoder successfully
+// produced. AFTER decoding pts=X, the format context's read cursor points
+// to the SUCCESSOR of X — the next av_read_frame returns a packet at pts > X.
+// So re-reading pts=X requires seeking BACKWARD; "no seek" + read-forward
+// would deliver pts > X and the qtrle loop would exit with no_frame_found
+// (caught in production by the 2026-05-15 same-file-two-tracks spike).
+//
+// Hence target_us <= current_pts_us forces a seek, not target_us < current_pts_us.
 bool need_seek(TimeUS current_pts_us, TimeUS target_us, bool have_current) {
     if (!have_current) {
         return true;
     }
 
-    // If target is before current position, need to seek
-    if (target_us < current_pts_us) {
+    // Target at-or-before last decoded: seek back. The format context
+    // cursor is past current_pts_us, so we cannot read forward to reach it.
+    if (target_us <= current_pts_us) {
         return true;
     }
 

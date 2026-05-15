@@ -604,6 +604,10 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
             break;
         }
         if (ret < 0) {
+            // Reset decode-position bookkeeping: fmt_ctx is in unknown state
+            // after a read failure, so the next call must seek rather than
+            // trust last_decode_pts.
+            have_decode_pos = false;
             return impl::ffmpeg_error(ret, "av_read_frame (qtrle)");
         }
 
@@ -620,6 +624,9 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
         av_packet_unref(pkt);
 
         if (decode_result.is_error()) {
+            // fmt_ctx already advanced past this packet; bookkeeping is now
+            // out of sync. Force seek on next call.
+            have_decode_pos = false;
             return decode_result.error();
         }
 
@@ -634,6 +641,14 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
     }
 
     if (!have_frame) {
+        // Reached here because either (a) fmt_ctx delivered a packet whose
+        // pts > target_us as the very first read after seek/forward-read
+        // (over-shoot — fixed at the need_seek level by treating
+        // target == current as "need seek", because after decoding pts=X
+        // fmt_ctx points past X), or (b) AVERROR_EOF before any packet
+        // matched. Either way, fmt_ctx is now in a state that doesn't match
+        // last_decode_pts — force a seek on the next call.
+        have_decode_pos = false;
         return Error::internal("qtrle: no frame found at target time");
     }
 
