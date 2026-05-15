@@ -208,12 +208,16 @@ function M.register(executors, undoers, db)
         Media.batch_clear_offline_notes(note_clears)
 
         -- Phase 2c: Sync media.duration_frames + every media_ref's
-        -- duration_frames to the freshly-probed file extent. Without
-        -- this, the source viewer / ruler / edit math run off the
-        -- pre-relink file's length even though the row is now pointing
-        -- at a different file. (Rule 2.5: model owns the SQL.)
+        -- duration_frames AND TC anchor to the freshly-probed file. The
+        -- media_refs sit at file_tc_origin spanning [tc_origin, tc_origin
+        -- + file_duration) (CLAUDE.md "TIMECODE IS THE SOURCE OF TRUTH").
+        -- Pass tc_updates so a probed origin shift (Resolve Media-Manage
+        -- trims the file head → tmcd advances) rebases the media_refs in
+        -- one atomic step alongside the duration sync. Without this, the
+        -- resolver computes coverage in the stale TC space and reports
+        -- phantom gaps for clip ranges that the new file actually covers.
         local old_media_durations = Media.batch_set_durations(
-            args.media_duration_updates)
+            args.media_duration_updates, media_tc_updates)
 
         local t_p2_core = qt_monotonic_s()
         local t_p2_end = t_p2_core

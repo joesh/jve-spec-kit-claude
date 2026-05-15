@@ -869,25 +869,64 @@ function M.batch_restore_file_state(old_state)
 end
 
 --- Atomically update each Media row's duration_frames AND every
---- media_ref's duration_frames over that media. The relinker probes the
---- candidate file's actual extent; that extent is the source of truth.
---- Without this sync, the source viewer, ruler, and edit math run off a
---- stale length.
+--- media_ref's duration_frames + TC anchor over that media. The relinker
+--- probes the candidate file's actual extent AND TC origin; both are the
+--- source of truth for the linked file's position in the master sequence's
+--- timebase. Without this sync, the source viewer, ruler, edit math, and
+--- the resolver's containment checks run off pre-relink coordinates —
+--- a stale TC origin produces phantom gaps for clips whose source range
+--- is fully covered by the new file but past the OLD media_ref window
+--- (TSO 2026-05-15 12:20:21: A035_C016.mov lost the last 39 frames of a
+--- 100-frame clip even though the file holds them).
 ---
 --- Per-medium semantics:
 ---   media.duration_frames    — video frames @ media.fps if video present,
 ---                              else audio samples (matches Media.create).
 ---   media_refs.duration_frames (V tracks) — video frames @ media.fps
 ---   media_refs.duration_frames (A tracks) — audio samples
+---   media_refs.timeline_start_frame / source_in_frame
+---     (V tracks) — start_tc_value (frames @ media.fps)
+---     (A tracks) — start_tc_audio_samples
+---   media_refs.source_out_frame = source_in_frame + duration_frames
+---     (TIMECODE-IS-TRUTH invariant: media_refs sit at file_tc_origin
+---      spanning [tc_origin, tc_origin + file_duration). Doctrine pinned
+---      in CLAUDE.md.)
 ---
 --- @param duration_changes table {[media_id] = {duration_frames=N,
 ---                                              audio_duration_samples=N}}
+--- @param tc_updates       table|nil {[media_id] = {start_tc_value=N,
+---                                                  start_tc_audio_samples=N}}
+---                         When supplied for a media_id, the media_refs over
+---                         that media are rebased to the new TC origin. When
+---                         nil for a media_id, media_refs keep their current
+---                         source_in / timeline_start but DO get
+---                         source_out_frame updated to remain consistent
+---                         with the new duration_frames (the row's
+---                         in-place duration shift).
 --- @return table  old_state for undo:
 ---                  {[media_id] = { media_duration_frames = N,
----                                  media_refs = {[mref_id] = N} }}
-function M.batch_set_durations(duration_changes)
+---                                  media_refs = {[mref_id] = {
+---                                    duration_frames, timeline_start_frame,
+---                                    source_in_frame, source_out_frame }} }}
+function M.batch_set_durations(duration_changes, tc_updates)
     assert(type(duration_changes) == "table",
         "Media.batch_set_durations: duration_changes table required")
+    assert(tc_updates == nil or type(tc_updates) == "table",
+        "Media.batch_set_durations: tc_updates must be table or nil")
+
+    -- tc_updates keys must be a subset of duration_changes keys. A TC
+    -- shift without a matching duration update would leave source_out
+    -- inconsistent (new_origin + old_duration), and the relinker always
+    -- knows both extents when it knows the new TC — so an orphaned
+    -- tc_updates entry is a planner bug worth surfacing.
+    if tc_updates then
+        for mid in pairs(tc_updates) do
+            assert(duration_changes[mid] ~= nil, string.format(
+                "Media.batch_set_durations: tc_updates contains %s but "
+                .. "duration_changes does not — TC rebase would be orphaned",
+                tostring(mid)))
+        end
+    end
 
     local database = require("core.database")
     local db = assert(database.get_connection(),
@@ -927,13 +966,16 @@ function M.batch_set_durations(duration_changes)
 
     local old_state = {}
 
-    -- Phase A: snapshot existing media.duration_frames + per-mref durations.
+    -- Phase A: snapshot existing media.duration_frames + per-mref state
+    -- (duration AND TC coordinates, so undo can restore the full row).
     local read_media = assert(
         db:prepare("SELECT duration_frames FROM media WHERE id = ?"),
         "Media.batch_set_durations: prepare read_media failed")
     local read_mrefs = assert(
         db:prepare([[
-            SELECT mr.id, t.track_type, mr.duration_frames
+            SELECT mr.id, t.track_type, mr.duration_frames,
+                   mr.timeline_start_frame, mr.source_in_frame,
+                   mr.source_out_frame
               FROM media_refs mr
               JOIN tracks t ON t.id = mr.track_id
              WHERE mr.media_id = ?
@@ -954,8 +996,13 @@ function M.batch_set_durations(duration_changes)
             "Media.batch_set_durations: read_mrefs exec failed")
         while read_mrefs:next() do
             local mref_id = read_mrefs:value(0)
-            rec.media_refs[mref_id] = read_mrefs:value(2)
             rec.mref_types[mref_id] = read_mrefs:value(1)
+            rec.media_refs[mref_id] = {
+                duration_frames      = read_mrefs:value(2),
+                timeline_start_frame = read_mrefs:value(3),
+                source_in_frame      = read_mrefs:value(4),
+                source_out_frame     = read_mrefs:value(5),
+            }
         end
         read_mrefs:reset()
         old_state[mid] = rec
@@ -964,20 +1011,30 @@ function M.batch_set_durations(duration_changes)
     read_mrefs:finalize()
 
     -- Phase B: apply updates. media row: prefer V extent if supplied,
-    -- else A. media_refs: per row, write the extent for THIS row's
-    -- track_type. A row whose track_type has no supplied extent in
-    -- duration_changes[mid] is left alone — caller chose not to touch
-    -- that medium.
+    -- else A. media_refs: per row, write the extent AND (when tc_updates
+    -- supplied) rebase the TC anchor for THIS row's track_type. A row
+    -- whose track_type has no supplied extent is left alone — caller
+    -- chose not to touch that medium.
+    --
+    -- Even when tc_updates is absent, source_out_frame is recomputed
+    -- to source_in_frame + new_duration so the row stays self-consistent
+    -- (it would otherwise be source_in + OLD duration, an invariant
+    -- break called out by the TIMECODE-IS-TRUTH doctrine).
     local upd_media = assert(
         db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
         "Media.batch_set_durations: prepare upd_media failed")
     local upd_mref = assert(
-        db:prepare("UPDATE media_refs SET duration_frames = ? WHERE id = ?"),
+        db:prepare([[
+            UPDATE media_refs
+               SET duration_frames = ?, timeline_start_frame = ?,
+                   source_in_frame = ?, source_out_frame = ?
+             WHERE id = ?
+        ]]),
         "Media.batch_set_durations: prepare upd_mref failed")
     for mid, entry in pairs(duration_changes) do
         -- media.duration_frames mirrors Media.create's convention: video
         -- frames if the file has video, else audio samples. Caller may
-        -- supply both (videom+audio file) or one (V-only / A-only).
+        -- supply both (V+A file) or one (V-only / A-only).
         local media_dur
         if entry.duration_frames ~= nil then
             media_dur = entry.duration_frames
@@ -991,15 +1048,29 @@ function M.batch_set_durations(duration_changes)
             tostring(mid)))
         upd_media:reset()
 
+        local tc_entry = tc_updates and tc_updates[mid] or nil
         local rec = old_state[mid]
         for mref_id, track_type in pairs(rec.mref_types) do
-            local new_dur
-            if track_type == "VIDEO" then new_dur = entry.duration_frames
-            elseif track_type == "AUDIO" then new_dur = entry.audio_duration_samples
+            local new_dur, new_origin
+            local old_mref = rec.media_refs[mref_id]
+            if track_type == "VIDEO" then
+                new_dur = entry.duration_frames
+                if tc_entry and tc_entry.start_tc_value ~= nil then
+                    new_origin = tc_entry.start_tc_value
+                end
+            elseif track_type == "AUDIO" then
+                new_dur = entry.audio_duration_samples
+                if tc_entry and tc_entry.start_tc_audio_samples ~= nil then
+                    new_origin = tc_entry.start_tc_audio_samples
+                end
             end
             if new_dur ~= nil then
+                local origin = new_origin or old_mref.source_in_frame
                 upd_mref:bind_value(1, new_dur)
-                upd_mref:bind_value(2, mref_id)
+                upd_mref:bind_value(2, origin)        -- timeline_start_frame
+                upd_mref:bind_value(3, origin)        -- source_in_frame
+                upd_mref:bind_value(4, origin + new_dur)  -- source_out_frame
+                upd_mref:bind_value(5, mref_id)
                 assert(upd_mref:exec(), string.format(
                     "Media.batch_set_durations: upd_mref exec failed for %s",
                     tostring(mref_id)))
@@ -1027,7 +1098,12 @@ function M.batch_restore_durations(old_state)
         db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
         "Media.batch_restore_durations: prepare upd_media failed")
     local upd_mref = assert(
-        db:prepare("UPDATE media_refs SET duration_frames = ? WHERE id = ?"),
+        db:prepare([[
+            UPDATE media_refs
+               SET duration_frames = ?, timeline_start_frame = ?,
+                   source_in_frame = ?, source_out_frame = ?
+             WHERE id = ?
+        ]]),
         "Media.batch_restore_durations: prepare upd_mref failed")
     for mid, rec in pairs(old_state) do
         upd_media:bind_value(1, rec.media_duration_frames)
@@ -1036,9 +1112,20 @@ function M.batch_restore_durations(old_state)
             "Media.batch_restore_durations: upd_media exec failed for %s",
             tostring(mid)))
         upd_media:reset()
-        for mref_id, old_dur in pairs(rec.media_refs) do
-            upd_mref:bind_value(1, old_dur)
-            upd_mref:bind_value(2, mref_id)
+        for mref_id, old_mref in pairs(rec.media_refs) do
+            -- old_mref is the full pre-update snapshot (duration + TC
+            -- anchor). Pre-2026-05-15 callers wrote it as a bare integer
+            -- duration; reject those — they'd silently leave TC anchors
+            -- stale on undo.
+            assert(type(old_mref) == "table",
+                "Media.batch_restore_durations: old_state media_refs "
+                .. "entries must be {duration_frames, timeline_start_frame, "
+                .. "source_in_frame, source_out_frame} tables")
+            upd_mref:bind_value(1, old_mref.duration_frames)
+            upd_mref:bind_value(2, old_mref.timeline_start_frame)
+            upd_mref:bind_value(3, old_mref.source_in_frame)
+            upd_mref:bind_value(4, old_mref.source_out_frame)
+            upd_mref:bind_value(5, mref_id)
             assert(upd_mref:exec(), string.format(
                 "Media.batch_restore_durations: upd_mref exec failed for %s",
                 tostring(mref_id)))
