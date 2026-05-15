@@ -948,18 +948,42 @@ local function validate_duration_changes(duration_changes)
     end
 end
 
--- tc_updates keys must be a subset of duration_changes keys. A TC
--- shift without a matching duration update would leave source_out
--- inconsistent (new_origin + old_duration), and the relinker always
--- knows both extents when it knows the new TC — so an orphaned
--- tc_updates entry is a planner bug worth surfacing.
-local function validate_tc_updates_subset(tc_updates, duration_changes)
+-- Validate caller-supplied tc_updates. Two halves:
+--   (1) keys are a subset of duration_changes keys — a TC shift without
+--       a matching duration update would leave source_out inconsistent
+--       (new_origin + old_duration), and the relinker always knows both
+--       extents when it knows the new TC, so an orphan is a planner bug.
+--   (2) each entry's start_tc_value / start_tc_audio_samples (when
+--       present) is a non-negative integer. These values land directly
+--       in media_refs columns the resolver uses for coverage; SQL has
+--       no CHECK on origin, so a bad value here silently produces wrong
+--       clip resolution (TSO 2026-05-15: stale origin → phantom gaps,
+--       same damage class).
+local function assert_tc_field(mid, key, val)
+    assert(type(val) == "number"
+        and val >= 0
+        and val == math.floor(val), string.format(
+        "Media.batch_set_durations: tc_updates[%s].%s must be a "
+        .. "non-negative integer, got %s",
+        tostring(mid), key, tostring(val)))
+end
+
+local function validate_tc_updates(tc_updates, duration_changes)
     if not tc_updates then return end
-    for mid in pairs(tc_updates) do
+    for mid, entry in pairs(tc_updates) do
         assert(duration_changes[mid] ~= nil, string.format(
             "Media.batch_set_durations: tc_updates contains %s but "
             .. "duration_changes does not — TC rebase would be orphaned",
             tostring(mid)))
+        assert(type(entry) == "table", string.format(
+            "Media.batch_set_durations: tc_updates[%s] must be a table, "
+            .. "got %s", tostring(mid), type(entry)))
+        if entry.start_tc_value ~= nil then
+            assert_tc_field(mid, "start_tc_value", entry.start_tc_value)
+        end
+        if entry.start_tc_audio_samples ~= nil then
+            assert_tc_field(mid, "start_tc_audio_samples", entry.start_tc_audio_samples)
+        end
     end
 end
 
@@ -1081,7 +1105,7 @@ function M.batch_set_durations(duration_changes, tc_updates)
         "Media.batch_set_durations: duration_changes table required")
     assert(tc_updates == nil or type(tc_updates) == "table",
         "Media.batch_set_durations: tc_updates must be table or nil")
-    validate_tc_updates_subset(tc_updates, duration_changes)
+    validate_tc_updates(tc_updates, duration_changes)
     validate_duration_changes(duration_changes)
 
     local database = require("core.database")
