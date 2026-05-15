@@ -190,18 +190,32 @@ local function probe_result_from_emp_info(info)
             -- stills), we still skip — a 0-frame extent can't contain
             -- anything for containment checks.
             if info.has_duration and info.duration_us and info.duration_us > 0 then
-                result.duration_frames = math.floor(
-                    info.duration_us * info.fps_num
-                        / (info.fps_den * 1000000) + 0.5)
+                -- Prefer the container's authoritative video_frame_count
+                -- when the demuxer exposes it (BRAW SDK). The
+                -- duration_us round-trip is lossy at non-integer fps;
+                -- on 23.976 BRAW the audio derivation in particular
+                -- overshoots by ~1‰ because the container records audio
+                -- at the nominal 24fps rate, not the pulldown rate.
+                if info.video_frame_count and info.video_frame_count > 0 then
+                    result.duration_frames = info.video_frame_count
+                else
+                    result.duration_frames = math.floor(
+                        info.duration_us * info.fps_num
+                            / (info.fps_den * 1000000) + 0.5)
+                end
                 -- For V+A files, also surface the audio-sample extent so
                 -- the relink path can sync audio media_refs (their
-                -- duration_frames are in samples). EMP reports a single
-                -- container duration shared by both streams.
+                -- duration_frames are in samples). Same authority order:
+                -- container's audio_sample_count wins over derivation.
                 if info.has_audio and info.audio_sample_rate
                     and info.audio_sample_rate > 0
                 then
-                    result.audio_duration_samples = math.floor(
-                        info.duration_us * info.audio_sample_rate / 1000000 + 0.5)
+                    if info.audio_sample_count and info.audio_sample_count > 0 then
+                        result.audio_duration_samples = info.audio_sample_count
+                    else
+                        result.audio_duration_samples = math.floor(
+                            info.duration_us * info.audio_sample_rate / 1000000 + 0.5)
+                    end
                 end
             end
         end

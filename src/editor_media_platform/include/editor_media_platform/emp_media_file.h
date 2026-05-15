@@ -27,6 +27,22 @@ struct MediaFileInfo {
     // has_audio_tc_origin for TC values.
     bool has_duration = false;
 
+    // Authoritative video frame count from container metadata, when the
+    // demuxer exposes it directly (BRAW SDK clip->GetFrameCount(), some
+    // MOV containers via nb_frames). -1 = unknown; consumers must fall
+    // back to duration_us × fps. ALWAYS prefer this when present: the
+    // duration_us round-trip is lossy at non-integer fps and on some
+    // codecs (e.g. BRAW 23.976) the container records audio at the
+    // nominal rate, so video-duration-derived audio extents drift.
+    int64_t video_frame_count = -1;
+
+    // Authoritative audio sample count from container metadata, when
+    // exposed directly (BRAW SDK audio interface). -1 = unknown;
+    // consumers must fall back to duration_us × sample_rate. Same
+    // rationale as video_frame_count — and especially load-bearing
+    // for 23.976 BRAW where the derivation overshoots by ~1‰.
+    int64_t audio_sample_count = -1;
+
     // Video stream info
     bool has_video;
     int video_width;

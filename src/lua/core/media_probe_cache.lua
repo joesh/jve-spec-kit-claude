@@ -52,7 +52,13 @@ local log = require("core.logger").for_area("media")
 -- importer wrote from MediaStartTime, leaving peak_cache with no
 -- authoritative audio tc_origin → waveforms vanish for every
 -- Media-Managed trim.
-local CACHE_VERSION = 3
+--
+-- v4 (2026-05-15): EMP now surfaces container-authoritative
+-- video_frame_count and audio_sample_count when the demuxer reports
+-- them (BRAW SDK). Pre-v4 cache entries lack these fields, and the
+-- relinker would silently fall back to the lossy duration_us
+-- round-trip — exactly the bug being fixed. Bump forces re-probe.
+local CACHE_VERSION = 4
 
 -- Fields that MUST be present on every cached info to consider the
 -- entry fresh. The relinker's downstream logic gates behavior on

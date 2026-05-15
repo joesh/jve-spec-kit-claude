@@ -234,6 +234,12 @@ static Result<MediaFileInfo> build_braw_info(const std::string& path) {
     // known" case doesn't arise here — if braw_probe_clip succeeded,
     // duration is authoritative.
     info.has_duration = bi.duration_us > 0;
+    // Authoritative counts from BRAW SDK. Both are required to bypass
+    // the lossy duration_us round-trip in Lua-side consumers.
+    info.video_frame_count = static_cast<int64_t>(bi.frame_count);
+    if (bi.has_audio) {
+        info.audio_sample_count = bi.audio_sample_count;
+    }
     info.first_frame_tc = bi.first_frame_tc;
     info.bwf_time_reference = -1;
 

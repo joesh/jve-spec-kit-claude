@@ -146,6 +146,17 @@ static void push_media_file_info_table(lua_State* L, const emp::MediaFileInfo& i
     lua_setfield(L, -2, "duration_us");
     lua_pushboolean(L, info.has_duration);
     lua_setfield(L, -2, "has_duration");
+    // Authoritative counts when the demuxer exposes them directly.
+    // -1 sentinel surfaces as nil so Lua callers can distinguish
+    // "container reported N" from "container didn't report".
+    if (info.video_frame_count >= 0) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.video_frame_count));
+        lua_setfield(L, -2, "video_frame_count");
+    }
+    if (info.audio_sample_count >= 0) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.audio_sample_count));
+        lua_setfield(L, -2, "audio_sample_count");
+    }
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
