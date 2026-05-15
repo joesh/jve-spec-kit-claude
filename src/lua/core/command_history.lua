@@ -330,8 +330,10 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
                 sequence_id))
             assert(db:changes() == 1, string.format(
                 "initialize_stack_position_from_db: orphan-repair UPDATE for sequence %s "
-                .. "found cursor changed by another writer (expected_prev=%s). Re-init required.",
-                sequence_id, tostring(state.persisted_seq_cursor)))
+                .. "found cursor changed by another writer "
+                .. "(expected_prev=%s new=%s). Re-init required.",
+                sequence_id, tostring(state.persisted_seq_cursor),
+                tostring(saved_value or 0)))
             state.persisted_seq_cursor = saved_value or 0
         end
         M.set_current_sequence_number(saved_value)
