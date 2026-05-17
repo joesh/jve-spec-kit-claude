@@ -49,10 +49,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, clip_id in ipairs(clip_ids) do
             local clip = Clip.load(clip_id)
             assert(clip, string.format("TrimTail: clip not found: %s", clip_id))
-            local clip_end = clip.timeline_start + clip.duration
-            assert(trim_frame > clip.timeline_start and trim_frame < clip_end,
+            local clip_end = clip.sequence_start + clip.duration
+            assert(trim_frame > clip.sequence_start and trim_frame < clip_end,
                 string.format("TrimTail: playhead (%d) not inside clip %s [%d..%d)",
-                    trim_frame, clip_id, clip.timeline_start, clip_end))
+                    trim_frame, clip_id, clip.sequence_start, clip_end))
             if not latest_end or clip_end > latest_end then
                 latest_end = clip_end
             end

@@ -57,7 +57,7 @@ local _MC = _Sequence.ensure_master("med1", "proj1")
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('clip_video', 'proj1', 'Video', 'trk_v',
@@ -69,7 +69,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('clip_audio', 'proj1', 'Audio', 'trk_a',
@@ -106,7 +106,7 @@ assert(result.success or result == true, "SplitClip should succeed")
 -- (SplitClip stores second_clip_id in parameters)
 local video_second_id = nil
 local stmt = db:prepare([[
-    SELECT id FROM clips WHERE track_id = 'trk_v' AND timeline_start_frame = 500
+    SELECT id FROM clips WHERE track_id = 'trk_v' AND sequence_start_frame = 500
 ]])
 if stmt:exec() and stmt:next() then
     video_second_id = stmt:value(0)

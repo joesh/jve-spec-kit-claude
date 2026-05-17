@@ -674,10 +674,10 @@ M.detect_edge_at_position = function(...)
     local clip, click_x, width = ...
     local ui_constants = require("core.ui_constants")
     local EDGE = ui_constants.TIMELINE.EDGE_ZONE_PX
-    assert(type(clip.timeline_start) == "number", "detect_edge_at_position: timeline_start must be integer")
+    assert(type(clip.sequence_start) == "number", "detect_edge_at_position: sequence_start must be integer")
     assert(type(clip.duration) == "number", "detect_edge_at_position: duration must be integer")
-    local sx = M.time_to_pixel(clip.timeline_start, width)
-    local ex = M.time_to_pixel(clip.timeline_start + clip.duration, width)
+    local sx = M.time_to_pixel(clip.sequence_start, width)
+    local ex = M.time_to_pixel(clip.sequence_start + clip.duration, width)
     if math.abs(click_x - sx) <= EDGE then return "in", "ripple" end
     if math.abs(click_x - ex) <= EDGE then return "out", "ripple" end
     return nil
@@ -686,12 +686,12 @@ end
 M.detect_roll_between_clips = function(c1, c2, x, w)
     local ui_constants = require("core.ui_constants")
     local ROLL = ui_constants.TIMELINE.ROLL_ZONE_PX or 0
-    assert(type(c1.timeline_start) == "number" and type(c1.duration) == "number",
+    assert(type(c1.sequence_start) == "number" and type(c1.duration) == "number",
         "detect_roll_between_clips: c1 coords must be integers")
-    assert(type(c2.timeline_start) == "number",
-        "detect_roll_between_clips: c2.timeline_start must be integer")
-    local boundary_left = c1.timeline_start + c1.duration
-    local boundary_right = c2.timeline_start
+    assert(type(c2.sequence_start) == "number",
+        "detect_roll_between_clips: c2.sequence_start must be integer")
+    local boundary_left = c1.sequence_start + c1.duration
+    local boundary_right = c2.sequence_start
 
     local sx = M.time_to_pixel(boundary_left, w)
     local ex = M.time_to_pixel(boundary_right, w)

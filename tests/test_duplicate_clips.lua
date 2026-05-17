@@ -114,7 +114,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         track_id = track_id,
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = start_frame,
+        sequence_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
@@ -140,7 +140,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id) -- luacheck: ignore 211
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -262,7 +262,7 @@ result = execute_command("DuplicateClips", {
 assert(result.success, "DuplicateClips with offset should succeed")
 
 -- Find the new clip on v2
-local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE track_id = 'track_v2' LIMIT 1")
+local stmt = db:prepare("SELECT sequence_start_frame FROM clips WHERE track_id = 'track_v2' LIMIT 1")
 stmt:exec()
 assert(stmt:next(), "Should find duplicated clip")
 local dup_start = stmt:value(0)

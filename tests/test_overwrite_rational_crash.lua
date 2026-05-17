@@ -102,7 +102,7 @@ local clip_existing = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -121,7 +121,7 @@ cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 -- Rationals
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 
 print("Executing Overwrite...")
 local result = command_manager.execute(cmd)

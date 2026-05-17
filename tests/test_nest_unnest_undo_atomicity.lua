@@ -43,12 +43,12 @@ local function build_three_clip_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -64,9 +64,9 @@ end
 
 local function snapshot_clips_in(db, seq_id)
     local stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames
+        SELECT id, track_id, sequence_start_frame, duration_frames
         FROM clips WHERE owner_sequence_id = ?
-        ORDER BY timeline_start_frame ASC, id ASC
+        ORDER BY sequence_start_frame ASC, id ASC
     ]])
     stmt:bind_value(1, seq_id)
     assert(stmt:exec())
@@ -75,7 +75,7 @@ local function snapshot_clips_in(db, seq_id)
         rows[#rows + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            timeline_start = stmt:value(2),
+            sequence_start = stmt:value(2),
             duration = stmt:value(3),
         }
     end
@@ -88,7 +88,7 @@ local function snapshots_equal(a, b)
     for i = 1, #a do
         if a[i].id ~= b[i].id
            or a[i].track_id ~= b[i].track_id
-           or a[i].timeline_start ~= b[i].timeline_start
+           or a[i].sequence_start ~= b[i].sequence_start
            or a[i].duration ~= b[i].duration then
             return false, string.format("row %d differs", i)
         end

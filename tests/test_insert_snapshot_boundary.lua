@@ -83,7 +83,7 @@ local cmd = Command.create("Insert", "project")
 cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("timeline_start_frame", 0)
+cmd:set_parameter("sequence_start_frame", 0)
 cmd:set_parameter("project_id", "project")
 cmd:set_parameter("clip_name", "BoundaryInsert")
 
@@ -117,7 +117,7 @@ end
 -- Verify the clip actually landed in the timeline.
 local clip_stmt = db:prepare([[
     SELECT COUNT(*) FROM clips
-    WHERE track_id = 'track_v1' AND timeline_start_frame = 0 AND duration_frames = 24
+    WHERE track_id = 'track_v1' AND sequence_start_frame = 0 AND duration_frames = 24
 ]])
 assert(clip_stmt:exec(), "Clip lookup failed")
 clip_stmt:next()

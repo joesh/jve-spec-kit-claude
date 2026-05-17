@@ -44,13 +44,13 @@ local function build_fixture()
         VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-a', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000,
                 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

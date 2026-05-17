@@ -74,7 +74,7 @@ local _MC = _Sequence.ensure_master("media_stub", "default_project")
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at) VALUES
     ('clip_a', 'default_project', 'Clip A', 'track_v1',
@@ -135,10 +135,10 @@ assert(undo_result.success, undo_result.error_message or "UndoSplitClip failed")
 
 -- DB verification
 local stmt = db:prepare([[
-    SELECT id, timeline_start_frame, duration_frames
+    SELECT id, sequence_start_frame, duration_frames
     FROM clips
     WHERE owner_sequence_id = 'default_sequence'
-    ORDER BY timeline_start_frame
+    ORDER BY sequence_start_frame
 ]])
 assert(stmt and stmt:exec(), "Failed to query clips after undo")
 local clip_count = 0

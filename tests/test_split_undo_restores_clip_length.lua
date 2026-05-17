@@ -41,7 +41,7 @@ assert(original_duration and original_duration > 10,
     string.format("Initial duration should be > 10 frames, got %s", tostring(original_duration)))
 
 -- Calculate split point at middle of clip
-local split_point = clip_before.timeline_start + math.floor(original_duration / 2)
+local split_point = clip_before.sequence_start + math.floor(original_duration / 2)
 
 -- Execute SplitClip
 local split_result = command_manager.execute("SplitClip", {

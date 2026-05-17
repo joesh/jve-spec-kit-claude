@@ -76,7 +76,7 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'm', '/tmp/m.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(string.format(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', '%s', '%s', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)",
     mC, mC_v1)))
@@ -89,7 +89,7 @@ Clip.create({
     track_id = edit_v1,
     sequence_id = mC,
     name = "c",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,

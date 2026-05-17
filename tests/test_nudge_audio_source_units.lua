@@ -41,7 +41,7 @@ local layout = ripple_layout.create({
         order = {"clip_a"},
         clip_a = {
             id = "clip_a", name = "A", track_key = "a1", media_key = "main",
-            timeline_start = 50, duration = TIMELINE_DURATION,
+            sequence_start = 50, duration = TIMELINE_DURATION,
             source_in = AUDIO_SOURCE_IN,
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },

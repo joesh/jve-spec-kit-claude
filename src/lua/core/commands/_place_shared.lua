@@ -82,7 +82,7 @@ end
 --- per-medium native durations, owner-timebase duration, target tracks,
 --- clip name. Returns a struct the caller consumes to execute.
 ---
----   args: { sequence_id, source_sequence_id, timeline_start_frame,
+---   args: { sequence_id, source_sequence_id, sequence_start_frame,
 ---           target_video_track_id?, target_audio_track_id?,
 ---           fps_mismatch_policy?, clip_name? }
 ---
@@ -100,9 +100,9 @@ local function validate_plan_args(args)
         "place_shared: sequence_id required")
     assert(args.source_sequence_id and args.source_sequence_id ~= "",
         "place_shared: source_sequence_id required")
-    assert(type(args.timeline_start_frame) == "number"
-        and args.timeline_start_frame >= 0,
-        "place_shared: timeline_start_frame must be non-negative integer")
+    assert(type(args.sequence_start_frame) == "number"
+        and args.sequence_start_frame >= 0,
+        "place_shared: sequence_start_frame must be non-negative integer")
 end
 
 -- Load the owner+nested sequences, enforce that owner is kind='sequence', project
@@ -377,7 +377,7 @@ function M.plan_placement(args)
         audio_targets    = audio_targets,
         audio_drop_mode  = drop_mode,
         base_name        = derive_base_name(nested, args),
-        start_frame      = args.timeline_start_frame,
+        start_frame      = args.sequence_start_frame,
     }
 end
 
@@ -431,7 +431,7 @@ local function insert_video_clip(plan, next_id)
         track_id              = plan.targets.VIDEO,
         sequence_id    = plan.nested.id,
         name                  = plan.base_name,
-        timeline_start_frame  = plan.start_frame,
+        sequence_start_frame  = plan.start_frame,
         duration_frames       = plan.owner_duration,
         source_in_frame       = v_in,
         source_out_frame      = v_in + plan.video_native_dur,
@@ -458,7 +458,7 @@ local function insert_audio_clips(plan, next_id)
             track_id              = tgt.track_id,
             sequence_id    = plan.nested.id,
             name                  = plan.base_name,
-            timeline_start_frame  = plan.start_frame,
+            sequence_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
             source_in_frame       = a_in,
             source_out_frame      = a_in + tgt.source_out,
@@ -543,7 +543,7 @@ local function snapshot_bounds(e)
     return {
         id = e.id,
         prior = {
-            timeline_start_frame = e.timeline_start_frame,
+            sequence_start_frame = e.sequence_start_frame,
             duration_frames      = e.duration_frames,
             source_in_frame      = e.source_in_frame,
             source_out_frame     = e.source_out_frame,
@@ -572,18 +572,18 @@ local function occlude_full_cover(e)
 end
 
 local function occlude_trim_tail(e, owner_seq, nested, n_start)
-    local new_duration = n_start - e.timeline_start_frame
+    local new_duration = n_start - e.sequence_start_frame
     local source_delta = owner_to_source_delta(
         e, owner_seq, nested, e.duration_frames - new_duration)
     local snap = snapshot_bounds(e)
     Clip.update_bounds(e.id,
-        e.timeline_start_frame, new_duration,
+        e.sequence_start_frame, new_duration,
         e.source_in_frame, e.source_out_frame - source_delta)
     return { trimmed = snap }
 end
 
 local function occlude_trim_head(e, owner_seq, nested, n_end)
-    local shift        = n_end - e.timeline_start_frame
+    local shift        = n_end - e.sequence_start_frame
     local new_duration = e.duration_frames - shift
     local source_delta = owner_to_source_delta(e, owner_seq, nested, shift)
     local snap = snapshot_bounds(e)
@@ -594,16 +594,16 @@ local function occlude_trim_head(e, owner_seq, nested, n_end)
 end
 
 local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
-    local e_end           = e.timeline_start_frame + e.duration_frames
-    local left_duration   = n_start - e.timeline_start_frame
+    local e_end           = e.sequence_start_frame + e.duration_frames
+    local left_duration   = n_start - e.sequence_start_frame
     local right_duration  = e_end - n_end
     local left_source_delta = owner_to_source_delta(
         e, owner_seq, nested, e.duration_frames - left_duration)
     local right_source_delta = owner_to_source_delta(
-        e, owner_seq, nested, n_end - e.timeline_start_frame)
+        e, owner_seq, nested, n_end - e.sequence_start_frame)
     local snap = snapshot_bounds(e)
     Clip.update_bounds(e.id,
-        e.timeline_start_frame, left_duration,
+        e.sequence_start_frame, left_duration,
         e.source_in_frame, e.source_out_frame - left_source_delta)
     local right_id = Clip.create({
         id                    = uuid.generate(),
@@ -612,7 +612,7 @@ local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
         track_id              = e.track_id,
         sequence_id    = e.sequence_id,
         name                  = e.name,
-        timeline_start_frame  = n_end,
+        sequence_start_frame  = n_end,
         duration_frames       = right_duration,
         source_in_frame       = e.source_in_frame + right_source_delta,
         source_out_frame      = e.source_out_frame,
@@ -648,8 +648,8 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
         assert(nested, string.format(
             "place_shared.occlude_track: nested %s of clip %s not found",
             tostring(e.sequence_id), tostring(e.id)))
-        local e_end = e.timeline_start_frame + e.duration_frames
-        local kind  = classify_overlap(e.timeline_start_frame, e_end, n_start, n_end)
+        local e_end = e.sequence_start_frame + e.duration_frames
+        local kind  = classify_overlap(e.sequence_start_frame, e_end, n_start, n_end)
         local out
         if kind == "full_cover" then
             out = occlude_full_cover(e)
@@ -662,7 +662,7 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
         else
             error(string.format(
                 "place_shared.occlude_track: unreachable case — clip=%s "
-                .. "E=[%d,%d) N=[%d,%d)", e.id, e.timeline_start_frame, e_end,
+                .. "E=[%d,%d) N=[%d,%d)", e.id, e.sequence_start_frame, e_end,
                 n_start, n_end))
         end
         if out.deleted      then deleted_rows[#deleted_rows + 1]   = out.deleted   end
@@ -678,10 +678,10 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
 end
 
 --- Split any clip on `track_id` that strictly straddles `position`
---- (timeline_start < position < timeline_start + duration) into a left
+--- (sequence_start < position < sequence_start + duration) into a left
 --- half ending at position and a right half starting at position. The
 --- caller's subsequent ripple_track_forward(track_id, position, shift)
---- picks up the new right-half (its timeline_start_frame == position) and
+--- picks up the new right-half (its sequence_start_frame == position) and
 --- shifts it forward by `shift` along with everything downstream.
 ---
 --- Net effect for an Insert at mid-clip: A becomes [orig_start, position),
@@ -710,7 +710,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
     -- find_overlapping_on_track requires hi > lo, so use [position, position+1).
     local candidates = Clip.find_overlapping_on_track(track_id, position, position + 1)
     for _, e in ipairs(candidates) do
-        local e_start = e.timeline_start_frame
+        local e_start = e.sequence_start_frame
         local e_end   = e_start + e.duration_frames
         if e_start < position and e_end > position then
             local nested = Sequence.find(e.sequence_id)
@@ -728,7 +728,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
             trimmed[#trimmed + 1] = {
                 id = e.id,
                 prior = {
-                    timeline_start_frame = e.timeline_start_frame,
+                    sequence_start_frame = e.sequence_start_frame,
                     duration_frames      = e.duration_frames,
                     source_in_frame      = e.source_in_frame,
                     source_out_frame     = e.source_out_frame,
@@ -739,7 +739,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
             -- the left half first (frees [position, e_end)), then create
             -- the right half into that freed range. Mirrors split_clip.lua.
             Clip.update_bounds(e.id,
-                e.timeline_start_frame, left_duration,
+                e.sequence_start_frame, left_duration,
                 e.source_in_frame, e.source_in_frame + source_offset)
 
             local right_id = uuid.generate()
@@ -750,7 +750,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
                 track_id              = e.track_id,
                 sequence_id    = e.sequence_id,
                 name                  = e.name,
-                timeline_start_frame  = position,
+                sequence_start_frame  = position,
                 duration_frames       = right_duration,
                 source_in_frame       = e.source_in_frame + source_offset,
                 source_out_frame      = e.source_out_frame,

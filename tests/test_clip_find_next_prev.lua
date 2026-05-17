@@ -50,14 +50,14 @@ local Sequence = require("models.sequence")
 Sequence.ensure_master("media_a", "proj", { id = "master_a" })
 
 -- Layout on track v1:
---   clip_1: frames [0, 48)    (timeline_start=0, duration=48)
+--   clip_1: frames [0, 48)    (sequence_start=0, duration=48)
 --   gap:    frames [48, 100)
---   clip_2: frames [100, 200) (timeline_start=100, duration=100)
---   clip_3: frames [200, 300) (timeline_start=200, duration=100, DISABLED)
---   clip_4: frames [300, 400) (timeline_start=300, duration=100)
+--   clip_2: frames [100, 200) (sequence_start=100, duration=100)
+--   clip_3: frames [200, 300) (sequence_start=200, duration=100, DISABLED)
+--   clip_4: frames [300, 400) (sequence_start=300, duration=100)
 assert(db:exec([[
     INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, sequence_id,
-                     timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                     sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
                      master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                      enabled, volume, playhead_frame, created_at, modified_at)
     VALUES

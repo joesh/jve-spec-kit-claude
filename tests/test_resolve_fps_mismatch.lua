@@ -43,7 +43,7 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'x', '/tmp/25fps.mov', 100, 25, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'm25', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 
@@ -52,12 +52,12 @@ assert(db:exec(
 -- Clip B: passthrough. Expected duration_frames (outer 24fps) = 100 (same int).
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-resample', 'p1', 'e24', 'e-v1', 'm25', 'A', 0, 96, 0, 100, 'resample', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-passthru', 'p1', 'e24', 'e-v1', 'm25', 'B', 200, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 

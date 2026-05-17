@@ -51,7 +51,7 @@ local function build_fixture()
         UPDATE sequences SET default_video_layer_track_id = 'other-v1' WHERE id = 'other';
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

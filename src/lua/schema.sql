@@ -214,7 +214,7 @@ CREATE TABLE IF NOT EXISTS media_refs (
     source_out_frame INTEGER NOT NULL,
 
     -- Where on the master's track this portion sits.
-    timeline_start_frame INTEGER NOT NULL,
+    sequence_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
     -- Source timebase is the referenced media's (media.fps_numerator/denominator);
@@ -255,12 +255,12 @@ CREATE TABLE IF NOT EXISTS clips (
     source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
 
-    -- Where on this sequence's track the clip sits. timeline_start_frame and
+    -- Where on this sequence's track the clip sits. sequence_start_frame and
     -- duration_frames are in the OWNER sequence's timebase; source_in/out are
     -- in the source sequence's timebase. The ratio between them is set by
     -- fps_mismatch_policy below. Neither timebase is carried on this row —
     -- callers dereference owner_sequence_id / sequence_id as needed.
-    timeline_start_frame INTEGER NOT NULL,
+    sequence_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
     -- Per-clip video-layer override. Non-NULL = this clip exposes the named
@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS clips (
 CREATE INDEX IF NOT EXISTS idx_clips_owner_sequence ON clips(owner_sequence_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
 CREATE INDEX IF NOT EXISTS idx_clips_sequence ON clips(sequence_id);
-CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
+CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, sequence_start_frame);
 
 -- ============================================================================
 -- CLIP LINKS (V+A sync — scope narrowed to clips only, media_refs don't link)
@@ -536,19 +536,19 @@ WHEN EXISTS (
 BEGIN
     SELECT CASE
     WHEN coalesce((
-        SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
+        SELECT (c.sequence_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame < NEW.timeline_start_frame
-        ORDER BY c.timeline_start_frame DESC LIMIT 1
-    ), NEW.timeline_start_frame) > NEW.timeline_start_frame
+          AND c.sequence_start_frame < NEW.sequence_start_frame
+        ORDER BY c.sequence_start_frame DESC LIMIT 1
+    ), NEW.sequence_start_frame) > NEW.sequence_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame >= NEW.timeline_start_frame
-          AND c.timeline_start_frame < (NEW.timeline_start_frame + NEW.duration_frames)
+          AND c.sequence_start_frame >= NEW.sequence_start_frame
+          AND c.sequence_start_frame < (NEW.sequence_start_frame + NEW.duration_frames)
         LIMIT 1
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;
@@ -563,19 +563,19 @@ WHEN EXISTS (
 BEGIN
     SELECT CASE
     WHEN coalesce((
-        SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
+        SELECT (c.sequence_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame < NEW.timeline_start_frame
-        ORDER BY c.timeline_start_frame DESC LIMIT 1
-    ), NEW.timeline_start_frame) > NEW.timeline_start_frame
+          AND c.sequence_start_frame < NEW.sequence_start_frame
+        ORDER BY c.sequence_start_frame DESC LIMIT 1
+    ), NEW.sequence_start_frame) > NEW.sequence_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame >= NEW.timeline_start_frame
-          AND c.timeline_start_frame < (NEW.timeline_start_frame + NEW.duration_frames)
+          AND c.sequence_start_frame >= NEW.sequence_start_frame
+          AND c.sequence_start_frame < (NEW.sequence_start_frame + NEW.duration_frames)
         LIMIT 1
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;

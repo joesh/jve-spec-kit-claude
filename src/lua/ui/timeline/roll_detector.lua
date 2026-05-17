@@ -64,7 +64,7 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
                     end
 
                     if left_clip and right_clip then
-                        if left_clip.timeline_start > right_clip.timeline_start then
+                        if left_clip.sequence_start > right_clip.sequence_start then
                             left_clip, right_clip = right_clip, left_clip
                             left_distance, right_distance = right_distance, left_distance
                         end
@@ -77,7 +77,7 @@ function RollDetector.find_best_roll_pair(entries, click_x, viewport_width, dete
                             local right_target = {clip_id = right_clip.id, edge_type = "in"}
                             local selection = build_selection(left_target, right_target)
                             local pair_meta = {
-                                edit_time = left_clip.timeline_start + left_clip.duration,
+                                edit_time = left_clip.sequence_start + left_clip.duration,
                                 left_target = left_target,
                                 right_target = right_target,
                                 roll_kind = "clip_clip"

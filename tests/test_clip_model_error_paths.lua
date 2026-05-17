@@ -93,7 +93,7 @@ expect_error("timeline clip missing track_id", function()
         project_id = "proj1",
         sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -110,7 +110,7 @@ expect_error("timeline clip missing owner_sequence_id", function()
         project_id = "proj1",
         track_id = "track1",
         sequence_id = "mc1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -138,7 +138,7 @@ local valid_id = Clip.create({
         track_id = "track1",
         sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -149,8 +149,8 @@ local valid_id = Clip.create({
     })
 local clip = Clip.load(valid_id)
 check("create with integers succeeds", clip ~= nil)
-check("timeline_start is integer", type(clip.timeline_start) == "number")
-check("timeline_start value is 0", clip.timeline_start == 0)
+check("sequence_start is integer", type(clip.sequence_start) == "number")
+check("sequence_start value is 0", clip.sequence_start == 0)
 check("duration is integer", type(clip.duration) == "number")
 check("duration value is 100", clip.duration == 100)
 
@@ -167,7 +167,7 @@ local bad_clip_id = Clip.create({
         track_id = "track1",
         sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -180,13 +180,13 @@ local bad_clip_id = Clip.create({
 local bad_clip = Clip.load(bad_clip_id)
 
 -- Corrupt the clip by setting a table value
-bad_clip.timeline_start = { frames = 50 }
-expect_error("save with table timeline_start asserts", function()
+bad_clip.sequence_start = { frames = 50 }
+expect_error("save with table sequence_start asserts", function()
     bad_clip:save(db)
 end, "must be integer")
 
 -- Fix it and try again
-bad_clip.timeline_start = 50
+bad_clip.sequence_start = 50
 bad_clip.duration = { frames = 100 }
 expect_error("save with table duration asserts", function()
     bad_clip:save(db)
@@ -201,7 +201,7 @@ print("\n--- load: returns integers ---")
 -- First save a valid clip via raw SQL (mc1 master sequence already exists from earlier ensure_master)
 db:exec(string.format([[
 INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id,
-                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+                    sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
                     enabled, created_at, modified_at,
                     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                     volume, playhead_frame)
@@ -212,8 +212,8 @@ VALUES
 
 local loaded = Clip.load("load_test_1", db)
 check("load returns clip", loaded ~= nil)
-check("loaded timeline_start is integer", type(loaded.timeline_start) == "number")
-check("loaded timeline_start value", loaded.timeline_start == 500)
+check("loaded sequence_start is integer", type(loaded.sequence_start) == "number")
+check("loaded sequence_start value", loaded.sequence_start == 500)
 check("loaded duration is integer", type(loaded.duration) == "number")
 check("loaded duration value", loaded.duration == 50)
 check("loaded source_in is integer", type(loaded.source_in) == "number")

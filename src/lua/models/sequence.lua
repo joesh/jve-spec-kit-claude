@@ -606,8 +606,8 @@ end
 ---     present (default_video_layer_track_id must be non-NULL when video tracks exist).
 ---
 --- Per-track unit convention (matching the established CT-R5/CT-R6 fixtures
---- and pre-013 ensure_masterclip): video media_refs measure timeline_start
---- and source in master.fps frames; audio media_refs measure timeline_start
+--- and pre-013 ensure_masterclip): video media_refs measure sequence_start
+--- and source in master.fps frames; audio media_refs measure sequence_start
 --- and source in samples at the file's audio_sample_rate. The resolver
 --- compares within-track and never crosses tracks in a single arithmetic
 --- expression, so the per-track unit is internally consistent.
@@ -732,7 +732,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
     end
 
     -- Master sequence's timebase IS absolute TC space. Each media_ref sits
-    -- at timeline_start = file's TC origin and spans [tc_origin, tc_origin
+    -- at sequence_start = file's TC origin and spans [tc_origin, tc_origin
     -- + file_duration]. Clips reference absolute TC into this timebase;
     -- C++ decode recovers file position via file_pos = source_in -
     -- file_tc_origin. The range [0, tc_origin) is empty (no media there).
@@ -749,7 +749,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             media_id             = media_id,
             source_in_frame      = dims.video_tc,
             source_out_frame     = dims.video_tc + dims.duration_frames,
-            timeline_start_frame = dims.video_tc,
+            sequence_start_frame = dims.video_tc,
             duration_frames      = dims.duration_frames,
             enabled              = true,
             volume               = 1.0,
@@ -780,7 +780,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 media_id             = media_id,
                 source_in_frame      = dims.audio_tc,
                 source_out_frame     = dims.audio_tc + dims.duration_samples,
-                timeline_start_frame = dims.audio_tc,
+                sequence_start_frame = dims.audio_tc,
                 duration_frames      = dims.duration_samples,
                 enabled              = true,
                 volume               = 1.0,
@@ -870,7 +870,7 @@ end
 --- V13: enumerate the media_refs inside a kind='master' sequence as
 -- "stream clips" for legacy callers. Each returned record is shaped to
 -- match the V8 clip-stream contract that callers depend on:
---   .id, .track_id, .timeline_start, .duration,
+--   .id, .track_id, .sequence_start, .duration,
 --   .source_in, .source_out, .media_id,
 --   .frame_rate = {fps_numerator, fps_denominator} for video streams,
 --   .sample_rate = N (Hz, integer) for audio streams.
@@ -916,10 +916,10 @@ local function ensure_stream_clips(self)
         local out = {}
         local stmt = conn:prepare([[
             SELECT id, track_id, media_id, source_in_frame, source_out_frame,
-                   timeline_start_frame, duration_frames,
+                   sequence_start_frame, duration_frames,
                    enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
             FROM media_refs WHERE track_id = ?
-            ORDER BY timeline_start_frame ASC
+            ORDER BY sequence_start_frame ASC
         ]])
         assert(stmt, "ensure_stream_clips: media_refs prepare failed")
         stmt:bind_value(1, track_id)
@@ -931,7 +931,7 @@ local function ensure_stream_clips(self)
                 media_id       = stmt:value(2),
                 source_in      = stmt:value(3),
                 source_out     = stmt:value(4),
-                timeline_start = stmt:value(5),
+                sequence_start = stmt:value(5),
                 duration       = stmt:value(6),
                 enabled        = stmt:value(7) == 1,
                 volume         = stmt:value(8),
@@ -1205,15 +1205,15 @@ end
 -- "Frames are frames": source_frame = source_in + timeline_offset (1:1 mapping).
 -- A 24fps clip on a 30fps timeline plays each source frame at 1/30s — the clip
 -- runs faster. No rate conversion here; the speed conform is intended behavior.
--- @param clip Clip object (timeline_start, source_in, rate)
+-- @param clip Clip object (sequence_start, source_in, rate)
 -- @param playhead_frame integer playhead position in timeline frames
 -- @return source_time_us (integer microseconds), source_frame (integer)
 local function calc_source_time_us(clip, playhead_frame)
     assert(type(playhead_frame) == "number", "Sequence: playhead must be integer")
-    assert(type(clip.timeline_start) == "number", "Sequence: timeline_start must be integer")
+    assert(type(clip.sequence_start) == "number", "Sequence: sequence_start must be integer")
     assert(type(clip.source_in) == "number", "Sequence: source_in must be integer")
 
-    local offset_frames = playhead_frame - clip.timeline_start
+    local offset_frames = playhead_frame - clip.sequence_start
     local source_frame = clip.source_in + offset_frames
 
     local clip_rate = clip.frame_rate
@@ -1238,7 +1238,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
     for _, track in ipairs(tracks) do
         local stmt = assert(conn:prepare([[
             SELECT id, media_id, source_in_frame, source_out_frame,
-                   timeline_start_frame, duration_frames, enabled, volume
+                   sequence_start_frame, duration_frames, enabled, volume
               FROM media_refs WHERE track_id = ? LIMIT 1
         ]]), "Sequence:resolve_master_at: prepare failed")
         stmt:bind_value(1, track.id)
@@ -1249,7 +1249,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
                 media_id       = stmt:value(1),
                 source_in      = stmt:value(2),
                 source_out     = stmt:value(3),
-                timeline_start = stmt:value(4),
+                sequence_start = stmt:value(4),
                 duration       = stmt:value(5),
                 enabled        = stmt:value(6) == 1,
                 volume         = stmt:value(7),
@@ -1257,13 +1257,13 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
         end
         stmt:finalize()
         if row then
-            local mr_end = row.timeline_start + row.duration
-            if playhead_frame >= row.timeline_start and playhead_frame < mr_end then
+            local mr_end = row.sequence_start + row.duration
+            if playhead_frame >= row.sequence_start and playhead_frame < mr_end then
                 local mr = {
                     id                = row.id,
                     track_id          = track.id,
                     sequence_id = self.id,
-                    timeline_start    = row.timeline_start,
+                    sequence_start    = row.sequence_start,
                     duration          = row.duration,
                     source_in         = row.source_in,
                     source_out        = row.source_out,
@@ -1410,7 +1410,7 @@ function Sequence:get_next_video(after_frame)
                 "Sequence:get_next_video: clip %s references missing media %s",
                 clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- source_frame at clip start = source_in
-            local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+            local source_time_us, source_frame = calc_source_time_us(clip, clip.sequence_start)
             results[#results + 1] = {
                 media_path = media.file_path,
                 source_time_us = source_time_us,
@@ -1446,7 +1446,7 @@ function Sequence:get_prev_video(before_frame)
                 "Sequence:get_prev_video: clip %s references missing media %s",
                 clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- Source position at clip END (last frame): reverse playback enters here
-            local last_frame = clip.timeline_start + clip.duration - 1
+            local last_frame = clip.sequence_start + clip.duration - 1
             local source_time_us, source_frame = calc_source_time_us(clip, last_frame)
             results[#results + 1] = {
                 media_path = media.file_path,
@@ -1482,7 +1482,7 @@ function Sequence:get_next_audio(after_frame)
             assert(media, string.format(
                 "Sequence:get_next_audio: clip %s references missing media %s",
                 clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
-            local source_time_us, source_frame = calc_source_time_us(clip, clip.timeline_start)
+            local source_time_us, source_frame = calc_source_time_us(clip, clip.sequence_start)
             results[#results + 1] = {
                 media_path = media.file_path,
                 source_time_us = source_time_us,
@@ -1520,7 +1520,7 @@ function Sequence:get_prev_audio(before_frame)
                 "Sequence:get_prev_audio: clip %s references missing media %s",
                 clip.id, tostring(clip.resolved_media and clip.resolved_media.id)))
             -- Source position at clip END (last frame): reverse playback enters here
-            local last_frame = clip.timeline_start + clip.duration - 1
+            local last_frame = clip.sequence_start + clip.duration - 1
             local source_time_us, source_frame = calc_source_time_us(clip, last_frame)
             results[#results + 1] = {
                 media_path = media.file_path,
@@ -1540,7 +1540,7 @@ end
 -- consumers (playback_engine, render preview, integration tests) read
 -- fields directly off the entry — no entry.clip / entry.track / .media_fps_*
 -- nesting. Each entry describes the OUTERMOST owner's full owner-coord
--- extent (timeline_start, duration), media-file source range (source_in,
+-- extent (sequence_start, duration), media-file source range (source_in,
 -- source_out), and routing (track_index, track_type). The leaf media's
 -- native rate rides along as fps_numerator / fps_denominator so consumers
 -- can compute speed ratios without re-loading the Media row.
@@ -1548,7 +1548,7 @@ end
 -- Promote a resolver internal entry to the public flat shape. Tags
 -- already on the entry from resolve_nested / resolve_master_leaf:
 -- owner_clip_id, owner_track_index, owner_track_type. Outer-coord
--- timeline_start / duration are already set to the outermost extent
+-- sequence_start / duration are already set to the outermost extent
 -- because resolve_nested recurses with each clip's full source window
 -- (not intersected with the playback window), and translate_to_outer
 -- maps that to the outer clip's full extent. media_cache reuses Media
@@ -1588,8 +1588,8 @@ local function filter_and_finalize(entries, kind, from_frame, to_frame)
     local cache = {}
     for _, e in ipairs(entries) do
         if e.media_kind == kind and e.media_path and e.media_path ~= "" then
-            local e_lo = e.timeline_start
-            local e_hi = e.timeline_start + e.duration
+            local e_lo = e.sequence_start
+            local e_hi = e.sequence_start + e.duration
             if e_hi > from_frame and e_lo < to_frame then
                 out[#out + 1] = finalize_to_flat(e, cache)
             end
@@ -1669,7 +1669,7 @@ function Sequence:get_track_indices(track_type)
 end
 
 --- Compute the furthest clip end frame in this sequence.
--- Returns max(timeline_start + duration) across all clips on all tracks.
+-- Returns max(sequence_start + duration) across all clips on all tracks.
 -- @return integer  0 if no clips
 function Sequence:compute_content_end()
     -- V13: master sequences hold media_refs (not clips). Delegate to
@@ -1683,7 +1683,7 @@ function Sequence:compute_content_end()
     local db = database.get_connection()
 
     local stmt = db:prepare([[
-        SELECT MAX(c.timeline_start_frame + c.duration_frames)
+        SELECT MAX(c.sequence_start_frame + c.duration_frames)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ?
@@ -1703,12 +1703,12 @@ function Sequence:compute_content_end()
 end
 
 --- Content duration in frames.
--- For master sequences (V13 kind='master'): max(timeline_start_frame +
+-- For master sequences (V13 kind='master'): max(sequence_start_frame +
 --   duration_frames) across V media_refs. (Falls back to the audio
 --   media_refs' max if no video.) Computed via the existing
 --   Sequence.native_duration_for_medium helper which already returns
 --   the correct value for either medium.
--- For non-master sequences (kind='sequence'): max(timeline_start +
+-- For non-master sequences (kind='sequence'): max(sequence_start +
 --   duration) across track clips, computed by compute_content_end().
 -- @return integer  0 if no content
 function Sequence:content_duration()
@@ -1765,10 +1765,10 @@ end
 -- was a unit confusion):
 --   * media_refs.source_in_frame / source_out_frame  — file-native units
 --     (video frames at the file's fps, or audio samples at its rate).
---   * media_refs.timeline_start_frame                 — master-timebase units.
+--   * media_refs.sequence_start_frame                 — master-timebase units.
 --   * clips.source_in_frame / source_out_frame        — nested-sequence units
 --     (i.e. nested.fps frames, sample units for an audio clip).
---   * clips.timeline_start_frame / duration_frames    — owner-sequence units.
+--   * clips.sequence_start_frame / duration_frames    — owner-sequence units.
 --   * The fps_mismatch_policy was applied at Insert/Set time, so the ratio
 --     between owner-units and source-units is exactly
 --       owner_per_source = c.duration_frames / (c.source_out - c.source_in)
@@ -1778,8 +1778,8 @@ end
 -- First-landing assumption: `master.fps == media.fps` for each media_ref
 -- (multi-fps masters defer to a later feature). With this assumption the
 -- master-timebase units coincide with file-native units 1:1, and a media_ref
--- placed at master_lo plays file frames [mr.source_in + (mr_lo - mr.timeline_start),
--- mr.source_in + (mr_hi - mr.timeline_start)).
+-- placed at master_lo plays file frames [mr.source_in + (mr_lo - mr.sequence_start),
+-- mr.source_in + (mr_hi - mr.sequence_start)).
 
 -- Fetch a sequence's kind. Asserts it exists.
 local function fetch_kind(db, seq_id)
@@ -1894,7 +1894,7 @@ end
 local function list_media_refs(db, master_seq_id, only_track_id)
     local sql = [[
         SELECT mr.id, mr.track_id, mr.media_id, mr.source_in_frame, mr.source_out_frame,
-               mr.timeline_start_frame, mr.duration_frames,
+               mr.sequence_start_frame, mr.duration_frames,
                mr.enabled, mr.volume,
                t.track_type, t.track_index,
                m.file_path, m.audio_channels
@@ -1904,7 +1904,7 @@ local function list_media_refs(db, master_seq_id, only_track_id)
         WHERE mr.owner_sequence_id = ?
     ]]
     if only_track_id then sql = sql .. " AND mr.track_id = ?" end
-    sql = sql .. " ORDER BY t.track_type DESC, t.track_index ASC, mr.timeline_start_frame ASC"
+    sql = sql .. " ORDER BY t.track_type DESC, t.track_index ASC, mr.sequence_start_frame ASC"
     local stmt = db:prepare(sql)
     assert(stmt, "Sequence.resolve: list_media_refs prepare failed")
     stmt:bind_value(1, master_seq_id)
@@ -1918,7 +1918,7 @@ local function list_media_refs(db, master_seq_id, only_track_id)
             media_id = stmt:value(2),
             source_in = stmt:value(3),
             source_out = stmt:value(4),
-            timeline_start = stmt:value(5),
+            sequence_start = stmt:value(5),
             duration = stmt:value(6),
             enabled = stmt:value(7) == 1,
             volume = stmt:value(8),
@@ -1934,12 +1934,12 @@ end
 
 -- Enumerate clips on a nested sequence that overlap [start, end) in this
 -- sequence's timebase. Sorted by track_type (VIDEO before AUDIO) then track
--- index ascending, then timeline_start ascending — so the output of a sequence
+-- index ascending, then sequence_start ascending — so the output of a sequence
 -- with many clips is deterministic (G-R11).
 local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
     local stmt = db:prepare([[
         SELECT c.id, c.track_id, c.sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -1949,10 +1949,10 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
         JOIN tracks t ON c.track_id = t.id
         WHERE c.owner_sequence_id = ?
           AND c.enabled = 1
-          AND (c.timeline_start_frame + c.duration_frames) > ?
-          AND c.timeline_start_frame < ?
+          AND (c.sequence_start_frame + c.duration_frames) > ?
+          AND c.sequence_start_frame < ?
         ORDER BY t.track_type DESC, t.track_index ASC,
-                 c.timeline_start_frame ASC, c.id ASC
+                 c.sequence_start_frame ASC, c.id ASC
     ]])
     assert(stmt, "Sequence.resolve: list_clips prepare failed")
     stmt:bind_value(1, seq_id)
@@ -1965,7 +1965,7 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
             id = stmt:value(0),
             track_id = stmt:value(1),
             sequence_id = stmt:value(2),
-            timeline_start = stmt:value(3),
+            sequence_start = stmt:value(3),
             duration = stmt:value(4),
             source_in = stmt:value(5),
             source_out = stmt:value(6),
@@ -2016,8 +2016,8 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
     local all = list_media_refs(db, seq_id, nil)
 
     for _, r in ipairs(all) do
-        local r_lo = r.timeline_start
-        local r_hi = r.timeline_start + r.duration
+        local r_lo = r.sequence_start
+        local r_hi = r.sequence_start + r.duration
         local include
         if r.track_type == "VIDEO" and layer_track_id ~= nil then
             include = (r.track_id == layer_track_id)
@@ -2029,8 +2029,8 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
         if include and r_hi > master_lo and r_lo < master_hi then
             local lo = math.max(r_lo, master_lo)
             local hi = math.min(r_hi, master_hi)
-            local file_in  = r.source_in + (lo - r.timeline_start)
-            local file_out = r.source_in + (hi - r.timeline_start)
+            local file_in  = r.source_in + (lo - r.sequence_start)
+            local file_out = r.source_in + (hi - r.sequence_start)
             -- Pass media_path AND user-set enabled state through unchanged
             -- regardless of online/offline. Offline routing is the
             -- responsibility of downstream consumers:
@@ -2047,7 +2047,7 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                 media_id       = r.media_id,
                 source_in      = file_in,
                 source_out     = file_out,
-                timeline_start = lo,            -- master coords; outer translates
+                sequence_start = lo,            -- master coords; outer translates
                 duration       = hi - lo,       -- master coords
                 volume         = r.volume,      -- leaf media_ref's own volume
                 enabled        = r.enabled,
@@ -2080,7 +2080,7 @@ local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
                         media_kind     = "audio",
                         source_in      = base.source_in,
                         source_out     = base.source_out,
-                        timeline_start = base.timeline_start,
+                        sequence_start = base.sequence_start,
                         duration       = base.duration,
                         track_role     = "audio",
                         channel_index  = ch,
@@ -2117,9 +2117,9 @@ local function translate_to_outer(e, c, source_lo)
     -- at Insert/Set time when c.duration_frames was written).
     local source_span = c.source_out - c.source_in
     local owner_per_source = c.duration / source_span
-    local outer_offset_lo = (e.timeline_start - source_lo) * owner_per_source
+    local outer_offset_lo = (e.sequence_start - source_lo) * owner_per_source
     local outer_dur       = e.duration * owner_per_source
-    e.timeline_start = c.timeline_start + round_int(outer_offset_lo
+    e.sequence_start = c.sequence_start + round_int(outer_offset_lo
         + (source_lo - c.source_in) * owner_per_source)
     e.duration       = round_int(outer_dur)
     return e
@@ -2235,7 +2235,7 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             for _, e in ipairs(inner) do
                 if e.media_kind == want_kind then
                     -- Translate master-coord -> outer-coord; the inner
-                    -- entry's timeline_start/duration are in this clip's
+                    -- entry's sequence_start/duration are in this clip's
                     -- nested-timebase, so we use this clip's source ratio.
                     translate_to_outer(e, c, c.source_in)
 
@@ -2504,7 +2504,7 @@ end
 --- a single medium. A master's VIDEO duration is in video frames at the
 --- master's fps; its AUDIO duration is in audio samples at its audio_sample_rate —
 --- the two are in different units, so the caller must specify which.
---- Computed as max(timeline_start_frame + duration_frames) across media_refs
+--- Computed as max(sequence_start_frame + duration_frames) across media_refs
 --- (for a master) OR clips (for a nested sequence) on tracks of the given
 --- type. Returns 0 if no content of that medium exists.
 function Sequence.native_duration_for_medium(id, track_type)
@@ -2514,7 +2514,7 @@ function Sequence.native_duration_for_medium(id, track_type)
         "Sequence.native_duration_for_medium: track_type must be VIDEO or AUDIO")
     local conn = resolve_db()
     -- Return the SPAN (length), not the absolute end frame. Master-sequence
-    -- media_refs sit at timeline_start_frame = file_tc_origin (TIMECODE-IS-
+    -- media_refs sit at sequence_start_frame = file_tc_origin (TIMECODE-IS-
     -- TRUTH memory), so MAX(start+duration) on its own equals
     -- tc_origin + actual_duration — wrong as a "how long is this content"
     -- answer. Callers (place_shared.compute_owner_duration et al.) treat
@@ -2522,14 +2522,14 @@ function Sequence.native_duration_for_medium(id, track_type)
     -- the end-frame produces wildly oversized clips.
     local stmt = conn:prepare([[
         SELECT COALESCE(
-            MAX(r.timeline_start_frame + r.duration_frames)
-              - MIN(r.timeline_start_frame),
+            MAX(r.sequence_start_frame + r.duration_frames)
+              - MIN(r.sequence_start_frame),
             0)
         FROM (
-            SELECT track_id, timeline_start_frame, duration_frames
+            SELECT track_id, sequence_start_frame, duration_frames
               FROM media_refs WHERE owner_sequence_id = ?
             UNION ALL
-            SELECT track_id, timeline_start_frame, duration_frames
+            SELECT track_id, sequence_start_frame, duration_frames
               FROM clips WHERE owner_sequence_id = ?
         ) r
         JOIN tracks t ON r.track_id = t.id

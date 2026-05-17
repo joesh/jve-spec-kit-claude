@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 -- Regression: undoing SetClipProperty on a top-level clip column
--- (duration, timeline_start, source_in, source_out) must restore the
+-- (duration, sequence_start, source_in, source_out) must restore the
 -- clip's previous column value — not nil.
 --
 -- Before the fix: the executor snapshotted `previous_value` from the
@@ -70,7 +70,7 @@ db:exec(string.format([[
     VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v' WHERE id = 'mc_seq';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+        source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mc_seq_mr', 'p1', 'mc_seq', 'mc_seq_v', 'mc_media',
         0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
@@ -80,7 +80,7 @@ do
     local stmt = db:prepare([[
         INSERT INTO clips (id, project_id, owner_sequence_id, sequence_id,
             track_id, name,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+            sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'resample', ?, ?, ?, ?, ?)
@@ -177,7 +177,7 @@ assert(get_cached_name() == "Original", string.format(
     "after name undo: expected 'Original', got %s", tostring(get_cached_name())))
 
 -- ----------------------------------------------------------------------
--- Check 5: the full MUTATION_KEY set — timeline_start, source_in,
+-- Check 5: the full MUTATION_KEY set — sequence_start, source_in,
 -- source_out, enabled. set_clip_property.lua maps each of these clip-
 -- column property names onto a specific `_value`-suffixed key in the
 -- __timeline_mutations payload; if ANY mapping regresses, the cache
@@ -195,7 +195,7 @@ local function get_cached_field(field)
 end
 
 local cases = {
-    { field = "timeline_start", type = "NUMBER",  new = 42,    old = 0   },
+    { field = "sequence_start", type = "NUMBER",  new = 42,    old = 0   },
     { field = "source_in",      type = "NUMBER",  new = 30,    old = 0   },
     { field = "source_out",     type = "NUMBER",  new = 200,   old = 120 },
     { field = "enabled",        type = "BOOLEAN", new = false, old = true},

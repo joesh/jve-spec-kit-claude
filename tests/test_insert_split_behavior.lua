@@ -86,7 +86,7 @@ local clip_a = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -104,7 +104,7 @@ local clip_c = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 200,
         source_out_frame = 300,
@@ -138,7 +138,7 @@ local cmd = Command.create("Insert", "project")
 cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 cmd:set_parameter("clip_name", "Clip B")
 
 -- Register Insert Command
@@ -163,7 +163,7 @@ print("✅ Insert succeeded")
 -- Parse result to get output parameters (reference to cmd might not update if copied)
 local executed_cmd = _G.qt_json_decode(result.result_data)
 -- local b_id = executed_cmd.parameters and executed_cmd.parameters.clip_id
-local stmt = db:prepare("SELECT id FROM clips WHERE timeline_start_frame = 50 AND track_id = 'track_v1' AND duration_frames = 20")
+local stmt = db:prepare("SELECT id FROM clips WHERE sequence_start_frame = 50 AND track_id = 'track_v1' AND duration_frames = 20")
 stmt:exec()
 stmt:next()
 local b_id = stmt:value(0)
@@ -218,10 +218,10 @@ else
 end
 
 -- Clip B (Inserted)
-if b_after.timeline_start == 50 then
+if b_after.sequence_start == 50 then
     print("✅ Clip B start is 50 (Correct)")
 else
-    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.timeline_start))
+    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.sequence_start))
     os.exit(1)
 end
 if b_after.duration == 20 then
@@ -233,10 +233,10 @@ end
 
 -- Clip A (Right)
 -- Should start at 50 + 20 = 70.
-if a_right_after.timeline_start == 70 then
+if a_right_after.sequence_start == 70 then
     print("✅ Clip A (Right) start is 70 (Correct)")
 else
-    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.timeline_start))
+    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.sequence_start))
     os.exit(1)
 end
 -- Duration should be 100 - 50 = 50.
@@ -249,10 +249,10 @@ end
 
 -- Clip C (Rippled)
 -- Should start at 200 + 20 = 220.
-if c_after.timeline_start == 220 then
+if c_after.sequence_start == 220 then
     print("✅ Clip C start is 220 (Correct)")
 else
-    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.timeline_start))
+    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.sequence_start))
     os.exit(1)
 end
 

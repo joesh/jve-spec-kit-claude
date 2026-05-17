@@ -91,7 +91,7 @@ local function find_clip_under_cursor(view, x, y, width, height)
     while lo <= hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
-        local start_frames = type(clip.timeline_start) == "number" and clip.timeline_start or nil
+        local start_frames = type(clip.sequence_start) == "number" and clip.sequence_start or nil
         if start_frames and start_frames >= target_frames then
             idx = mid
             hi = mid - 1
@@ -105,7 +105,7 @@ local function find_clip_under_cursor(view, x, y, width, height)
 
     for i = idx, #track_clips do
         local clip = track_clips[i]
-        if type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+        if type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_clip
         end
         -- Gap clips use the separate gap selection path (selected_gaps),
@@ -114,7 +114,7 @@ local function find_clip_under_cursor(view, x, y, width, height)
         if clip.is_gap then
             goto continue_clip
         end
-        local start_frames = clip.timeline_start
+        local start_frames = clip.sequence_start
         if start_frames > target_frames then
             break
         end
@@ -142,14 +142,14 @@ local function find_gap_at_time(view, track_id, time_frame)
     -- at the given time position directly.
     for _, clip in ipairs(clips_on_track) do
         if clip.is_gap
-            and type(clip.timeline_start) == "number"
+            and type(clip.sequence_start) == "number"
             and type(clip.duration) == "number"
             and clip.duration > 0
-            and time_frame >= clip.timeline_start
-            and time_frame < clip.timeline_start + clip.duration then
+            and time_frame >= clip.sequence_start
+            and time_frame < clip.sequence_start + clip.duration then
             return {
                 track_id = track_id,
-                start_value = clip.timeline_start,
+                start_value = clip.sequence_start,
                 duration_value = clip.duration,
                 duration = clip.duration,
                 gap_clip_id = clip.id,
@@ -638,9 +638,9 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 if view.drag_state.type == "edges" then
                     for _, edge in ipairs(view.drag_state.edges) do
                         local c = state.get_clip_by_id and state.get_clip_by_id(edge.clip_id) or nil
-                        if c and c.timeline_start and c.duration then
-                            if edge.edge_type == "in" then edge.original_time = c.timeline_start
-                            elseif edge.edge_type == "out" then edge.original_time = c.timeline_start + c.duration
+                        if c and c.sequence_start and c.duration then
+                            if edge.edge_type == "in" then edge.original_time = c.sequence_start
+                            elseif edge.edge_type == "out" then edge.original_time = c.sequence_start + c.duration
                             end
                         end
                     end
@@ -677,7 +677,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     local best_snap = nil
                     local best_dist = math.huge
                     for _, c in ipairs(view.drag_state.clips) do
-                        local new_in = c.timeline_start + delta
+                        local new_in = c.sequence_start + delta
                         local new_out = new_in + c.duration
                         local ex_in = {{clip_id=c.id, edge_type="in"}}
                         local _, si_in = magnetic_snapping.apply_snap(state, new_in, true, {}, ex_in, width)

@@ -9,8 +9,8 @@
 --   Mutation:
 --     1. For each clip C inside clip.source_sequence_id: UPDATE
 --        owner_sequence_id ← parent; track_id ← parent's equivalent
---        track; timeline_start_frame ← C.timeline_start_frame +
---        (clip.timeline_start_frame - clip.source_in_frame).
+--        track; sequence_start_frame ← C.sequence_start_frame +
+--        (clip.sequence_start_frame - clip.source_in_frame).
 --     2. DELETE the clip row.
 --     3. If the nested sequence has no remaining references, DELETE it
 --        (orphan cleanup).
@@ -52,13 +52,13 @@ local function build_master_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         -- Clip on edit referencing the master directly.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -92,12 +92,12 @@ local function build_nested_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -118,9 +118,9 @@ end
 
 local function clips_in_sequence(db, seq_id)
     local stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames
+        SELECT id, sequence_start_frame, duration_frames
         FROM clips WHERE owner_sequence_id = ?
-        ORDER BY timeline_start_frame ASC, id ASC
+        ORDER BY sequence_start_frame ASC, id ASC
     ]])
     stmt:bind_value(1, seq_id)
     assert(stmt:exec())
@@ -128,7 +128,7 @@ local function clips_in_sequence(db, seq_id)
     while stmt:next() do
         rows[#rows + 1] = {
             id = stmt:value(0),
-            timeline_start = stmt:value(1),
+            sequence_start = stmt:value(1),
             duration = stmt:value(2),
         }
     end
@@ -163,7 +163,7 @@ end
 print("-- CT-C18: expansion + orphan delete --")
 do
     local db, nest_result = build_nested_fixture()
-    -- After Nest: parent has one clip (the replacement) at timeline_start=100,
+    -- After Nest: parent has one clip (the replacement) at sequence_start=100,
     -- duration=300; nested sequence has 3 clips at 0/100/200 of duration 100.
     assert(#clips_in_sequence(db, "e") == 1)
     assert(#clips_in_sequence(db, nest_result.new_sequence_id) == 3)
@@ -177,9 +177,9 @@ do
     local e_clips = clips_in_sequence(db, "e")
     assert(#e_clips == 3, string.format(
         "parent should hold 3 clips after unnest; got %d", #e_clips))
-    assert(e_clips[1].timeline_start == 100
-       and e_clips[2].timeline_start == 200
-       and e_clips[3].timeline_start == 300,
+    assert(e_clips[1].sequence_start == 100
+       and e_clips[2].sequence_start == 200
+       and e_clips[3].sequence_start == 300,
         "clips translated back to original 100/200/300")
 
     -- Original replacement clip is gone.
@@ -203,7 +203,7 @@ do
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

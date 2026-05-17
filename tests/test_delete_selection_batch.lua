@@ -78,7 +78,7 @@ local function insert_clip(conn, id, track_id, start_frames, dur_frames, media_i
         INSERT INTO clips (
             id, project_id, name, track_id,
             owner_sequence_id, sequence_id,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame,
@@ -162,7 +162,7 @@ assert(clip_exists(conn, "c3"), "c3 should be restored")
 
 -- Verify positions restored correctly
 local function clip_start(cid)
-    local q = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local q = conn:prepare("SELECT sequence_start_frame FROM clips WHERE id = ?")
     q:bind_value(1, cid)
     assert(q:exec() and q:next(), "clip not found: " .. cid)
     local v = q:value(0)

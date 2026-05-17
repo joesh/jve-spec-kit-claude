@@ -23,18 +23,18 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 2000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 2000, duration = 1000, source_in = 500 },
         }
     })
 
     -- A1 has a gap [1000..2000]
     local a1_clips = {
-        { id = "clip_a1_left", track_id = "track_a1", timeline_start = 0, duration = 1000,
+        { id = "clip_a1_left", track_id = "track_a1", sequence_start = 0, duration = 1000,
           clip_kind = "sequence", media_id = "media_primary" },
-        { id = "clip_a1_right", track_id = "track_a1", timeline_start = 2000, duration = 1000,
+        { id = "clip_a1_right", track_id = "track_a1", sequence_start = 2000, duration = 1000,
           clip_kind = "sequence", media_id = "media_primary" },
     }
     local a1_gaps = gap_lifecycle.compute_gaps_for_track("track_a1", a1_clips, SEQ_FPS)
@@ -59,9 +59,9 @@ do
     local a1_right = Clip.load("clip_a1_right")
 
     assert(v1_left.duration == 800, string.format("v1_left duration=%d, expected 800", v1_left.duration))
-    assert(v1_right.timeline_start == 800, string.format("v1_right start=%d, expected 800", v1_right.timeline_start))
+    assert(v1_right.sequence_start == 800, string.format("v1_right start=%d, expected 800", v1_right.sequence_start))
     -- A1 right clip should shift left by 200 (gap absorbs)
-    assert(a1_right.timeline_start == 1800, string.format("a1_right start=%d, expected 1800", a1_right.timeline_start))
+    assert(a1_right.sequence_start == 1800, string.format("a1_right start=%d, expected 1800", a1_right.sequence_start))
 
     layout:cleanup()
 end
@@ -76,10 +76,10 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 1000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 1000, duration = 1000, source_in = 500 },
         }
     })
 
@@ -115,10 +115,10 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 1000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 1000, duration = 1000, source_in = 500 },
         }
     })
 
@@ -140,9 +140,9 @@ do
     local a1_right = Clip.load("clip_a1_right")
 
     assert(v1_left.duration == 1200, string.format("v1_left duration=%d, expected 1200", v1_left.duration))
-    assert(v1_right.timeline_start == 1200, string.format("v1_right start=%d, expected 1200", v1_right.timeline_start))
+    assert(v1_right.sequence_start == 1200, string.format("v1_right start=%d, expected 1200", v1_right.sequence_start))
     -- A1 right should shift right by 200
-    assert(a1_right.timeline_start == 1200, string.format("a1_right start=%d, expected 1200", a1_right.timeline_start))
+    assert(a1_right.sequence_start == 1200, string.format("a1_right start=%d, expected 1200", a1_right.sequence_start))
 
     layout:cleanup()
 end

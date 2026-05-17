@@ -20,7 +20,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local points = {0}
 
         for _, clip in ipairs(clips) do
-            local start = clip.timeline_start or clip.start_value
+            local start = clip.sequence_start or clip.start_value
             local duration = clip.duration or clip.duration_value
 
             if type(start) == "number" then

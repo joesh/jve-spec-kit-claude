@@ -27,7 +27,7 @@ local function fresh_state()
         -- Data
         tracks = {},
         clips = {},
-        -- Cached max(timeline_start + duration) across `clips`. Refreshed
+        -- Cached max(sequence_start + duration) across `clips`. Refreshed
         -- by update_content_length(), which writers call after mutating
         -- clips. Read by viewport math (clamp, extent, scrollbar thumb)
         -- in O(1); pre-cache the read path scanned every clip on every
@@ -144,8 +144,8 @@ end
 function M.update_content_length()
     local max_end = 0
     for _, clip in ipairs(M.state.clips) do
-        if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
-            local clip_end = clip.timeline_start + clip.duration
+        if type(clip.sequence_start) == "number" and type(clip.duration) == "number" then
+            local clip_end = clip.sequence_start + clip.duration
             if clip_end > max_end then
                 max_end = clip_end
             end

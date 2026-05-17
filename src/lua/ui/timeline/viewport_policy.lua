@@ -47,8 +47,8 @@ end
 
 -- Extract timeline coordinates + track_id from a mutation record when
 -- all three fields are present. Handles two shapes:
---   - new-state form (inserts, updates): timeline_start_frame / duration_frames
---   - pre-state form (previous row for updates/deletes): timeline_start /
+--   - new-state form (inserts, updates): sequence_start_frame / duration_frames
+--   - pre-state form (previous row for updates/deletes): sequence_start /
 --     duration (no _frame suffix; matches the DB row column naming that
 --     clip_mutator.plan_update preserves in `previous`)
 -- Returns nil when the record doesn't carry full extents — the
@@ -58,7 +58,7 @@ end
 -- A region computed from partial data is still a useful viewport target.
 local function try_read_extent(record)
     if type(record) ~= "table" then return nil end
-    local start_frame = record.timeline_start_frame or record.timeline_start
+    local start_frame = record.sequence_start_frame or record.sequence_start
     local dur = record.duration_frames or record.duration
     local track_id = record.track_id
     if type(start_frame) ~= "number" then return nil end

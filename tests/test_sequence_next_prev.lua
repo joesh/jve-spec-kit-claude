@@ -62,7 +62,7 @@ VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 30, 1, 48000, 1920
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence for media_v
@@ -71,10 +71,10 @@ VALUES ('master_media_v', 'proj', 'media_v_master', 'master', 30, 1, 48000, 1920
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_v', 'master_media_v', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_v' WHERE id = 'master_media_v' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_v', 'proj', 'master_media_v', 'master_v_media_v', 'media_v', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', 'master_media_v', 0, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', 'master_media_v', 200, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', 'master_media_v', 50, 100, 10, 110, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
@@ -202,7 +202,7 @@ do
     -- not the first — reverse playback enters a clip at its end.
     local results = seq:get_prev_video(200)
     for _, entry in ipairs(results) do
-        -- Last timeline frame of clip = timeline_start + duration - 1
+        -- Last timeline frame of clip = sequence_start + duration - 1
         -- source at last frame = source_in + (duration - 1)
         local expected_source_frame = entry.clip.source_in + entry.clip.duration - 1
         assert(entry.source_frame == expected_source_frame, string.format(

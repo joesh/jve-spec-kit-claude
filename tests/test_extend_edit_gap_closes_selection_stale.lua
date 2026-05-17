@@ -21,12 +21,12 @@ local layout = ripple_layout.create({
     clips = {
         order = {"v1_left", "v1_right"},
         v1_left = {
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 1000,
             source_in = 1000,
         },
         v1_right = {
-            timeline_start = 2000,
+            sequence_start = 2000,
             duration = 1000,
             source_in = 1000,
         },
@@ -65,7 +65,7 @@ assert(result1 and result1.success, "First ExtendEdit should succeed: " .. tostr
 local left = Clip.load(clips.v1_left.id, layout.db)
 local right = Clip.load(clips.v1_right.id, layout.db)
 
-local gap_after_edit = right.timeline_start - (left.timeline_start + left.duration)
+local gap_after_edit = right.sequence_start - (left.sequence_start + left.duration)
 assert(gap_after_edit == 0, string.format("Gap should be closed, got %d frames", gap_after_edit))
 
 -- Selection should normalize: gap clip disappeared, so gap:out edge drops.
@@ -110,7 +110,7 @@ assert(result2, "Second ExtendEdit should return a result")
 -- If it succeeded, verify the clip moved
 if result2.success then
     right = Clip.load(clips.v1_right.id, layout.db)
-    print(string.format("  Right clip at %d after second edit", right.timeline_start))
+    print(string.format("  Right clip at %d after second edit", right.sequence_start))
 end
 
 layout:cleanup()

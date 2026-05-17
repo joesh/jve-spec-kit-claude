@@ -33,9 +33,9 @@ local function find_clips_in_range(time_start, time_end, track_ids)
     for _, clip in ipairs(timeline_state.get_clips()) do
         -- Skip gap clips — they're derived state, not selectable for clip operations
         if not clip.is_gap and track_set[clip.track_id] then
-            local clip_end = clip.timeline_start + clip.duration
+            local clip_end = clip.sequence_start + clip.duration
             -- Check time overlap: NOT (clip ends before range OR clip starts after range)
-            local overlaps = not (clip_end <= time_start or clip.timeline_start >= time_end)
+            local overlaps = not (clip_end <= time_start or clip.sequence_start >= time_end)
             if overlaps then
                 table.insert(matching, clip)
             end

@@ -96,7 +96,7 @@ local function create_clip(id, track_id, media_id, start_frame, dur)
         id = id,
         track_id = track_id,
         owner_sequence_id = "seq",
-        timeline_start_frame = start_frame,
+        sequence_start_frame = start_frame,
         duration_frames = dur,
         source_in_frame = 0,
         source_out_frame = dur,

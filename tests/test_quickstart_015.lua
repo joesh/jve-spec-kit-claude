@@ -290,7 +290,7 @@ local r17 = command_manager.execute("Insert", {
     sequence_id        = "rec",
     project_id         = "proj",
     source_sequence_id = "src",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
 })
 assert(r17 and r17.success,
     "FAIL Step 17: Insert failed: " .. tostring(r17 and r17.error_message))

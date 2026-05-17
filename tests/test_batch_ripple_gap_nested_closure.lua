@@ -42,10 +42,10 @@ VALUES ('_v13_placeholder_master', 'default_project', 'placeholder_master', 'mas
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'default_project', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_c1', 'default_project', 'C1', 'track_v1', '_v13_placeholder_master', 'default_sequence', 6000, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_c2', 'default_project', 'C2', 'track_v1', '_v13_placeholder_master', 'default_sequence', 11000, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now))
@@ -64,7 +64,7 @@ local result = command_manager.execute(cmd)
 assert(result.success, result.error_message or "BatchRippleEdit should succeed")
 
 local function fetch_start(id)
-    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "missing clip " .. tostring(id))
     local value = tonumber(stmt:value(0))

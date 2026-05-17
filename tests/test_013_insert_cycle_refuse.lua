@@ -64,7 +64,7 @@ do
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e",
         source_sequence_id    = "e",     -- same as owner — direct cycle
-        timeline_start_frame  = 0,
+        sequence_start_frame  = 0,
         target_video_track_id = "e-v1",
     })
     assert(not ok, "direct cycle (E in E) must refuse")
@@ -107,13 +107,13 @@ do
         VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
         -- E2 contains a clip referencing master M (non-zero effective duration).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -123,7 +123,7 @@ do
         -- reachability E1 -> E2.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -136,7 +136,7 @@ do
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e2",
         source_sequence_id    = "e1",    -- e1 already references e2
-        timeline_start_frame  = 0,
+        sequence_start_frame  = 0,
         target_video_track_id = "e2-v1",
     })
     assert(not ok, "transitive cycle (E1 into E2 where E1 references E2) must refuse")

@@ -25,7 +25,7 @@ local function reset_state(start_time, duration, playhead)
     data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
     data.state.sequence_timecode_start_frame = 0
     data.state.clips = {
-        { id = "bg", track_id = "t1", timeline_start = 0, duration = 100000 },
+        { id = "bg", track_id = "t1", sequence_start = 0, duration = 100000 },
     }
     data.state.viewport_start_time = start_time
     data.state.viewport_duration = duration

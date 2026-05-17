@@ -37,17 +37,17 @@ local layout = ripple_layout.create({
     clips = {
         order = {"c_v1f", "c_v1b", "c_a1f", "c_a1b", "c_a2f", "c_a2b"},
         c_v1f = {id="c_v1f", name="V1f", track_key="v1", media_key="main",
-                 timeline_start=0,   duration=100, source_in=500, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=0,   duration=100, source_in=500, fps_numerator=1000, fps_denominator=1},
         c_v1b = {id="c_v1b", name="V1b", track_key="v1", media_key="main",
-                 timeline_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
         c_a1f = {id="c_a1f", name="A1f", track_key="a1", media_key="main",
-                 timeline_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
         c_a1b = {id="c_a1b", name="A1b", track_key="a1", media_key="main",
-                 timeline_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
         c_a2f = {id="c_a2f", name="A2f", track_key="a2", media_key="main",
-                 timeline_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
         c_a2b = {id="c_a2b", name="A2b", track_key="a2", media_key="main",
-                 timeline_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
+                 sequence_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
     },
 })
 

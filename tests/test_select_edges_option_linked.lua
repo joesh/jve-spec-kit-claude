@@ -44,17 +44,17 @@ VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 108
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_v', 'proj1', 'Video Clip', 'trk_v', 'seq1', 'master_med1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Create audio clip
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_a', 'proj1', 'Audio Clip', 'trk_a', 'seq1', 'master_med1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
@@ -71,8 +71,8 @@ command_manager.init("seq1", "proj1")
 -- Mock timeline_state for testing
 local mock_edges = {}
 local mock_clips = {
-    { id = "clip_v", track_id = "trk_v", timeline_start = 0, duration = 100, clip_kind = "sequence" },
-    { id = "clip_a", track_id = "trk_a", timeline_start = 0, duration = 100, clip_kind = "sequence" },
+    { id = "clip_v", track_id = "trk_v", sequence_start = 0, duration = 100, clip_kind = "sequence" },
+    { id = "clip_a", track_id = "trk_a", sequence_start = 0, duration = 100, clip_kind = "sequence" },
 }
 
 timeline_state.get_selected_edges = function()

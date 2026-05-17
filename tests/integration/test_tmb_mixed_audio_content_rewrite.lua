@@ -49,7 +49,7 @@ local rate_den  = probe.fps_denominator or 1
 
 local clip = {
     clip_id = "mix_clip", media_path = SWAP,
-    timeline_start = 0, duration = 20,
+    sequence_start = 0, duration = 20,
     source_in = probe.first_frame_tc or 0,
     rate_num = rate_num, rate_den = rate_den, speed_ratio = 1.0, volume = 1.0,
 }

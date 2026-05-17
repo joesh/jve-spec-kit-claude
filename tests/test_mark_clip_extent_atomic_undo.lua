@@ -44,7 +44,7 @@ command_manager.init("s", "p")
 package.loaded["ui.timeline.timeline_state"] = {
     get_playhead_position = function() return 200 end,
     get_clips = function()
-        return { { id = "c1", track_id = "v1", timeline_start = 120, duration = 240 } }
+        return { { id = "c1", track_id = "v1", sequence_start = 120, duration = 240 } }
     end,
     get_sequence_id   = function() return "s" end,
     get_project_id    = function() return "p" end,

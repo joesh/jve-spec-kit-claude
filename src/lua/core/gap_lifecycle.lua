@@ -13,19 +13,19 @@
 -- - Between any two adjacent media clips on the same track, exactly one gap (duration >= 0)
 -- - Before the first media clip: one gap from position 0 (if first clip doesn't start at 0)
 -- - No two gaps are ever adjacent (merge invariant)
--- - gap.timeline_start + gap.duration = next media clip's timeline_start
--- - prev media clip's timeline_start + duration = gap.timeline_start
+-- - gap.sequence_start + gap.duration = next media clip's sequence_start
+-- - prev media clip's sequence_start + duration = gap.sequence_start
 --
 -- @file gap_lifecycle.lua
 local M = {}
 
 --- Create a gap clip entity with the standard clip interface.
 -- Gap clips use the same fields as media clips so the pipeline doesn't distinguish them.
-local function make_gap_clip(track_id, timeline_start, duration, seq_fps)
+local function make_gap_clip(track_id, sequence_start, duration, seq_fps)
     assert(type(track_id) == "string" or type(track_id) == "number",
         "make_gap_clip: track_id required")
-    assert(type(timeline_start) == "number",
-        "make_gap_clip: timeline_start must be integer, got " .. type(timeline_start))
+    assert(type(sequence_start) == "number",
+        "make_gap_clip: sequence_start must be integer, got " .. type(sequence_start))
     assert(type(duration) == "number" and duration >= 0,
         string.format("make_gap_clip: duration must be >= 0, got %s", tostring(duration)))
     assert(type(seq_fps) == "table" and seq_fps.fps_numerator and seq_fps.fps_denominator,
@@ -35,9 +35,9 @@ local function make_gap_clip(track_id, timeline_start, duration, seq_fps)
     -- readers can distinguish from real (DB-backed) clips. Per FR-018,
     -- V13 has no V8-style row-discriminator.
     return {
-        id = string.format("gap_%s_%d", tostring(track_id), timeline_start),
+        id = string.format("gap_%s_%d", tostring(track_id), sequence_start),
         track_id = track_id,
-        timeline_start = timeline_start,
+        sequence_start = sequence_start,
         duration = duration,
         is_gap = true,
         source_in = nil,
@@ -53,7 +53,7 @@ end
 -- Called on sequence open to populate gaps.
 --
 -- @param track_id string The track ID
--- @param sorted_media_clips table Array of media clips sorted by timeline_start
+-- @param sorted_media_clips table Array of media clips sorted by sequence_start
 -- @param seq_fps table {fps_numerator, fps_denominator}
 -- @return table Array of gap clips (may be empty)
 function M.compute_gaps_for_track(track_id, sorted_media_clips, seq_fps)
@@ -69,19 +69,19 @@ function M.compute_gaps_for_track(track_id, sorted_media_clips, seq_fps)
     local cursor = 0  -- current position scanning left-to-right
 
     for _, clip in ipairs(sorted_media_clips) do
-        assert(type(clip.timeline_start) == "number",
-            "compute_gaps_for_track: clip.timeline_start must be integer")
+        assert(type(clip.sequence_start) == "number",
+            "compute_gaps_for_track: clip.sequence_start must be integer")
         assert(type(clip.duration) == "number",
             "compute_gaps_for_track: clip.duration must be integer")
 
-        local gap_size = clip.timeline_start - cursor
+        local gap_size = clip.sequence_start - cursor
         -- gap_size < 0 means clips overlap (transient state during overwrite/insert
         -- before occlusion resolves). No gap in overlapping region.
         if gap_size > 0 then
             table.insert(gaps, make_gap_clip(track_id, cursor, gap_size, seq_fps))
         end
         -- Advance cursor past this clip (only if it extends further)
-        local clip_end = clip.timeline_start + clip.duration
+        local clip_end = clip.sequence_start + clip.duration
         if clip_end > cursor then
             cursor = clip_end
         end
@@ -95,7 +95,7 @@ end
 -- clip IDs, recompute gap geometry for affected positions only.
 --
 -- @param track_id string The track ID
--- @param sorted_all_clips table Array of all clips (media + gap) sorted by timeline_start
+-- @param sorted_all_clips table Array of all clips (media + gap) sorted by sequence_start
 -- @param changed_clip_ids table Set of clip IDs that changed {[id]=true}
 -- @param seq_fps table {fps_numerator, fps_denominator}
 -- @return table Updated array of all clips (media + gap)
@@ -114,12 +114,12 @@ function M.update_gaps_after_edit(track_id, sorted_all_clips, changed_clip_ids, 
         end
     end
 
-    -- Sort by timeline_start
+    -- Sort by sequence_start
     table.sort(media_clips, function(a, b)
-        if a.timeline_start == b.timeline_start then
+        if a.sequence_start == b.sequence_start then
             return (a.id or "") < (b.id or "")
         end
-        return a.timeline_start < b.timeline_start
+        return a.sequence_start < b.sequence_start
     end)
 
     -- Recompute gaps from media positions
@@ -130,14 +130,14 @@ function M.update_gaps_after_edit(track_id, sorted_all_clips, changed_clip_ids, 
     local gi = 1
     for _, clip in ipairs(media_clips) do
         -- Insert any gaps that come before this clip
-        while gi <= #gaps and gaps[gi].timeline_start < clip.timeline_start do
+        while gi <= #gaps and gaps[gi].sequence_start < clip.sequence_start do
             table.insert(result, gaps[gi])
             gi = gi + 1
         end
         -- Insert gap at same position (gap ends where clip starts)
-        while gi <= #gaps and gaps[gi].timeline_start + gaps[gi].duration <= clip.timeline_start
-              and gaps[gi].timeline_start >= (result[#result] and (result[#result].timeline_start + result[#result].duration) or 0) do
-            if gaps[gi].timeline_start + gaps[gi].duration == clip.timeline_start then
+        while gi <= #gaps and gaps[gi].sequence_start + gaps[gi].duration <= clip.sequence_start
+              and gaps[gi].sequence_start >= (result[#result] and (result[#result].sequence_start + result[#result].duration) or 0) do
+            if gaps[gi].sequence_start + gaps[gi].duration == clip.sequence_start then
                 table.insert(result, gaps[gi])
             end
             gi = gi + 1

@@ -33,10 +33,10 @@ local layout = ripple_layout.create({
     clips = {
         order = {"c_v1_wide", "c_v2"},
         c_v1_wide = {id="c_v1_wide", name="V1Wide", track_key="v1", media_key="main",
-                     timeline_start=500,  duration=2000, source_in=500,
+                     sequence_start=500,  duration=2000, source_in=500,
                      fps_numerator=1000, fps_denominator=1},
         c_v2      = {id="c_v2",      name="V2",     track_key="v2", media_key="main",
-                     timeline_start=1000, duration=1000, source_in=600,
+                     sequence_start=1000, duration=1000, source_in=600,
                      fps_numerator=1000, fps_denominator=1},
     },
 })
@@ -93,12 +93,12 @@ local r = command_manager.execute("RippleTrimEdge", {
 assert(r and r.success, "RippleTrimEdge failed: " .. tostring(r and r.error_message))
 
 -- ── V1 left half: was clip "c_v1_wide". After cut at 1000:
---     timeline_start=500, duration=500 (covers [500, 1000)).
-local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
+--     sequence_start=500, duration=500 (covers [500, 1000)).
+local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
 assert(stmt); stmt:exec(); stmt:next()
 local left_ts, left_dur = stmt:value(0), stmt:value(1); stmt:finalize()
 assert(left_ts == 500, string.format(
-    "FAIL: V1 left half timeline_start=%s, expected 500 (clip disappeared or shifted)",
+    "FAIL: V1 left half sequence_start=%s, expected 500 (clip disappeared or shifted)",
     tostring(left_ts)))
 assert(left_dur == 500, string.format(
     "FAIL: V1 left half duration=%s, expected 500", tostring(left_dur)))
@@ -108,10 +108,10 @@ print(string.format("  V1 left half OK: ts=%d dur=%d", left_ts, left_dur))
 -- V2 IN extended by -100; the ripple bulk-shifts content downstream of
 -- the cut by +100 (the IN-edge propagation). The right half rides with
 -- the ripple — its source range stays the same (source_in=1000), only
--- its timeline_start moves to 1000 + 100 = 1100. A 100-frame gap forms
+-- its sequence_start moves to 1000 + 100 = 1100. A 100-frame gap forms
 -- on V1 between left half (ends at 1000) and right half (starts 1100).
 local stmt2 = db:prepare(
-    "SELECT id, timeline_start_frame, duration_frames FROM clips "
+    "SELECT id, sequence_start_frame, duration_frames FROM clips "
     .. "WHERE track_id='trk_v1' AND id != 'c_v1_wide'")
 assert(stmt2); stmt2:exec(); stmt2:next()
 local right_id, right_ts, right_dur = stmt2:value(0), stmt2:value(1), stmt2:value(2); stmt2:finalize()
@@ -158,7 +158,7 @@ assert(post_undo == 1, string.format(
     "FAIL: after undo V1 has %d clips, expected 1 (the nested SplitClip "
     .. "was not reversed — right half lingers)", post_undo))
 
-local stmt4 = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
+local stmt4 = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id='c_v1_wide'")
 assert(stmt4); stmt4:exec(); stmt4:next()
 local rts, rdur = stmt4:value(0), stmt4:value(1); stmt4:finalize()
 assert(rts == 500 and rdur == 2000, string.format(

@@ -3,9 +3,9 @@
 -- multi_editable=false.
 --
 -- Reproducer: TSO 2026-04-20 15:26:46 — user selected 2 clips, typed a
--- timeline_start value, hit Apply. apply_multi_edit fired SetClipProperty
--- for BOTH clips with the same timeline_start, causing VIDEO_OVERLAP. The
--- fix marks per-clip structural fields (timeline_start, duration,
+-- sequence_start value, hit Apply. apply_multi_edit fired SetClipProperty
+-- for BOTH clips with the same sequence_start, causing VIDEO_OVERLAP. The
+-- fix marks per-clip structural fields (sequence_start, duration,
 -- source_in, source_out) as multi_editable=false so Apply silently skips
 -- them. They're still editable per-clip in single-edit mode.
 
@@ -20,11 +20,11 @@ local function check(label, ok) if ok then pass = pass + 1 else fail = fail + 1;
 print("=== Inspector: multi_editable field filter ===\n")
 
 -- Schema declares the right fields as non-multi-editable.
-local clip_timeline_start = schemas.get_field("clip", "timeline_start")
-check("clip.timeline_start exists",
-    clip_timeline_start ~= nil)
-check("clip.timeline_start is multi_editable=false",
-    clip_timeline_start and clip_timeline_start.multi_editable == false)
+local clip_sequence_start = schemas.get_field("clip", "sequence_start")
+check("clip.sequence_start exists",
+    clip_sequence_start ~= nil)
+check("clip.sequence_start is multi_editable=false",
+    clip_sequence_start and clip_sequence_start.multi_editable == false)
 
 for _, fkey in ipairs({"duration", "source_in", "source_out"}) do
     local f = schemas.get_field("clip", fkey)
@@ -61,8 +61,8 @@ check("module-level field construction completed without error", ok,
 
 -- Smoke: a non-multi_editable field in single-edit mode is still
 -- fully editable (read_only stays false; the flag only affects Apply).
-check("clip.timeline_start.read_only is false (single-edit path still editable)",
-    clip_timeline_start and clip_timeline_start.read_only == false)
+check("clip.sequence_start.read_only is false (single-edit path still editable)",
+    clip_sequence_start and clip_sequence_start.read_only == false)
 
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end

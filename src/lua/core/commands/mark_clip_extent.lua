@@ -29,13 +29,13 @@ local function pick_clip_under_playhead(timeline_state, playhead)
     local best_clip, best_priority
 
     for _, clip in ipairs(clips) do
-        assert(type(clip.timeline_start) == "number", string.format(
-            "MarkClipExtent: clip %s missing timeline_start", tostring(clip.id)))
+        assert(type(clip.sequence_start) == "number", string.format(
+            "MarkClipExtent: clip %s missing sequence_start", tostring(clip.id)))
         assert(type(clip.duration) == "number", string.format(
             "MarkClipExtent: clip %s missing duration", tostring(clip.id)))
-        local clip_end = clip.timeline_start + clip.duration
+        local clip_end = clip.sequence_start + clip.duration
 
-        if playhead >= clip.timeline_start and playhead <= clip_end then
+        if playhead >= clip.sequence_start and playhead <= clip_end then
             local track = timeline_state.get_track_by_id(clip.track_id)
             assert(track, string.format(
                 "MarkClipExtent: clip %s references unknown track %s",
@@ -91,8 +91,8 @@ function M.register(executors, undoers, db)
         if not best_clip then return true end
 
         -- best_clip came from pick_clip_under_playhead → already asserted to
-        -- have numeric timeline_start + duration.
-        local clip_last_frame = best_clip.timeline_start + best_clip.duration - 1
+        -- have numeric sequence_start + duration.
+        local clip_last_frame = best_clip.sequence_start + best_clip.duration - 1
 
         local args = command:get_all_parameters()
         -- MarkClipExtent is a movement command (mutates_clips=false). For
@@ -108,7 +108,7 @@ function M.register(executors, undoers, db)
             .. "scripted callers must pass it explicitly")
 
         dispatch_grouped_marks(args.project_id, args.sequence_id,
-            best_clip.timeline_start, clip_last_frame)
+            best_clip.sequence_start, clip_last_frame)
         return true
     end
 

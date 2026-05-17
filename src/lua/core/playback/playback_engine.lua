@@ -272,7 +272,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
         self.total_frames, self.fps_num, self.fps_den)
 end
 
---- Compute content end frame from sequence clips (max of timeline_start + duration).
+--- Compute content end frame from sequence clips (max of sequence_start + duration).
 -- Delegates to Sequence model (SQL isolation: only models/ execute SQL).
 function PlaybackEngine:_compute_content_end()
     assert(self.sequence,
@@ -801,7 +801,7 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     return {
         clip_id        = entry.clip_id,
         media_path     = entry.media_path,
-        timeline_start = entry.timeline_start,
+        sequence_start = entry.sequence_start,
         duration       = entry.duration,
         source_in      = entry.source_in,
         rate_num       = entry.fps_numerator,
@@ -814,7 +814,7 @@ end
 
 --- Compute video speed_ratio from clip's source range vs timeline duration.
 -- When source_out - source_in == duration, speed is 1.0 (no change).
--- Otherwise, speed = source_range / timeline_duration (< 1.0 = slow motion).
+-- Otherwise, speed = source_range / sequence_duration (< 1.0 = slow motion).
 function PlaybackEngine:_compute_video_speed_ratio(entry)
     assert(entry.source_out ~= nil,
         "_compute_video_speed_ratio: source_out is nil (clip_id="

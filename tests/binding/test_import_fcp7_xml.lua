@@ -158,7 +158,7 @@ end
 local function fetch_clip_ids(limit)
     local ids = {}
     -- V13: every row in `clips` is a timeline-side clip (clips must be owned by a kind='sequence' sequence).
-    local stmt = db:prepare("SELECT id FROM clips ORDER BY timeline_start_frame DESC")
+    local stmt = db:prepare("SELECT id FROM clips ORDER BY sequence_start_frame DESC")
     assert(stmt, "fetch_clip_ids: prepare failed")
     assert(stmt:exec())
     while stmt:next() do
@@ -295,7 +295,7 @@ os.remove(scratch_db_path)
 -- V13: timeline-side clips reference their master via source_sequence_id
 -- (the V8 master_clip_id column is gone), and clips must be owned by a kind='sequence' sequence; that
 -- every clip has a non-null source_sequence_id, so no NULL filter needed.
-local timeline_master_stmt = db:prepare([[SELECT c.id, c.sequence_id, c.timeline_start_frame
+local timeline_master_stmt = db:prepare([[SELECT c.id, c.sequence_id, c.sequence_start_frame
     FROM clips c LIMIT 1]])
 assert(timeline_master_stmt, "Timeline clip master query should prepare")
 assert(timeline_master_stmt:exec(), "Timeline clip master query should run")
@@ -660,7 +660,7 @@ toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
 -- V13 Insert: source range comes from the master sequence's marks; the
--- timeline-side spec is just (target track, timeline_start_frame).
+-- timeline-side spec is just (target track, sequence_start_frame).
 do
     local Sequence = require("models.sequence")
     local mc_seq = Sequence.load(insert_source_sequence_id)
@@ -678,7 +678,7 @@ end
 local insert_cmd2 = Command.create("Insert", "default_project")
 insert_cmd2:set_parameter("source_sequence_id", insert_source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", video_tracks[1])
-insert_cmd2:set_parameter("timeline_start_frame", 800)
+insert_cmd2:set_parameter("sequence_start_frame", 800)
 insert_cmd2:set_parameter("sequence_id", replayed_sequence_id)
 do
     local _r = command_manager.execute(insert_cmd2)

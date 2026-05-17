@@ -66,7 +66,7 @@ db:exec([[
     UPDATE sequences SET default_video_layer_track_id = 'master_v_med1'
         WHERE id = 'master_seq_for_med1';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-        media_id, source_in_frame, source_out_frame, timeline_start_frame,
+        media_id, source_in_frame, source_out_frame, sequence_start_frame,
         duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_med1', 'proj1', 'master_seq_for_med1', 'master_v_med1',
         'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
@@ -90,7 +90,7 @@ local clips = {
         master_audio_track_id = nil,
         fps_mismatch_policy = "resample",
         -- INTEGER coordinates (post-refactor)
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -114,9 +114,9 @@ assert(snap ~= nil, "load_snapshot should not return nil")
 assert(#snap.clips == 1, "should have 1 clip")
 
 local c = snap.clips[1]
-assert_type(c.timeline_start, "number", "clip.timeline_start")
-assert(c.timeline_start == 0, "timeline_start should be 0, got " .. tostring(c.timeline_start))
-print("  ✓ timeline_start is integer 0")
+assert_type(c.sequence_start, "number", "clip.sequence_start")
+assert(c.sequence_start == 0, "sequence_start should be 0, got " .. tostring(c.sequence_start))
+print("  ✓ sequence_start is integer 0")
 
 assert_type(c.duration, "number", "clip.duration")
 assert(c.duration == 100, "duration should be 100, got " .. tostring(c.duration))
@@ -147,7 +147,7 @@ print("  ✓ rate metadata preserved")
 -- ERROR PATH: Missing required integer fields
 --------------------------------------------------------------------------------
 
-print("Test 5: deserialize asserts on missing timeline_start_frame")
+print("Test 5: deserialize asserts on missing sequence_start_frame")
 -- Delete the valid snapshot first so corrupt one is loaded
 db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 
@@ -166,7 +166,7 @@ local bad_payload = json.encode({
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
-            -- Missing timeline_start_frame!
+            -- Missing sequence_start_frame!
             duration_frames = 100,
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,
@@ -182,8 +182,8 @@ raw_sql(db, "INSERT OR REPLACE INTO snapshots (id, sequence_id, sequence_number,
 
 expect_error(function()
     snapshot_manager.load_snapshot(db, "seq1")
-end, "timeline_start_frame")
-print("  ✓ deserialize asserts on missing timeline_start_frame")
+end, "sequence_start_frame")
+print("  ✓ deserialize asserts on missing sequence_start_frame")
 
 print("Test 6: deserialize asserts on missing duration_frames")
 -- Clean slate for this test
@@ -203,7 +203,7 @@ local bad_payload2 = json.encode({
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
-            timeline_start_frame = 0,
+            sequence_start_frame = 0,
             -- Missing duration_frames!
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,

@@ -40,7 +40,7 @@ VALUES ('mc_test', 'proj', 'mc_test', 'master', 30, 1, 48000, 1920, 1080, 0, 0)]
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_test_v1', 'mc_test', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_test_v1' WHERE id = 'mc_test']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mc_test_mr', 'proj', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
 db:exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_sample_rate,width,height,
         view_start_frame,view_duration_frames,playhead_frame,
@@ -65,7 +65,7 @@ local clip1 = Clip.create({
         track_id = "v1",
         owner_sequence_id = "seq",
         sequence_id = "mc_test",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -107,7 +107,7 @@ timeline_view_drag_handler.handle_release(mock_view, drag_state)
 local loaded_clip1 = Clip.load(clip1, db)
 assert(loaded_clip1, "Original clip should exist")
 assert(loaded_clip1.track_id == 'v1', "Original clip should stay on V1")
-assert(loaded_clip1.timeline_start == 0, "Original clip should stay at 0")
+assert(loaded_clip1.sequence_start == 0, "Original clip should stay at 0")
 
 -- New clip should exist on V2 at 30 frames
 local all_clips = database.load_clips("seq")
@@ -121,7 +121,7 @@ end
 
 assert(new_clip, "A new clip should have been created (Copy)")
 assert(new_clip.track_id == 'v2', "New clip should be on V2")
-assert(new_clip.timeline_start == 30, "New clip should be at 30 frames (got " .. tostring(new_clip.timeline_start) .. ")")
+assert(new_clip.sequence_start == 30, "New clip should be at 30 frames (got " .. tostring(new_clip.sequence_start) .. ")")
 -- V13: clips reference master sequences (not media directly). Equivalent
 -- "same source" check is on source_sequence_id.
 assert(new_clip.sequence_id ~= nil and new_clip.sequence_id ~= "",

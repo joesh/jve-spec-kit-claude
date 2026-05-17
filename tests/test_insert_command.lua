@@ -116,7 +116,7 @@ local downstream_clip = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -144,7 +144,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -175,7 +175,7 @@ local insert_cmd = Command.create("Insert", "project")
 insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("target_video_track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -196,7 +196,7 @@ local insert_cmd2 = Command.create("Insert", "project")
 insert_cmd2:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
-insert_cmd2:set_parameter("timeline_start_frame", 0)
+insert_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -242,7 +242,7 @@ assert(downstream_start == 280, string.format("Downstream should ripple to 280 a
 print("Test 5: Insert uses media duration when unspecified")
 -- Clean up first
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Clear marks — no marks = use full clip range
 set_masterclip_marks(source_sequence_id, nil, nil)
@@ -250,14 +250,14 @@ local insert_cmd3 = Command.create("Insert", "project")
 insert_cmd3:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd3:set_parameter("target_video_track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
-insert_cmd3:set_parameter("timeline_start_frame", 0)
+insert_cmd3:set_parameter("sequence_start_frame", 0)
 -- No marks set — should use full media duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
 assert(result.success, "Insert without duration should succeed: " .. tostring(result.error_message))
 
 -- Verify clip was created with media duration
-local stmt = db:prepare("SELECT duration_frames FROM clips WHERE track_id = 'track_v1' AND timeline_start_frame = 0")
+local stmt = db:prepare("SELECT duration_frames FROM clips WHERE track_id = 'track_v1' AND sequence_start_frame = 0")
 stmt:exec()
 assert(stmt:next(), "Should find inserted clip")
 local inserted_duration = stmt:value(0)
@@ -270,14 +270,14 @@ assert(inserted_duration == 100, string.format("Clip should have media duration 
 print("Test 6: Insert at exact clip start boundary")
 -- Reset: put downstream back at 200
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 set_masterclip_marks(source_sequence_id, 0, 50)
 local insert_cmd4 = Command.create("Insert", "project")
 insert_cmd4:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd4:set_parameter("target_video_track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
-insert_cmd4:set_parameter("timeline_start_frame", 200)  -- Exactly at downstream start
+insert_cmd4:set_parameter("sequence_start_frame", 200)  -- Exactly at downstream start
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -295,7 +295,7 @@ asserts._set_enabled_for_tests(false)
 local bad_cmd = Command.create("Insert", "project")
 bad_cmd:set_parameter("target_video_track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
-bad_cmd:set_parameter("timeline_start_frame", 0)
+bad_cmd:set_parameter("sequence_start_frame", 0)
 -- No source_sequence_id
 
 result = execute_cmd(bad_cmd)
@@ -311,7 +311,7 @@ local bad_cmd2 = Command.create("Insert", "project")
 bad_cmd2:set_parameter("source_sequence_id", "nonexistent_master")
 bad_cmd2:set_parameter("target_video_track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
-bad_cmd2:set_parameter("timeline_start_frame", 0)
+bad_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(bad_cmd2)
 asserts._set_enabled_for_tests(true)
@@ -323,7 +323,7 @@ assert(not result.success, "Insert with nonexistent source_sequence_id should fa
 print("Test 9: Multiple undo/redo cycle")
 -- Reset state
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
 set_masterclip_marks(source_sequence_id, 0, 30)
@@ -332,7 +332,7 @@ for i = 1, 3 do
     cmd:set_parameter("source_sequence_id", source_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
-    cmd:set_parameter("timeline_start_frame", 0)
+    cmd:set_parameter("sequence_start_frame", 0)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))
 end

@@ -86,7 +86,7 @@ local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 insert_cmd:set_parameter("target_video_track_id", "video1")
-insert_cmd:set_parameter("timeline_start_frame", playhead)
+insert_cmd:set_parameter("sequence_start_frame", playhead)
 insert_cmd:set_parameter("advance_playhead", true)
 
 local result = command_manager.execute(insert_cmd)
@@ -106,21 +106,21 @@ for _, c in ipairs(clips) do
 end
 assert(clip, "video clip not found")
 
-assert(clip.timeline_start == 0, string.format("clip should start at frame 0, got %s", tostring(clip.timeline_start)))
+assert(clip.sequence_start == 0, string.format("clip should start at frame 0, got %s", tostring(clip.sequence_start)))
 
 -- Verify rendering math keeps the clip at the origin for a 1000px viewport
 timeline_state.set_viewport_start_time(0)
-local px = timeline_state.time_to_pixel(clip.timeline_start, 1000)
+local px = timeline_state.time_to_pixel(clip.sequence_start, 1000)
 assert(px >= -1 and px <= 1, string.format("clip should render at viewport origin, got pixel=%s", tostring(px)))
 
 -- Playhead should advance to the end of the inserted clip when requested
 local final_playhead = timeline_state.get_playhead_position()
 -- Domain: 114567 source frames at 25fps = 4582.68 seconds
 -- On 24fps timeline: 4582.68s × 24 = 109,984 frames
-local expected_timeline_duration = 109984
-assert(final_playhead == expected_timeline_duration,
+local expected_sequence_duration = 109984
+assert(final_playhead == expected_sequence_duration,
     string.format("playhead should advance to timeline end (%d), got %s",
-        expected_timeline_duration, tostring(final_playhead)))
+        expected_sequence_duration, tostring(final_playhead)))
 
 print("✅ Insert at playhead origin renders at timeline start")
 os.remove(DB_PATH)

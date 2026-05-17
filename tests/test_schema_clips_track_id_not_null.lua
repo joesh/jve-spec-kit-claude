@@ -34,7 +34,7 @@ assert(db:exec(
 -- (1) NULL track_id is rejected.
 local stmt = db:prepare([[
     INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-        sequence_id, name, timeline_start_frame, duration_frames,
+        sequence_id, name, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES (?, 'p1', 'e', NULL, 'm', 'c', 0, 10, 0, 10, 'passthrough',
@@ -53,7 +53,7 @@ assert(null_err and null_err:lower():find("not null"),
 -- (2) Real track_id succeeds (regression guard).
 local stmt2 = db:prepare([[
     INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-        sequence_id, name, timeline_start_frame, duration_frames,
+        sequence_id, name, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('c-real', 'p1', 'e', 'e-v1', 'm', 'c', 0, 10, 0, 10,

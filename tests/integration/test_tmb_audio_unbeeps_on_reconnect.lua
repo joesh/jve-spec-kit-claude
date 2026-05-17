@@ -47,7 +47,7 @@ local function build_clip_with_current_offline_flag()
     return {
         clip_id = "unbeep_clip",
         media_path = SWAP,
-        timeline_start = 0, duration = 20,
+        sequence_start = 0, duration = 20,
         source_in = probe.first_frame_tc or 0,
         rate_num = rate_num, rate_den = rate_den, speed_ratio = 1.0,
         volume = 1.0,
@@ -74,7 +74,7 @@ EMP.TMB_SET_TRACK_CLIPS(tmb, "audio", 1, { initial_clip })
 local function decode_real_reference()
     local ref_clip = {
         clip_id = "ref_clip", media_path = REAL,
-        timeline_start = 0, duration = 20,
+        sequence_start = 0, duration = 20,
         source_in = probe.first_frame_tc or 0,
         rate_num = rate_num, rate_den = rate_den, speed_ratio = 1.0,
         volume = 1.0, offline = false,

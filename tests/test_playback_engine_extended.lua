@@ -159,7 +159,7 @@ local mock_sequence = {
                 clip = {
                     id = "aclip1",
                     frame_rate = { fps_numerator = 24, fps_denominator = 1 },
-                    timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
+                    sequence_start = 0, duration = 100, source_in = 0, source_out = 100,
                 },
                 track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
                 media_fps_num = 24, media_fps_den = 1,

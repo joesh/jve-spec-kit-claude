@@ -47,17 +47,17 @@ local layout = ripple_layout.create({
         order = {"c_v1", "c_a1_front", "c_a1_back", "c_a2_front", "c_a2_back"},
         -- V1: one clip at [0,100) — we'll ripple-trim its right edge back
         c_v1       = {id="c_v1",  name="V1",  track_key="v1", media_key="main",
-                      timeline_start=0,   duration=100, source_in=500, fps_numerator=1000, fps_denominator=1},
+                      sequence_start=0,   duration=100, source_in=500, fps_numerator=1000, fps_denominator=1},
         -- A1 (off): two clips so we can verify downstream position unchanged
         c_a1_front = {id="c_a1f", name="A1f", track_key="a1", media_key="main",
-                      timeline_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
+                      sequence_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
         c_a1_back  = {id="c_a1b", name="A1b", track_key="a1", media_key="main",
-                      timeline_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
+                      sequence_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
         -- A2 (ripple): similar layout — back clip must shift by -DELTA
         c_a2_front = {id="c_a2f", name="A2f", track_key="a2", media_key="main",
-                      timeline_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
+                      sequence_start=0,   duration=60,  source_in=500, fps_numerator=1000, fps_denominator=1},
         c_a2_back  = {id="c_a2b", name="A2b", track_key="a2", media_key="main",
-                      timeline_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
+                      sequence_start=100, duration=100, source_in=600, fps_numerator=1000, fps_denominator=1},
     },
 })
 
@@ -73,7 +73,7 @@ print("  sync_mode set: a1=off, v1/a2=ripple")
 
 -- Read helper.
 local function clip_ts(clip_id)
-    local s = db:prepare("SELECT timeline_start_frame FROM clips WHERE id=?")
+    local s = db:prepare("SELECT sequence_start_frame FROM clips WHERE id=?")
     assert(s); s:bind_value(1, clip_id); s:exec(); s:next()
     local v = s:value(0); s:finalize()
     assert(v ~= nil, "clip " .. clip_id .. " not found")
@@ -100,7 +100,7 @@ local a1b_after = clip_ts("c_a1b")
 assert(a1b_after == a1b_before, string.format(
     "FAIL: Off-track A1 clip shifted from %d to %d — sync_mode='off' must be immune to ripple",
     a1b_before, a1b_after))
-print(string.format("  Off-track A1 unchanged: timeline_start=%d — OK", a1b_after))
+print(string.format("  Off-track A1 unchanged: sequence_start=%d — OK", a1b_after))
 
 -- ── Ripple-branch: A2 back-clip must shift by -DELTA ─────────────────────
 local a2b_after = clip_ts("c_a2b")

@@ -166,14 +166,14 @@ local function find_adjacent_pair(track_id, min_headroom)
             table.insert(track_clips, c)
         end
     end
-    table.sort(track_clips, function(a, b) return a.timeline_start < b.timeline_start end)
+    table.sort(track_clips, function(a, b) return a.sequence_start < b.sequence_start end)
 
     local Media = require("models.media")
     for i = 1, #track_clips - 1 do
         local a = track_clips[i]
         local b = track_clips[i + 1]
         local a_media_id = a.resolved_media and a.resolved_media.id
-        if a.timeline_start + a.duration == b.timeline_start and a_media_id then
+        if a.sequence_start + a.duration == b.sequence_start and a_media_id then
             -- Check media headroom: can clip_a extend its out edge?
             local media = Media.load(a_media_id)
             if media and media.duration then
@@ -199,12 +199,12 @@ local function find_gapped_pair(track_id)
             table.insert(track_clips, c)
         end
     end
-    table.sort(track_clips, function(a, b) return a.timeline_start < b.timeline_start end)
+    table.sort(track_clips, function(a, b) return a.sequence_start < b.sequence_start end)
 
     for i = 1, #track_clips - 1 do
         local a = track_clips[i]
         local b = track_clips[i + 1]
-        local gap_size = b.timeline_start - (a.timeline_start + a.duration)
+        local gap_size = b.sequence_start - (a.sequence_start + a.duration)
         if gap_size > 10 then  -- meaningful gap
             return a, b, gap_size
         end
@@ -234,7 +234,7 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
-            and c.timeline_start > clip_b.timeline_start + clip_b.duration then
+            and c.sequence_start > clip_b.sequence_start + clip_b.duration then
             downstream = c
             break
         end
@@ -242,9 +242,9 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
 
     -- Capture before state
     local a_dur_before = clip_a.duration
-    local b_start_before = clip_b.timeline_start
+    local b_start_before = clip_b.sequence_start
     local b_dur_before = clip_b.duration
-    local downstream_start_before = downstream and downstream.timeline_start
+    local downstream_start_before = downstream and downstream.sequence_start
 
     -- Execute roll: extend A out, trim B in, by 5 frames
     local delta = 5
@@ -265,17 +265,17 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
     local b_after = Clip.load(clip_b.id)
     assert(a_after.duration == a_dur_before + delta,
         string.format("A duration: expected %d, got %d", a_dur_before + delta, a_after.duration))
-    assert(b_after.timeline_start == b_start_before + delta,
-        string.format("B start: expected %d, got %d", b_start_before + delta, b_after.timeline_start))
+    assert(b_after.sequence_start == b_start_before + delta,
+        string.format("B start: expected %d, got %d", b_start_before + delta, b_after.sequence_start))
     assert(b_after.duration == b_dur_before - delta,
         string.format("B duration: expected %d, got %d", b_dur_before - delta, b_after.duration))
 
     -- THE KEY ASSERTION: downstream clip must NOT move
     if downstream then
         local ds_after = Clip.load(downstream.id)
-        assert(ds_after.timeline_start == downstream_start_before,
+        assert(ds_after.sequence_start == downstream_start_before,
             string.format("DOWNSTREAM SHIFTED! Roll acted as ripple. Expected %d, got %d",
-                downstream_start_before, ds_after.timeline_start))
+                downstream_start_before, ds_after.sequence_start))
     end
 
     -- Undo and verify restoration
@@ -287,7 +287,7 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
     local a_restored = Clip.load(clip_a.id)
     local b_restored = Clip.load(clip_b.id)
     assert(a_restored.duration == a_dur_before, "A duration not restored after undo")
-    assert(b_restored.timeline_start == b_start_before, "B start not restored after undo")
+    assert(b_restored.sequence_start == b_start_before, "B start not restored after undo")
 end)
 
 -- =========================================================================
@@ -303,14 +303,14 @@ run_test("roll_on_audio_doesnt_shift_downstream", function()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == A3_TRACK and not c.is_gap
-            and c.timeline_start > clip_b.timeline_start + clip_b.duration then
+            and c.sequence_start > clip_b.sequence_start + clip_b.duration then
             downstream = c
             break
         end
     end
 
-    local downstream_start = downstream and downstream.timeline_start
-    local b_start_before = clip_b.timeline_start
+    local downstream_start = downstream and downstream.sequence_start
+    local b_start_before = clip_b.sequence_start
     local b_dur_before = clip_b.duration
 
     -- Roll by 5 frames (small delta to stay within bounds)
@@ -330,15 +330,15 @@ run_test("roll_on_audio_doesnt_shift_downstream", function()
     -- Key assertion: downstream doesn't shift
     if downstream then
         local ds = Clip.load(downstream.id)
-        assert(ds.timeline_start == downstream_start,
+        assert(ds.sequence_start == downstream_start,
             string.format("AUDIO DOWNSTREAM SHIFTED! Roll acted as ripple. Expected %d, got %d",
-                downstream_start, ds.timeline_start))
+                downstream_start, ds.sequence_start))
     end
 
     local b_after = Clip.load(clip_b.id)
-    assert(b_after.timeline_start == b_start_before + delta,
+    assert(b_after.sequence_start == b_start_before + delta,
         string.format("B start after roll: expected %d, got %d",
-            b_start_before + delta, b_after.timeline_start))
+            b_start_before + delta, b_after.sequence_start))
     assert(b_after.duration == b_dur_before - delta,
         string.format("B duration after roll: expected %d, got %d",
             b_dur_before - delta, b_after.duration))
@@ -361,13 +361,13 @@ run_test("ripple_on_v1_shifts_downstream", function()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
-            and c.timeline_start > clip_b.timeline_start + clip_b.duration then
+            and c.sequence_start > clip_b.sequence_start + clip_b.duration then
             downstream = c
             break
         end
     end
 
-    local downstream_start = downstream and downstream.timeline_start
+    local downstream_start = downstream and downstream.sequence_start
 
     -- Ripple A out by 5 frames
     local delta = 5
@@ -385,9 +385,9 @@ run_test("ripple_on_v1_shifts_downstream", function()
     -- Downstream MUST shift (opposite of roll)
     if downstream then
         local ds = Clip.load(downstream.id)
-        assert(ds.timeline_start == downstream_start + delta,
+        assert(ds.sequence_start == downstream_start + delta,
             string.format("Downstream should shift by %d. Expected %d, got %d",
-                delta, downstream_start + delta, ds.timeline_start))
+                delta, downstream_start + delta, ds.sequence_start))
     end
 
     -- Undo
@@ -398,7 +398,7 @@ run_test("ripple_on_v1_shifts_downstream", function()
     -- Verify restoration
     if downstream then
         local ds_restored = Clip.load(downstream.id)
-        assert(ds_restored.timeline_start == downstream_start,
+        assert(ds_restored.sequence_start == downstream_start,
             "Downstream not restored after ripple undo")
     end
 end)
@@ -415,14 +415,14 @@ run_test("roll_vs_ripple_produce_different_results", function()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
-            and c.timeline_start > clip_b.timeline_start + clip_b.duration then
+            and c.sequence_start > clip_b.sequence_start + clip_b.duration then
             downstream = c
             break
         end
     end
     assert(downstream, "No downstream clip found — can't compare roll vs ripple")
 
-    local ds_start_orig = downstream.timeline_start
+    local ds_start_orig = downstream.sequence_start
     local delta = 3
 
     -- Roll
@@ -436,7 +436,7 @@ run_test("roll_vs_ripple_produce_different_results", function()
     local r1 = command_manager.execute(roll_cmd)
     assert(r1.success, "Roll failed")
 
-    local ds_after_roll = Clip.load(downstream.id).timeline_start
+    local ds_after_roll = Clip.load(downstream.id).sequence_start
     command_manager.undo()
 
     -- Ripple
@@ -449,7 +449,7 @@ run_test("roll_vs_ripple_produce_different_results", function()
     local r2 = command_manager.execute(rip_cmd)
     assert(r2.success, "Ripple failed")
 
-    local ds_after_ripple = Clip.load(downstream.id).timeline_start
+    local ds_after_ripple = Clip.load(downstream.id).sequence_start
     command_manager.undo()
 
     validate("after roll vs ripple comparison")
@@ -472,9 +472,9 @@ run_test("roll_at_gap_boundary", function()
     local clip_a, clip_b = find_gapped_pair(V1_TRACK)
     assert(clip_a and clip_b, "No gapped pair found on V1")
 
-    local clip_a_end = clip_a.timeline_start + clip_a.duration
+    local clip_a_end = clip_a.sequence_start + clip_a.duration
     local gap_id = string.format("gap_%s_%d", V1_TRACK, clip_a_end)
-    local b_start_before = clip_b.timeline_start
+    local b_start_before = clip_b.sequence_start
 
     -- Roll clip_a:out + gap:in by 3 frames (extend A into gap)
     local delta = 3
@@ -492,9 +492,9 @@ run_test("roll_at_gap_boundary", function()
 
     -- clip_b should NOT move (roll into gap)
     local b_after = Clip.load(clip_b.id)
-    assert(b_after.timeline_start == b_start_before,
+    assert(b_after.sequence_start == b_start_before,
         string.format("B moved after gap roll! Expected %d, got %d",
-            b_start_before, b_after.timeline_start))
+            b_start_before, b_after.sequence_start))
 
     -- Undo
     command_manager.undo()
@@ -511,7 +511,7 @@ run_test("undo_redo_cycle_preserves_state", function()
     assert(clip_a and clip_b, "No adjacent pair on A3 for undo/redo test")
 
     local a_dur_orig = clip_a.duration
-    local b_start_orig = clip_b.timeline_start
+    local b_start_orig = clip_b.sequence_start
     local delta = 2
 
     -- Execute
@@ -533,7 +533,7 @@ run_test("undo_redo_cycle_preserves_state", function()
     command_manager.undo()
     validate("after undo")
     assert(Clip.load(clip_a.id).duration == a_dur_orig, "Undo didn't restore A duration")
-    assert(Clip.load(clip_b.id).timeline_start == b_start_orig, "Undo didn't restore B start")
+    assert(Clip.load(clip_b.id).sequence_start == b_start_orig, "Undo didn't restore B start")
 
     -- Note: redo not tested here — pre-existing undo history in the anamnesis
     -- project interferes with redo target resolution. Redo is tested in the
@@ -556,7 +556,7 @@ run_test("split_clip_preserves_coverage", function()
     end
     assert(target, "No clip long enough to split on V1")
 
-    local orig_start = target.timeline_start
+    local orig_start = target.sequence_start
     local orig_dur = target.duration
     local split_point = orig_start + math.floor(orig_dur / 2)
 
@@ -572,10 +572,10 @@ run_test("split_clip_preserves_coverage", function()
 
     -- First part should end at split_point
     local first = Clip.load(target.id)
-    assert(first.timeline_start == orig_start, "First part start changed")
-    assert(first.timeline_start + first.duration == split_point,
+    assert(first.sequence_start == orig_start, "First part start changed")
+    assert(first.sequence_start + first.duration == split_point,
         string.format("First part should end at %d, ends at %d",
-            split_point, first.timeline_start + first.duration))
+            split_point, first.sequence_start + first.duration))
 
     -- Undo and verify restoration
     command_manager.undo()
@@ -634,14 +634,14 @@ run_test("nudge_clip_position", function()
     -- Find a clip that's NOT at position 0 (so we can nudge left)
     local target = nil
     for _, c in ipairs(all_clips) do
-        if c.track_id == V1_TRACK and not c.is_gap and c.timeline_start > 10 then
+        if c.track_id == V1_TRACK and not c.is_gap and c.sequence_start > 10 then
             target = c
             break
         end
     end
     assert(target, "No nudgeable clip on V1")
 
-    local orig_start = target.timeline_start
+    local orig_start = target.sequence_start
     local nudge_amount = 3
 
     local cmd = Command.create("Nudge", PROJECT_ID)
@@ -655,9 +655,9 @@ run_test("nudge_clip_position", function()
     validate("after nudge")
 
     local nudged = Clip.load(target.id)
-    assert(nudged.timeline_start == orig_start + nudge_amount,
+    assert(nudged.sequence_start == orig_start + nudge_amount,
         string.format("Nudge: expected start=%d, got %d",
-            orig_start + nudge_amount, nudged.timeline_start))
+            orig_start + nudge_amount, nudged.sequence_start))
 
     -- Duration and source coordinates should NOT change for clip nudge
     assert(nudged.duration == target.duration, "Nudge shouldn't change duration")
@@ -669,7 +669,7 @@ run_test("nudge_clip_position", function()
     validate("after nudge undo")
 
     local restored = Clip.load(target.id)
-    assert(restored.timeline_start == orig_start, "Nudge undo didn't restore position")
+    assert(restored.sequence_start == orig_start, "Nudge undo didn't restore position")
 end)
 
 -- =========================================================================

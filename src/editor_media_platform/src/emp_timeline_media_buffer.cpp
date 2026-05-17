@@ -260,10 +260,10 @@ void TimelineMediaBuffer::AddClips(TrackId track, std::vector<ClipInfo> clips) {
 
         if (clips_to_warm.empty()) return;  // all duplicates
 
-        // Re-sort by timeline_start
+        // Re-sort by sequence_start
         std::sort(ts.clips.begin(), ts.clips.end(),
             [](const ClipInfo& a, const ClipInfo& b) {
-                return a.timeline_start < b.timeline_start;
+                return a.sequence_start < b.sequence_start;
             });
     }
     // New audio clips invalidate the mixed cache: the mix thread may have
@@ -437,8 +437,8 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
                 if (tid.type != TrackType::Video) continue;
                 for (const auto& c : ts.clips) {
                     bool in_window = (direction > 0)
-                        ? (c.timeline_start < scan_end && c.timeline_end() > frame)
-                        : (c.timeline_start < frame && c.timeline_end() > scan_end);
+                        ? (c.sequence_start < scan_end && c.sequence_end() > frame)
+                        : (c.sequence_start < frame && c.sequence_end() > scan_end);
                     if (!in_window) continue;
                     if (m_decode_speed_cache.find(std::make_pair(tid, c.media_path))
                             != m_decode_speed_cache.end()) continue;
@@ -470,8 +470,8 @@ void TimelineMediaBuffer::SetPlayhead(int64_t frame, int direction, float speed)
 Segment TimelineMediaBuffer::find_segment_at(const TrackState& ts, int64_t timeline_frame) const {
     // Check if timeline_frame falls inside any clip
     for (const auto& clip : ts.clips) {
-        if (timeline_frame >= clip.timeline_start && timeline_frame < clip.timeline_end()) {
-            return Segment{Segment::CLIP, clip.timeline_start, clip.timeline_end(), &clip};
+        if (timeline_frame >= clip.sequence_start && timeline_frame < clip.sequence_end()) {
+            return Segment{Segment::CLIP, clip.sequence_start, clip.sequence_end(), &clip};
         }
     }
 
@@ -481,15 +481,15 @@ Segment TimelineMediaBuffer::find_segment_at(const TrackState& ts, int64_t timel
 
     for (const auto& clip : ts.clips) {
         // Clips ending at or before this frame → gap starts after them
-        if (clip.timeline_end() <= timeline_frame) {
-            if (clip.timeline_end() > gap_start) {
-                gap_start = clip.timeline_end();
+        if (clip.sequence_end() <= timeline_frame) {
+            if (clip.sequence_end() > gap_start) {
+                gap_start = clip.sequence_end();
             }
         }
         // Clips starting after this frame → gap ends at the nearest one
-        if (clip.timeline_start > timeline_frame) {
-            if (clip.timeline_start < gap_end) {
-                gap_end = clip.timeline_start;
+        if (clip.sequence_start > timeline_frame) {
+            if (clip.sequence_start < gap_end) {
+                gap_end = clip.sequence_start;
             }
         }
     }
@@ -507,7 +507,7 @@ bool TimelineMediaBuffer::is_video_obscured(const TrackId& track, int64_t timeli
         if (tid.type != TrackType::Video) continue;
         if (tid.index <= track.index) continue;  // same or lower — not obscuring
         for (const auto& clip : ts.clips) {
-            if (timeline_frame >= clip.timeline_start && timeline_frame < clip.timeline_end()) {
+            if (timeline_frame >= clip.sequence_start && timeline_frame < clip.sequence_end()) {
                 return true;
             }
         }
@@ -562,8 +562,8 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
         EMP_LOG_DEBUG("GetVideoFrame gap: track %s frame %lld, %zu clips [%lld..%lld)",
             tbuf, (long long)timeline_frame,
             ts.clips.size(),
-            ts.clips.empty() ? -1LL : (long long)ts.clips.front().timeline_start,
-            ts.clips.empty() ? -1LL : (long long)ts.clips.back().timeline_end());
+            ts.clips.empty() ? -1LL : (long long)ts.clips.front().sequence_start,
+            ts.clips.empty() ? -1LL : (long long)ts.clips.back().sequence_end());
         int dir = m_playhead_direction.load(std::memory_order_relaxed);
         if (dir != 0 && is_video_buffer_low(ts, timeline_frame, dir)) {
             tracks_lock.unlock();
@@ -580,8 +580,8 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     result.media_path = clip->media_path;
     result.clip_fps_num = clip->rate_num;
     result.clip_fps_den = clip->rate_den;
-    result.clip_start_frame = clip->timeline_start;
-    result.clip_end_frame = clip->timeline_end();
+    result.clip_start_frame = clip->sequence_start;
+    result.clip_end_frame = clip->sequence_end();
     // Same helper REFILL uses (fill_prefetch), so the wait path and the
     // decode path agree on what's needed for display.
     result.obscured = is_video_obscured(track, timeline_frame);
@@ -589,7 +589,7 @@ VideoResult TimelineMediaBuffer::GetVideoFrame(TrackId track, int64_t timeline_f
     // Compute source frame: source_in + (timeline_offset * speed_ratio)
     // speed_ratio < 1.0 = slow motion (fewer source frames than timeline frames)
     int64_t source_frame = clip->source_in +
-        static_cast<int64_t>((timeline_frame - clip->timeline_start) * clip->speed_ratio);
+        static_cast<int64_t>((timeline_frame - clip->sequence_start) * clip->speed_ratio);
     result.source_frame = source_frame;
 
     // Check video cache (keyed by timeline_frame for this track)
@@ -911,8 +911,8 @@ SegmentUS TimelineMediaBuffer::find_segment_at_us(const TrackState& ts, TimeUS t
     // Check if t_us falls inside any clip
     for (const auto& clip : ts.clips) {
         assert(clip.rate_den > 0 && "find_segment_at_us: clip has zero rate_den");
-        TimeUS start = FrameTime::from_frame(clip.timeline_start, m_seq_rate).to_us();
-        TimeUS end = FrameTime::from_frame(clip.timeline_end(), m_seq_rate).to_us();
+        TimeUS start = FrameTime::from_frame(clip.sequence_start, m_seq_rate).to_us();
+        TimeUS end = FrameTime::from_frame(clip.sequence_end(), m_seq_rate).to_us();
         if (t_us >= start && t_us < end) {
             return SegmentUS{SegmentUS::CLIP, start, end, &clip};
         }
@@ -923,8 +923,8 @@ SegmentUS TimelineMediaBuffer::find_segment_at_us(const TrackState& ts, TimeUS t
     TimeUS gap_end = std::numeric_limits<TimeUS>::max();
 
     for (const auto& clip : ts.clips) {
-        TimeUS clip_end = FrameTime::from_frame(clip.timeline_end(), m_seq_rate).to_us();
-        TimeUS clip_start = FrameTime::from_frame(clip.timeline_start, m_seq_rate).to_us();
+        TimeUS clip_end = FrameTime::from_frame(clip.sequence_end(), m_seq_rate).to_us();
+        TimeUS clip_start = FrameTime::from_frame(clip.sequence_start, m_seq_rate).to_us();
 
         if (clip_end <= t_us) {
             if (clip_end > gap_start) gap_start = clip_end;
@@ -981,8 +981,8 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::build_audio_output(
     if (source_sample_count <= 0) return nullptr;
 
     // Output sample count (timeline duration)
-    int64_t timeline_duration_us = timeline_t1 - timeline_t0;
-    int64_t out_frames = (timeline_duration_us * sr) / 1000000;
+    int64_t sequence_duration_us = timeline_t1 - timeline_t0;
+    int64_t out_frames = (sequence_duration_us * sr) / 1000000;
     if (out_frames <= 0) return nullptr;
 
     std::vector<float> out_data(out_frames * ch);
@@ -2579,7 +2579,7 @@ void TimelineMediaBuffer::decode_into_cache(
     assert(clip->speed_ratio != 0.0f && "decode_into_cache: clip has zero speed_ratio");
 
     int64_t source_frame = clip->source_in +
-        static_cast<int64_t>((position - clip->timeline_start) * clip->speed_ratio);
+        static_cast<int64_t>((position - clip->sequence_start) * clip->speed_ratio);
 
     // ── Early EOF check: skip decoder if past recorded EOF for this clip ──
     // On first EOF, we record the hold frame in clip_eof_frame. Subsequent
@@ -2605,12 +2605,12 @@ void TimelineMediaBuffer::decode_into_cache(
                     auto& cache = tit->second.video_cache;
                     for (int s = 0; s < stride; ++s) {
                         int64_t fill_tf = position + s * direction;
-                        if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                        if (fill_tf < clip->sequence_start || fill_tf >= clip->sequence_end()) break;
                         while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                             evict_video_cache_entry(tit->second);
                         }
                         int64_t fill_sf = clip->source_in +
-                            static_cast<int64_t>((fill_tf - clip->timeline_start) * clip->speed_ratio);
+                            static_cast<int64_t>((fill_tf - clip->sequence_start) * clip->speed_ratio);
                         cache[fill_tf] = {clip->clip_id, fill_sf,
                                           ei.hold_frame, ei.rotation,
                                           ei.par_num, ei.par_den,
@@ -2636,8 +2636,8 @@ void TimelineMediaBuffer::decode_into_cache(
 
         if (!held_reader) {
             // Undecodable clip — skip past clip in direction of travel
-            int64_t skip_to = (direction > 0) ? clip->timeline_end()
-                                               : clip->timeline_start - 1;
+            int64_t skip_to = (direction > 0) ? clip->sequence_end()
+                                               : clip->sequence_start - 1;
             char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));
             EMP_LOG_WARN("PREFETCH SKIP: %s clip=%.8s undecodable, advancing to %lld",
                 tbuf, clip->clip_id.c_str(), (long long)skip_to);
@@ -2677,7 +2677,7 @@ void TimelineMediaBuffer::decode_into_cache(
                 int fill_count = 1;
                 for (int s = 1; s < stride; ++s) {
                     int64_t fill_tf = position + s * direction;
-                    if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                    if (fill_tf < clip->sequence_start || fill_tf >= clip->sequence_end()) break;
                     while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                         evict_video_cache_entry(tit->second);
                     }
@@ -2778,7 +2778,7 @@ void TimelineMediaBuffer::decode_into_cache(
             int fill_count = 1;
             for (int s = 1; s < stride; ++s) {
                 int64_t fill_tf = position + s * direction;
-                if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                if (fill_tf < clip->sequence_start || fill_tf >= clip->sequence_end()) break;
                 while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                     evict_video_cache_entry(tit->second);
                 }
@@ -2867,12 +2867,12 @@ void TimelineMediaBuffer::decode_into_cache(
                 if (last_good_frame) {
                     for (int s = 0; s < stride; ++s) {
                         int64_t fill_tf = position + s * direction;
-                        if (fill_tf < clip->timeline_start || fill_tf >= clip->timeline_end()) break;
+                        if (fill_tf < clip->sequence_start || fill_tf >= clip->sequence_end()) break;
                         while (cache.size() >= TrackState::MAX_VIDEO_CACHE) {
                             evict_video_cache_entry(tit->second);
                         }
                         int64_t fill_sf = clip->source_in +
-                            static_cast<int64_t>((fill_tf - clip->timeline_start) * clip->speed_ratio);
+                            static_cast<int64_t>((fill_tf - clip->sequence_start) * clip->speed_ratio);
                         cache[fill_tf] = {clip->clip_id, fill_sf,
                                           last_good_frame, info.rotation,
                                           info.video_par_num, info.video_par_den,

@@ -67,7 +67,7 @@ VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 24, 1, 48000, 1920
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence for media_audio
@@ -76,7 +76,7 @@ VALUES ('master_media_audio', 'proj', 'media_audio_master', 'master', 48000, 1, 
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_audio', 'master_media_audio', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_audio' WHERE id = 'master_media_audio' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_audio', 'proj', 'master_media_audio', 'master_v_media_audio', 'media_audio', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence for media_b
@@ -85,10 +85,10 @@ VALUES ('master_media_b', 'proj', 'media_b_master', 'master', 24, 1, 48000, 1920
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_b' WHERE id = 'master_media_b' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_b', 'proj', 'master_media_b', 'master_v_media_b', 'media_b', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_v2', 'proj', 'ClipV2', 'v2', 'seq', 'master_media_b', 0, 48, 0, 48, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v1', 'proj', 'ClipV1', 'v1', 'seq', 'master_media_a', 24, 48, 10, 58, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
@@ -96,7 +96,7 @@ INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_i
 -- A1: audio clip at frames 0-96
 -- A2: audio clip at frames 48-144 (overlapping A1)
 assert(db:exec([[
-    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_a1', 'proj', 'ClipA1', 'a1', 'seq', 'master_media_audio', 0, 96, 0, 96000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
     ('clip_a2', 'proj', 'ClipA2', 'a2', 'seq', 'master_media_b', 48, 96, 0, 96, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 

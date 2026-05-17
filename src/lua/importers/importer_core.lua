@@ -344,7 +344,7 @@ end
 -- Compute the start_timecode_frame for the new sequence. start_tc_seconds
 -- is the source format's timeline-start; convert to native frames at the
 -- sequence's fps.
-local function compute_timeline_start_tc(timeline_data, fps_num, fps_den)
+local function compute_sequence_start_tc(timeline_data, fps_num, fps_den)
     if not (timeline_data.start_tc_seconds and timeline_data.start_tc_seconds > 0) then
         return 0
     end
@@ -689,7 +689,7 @@ function M.import_into_project(project_id, parse_result, opts)
         local fps_num, fps_den =
             resolve_timeline_frame_rate(timeline_data, min_start_frame, project_settings)
         local start_timecode_frame =
-            compute_timeline_start_tc(timeline_data, fps_num, fps_den)
+            compute_sequence_start_tc(timeline_data, fps_num, fps_den)
         local view_start, view_duration, playhead_frame =
             compute_viewport(timeline_data, fps_num, fps_den, start_timecode_frame,
                              min_start_frame, max_end_frame)
@@ -739,7 +739,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     -- in native units, set by the parser (parse_resolve_tracks):
                     -- file_tc_origin + file-relative offset. Frames for video,
                     -- samples for audio. The master sequence's timebase IS TC
-                    -- space (its media_refs sit at timeline_start = file_tc_origin),
+                    -- space (its media_refs sit at sequence_start = file_tc_origin),
                     -- so parser values pass through unchanged.
                     assert(clip_data.native_rate, string.format(
                         "import_into_project: clip '%s' missing native_rate (media_id=%s)",
@@ -776,7 +776,7 @@ function M.import_into_project(project_id, parse_result, opts)
                         track_id              = track.id,
                         sequence_id    = master_seq_id,
                         name                  = clip_data.name or "Untitled Clip",
-                        timeline_start_frame  = clip_data.start_value,
+                        sequence_start_frame  = clip_data.start_value,
                         duration_frames       = clip_data.duration,
                         source_in_frame       = source_in_final,
                         source_out_frame      = source_out_final,

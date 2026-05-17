@@ -47,7 +47,7 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 2000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES
           ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0),
@@ -56,18 +56,18 @@ local function build_fixture()
     return db
 end
 
-local function seed_clip(db, clip_id, track_id, timeline_start, duration,
+local function seed_clip(db, clip_id, track_id, sequence_start, duration,
                         source_in, source_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d,
             'passthrough', 1, 1.0, 0, 0, 0)
-    ]], clip_id, track_id, clip_id, timeline_start, duration,
+    ]], clip_id, track_id, clip_id, sequence_start, duration,
        source_in, source_out)))
 end
 
@@ -92,12 +92,12 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames
+        SELECT sequence_start_frame, duration_frames
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
-    local r = { timeline_start = stmt:value(0), duration = stmt:value(1) }
+    local r = { sequence_start = stmt:value(0), duration = stmt:value(1) }
     stmt:finalize()
     return r
 end
@@ -155,12 +155,12 @@ do
     -- Pair 2 ripples upstream by 100 on each affected track.
     local v2 = load_clip(db, "v2")
     local a2 = load_clip(db, "a2")
-    assert(v2.timeline_start == 0 and v2.duration == 100,
+    assert(v2.sequence_start == 0 and v2.duration == 100,
         string.format("v2 expected at [0,100); got [%d,%d)",
-            v2.timeline_start, v2.timeline_start + v2.duration))
-    assert(a2.timeline_start == 0 and a2.duration == 100,
+            v2.sequence_start, v2.sequence_start + v2.duration))
+    assert(a2.sequence_start == 0 and a2.duration == 100,
         string.format("a2 expected at [0,100); got [%d,%d)",
-            a2.timeline_start, a2.timeline_start + a2.duration))
+            a2.sequence_start, a2.sequence_start + a2.duration))
 
     -- G2 link group still intact: both v2 and a2 share G2.
     assert(group_id_for(db, "v2") == "G2", "v2 lost G2 group")
@@ -192,9 +192,9 @@ do
     assert(clip_exists(db, "v2"), "v2 retained")
     assert(clip_exists(db, "a1"), "a1 (unrelated track) retained")
     local v2 = load_clip(db, "v2")
-    assert(v2.timeline_start == 0, "v2 ripples to start")
+    assert(v2.sequence_start == 0, "v2 ripples to start")
     local a1 = load_clip(db, "a1")
-    assert(a1.timeline_start == 0 and a1.duration == 100,
+    assert(a1.sequence_start == 0 and a1.duration == 100,
         "a1 on unrelated track must not move")
     print("  ok")
 end
@@ -253,7 +253,7 @@ do
     -- Sanity: pair 1 gone, pair 2 rippled to start.
     assert(not clip_exists(db, "v1") and not clip_exists(db, "a1"))
     local v2 = load_clip(db, "v2")
-    assert(v2.timeline_start == 0)
+    assert(v2.sequence_start == 0)
 
     -- Undo.
     assert(undo(cmd))
@@ -261,15 +261,15 @@ do
         "deleted pair restored")
     local v1_after = load_clip(db, "v1")
     local a1_after = load_clip(db, "a1")
-    assert(v1_after.timeline_start == 0 and v1_after.duration == 100,
+    assert(v1_after.sequence_start == 0 and v1_after.duration == 100,
         "v1 restored at original position")
-    assert(a1_after.timeline_start == 0 and a1_after.duration == 100,
+    assert(a1_after.sequence_start == 0 and a1_after.duration == 100,
         "a1 restored at original position")
     local v2_after = load_clip(db, "v2")
     local a2_after = load_clip(db, "a2")
-    assert(v2_after.timeline_start == 100 and v2_after.duration == 100,
+    assert(v2_after.sequence_start == 100 and v2_after.duration == 100,
         "v2 un-rippled back to original position")
-    assert(a2_after.timeline_start == 100 and a2_after.duration == 100,
+    assert(a2_after.sequence_start == 100 and a2_after.duration == 100,
         "a2 un-rippled back to original position")
     assert(group_id_for(db, "v1") == "G1" and group_id_for(db, "a1") == "G1",
         "G1 link rows restored")

@@ -46,10 +46,10 @@ local function inmem_clips_on_track(track_id)
     local out = {}
     for _, c in ipairs(list) do
         if not c.is_gap then
-            out[#out+1] = {id=c.id, timeline_start=c.timeline_start, duration=c.duration}
+            out[#out+1] = {id=c.id, sequence_start=c.sequence_start, duration=c.duration}
         end
     end
-    table.sort(out, function(a,b) return a.timeline_start < b.timeline_start end)
+    table.sort(out, function(a,b) return a.sequence_start < b.sequence_start end)
     return out
 end
 
@@ -63,14 +63,14 @@ end
 local function all_timeline_clips_on_track(db, track_id)
     local rows = {}
     local s = db:prepare(
-        "SELECT id, timeline_start_frame, duration_frames FROM clips "
-        .. "WHERE track_id=? ORDER BY timeline_start_frame")
+        "SELECT id, sequence_start_frame, duration_frames FROM clips "
+        .. "WHERE track_id=? ORDER BY sequence_start_frame")
     assert(s, string.format("all_timeline_clips_on_track: prepare failed for track %s", tostring(track_id)))
     s:bind_value(1, track_id); s:exec()
     while s:next() do
         rows[#rows + 1] = {
             id             = s:value(0),
-            timeline_start = s:value(1),
+            sequence_start = s:value(1),
             duration       = s:value(2),
         }
     end
@@ -97,21 +97,21 @@ local layout = ripple_layout.create({
         v1_anchor = {
             id             = "clip_v1_anchor",
             track_key      = "v1",
-            timeline_start = 0,
+            sequence_start = 0,
             duration       = 1000,
             source_in      = 500,    -- non-zero so source_out computation is exercised
         },
         v2_long = {
             id             = "clip_v2_long",
             track_key      = "v2",
-            timeline_start = 0,
+            sequence_start = 0,
             duration       = 2000,
             source_in      = 0,
         },
         v3_off = {
             id             = "clip_v3_off",
             track_key      = "v3",
-            timeline_start = 500,
+            sequence_start = 500,
             duration       = 1000,
             source_in      = 0,
         },
@@ -142,7 +142,7 @@ local db = layout.db
 print("\n-- T1: cut-mode splits spanning V2 clip")
 
 -- Trim V1's out-edge by -200 (shrink from 1000→800).
--- trim_point for out-edge = base_clip.timeline_start + base_clip.duration = 0+1000 = 1000.
+-- trim_point for out-edge = base_clip.sequence_start + base_clip.duration = 0+1000 = 1000.
 -- V2 clip spans [0, 2000), so it straddles frame 1000 → must be split.
 local trim_cmd = Command.create("BatchRippleEdit", layout.project_id)
 trim_cmd:set_parameter("sequence_id", layout.sequence_id)
@@ -168,8 +168,8 @@ assert(#v2_clips_t1 == 2, string.format(
 
 -- Left half: anchored at 0, duration up to the split point (frame 1000).
 local v2_left = v2_clips_t1[1]
-assert(v2_left.timeline_start == 0,
-    string.format("T1: V2 left half must start at 0; got %d", v2_left.timeline_start))
+assert(v2_left.sequence_start == 0,
+    string.format("T1: V2 left half must start at 0; got %d", v2_left.sequence_start))
 assert(v2_left.duration == 1000,
     string.format("T1: V2 left half must span to split point (dur=1000); got %d", v2_left.duration))
 assert(v2_left.id == "clip_v2_long",
@@ -178,9 +178,9 @@ assert(v2_left.id == "clip_v2_long",
 -- Right half: stays at original TC position (cut mode preserves downstream TC).
 -- A 200-frame implicit gap forms between V1's new out (800) and V2's right start (1000).
 local v2_right = v2_clips_t1[2]
-assert(v2_right.timeline_start == 1000, string.format(
+assert(v2_right.sequence_start == 1000, string.format(
     "T1: V2 right half must stay at 1000 (cut mode preserves downstream TC); got %d",
-    v2_right.timeline_start))
+    v2_right.sequence_start))
 assert(v2_right.duration == 1000, string.format(
     "T1: V2 right half must have dur=1000; got %d", v2_right.duration))
 
@@ -188,8 +188,8 @@ assert(v2_right.duration == 1000, string.format(
 local v3_clips_t1 = all_timeline_clips_on_track(db, "track_v3")
 assert(#v3_clips_t1 == 1,
     string.format("T1: V3 (off mode) must still have exactly 1 clip; got %d", #v3_clips_t1))
-assert(v3_clips_t1[1].timeline_start == 500,
-    string.format("T1: V3 clip must not move (off mode); got start=%d", v3_clips_t1[1].timeline_start))
+assert(v3_clips_t1[1].sequence_start == 500,
+    string.format("T1: V3 clip must not move (off mode); got start=%d", v3_clips_t1[1].sequence_start))
 assert(v3_clips_t1[1].duration == 1000,
     string.format("T1: V3 clip duration unchanged; got %d", v3_clips_t1[1].duration))
 
@@ -198,12 +198,12 @@ assert(v3_clips_t1[1].duration == 1000,
 local v2_inmem_t1 = inmem_clips_on_track("track_v2")
 assert(#v2_inmem_t1 == 2, string.format(
     "T1 (in-mem): V2 clip_state must have 2 clips; got %d", #v2_inmem_t1))
-assert(v2_inmem_t1[1].timeline_start == 0 and v2_inmem_t1[1].duration == 1000,
+assert(v2_inmem_t1[1].sequence_start == 0 and v2_inmem_t1[1].duration == 1000,
     string.format("T1 (in-mem): V2 left half wrong; ts=%d dur=%d",
-        v2_inmem_t1[1].timeline_start, v2_inmem_t1[1].duration))
-assert(v2_inmem_t1[2].timeline_start == 1000 and v2_inmem_t1[2].duration == 1000,
+        v2_inmem_t1[1].sequence_start, v2_inmem_t1[1].duration))
+assert(v2_inmem_t1[2].sequence_start == 1000 and v2_inmem_t1[2].duration == 1000,
     string.format("T1 (in-mem): V2 right half wrong; ts=%d dur=%d",
-        v2_inmem_t1[2].timeline_start, v2_inmem_t1[2].duration))
+        v2_inmem_t1[2].sequence_start, v2_inmem_t1[2].duration))
 
 print("T1 passed")
 
@@ -218,8 +218,8 @@ local v1_undone = load_clip_opt("clip_v1_anchor")
 assert(v1_undone, "T2: V1 anchor clip must exist after undo")
 assert(v1_undone.duration == 1000, string.format(
     "T2: V1 must be restored to duration=1000 after undo; got %d", v1_undone.duration))
-assert(v1_undone.timeline_start == 0,
-    string.format("T2: V1 timeline_start must be 0 after undo; got %d", v1_undone.timeline_start))
+assert(v1_undone.sequence_start == 0,
+    string.format("T2: V1 sequence_start must be 0 after undo; got %d", v1_undone.sequence_start))
 
 -- V2 must be a SINGLE clip again (right half deleted by undo).
 local v2_clips_t2 = all_timeline_clips_on_track(db, "track_v2")
@@ -230,8 +230,8 @@ assert(#v2_clips_t2 == 1, string.format(
 local v2_restored = v2_clips_t2[1]
 assert(v2_restored.id == "clip_v2_long",
     "T2: surviving V2 clip must be the original (clip_v2_long)")
-assert(v2_restored.timeline_start == 0,
-    string.format("T2: V2 must start at 0 after undo; got %d", v2_restored.timeline_start))
+assert(v2_restored.sequence_start == 0,
+    string.format("T2: V2 must start at 0 after undo; got %d", v2_restored.sequence_start))
 assert(v2_restored.duration == 2000, string.format(
     "T2: V2 must be restored to full duration=2000 after undo; got %d", v2_restored.duration))
 
@@ -242,7 +242,7 @@ assert(v2_right_after_undo == nil, string.format(
 
 -- V3 still untouched.
 local v3_clips_t2 = all_timeline_clips_on_track(db, "track_v3")
-assert(#v3_clips_t2 == 1 and v3_clips_t2[1].timeline_start == 500,
+assert(#v3_clips_t2 == 1 and v3_clips_t2[1].sequence_start == 500,
     "T2: V3 (off mode) unchanged after undo")
 
 -- In-memory state after undo must match restored DB.
@@ -279,28 +279,28 @@ assert(#v2_clips_t4 == 2, string.format(
 
 local v2_left_t4  = v2_clips_t4[1]
 local v2_right_t4 = v2_clips_t4[2]
-assert(v2_left_t4.timeline_start == 0 and v2_left_t4.duration == 1000,
+assert(v2_left_t4.sequence_start == 0 and v2_left_t4.duration == 1000,
     string.format("T4: V2 left half must be [0, 1000); got start=%d dur=%d",
-        v2_left_t4.timeline_start, v2_left_t4.duration))
-assert(v2_right_t4.timeline_start == 1000 and v2_right_t4.duration == 1000,
+        v2_left_t4.sequence_start, v2_left_t4.duration))
+assert(v2_right_t4.sequence_start == 1000 and v2_right_t4.duration == 1000,
     string.format("T4: V2 right half must stay at [1000, 2000) (cut mode); got start=%d dur=%d",
-        v2_right_t4.timeline_start, v2_right_t4.duration))
+        v2_right_t4.sequence_start, v2_right_t4.duration))
 
 -- V3 still untouched.
 local v3_clips_t4 = all_timeline_clips_on_track(db, "track_v3")
-assert(#v3_clips_t4 == 1 and v3_clips_t4[1].timeline_start == 500,
+assert(#v3_clips_t4 == 1 and v3_clips_t4[1].sequence_start == 500,
     "T4: V3 (off mode) unchanged after redo")
 
 -- In-memory state after redo must match re-applied split.
 local v2_inmem_t4 = inmem_clips_on_track("track_v2")
 assert(#v2_inmem_t4 == 2, string.format(
     "T4 (in-mem): V2 clip_state must have 2 clips after redo; got %d", #v2_inmem_t4))
-assert(v2_inmem_t4[1].timeline_start == 0 and v2_inmem_t4[1].duration == 1000,
+assert(v2_inmem_t4[1].sequence_start == 0 and v2_inmem_t4[1].duration == 1000,
     string.format("T4 (in-mem): V2 left half wrong; ts=%d dur=%d",
-        v2_inmem_t4[1].timeline_start, v2_inmem_t4[1].duration))
-assert(v2_inmem_t4[2].timeline_start == 1000 and v2_inmem_t4[2].duration == 1000,
+        v2_inmem_t4[1].sequence_start, v2_inmem_t4[1].duration))
+assert(v2_inmem_t4[2].sequence_start == 1000 and v2_inmem_t4[2].duration == 1000,
     string.format("T4 (in-mem): V2 right half wrong; ts=%d dur=%d",
-        v2_inmem_t4[2].timeline_start, v2_inmem_t4[2].duration))
+        v2_inmem_t4[2].sequence_start, v2_inmem_t4[2].duration))
 
 print("T4 passed")
 

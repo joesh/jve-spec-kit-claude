@@ -116,7 +116,7 @@ local bad_clip = {
     source_in = 0,
     source_out = 0,
     duration = 100,
-    timeline_start = 0,
+    sequence_start = 0,
     fps_numerator = 25,
     fps_denominator = 1,
 }
@@ -138,7 +138,7 @@ local mock_sequence = {
                 source_frame = 0,
                 clip_id = bad_clip.id,
                 source_in = bad_clip.source_in, source_out = bad_clip.source_out,
-                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                duration = bad_clip.duration, sequence_start = bad_clip.sequence_start,
                 fps_numerator = bad_clip.fps_numerator, fps_denominator = bad_clip.fps_denominator,
                 track_index = bad_track.track_index, track_type = bad_track.type,
             }}
@@ -156,7 +156,7 @@ local mock_sequence = {
                 media_path = "/test.mov",
                 clip_id = bad_clip.id,
                 source_in = bad_clip.source_in, source_out = bad_clip.source_out,
-                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                duration = bad_clip.duration, sequence_start = bad_clip.sequence_start,
                 fps_numerator = 25, fps_denominator = 1,
                 track_index = bad_track.track_index, track_type = bad_track.type,
             }}

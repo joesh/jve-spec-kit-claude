@@ -173,8 +173,8 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         file_id = nil,
         media_key = nil,
         track_id = track_id,
-        timeline_start = nil,
-        timeline_end = nil,
+        sequence_start = nil,
+        sequence_end = nil,
         start_value = nil,
         duration = 0,      -- integer frames
         source_in = 0,     -- integer frames
@@ -243,9 +243,9 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
                 clip_info.raw_duration = raw_duration
             end
         elseif name == "start" then
-            clip_info.timeline_start = parse_time_frames(child.text, clip_info.frame_rate)
+            clip_info.sequence_start = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "end" then
-            clip_info.timeline_end = parse_time_frames(child.text, clip_info.frame_rate)
+            clip_info.sequence_end = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "in" then
             clip_info.source_in = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "out" then
@@ -262,8 +262,8 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
     if clip_info.duration <= 0 and clip_info.raw_duration and clip_info.raw_duration > 0 then
         clip_info.duration = clip_info.raw_duration
     end
-    if clip_info.duration <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
-        clip_info.duration = clip_info.timeline_end - clip_info.timeline_start
+    if clip_info.duration <= 0 and clip_info.sequence_start and clip_info.sequence_end and clip_info.sequence_end > clip_info.sequence_start then
+        clip_info.duration = clip_info.sequence_end - clip_info.sequence_start
     end
 
     return clip_info
@@ -285,12 +285,12 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
 
     local function finalize_clip_timing(clip_info)
         -- All values are integer frames
-        local start = clip_info.timeline_start
+        local start = clip_info.sequence_start
         if start and start < 0 then
             start = nil
         end
 
-        local finish = clip_info.timeline_end
+        local finish = clip_info.sequence_end
         if finish and finish < 0 then
             finish = nil
         end
@@ -336,8 +336,8 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
             ))
         end
 
-        clip_info.timeline_start = start
-        clip_info.timeline_end = finish
+        clip_info.sequence_start = start
+        clip_info.sequence_end = finish
         clip_info.start_value = start
         clip_info.duration = duration
         prev_end_time = finish
@@ -990,7 +990,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             owner_sequence_id = clip_info.owner_sequence_id,
             sequence_id = nested_seq_id,
             name = clip_info.name or "Clip",
-            timeline_start_frame = start_value,
+            sequence_start_frame = start_value,
             duration_frames = duration,
             source_in_frame = source_in,
             source_out_frame = source_out,

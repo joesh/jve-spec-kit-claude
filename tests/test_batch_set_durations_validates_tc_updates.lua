@@ -3,7 +3,7 @@
 ---
 --- Half 1 of NSF: validate caller preconditions at the function boundary.
 --- `tc_updates` carries the probed TC origin that the function uses to
---- rebase media_refs.timeline_start_frame / source_in_frame / source_out
+--- rebase media_refs.sequence_start_frame / source_in_frame / source_out
 --- _frame. A bad value here lands directly in the DB columns — SQL has
 --- no CHECK constraint on negative origin, and the next resolver call
 --- silently produces wrong coverage. (Live precedent for the symptom:

@@ -14,7 +14,7 @@
 ---     * All share the same source_in_frame AND source_out_frame
 ---       (divergent windows refuse — per-track slip is the genuine
 ---       expressiveness Expand buys; composite has nowhere to encode it).
----     * All share the same timeline_start_frame AND duration_frames.
+---     * All share the same sequence_start_frame AND duration_frames.
 ---     * All share the same fps_mismatch_policy.
 ---     * All members of the same link_group_id.
 ---     * Each clip's master_audio_track_id is distinct.
@@ -114,12 +114,12 @@ local function assert_consistent_selection(selected)
             .. "in composite — refused.",
             r.id, r.source_in_frame, r.source_out_frame,
             first.source_in_frame, first.source_out_frame))
-        assert(r.timeline_start_frame == first.timeline_start_frame
+        assert(r.sequence_start_frame == first.sequence_start_frame
            and r.duration_frames == first.duration_frames, string.format(
             "CollapseAudio: clip %s timeline window [%d..+%d) differs from "
             .. "first selected clip [%d..+%d).",
-            r.id, r.timeline_start_frame, r.duration_frames,
-            first.timeline_start_frame, first.duration_frames))
+            r.id, r.sequence_start_frame, r.duration_frames,
+            first.sequence_start_frame, first.duration_frames))
         assert(r.fps_mismatch_policy == first.fps_mismatch_policy, string.format(
             "CollapseAudio: clip %s fps_mismatch_policy=%s differs from first "
             .. "selected clip's %s.",
@@ -173,7 +173,7 @@ local function insert_composite_clip(sequence_id, first, topmost)
         track_id              = topmost.row.track_id,
         sequence_id    = first.sequence_id,
         name                  = first.name,
-        timeline_start_frame  = first.timeline_start_frame,
+        sequence_start_frame  = first.sequence_start_frame,
         duration_frames       = first.duration_frames,
         source_in_frame       = first.source_in_frame,
         source_out_frame      = first.source_out_frame,

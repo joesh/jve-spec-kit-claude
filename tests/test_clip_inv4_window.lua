@@ -43,7 +43,7 @@ assert(db:exec(
 -- Master has a single 100-frame media_ref — master's effective duration = 100.
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr1', 'p1', 'seq-master', 'trk-master-v1', 'med1', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 
@@ -56,7 +56,7 @@ local clip_id = Clip.create({
     track_id = "trk-edit-v1",
     sequence_id = "seq-master",
     name = "c",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,

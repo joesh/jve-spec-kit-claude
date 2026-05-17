@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
--- Regression: get_all should return clips with integer timeline_start/duration.
+-- Regression: get_all should return clips with integer sequence_start/duration.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -13,7 +13,7 @@ data.state.clips = {
     {
         id = "c1",
         track_id = "v1",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 48,
         enabled = true,
     }
@@ -22,9 +22,9 @@ data.state.clips = {
 local clips = clip_state.get_all()
 assert(#clips == 1, "expected one clip")
 local clip = clips[1]
-assert(type(clip.timeline_start) == "number", "timeline_start should be integer")
+assert(type(clip.sequence_start) == "number", "sequence_start should be integer")
 assert(type(clip.duration) == "number", "duration should be integer")
-assert(clip.timeline_start == 0, "timeline_start should be 0")
+assert(clip.sequence_start == 0, "sequence_start should be 0")
 assert(clip.duration == 48, "duration should be 48")
 
 print("✅ clip_state.get_all returns integer clip bounds")

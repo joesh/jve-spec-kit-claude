@@ -15,13 +15,13 @@ local clips = {
     {
         id = "a",
         track_id = "v1",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100
     },
     {
         id = "b",
         track_id = "v1",
-        timeline_start = 100,
+        sequence_start = 100,
         duration = 80
     }
 }
@@ -37,8 +37,8 @@ end
 local function build_entries()
     local entries = {}
     for _, clip in ipairs(clips) do
-        local sx = time_to_px(clip.timeline_start)
-        local ex = time_to_px(clip.timeline_start + clip.duration)
+        local sx = time_to_px(clip.sequence_start)
+        local ex = time_to_px(clip.sequence_start + clip.duration)
         table.insert(entries, {clip = clip, edge = "in", distance = 0, px = sx})
         table.insert(entries, {clip = clip, edge = "out", distance = 0, px = ex})
     end
@@ -56,8 +56,8 @@ local search_radius = math.max(EDGE, ROLL) + 2
 local function detect_roll_between_clips(left_clip, right_clip, click_x, _viewport_width)
     -- Mirror timeline_state.detect_roll_between_clips
     local EDGE_ZONE = ui_constants.TIMELINE.ROLL_ZONE_PX
-    local sx = time_to_px(left_clip.timeline_start + left_clip.duration)
-    local ex = time_to_px(right_clip.timeline_start)
+    local sx = time_to_px(left_clip.sequence_start + left_clip.duration)
+    local ex = time_to_px(right_clip.sequence_start)
     if ex - sx < EDGE_ZONE then
         local mid = (sx + ex) / 2
         if math.abs(click_x - mid) <= EDGE_ZONE / 2 then

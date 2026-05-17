@@ -6,7 +6,7 @@
 --
 --   (a) new range fully covers an existing clip  → DELETE
 --   (c) new range head-overlaps an existing clip → trim E's head
---       (timeline_start shifts forward, source_in advances,
+--       (sequence_start shifts forward, source_in advances,
 --        source_out unchanged)
 --   (d) new range straddles inside an existing   → split E into
 --       (shorter left half + new right-half row at n_end)
@@ -66,12 +66,12 @@ local function build_fixture()
         VALUES ('med-v-pre', 'p1', 'pre.mov', '/tmp/pre.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 1, 1.0, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v-pre', 'p1', 'm-pre', 'm-pre-v1', 'med-v-pre', 0, 1000, 0, 1000,
             1, 1.0, 0, 0, 0);
@@ -82,22 +82,22 @@ end
 -- Seed one pre-existing V clip on the edit track. Timebase: edit is 24/1,
 -- master 'm-pre' is 24/1 passthrough so source==owner frames. Source
 -- range starts at `source_in` for `duration` frames.
-local function seed_pre_clip(db, clip_id, timeline_start, duration, source_in)
+local function seed_pre_clip(db, clip_id, sequence_start, duration, source_in)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name, timeline_start_frame, duration_frames,
+            sequence_id, name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('%s', 'p1', 'e', 'e-v1', 'm-pre', '%s', %d, %d, %d, %d,
             'passthrough', 1, 1.0, 0, 0, 0)
-    ]], clip_id, clip_id, timeline_start, duration, source_in,
+    ]], clip_id, clip_id, sequence_start, duration, source_in,
        source_in + duration)))
 end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame
         FROM clips WHERE id = ?
     ]])
@@ -105,7 +105,7 @@ local function load_clip(db, id)
     assert(stmt:exec(), "load_clip: exec failed")
     if not stmt:next() then stmt:finalize(); return nil end
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         source_in      = stmt:value(2),
         source_out     = stmt:value(3),
@@ -116,8 +116,8 @@ end
 
 local function clips_on_track(db, track_id)
     local stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames
-        FROM clips WHERE track_id = ? ORDER BY timeline_start_frame
+        SELECT id, sequence_start_frame, duration_frames
+        FROM clips WHERE track_id = ? ORDER BY sequence_start_frame
     ]])
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "clips_on_track: exec failed")
@@ -125,7 +125,7 @@ local function clips_on_track(db, track_id)
     while stmt:next() do
         list[#list + 1] = {
             id = stmt:value(0),
-            timeline_start = stmt:value(1),
+            sequence_start = stmt:value(1),
             duration = stmt:value(2),
         }
     end
@@ -149,7 +149,7 @@ do
     seed_pre_clip(db, "pre", 40, 40, 0)
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 30,
+        sequence_start_frame = 30,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
     })
@@ -158,15 +158,15 @@ do
     local list = clips_on_track(db, "e-v1")
     assert(#list == 1,
         string.format("track should hold 1 clip (the new one); got %d", #list))
-    assert(list[1].timeline_start == 30 and list[1].duration == 60,
+    assert(list[1].sequence_start == 30 and list[1].duration == 60,
         string.format("new clip at [30,90); got [%d,%d)",
-            list[1].timeline_start, list[1].timeline_start + list[1].duration))
+            list[1].sequence_start, list[1].sequence_start + list[1].duration))
     print("  ok")
 end
 
 -- -------------------------------------------------------------------------
 -- (c) Head-overlap: Overwrite's range starts at or before E's start and
---     ends inside E. E's head is trimmed away — timeline_start shifts to
+--     ends inside E. E's head is trimmed away — sequence_start shifts to
 --     n_end, source_in advances by the trimmed amount, source_out is
 --     unchanged.
 -- -------------------------------------------------------------------------
@@ -178,16 +178,16 @@ do
     seed_pre_clip(db, "pre", 100, 100, 50)
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 80,
+        sequence_start_frame = 80,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
     })
     local pre = load_clip(db, "pre")
     assert(pre, "pre clip must still exist (head-trim, not delete)")
     -- New duration = 200 - 140 = 60; shifted to start at 140.
-    assert(pre.timeline_start == 140, string.format(
-        "pre clip timeline_start=%d expected 140 (n_end of overwrite)",
-        pre.timeline_start))
+    assert(pre.sequence_start == 140, string.format(
+        "pre clip sequence_start=%d expected 140 (n_end of overwrite)",
+        pre.sequence_start))
     assert(pre.duration == 60, string.format(
         "pre clip duration=%d expected 60", pre.duration))
     -- source_in advances by the trim shift (140-100=40), passthrough 1:1
@@ -213,7 +213,7 @@ do
     seed_pre_clip(db, "pre", 50, 200, 100)
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 120,
+        sequence_start_frame = 120,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
     })
@@ -222,9 +222,9 @@ do
     -- unchanged, source_out shrinks by 130 (the removed right side) to 170.
     local pre = load_clip(db, "pre")
     assert(pre, "left half must still exist under original id")
-    assert(pre.timeline_start == 50 and pre.duration == 70, string.format(
+    assert(pre.sequence_start == 50 and pre.duration == 70, string.format(
         "left half [timeline=%d, dur=%d] expected [50, 70]",
-        pre.timeline_start, pre.duration))
+        pre.sequence_start, pre.duration))
     assert(pre.source_in == 100 and pre.source_out == 170, string.format(
         "left half source [%d,%d) expected [100,170)",
         pre.source_in, pre.source_out))
@@ -233,11 +233,11 @@ do
     local list = clips_on_track(db, "e-v1")
     assert(#list == 3, string.format(
         "straddle should leave 3 clips (left + new + right); got %d", #list))
-    -- Identify right half: the clip at timeline_start >= 180 that's NOT
+    -- Identify right half: the clip at sequence_start >= 180 that's NOT
     -- the new clip (nested 'm').
     local function find_right_half()
         for _, c in ipairs(list) do
-            if c.timeline_start == 180 then
+            if c.sequence_start == 180 then
                 local q = db:prepare(
                     "SELECT sequence_id FROM clips WHERE id = ?")
                 q:bind_value(1, c.id); q:exec(); q:next()
@@ -283,17 +283,17 @@ do
 
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 30,
+        sequence_start_frame = 30,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 60 frames at [30, 90)
     })
 
     -- pre_a trimmed to [0, 30): duration 30, source_out 30.
     local a = load_clip(db, "pre_a")
-    assert(a and a.timeline_start == 0 and a.duration == 30
+    assert(a and a.sequence_start == 0 and a.duration == 30
            and a.source_in == 0 and a.source_out == 30,
         string.format("pre_a expected [tl=0,d=30,s=(0,30)] got [tl=%s,d=%s,s=(%s,%s)]",
-            tostring(a and a.timeline_start), tostring(a and a.duration),
+            tostring(a and a.sequence_start), tostring(a and a.duration),
             tostring(a and a.source_in),      tostring(a and a.source_out)))
 
     -- pre_b fully covered → deleted.
@@ -301,9 +301,9 @@ do
 
     -- pre_c head-trimmed to [90, 150): duration 60, source_in shifts by 5.
     local c = load_clip(db, "pre_c")
-    assert(c and c.timeline_start == 90 and c.duration == 60,
+    assert(c and c.sequence_start == 90 and c.duration == 60,
         string.format("pre_c expected [tl=90,d=60] got [tl=%s,d=%s]",
-            tostring(c and c.timeline_start), tostring(c and c.duration)))
+            tostring(c and c.sequence_start), tostring(c and c.duration)))
     assert(c.source_in == 705 and c.source_out == 765, string.format(
         "pre_c source expected [705,765) got [%d,%d)",
         c.source_in, c.source_out))
@@ -321,7 +321,7 @@ end
 -- Pre clip [100, 160). Overwrite at [160, 220). n_start == e_end so the
 -- overlap is empty — no occlusion required (new range touches but does
 -- not cross into pre). The find_overlapping_on_track query uses strict
--- `>` on the right boundary via `timeline_start_frame + duration_frames
+-- `>` on the right boundary via `sequence_start_frame + duration_frames
 -- > window_start`, which for e_end == n_start yields `160 > 160` = false.
 -- So no occlusion is invoked. Pre should survive unmodified; new clip
 -- sits at [160, 220). No surprises.
@@ -332,13 +332,13 @@ do
     seed_pre_clip(db, "pre", 100, 60, 0)
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 160,
+        sequence_start_frame = 160,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
     })
     local pre = load_clip(db, "pre")
     assert(pre, "abutting pre clip must survive (no overlap)")
-    assert(pre.timeline_start == 100 and pre.duration == 60 and
+    assert(pre.sequence_start == 100 and pre.duration == 60 and
            pre.source_in == 0 and pre.source_out == 60,
         "abutting pre clip must be untouched")
     print("  ok")
@@ -347,7 +347,7 @@ end
 -- -------------------------------------------------------------------------
 -- Edge: tail-overlap that would leave duration == 0 (n_start == e_start).
 -- Pre clip [100, 160), Overwrite at [100, 180). overlap check
--- (timeline_start_frame < 180 && tl + dur > 100) = true; but the trim
+-- (sequence_start_frame < 180 && tl + dur > 100) = true; but the trim
 -- would make new_duration = 100 - 100 = 0. That's actually a
 -- full-cover case (n_start <= e_start and n_end >= e_end), so case (a)
 -- fires and E is deleted. Verifies the branch ordering holds up at
@@ -359,7 +359,7 @@ do
     seed_pre_clip(db, "pre", 100, 60, 0)
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 100,
+        sequence_start_frame = 100,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 60, [100, 160)
     })
@@ -400,14 +400,14 @@ do
         VALUES ('med120', 'p1', 'm120.mov', '/tmp/m120.mov', 120, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr120', 'p1', 'm120', 'm120-v1', 'med120', 0, 120, 0, 120,
             1, 1.0, 0, 0, 0);
     ]])
     Overwrite.execute({
         sequence_id = "e", source_sequence_id = "m120",
-        timeline_start_frame = 40,
+        sequence_start_frame = 40,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",  -- new = 120, [40, 160)
     })

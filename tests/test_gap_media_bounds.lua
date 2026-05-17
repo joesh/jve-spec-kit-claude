@@ -32,12 +32,12 @@ assert(result.success, "Gap edge ripple should succeed without media-bound clamp
 local left = Clip.load(clips.v1_left.id, db)
 local right = Clip.load(clips.v1_right.id, db)
 
-assert(left.timeline_start == 0, "Upstream clip should stay anchored")
+assert(left.sequence_start == 0, "Upstream clip should stay anchored")
 assert(left.duration == 1500, "Upstream clip duration should stay constant")
 
-assert(right.timeline_start == 1500,
+assert(right.sequence_start == 1500,
     string.format("Downstream clip should shift upstream to close the gap; expected 1500, got %d",
-        right.timeline_start))
+        right.sequence_start))
 assert(right.duration == 1200, "Downstream clip duration should be preserved")
 assert(right.source_in == 0 and right.source_out == 1200,
     "Downstream clip media bounds should remain unchanged")

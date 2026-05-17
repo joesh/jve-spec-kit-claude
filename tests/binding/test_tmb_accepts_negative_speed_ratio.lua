@@ -36,7 +36,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb, 48000, 2)
 local reverse_clip = {
     clip_id        = "reverse-clip-001",
     media_path     = "/nonexistent/fixture.mov",  -- offline ok for this test
-    timeline_start = 0,
+    sequence_start = 0,
     duration       = 100,
     source_in      = 200,
     rate_num       = 25,

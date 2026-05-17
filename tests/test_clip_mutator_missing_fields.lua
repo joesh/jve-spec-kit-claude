@@ -17,12 +17,12 @@ local ClipMutator = require("core.clip_mutator")
 
 -- resolve_occlusions: every missing required input asserts loud.
 local ok1 = pcall(function()
-    ClipMutator.resolve_occlusions(nil, { track_id = nil, timeline_start = 0, duration = 10 })
+    ClipMutator.resolve_occlusions(nil, { track_id = nil, sequence_start = 0, duration = 10 })
 end)
 check("resolve_occlusions asserts on nil track_id", not ok1)
 
 local ok2 = pcall(function()
-    ClipMutator.resolve_occlusions(nil, { track_id = "t1", timeline_start = 0, duration = nil })
+    ClipMutator.resolve_occlusions(nil, { track_id = "t1", sequence_start = 0, duration = nil })
 end)
 check("resolve_occlusions asserts on nil duration", not ok2)
 
@@ -33,12 +33,12 @@ check("resolve_occlusions asserts on nil params", not ok5)
 
 -- resolve_ripple: same contract.
 local ok3 = pcall(function()
-    ClipMutator.resolve_ripple(nil, { track_id = nil, timeline_start_frame = 0, shift_amount = 5 })
+    ClipMutator.resolve_ripple(nil, { track_id = nil, sequence_start_frame = 0, shift_amount = 5 })
 end)
 check("resolve_ripple asserts on nil track_id", not ok3)
 
 local ok4 = pcall(function()
-    ClipMutator.resolve_ripple(nil, { track_id = "t1", timeline_start_frame = 0, shift_amount = nil })
+    ClipMutator.resolve_ripple(nil, { track_id = "t1", sequence_start_frame = 0, shift_amount = nil })
 end)
 check("resolve_ripple asserts on nil shift_amount", not ok4)
 

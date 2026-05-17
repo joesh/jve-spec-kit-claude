@@ -45,22 +45,22 @@ assert(db:exec(
     .. "VALUES ('med-a', 'p1', 'a', '/tmp/a.wav', 48000, 48000, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 48000, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('cv', 'p1', 'e', 'e-v1', 'm', 'cv', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca', 0, 48000, 0, 48000, 'passthrough', 1, 1.0, 0, 0, 0)"))
 

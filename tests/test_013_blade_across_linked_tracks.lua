@@ -50,7 +50,7 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES
           ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0),
@@ -59,18 +59,18 @@ local function build_fixture()
     return db
 end
 
-local function seed_clip(db, clip_id, track_id, timeline_start, duration,
+local function seed_clip(db, clip_id, track_id, sequence_start, duration,
                         source_in, source_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d,
             'passthrough', 1, 1.0, 0, 0, 0)
-    ]], clip_id, track_id, clip_id, timeline_start, duration,
+    ]], clip_id, track_id, clip_id, sequence_start, duration,
        source_in, source_out)))
 end
 
@@ -85,14 +85,14 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame, track_id
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         source_in      = stmt:value(2),
         source_out     = stmt:value(3),
@@ -160,9 +160,9 @@ do
     -- Left halves keep their ids ("v", "a") and original group G1.
     local v_left  = load_clip(db, "v")
     local a_left  = load_clip(db, "a")
-    assert(v_left.timeline_start == 0 and v_left.duration == 60,
+    assert(v_left.sequence_start == 0 and v_left.duration == 60,
         "V left half wrong window")
-    assert(a_left.timeline_start == 0 and a_left.duration == 60,
+    assert(a_left.sequence_start == 0 and a_left.duration == 60,
         "A left half wrong window")
     assert(group_id_for(db, "v") == "G1", "V left lost original group")
     assert(group_id_for(db, "a") == "G1", "A left lost original group")
@@ -177,9 +177,9 @@ do
 
     local v_right = load_clip(db, v_right_id)
     local a_right = load_clip(db, a_right_id)
-    assert(v_right.timeline_start == 60 and v_right.duration == 40,
+    assert(v_right.sequence_start == 60 and v_right.duration == 40,
         "V right half wrong window")
-    assert(a_right.timeline_start == 60 and a_right.duration == 40,
+    assert(a_right.sequence_start == 60 and a_right.duration == 40,
         "A right half wrong window")
 
     local g_v_right = group_id_for(db, v_right_id)
@@ -221,7 +221,7 @@ do
 
     -- A still intact: [0, 100), undivided.
     local a = load_clip(db, "a")
-    assert(a.timeline_start == 0 and a.duration == 100,
+    assert(a.sequence_start == 0 and a.duration == 100,
         "A unchanged when its track wasn't armed")
     print("  ok")
 end
@@ -243,7 +243,7 @@ do
     assert(#result.splits == 0,
         "no splits when blade misses every armed clip")
     local v = load_clip(db, "v")
-    assert(v.timeline_start == 0 and v.duration == 50, "V untouched")
+    assert(v.sequence_start == 0 and v.duration == 50, "V untouched")
     print("  ok")
 end
 

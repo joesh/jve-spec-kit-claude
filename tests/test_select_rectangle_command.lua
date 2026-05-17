@@ -26,10 +26,10 @@ command_manager.init("seq1", "proj1")
 
 -- Mock clips
 local mock_clips = {
-    { id = "clip_a", track_id = "trk_v1", timeline_start = 0, duration = 100 },
-    { id = "clip_b", track_id = "trk_v1", timeline_start = 150, duration = 100 },
-    { id = "clip_c", track_id = "trk_v2", timeline_start = 50, duration = 100 },
-    { id = "clip_d", track_id = "trk_a1", timeline_start = 0, duration = 200 },
+    { id = "clip_a", track_id = "trk_v1", sequence_start = 0, duration = 100 },
+    { id = "clip_b", track_id = "trk_v1", sequence_start = 150, duration = 100 },
+    { id = "clip_c", track_id = "trk_v2", sequence_start = 50, duration = 100 },
+    { id = "clip_d", track_id = "trk_a1", sequence_start = 0, duration = 200 },
 }
 
 local mock_selection = {}

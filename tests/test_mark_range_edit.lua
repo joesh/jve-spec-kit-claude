@@ -91,7 +91,7 @@ local function insert_clip(p)
     local cmd = Command.create("Overwrite", "proj")
     cmd:set_parameters({
         source_sequence_id = mc, target_video_track_id = p.track_id, sequence_id = "seq",
-        timeline_start_frame = p.start,
+        sequence_start_frame = p.start,
         advance_playhead = false,
     })
     local result = command_manager.execute(cmd)
@@ -113,13 +113,13 @@ local function get_clip(clip_id)
     clip_id = resolve_clip_id(clip_id)
     local conn = database.get_connection()
     local s = conn:prepare([[
-        SELECT timeline_start_frame, duration_frames, source_in_frame, source_out_frame
+        SELECT sequence_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips WHERE id=? AND owner_sequence_id='seq'
     ]])
     s:bind_value(1, clip_id)
     if not (s:exec() and s:next()) then s:finalize(); return nil end
     local r = {
-        timeline_start = s:value(0), duration = s:value(1),
+        sequence_start = s:value(0), duration = s:value(1),
         source_in = s:value(2), source_out = s:value(3),
     }
     s:finalize(); return r
@@ -159,12 +159,12 @@ assert(result.success, result.error_message or "LiftRange failed")
 local ca = get_clip("a")
 assert(ca, "clip a should survive (partially outside range)")
 assert(ca.duration == 150, string.format("clip a duration should be 150 (got %d)", ca.duration))
-assert(ca.timeline_start == 100, "clip a should still start at 100")
+assert(ca.sequence_start == 100, "clip a should still start at 100")
 
 -- clip b should be trimmed: [450, 600) dur=150
 local cb = get_clip("b")
 assert(cb, "clip b should survive (partially outside range)")
-assert(cb.timeline_start == 450, string.format("clip b should start at 450 (got %d)", cb.timeline_start))
+assert(cb.sequence_start == 450, string.format("clip b should start at 450 (got %d)", cb.sequence_start))
 assert(cb.duration == 150, string.format("clip b duration should be 150 (got %d)", cb.duration))
 
 -- clip c trimmed on both sides: [200,250) left + [450,500) right = two fragments
@@ -184,7 +184,7 @@ assert(count_clips() == pre_count,
 local ca_undo = get_clip("a")
 assert(ca_undo and ca_undo.duration == 200, "clip a should be restored to dur=200")
 local cb_undo = get_clip("b")
-assert(cb_undo and cb_undo.timeline_start == 400, "clip b should be restored at 400")
+assert(cb_undo and cb_undo.sequence_start == 400, "clip b should be restored at 400")
 
 print("✅ LiftRange trims/removes clips in range, undo restores")
 
@@ -214,17 +214,17 @@ assert(result2.success, result2.error_message or "ExtractRange failed")
 -- z should have shifted left by 200
 local cz = get_clip("z")
 assert(cz, "clip z should exist")
-assert(cz.timeline_start == 300,
-    string.format("clip z should shift from 500 to 300 (got %d)", cz.timeline_start))
+assert(cz.sequence_start == 300,
+    string.format("clip z should shift from 500 to 300 (got %d)", cz.sequence_start))
 
 -- x untouched (before mark_in)
 local cx = get_clip("x")
-assert(cx and cx.timeline_start == 0 and cx.duration == 100, "clip x should be unchanged")
+assert(cx and cx.sequence_start == 0 and cx.duration == 100, "clip x should be unchanged")
 
 -- Undo restores everything
 assert(command_manager.undo().success)
 local cz_undo = get_clip("z")
-assert(cz_undo and cz_undo.timeline_start == 500, "clip z should be back at 500 after undo")
+assert(cz_undo and cz_undo.sequence_start == 500, "clip z should be back at 500 after undo")
 
 print("✅ ExtractRange lifts range and closes gap, undo restores")
 
@@ -244,7 +244,7 @@ assert(command_manager.execute(del_cmd).success, "DeleteSelection with marks sho
 
 local cd1 = get_clip("d1")
 assert(cd1, "clip d1 should survive (partially outside range)")
-assert(cd1.timeline_start == 0, "d1 should still start at 0")
+assert(cd1.sequence_start == 0, "d1 should still start at 0")
 assert(cd1.duration < 300, string.format("d1 should be trimmed (got dur=%d)", cd1.duration))
 
 -- Undo

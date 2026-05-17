@@ -59,7 +59,7 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000,
                 1, 1.0, 0, 0, 0);
@@ -73,7 +73,7 @@ local function build_fixture()
         -- The clip on the edit timeline references the master.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

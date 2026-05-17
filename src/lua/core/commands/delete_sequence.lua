@@ -397,7 +397,7 @@ fetch_sequence_clips = function(db, sequence_id)
     local clip_stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
                c.sequence_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -409,7 +409,7 @@ fetch_sequence_clips = function(db, sequence_id)
         WHERE c.track_id IN (
             SELECT id FROM tracks WHERE sequence_id = ?
         )
-        ORDER BY c.track_id, c.timeline_start_frame
+        ORDER BY c.track_id, c.sequence_start_frame
     ]])
     if not clip_stmt then
         return clips, properties, clip_links
@@ -713,7 +713,7 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
         INSERT INTO clips (
             id, project_id, name, track_id,
             sequence_id, owner_sequence_id,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,

@@ -12,9 +12,9 @@ local TEST_DB = "/tmp/jve/test_timeline_gap_downstream_preview.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_left = {timeline_start = 0, duration = 1000},
-        v1_right = {timeline_start = 1600, duration = 1000},
-        v2 = {timeline_start = 1200, duration = 1200}
+        v1_left = {sequence_start = 0, duration = 1000},
+        v1_right = {sequence_start = 1600, duration = 1000},
+        v2 = {sequence_start = 1200, duration = 1200}
     }
 })
 local clips = layout.clips
@@ -29,7 +29,7 @@ local downstream = Clip.create({
         owner_sequence_id = layout.sequence_id,
         sequence_id = _primary_master,
         track_id = tracks.v2.id,
-        timeline_start_frame = 2600,
+        sequence_start_frame = 2600,
         duration_frames = 600,
         source_in_frame = 0,
         source_out_frame = 600,
@@ -78,7 +78,7 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}
@@ -131,7 +131,7 @@ end
 local active_block = track_block or global
 assert(active_block and active_block.delta_frames and active_block.start_frames, "Expected a usable shift block for V2")
 
-local shifted_start_frames = downstream.timeline_start
+local shifted_start_frames = downstream.sequence_start
 if shifted_start_frames >= active_block.start_frames then
     shifted_start_frames = shifted_start_frames + active_block.delta_frames
 end

@@ -120,7 +120,7 @@ local function make_clip(db, project_id, sequence_id, track_id, clip_id, media_i
         owner_sequence_id = sequence_id, track_id = track_id,
         sequence_id = nested_seq_id,
         name = "c_" .. clip_id:sub(1, 6),
-        timeline_start_frame = start, duration_frames = 100,
+        sequence_start_frame = start, duration_frames = 100,
         source_in_frame = 0, source_out_frame = 100,
         fps_mismatch_policy = "passthrough",
         enabled = true, volume = 1.0, playhead_frame = 0,

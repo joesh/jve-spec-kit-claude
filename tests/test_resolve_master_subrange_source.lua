@@ -46,13 +46,13 @@ assert(db:exec(
 -- Master's media_ref points at file frames [50, 150); placed at master-frame 0.
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 50, 150, 0, 100, 1, 1.0, 0, 0, 0)"))
 -- Clip on edit picks the full master window [0, 100), at edit-frame 0.
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c', 'p1', 'e', 'e-v1', 'm', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
@@ -71,7 +71,7 @@ assert(e.source_in == 50 and e.source_out == 150, string.format(
     "source range must be in file-native units (the portion of the file the "
     .. "entry plays back); expected [50, 150), got [%s, %s)",
     tostring(e.source_in), tostring(e.source_out)))
-assert(e.timeline_start == 0 and e.duration == 100,
+assert(e.sequence_start == 0 and e.duration == 100,
     "outer timeline range matches the clip's full window")
 
 print("✅ test_resolve_master_subrange_source.lua passed")

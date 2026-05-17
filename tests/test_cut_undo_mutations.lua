@@ -59,7 +59,7 @@ cmd:set_parameter("sequence_id", "seq")
 cmd:set_parameter("target_video_track_id", "v1")
 cmd:set_parameter("source_sequence_id", mc_id)
 cmd:set_parameter("clip_name", "clip_a")
-cmd:set_parameter("timeline_start_frame", 100)
+cmd:set_parameter("sequence_start_frame", 100)
 
 local r = command_manager.execute(cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
@@ -73,7 +73,7 @@ local new_clip_id = created and created[1]
 assert(new_clip_id, "Insert should record created_clip_ids[1]")
 local clip = timeline_state.get_clip_by_id(new_clip_id)
 assert(clip, "Inserted clip must be in timeline cache")
-local original_start = clip.timeline_start
+local original_start = clip.sequence_start
 local original_duration = clip.duration
 print(string.format("Clip after Insert: start=%d dur=%d", original_start, original_duration))
 
@@ -106,8 +106,8 @@ assert(not reload_called,
 local restored = timeline_state.get_clip_by_id(new_clip_id)
 assert(restored, "Inserted clip must be back in timeline cache after undo")
 
-assert(restored.timeline_start == original_start,
-    string.format("clip_a.timeline_start should be %d, got %s", original_start, tostring(restored.timeline_start)))
+assert(restored.sequence_start == original_start,
+    string.format("clip_a.sequence_start should be %d, got %s", original_start, tostring(restored.sequence_start)))
 assert(restored.duration == original_duration,
     string.format("clip_a.duration should be %d, got %s", original_duration, tostring(restored.duration)))
 

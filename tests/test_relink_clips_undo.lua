@@ -64,9 +64,9 @@ local _Sequence = require("models.sequence")
 local master_seq_id = _Sequence.ensure_master(media_id, project_id)
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
     VALUES ('%s', '%s', 'Clip1', '%s', '%s', '%s', 0, 100, 100, 200, 1, 0, %d, %d, NULL, NULL, 'resample', 1.0);
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume)
     VALUES ('%s', '%s', 'Clip2', '%s', '%s', '%s', 100, 50, 300, 350, 1, 0, %d, %d, NULL, NULL, 'resample', 1.0);
 ]], clip_id_1, project_id, track_id, master_seq_id, seq_id, now, now,
     clip_id_2, project_id, track_id, master_seq_id, seq_id, now, now))

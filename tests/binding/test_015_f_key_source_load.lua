@@ -66,7 +66,7 @@ db:exec(string.format([[
 
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200, %d, 1200, 1, 1.0, 0, %d, %d),
@@ -168,14 +168,14 @@ local ve = vs + vd
 local intersects = false
 for _, c in ipairs(view_clips) do
     if not c.is_gap then
-        local cs, ce = c.timeline_start, c.timeline_start + c.duration
+        local cs, ce = c.sequence_start, c.sequence_start + c.duration
         if cs and ce and cs < ve and ce > vs then intersects = true end
     end
 end
 check("timeline view viewport intersects master content (content visible)",
     intersects,
     string.format("viewport=[%d,%d) clip starts at %d", vs, ve,
-        view_clips[1] and view_clips[1].timeline_start or -1))
+        view_clips[1] and view_clips[1].sequence_start or -1))
 
 -- The two monitors must NOT both show source content.
 check("timeline_monitor STAYS on active record (does NOT mirror source)",

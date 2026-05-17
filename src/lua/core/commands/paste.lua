@@ -41,7 +41,7 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_insert_mutation(command, sequence_id, {
                 id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
@@ -58,7 +58,7 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_update_mutation(command, sequence_id, {
                 clip_id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
@@ -199,7 +199,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 master_audio_track_id = cd.master_audio_track_id,
                 fps_mismatch_policy = cd.fps_mismatch_policy or "resample",
                 name = cd.name or "Pasted Clip",
-                timeline_start = p.paste_start,
+                sequence_start = p.paste_start,
                 start_value = p.paste_start,
                 duration = cd.duration,
                 source_in = cd.source_in,

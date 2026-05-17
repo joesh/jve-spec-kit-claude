@@ -137,7 +137,7 @@ local function make_clip(params)
         track_id = params.track_id,
         sequence_id = "mc_" .. params.media_id,
         owner_sequence_id = "seq1",
-        timeline_start_frame = params.timeline_start,
+        sequence_start_frame = params.sequence_start,
         duration_frames = params.source_out - params.source_in,
         source_in_frame = params.source_in,
         source_out_frame = params.source_out,
@@ -154,15 +154,15 @@ end
 -- Source ranges [100, 300] and [500, 700] at 25fps — extent math
 -- should pick up [100, 700].
 make_clip({ id="clip_a1", media_id="media_a", track_id="track_v1",
-    timeline_start=0,   source_in=100, source_out=300, fps_num=25, fps_den=1 })
+    sequence_start=0,   source_in=100, source_out=300, fps_num=25, fps_den=1 })
 make_clip({ id="clip_a2", media_id="media_a", track_id="track_v1",
-    timeline_start=200, source_in=500, source_out=700, fps_num=25, fps_den=1 })
+    sequence_start=200, source_in=500, source_out=700, fps_num=25, fps_den=1 })
 -- media_b: one clip on track_v1 (after media_a clips). Source [600, 900] at 24fps.
 make_clip({ id="clip_b1", media_id="media_b", track_id="track_v1",
-    timeline_start=400, source_in=600, source_out=900, fps_num=24, fps_den=1 })
+    sequence_start=400, source_in=600, source_out=900, fps_num=24, fps_den=1 })
 -- media_c: audio clip on track_a1 (audio track). Source [1000, 4000] at 48kHz.
 make_clip({ id="clip_c1", media_id="media_c", track_id="track_a1",
-    timeline_start=0,   source_in=1000, source_out=4000, fps_num=48000, fps_den=1 })
+    sequence_start=0,   source_in=1000, source_out=4000, fps_num=48000, fps_den=1 })
 
 -- V13: 'master clips' are master Sequences (already created above),
 -- not timeline clip rows. The legacy V8 fixture inserted an extra

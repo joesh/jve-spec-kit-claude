@@ -41,7 +41,7 @@ VALUES ('mc_test', 'default_project', 'mc_test', 'master', 30, 1, 48000, 1920, 1
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_test_v1', 'mc_test', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_test_v1' WHERE id = 'mc_test']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mc_test_mr', 'default_project', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
 
 local function create_media(id, duration_value)
@@ -69,7 +69,7 @@ local function create_clip(id, track_id, start_value, duration_value, media_id)
         track_id = track_id,
         owner_sequence_id = 'default_sequence',
         sequence_id = "mc_test",
-        timeline_start_frame = start_value,
+        sequence_start_frame = start_value,
         duration_frames = duration_value,
         source_in_frame = 0,
         source_out_frame = duration_value,

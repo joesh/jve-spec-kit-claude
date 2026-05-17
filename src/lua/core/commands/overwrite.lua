@@ -35,16 +35,16 @@ end
 
 
 function M.execute(args)
-    -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+    -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
     -- See insert.lua for rationale (rule 2.13 — no silent default-to-0).
-    if args.timeline_start_frame == nil then
+    if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
             "Overwrite: sequence %s not found (cannot resolve playhead fallback)",
             tostring(args.sequence_id)))
         assert(type(owner.playhead_position) == "number", string.format(
-            "Overwrite: timeline_start_frame omitted and sequence %s has no "
+            "Overwrite: sequence_start_frame omitted and sequence %s has no "
             .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.timeline_start_frame = owner.playhead_position
+        args.sequence_start_frame = owner.playhead_position
     end
 
     -- 015 F2: ensure identity patches exist for every source track in the
@@ -95,8 +95,8 @@ local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
         source_sequence_id    = { required = true,  kind = "string" },
-        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
-        timeline_start_frame  = { kind = "number" },
+        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
         target_audio_track_id = { kind = "string" },
         fps_mismatch_policy   = { kind = "string" },
@@ -152,8 +152,8 @@ local function build_insert_mutation_entry(clip_id)
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
         sequence_id    = clip.sequence_id,
-        start_value           = clip.timeline_start,
-        timeline_start        = clip.timeline_start,
+        start_value           = clip.sequence_start,
+        sequence_start        = clip.sequence_start,
         duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
@@ -199,7 +199,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 bucket.deletes[#bucket.deletes + 1] = {
                     clip_id        = prev.id,
                     track_id       = prev.track_id,
-                    timeline_start = prev.timeline_start_frame,
+                    sequence_start = prev.sequence_start_frame,
                     duration       = prev.duration_frames,
                 }
             end
@@ -207,7 +207,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 local fresh = Clip.load_v13_row(tr.id)
                 bucket.updates[#bucket.updates + 1] = {
                     clip_id          = tr.id,
-                    start_value      = fresh.timeline_start_frame,
+                    start_value      = fresh.sequence_start_frame,
                     duration_value   = fresh.duration_frames,
                     source_in_value  = fresh.source_in_frame,
                     source_out_value = fresh.source_out_frame,
@@ -258,7 +258,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, cap in pairs(occluded) do
             for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
-                    tr.prior.timeline_start_frame,
+                    tr.prior.sequence_start_frame,
                     tr.prior.duration_frames,
                     tr.prior.source_in_frame,
                     tr.prior.source_out_frame)
@@ -278,7 +278,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     track_id              = d.track_id,
                     sequence_id    = d.sequence_id,
                     name                  = d.name,
-                    timeline_start_frame  = d.timeline_start_frame,
+                    sequence_start_frame  = d.sequence_start_frame,
                     duration_frames       = d.duration_frames,
                     source_in_frame       = d.source_in_frame,
                     source_out_frame      = d.source_out_frame,
@@ -319,8 +319,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                             track_sequence_id   = row.owner_sequence_id,
                             track_id            = row.track_id,
                             sequence_id  = row.sequence_id,
-                            start_value         = row.timeline_start_frame,
-                            timeline_start      = row.timeline_start_frame,
+                            start_value         = row.sequence_start_frame,
+                            sequence_start      = row.sequence_start_frame,
                             duration_value      = row.duration_frames,
                             duration            = row.duration_frames,
                             source_in           = row.source_in_frame,

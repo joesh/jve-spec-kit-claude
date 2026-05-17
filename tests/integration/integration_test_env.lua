@@ -66,7 +66,7 @@ function M.create_single_clip_tmb(opts)
     local clip_info = {
         clip_id = "test-clip-001",
         media_path = media_path,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = duration,
         source_in = source_in,
         rate_num = rate_num,
@@ -102,7 +102,7 @@ function M.create_two_clip_tmb(opts)
     local clip_a = {
         clip_id = "clip-A",
         media_path = media_path,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = clip_a_dur,
         source_in = 0,
         rate_num = rate_num,
@@ -113,7 +113,7 @@ function M.create_two_clip_tmb(opts)
     local clip_b = {
         clip_id = "clip-B",
         media_path = media_path,
-        timeline_start = clip_a_dur,
+        sequence_start = clip_a_dur,
         duration = clip_b_dur,
         source_in = clip_a_dur, -- different source region
         rate_num = rate_num,

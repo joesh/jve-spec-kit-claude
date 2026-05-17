@@ -74,7 +74,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb, 48000, 2)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
     clip_id = "braw-test-001",
     media_path = BRAW_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = math.min(10, total_frames),
     source_in = info.first_frame_tc or 0,
     rate_num = info.fps_num,
@@ -113,7 +113,7 @@ EMP.TMB_SET_SEQUENCE_RESOLUTION(tmb2, 1920, 1080)
 EMP.TMB_SET_TRACK_CLIPS(tmb2, "video", 1, {{
     clip_id = "braw-scale-001",
     media_path = BRAW_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = math.min(10, total_frames),
     source_in = info.first_frame_tc or 0,
     rate_num = info.fps_num,
@@ -151,7 +151,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb3, 48000, 2)
 EMP.TMB_SET_TRACK_CLIPS(tmb3, "video", 1, {{
     clip_id = "braw-seq-001",
     media_path = BRAW_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = math.min(10, total_frames),
     source_in = info.first_frame_tc or 0,
     rate_num = info.fps_num,

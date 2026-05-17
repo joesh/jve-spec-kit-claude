@@ -884,7 +884,7 @@ end
 ---                              else audio samples (matches Media.create).
 ---   media_refs.duration_frames (V tracks) — video frames @ media.fps
 ---   media_refs.duration_frames (A tracks) — audio samples
----   media_refs.timeline_start_frame / source_in_frame
+---   media_refs.sequence_start_frame / source_in_frame
 ---     (V tracks) — start_tc_value (frames @ media.fps)
 ---     (A tracks) — start_tc_audio_samples
 ---   media_refs.source_out_frame = source_in_frame + duration_frames
@@ -899,14 +899,14 @@ end
 ---                         When supplied for a media_id, the media_refs over
 ---                         that media are rebased to the new TC origin. When
 ---                         nil for a media_id, media_refs keep their current
----                         source_in / timeline_start but DO get
+---                         source_in / sequence_start but DO get
 ---                         source_out_frame updated to remain consistent
 ---                         with the new duration_frames (the row's
 ---                         in-place duration shift).
 --- @return table  old_state for undo:
 ---                  {[media_id] = { media_duration_frames = N,
 ---                                  media_refs = {[mref_id] = {
----                                    duration_frames, timeline_start_frame,
+---                                    duration_frames, sequence_start_frame,
 ---                                    source_in_frame, source_out_frame }} }}
 -- Per-track-type column map. The two media kinds carry their extent
 -- and TC origin in different fields of the caller's entries, but the
@@ -992,7 +992,7 @@ end
 --   { [mid] = { media_duration_frames = N,
 --               mref_types = {[mref_id] = "VIDEO"|"AUDIO"},
 --               media_refs = {[mref_id] = {duration_frames,
---                                          timeline_start_frame,
+--                                          sequence_start_frame,
 --                                          source_in_frame,
 --                                          source_out_frame}} } }
 local function snapshot_pre_update_state(db, duration_changes)
@@ -1002,7 +1002,7 @@ local function snapshot_pre_update_state(db, duration_changes)
     local read_mrefs = assert(
         db:prepare([[
             SELECT mr.id, t.track_type, mr.duration_frames,
-                   mr.timeline_start_frame, mr.source_in_frame,
+                   mr.sequence_start_frame, mr.source_in_frame,
                    mr.source_out_frame
               FROM media_refs mr
               JOIN tracks t ON t.id = mr.track_id
@@ -1029,7 +1029,7 @@ local function snapshot_pre_update_state(db, duration_changes)
             rec.mref_types[mref_id] = read_mrefs:value(1)
             rec.media_refs[mref_id] = {
                 duration_frames      = read_mrefs:value(2),
-                timeline_start_frame = read_mrefs:value(3),
+                sequence_start_frame = read_mrefs:value(3),
                 source_in_frame      = read_mrefs:value(4),
                 source_out_frame     = read_mrefs:value(5),
             }
@@ -1063,7 +1063,7 @@ local function pick_new_mref_coords(track_type, entry, tc_entry, old_mref)
 end
 
 -- Apply media.duration_frames + media_refs.{duration_frames,
--- timeline_start_frame, source_in_frame, source_out_frame} for one
+-- sequence_start_frame, source_in_frame, source_out_frame} for one
 -- media_id. media.duration_frames mirrors Media.create: V extent if
 -- supplied, else A. media_refs land at (origin, origin + duration).
 -- Even without a tc_entry, source_out_frame is recomputed to track
@@ -1088,7 +1088,7 @@ local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
             track_type, entry, tc_entry, rec.media_refs[mref_id])
         if new_dur ~= nil then
             upd_mref:bind_value(1, new_dur)
-            upd_mref:bind_value(2, new_origin)              -- timeline_start_frame
+            upd_mref:bind_value(2, new_origin)              -- sequence_start_frame
             upd_mref:bind_value(3, new_origin)              -- source_in_frame
             upd_mref:bind_value(4, new_origin + new_dur)    -- source_out_frame
             upd_mref:bind_value(5, mref_id)
@@ -1120,7 +1120,7 @@ function M.batch_set_durations(duration_changes, tc_updates)
     local upd_mref = assert(
         db:prepare([[
             UPDATE media_refs
-               SET duration_frames = ?, timeline_start_frame = ?,
+               SET duration_frames = ?, sequence_start_frame = ?,
                    source_in_frame = ?, source_out_frame = ?
              WHERE id = ?
         ]]),
@@ -1152,7 +1152,7 @@ function M.batch_restore_durations(old_state)
     local upd_mref = assert(
         db:prepare([[
             UPDATE media_refs
-               SET duration_frames = ?, timeline_start_frame = ?,
+               SET duration_frames = ?, sequence_start_frame = ?,
                    source_in_frame = ?, source_out_frame = ?
              WHERE id = ?
         ]]),
@@ -1171,10 +1171,10 @@ function M.batch_restore_durations(old_state)
             -- stale on undo.
             assert(type(old_mref) == "table",
                 "Media.batch_restore_durations: old_state media_refs "
-                .. "entries must be {duration_frames, timeline_start_frame, "
+                .. "entries must be {duration_frames, sequence_start_frame, "
                 .. "source_in_frame, source_out_frame} tables")
             upd_mref:bind_value(1, old_mref.duration_frames)
-            upd_mref:bind_value(2, old_mref.timeline_start_frame)
+            upd_mref:bind_value(2, old_mref.sequence_start_frame)
             upd_mref:bind_value(3, old_mref.source_in_frame)
             upd_mref:bind_value(4, old_mref.source_out_frame)
             upd_mref:bind_value(5, mref_id)

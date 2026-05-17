@@ -71,7 +71,7 @@ local function create_clip(params)
         track_id = params.track_id,
         project_id = 'default_project',
         owner_sequence_id = 'default_sequence',
-        timeline_start_frame = params.start_value or 0,
+        sequence_start_frame = params.start_value or 0,
         duration_frames = params.duration_value or 0,
         source_in_frame = params.source_in_value or 0,
         source_out_frame = params.source_out_value or params.duration_value or 0,
@@ -99,7 +99,7 @@ end
 local overwrite_cmd = Command.create('Overwrite', 'default_project')
 overwrite_cmd:set_parameter('source_sequence_id', masterclip_ids['media_src'])
 overwrite_cmd:set_parameter('target_video_track_id', 'video2')
-overwrite_cmd:set_parameter('timeline_start_frame', 1000)
+overwrite_cmd:set_parameter('sequence_start_frame', 1000)
 overwrite_cmd:set_parameter('project_id', 'default_project')
 overwrite_cmd:set_parameter('sequence_id', 'default_sequence')
 overwrite_cmd:set_parameter('advance_playhead', false)
@@ -107,14 +107,14 @@ overwrite_cmd:set_parameter('advance_playhead', false)
 local result = command_manager.execute(overwrite_cmd)
 assert(result.success, result.error_message or 'Overwrite failed')
 
-local stmt = db:prepare([[SELECT timeline_start_frame FROM clips WHERE id = 'clip_tgt']])
+local stmt = db:prepare([[SELECT sequence_start_frame FROM clips WHERE id = 'clip_tgt']])
 assert(stmt:exec() and stmt:next())
 local start_value = stmt:value(0)
 stmt:finalize()
 
 assert(start_value == 3000, string.format('Expected clip_tgt start_value to remain 3000, got %d', start_value))
 
-local dup_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND timeline_start_frame = 1000 AND id != 'clip_tgt']])
+local dup_stmt = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND sequence_start_frame = 1000 AND id != 'clip_tgt']])
 assert(dup_stmt:exec() and dup_stmt:next())
 local duplicate_count = dup_stmt:value(0)
 dup_stmt:finalize()
@@ -144,7 +144,7 @@ local command_specs = {
         command_type = "Overwrite",
         parameters = {
             target_video_track_id = 'video2',
-            timeline_start_frame = 500,
+            sequence_start_frame = 500,
             source_sequence_id = masterclip_ids['media_src_a'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
@@ -155,7 +155,7 @@ local command_specs = {
         command_type = "Overwrite",
         parameters = {
             target_video_track_id = 'video2',
-            timeline_start_frame = 3200,
+            sequence_start_frame = 3200,
             source_sequence_id = masterclip_ids['media_src_b'],
             project_id = 'default_project',
             sequence_id = 'default_sequence',
@@ -173,7 +173,7 @@ for _, spec in ipairs(command_specs) do
     assert(res.success, res.error_message or 'Command execution failed')
 end
 
-local existing_stmt = db:prepare([[SELECT timeline_start_frame, duration_frames FROM clips WHERE id = 'clip_existing_dest']])
+local existing_stmt = db:prepare([[SELECT sequence_start_frame, duration_frames FROM clips WHERE id = 'clip_existing_dest']])
 assert(existing_stmt:exec() and existing_stmt:next())
 local dest_start = existing_stmt:value(0)
 local dest_duration_value = existing_stmt:value(1)
@@ -183,7 +183,7 @@ assert(dest_start == 6000, string.format('Expected destination clip to remain at
 assert(dest_duration_value == 1000, string.format('Expected destination clip duration_value to remain 1000ms, got %d', dest_duration_value))
 
 local function count_clips_at(time_ms, duration_ms)
-    local q = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND timeline_start_frame = ? AND duration_frames = ?]])
+    local q = db:prepare([[SELECT COUNT(*) FROM clips WHERE track_id = 'video2' AND sequence_start_frame = ? AND duration_frames = ?]])
     q:bind_value(1, time_ms)
     q:bind_value(2, duration_ms)
     assert(q:exec() and q:next())

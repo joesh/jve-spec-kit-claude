@@ -48,7 +48,7 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000,
                 1, 1.0, 0, 0, 0),
@@ -57,7 +57,7 @@ local function build_fixture()
         -- Video clip with layer override = V2.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -68,7 +68,7 @@ local function build_fixture()
         -- Audio clip with channel-1 override (enabled=0, gain_db=-9).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

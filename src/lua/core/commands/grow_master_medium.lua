@@ -12,7 +12,7 @@
 ---   2. For every clips row that already references this master AND
 ---      lacks a companion in its link group on the new medium: INSERT
 ---      a companion clip on the appropriate track of the parent's
----      sequence, mirroring timeline_start/duration, link the pair via
+---      sequence, mirroring sequence_start/duration, link the pair via
 ---      clip_links (creating a link group if neither side had one).
 ---   3. Emit sequence_content_changed on the master AND on every
 ---      parent sequence touched.
@@ -135,7 +135,7 @@ local function add_master_audio_stream(master, media_id, media, sample_rate, opt
         media_id             = media_id,
         source_in_frame      = 0,
         source_out_frame     = duration_samples,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames      = duration_samples,
         enabled              = true,
         volume               = 1.0,
@@ -178,7 +178,7 @@ local function build_companion_for_video_clip(c, master, sample_rate)
         track_id              = dst_a_track_id,
         sequence_id    = master.id,
         name                  = (c.name or "Clip") .. " (audio)",
-        timeline_start_frame  = c.timeline_start_frame,
+        sequence_start_frame  = c.sequence_start_frame,
         duration_frames       = c.duration_frames,
         source_in_frame       = 0,
         source_out_frame      = dur_samples,

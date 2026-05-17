@@ -2,7 +2,7 @@
 --- Relink must rebase media_refs to the file's actual TC origin
 ---
 --- Domain contract (CLAUDE.md "TIMECODE IS THE SOURCE OF TRUTH"):
----   media_refs sit at timeline_start = file_tc_origin, spanning
+---   media_refs sit at sequence_start = file_tc_origin, spanning
 ---   [tc_origin, tc_origin + file_duration). When relink probes a
 ---   replacement file and discovers its tmcd-derived TC origin differs
 ---   from what the project recorded (e.g. DRP claimed an old file's
@@ -16,7 +16,7 @@
 ---   A035_11192237_C016.mov — file actually 426 frames @ TC origin
 ---   2036608. media row's metadata.start_tc_value got updated to
 ---   2036608 (relink wrote it). But media_ref kept its DRP-stated
----   timeline_start = 2036268 and source_out = 2037265 (= 2036268 +
+---   sequence_start = 2036268 and source_out = 2037265 (= 2036268 +
 ---   997, the DRP's claimed extent). A clip at source_in=2036633
 ---   .. source_out=2036733 (100 frames, well inside the file's actual
 ---   range [2036608, 2037034)) resolved to: 61 frames in coverage
@@ -53,7 +53,7 @@ local Sequence = require("models.sequence")
 -- exists for this and we don't want to add one just for a test.
 local function media_refs_by_type(media_id, track_type)
     local stmt = database.get_connection():prepare([[
-        SELECT mr.id, mr.timeline_start_frame, mr.source_in_frame,
+        SELECT mr.id, mr.sequence_start_frame, mr.source_in_frame,
                mr.source_out_frame, mr.duration_frames
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
@@ -68,7 +68,7 @@ local function media_refs_by_type(media_id, track_type)
     while stmt:next() do
         out[#out + 1] = {
             id = stmt:value(0),
-            timeline_start_frame = stmt:value(1),
+            sequence_start_frame = stmt:value(1),
             source_in_frame = stmt:value(2),
             source_out_frame = stmt:value(3),
             duration_frames = stmt:value(4),
@@ -164,7 +164,7 @@ local master_seq = Sequence.ensure_master(media_id, project_id)
 local clip_id = uuid.generate()
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Shot', '%s', '%s', '%s',
@@ -183,8 +183,8 @@ local a_refs = media_refs_by_type(media_id, "AUDIO")
 assert(#v_refs == 1, string.format("expected 1 video media_ref, got %d", #v_refs))
 assert(#a_refs >= 1, string.format("expected ≥1 audio media_ref, got %d", #a_refs))
 local v_ref = v_refs[1]
-assert(v_ref.timeline_start_frame == OLD_TC,
-    string.format("pre: v_ref.timeline_start=%d expected %d", v_ref.timeline_start_frame, OLD_TC))
+assert(v_ref.sequence_start_frame == OLD_TC,
+    string.format("pre: v_ref.sequence_start=%d expected %d", v_ref.sequence_start_frame, OLD_TC))
 assert(v_ref.source_in_frame == OLD_TC,
     string.format("pre: v_ref.source_in=%d expected %d", v_ref.source_in_frame, OLD_TC))
 assert(v_ref.source_out_frame == OLD_TC + OLD_DUR,
@@ -192,7 +192,7 @@ assert(v_ref.source_out_frame == OLD_TC + OLD_DUR,
 assert(v_ref.duration_frames == OLD_DUR,
     string.format("pre: v_ref.duration=%d expected %d", v_ref.duration_frames, OLD_DUR))
 print(string.format("  ✓ v_ref: ts=%d src=[%d,%d) dur=%d  (stale DRP TC)",
-    v_ref.timeline_start_frame, v_ref.source_in_frame, v_ref.source_out_frame,
+    v_ref.sequence_start_frame, v_ref.source_in_frame, v_ref.source_out_frame,
     v_ref.duration_frames))
 
 -- ---------------------------------------------------------------------
@@ -231,13 +231,13 @@ print("\n--- Post-relink: media_refs at new (probed) TC ---")
 v_refs = media_refs_by_type(media_id, "VIDEO")
 a_refs = media_refs_by_type(media_id, "AUDIO")
 local v_ref_post = v_refs[1]
-assert(v_ref_post.timeline_start_frame == NEW_TC, string.format(
-    "post: v_ref.timeline_start must rebase to the file's actual TC origin. "
+assert(v_ref_post.sequence_start_frame == NEW_TC, string.format(
+    "post: v_ref.sequence_start must rebase to the file's actual TC origin. "
     .. "Got %d, expected %d. media_refs that don't follow the file's TC "
     .. "produce phantom gaps when clips reference the actual file range — "
     .. "TSO 2026-05-15: clip's last 39 of 100 frames went black despite "
     .. "the file holding them.",
-    v_ref_post.timeline_start_frame, NEW_TC))
+    v_ref_post.sequence_start_frame, NEW_TC))
 assert(v_ref_post.source_in_frame == NEW_TC, string.format(
     "post: v_ref.source_in must equal the new TC origin (got %d, want %d)",
     v_ref_post.source_in_frame, NEW_TC))
@@ -250,15 +250,15 @@ assert(v_ref_post.duration_frames == NEW_DUR,
     string.format("post: v_ref.duration=%d expected %d",
         v_ref_post.duration_frames, NEW_DUR))
 print(string.format("  ✓ v_ref: ts=%d src=[%d,%d) dur=%d  (probed TC)",
-    v_ref_post.timeline_start_frame, v_ref_post.source_in_frame,
+    v_ref_post.sequence_start_frame, v_ref_post.source_in_frame,
     v_ref_post.source_out_frame, v_ref_post.duration_frames))
 
 -- Audio media_refs: independent timebase (samples), independent delta.
 for _, a_ref in ipairs(a_refs) do
-    assert(a_ref.timeline_start_frame == NEW_TC_AUDIO, string.format(
-        "post: a_ref.timeline_start must rebase in audio-sample space "
+    assert(a_ref.sequence_start_frame == NEW_TC_AUDIO, string.format(
+        "post: a_ref.sequence_start must rebase in audio-sample space "
         .. "(got %d, want %d)",
-        a_ref.timeline_start_frame, NEW_TC_AUDIO))
+        a_ref.sequence_start_frame, NEW_TC_AUDIO))
     assert(a_ref.source_in_frame == NEW_TC_AUDIO, string.format(
         "post: a_ref.source_in must equal new audio TC origin (got %d, want %d)",
         a_ref.source_in_frame, NEW_TC_AUDIO))
@@ -268,7 +268,7 @@ for _, a_ref in ipairs(a_refs) do
         a_ref.source_out_frame, NEW_TC_AUDIO + NEW_DUR_AUDIO))
 end
 print(string.format("  ✓ a_ref (n=%d): ts=%d src_out=%d  (probed audio TC)",
-    #a_refs, a_refs[1].timeline_start_frame, a_refs[1].source_out_frame))
+    #a_refs, a_refs[1].sequence_start_frame, a_refs[1].source_out_frame))
 
 -- Clip is unchanged: its source_in/out are absolute TC moments; the
 -- relink rewires the media_ref under them, not the clip.
@@ -292,9 +292,9 @@ command_manager.undo()
 
 v_refs = media_refs_by_type(media_id, "VIDEO")
 local v_ref_undo = v_refs[1]
-assert(v_ref_undo.timeline_start_frame == OLD_TC, string.format(
-    "undo: v_ref.timeline_start must restore to %d, got %d",
-    OLD_TC, v_ref_undo.timeline_start_frame))
+assert(v_ref_undo.sequence_start_frame == OLD_TC, string.format(
+    "undo: v_ref.sequence_start must restore to %d, got %d",
+    OLD_TC, v_ref_undo.sequence_start_frame))
 assert(v_ref_undo.source_in_frame == OLD_TC,
     "undo: v_ref.source_in must restore")
 assert(v_ref_undo.source_out_frame == OLD_TC + OLD_DUR,

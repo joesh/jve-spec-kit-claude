@@ -20,12 +20,12 @@ local layout = ripple_layout.create({
     clips = {
         order = {"v1_left", "v1_right"},
         v1_left = {
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 1000,
             source_in = 1000,
         },
         v1_right = {
-            timeline_start = 2000,
+            sequence_start = 2000,
             duration = 1000,
             source_in = 1000,
         },
@@ -60,7 +60,7 @@ assert(result1 and result1.success, "ExtendEdit should succeed: " .. tostring(re
 -- Verify gap is closed
 local left = Clip.load(clips.v1_left.id, layout.db)
 local right = Clip.load(clips.v1_right.id, layout.db)
-local gap = right.timeline_start - (left.timeline_start + left.duration)
+local gap = right.sequence_start - (left.sequence_start + left.duration)
 assert(gap == 0, string.format("Gap should be 0, got %d", gap))
 
 -- After gap closes, selection should normalize.

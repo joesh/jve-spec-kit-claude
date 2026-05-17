@@ -70,7 +70,7 @@ local function insert_clip(conn, id, start_frames, dur_frames, track_id)
         "proj", media_id, 24, 1, dur_frames, media_id)
     assert(conn:exec(string.format([[
         INSERT INTO clips (id, project_id, name, track_id,
-            owner_sequence_id, sequence_id, timeline_start_frame, duration_frames,
+            owner_sequence_id, sequence_id, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

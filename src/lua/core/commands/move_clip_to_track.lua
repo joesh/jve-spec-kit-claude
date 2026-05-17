@@ -18,7 +18,7 @@ local SPEC = {
     },
     persisted = {
         executed_mutations = {},
-        original_timeline_start = {},  -- Set by executor for undo (integer frames)
+        original_sequence_start = {},  -- Set by executor for undo (integer frames)
         original_track_id = {},  -- Set by executor for undo
         pending_clips = {},
     },
@@ -41,7 +41,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_update_mutation(command, sequence_id, {
                     clip_id = mut.clip_id,
                     track_id = mut.track_id,
-                    start_value = mut.timeline_start_frame,
+                    start_value = mut.sequence_start_frame,
                     duration_value = mut.duration_frames,
                     source_in_value = mut.source_in_frame,
                     source_out_value = mut.source_out_frame,
@@ -53,7 +53,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_insert_mutation(command, sequence_id, {
                     id = mut.clip_id,
                     track_id = mut.track_id,
-                    start_value = mut.timeline_start_frame,
+                    start_value = mut.sequence_start_frame,
                     duration_value = mut.duration_frames,
                     source_in_value = mut.source_in_frame,
                     source_out_value = mut.source_out_frame,
@@ -137,18 +137,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if pending_new_start then
-            command:set_parameter("original_timeline_start", clip.timeline_start)
-            clip.timeline_start = pending_new_start
+            command:set_parameter("original_sequence_start", clip.sequence_start)
+            clip.sequence_start = pending_new_start
         end
 
         -- Resolve Occlusions on Target Track
-        local target_start = clip.timeline_start
+        local target_start = clip.sequence_start
         local target_duration = pending_duration or clip.duration
         local pending_clips = args.pending_clips
 
         local ok_occ, err_occ, planned_mutations = clip_mutator.resolve_occlusions(db, {
             track_id = args.target_track_id,
-            timeline_start = target_start,
+            sequence_start = target_start,
             duration = target_duration,
             exclude_clip_id = clip.id,
             pending_clips = pending_clips
@@ -164,7 +164,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Pending start/duration were already applied to `clip` object above if pending_new_start_rat was set?
         -- Wait, lines 87-90:
         -- if pending_new_start_rat then
-        --    clip.timeline_start = pending_new_start_rat
+        --    clip.sequence_start = pending_new_start_rat
         -- end
         -- So `clip` is already modified in memory.
         
@@ -183,7 +183,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         record_planned_mutations(command, mutation_sequence, planned_mutations)
 
         log.event("Moved clip %s to track %s at %s",
-            clip_id, args.target_track_id, tostring(clip.timeline_start))
+            clip_id, args.target_track_id, tostring(clip.sequence_start))
         return true
     end
 

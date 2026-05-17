@@ -26,9 +26,9 @@ function M.compute_edge_boundary_time(edge_info, original_states_map)
     local raw_edge = edge_info.edge_type
     local normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge)
     if normalized_edge == "in" then
-        return clip_state.timeline_start
+        return clip_state.sequence_start
     elseif normalized_edge == "out" then
-        return clip_state.timeline_start + clip_state.duration
+        return clip_state.sequence_start + clip_state.duration
     end
     error(string.format("edge_info.compute_edge_boundary_time: unhandled edge_type=%s normalized=%s for clip %s",
         tostring(raw_edge), tostring(normalized_edge), tostring(edge_info.clip_id)))

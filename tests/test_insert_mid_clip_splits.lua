@@ -58,7 +58,7 @@ local Clip = require('models.clip')
 local clip_a_id = Clip.create({
     name = "A", project_id = "proj",
     track_id = "v1", owner_sequence_id = "seq", sequence_id = master,
-    timeline_start_frame = 0, duration_frames = 100,
+    sequence_start_frame = 0, duration_frames = 100,
     source_in_frame = 100, source_out_frame = 200,
     fps_mismatch_policy = "resample", enabled = true, volume = 1.0,
     playhead_frame = 0,
@@ -70,7 +70,7 @@ local clip_a_id = Clip.create({
 local clip_c_id = Clip.create({
     name = "C", project_id = "proj",
     track_id = "v1", owner_sequence_id = "seq", sequence_id = master,
-    timeline_start_frame = 200, duration_frames = 100,
+    sequence_start_frame = 200, duration_frames = 100,
     source_in_frame = 400, source_out_frame = 500,
     fps_mismatch_policy = "resample", enabled = true, volume = 1.0,
     playhead_frame = 0,
@@ -94,7 +94,7 @@ local cmd = Command.create("Insert", "proj")
 cmd:set_parameter("source_sequence_id", master)
 cmd:set_parameter("target_video_track_id", "v1")
 cmd:set_parameter("sequence_id", "seq")
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 cmd:set_parameter("clip_name", "B")
 local result = command_manager.execute(cmd)
 assert(result.success, "Insert failed: " .. tostring(result.error_message))
@@ -103,17 +103,17 @@ assert(result.success, "Insert failed: " .. tostring(result.error_message))
 local function load_track_clips()
     local out = {}
     local q = db:prepare([[
-        SELECT id, name, timeline_start_frame, duration_frames,
+        SELECT id, name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame
         FROM clips WHERE owner_sequence_id='seq' AND track_id='v1'
-        ORDER BY timeline_start_frame ASC
+        ORDER BY sequence_start_frame ASC
     ]])
     assert(q:exec())
     while q:next() do
         out[#out+1] = {
             id            = q:value(0),
             name          = q:value(1),
-            timeline_start = q:value(2),
+            sequence_start = q:value(2),
             duration      = q:value(3),
             source_in     = q:value(4),
             source_out    = q:value(5),
@@ -130,8 +130,8 @@ assert(#clips == 4, string.format(
 local A_left, B, A_right, C = clips[1], clips[2], clips[3], clips[4]
 
 -- A_left: untouched start, shrunk to the insertion frame, source_in unchanged.
-assert(A_left.timeline_start == 0,
-    "A_left.timeline_start expected 0, got " .. A_left.timeline_start)
+assert(A_left.sequence_start == 0,
+    "A_left.sequence_start expected 0, got " .. A_left.sequence_start)
 assert(A_left.duration == 50,
     "A_left.duration expected 50, got " .. A_left.duration)
 assert(A_left.source_in == 100,
@@ -143,8 +143,8 @@ assert(A_left.id == clip_a_id,
     "A_left should be the original A row (id preserved on the left half)")
 
 -- B (new): occupies [50, 70). 20-frame range from the master's mark window.
-assert(B.timeline_start == 50,
-    "B.timeline_start expected 50, got " .. B.timeline_start)
+assert(B.sequence_start == 50,
+    "B.sequence_start expected 50, got " .. B.sequence_start)
 assert(B.duration == 20,
     "B.duration expected 20, got " .. B.duration)
 assert(B.source_in == 80,
@@ -154,8 +154,8 @@ assert(B.source_out == 100,
 
 -- A_right: starts at the insertion frame plus the inserted duration,
 -- source picks up where A_left left off.
-assert(A_right.timeline_start == 70,
-    "A_right.timeline_start expected 70 (50 + 20), got " .. A_right.timeline_start)
+assert(A_right.sequence_start == 70,
+    "A_right.sequence_start expected 70 (50 + 20), got " .. A_right.sequence_start)
 assert(A_right.duration == 50,
     "A_right.duration expected 50 (the half not consumed by A_left), got "
     .. A_right.duration)
@@ -170,8 +170,8 @@ assert(A_right.id ~= clip_a_id,
 
 -- C: rippled forward by the inserted duration; source range untouched.
 assert(C.id == clip_c_id, "C should be the original C row")
-assert(C.timeline_start == 220,
-    "C.timeline_start expected 220 (200 + 20), got " .. C.timeline_start)
+assert(C.sequence_start == 220,
+    "C.sequence_start expected 220 (200 + 20), got " .. C.sequence_start)
 assert(C.duration == 100,
     "C.duration expected unchanged at 100, got " .. C.duration)
 assert(C.source_in == 400 and C.source_out == 500,
@@ -182,11 +182,11 @@ local und = command_manager.undo()
 assert(und.success, "undo failed: " .. tostring(und.error_message))
 clips = load_track_clips()
 assert(#clips == 2, "after undo expected 2 clips (A, C); got " .. #clips)
-assert(clips[1].id == clip_a_id and clips[1].timeline_start == 0
+assert(clips[1].id == clip_a_id and clips[1].sequence_start == 0
        and clips[1].duration == 100
        and clips[1].source_in == 100 and clips[1].source_out == 200,
     "after undo A should be its original [0,100) src [100,200)")
-assert(clips[2].id == clip_c_id and clips[2].timeline_start == 200
+assert(clips[2].id == clip_c_id and clips[2].sequence_start == 200
        and clips[2].duration == 100,
     "after undo C should be back at [200, 300)")
 

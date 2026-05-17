@@ -38,13 +38,13 @@ local clips = {
     {
         id = "clip_a",
         track_id = "track_v1",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 50
     },
     {
         id = "clip_b",
         track_id = "track_v1",
-        timeline_start = 60,
+        sequence_start = 60,
         duration = 40
     }
 }

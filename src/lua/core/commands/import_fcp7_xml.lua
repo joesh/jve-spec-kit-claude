@@ -38,7 +38,7 @@ local function apply_zoom_to_fit_viewport(sequence_id, db)
     local max_end = nil
 
     for _, clip in ipairs(clips) do
-        local start_val = clip.timeline_start
+        local start_val = clip.sequence_start
         local dur_val = clip.duration
 
         if start_val and dur_val then

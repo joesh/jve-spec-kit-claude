@@ -102,7 +102,7 @@ db:exec([[
     UPDATE sequences SET default_video_layer_track_id = 'master_v_med1'
         WHERE id = 'master_med1';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-        media_id, source_in_frame, source_out_frame, timeline_start_frame,
+        media_id, source_in_frame, source_out_frame, sequence_start_frame,
         duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1',
         0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
@@ -123,7 +123,7 @@ do
             owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 100,
             source_in = 0,
             source_out = 100,
@@ -163,8 +163,8 @@ do
     check("clip.name", c.name == "My Clip")
     check("clip.track_id", c.track_id == "trk1")
     check("clip.sequence_id", c.sequence_id == "master_med1")
-    check("clip.timeline_start is Rational", c.timeline_start ~= nil and c.timeline_start ~= nil)
-    check("clip.timeline_start == 0", c.timeline_start == 0)
+    check("clip.sequence_start is Rational", c.sequence_start ~= nil and c.sequence_start ~= nil)
+    check("clip.sequence_start == 0", c.sequence_start == 0)
     check("clip.duration == 100", c.duration == 100)
     check("clip.source_in == 0", c.source_in == 0)
     check("clip.source_out == 100", c.source_out == 100)
@@ -200,7 +200,7 @@ do
             owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 200,
+            sequence_start = 200,
             duration = 50,
             source_in = 0,
             source_out = 50,
@@ -334,7 +334,7 @@ do
             owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 120,
+            sequence_start = 120,
             duration = 300,
             source_in = 10,
             source_out = 310,
@@ -349,7 +349,7 @@ do
     local snap = snapshot_manager.load_snapshot(db, "seq1")
     local c = snap.clips[1]
 
-    check("30fps clip timeline_start.frames", c.timeline_start == 120)
+    check("30fps clip sequence_start.frames", c.sequence_start == 120)
     check("30fps clip duration.frames", c.duration == 300)
     check("30fps clip source_in.frames", c.source_in == 10)
     check("30fps clip source_out.frames", c.source_out == 310)
@@ -371,7 +371,7 @@ do
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 50,
             source_in = 0,
             source_out = 50,
@@ -384,7 +384,7 @@ do
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 50,
+            sequence_start = 50,
             duration = 50,
             source_in = 50,
             source_out = 100,
@@ -412,7 +412,7 @@ do
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
             sequence_id = "master_med1",
             fps_mismatch_policy = "resample",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 30,
             source_in = 0,
             source_out = 30,
@@ -453,7 +453,7 @@ do
         { id = "cs1", track_type = "VIDEO", name = "S1C",
           project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
           sequence_id = "master_med1", fps_mismatch_policy = "resample",
-          timeline_start = 0, duration = 10,
+          sequence_start = 0, duration = 10,
           source_in = 0, source_out = 10,
           frame_rate = { fps_numerator = 24, fps_denominator = 1 },
           enabled = true, volume = 1.0,
@@ -463,7 +463,7 @@ do
         { id = "cs2", track_type = "VIDEO", name = "S2C",
           project_id = "proj1", track_id = "trk2", owner_sequence_id = "seq2",
           sequence_id = "master_med1", fps_mismatch_policy = "resample",
-          timeline_start = 0, duration = 20,
+          sequence_start = 0, duration = 20,
           source_in = 0, source_out = 20,
           frame_rate = { fps_numerator = 30, fps_denominator = 1 },
           enabled = true, volume = 1.0,

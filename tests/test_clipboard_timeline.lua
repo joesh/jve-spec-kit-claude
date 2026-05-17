@@ -121,7 +121,7 @@ local function insert_clip(params)
         source_sequence_id = source_sequence_id,
         target_video_track_id = params.track_id,
         sequence_id = "seq",
-        timeline_start_frame = params.timeline_start,
+        sequence_start_frame = params.sequence_start,
         advance_playhead = false,
     })
     local result = command_manager.execute(cmd)
@@ -142,18 +142,18 @@ local function count_timeline_clips()
     return n
 end
 
---- Find a timeline clip by its timeline_start_frame
+--- Find a timeline clip by its sequence_start_frame
 local function find_clip_at_frame(frame)
     local conn = database.get_connection()
     local stmt = conn:prepare([[
-        SELECT id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
-        FROM clips WHERE owner_sequence_id = 'seq' AND timeline_start_frame = ?
+        SELECT id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame
+        FROM clips WHERE owner_sequence_id = 'seq' AND sequence_start_frame = ?
     ]])
     stmt:bind_value(1, frame)
     local found = stmt:exec() and stmt:next()
     local result = found and {
         id = stmt:value(0),
-        timeline_start = stmt:value(1),
+        sequence_start = stmt:value(1),
         duration = stmt:value(2),
         source_in = stmt:value(3),
         source_out = stmt:value(4),
@@ -166,7 +166,7 @@ end
 local function get_clip_start_frame(clip_id)
     clip_id = resolve_clip_id(clip_id)
     local conn = database.get_connection()
-    local stmt = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local stmt = conn:prepare("SELECT sequence_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     if not (stmt:exec() and stmt:next()) then
         stmt:finalize()
@@ -192,7 +192,7 @@ insert_clip({
     media_id = "media_a",
     media_duration = 500,
     track_id = "v1",
-    timeline_start = 300,
+    sequence_start = 300,
     duration = 120,
     source_in = 50,
     source_out = 170,
@@ -265,7 +265,7 @@ insert_clip({
     media_id = "media_b",
     media_duration = 500,
     track_id = "v1",
-    timeline_start = 100,
+    sequence_start = 100,
     duration = 200,
     source_in = 0,
     source_out = 200,
@@ -277,7 +277,7 @@ insert_clip({
     media_id = "media_c",
     media_duration = 500,
     track_id = "v1",
-    timeline_start = 500,
+    sequence_start = 500,
     duration = 100,
     source_in = 10,
     source_out = 110,
@@ -321,15 +321,15 @@ setup_database(TEST3_DB)
 -- Three clips on v1, well separated
 insert_clip({
     clip_id = "d_src", media_id = "media_d1", media_duration = 500,
-    track_id = "v1", timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
+    track_id = "v1", sequence_start = 0, duration = 100, source_in = 0, source_out = 100,
 })
 insert_clip({
     clip_id = "d_mid", media_id = "media_d2", media_duration = 500,
-    track_id = "v1", timeline_start = 5000, duration = 100, source_in = 0, source_out = 100,
+    track_id = "v1", sequence_start = 5000, duration = 100, source_in = 0, source_out = 100,
 })
 insert_clip({
     clip_id = "d_tail", media_id = "media_d3", media_duration = 500,
-    track_id = "v1", timeline_start = 10000, duration = 100, source_in = 0, source_out = 100,
+    track_id = "v1", sequence_start = 10000, duration = 100, source_in = 0, source_out = 100,
 })
 
 local baseline_tail = get_clip_start_frame("d_tail")
@@ -369,7 +369,7 @@ insert_clip({
     media_id = "media_cut",
     media_duration = 500,
     track_id = "v1",
-    timeline_start = 250,
+    sequence_start = 250,
     duration = 80,
     source_in = 30,
     source_out = 110,
@@ -402,11 +402,11 @@ setup_database(TEST5_DB)
 
 insert_clip({
     clip_id = "r_a", media_id = "media_r1", media_duration = 500,
-    track_id = "v1", timeline_start = 0, duration = 75, source_in = 0, source_out = 75,
+    track_id = "v1", sequence_start = 0, duration = 75, source_in = 0, source_out = 75,
 })
 insert_clip({
     clip_id = "r_b", media_id = "media_r2", media_duration = 500,
-    track_id = "v1", timeline_start = 200, duration = 100, source_in = 0, source_out = 100,
+    track_id = "v1", sequence_start = 200, duration = 100, source_in = 0, source_out = 100,
 })
 
 local orig_b_start = get_clip_start_frame("r_b")
@@ -428,8 +428,8 @@ for _, c in ipairs(clips_after) do
 end
 assert(not r_a_exists, "r_a should be deleted")
 assert(r_b_after, "r_b should still exist")
-assert(r_b_after.timeline_start < orig_b_start,
-    string.format("r_b should shift left (was %d, now %d)", orig_b_start, r_b_after.timeline_start))
+assert(r_b_after.sequence_start < orig_b_start,
+    string.format("r_b should shift left (was %d, now %d)", orig_b_start, r_b_after.sequence_start))
 
 -- Undo restores both
 assert(command_manager.undo().success)
@@ -437,7 +437,7 @@ local undo_clips = database.load_clips("seq")
 local undo_a_found, undo_b_start = false, nil
 for _, c in ipairs(undo_clips) do
     if c.id == r_a_id then undo_a_found = true end
-    if c.id == r_b_id then undo_b_start = c.timeline_start end
+    if c.id == r_b_id then undo_b_start = c.sequence_start end
 end
 assert(undo_a_found, "r_a should be restored")
 assert(undo_b_start == orig_b_start,

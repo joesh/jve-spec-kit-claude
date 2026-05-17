@@ -120,7 +120,7 @@ local function build_layout(before_tracks, track_order, db_path)
                 name = clip.name,
                 track_key = track_key,
                 media_key = "main",
-                timeline_start = clip.start,
+                sequence_start = clip.start,
                 duration = duration,
                 source_in = source_in,
             }
@@ -154,10 +154,10 @@ local function verify_after_state(after_tracks)
                 end
             else
                 local expected_dur = clip.end_pos - clip.start
-                if c.timeline_start ~= clip.start then
+                if c.sequence_start ~= clip.start then
                     table.insert(failures, string.format(
                         "%s: %s start expected %d, got %d",
-                        track_name, clip.name, clip.start, c.timeline_start))
+                        track_name, clip.name, clip.start, c.sequence_start))
                 end
                 if c.duration ~= expected_dur then
                     table.insert(failures, string.format(
@@ -217,10 +217,10 @@ local function verify_undo_round_trip(test_name, before_tracks, before_source_in
             local clip_id = "clip_" .. clip.name
             local c = Clip.load(clip_id)
             assert(c, test_name .. ": undo: clip " .. clip.name .. " missing after undo")
-            if c.timeline_start ~= clip.start then
+            if c.sequence_start ~= clip.start then
                 table.insert(undo_failures, string.format(
                     "%s: %s start expected %d, got %d (undo)",
-                    track_name, clip.name, clip.start, c.timeline_start))
+                    track_name, clip.name, clip.start, c.sequence_start))
             end
             local expected_dur = clip.end_pos - clip.start
             if c.duration ~= expected_dur then
@@ -261,8 +261,8 @@ function M.run(test)
         for _, clip in ipairs(clips) do
             local c = Clip.load("clip_" .. clip.name)
             assert(c, "setup: clip " .. clip.name .. " not found")
-            assert(c.timeline_start == clip.start,
-                string.format("setup: %s start expected %d, got %d", clip.name, clip.start, c.timeline_start))
+            assert(c.sequence_start == clip.start,
+                string.format("setup: %s start expected %d, got %d", clip.name, clip.start, c.sequence_start))
             local expected_dur = clip.end_pos - clip.start
             assert(c.duration == expected_dur,
                 string.format("setup: %s duration expected %d, got %d", clip.name, expected_dur, c.duration))
@@ -284,7 +284,7 @@ function M.run(test)
             assert(clip_data, "drag: clip " .. edge.clip_name .. " not in DB")
             local gap_start, gap_edge_type
             if edge.edge_type == "gap_after" then
-                gap_start = clip_data.timeline_start + clip_data.duration
+                gap_start = clip_data.sequence_start + clip_data.duration
                 gap_edge_type = "in"
             else -- gap_before
                 -- Gap starts at previous clip's end on the same track.
@@ -294,7 +294,7 @@ function M.run(test)
                     if tid == track_id then
                         for _, c in ipairs(clips_list) do
                             local c_end = c.end_pos
-                            if c_end <= clip_data.timeline_start and c_end > prev_clip_end then
+                            if c_end <= clip_data.sequence_start and c_end > prev_clip_end then
                                 prev_clip_end = c_end
                             end
                         end
@@ -351,7 +351,7 @@ function M.run(test)
             test.name .. " after execute")
     end
 
-    -- Verify after-state: timeline_start and duration match expected
+    -- Verify after-state: sequence_start and duration match expected
     local failures = verify_after_state(after_tracks)
 
     -- Verify source_in changes for edited clips (skip when delta was clamped)

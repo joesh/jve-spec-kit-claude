@@ -112,7 +112,7 @@ VALUES ('master_clip_a', 'default_project', 'Master A', 'master', 30, 1, 48000, 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mca_v', 'master_clip_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mca_v' WHERE id = 'master_clip_a';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_a', 'default_project', 'master_clip_a', 'mca_v', 'media_a', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
@@ -120,14 +120,14 @@ VALUES ('master_clip_b', 'default_project', 'Master B', 'master', 30, 1, 48000, 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mcb_v', 'master_clip_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mcb_v' WHERE id = 'master_clip_b';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_b', 'default_project', 'master_clip_b', 'mcb_v', 'media_b', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_clip_audio_a1', 'default_project', 'Master Audio A1', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mca_a', 'master_clip_audio_a1', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_audio', 0, 8000000, 0, 8000000, 1, 1.0, 0, 0, 0);
 
 -- Empty master with no media_refs — used by clip_no_parent so MatchFrame
@@ -135,7 +135,7 @@ VALUES ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_aud
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
 VALUES ('master_empty', 'default_project', 'Empty Master', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_v1', 'default_project', 'Clip V1', 'track_v1', 'master_clip_a', 'default_sequence', 0, 200, 10, 210, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2', 'default_project', 'Clip V2', 'track_v2', 'master_clip_b', 'default_sequence', 100, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
@@ -289,7 +289,7 @@ assert(load_calls[1] == 'master_clip_audio_a1',
     "Selected audio clip should win, got " .. tostring(load_calls[1]))
 
 -- Test 12: MatchFrame sets master clip marks to clip's source_in/source_out
--- clip_v1: timeline_start=0, source_in=10, source_out=210, playhead at 50
+-- clip_v1: sequence_start=0, source_in=10, source_out=210, playhead at 50
 -- Expected: master mark_in=10, mark_out=210, playhead_frame=10+(50-0)=60
 print("Test 12: MatchFrame sets marks and playhead on master clip")
 load_calls = {}
@@ -304,11 +304,11 @@ assert(master_a.mark_in == 10,
 assert(master_a.mark_out == 210,
     string.format("mark_out should be 210 (source_out), got %s", tostring(master_a.mark_out)))
 assert(master_a.playhead_position == 60,
-    string.format("playhead_position should be 60 (source_in + playhead - timeline_start), got %s",
+    string.format("playhead_position should be 60 (source_in + playhead - sequence_start), got %s",
         tostring(master_a.playhead_position)))
 
 -- Test 13: MatchFrame with playhead deeper into clip
--- clip_v2: timeline_start=100, source_in=0, source_out=100, playhead at 150
+-- clip_v2: sequence_start=100, source_in=0, source_out=100, playhead at 150
 -- Expected: master mark_in=0, mark_out=100, playhead_frame=0+(150-100)=50
 print("Test 13: MatchFrame playhead mapping with offset clip")
 load_calls = {}
@@ -339,7 +339,7 @@ print("Test 14: Out-of-range playhead is clamped, not asserted")
 db:exec(string.format([[
     INSERT INTO clips (
         id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at
     ) VALUES (

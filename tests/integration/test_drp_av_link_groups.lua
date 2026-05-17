@@ -3,7 +3,7 @@
 --
 -- Domain expectations (derived from how Resolve renders this fixture):
 --
---   * The V `13-053-001` shot at timeline_start = 111632 and the
+--   * The V `13-053-001` shot at sequence_start = 111632 and the
 --     A `13-053-001` chunk at 111626 belong to the same V↔A pair.
 --     They must end up in one clip_links group.
 --
@@ -49,7 +49,7 @@ assert(database.set_path(JVP_PATH),
 local conn = database.get_connection()
 
 -- ----------------------------------------------------------------------
--- Locate the V `13-053-001` clip at timeline_start=111632 on the
+-- Locate the V `13-053-001` clip at sequence_start=111632 on the
 -- GOLD-MASTER sequence. There are two such clips (one linked, one a
 -- parallel-track duplicate) — distinguish them by track_index.
 -- ----------------------------------------------------------------------
@@ -88,7 +88,7 @@ local v_clip_rows = fetch_all([[
     JOIN tracks t ON t.id = c.track_id
     WHERE c.owner_sequence_id = ?
       AND c.name = '13-053-001'
-      AND c.timeline_start_frame = 111632
+      AND c.sequence_start_frame = 111632
       AND t.track_type = 'VIDEO'
     ORDER BY t.track_index
 ]], { gold_seq_id }, {"id", "track_id", "track_index"})
@@ -108,7 +108,7 @@ local a_clip_rows = fetch_all([[
     JOIN tracks t ON t.id = c.track_id
     WHERE c.owner_sequence_id = ?
       AND c.name = '13-053-001'
-      AND c.timeline_start_frame = 111626
+      AND c.sequence_start_frame = 111626
       AND t.track_type = 'AUDIO'
     ORDER BY t.track_index
 ]], { gold_seq_id }, {"id", "track_id", "track_index"})
@@ -160,14 +160,14 @@ print(string.format(
 -- ----------------------------------------------------------------------
 
 local group_members = fetch_all([[
-    SELECT cl.clip_id, cl.role, c.name, c.timeline_start_frame, t.track_type, t.track_index
+    SELECT cl.clip_id, cl.role, c.name, c.sequence_start_frame, t.track_type, t.track_index
     FROM clip_links cl
     JOIN clips  c ON c.id  = cl.clip_id
     JOIN tracks t ON t.id  = c.track_id
     WHERE cl.link_group_id = ?
     ORDER BY t.track_type, t.track_index
 ]], { linked_v_group },
-    {"clip_id", "role", "name", "timeline_start_frame", "track_type", "track_index"})
+    {"clip_id", "role", "name", "sequence_start_frame", "track_type", "track_index"})
 
 local has_video = false
 local has_audio = false
@@ -182,7 +182,7 @@ if not has_audio then
         print(string.format(
             "  %s/%d %s start=%d clip_id=%s",
             m.track_type, m.track_index, m.name,
-            m.timeline_start_frame, m.clip_id))
+            m.sequence_start_frame, m.clip_id))
     end
 end
 
@@ -214,7 +214,7 @@ if distinct_names ~= 1 then
     for _, m in ipairs(group_members) do
         print(string.format(
             "  %s/%d %s start=%d", m.track_type, m.track_index,
-            m.name, m.timeline_start_frame))
+            m.name, m.sequence_start_frame))
     end
 end
 

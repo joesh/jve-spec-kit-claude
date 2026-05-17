@@ -87,7 +87,7 @@ local function partition_clips_for_recompute(clips, scoped, affected_track_ids)
     return kept, media_for_scope, old_gap_tracks
 end
 
--- Group media clips by track_id and sort each track's list by timeline_start
+-- Group media clips by track_id and sort each track's list by sequence_start
 -- (ties broken by clip id for determinism).
 local function build_sorted_track_media(media_clips)
     local track_clips = {}
@@ -101,10 +101,10 @@ local function build_sorted_track_media(media_clips)
     end
     for _, list in pairs(track_clips) do
         table.sort(list, function(a, b)
-            if a.timeline_start == b.timeline_start then
+            if a.sequence_start == b.sequence_start then
                 return a.id < b.id
             end
-            return a.timeline_start < b.timeline_start
+            return a.sequence_start < b.sequence_start
         end)
     end
     return track_clips
@@ -147,9 +147,9 @@ local function migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
                 local old_start = tonumber(edge.clip_id:match("_(%d+)$"))
                 local best_gap = new_gaps[1]
                 if old_start then
-                    local best_dist = math.abs(best_gap.timeline_start - old_start)
+                    local best_dist = math.abs(best_gap.sequence_start - old_start)
                     for _, g in ipairs(new_gaps) do
-                        local dist = math.abs(g.timeline_start - old_start)
+                        local dist = math.abs(g.sequence_start - old_start)
                         if dist < best_dist then
                             best_gap = g
                             best_dist = dist
@@ -506,8 +506,8 @@ local function load_displayed_sequence(seq_id)
     local function content_bounds()
         local min_start, max_end
         for _, c in ipairs(data.state.clips) do
-            if not c.is_gap and c.timeline_start and c.duration then
-                local s, e = c.timeline_start, c.timeline_start + c.duration
+            if not c.is_gap and c.sequence_start and c.duration then
+                local s, e = c.sequence_start, c.sequence_start + c.duration
                 if not min_start or s < min_start then min_start = s end
                 if not max_end or e > max_end then max_end = e end
             end

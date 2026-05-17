@@ -40,7 +40,7 @@ assert(db:exec([[
     VALUES ('me','p','m.mov','/tmp/m.mov',240,24,1,1920,1080,0,0);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr','p','m','m-v1','me',0,240,0,240,1,1.0,0,0,0);
     -- Patch: src V1 → rec V2 (locked).
@@ -73,7 +73,7 @@ local clips_before  = clip_count()
 local r = command_manager.execute("Insert", {
     sequence_id          = "r",
     source_sequence_id   = "m",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     project_id           = "p",
 })
 assert(r and r.success == false,

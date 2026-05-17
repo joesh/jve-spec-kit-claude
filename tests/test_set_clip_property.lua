@@ -150,7 +150,7 @@ insert_cmd:set_parameters({
     sequence_id = "timeline_seq",
     target_video_track_id = "track_v1",
     source_sequence_id = master_seq_id,
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
 })
 local insert_res = command_manager.execute(insert_cmd)
 assert(insert_res.success, "Insert failed: " .. tostring(insert_res.error_message))

@@ -37,7 +37,7 @@ end
 local CLIP_LOAD_SQL = [[
     SELECT c.id, c.project_id, c.name, c.track_id,
            c.owner_sequence_id, c.sequence_id,
-           c.timeline_start_frame, c.duration_frames,
+           c.sequence_start_frame, c.duration_frames,
            c.source_in_frame, c.source_out_frame,
            c.master_layer_track_id, c.master_audio_track_id,
            c.fps_mismatch_policy,
@@ -89,7 +89,7 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         owner_sequence_id     = query:value(4),
         sequence_id    = query:value(5),
 
-        timeline_start = assert(query:value(6),  "Clip.load: timeline_start_frame is NULL"),
+        sequence_start = assert(query:value(6),  "Clip.load: sequence_start_frame is NULL"),
         duration       = assert(query:value(7),  "Clip.load: duration_frames is NULL"),
         source_in      = assert(query:value(8),  "Clip.load: source_in_frame is NULL"),
         source_out     = assert(query:value(9),  "Clip.load: source_out_frame is NULL"),
@@ -182,7 +182,7 @@ end
 
 --- Create a clip row. Args: a single table with the V13 fields:
 --- id (optional), project_id, owner_sequence_id, track_id,
---- sequence_id, name, timeline_start_frame, duration_frames,
+--- sequence_id, name, sequence_start_frame, duration_frames,
 --- source_in_frame, source_out_frame, master_layer_track_id (nullable),
 --- fps_mismatch_policy ('resample'|'passthrough'), enabled, volume,
 --- mark_in_frame (nullable), mark_out_frame (nullable), playhead_frame.
@@ -311,8 +311,8 @@ end
 -- rule 2.13: NOT NULL columns + invariant fields fail loud at write time.
 local function assert_clip_save_invariants(self)
     assert(self.id and self.id ~= "", "Clip.save: clip id is required")
-    assert(type(self.timeline_start) == "number",
-        "Clip.save: timeline_start must be integer (got " .. type(self.timeline_start) .. ")")
+    assert(type(self.sequence_start) == "number",
+        "Clip.save: sequence_start must be integer (got " .. type(self.sequence_start) .. ")")
     assert(type(self.duration) == "number",
         "Clip.save: duration must be integer (got " .. type(self.duration) .. ")")
     assert(type(self.source_in) == "number",
@@ -362,7 +362,7 @@ local function prepare_clip_save_stmt(db, exists)
             UPDATE clips
             SET project_id = ?, name = ?, track_id = ?,
                 owner_sequence_id = ?, sequence_id = ?,
-                timeline_start_frame = ?, duration_frames = ?,
+                sequence_start_frame = ?, duration_frames = ?,
                 source_in_frame = ?, source_out_frame = ?,
                 master_layer_track_id = ?, master_audio_track_id = ?,
                 fps_mismatch_policy = ?,
@@ -376,7 +376,7 @@ local function prepare_clip_save_stmt(db, exists)
         INSERT INTO clips (
             id, project_id, name, track_id,
             owner_sequence_id, sequence_id,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,
@@ -408,7 +408,7 @@ local function bind_clip_writable_columns(query, base, self, nested_id)
     query:bind_value(base + 2, self.track_id)
     query:bind_value(base + 3, self.owner_sequence_id)
     query:bind_value(base + 4, nested_id)
-    query:bind_value(base + 5, self.timeline_start)
+    query:bind_value(base + 5, self.sequence_start)
     query:bind_value(base + 6, self.duration)
     query:bind_value(base + 7, self.source_in)
     query:bind_value(base + 8, self.source_out)
@@ -530,7 +530,7 @@ function M:set_property(property_name, value)
 end
 
 --- Find a clip on a track that contains a given timeline time
--- A clip contains time T if: timeline_start <= T < timeline_start + duration
+-- A clip contains time T if: sequence_start <= T < sequence_start + duration
 -- @param track_id string: Track ID to search
 -- @param time_frames number: Timeline frame position to check
 -- @return Clip or nil: First enabled clip containing the time, or nil
@@ -548,8 +548,8 @@ function M.find_at_time(track_id, time_frames)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame <= ?
-          AND (timeline_start_frame + duration_frames) > ?
+          AND sequence_start_frame <= ?
+          AND (sequence_start_frame + duration_frames) > ?
           AND enabled = 1
         LIMIT 1
     ]])
@@ -644,9 +644,9 @@ function M.find_next_on_track(track_id, after_frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame >= ?
+          AND sequence_start_frame >= ?
           AND enabled = 1
-        ORDER BY timeline_start_frame ASC
+        ORDER BY sequence_start_frame ASC
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_next_on_track: failed to prepare query")
@@ -665,7 +665,7 @@ function M.find_next_on_track(track_id, after_frame)
 end
 
 --- Find the previous enabled clip on a track ending at or before a given frame.
--- "Ending at" means (timeline_start + duration) <= before_frame.
+-- "Ending at" means (sequence_start + duration) <= before_frame.
 -- @param track_id string: Track ID to search
 -- @param before_frame number: Timeline frame position (inclusive upper bound for clip end)
 -- @return Clip or nil
@@ -680,9 +680,9 @@ function M.find_prev_on_track(track_id, before_frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND (timeline_start_frame + duration_frames) <= ?
+          AND (sequence_start_frame + duration_frames) <= ?
           AND enabled = 1
-        ORDER BY timeline_start_frame DESC
+        ORDER BY sequence_start_frame DESC
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_prev_on_track: failed to prepare query")
@@ -885,7 +885,7 @@ local V13_REQUIRED = {
     "project_id", "owner_sequence_id", "sequence_id",
     "track_id",
     "name",
-    "timeline_start_frame", "duration_frames",
+    "sequence_start_frame", "duration_frames",
     "source_in_frame", "source_out_frame",
     "fps_mismatch_policy",
     "enabled", "volume", "playhead_frame",
@@ -955,7 +955,7 @@ function M._create_v13_row(fields)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, owner_sequence_id, track_id, sequence_id,
-            name, timeline_start_frame, duration_frames,
+            name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
@@ -969,7 +969,7 @@ function M._create_v13_row(fields)
     stmt:bind_value(4, fields.track_id)
     stmt:bind_value(5, fields.sequence_id)
     stmt:bind_value(6, fields.name)
-    stmt:bind_value(7, fields.timeline_start_frame)
+    stmt:bind_value(7, fields.sequence_start_frame)
     stmt:bind_value(8, fields.duration_frames)
     stmt:bind_value(9, fields.source_in_frame)
     stmt:bind_value(10, fields.source_out_frame)
@@ -996,7 +996,7 @@ end
 
 local CLIP_UPDATABLE_V13 = {
     name = true, track_id = true,
-    timeline_start_frame = true, duration_frames = true,
+    sequence_start_frame = true, duration_frames = true,
     source_in_frame = true, source_out_frame = true,
     master_layer_track_id = true, fps_mismatch_policy = true,
     enabled = true, volume = true,
@@ -1064,7 +1064,7 @@ end
 
 -- ===========================================================================
 -- Feature 013 (T041): source<->timeline frame conversion under a clip's
--- policy. A single clip stores timeline_start/duration in owner-timebase
+-- policy. A single clip stores sequence_start/duration in owner-timebase
 -- frames AND source_in/out in nested-timebase frames; to trim by N owner
 -- frames you have to shift source bounds by the policy-appropriate ratio.
 -- ===========================================================================
@@ -1098,7 +1098,7 @@ function M.owner_delta_to_source(policy, owner_delta,
 end
 
 --- Return every clip on `track_id` that overlaps the owner-timebase range
---- [window_start, window_end), ordered by timeline_start_frame. Each row is
+--- [window_start, window_end), ordered by sequence_start_frame. Each row is
 --- a plain table carrying the fields needed to plan an occlusion mutation.
 --- Used by Overwrite to compute its remove/trim/split plan.
 function M.find_overlapping_on_track(track_id, window_start, window_end)
@@ -1112,15 +1112,15 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
-               name, timeline_start_frame, duration_frames,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame < ?
-          AND (timeline_start_frame + duration_frames) > ?
-        ORDER BY timeline_start_frame ASC
+          AND sequence_start_frame < ?
+          AND (sequence_start_frame + duration_frames) > ?
+        ORDER BY sequence_start_frame ASC
     ]])
     assert(stmt, "Clip.find_overlapping_on_track: prepare failed")
     stmt:bind_value(1, track_id)
@@ -1137,7 +1137,7 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
             track_id              = stmt:value(3),
             sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1156,10 +1156,10 @@ end
 
 --- Low-level UPDATE: set timeline + duration + source bounds on one clip.
 --- Source-window invariant (non-empty, lower bound >= 0) is re-checked by Clip.update which we delegate to.
-function M.update_bounds(id, timeline_start_frame, duration_frames,
+function M.update_bounds(id, sequence_start_frame, duration_frames,
                         source_in_frame, source_out_frame)
     return M.update(id, {
-        timeline_start_frame = timeline_start_frame,
+        sequence_start_frame = sequence_start_frame,
         duration_frames      = duration_frames,
         source_in_frame      = source_in_frame,
         source_out_frame     = source_out_frame,
@@ -1199,12 +1199,12 @@ function M.find_referencing_nested(sequence_id)
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
-               name, timeline_start_frame, duration_frames,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
                enabled, volume, playhead_frame
         FROM clips WHERE sequence_id = ?
-        ORDER BY owner_sequence_id, track_id, timeline_start_frame, id
+        ORDER BY owner_sequence_id, track_id, sequence_start_frame, id
     ]])
     assert(stmt, "Clip.find_referencing_nested: prepare failed")
     stmt:bind_value(1, sequence_id)
@@ -1218,7 +1218,7 @@ function M.find_referencing_nested(sequence_id)
             track_id              = stmt:value(3),
             sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1241,12 +1241,12 @@ function M.list_in_sequence(owner_sequence_id)
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
-               name, timeline_start_frame, duration_frames,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips WHERE owner_sequence_id = ?
-        ORDER BY timeline_start_frame ASC, id ASC
+        ORDER BY sequence_start_frame ASC, id ASC
     ]])
     assert(stmt, "Clip.list_in_sequence: prepare failed")
     stmt:bind_value(1, owner_sequence_id)
@@ -1260,7 +1260,7 @@ function M.list_in_sequence(owner_sequence_id)
             track_id              = stmt:value(3),
             sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1352,7 +1352,7 @@ end
 -- Feature 013 (T040): ripple + batch operations for Insert's write path.
 -- ===========================================================================
 
---- Shift every clip on `track_id` whose `timeline_start_frame >= from_frame`
+--- Shift every clip on `track_id` whose `sequence_start_frame >= from_frame`
 --- forward by `shift` frames. Returns the list of clip ids actually shifted
 --- (for undo capture). `shift` must be non-zero (rule 2.13).
 function M.ripple_track_forward(track_id, from_frame, shift)
@@ -1377,8 +1377,8 @@ function M.ripple_track_forward(track_id, from_frame, shift)
     local order = (shift > 0) and "DESC" or "ASC"
     local sel = db:prepare(string.format([[
         SELECT id FROM clips
-        WHERE track_id = ? AND timeline_start_frame >= ?
-        ORDER BY timeline_start_frame %s
+        WHERE track_id = ? AND sequence_start_frame >= ?
+        ORDER BY sequence_start_frame %s
     ]], order))
     assert(sel, "Clip.ripple_track_forward: select prepare failed")
     sel:bind_value(1, track_id)
@@ -1392,7 +1392,7 @@ function M.ripple_track_forward(track_id, from_frame, shift)
 
     local upd = db:prepare([[
         UPDATE clips
-        SET timeline_start_frame = timeline_start_frame + ?,
+        SET sequence_start_frame = sequence_start_frame + ?,
             modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
@@ -1421,7 +1421,7 @@ function M.shift_many_by(clip_ids, delta)
     require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
     local upd = db:prepare([[
         UPDATE clips
-        SET timeline_start_frame = timeline_start_frame + ?,
+        SET sequence_start_frame = sequence_start_frame + ?,
             modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
@@ -1463,7 +1463,7 @@ function M.delete_by_ids(clip_ids)
 end
 
 --- Return the id of the clip on `track_id` whose timeline range
---- STRICTLY contains `frame` (i.e. timeline_start < frame < timeline_end).
+--- STRICTLY contains `frame` (i.e. sequence_start < frame < sequence_end).
 --- Used by Blade (T045a) — boundary-touching clips must NOT match because
 --- splitting AT a boundary is a no-op refused by SplitClip.
 --- Returns nil if no such clip exists.
@@ -1476,8 +1476,8 @@ function M.find_strictly_spanning(track_id, frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame < ?
-          AND (timeline_start_frame + duration_frames) > ?
+          AND sequence_start_frame < ?
+          AND (sequence_start_frame + duration_frames) > ?
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_strictly_spanning: prepare failed")
@@ -1560,7 +1560,7 @@ function M.load_v13_row(id)
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
-               name, timeline_start_frame, duration_frames,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
@@ -1578,7 +1578,7 @@ function M.load_v13_row(id)
             track_id              = stmt:value(3),
             sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1674,7 +1674,7 @@ function M.restore_v13_state(state)
         track_id              = r.track_id,
         sequence_id    = r.sequence_id,
         name                  = r.name,
-        timeline_start_frame  = r.timeline_start_frame,
+        sequence_start_frame  = r.sequence_start_frame,
         duration_frames       = r.duration_frames,
         source_in_frame       = r.source_in_frame,
         source_out_frame      = r.source_out_frame,

@@ -74,7 +74,7 @@ db:exec(string.format([[
     -- respective track timebases — what the DRP importer actually writes.
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752,    1200, 1, 1.0, 0, %d, %d),
@@ -82,7 +82,7 @@ db:exec(string.format([[
     -- Master B: video at TC origin frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0, 600, 0, 600, 1, 1.0, 0, %d, %d);
@@ -98,7 +98,7 @@ local function viewport_intersects_any_clip()
     local ve = vs + vd
     for _, c in ipairs(timeline_state.get_clips()) do
         if not c.is_gap then
-            local cs, ce = c.timeline_start, c.timeline_start + c.duration
+            local cs, ce = c.sequence_start, c.sequence_start + c.duration
             if cs < ve and ce > vs then return true, vs, ve, cs, ce end
         end
     end
@@ -150,7 +150,7 @@ check("timeline view shows master A's media_refs as 2 virtual clips",
 
 -- The audio and video media_refs describe the SAME physical span in their
 -- track-respective timebases. After synthesis they must show up at the
--- SAME timeline_start in the timeline view's coordinate system (master video frames).
+-- SAME sequence_start in the timeline view's coordinate system (master video frames).
 -- A 2000× discrepancy indicates audio sample units leaking through as frames.
 local v_clip, a_clip
 for _, c in ipairs(clips) do
@@ -160,11 +160,11 @@ end
 check("master A virtual VIDEO clip exists",  v_clip ~= nil, "")
 check("master A virtual AUDIO clip exists",  a_clip ~= nil, "")
 if v_clip and a_clip then
-    check("audio virtual clip's timeline_start is in MASTER FRAMES (not samples)",
-        math.abs(a_clip.timeline_start - v_clip.timeline_start) <= 1,
+    check("audio virtual clip's sequence_start is in MASTER FRAMES (not samples)",
+        math.abs(a_clip.sequence_start - v_clip.sequence_start) <= 1,
         string.format("video=%d audio=%d (audio is %.0fx larger — sample units leaking)",
-            v_clip.timeline_start, a_clip.timeline_start,
-            a_clip.timeline_start / math.max(1, v_clip.timeline_start)))
+            v_clip.sequence_start, a_clip.sequence_start,
+            a_clip.sequence_start / math.max(1, v_clip.sequence_start)))
     check("audio virtual clip's duration is in MASTER FRAMES (not samples)",
         math.abs(a_clip.duration - v_clip.duration) <= 1,
         string.format("video duration=%d audio duration=%d", v_clip.duration, a_clip.duration))

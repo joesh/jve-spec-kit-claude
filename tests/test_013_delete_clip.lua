@@ -44,7 +44,7 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 2000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES
           ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0),
@@ -57,7 +57,7 @@ local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -86,13 +86,13 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames, track_id
+        SELECT sequence_start_frame, duration_frames, track_id
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         track_id       = stmt:value(2),
     }
@@ -117,7 +117,7 @@ do
 
     assert(not clip_exists(db, "v1"), "v1 deleted")
     local v2 = load_clip(db, "v2")
-    assert(v2.timeline_start == 200 and v2.duration == 50,
+    assert(v2.sequence_start == 200 and v2.duration == 50,
         "v2 must NOT shift (Delete is non-ripple)")
     print("  ok")
 end
@@ -144,8 +144,8 @@ do
     -- Downstream pair must NOT shift (non-ripple).
     local v2 = load_clip(db, "v2")
     local a2 = load_clip(db, "a2")
-    assert(v2.timeline_start == 100, "v2 must not move")
-    assert(a2.timeline_start == 100, "a2 must not move")
+    assert(v2.sequence_start == 100, "v2 must not move")
+    assert(a2.sequence_start == 100, "a2 must not move")
     print("  ok")
 end
 
@@ -205,7 +205,7 @@ do
     assert(undo(cmd))
     assert(clip_exists(db, "v1"), "v1 restored after undo")
     local v1 = load_clip(db, "v1")
-    assert(v1.timeline_start == 100 and v1.duration == 50,
+    assert(v1.sequence_start == 100 and v1.duration == 50,
         "v1 timeline restored")
 
     local stmt = db:prepare(

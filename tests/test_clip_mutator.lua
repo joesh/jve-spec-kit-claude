@@ -41,7 +41,7 @@ do
         track_id = "t1",
         owner_sequence_id = "owner_seq",
         sequence_id = "nested_seq",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -56,7 +56,7 @@ do
     local mut = ClipMutator.plan_insert(row)
     check("plan_insert type=insert", mut.type == "insert")
     check("plan_insert clip_id", mut.clip_id == "c1")
-    check("plan_insert timeline_start_frame", mut.timeline_start_frame == 0)
+    check("plan_insert sequence_start_frame", mut.sequence_start_frame == 0)
     check("plan_insert duration_frames", mut.duration_frames == 100)
     check("plan_insert source_in_frame", mut.source_in_frame == 0)
     check("plan_insert source_out_frame", mut.source_out_frame == 100)
@@ -69,7 +69,7 @@ end
 print("\n--- plan_insert: missing fps asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_in = 0, source_out = 100,
         created_at = os.time(), modified_at = os.time()
     }
@@ -81,7 +81,7 @@ end
 print("\n--- plan_insert: missing duration asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0,
+        id = "c1", sequence_start = 0,
         source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
@@ -94,7 +94,7 @@ end
 print("\n--- plan_insert: missing source_in asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_out = 100,
         frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
@@ -107,7 +107,7 @@ end
 print("\n--- plan_insert: missing source_out asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_in = 0,
         frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
@@ -120,7 +120,7 @@ end
 print("\n--- plan_insert: missing created_at asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = 1000, fps_denominator = 1 },
         modified_at = os.time()
@@ -133,7 +133,7 @@ end
 print("\n--- plan_insert: zero fps asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = 0, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
@@ -146,7 +146,7 @@ end
 print("\n--- plan_insert: negative fps asserts ---")
 do
     local row = {
-        id = "c1", timeline_start = 0, duration = 100,
+        id = "c1", sequence_start = 0, duration = 100,
         source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = -1000, fps_denominator = 1 },
         created_at = os.time(), modified_at = os.time()
@@ -160,7 +160,7 @@ print("\n--- plan_update: valid ---")
 do
     local row = {
         id = "c1", track_id = "t1",
-        timeline_start = 10,
+        sequence_start = 10,
         duration = 50,
         source_in = 5,
         source_out = 55,
@@ -170,7 +170,7 @@ do
     local mut = ClipMutator.plan_update(row, original)
     check("plan_update type=update", mut.type == "update")
     check("plan_update clip_id", mut.clip_id == "c1")
-    check("plan_update timeline_start_frame", mut.timeline_start_frame == 10)
+    check("plan_update sequence_start_frame", mut.sequence_start_frame == 10)
     check("plan_update previous", mut.previous == original)
 end
 
@@ -195,7 +195,7 @@ end
 
 print("\n--- resolve_occlusions: missing track_id → assert (rule 2.13) ---")
 do
-    local ok = pcall(ClipMutator.resolve_occlusions, nil, {timeline_start = 0, duration = 10})
+    local ok = pcall(ClipMutator.resolve_occlusions, nil, {sequence_start = 0, duration = 10})
     check("missing track_id raises", not ok)
 end
 
@@ -204,13 +204,13 @@ do
     local layout = ripple_layout.create({
         clips = {
             order = {"v1_left"},
-            v1_left = {timeline_start = 0, duration = 500, source_in = 0}
+            v1_left = {sequence_start = 0, duration = 500, source_in = 0}
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 1000,
+        sequence_start = 1000,
         duration = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -226,14 +226,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 100, duration = 200, source_in = 0
+                sequence_start = 100, duration = 200, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 500,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -252,14 +252,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 300,
+        sequence_start = 300,
         duration = 500,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -278,21 +278,21 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 200, duration = 500, source_in = 0
+                sequence_start = 200, duration = 500, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 400,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
     check("head trim ok", ok == true)
     check("head trim 1 action", #actions == 1)
     check("head trim action=update", actions[1].type == "update")
-    check("head trim new start=400", actions[1].timeline_start_frame == 400)
+    check("head trim new start=400", actions[1].sequence_start_frame == 400)
     check("head trim new duration=300", actions[1].duration_frames == 300)
 
     layout:cleanup()
@@ -305,14 +305,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 1000, source_in = 0
+                sequence_start = 0, duration = 1000, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 300,
+        sequence_start = 300,
         duration = 300,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -321,7 +321,7 @@ do
     check("straddle first=update (left part)", actions[1].type == "update")
     check("straddle left duration=300", actions[1].duration_frames == 300)
     check("straddle second=insert (right part)", actions[2].type == "insert")
-    check("straddle right start=600", actions[2].timeline_start_frame == 600)
+    check("straddle right start=600", actions[2].sequence_start_frame == 600)
     check("straddle right duration=400", actions[2].duration_frames == 400)
 
     layout:cleanup()
@@ -333,14 +333,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 500,
         exclude_clip_id = "clip_v1_left",
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
@@ -358,17 +358,17 @@ do
         clips = {
             order = {"v1_left", "v1_right"},
             v1_left = {
-                timeline_start = 0, duration = 300, source_in = 0
+                sequence_start = 0, duration = 300, source_in = 0
             },
             v1_right = {
-                timeline_start = 500, duration = 300, source_in = 0
+                sequence_start = 500, duration = 300, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 100,
+        sequence_start = 100,
         duration = 600,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -379,7 +379,7 @@ do
     check("multi first duration=100", actions[1].duration_frames == 100)
     -- Second clip [500,800) with new [100,700): head trim to [700,800)
     check("multi second=update (head trim)", actions[2].type == "update")
-    check("multi second start=700", actions[2].timeline_start_frame == 700)
+    check("multi second start=700", actions[2].sequence_start_frame == 700)
 
     layout:cleanup()
 end
@@ -391,14 +391,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 100, duration = 100, source_in = 0
+                sequence_start = 100, duration = 100, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_occlusions(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start = 100,
+        sequence_start = 100,
         duration = 400,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -418,10 +418,10 @@ do
     check("ripple nil params raises", not ok)
 end
 
-print("\n--- resolve_ripple: missing timeline_start_frame → assert (rule 2.13) ---")
+print("\n--- resolve_ripple: missing sequence_start_frame → assert (rule 2.13) ---")
 do
     local ok = pcall(ClipMutator.resolve_ripple, nil, {track_id = "t1", shift_amount = 10})
-    check("ripple missing timeline_start_frame raises", not ok)
+    check("ripple missing sequence_start_frame raises", not ok)
 end
 
 print("\n--- resolve_ripple: shift clips after insert point ---")
@@ -432,10 +432,10 @@ do
         clips = {
             order = {"v1_left", "v1_right"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             },
             v1_right = {
-                timeline_start = 500, duration = 500, source_in = 0
+                sequence_start = 500, duration = 500, source_in = 0
             }
         }
     })
@@ -449,7 +449,7 @@ do
     check("ripple shift ok", ok == true)
     check("ripple shift 1 action", #actions == 1)
     check("ripple shift action=update", actions[1].type == "update")
-    check("ripple shift new start=700", actions[1].timeline_start_frame == 700)
+    check("ripple shift new start=700", actions[1].sequence_start_frame == 700)
 
     layout:cleanup()
 end
@@ -462,7 +462,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 1000, source_in = 0
+                sequence_start = 0, duration = 1000, source_in = 0
             }
         }
     })
@@ -480,7 +480,7 @@ do
     check("ripple split left duration=400", actions[1].duration_frames == 400)
     -- Second: insert right part at 700
     check("ripple split second=insert", actions[2].type == "insert")
-    check("ripple split right start=700", actions[2].timeline_start_frame == 700)
+    check("ripple split right start=700", actions[2].sequence_start_frame == 700)
     check("ripple split right duration=600", actions[2].duration_frames == 600)
 
     layout:cleanup()
@@ -494,16 +494,16 @@ do
         clips = {
             order = {"v1_left", "v1_mid", "v1_right"},
             v1_left = {
-                timeline_start = 0, duration = 300, source_in = 0
+                sequence_start = 0, duration = 300, source_in = 0
             },
             v1_mid = {
                 id = "clip_v1_mid",
                 track_key = "v1", media_key = "main",
-                timeline_start = 300, duration = 300, source_in = 0,
+                sequence_start = 300, duration = 300, source_in = 0,
                 fps_numerator = 1000, fps_denominator = 1
             },
             v1_right = {
-                timeline_start = 600, duration = 300, source_in = 0
+                sequence_start = 600, duration = 300, source_in = 0
             }
         }
     })
@@ -517,9 +517,9 @@ do
     check("ripple reverse ok", ok == true)
     check("ripple reverse 3 actions", #actions == 3)
     -- Reversed: rightmost clip first
-    check("ripple reverse first start=700", actions[1].timeline_start_frame == 700)
-    check("ripple reverse second start=400", actions[2].timeline_start_frame == 400)
-    check("ripple reverse third start=100", actions[3].timeline_start_frame == 100)
+    check("ripple reverse first start=700", actions[1].sequence_start_frame == 700)
+    check("ripple reverse second start=400", actions[2].sequence_start_frame == 400)
+    check("ripple reverse third start=100", actions[3].sequence_start_frame == 100)
 
     layout:cleanup()
 end
@@ -530,14 +530,14 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
 
     local ok, _, actions = ClipMutator.resolve_ripple(layout.db, {
         track_id = layout.tracks.v1.id,
-        timeline_start_frame = 1000,
+        sequence_start_frame = 1000,
         shift_amount = 200,
         sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
     })
@@ -610,7 +610,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -635,7 +635,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -659,7 +659,7 @@ do
         end
     end
     check("dup positive insert found", insert_mut ~= nil)
-    check("dup positive insert start=1000", insert_mut and insert_mut.timeline_start_frame == 1000)
+    check("dup positive insert start=1000", insert_mut and insert_mut.sequence_start_frame == 1000)
     check("dup positive insert duration=500", insert_mut and insert_mut.duration_frames == 500)
 
     layout:cleanup()
@@ -671,7 +671,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -706,10 +706,10 @@ do
         clips = {
             order = {"v1_left", "v2"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             },
             v2 = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -743,7 +743,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -767,7 +767,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })
@@ -793,7 +793,7 @@ do
         clips = {
             order = {"v1_left"},
             v1_left = {
-                timeline_start = 0, duration = 500, source_in = 0
+                sequence_start = 0, duration = 500, source_in = 0
             }
         }
     })

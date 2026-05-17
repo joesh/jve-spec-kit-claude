@@ -50,7 +50,7 @@ end
 local REQUIRED_COLUMNS = {
     "project_id", "owner_sequence_id", "track_id", "media_id",
     "source_in_frame", "source_out_frame",
-    "timeline_start_frame", "duration_frames",
+    "sequence_start_frame", "duration_frames",
     "enabled", "volume", "playhead_frame",
 }
 
@@ -85,7 +85,7 @@ function M.create(fields)
     local stmt = db:prepare([[
         INSERT INTO media_refs (
             id, project_id, owner_sequence_id, track_id, media_id,
-            source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -98,7 +98,7 @@ function M.create(fields)
     stmt:bind_value(5, fields.media_id)
     stmt:bind_value(6, fields.source_in_frame)
     stmt:bind_value(7, fields.source_out_frame)
-    stmt:bind_value(8, fields.timeline_start_frame)
+    stmt:bind_value(8, fields.sequence_start_frame)
     stmt:bind_value(9, fields.duration_frames)
     stmt:bind_value(10, to_int_bool(fields.enabled))
     stmt:bind_value(11, fields.volume)
@@ -121,7 +121,7 @@ function M.find(id)
     local db = database.get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, media_id,
-               source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+               source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
                created_at, modified_at
         FROM media_refs WHERE id = ?
@@ -139,7 +139,7 @@ function M.find(id)
             media_id = stmt:value(4),
             source_in_frame = stmt:value(5),
             source_out_frame = stmt:value(6),
-            timeline_start_frame = stmt:value(7),
+            sequence_start_frame = stmt:value(7),
             duration_frames = stmt:value(8),
             enabled = stmt:value(9) == 1,
             volume = stmt:value(10),
@@ -159,7 +159,7 @@ end
 -- media_ref between masters/tracks is a higher-level operation, not a bare UPDATE.
 local UPDATABLE_COLUMNS = {
     source_in_frame = true, source_out_frame = true,
-    timeline_start_frame = true, duration_frames = true,
+    sequence_start_frame = true, duration_frames = true,
     enabled = true, volume = true,
     mark_in_frame = true, mark_out_frame = true,
     playhead_frame = true,

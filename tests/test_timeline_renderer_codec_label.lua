@@ -107,7 +107,7 @@ do
     local clips = {
         {
             id = "c1", track_id = "v1", label = "MyClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "FileNotFound",
         },
     }
@@ -135,7 +135,7 @@ do
     local clips = {
         {
             id = "c2", track_id = "v1", label = "BRAWClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "Unsupported",
         },
     }
@@ -163,7 +163,7 @@ do
     local clips = {
         {
             id = "c3", track_id = "v1", label = "CorruptClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "DecodeFailed",
         },
     }
@@ -189,7 +189,7 @@ do
     local clips = {
         {
             id = "c4", track_id = "v1", label = "NormalClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = false, error_code = nil,
         },
     }

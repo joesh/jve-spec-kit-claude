@@ -184,7 +184,7 @@ check("masterclip created", mc_id ~= nil)
 
 -- Query the video stream clip's source_in
 local stmt = assert(db:prepare([[
-    SELECT c.source_in_frame, c.source_out_frame, c.timeline_start_frame
+    SELECT c.source_in_frame, c.source_out_frame, c.sequence_start_frame
     FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
     WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
@@ -193,15 +193,15 @@ stmt:bind_value(1, mc_id)
 assert(stmt:exec() and stmt:next())
 local source_in = stmt:value(0)
 local source_out = stmt:value(1)
-local timeline_start = stmt:value(2)
+local sequence_start = stmt:value(2)
 stmt:finalize()
 
 check("video source_in = TC origin (1148001)", source_in == 1148001,
     string.format("expected 1148001, got %s", tostring(source_in)))
 check("video source_out = TC + duration", source_out == 1148001 + 250,
     string.format("expected %d, got %s", 1148001 + 250, tostring(source_out)))
-check("video timeline_start = TC origin", timeline_start == 1148001,
-    string.format("expected 1148001, got %s", tostring(timeline_start)))
+check("video sequence_start = TC origin", sequence_start == 1148001,
+    string.format("expected 1148001, got %s", tostring(sequence_start)))
 
 -- Query audio stream clip's source_in
 local astmt = assert(db:prepare([[
@@ -235,7 +235,7 @@ local mc_id_0 = Sequence.ensure_master("m_tc0", "proj1")
 check("TC=0 masterclip created", mc_id_0 ~= nil)
 
 local stmt0 = assert(db:prepare([[
-    SELECT c.source_in_frame, c.timeline_start_frame
+    SELECT c.source_in_frame, c.sequence_start_frame
     FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
     WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
@@ -247,7 +247,7 @@ local ts0 = stmt0:value(1)
 stmt0:finalize()
 
 check("TC=0 video source_in = 0", si0 == 0, "got: " .. tostring(si0))
-check("TC=0 video timeline_start = 0", ts0 == 0, "got: " .. tostring(ts0))
+check("TC=0 video sequence_start = 0", ts0 == 0, "got: " .. tostring(ts0))
 
 --------------------------------------------------------------------------------
 -- Half 2: Output bounds — get_audio_start_tc derivation

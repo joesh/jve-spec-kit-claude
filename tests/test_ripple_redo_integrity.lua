@@ -109,7 +109,7 @@ set_mc_marks(source_sequence_id, 0, 4543560)
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("target_video_track_id", "track_default_v1")
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 exec(insert_cmd)
 
@@ -128,10 +128,10 @@ exec(ripple_cmd)
 
 local function snapshot_clips()
     local snap_stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
+        SELECT id, track_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
         WHERE owner_sequence_id = 'default_sequence'
-        ORDER BY track_id, timeline_start_frame
+        ORDER BY track_id, sequence_start_frame
     ]])
     assert(snap_stmt:exec(), "Failed to fetch clips for snapshot")
 
@@ -208,17 +208,17 @@ local function insert_clip(start_value, duration, source_in)
     local cmd = Command.create("Insert", "default_project")
     cmd:set_parameter("source_sequence_id", source_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_default_v1")
-    cmd:set_parameter("timeline_start_frame", start_value)
+    cmd:set_parameter("sequence_start_frame", start_value)
     cmd:set_parameter("sequence_id", "default_sequence")
     exec(cmd)
 end
 
 local function fetch_clips_ordered()
     local order_stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames
+        SELECT id, sequence_start_frame, duration_frames
         FROM clips
         WHERE owner_sequence_id = 'default_sequence'
-        ORDER BY timeline_start_frame
+        ORDER BY sequence_start_frame
     ]])
     assert(order_stmt:exec(), "Failed to fetch clip ordering")
     local ordered_clips = {}

@@ -114,7 +114,7 @@ end
 
 local function fetch_clip(db, clip_id)
     local stmt = db:prepare([[ 
-        SELECT track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
+        SELECT track_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, clip_id)
@@ -142,7 +142,7 @@ local function fetch_clip(db, clip_id)
 end
 
 local function fetch_track_clips(db, track_id)
-    local stmt = db:prepare([[SELECT timeline_start_frame, duration_frames, id FROM clips WHERE track_id = ? ORDER BY timeline_start_frame]])
+    local stmt = db:prepare([[SELECT sequence_start_frame, duration_frames, id FROM clips WHERE track_id = ? ORDER BY sequence_start_frame]])
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "track clip query failed")
     
@@ -211,7 +211,7 @@ local clip_a = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 120,
         source_in_frame = 0,
         source_out_frame = 120,
@@ -228,7 +228,7 @@ local _clip_b = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 180,
+        sequence_start_frame = 180,
         duration_frames = 90 - 0,
         source_in_frame = 0,
         source_out_frame = 90,
@@ -249,7 +249,7 @@ local mover_clip = Clip.create({
         track_id = "track_v2",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 60,
+        sequence_start_frame = 60,
         duration_frames = 120 - 0,
         source_in_frame = 0,
         source_out_frame = 120,
@@ -294,7 +294,7 @@ local _base_left = Clip.create({
         track_id = "track_nudge_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 30,
+        sequence_start_frame = 30,
         duration_frames = 90 - 0,
         source_in_frame = 0,
         source_out_frame = 90,
@@ -311,7 +311,7 @@ local _base_right = Clip.create({
         track_id = "track_nudge_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 180,
+        sequence_start_frame = 180,
         duration_frames = 180 - 0,
         source_in_frame = 0,
         source_out_frame = 180,
@@ -328,7 +328,7 @@ local mover_for_nudge = Clip.create({
         track_id = "track_nudge_v2",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 105,
+        sequence_start_frame = 105,
         duration_frames = 120 - 0,
         source_in_frame = 0,
         source_out_frame = 120,
@@ -388,7 +388,7 @@ local ripple_clip = Clip.create({
         project_id = "project",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 120,
         source_in_frame = 0,
         source_out_frame = 120,
@@ -450,7 +450,7 @@ local base_clip = Clip.create({
         project_id = "project",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 180,
         source_in_frame = 0,
         source_out_frame = 180,
@@ -468,11 +468,11 @@ end
 local insert_split = Command.create("Insert", "project")
 insert_split:set_parameter("source_sequence_id", split_source_sequence_id)
 insert_split:set_parameter("target_video_track_id", "track_v3")
-insert_split:set_parameter("timeline_start_frame", 60) -- 2000ms
+insert_split:set_parameter("sequence_start_frame", 60) -- 2000ms
 insert_split:set_parameter("sequence_id", "sequence")
 assert(command_manager.execute(insert_split).success, "Insert command failed")
 
-local stmt_split = db:prepare([[SELECT id, timeline_start_frame, duration_frames FROM clips WHERE track_id = 'track_v3' ORDER BY timeline_start_frame]])
+local stmt_split = db:prepare([[SELECT id, sequence_start_frame, duration_frames FROM clips WHERE track_id = 'track_v3' ORDER BY sequence_start_frame]])
 assert(stmt_split:exec(), "failed to query split results")
 
 local rows = {}

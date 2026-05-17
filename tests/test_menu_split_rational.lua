@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
--- Regression: Split menu action must handle Rational clip fields (timeline_start/duration) and not crash when start_value is nil.
+-- Regression: Split menu action must handle Rational clip fields (sequence_start/duration) and not crash when start_value is nil.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -79,7 +79,7 @@ data.state.sequence_id = "timeline_seq"
 local clip = {
     id = "clip_rational",
     track_id = "v1",
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 48,
     source_in = 0,
     source_out = 48,

@@ -13,9 +13,9 @@ local function binary_search_first_start_on_or_after(track_clips, target_frames)
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
         assert(clip, "timeline_active_region: nil clip in binary search at index " .. tostring(mid))
-        assert(type(clip.timeline_start) == "number",
-            "timeline_active_region: clip missing integer timeline_start in binary search (id=" .. tostring(clip.id) .. ")")
-        local start_frames = clip.timeline_start
+        assert(type(clip.sequence_start) == "number",
+            "timeline_active_region: clip missing integer sequence_start in binary search (id=" .. tostring(clip.id) .. ")")
+        local start_frames = clip.sequence_start
         if start_frames >= target_frames then
             ans = mid
             hi = mid - 1
@@ -27,10 +27,10 @@ local function binary_search_first_start_on_or_after(track_clips, target_frames)
 end
 
 local function clip_start_frames(clip)
-    if not clip or type(clip.timeline_start) ~= "number" then
+    if not clip or type(clip.sequence_start) ~= "number" then
         return nil
     end
-    return clip.timeline_start
+    return clip.sequence_start
 end
 
 local function clip_end_frames(clip)
@@ -42,10 +42,10 @@ local function clip_end_frames(clip)
 end
 
 local function edge_point_frames(edge, clip)
-    if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+    if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
         return nil
     end
-    local start_frames = clip.timeline_start
+    local start_frames = clip.sequence_start
     local end_frames = start_frames + clip.duration
     local edge_type = edge and edge.edge_type
     if edge_type == "in" then
@@ -108,10 +108,10 @@ function M.compute_for_edge_drag(state_module, edges, opts)
         local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(edge.clip_id) or nil
         assert(clip, "TimelineActiveRegion.compute_for_edge_drag: missing clip for edge " .. tostring(edge.clip_id))
         assert(clip.track_id, "TimelineActiveRegion.compute_for_edge_drag: clip missing track_id " .. tostring(edge.clip_id))
-        assert(type(clip.timeline_start) == "number" and type(clip.duration) == "number",
+        assert(type(clip.sequence_start) == "number" and type(clip.duration) == "number",
             "TimelineActiveRegion.compute_for_edge_drag: clip missing integer time fields " .. tostring(edge.clip_id))
 
-        local clip_start = clip.timeline_start
+        local clip_start = clip.sequence_start
         local clip_end = clip_start + clip.duration
         local point = edge_point_frames(edge, clip)
 
@@ -211,7 +211,7 @@ function M.build_snapshot_for_region(state_module, region)
                 local first_index_after_end = nil
                 for i = idx, #track_clips do
                     local clip = track_clips[i]
-                    local cs = type(clip.timeline_start) == "number" and clip.timeline_start or nil
+                    local cs = type(clip.sequence_start) == "number" and clip.sequence_start or nil
                     local cd = type(clip.duration) == "number" and clip.duration or nil
                     if not cs or not cd then
                         goto continue_clip
@@ -244,8 +244,8 @@ function M.build_snapshot_for_region(state_module, region)
 
     for track_id, list in pairs(track_clip_map) do
         table.sort(list, function(a, b)
-            local a_start = type(a.timeline_start) == "number" and a.timeline_start or 0
-            local b_start = type(b.timeline_start) == "number" and b.timeline_start or 0
+            local a_start = type(a.sequence_start) == "number" and a.sequence_start or 0
+            local b_start = type(b.sequence_start) == "number" and b.sequence_start or 0
             if a_start == b_start then
                 return (a.id or "") < (b.id or "")
             end

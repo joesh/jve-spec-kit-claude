@@ -70,7 +70,7 @@ local result = command_manager.execute("Insert", {
     project_id = project.id,
     sequence_id = seq.id,
     source_sequence_id = mc_id,
-    timeline_start_frame = timeline_state.get_playhead_position(),
+    sequence_start_frame = timeline_state.get_playhead_position(),
     advance_playhead = true,
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))

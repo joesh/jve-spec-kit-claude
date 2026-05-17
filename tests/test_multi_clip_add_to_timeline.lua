@@ -106,7 +106,7 @@ end
 
 -- Helper: get clip positions on a track
 local function get_clip_positions(track_id)
-    local stmt = db:prepare("SELECT id, timeline_start_frame, duration_frames FROM clips WHERE track_id = ? ORDER BY timeline_start_frame")
+    local stmt = db:prepare("SELECT id, sequence_start_frame, duration_frames FROM clips WHERE track_id = ? ORDER BY sequence_start_frame")
     stmt:bind_value(1, track_id)
     stmt:exec()
     local clips = {}

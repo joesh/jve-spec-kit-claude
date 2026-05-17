@@ -54,13 +54,13 @@ local function build_fixture()
                ('aud', 'p1', 'a.wav', '/tmp/a.wav', 2000000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'vid', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         -- Three video clips on edit, each 100 frames at different positions.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -77,10 +77,10 @@ end
 
 local function clips_on_track(db, owner, track_id)
     local stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames,
+        SELECT id, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame, fps_mismatch_policy
         FROM clips WHERE owner_sequence_id = ? AND track_id = ?
-        ORDER BY timeline_start_frame ASC
+        ORDER BY sequence_start_frame ASC
     ]])
     stmt:bind_value(1, owner)
     stmt:bind_value(2, track_id)
@@ -89,7 +89,7 @@ local function clips_on_track(db, owner, track_id)
     while stmt:next() do
         rows[#rows + 1] = {
             id = stmt:value(0),
-            timeline_start = stmt:value(1),
+            sequence_start = stmt:value(1),
             duration = stmt:value(2),
             source_in = stmt:value(3),
             source_out = stmt:value(4),
@@ -131,14 +131,14 @@ do
         #result.companions))
 
     -- Each existing video clip now has a linked audio clip on e-a1
-    -- with same timeline_start + duration.
+    -- with same sequence_start + duration.
     local v_clips = clips_on_track(db, "e", "e-v1")
     local a_clips = clips_on_track(db, "e", "e-a1")
     assert(#v_clips == 3 and #a_clips == 3,
         "edit timeline has 3 V clips and 3 new A clips")
 
     for i = 1, 3 do
-        assert(v_clips[i].timeline_start == a_clips[i].timeline_start,
+        assert(v_clips[i].sequence_start == a_clips[i].sequence_start,
             string.format("V[%d] and A[%d] timelines align", i, i))
         assert(v_clips[i].duration == a_clips[i].duration,
             string.format("V[%d] and A[%d] durations align", i, i))
@@ -180,7 +180,7 @@ do
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -299,7 +299,7 @@ do
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

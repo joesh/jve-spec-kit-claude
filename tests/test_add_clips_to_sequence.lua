@@ -142,7 +142,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -178,7 +178,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         track_id = track_id,
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = start_frame,
+        sequence_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
@@ -371,7 +371,7 @@ assert(result.success, "Serial insert should succeed")
 assert(count_clips("track_v1") == 2, "Should have 2 clips on V1")
 
 -- Verify positions: Clip A at 0, Clip B at 100
-local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE track_id = 'track_v1' ORDER BY timeline_start_frame")
+local stmt = db:prepare("SELECT sequence_start_frame FROM clips WHERE track_id = 'track_v1' ORDER BY sequence_start_frame")
 stmt:exec()
 local positions = {}
 while stmt:next() do

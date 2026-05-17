@@ -11,7 +11,7 @@ local SEQ_FPS = { fps_numerator = 24, fps_denominator = 1 }
 
 local function media_clip(id, track_id, start, dur)
     return {
-        id = id, track_id = track_id, timeline_start = start, duration = dur,
+        id = id, track_id = track_id, sequence_start = start, duration = dur,
         is_gap = false, media_id = "m1",
     }
 end
@@ -38,14 +38,14 @@ do
 end
 print("  ✓ nil seq_fps asserts")
 
--- compute_gaps_for_track: clip with nil timeline_start must assert
+-- compute_gaps_for_track: clip with nil sequence_start must assert
 do
     local bad_clip = { id = "bad", track_id = "v1", duration = 100 }
     local ok, err = pcall(gap_lifecycle.compute_gaps_for_track, "v1", {bad_clip}, SEQ_FPS)
-    assert(not ok, "clip with nil timeline_start must assert")
-    assert(tostring(err):find("timeline_start"), "error must mention timeline_start: " .. tostring(err))
+    assert(not ok, "clip with nil sequence_start must assert")
+    assert(tostring(err):find("sequence_start"), "error must mention sequence_start: " .. tostring(err))
 end
-print("  ✓ clip with nil timeline_start asserts")
+print("  ✓ clip with nil sequence_start asserts")
 
 -- create_implied_gap: nil position must assert
 do
@@ -81,13 +81,13 @@ do
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("v1", clips, SEQ_FPS)
     assert(#gaps == 1, string.format("expected 1 gap after overlap, got %d", #gaps))
-    assert(gaps[1].timeline_start == 200, "gap should start at 200")
+    assert(gaps[1].sequence_start == 200, "gap should start at 200")
     assert(gaps[1].duration == 200, "gap should be 200 frames")
 end
 print("  ✓ overlap followed by gap computes correctly")
 
 -- Computed gaps must satisfy invariants:
--- gap.timeline_start + gap.duration == next clip's timeline_start
+-- gap.sequence_start + gap.duration == next clip's sequence_start
 do
     local clips = {
         media_clip("c1", "v1", 50, 100),
@@ -97,13 +97,13 @@ do
     local gaps = gap_lifecycle.compute_gaps_for_track("v1", clips, SEQ_FPS)
 
     -- Head gap: [0, 50)
-    assert(gaps[1].timeline_start == 0, "head gap starts at 0")
-    assert(gaps[1].timeline_start + gaps[1].duration == clips[1].timeline_start,
+    assert(gaps[1].sequence_start == 0, "head gap starts at 0")
+    assert(gaps[1].sequence_start + gaps[1].duration == clips[1].sequence_start,
         "gap end must equal next clip start")
 
     -- Gap between c1 and c2: [150, 300)
-    assert(gaps[2].timeline_start == 150, "gap2 starts at 150")
-    assert(gaps[2].timeline_start + gaps[2].duration == clips[2].timeline_start,
+    assert(gaps[2].sequence_start == 150, "gap2 starts at 150")
+    assert(gaps[2].sequence_start + gaps[2].duration == clips[2].sequence_start,
         "gap2 end must equal c2 start")
 
     -- All gaps must have is_gap = true
@@ -121,7 +121,7 @@ do
     assert(gap, "create_implied_gap must return a gap")
     assert(gap.is_gap == true, "implied gap must have clip_kind='gap'")
     assert(gap.duration == 0, "implied gap must have duration 0")
-    assert(gap.timeline_start == 100, "implied gap must be at requested position")
+    assert(gap.sequence_start == 100, "implied gap must be at requested position")
     assert(gap.track_id == "v1", "implied gap must have correct track_id")
     assert(gap.media_id == nil, "implied gap must have nil media_id")
 end

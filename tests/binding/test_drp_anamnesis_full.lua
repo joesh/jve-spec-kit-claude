@@ -107,11 +107,11 @@ if seq_stmt:next() then
     assert(seq, "failed to load sequence " .. seq_id)
 
     local dis_stmt = assert(db:prepare([[
-        SELECT c.timeline_start_frame, c.timeline_start_frame + c.duration_frames as clip_end
+        SELECT c.sequence_start_frame, c.sequence_start_frame + c.duration_frames as clip_end
         FROM clips c JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
           AND c.clip_kind = 'timeline' AND c.enabled = 0
-        ORDER BY c.timeline_start_frame LIMIT 1
+        ORDER BY c.sequence_start_frame LIMIT 1
     ]]))
     dis_stmt:bind_value(1, seq_id)
     assert(dis_stmt:exec() and dis_stmt:next())
@@ -123,7 +123,7 @@ if seq_stmt:next() then
     for _, entry in ipairs(audio_entries) do
         assert(entry.clip.enabled ~= 0 and entry.clip.enabled ~= false,
             string.format("get_audio_in_range returned disabled clip id=%s at tl=%d",
-                entry.clip.id, entry.clip.timeline_start))
+                entry.clip.id, entry.clip.sequence_start))
     end
     print(string.format("  3c: disabled audio clip at [%d..%d] excluded from %s",
         disabled_start, disabled_end, seq_name))
@@ -152,11 +152,11 @@ if vseq_stmt:next() then
     assert(seq, "failed to load sequence")
 
     local vdis_stmt = assert(db:prepare([[
-        SELECT c.timeline_start_frame, c.timeline_start_frame + c.duration_frames
+        SELECT c.sequence_start_frame, c.sequence_start_frame + c.duration_frames
         FROM clips c JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
           AND c.clip_kind = 'timeline' AND c.enabled = 0
-        ORDER BY c.timeline_start_frame LIMIT 1
+        ORDER BY c.sequence_start_frame LIMIT 1
     ]]))
     vdis_stmt:bind_value(1, seq_id)
     assert(vdis_stmt:exec() and vdis_stmt:next())
@@ -207,7 +207,7 @@ tl_stmt:finalize()
 local a3_stmt = db:prepare([[
     SELECT c.source_in_frame, c.fps_numerator, m.metadata
     FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
-    WHERE t.sequence_id=? AND t.name='A3' AND c.timeline_start_frame=96607
+    WHERE t.sequence_id=? AND t.name='A3' AND c.sequence_start_frame=96607
       AND m.name LIKE '%C053%' AND c.clip_kind='timeline'
 ]])
 a3_stmt:bind_value(1, timeline_id)
@@ -231,11 +231,11 @@ assert(math.abs(a3_source_in - expected_a3) <= 1, string.format(
 print("\n  4b: Stereo Mix absolute TC source_in")
 
 local mix_stmt = db:prepare([[
-    SELECT c.timeline_start_frame, c.source_in_frame
+    SELECT c.sequence_start_frame, c.source_in_frame
     FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
     WHERE t.sequence_id=? AND t.name='A1'
       AND m.name LIKE '%Stereo Mix - Online%' AND c.clip_kind='timeline'
-    ORDER BY c.timeline_start_frame
+    ORDER BY c.sequence_start_frame
 ]])
 mix_stmt:bind_value(1, timeline_id)
 assert(mix_stmt:exec())

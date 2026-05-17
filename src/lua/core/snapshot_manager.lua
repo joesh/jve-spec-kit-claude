@@ -146,8 +146,8 @@ local function build_snapshot_payload(db, sequence_id, clips)
         require_field("build_snapshot_payload", "clip", "id", clip.id)
         require_field("build_snapshot_payload", "clip", "track_type", clip.track_type)
         require_field("build_snapshot_payload", "clip", "sequence_id", clip.sequence_id)
-        assert(type(clip.timeline_start) == "number", string.format(
-            "snapshot_manager.build_snapshot_payload: clip %s timeline_start must be integer", tostring(clip.id)))
+        assert(type(clip.sequence_start) == "number", string.format(
+            "snapshot_manager.build_snapshot_payload: clip %s sequence_start must be integer", tostring(clip.id)))
 
         table.insert(clip_data, {
             id = clip.id,
@@ -161,7 +161,7 @@ local function build_snapshot_payload(db, sequence_id, clips)
             master_audio_track_id = clip.master_audio_track_id,
             fps_mismatch_policy = clip.fps_mismatch_policy,
 
-            timeline_start_frame = clip.timeline_start,
+            sequence_start_frame = clip.sequence_start,
             duration_frames = clip.duration,
             source_in_frame = clip.source_in,
             source_out_frame = clip.source_out,
@@ -303,7 +303,7 @@ local function deserialize_snapshot_payload(json_str)
                 fps_mismatch_policy = data.fps_mismatch_policy,
                 track_id = data.track_id,
 
-                timeline_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "timeline_start_frame", data.timeline_start_frame),
+                sequence_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "sequence_start_frame", data.sequence_start_frame),
                 duration = require_field("deserialize_snapshot_payload", "clip " .. data.id, "duration_frames", data.duration_frames),
                 source_in = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_in_frame", data.source_in_frame),
                 source_out = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_out_frame", data.source_out_frame),

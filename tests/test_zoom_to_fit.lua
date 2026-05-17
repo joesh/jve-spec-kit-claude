@@ -65,13 +65,13 @@ cmd:set_parameter("target_video_track_id", "v1")
 cmd:set_parameter("source_sequence_id", mc_id)
 cmd:set_parameter("clip_name", "clip_a")
 cmd:set_parameter("created_clip_ids", {"clip_a"})
-cmd:set_parameter("timeline_start_frame", 100)
+cmd:set_parameter("sequence_start_frame", 100)
 local r = command_manager.execute(cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 
 local clip_a = timeline_state.get_clip_by_id("clip_a")
 assert(clip_a, "clip_a must exist")
-local content_start = clip_a.timeline_start
+local content_start = clip_a.sequence_start
 local content_end = content_start + clip_a.duration
 local content_dur = content_end - content_start
 print(string.format("Media clip: start=%d end=%d dur=%d", content_start, content_end, content_dur))

@@ -244,7 +244,7 @@ do
 
     local entry = {
         clip_id = "rev1",
-        timeline_start = 0, duration = 50,
+        sequence_start = 0, duration = 50,
         source_in = 50, source_out = 0,
         fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
@@ -269,7 +269,7 @@ do
     mock_clips = {
         {
             clip_id = "rev1",
-            timeline_start = 0, duration = 50,
+            sequence_start = 0, duration = 50,
             source_in = 50, source_out = 0,
             fps_numerator = 25, fps_denominator = 1,
             media_path = "/test.mov",
@@ -298,7 +298,7 @@ do
     mock_clips = {
         {
             clip_id = "rev_audio1",
-            timeline_start = 0, duration = 50,
+            sequence_start = 0, duration = 50,
             source_in = 2400000,   -- 50s * 48000
             source_out = 0,
             fps_numerator = 25, fps_denominator = 1,  -- media's video rate (audio path uses this)

@@ -63,7 +63,7 @@ print("\n--- Test 1: Non-BWF clip source_in = media_tc_origin + in_offset ---")
 local stmt = db:prepare([[
     SELECT c.source_in_frame, c.fps_numerator, m.metadata
     FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
-    WHERE t.sequence_id=? AND t.name='A3' AND c.timeline_start_frame=96607
+    WHERE t.sequence_id=? AND t.name='A3' AND c.sequence_start_frame=96607
       AND m.name LIKE '%C053%' AND c.clip_kind='timeline'
 ]])
 stmt:bind_value(1, timeline_id)
@@ -89,11 +89,11 @@ assert(math.abs(a3_source_in - expected_a3) <= 1, string.format(
 print("\n--- Test 2: Stereo Mix absolute TC source_in ---")
 
 local stmt2 = db:prepare([[
-    SELECT c.timeline_start_frame, c.source_in_frame
+    SELECT c.sequence_start_frame, c.source_in_frame
     FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
     WHERE t.sequence_id=? AND t.name='A1'
       AND m.name LIKE '%Stereo Mix - Online%' AND c.clip_kind='timeline'
-    ORDER BY c.timeline_start_frame
+    ORDER BY c.sequence_start_frame
 ]])
 stmt2:bind_value(1, timeline_id)
 assert(stmt2:exec())

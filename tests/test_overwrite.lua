@@ -167,7 +167,7 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         track_id = track_id,
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = start_frame,
+        sequence_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
@@ -183,7 +183,7 @@ end
 -- Helper: get clip position
 local function get_clip_position(clip_id)
     clip_id = resolve_clip_id(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -235,7 +235,7 @@ local result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -256,7 +256,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "overwrite_clip",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -281,7 +281,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "overwrite_start",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 50,
     source_in = 0,
     source_out = 50
@@ -336,7 +336,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "middle_overwrite",
-    timeline_start_frame = 75,
+    sequence_start_frame = 75,
     duration = 50,
     source_in = 0,
     source_out = 50
@@ -356,7 +356,7 @@ result = execute_command("Overwrite", {
     project_id = "project",
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100
     -- No source_sequence_id
 })
@@ -373,7 +373,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     -- No track_id - should use first video track
     source_sequence_id = source_sequence_id,
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -393,7 +393,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "fallback_dur_clip",
-    timeline_start_frame = 0
+    sequence_start_frame = 0
     -- No duration - should infer from masterclip stream
 })
 assert(result.success, "Overwrite should succeed with duration inference: " .. tostring(result.error_message))
@@ -415,7 +415,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_1",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -429,7 +429,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_2",
-    timeline_start_frame = 100,
+    sequence_start_frame = 100,
     duration = 100,
     source_in = 100,
     source_out = 200
@@ -443,7 +443,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_3",
-    timeline_start_frame = 200,
+    sequence_start_frame = 200,
     duration = 100,
     source_in = 200,
     source_out = 300
@@ -473,7 +473,7 @@ result = execute_command("Overwrite", {
     target_video_track_id = "track_v2",  -- Different track
     source_sequence_id = source_sequence_id,
     _alias = "v2_clip",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100
@@ -501,7 +501,7 @@ result = execute_command("Overwrite", {
     sequence_id = "sequence",
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,  -- Uses the existing video-only masterclip
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration = 100,
     source_in = 0,
     source_out = 100

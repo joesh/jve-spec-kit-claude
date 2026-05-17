@@ -22,7 +22,7 @@ assert(upstream:delete(layout.db), "failed to remove upstream clip")
 
 layout:init_timeline_state()
 
--- After deleting v1_left, gap_lifecycle creates a gap from 0 to v1_right.timeline_start
+-- After deleting v1_left, gap_lifecycle creates a gap from 0 to v1_right.sequence_start
 -- Gap clip ID: gap_<track_id>_0
 local gap_id = layout:gap_id("v1", 0)
 -- Verify gap clip exists in timeline state

@@ -106,7 +106,7 @@ end
 local function normalize_preview_entries(entries)
     local normalized = {}
     for _, entry in ipairs(coerce_clip_entries(entries) or {}) do
-        local start_value = entry.new_start_value or entry.timeline_start or entry.start_value
+        local start_value = entry.new_start_value or entry.sequence_start or entry.start_value
         local duration_value = entry.new_duration or entry.duration
         assert(type(start_value) == "number", "normalize_preview_entries: start_value must be integer")
         assert(type(duration_value) == "number", "normalize_preview_entries: duration_value must be integer")
@@ -233,7 +233,7 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
         if not entry.is_gap then
             local clip = get_preview_clip(state_module, preview_clip_cache, entry)
             if clip then
-                local start_value = entry.new_start_value or clip.timeline_start
+                local start_value = entry.new_start_value or clip.sequence_start
                 local duration_value = entry.new_duration or clip.duration
                 draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
             end
@@ -243,7 +243,7 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
     for _, shift in ipairs(preview_data.shifted_clips or {}) do
         local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = shift.clip_id})
         if clip and shift.new_start_value then
-            local existing_start = clip.timeline_start
+            local existing_start = clip.sequence_start
             local new_start = shift.new_start_value
             -- All coords are now integers, simple comparison
             if new_start ~= existing_start then
@@ -263,7 +263,7 @@ local function lower_bound_start_frames(clips, start_frames)
         local mid = math.floor((lo + hi) / 2)
         local clip = clips[mid]
         -- All coords are integer frames now
-        local clip_start = clip and clip.timeline_start
+        local clip_start = clip and clip.sequence_start
         if type(clip_start) ~= "number" then
             -- Defensive: if the index contains malformed entries, fall back to
             -- scanning from the front rather than risking an infinite loop.
@@ -294,10 +294,10 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
 
     for i = start_index, #track_clips do
         local clip = track_clips[i]
-        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_bounds
         end
-        if clip.timeline_start < block_start then
+        if clip.sequence_start < block_start then
             goto continue_bounds
         end
         if clip.is_gap then
@@ -307,7 +307,7 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
             goto continue_bounds
         end
 
-        local shifted_start = clip.timeline_start + delta_frames
+        local shifted_start = clip.sequence_start + delta_frames
         if shifted_start < 0 then shifted_start = 0 end
         local shifted_end = shifted_start + clip.duration
 
@@ -924,14 +924,14 @@ function M.render(view)
                     end
                     for i = start_index, #track_clips do
                         local clip = track_clips[i]
-                        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+                        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
                             goto continue_clip
                         end
                         -- Gap clips are invisible (empty space) — don't render
                         if clip.is_gap then
                             goto continue_clip
                         end
-                        local clip_start = clip.timeline_start
+                        local clip_start = clip.sequence_start
                         if clip_start >= viewport_end then
                             break
                         end
@@ -940,7 +940,7 @@ function M.render(view)
                             goto continue_clip
                         end
 
-                        draw_clip_instance(clip, track_id, clip.timeline_start, clip.duration, false)
+                        draw_clip_instance(clip, track_id, clip.sequence_start, clip.duration, false)
                         ::continue_clip::
                     end
                 end
@@ -1040,7 +1040,7 @@ function M.render(view)
                     render_track_id = preview_target_id
                 end
 
-                local start_value = clip.timeline_start + delta_frames
+                local start_value = clip.sequence_start + delta_frames
                 draw_clip_instance(clip, render_track_id, start_value, clip.duration, true)
             end
         end

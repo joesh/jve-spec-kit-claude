@@ -10,7 +10,7 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 local TimelineActiveRegion = require("core.timeline_active_region")
 
 local TEST_DB = "/tmp/jve/test_timeline_preview_gap_clamp.db"
-local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {sequence_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 
@@ -61,7 +61,7 @@ _G.timeline = {
     update = function() end
 }
 
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local edges = {
     {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"},

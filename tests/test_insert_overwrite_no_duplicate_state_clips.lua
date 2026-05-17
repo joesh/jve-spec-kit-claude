@@ -73,7 +73,7 @@ print("=== Overwrite → state.clips has exactly one entry per inserted clip ===
 local cmd = Command.create("Overwrite", "proj")
 cmd:set_parameters({
     source_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 100, advance_playhead = false,
+    sequence_start_frame = 100, advance_playhead = false,
 })
 local res = command_manager.execute(cmd)
 assert(res.success, "Overwrite failed: " .. tostring(res.error_message))
@@ -108,7 +108,7 @@ print("=== Insert → same invariant ===")
 local cmd2 = Command.create("Insert", "proj")
 cmd2:set_parameters({
     source_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 500, advance_playhead = false,
+    sequence_start_frame = 500, advance_playhead = false,
 })
 local res2 = command_manager.execute(cmd2)
 assert(res2.success, "Insert failed: " .. tostring(res2.error_message))

@@ -58,7 +58,7 @@ local _MC = _Sequence.ensure_master("med1", "proj1")
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('clip_video', 'proj1', 'Video', 'trk_v',
@@ -70,7 +70,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('clip_audio', 'proj1', 'Audio', 'trk_a',
@@ -90,15 +90,15 @@ command_manager.init("seq1", "proj1")
 
 -- Mock timeline_state for the Split wrapper to find clips at playhead
 local all_test_clips = {
-    { id = "clip_video", track_id = "trk_v", timeline_start = 0, duration = 1000 },
-    { id = "clip_audio", track_id = "trk_a", timeline_start = 0, duration = 1000 },
+    { id = "clip_video", track_id = "trk_v", sequence_start = 0, duration = 1000 },
+    { id = "clip_audio", track_id = "trk_a", sequence_start = 0, duration = 1000 },
 }
 
 timeline_state.get_playhead_position = function() return 500 end
 timeline_state.get_clips_at_time = function(time)
     local result = {}
     for _, clip in ipairs(all_test_clips) do
-        if clip.timeline_start <= time and (clip.timeline_start + clip.duration) > time then
+        if clip.sequence_start <= time and (clip.sequence_start + clip.duration) > time then
             table.insert(result, clip)
         end
     end
@@ -123,11 +123,11 @@ assert(result == true or (result and result.success), "Blade should succeed")
 
 -- Find the second half clip IDs
 local video_second_id, audio_second_id
-local stmt = db:prepare([[SELECT id FROM clips WHERE track_id = 'trk_v' AND timeline_start_frame = 500]])
+local stmt = db:prepare([[SELECT id FROM clips WHERE track_id = 'trk_v' AND sequence_start_frame = 500]])
 if stmt:exec() and stmt:next() then video_second_id = stmt:value(0) end
 stmt:finalize()
 
-stmt = db:prepare([[SELECT id FROM clips WHERE track_id = 'trk_a' AND timeline_start_frame = 500]])
+stmt = db:prepare([[SELECT id FROM clips WHERE track_id = 'trk_a' AND sequence_start_frame = 500]])
 if stmt:exec() and stmt:next() then audio_second_id = stmt:value(0) end
 stmt:finalize()
 
@@ -160,10 +160,10 @@ assert(not video_second_in_first, "Second halves should NOT be in first halves' 
 -- Mock timeline_state for testing
 local mock_edges = {}
 local mock_clips = {
-    { id = "clip_video", track_id = "trk_v", timeline_start = 0, duration = 500 },
-    { id = video_second_id, track_id = "trk_v", timeline_start = 500, duration = 500 },
-    { id = "clip_audio", track_id = "trk_a", timeline_start = 0, duration = 500 },
-    { id = audio_second_id, track_id = "trk_a", timeline_start = 500, duration = 500 },
+    { id = "clip_video", track_id = "trk_v", sequence_start = 0, duration = 500 },
+    { id = video_second_id, track_id = "trk_v", sequence_start = 500, duration = 500 },
+    { id = "clip_audio", track_id = "trk_a", sequence_start = 0, duration = 500 },
+    { id = audio_second_id, track_id = "trk_a", sequence_start = 500, duration = 500 },
 }
 
 timeline_state.get_selected_edges = function() return mock_edges end

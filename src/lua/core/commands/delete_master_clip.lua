@@ -81,7 +81,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local stmt = db:prepare([[
             SELECT c.id, c.project_id, c.name, c.track_id,
                    c.sequence_id, c.owner_sequence_id,
-                   c.timeline_start_frame, c.duration_frames,
+                   c.sequence_start_frame, c.duration_frames,
                    c.source_in_frame, c.source_out_frame,
                    c.master_layer_track_id, c.master_audio_track_id,
                    c.fps_mismatch_policy,
@@ -101,7 +101,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     name = stmt:value(2), track_id = stmt:value(3),
                     sequence_id = stmt:value(4),
                     owner_sequence_id = stmt:value(5),
-                    timeline_start = stmt:value(6),
+                    sequence_start = stmt:value(6),
                     duration = stmt:value(7),
                     source_in = stmt:value(8), source_out = stmt:value(9),
                     master_layer_track_id = stmt:value(10),
@@ -225,7 +225,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         stmt:bind_value(4, snap.track_id)
         stmt:bind_value(5, snap.sequence_id)
         stmt:bind_value(6, snap.owner_sequence_id)
-        stmt:bind_value(7, snap.timeline_start)
+        stmt:bind_value(7, snap.sequence_start)
         stmt:bind_value(8, snap.duration)
         stmt:bind_value(9, snap.source_in)
         stmt:bind_value(10, snap.source_out)
@@ -251,7 +251,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command_helper.add_insert_mutation(command, snap.owner_sequence_id, {
             id                    = snap.id,
             track_id              = snap.track_id,
-            start_value           = snap.timeline_start,
+            start_value           = snap.sequence_start,
             duration_value        = snap.duration,
             source_in_value       = snap.source_in,
             source_out_value      = snap.source_out,
@@ -274,7 +274,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             INSERT INTO clips (
                 id, project_id, name, track_id,
                 sequence_id, owner_sequence_id,
-                timeline_start_frame, duration_frames,
+                sequence_start_frame, duration_frames,
                 source_in_frame, source_out_frame,
                 master_layer_track_id, master_audio_track_id,
                 fps_mismatch_policy,

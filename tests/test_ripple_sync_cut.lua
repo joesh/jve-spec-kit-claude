@@ -47,11 +47,11 @@ local layout = ripple_layout.create({
     clips = {
         order = {"c_dialog", "c_music"},
         c_dialog = {id="c_dialog", track_key="v1", media_key="main",
-                    timeline_start=0,          duration=TRIM_POINT,
+                    sequence_start=0,          duration=TRIM_POINT,
                     source_in=500,
                     fps_numerator=1000, fps_denominator=1},
         c_music  = {id="c_music",  track_key="a1", media_key="main",
-                    timeline_start=MUSIC_START, duration=160,
+                    sequence_start=MUSIC_START, duration=160,
                     source_in=MUSIC_SOURCE,
                     fps_numerator=1000, fps_denominator=1},
     },
@@ -80,9 +80,9 @@ assert(r and r.success,
 -- ── Find the two resulting music clips (left=c_music, right=new UUID) ─────
 local function clips_on_track(track_id)
     local s = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
+        SELECT id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips WHERE track_id = ?
-        ORDER BY timeline_start_frame
+        ORDER BY sequence_start_frame
     ]])
     assert(s)
     s:bind_value(1, track_id); s:exec()
@@ -112,7 +112,7 @@ local right = music_clips[2]
 -- ── Left half: [MUSIC_START, TRIM_POINT) ─────────────────────────────────
 local exp_left_dur = TRIM_POINT - MUSIC_START   -- 60
 assert(left.ts == MUSIC_START, string.format(
-    "FAIL: left music timeline_start=%d, expected %d", left.ts, MUSIC_START))
+    "FAIL: left music sequence_start=%d, expected %d", left.ts, MUSIC_START))
 assert(left.dur == exp_left_dur, string.format(
     "FAIL: left music duration=%d, expected %d", left.dur, exp_left_dur))
 assert(left.dur >= 1, "FAIL: left music clip is sub-frame (duration < 1)")
@@ -123,7 +123,7 @@ print(string.format("  left: ts=%d dur=%d — OK", left.ts, left.dur))
 local exp_right_ts  = TRIM_POINT          -- 100 (TC preserved)
 local exp_right_dur = 160 - exp_left_dur  -- 100
 assert(right.ts == exp_right_ts, string.format(
-    "FAIL: right music timeline_start=%d, expected %d", right.ts, exp_right_ts))
+    "FAIL: right music sequence_start=%d, expected %d", right.ts, exp_right_ts))
 assert(right.dur == exp_right_dur, string.format(
     "FAIL: right music duration=%d, expected %d", right.dur, exp_right_dur))
 assert(right.dur >= 1, "FAIL: right music clip is sub-frame")

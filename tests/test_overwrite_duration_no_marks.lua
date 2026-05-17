@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 
 -- Regression: Overwrite invoked from F10/keyboard (no marks, no explicit
--- duration_frames or timeline_start_frame) must produce a clip whose
+-- duration_frames or sequence_start_frame) must produce a clip whose
 -- duration matches the source master's native video duration in record
 -- frames.
 --
@@ -86,7 +86,7 @@ local result = command_manager.execute("Overwrite", {
     project_id            = "proj",
     sequence_id           = "rec",
     source_sequence_id    = src_seq_id,
-    timeline_start_frame  = 0,
+    sequence_start_frame  = 0,
     target_video_track_id = "rv1",
 })
 assert(result and result.success,
@@ -94,7 +94,7 @@ assert(result and result.success,
 
 -- Inspect created V1 clip
 local stmt = db:prepare(
-    "SELECT id, duration_frames, timeline_start_frame FROM clips "
+    "SELECT id, duration_frames, sequence_start_frame FROM clips "
     .. "WHERE track_id = 'rv1'")
 assert(stmt and stmt:exec() and stmt:next(),
     "expected exactly one V1 clip after Overwrite")

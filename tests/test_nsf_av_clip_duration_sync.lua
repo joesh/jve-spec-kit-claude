@@ -168,13 +168,13 @@ local function test_timeline_clips_visual_sync()
         sequence_id = timeline.id,
         target_video_track_id = video_track.id,
         source_sequence_id = masterclip.id,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
     })
     assert(result and result.success, "Insert failed: " .. tostring(result and result.error_message))
 
     -- Query video clip from timeline
     local video_stmt = db:prepare([[
-        SELECT duration_frames, timeline_start_frame
+        SELECT duration_frames, sequence_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     video_stmt:bind_value(1, video_track.id)
@@ -187,7 +187,7 @@ local function test_timeline_clips_visual_sync()
 
     -- Query audio clip from timeline
     local audio_stmt = db:prepare([[
-        SELECT duration_frames, timeline_start_frame
+        SELECT duration_frames, sequence_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     audio_stmt:bind_value(1, audio_track.id)
@@ -198,9 +198,9 @@ local function test_timeline_clips_visual_sync()
     local ac_start = audio_stmt:value(1)
     audio_stmt:finalize()
 
-    -- Both should have same timeline_start
+    -- Both should have same sequence_start
     assert(vc_start == ac_start,
-        string.format("timeline_start mismatch: video=%d, audio=%d", vc_start, ac_start))
+        string.format("sequence_start mismatch: video=%d, audio=%d", vc_start, ac_start))
 
     -- clip.duration is now in TIMELINE frames (30fps), not source units
     -- Both video and audio should have the same timeline duration

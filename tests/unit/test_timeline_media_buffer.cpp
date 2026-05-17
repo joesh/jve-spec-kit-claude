@@ -1051,7 +1051,7 @@ private slots:
         auto tmb = TimelineMediaBuffer::Create(0);
         tmb->SetSequenceRate(24, 1);
 
-        // Clip with duration=0 → timeline_end() == timeline_start, half-open range [s,s) is empty
+        // Clip with duration=0 → sequence_end() == sequence_start, half-open range [s,s) is empty
         std::vector<ClipInfo> clips = {
             {"clip1", m_testVideoPath.toStdString(), 10, 0, 0, 24, 1, 1.0f},
         };
@@ -1755,7 +1755,7 @@ private slots:
         tmb->SetTrackClips(V1, clips);
 
         // Park near clipB's START with reverse direction — triggers pre-buffer
-        // (distance to clipB.timeline_start == 2, within PRE_BUFFER_THRESHOLD)
+        // (distance to clipB.sequence_start == 2, within PRE_BUFFER_THRESHOLD)
         tmb->SetPlayhead(52, -1, 1.0f);
         QThread::msleep(400);
 
@@ -4674,7 +4674,7 @@ private slots:
         std::string path = m_longAudioPath.toStdString();
 
         // source_in=480000 at rate 48000/1 → 10.0s into source media
-        // timeline_start=250 frames at 25fps → 10.0s on timeline
+        // sequence_start=250 frames at 25fps → 10.0s on timeline
         // duration=50 frames = 2.0s → source end = 12.0s (within 30s)
         std::vector<ClipInfo> clips = {
             {"a48k_10s", path, 250, 50, 480000, 48000, 1, 1.0f},
@@ -4796,7 +4796,7 @@ private slots:
     void test_audio_48khz_late_timeline_position() {
         // Simulate the real bug: audio clip at a LATE timeline position.
         // User reported 5s offset at TC 01:02:03:09 (frame ~93127 at 25fps).
-        // source_in=480000, timeline_start=90175.
+        // source_in=480000, sequence_start=90175.
         // Clip source [10s, 12s) — within 30s fixture.
         if (!m_hasLongAudio) QSKIP("No long audio fixture (countdown_chirp_30s.mp4)");
 
@@ -4806,7 +4806,7 @@ private slots:
         std::string path = m_longAudioPath.toStdString();
 
         // Real project values:
-        // timeline_start=90175 → 3,607,000,000us (~60:07 on timeline)
+        // sequence_start=90175 → 3,607,000,000us (~60:07 on timeline)
         // source_in=480000 → 10.0s in media
         // duration=50 frames=2.0s → source end=12.0s
         std::vector<ClipInfo> clips = {

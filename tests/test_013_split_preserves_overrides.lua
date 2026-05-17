@@ -2,9 +2,9 @@
 --
 -- Split divides one clip row into two at a chosen frame on the owner
 -- timeline. Arithmetic (per commands.md §Split):
---   Left half:  timeline_start unchanged; duration = split_offset;
+--   Left half:  sequence_start unchanged; duration = split_offset;
 --               source_in  unchanged; source_out = source_in + source_offset.
---   Right half: timeline_start = orig_ts + split_offset;
+--   Right half: sequence_start = orig_ts + split_offset;
 --               duration = orig_dur - split_offset;
 --               source_in  = orig_source_in + source_offset;
 --               source_out unchanged.
@@ -51,7 +51,7 @@ local function build_fixture(owner_fps_num, nested_fps_num)
         VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', 2000, %d, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 2000, 0, 2000,
             1, 1.0, 0, 0, 0);
@@ -60,12 +60,12 @@ local function build_fixture(owner_fps_num, nested_fps_num)
 end
 
 local function seed_clip(db, clip_id, policy, master_layer_track_id,
-                        timeline_start, duration, source_in, source_out)
+                        sequence_start, duration, source_in, source_out)
     local master_val = master_layer_track_id and ("'" .. master_layer_track_id .. "'") or "NULL"
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -73,7 +73,7 @@ local function seed_clip(db, clip_id, policy, master_layer_track_id,
             %d, %d, %d, %d,
             %s, '%s',
             1, 1.0, 0, 0, 0)
-    ]], clip_id, clip_id, timeline_start, duration, source_in, source_out,
+    ]], clip_id, clip_id, sequence_start, duration, source_in, source_out,
        master_val, policy)))
 end
 
@@ -86,7 +86,7 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy, track_id,
                owner_sequence_id, sequence_id
@@ -95,7 +95,7 @@ local function load_clip(db, id)
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
     local r = {
-        timeline_start        = stmt:value(0),
+        sequence_start        = stmt:value(0),
         duration              = stmt:value(1),
         source_in             = stmt:value(2),
         source_out            = stmt:value(3),
@@ -158,14 +158,14 @@ do
     local right = load_clip(db, second_id)
 
     -- Arithmetic.
-    assert(left.timeline_start == 100 and left.duration == 50
+    assert(left.sequence_start == 100 and left.duration == 50
            and left.source_in == 0 and left.source_out == 50, string.format(
         "left expected [tl=100,d=50,s=(0,50)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        left.timeline_start, left.duration, left.source_in, left.source_out))
-    assert(right.timeline_start == 150 and right.duration == 50
+        left.sequence_start, left.duration, left.source_in, left.source_out))
+    assert(right.sequence_start == 150 and right.duration == 50
            and right.source_in == 50 and right.source_out == 100, string.format(
         "right expected [tl=150,d=50,s=(50,100)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        right.timeline_start, right.duration, right.source_in, right.source_out))
+        right.sequence_start, right.duration, right.source_in, right.source_out))
 
     -- Structural preservation on both halves.
     assert(left.master_layer_track_id  == "m-v2", "left master_layer_track_id lost")
@@ -206,14 +206,14 @@ do
     local left  = load_clip(db, "c")
     local right = load_clip(db, result.second_clip_id)
 
-    assert(left.timeline_start == 0 and left.duration == 24
+    assert(left.sequence_start == 0 and left.duration == 24
            and left.source_in == 0 and left.source_out == 25, string.format(
         "left expected [tl=0,d=24,s=(0,25)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        left.timeline_start, left.duration, left.source_in, left.source_out))
-    assert(right.timeline_start == 24 and right.duration == 72
+        left.sequence_start, left.duration, left.source_in, left.source_out))
+    assert(right.sequence_start == 24 and right.duration == 72
            and right.source_in == 25 and right.source_out == 100, string.format(
         "right expected [tl=24,d=72,s=(25,100)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        right.timeline_start, right.duration, right.source_in, right.source_out))
+        right.sequence_start, right.duration, right.source_in, right.source_out))
     print("  ok")
 end
 
@@ -233,7 +233,7 @@ do
     end
     -- DB unchanged.
     local c = load_clip(db, "c")
-    assert(c.timeline_start == 100 and c.duration == 100
+    assert(c.sequence_start == 100 and c.duration == 100
            and c.source_in == 0 and c.source_out == 100,
         "DB unchanged after refused split")
     print("  ok")

@@ -10,7 +10,7 @@ local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local gap_clip = {
     id = "gap_track_v1_2000",
     track_id = "track_v1",
-    timeline_start = 2000,
+    sequence_start = 2000,
     duration = 1000,
     clip_kind = "gap"
 }
@@ -43,9 +43,9 @@ local start, duration = edge_drag_renderer.compute_preview_geometry(
 assert(duration == gap_clip.duration + delta,
     string.format("out edge should extend gap duration; expected %d got %d",
         gap_clip.duration + delta, duration or -1))
-assert(start == gap_clip.timeline_start,
+assert(start == gap_clip.sequence_start,
     string.format("out edge should preserve start; expected %d got %d",
-        gap_clip.timeline_start, start or -1))
+        gap_clip.sequence_start, start or -1))
 
 -- Gap clip "in" edge drag (shortening from left)
 local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(
@@ -53,8 +53,8 @@ local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(
 assert(in_duration == gap_clip.duration - 200,
     string.format("in edge should shorten gap; expected %d got %d",
         gap_clip.duration - 200, in_duration or -1))
-assert(in_start == gap_clip.timeline_start,
+assert(in_start == gap_clip.sequence_start,
     string.format("in edge should preserve start; expected %d got %d",
-        gap_clip.timeline_start, in_start or -1))
+        gap_clip.sequence_start, in_start or -1))
 
 print("✅ edge_drag_renderer handles gap clip edges with standard in/out geometry")

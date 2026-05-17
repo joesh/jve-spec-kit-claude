@@ -6,12 +6,12 @@
 -- [50, 100). A clip on the edit timeline picks the full master window
 -- [0, 100) and is placed at edit-frame 1000.
 --
--- The resolver must return TWO entries, with distinct outer timeline_starts
+-- The resolver must return TWO entries, with distinct outer sequence_starts
 -- (1000 for A, 1050 for B) and distinct durations (50 each), each pointing
 -- at its own file.
 --
 -- Catches the resolver bug where every entry under a clip is forced to
--- the clip's own timeline_start/duration, causing the two media_refs to
+-- the clip's own sequence_start/duration, causing the two media_refs to
 -- collapse into overlapping entries at the same outer position.
 
 require("test_env")
@@ -51,18 +51,18 @@ assert(db:exec(
 -- Two media_refs on the master's V track, side by side.
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mrA', 'p1', 'm', 'm-v1', 'mA', 0, 50, 0, 50, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mrB', 'p1', 'm', 'm-v1', 'mB', 0, 50, 50, 50, 1, 1.0, 0, 0, 0)"))
 -- Clip references the full master window, placed at edit-frame 1000.
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c', 'p1', 'e', 'e-v1', 'm', 'c', 1000, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
@@ -76,15 +76,15 @@ local entries = Sequence:resolve_in_range("e", 0, 2000, {
 })
 
 assert(#entries == 2, "expected 2 entries (one per media_ref); got " .. tostring(#entries))
-table.sort(entries, function(a, b) return a.timeline_start < b.timeline_start end)
+table.sort(entries, function(a, b) return a.sequence_start < b.sequence_start end)
 local A, B = entries[1], entries[2]
 assert(A.media_path == "/tmp/A.mov" and B.media_path == "/tmp/B.mov",
     "first entry plays file A, second plays file B")
-assert(A.timeline_start == 1000 and A.duration == 50, string.format(
+assert(A.sequence_start == 1000 and A.duration == 50, string.format(
     "entry A occupies [1000, 1050) on the edit timeline; got start=%s dur=%s",
-    tostring(A.timeline_start), tostring(A.duration)))
-assert(B.timeline_start == 1050 and B.duration == 50, string.format(
+    tostring(A.sequence_start), tostring(A.duration)))
+assert(B.sequence_start == 1050 and B.duration == 50, string.format(
     "entry B occupies [1050, 1100) on the edit timeline; got start=%s dur=%s",
-    tostring(B.timeline_start), tostring(B.duration)))
+    tostring(B.sequence_start), tostring(B.duration)))
 
 print("✅ test_resolve_master_two_media_refs.lua passed")

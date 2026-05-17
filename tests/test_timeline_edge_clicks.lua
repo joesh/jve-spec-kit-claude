@@ -148,8 +148,8 @@ local edge_b = {clip_id = "clip_b", edge_type = "gap_before", trim_type = "rippl
 
 -- Test 1: clicking without modifiers on an already-selected edge leaves selection intact
 local track_clips = {
-    {id = "clip_a", track_id = "track_v1", timeline_start = 0, duration = 10},
-    {id = "clip_b", track_id = "track_v1", timeline_start = 20, duration = 10}
+    {id = "clip_a", track_id = "track_v1", sequence_start = 0, duration = 10},
+    {id = "clip_b", track_id = "track_v1", sequence_start = 20, duration = 10}
 }
 
 local state1 = new_state(track_clips)

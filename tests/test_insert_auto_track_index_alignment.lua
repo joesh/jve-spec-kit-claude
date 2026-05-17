@@ -53,7 +53,7 @@ assert(db:exec([[
     VALUES ('a',   'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr-a','p1','m','m-a1','a', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
     INSERT INTO patches (id, sequence_id, track_type, source_shape,
@@ -70,7 +70,7 @@ command_manager.init("e", "p1")
 local r = command_manager.execute("Insert", {
     sequence_id          = "e",
     source_sequence_id   = "m",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     -- project_id must be passed explicitly when the test runner doesn't
     -- guarantee a fresh command_manager state across tests.
     project_id           = "p1",

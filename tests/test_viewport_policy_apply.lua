@@ -26,7 +26,7 @@ local function install_stub_strip(seq_id)
 end
 
 local function reset_viewport(viewport_start, viewport_duration, playhead, content_end)
-    data.state.clips = { { timeline_start = 0, duration = content_end or 10000 } }
+    data.state.clips = { { sequence_start = 0, duration = content_end or 10000 } }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration
@@ -82,9 +82,9 @@ do
         updates = {
             {
                 track_id = "v1",
-                timeline_start_frame = 5100,
+                sequence_start_frame = 5100,
                 duration_frames = 300,
-                previous = { track_id = "v1", timeline_start = 5000, duration = 300 },
+                previous = { track_id = "v1", sequence_start = 5000, duration = 300 },
             },
         },
         deletes = {},
@@ -106,7 +106,7 @@ do
     local cmd = make_cmd({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 5000, duration_frames = 400 },
+            { track_id = "v1", sequence_start_frame = 5000, duration_frames = 400 },
         },
         updates = {},
         deletes = {},
@@ -140,7 +140,7 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { previous = { track_id = "v1", timeline_start = 5000, duration = 400 } },
+            { previous = { track_id = "v1", sequence_start = 5000, duration = 400 } },
         },
     })
     viewport_policy.apply_post_command("redo", cmd)

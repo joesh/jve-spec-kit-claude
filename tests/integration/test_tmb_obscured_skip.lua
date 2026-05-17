@@ -31,7 +31,7 @@ EMP.TMB_SET_SEQUENCE_RESOLUTION(tmb, 1920, 1080)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
     clip_id = "lower-track-clip",
     media_path = FAKE_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 200,
     source_in = 0,
     rate_num = 24,
@@ -43,7 +43,7 @@ EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 5, {{
     clip_id = "higher-track-clip",
     media_path = FAKE_PATH,
-    timeline_start = 50,
+    sequence_start = 50,
     duration = 100,
     source_in = 0,
     rate_num = 24,
@@ -121,7 +121,7 @@ print("  OK: gap position reports no clip")
 
 -- ------------------------------------------------------------------
 -- Contract 5: boundary — inclusive start of the higher track's clip.
--- A frame exactly AT the higher clip's timeline_start is covered.
+-- A frame exactly AT the higher clip's sequence_start is covered.
 -- ------------------------------------------------------------------
 local V5_START = 50
 local _, meta_start = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_START, true)
@@ -133,9 +133,9 @@ print("  OK: lower track reports obscured=true at higher track's inclusive start
 
 -- ------------------------------------------------------------------
 -- Contract 6: boundary — last frame covered by the higher clip.
--- timeline_end is exclusive, so the last covered frame is end - 1.
+-- sequence_end is exclusive, so the last covered frame is end - 1.
 -- ------------------------------------------------------------------
-local V5_LAST_COVERED = 50 + 100 - 1  -- timeline_start + duration - 1 = 149
+local V5_LAST_COVERED = 50 + 100 - 1  -- sequence_start + duration - 1 = 149
 local _, meta_last = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_LAST_COVERED, true)
 assert(meta_last.obscured == true, string.format(
     "V5 last covered frame is %d (end-exclusive). V1 at that frame must be "..
@@ -145,9 +145,9 @@ print("  OK: lower track reports obscured=true at higher track's last covered fr
 
 -- ------------------------------------------------------------------
 -- Contract 7: boundary — first frame past the higher clip's end.
--- timeline_end is exclusive, so this frame is NOT covered and V1 is visible.
+-- sequence_end is exclusive, so this frame is NOT covered and V1 is visible.
 -- ------------------------------------------------------------------
-local V5_FIRST_UNCOVERED = 50 + 100  -- timeline_end = 150
+local V5_FIRST_UNCOVERED = 50 + 100  -- sequence_end = 150
 local _, meta_past = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, V5_FIRST_UNCOVERED, true)
 assert(meta_past.clip_id == "lower-track-clip",
     string.format("V1 still spans frame %d", V5_FIRST_UNCOVERED))

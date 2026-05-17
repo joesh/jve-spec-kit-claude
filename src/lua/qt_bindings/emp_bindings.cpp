@@ -734,7 +734,7 @@ static int lua_emp_tmb_set_audio_format(lua_State* L) {
 }
 
 // EMP.TMB_SET_TRACK_CLIPS(tmb, type_string, track_index, clips_table)
-// clips_table = array of { clip_id, media_path, timeline_start, duration, source_in, rate_num, rate_den, speed_ratio }
+// clips_table = array of { clip_id, media_path, sequence_start, duration, source_in, rate_num, rate_den, speed_ratio }
 static int lua_emp_tmb_set_track_clips(lua_State* L) {
     auto tmb = get_tmb(L, 1);
     auto track_type = parse_track_type(L, 2);
@@ -768,11 +768,11 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.media_path = lua_tostring(L, -1);
         lua_pop(L, 1);
 
-        lua_getfield(L, -1, "timeline_start");
+        lua_getfield(L, -1, "sequence_start");
         if (!lua_isnumber(L, -1)) {
-            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing timeline_start", i);
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing sequence_start", i);
         }
-        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        ci.sequence_start = static_cast<int64_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, -1, "duration");
@@ -869,11 +869,11 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
         ci.media_path = lua_tostring(L, -1);
         lua_pop(L, 1);
 
-        lua_getfield(L, -1, "timeline_start");
+        lua_getfield(L, -1, "sequence_start");
         if (!lua_isnumber(L, -1)) {
-            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing timeline_start", i);
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing sequence_start", i);
         }
-        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        ci.sequence_start = static_cast<int64_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, -1, "duration");

@@ -42,10 +42,10 @@ VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 480, 0, 480, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_v1_upstream', 'proj', 'V1 Upstream', 'v1', '_v13_placeholder_master', 'seq', 100, 480, 0, 480, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2_left', 'proj', 'V2 Left', 'v2', '_v13_placeholder_master', 'seq', 580, 240, 0, 240, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_v2_right', 'proj', 'V2 Right', 'v2', '_v13_placeholder_master', 'seq', 1060, 240, 0, 240, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
@@ -67,10 +67,10 @@ assert(result.success, result.error_message or "BatchRippleEdit failed")
 local v1_clip = Clip.load("clip_v1_upstream", db)
 local v2_right = Clip.load("clip_v2_right", db)
 
-assert(v1_clip.timeline_start == 100,
-    string.format("Cross-track upstream clip moved from 100 to %d", v1_clip.timeline_start))
-assert(v2_right.timeline_start == 940,
-    string.format("V2 downstream clip should shift upstream to 940 when closing the gap; got %d", v2_right.timeline_start))
+assert(v1_clip.sequence_start == 100,
+    string.format("Cross-track upstream clip moved from 100 to %d", v1_clip.sequence_start))
+assert(v2_right.sequence_start == 940,
+    string.format("V2 downstream clip should shift upstream to 940 when closing the gap; got %d", v2_right.sequence_start))
 
 os.remove(TEST_DB)
 print("✅ BatchRippleEdit keeps cross-track upstream clips anchored when rippling gaps")

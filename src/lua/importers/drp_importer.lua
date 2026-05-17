@@ -1473,7 +1473,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- source_in is ABSOLUTE TC in native units = file_tc_origin
             -- (media_tc_origin) + file-relative offset. Frames for video,
             -- samples for audio. The master sequence's timebase IS TC space:
-            -- its media_refs sit at timeline_start = file_tc_origin spanning
+            -- its media_refs sit at sequence_start = file_tc_origin spanning
             -- [tc_origin, tc_origin + file_duration]. Clips reference absolute
             -- TC into that timebase. C++ decode does file_pos = source_in -
             -- file_tc_origin to recover the file-relative position.

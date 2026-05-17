@@ -68,7 +68,7 @@ db:exec(string.format([[
     -- Master A: TC origin at non-zero (cinema camera) frame 318650 (22:06:21:02 @ 24).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       -- Video media_ref in master VIDEO timebase (frames @ 24fps).
@@ -81,7 +81,7 @@ db:exec(string.format([[
     -- Master B: TC origin at frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mref_b_v', 'proj', 'mst_b', 'b_v1', 'med_b', 0, 600,     0, 600,     1, 1.0, 0, %d, %d),
@@ -105,8 +105,8 @@ for _, c in ipairs(virtual) do
     if c.track_type == "VIDEO" then v = c end
 end
 assert(v, "FAIL: no VIDEO virtual clip generated for master")
-assert(v.timeline_start == 318650, string.format(
-    "FAIL: master video virtual clip timeline_start=%d, expected 318650 (file TC origin)", v.timeline_start))
+assert(v.sequence_start == 318650, string.format(
+    "FAIL: master video virtual clip sequence_start=%d, expected 318650 (file TC origin)", v.sequence_start))
 assert(v.duration == 1200, string.format(
     "FAIL: master video virtual clip duration=%d, expected 1200 (file frame count)", v.duration))
 assert(v.is_master_virtual == true,
@@ -114,7 +114,7 @@ assert(v.is_master_virtual == true,
 assert(v.id:match("^mref:"),
     "FAIL: virtual clip id must be prefixed 'mref:' to distinguish from real clips")
 print(string.format("  master video span: tl_start=%d duration=%d — OK",
-    v.timeline_start, v.duration))
+    v.sequence_start, v.duration))
 
 -- ── (b) load_master_virtual_clips on a different master returns its own spans
 print("-- (b) per-master scoping --")
@@ -124,7 +124,7 @@ local v_b
 for _, c in ipairs(virtual_b) do
     if c.track_type == "VIDEO" then v_b = c end
 end
-assert(v_b.timeline_start == 0, "FAIL: master B video span should start at 0 (no TC offset)")
+assert(v_b.sequence_start == 0, "FAIL: master B video span should start at 0 (no TC offset)")
 assert(v_b.duration == 600, "FAIL: master B video span duration mismatch")
 print("  per-master spans correctly scoped — OK")
 

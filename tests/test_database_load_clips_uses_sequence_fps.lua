@@ -61,10 +61,10 @@ VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30000
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 3000, 0, 3000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     
     ('clip1', 'proj', 'Clip', 'v1', '_v13_placeholder_master', 'seq', 1500, 100, 0, 3000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]]))
@@ -73,16 +73,16 @@ INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_i
 -- HAPPY PATH: Verify integer coordinates
 --------------------------------------------------------------------------------
 
-print("Test 1: load_clips returns integer timeline_start")
+print("Test 1: load_clips returns integer sequence_start")
 local clips = database.load_clips("seq")
 assert(clips and #clips == 1, "expected exactly one clip, got " .. tostring(clips and #clips))
 
 local clip = clips[1]
-assert(type(clip.timeline_start) == "number",
-    "timeline_start should be number, got " .. type(clip.timeline_start))
-assert(clip.timeline_start == 1500,
-    "expected timeline_start == 1500, got " .. tostring(clip.timeline_start))
-print("  ✓ timeline_start is integer 1500")
+assert(type(clip.sequence_start) == "number",
+    "sequence_start should be number, got " .. type(clip.sequence_start))
+assert(clip.sequence_start == 1500,
+    "expected sequence_start == 1500, got " .. tostring(clip.sequence_start))
+print("  ✓ sequence_start is integer 1500")
 
 print("Test 2: load_clips returns integer duration")
 assert(type(clip.duration) == "number",
@@ -115,8 +115,8 @@ print("  ✓ clip.frame_rate has correct fps metadata")
 
 print("Test 6: timeline coords are NOT Rationals (are plain numbers)")
 -- Verify coords are plain numbers (Rationals would be tables)
-assert(type(clip.timeline_start) == "number",
-    "timeline_start should be number, not Rational table")
+assert(type(clip.sequence_start) == "number",
+    "sequence_start should be number, not Rational table")
 assert(type(clip.duration) == "number",
     "duration should be number, not Rational table")
 print("  ✓ coords are plain integers, not Rationals")

@@ -44,10 +44,10 @@ VALUES ('master_media1', 'default_project', 'media1_master', 'master', 30, 1, 48
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media1', 'default_project', 'master_media1', 'master_v_media1', 'media1', 0, 24000, 0, 24000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_anchor', 'default_project', 'Anchor', 'track_v1', 'master_media1', 'default_sequence', 0, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_gap_target', 'default_project', 'GapTarget', 'track_v1', 'master_media1', 'default_sequence', 2500, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
@@ -73,8 +73,8 @@ assert(result.success, result.error_message or "BatchRippleEdit gap expansion fa
 local target_clip = Clip.load("clip_gap_target", db)
 local downstream_clip = Clip.load("clip_downstream", db)
 
-assert(target_clip.timeline_start == 2100, string.format("Gap target should shift LEFT when gap in-edge is dragged right; expected 2100, got %s", tostring(target_clip.timeline_start)))
-assert(downstream_clip.timeline_start == 3600, string.format("Downstream clip should shift by the same delta; expected 3600, got %s", tostring(downstream_clip.timeline_start)))
+assert(target_clip.sequence_start == 2100, string.format("Gap target should shift LEFT when gap in-edge is dragged right; expected 2100, got %s", tostring(target_clip.sequence_start)))
+assert(downstream_clip.sequence_start == 3600, string.format("Downstream clip should shift by the same delta; expected 3600, got %s", tostring(downstream_clip.sequence_start)))
 
 os.remove(TEST_DB)
 print("✅ BatchRippleEdit closes gaps from upstream handles and shifts downstream clips on the same track")

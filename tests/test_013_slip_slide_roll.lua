@@ -5,7 +5,7 @@
 --        owner timeline are unchanged. Must keep the source window
 --        within [0, nested.native_duration] (source window: non-empty, lower bound >= 0).
 --
--- Slide: move timeline_start by ±N owner frames. Source window is
+-- Slide: move sequence_start by ±N owner frames. Source window is
 --        unchanged. Adjacent clips on the same track ripple (the
 --        previous clip extends/shrinks to absorb the slide on one side;
 --        the next clip shifts on the other). For this contract test
@@ -17,7 +17,7 @@
 --          A.source_out shifts by source_delta_A;
 --          A.duration +=/- N;
 --          B.source_in shifts by source_delta_B;
---          B.timeline_start +=/- N;
+--          B.sequence_start +=/- N;
 --          B.duration -=/+ N.
 --        Each side uses its own fps_mismatch_policy. Source window must be
 --        non-empty with lower bound >= 0 on both sides.
@@ -57,7 +57,7 @@ local function build_fixture(owner_fps, nested_native_duration)
         VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', %d, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, %d, 0, %d,
             1, 1.0, 0, 0, 0);
@@ -66,29 +66,29 @@ local function build_fixture(owner_fps, nested_native_duration)
 end
 
 local function seed_clip(db, clip_id, policy,
-                       timeline_start, duration, source_in, source_out)
+                       sequence_start, duration, source_in, source_out)
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name, timeline_start_frame, duration_frames,
+            sequence_id, name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('%s', 'p1', 'e', 'e-v1', 'm', '%s', %d, %d, %d, %d,
             '%s', 1, 1.0, 0, 0, 0)
-    ]], clip_id, clip_id, timeline_start, duration, source_in, source_out,
+    ]], clip_id, clip_id, sequence_start, duration, source_in, source_out,
        policy)))
 end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         source_in      = stmt:value(2),
         source_out     = stmt:value(3),
@@ -119,9 +119,9 @@ do
         sequence_id = "e", clip_id = "c", delta_source_frames = 5,
     })
     local c = load_clip(db, "c")
-    assert(c.timeline_start == 100 and c.duration == 100, string.format(
+    assert(c.sequence_start == 100 and c.duration == 100, string.format(
         "timeline must not move under Slip; got [tl=%d,d=%d]",
-        c.timeline_start, c.duration))
+        c.sequence_start, c.duration))
     assert(c.source_in == 55 and c.source_out == 155, string.format(
         "source must shift by +5 under Slip; got [%d,%d)",
         c.source_in, c.source_out))
@@ -137,7 +137,7 @@ do
         sequence_id = "e", clip_id = "c", delta_source_frames = -10,
     })
     local c = load_clip(db, "c")
-    assert(c.timeline_start == 100 and c.duration == 100, "timeline untouched")
+    assert(c.sequence_start == 100 and c.duration == 100, "timeline untouched")
     assert(c.source_in == 40 and c.source_out == 140, string.format(
         "source shifted by -10; got [%d,%d)", c.source_in, c.source_out))
     print("  ok")
@@ -175,7 +175,7 @@ do
 end
 
 -- -------------------------------------------------------------------------
--- CT-C5 Slide: +N shifts timeline_start; window unchanged.
+-- CT-C5 Slide: +N shifts sequence_start; window unchanged.
 -- -------------------------------------------------------------------------
 print("-- CT-C5 Slide +15 --")
 do
@@ -185,15 +185,15 @@ do
         sequence_id = "e", clip_id = "c", delta_timeline_frames = 15,
     })
     local c = load_clip(db, "c")
-    assert(c.timeline_start == 115 and c.duration == 100, string.format(
+    assert(c.sequence_start == 115 and c.duration == 100, string.format(
         "timeline shifts by +15; got [tl=%d,d=%d]",
-        c.timeline_start, c.duration))
+        c.sequence_start, c.duration))
     assert(c.source_in == 50 and c.source_out == 150,
         "source window unchanged under Slide")
     print("  ok")
 end
 
--- Slide negative: timeline_start must not go below 0.
+-- Slide negative: sequence_start must not go below 0.
 print("-- Slide that drags past frame 0 refuses --")
 do
     local db = build_fixture(24, 1000)
@@ -203,15 +203,15 @@ do
     })
     assert(not ok, "Slide below 0 must refuse")
     local c = load_clip(db, "c")
-    assert(c.timeline_start == 10, "DB unchanged after refused slide")
+    assert(c.sequence_start == 10, "DB unchanged after refused slide")
     print("  ok")
 end
 
 -- -------------------------------------------------------------------------
 -- CT-C6 Roll: two adjacent clips A [0,100) source [0,100) and B [100,200)
 -- source [200,300) on the same track. Roll the boundary by +10 owner.
--- A: timeline_start=0 unchanged, duration 100→110, source_out 100→110.
--- B: timeline_start 100→110, duration 100→90, source_in 200→210.
+-- A: sequence_start=0 unchanged, duration 100→110, source_out 100→110.
+-- B: sequence_start 100→110, duration 100→90, source_in 200→210.
 -- Both passthrough 1:1.
 -- -------------------------------------------------------------------------
 print("-- CT-C6 Roll +10 at boundary --")
@@ -227,14 +227,14 @@ do
     })
     local a = load_clip(db, "a")
     local b = load_clip(db, "b")
-    assert(a.timeline_start == 0 and a.duration == 110
+    assert(a.sequence_start == 0 and a.duration == 110
            and a.source_in == 0 and a.source_out == 110, string.format(
         "A after +10 Roll expected [tl=0,d=110,s=(0,110)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        a.timeline_start, a.duration, a.source_in, a.source_out))
-    assert(b.timeline_start == 110 and b.duration == 90
+        a.sequence_start, a.duration, a.source_in, a.source_out))
+    assert(b.sequence_start == 110 and b.duration == 90
            and b.source_in == 210 and b.source_out == 300, string.format(
         "B after +10 Roll expected [tl=110,d=90,s=(210,300)]; got [tl=%d,d=%d,s=(%d,%d)]",
-        b.timeline_start, b.duration, b.source_in, b.source_out))
+        b.sequence_start, b.duration, b.source_in, b.source_out))
     print("  ok")
 end
 
@@ -254,7 +254,7 @@ do
     local b = load_clip(db, "b")
     assert(a.duration == 90 and a.source_out == 90,
         "A shrunk 10 from the right")
-    assert(b.timeline_start == 90 and b.duration == 110
+    assert(b.sequence_start == 90 and b.duration == 110
            and b.source_in == 190,
         "B grew 10 on the left")
     print("  ok")

@@ -13,7 +13,7 @@ local function media_clip(id, track_id, start, dur)
     return {
         id = id,
         track_id = track_id,
-        timeline_start = start,
+        sequence_start = start,
         duration = dur,
         is_gap = false,
         media_id = "media_1",
@@ -28,7 +28,7 @@ local function gap_clip(track_id, start, dur)
     return {
         id = string.format("gap_%s_%d", track_id, start),
         track_id = track_id,
-        timeline_start = start,
+        sequence_start = start,
         duration = dur,
         is_gap = true,
         media_id = nil,
@@ -74,7 +74,7 @@ do
     local result = gap_lifecycle.update_gaps_after_edit("v1", all_clips, {c1 = true}, SEQ_FPS)
     local gaps = extract_gaps(result)
     assert(#gaps == 1, string.format("expected 1 gap, got %d", #gaps))
-    assert(gaps[1].timeline_start == 80, string.format("gap start=%d, expected 80", gaps[1].timeline_start))
+    assert(gaps[1].sequence_start == 80, string.format("gap start=%d, expected 80", gaps[1].sequence_start))
     assert(gaps[1].duration == 220, string.format("gap duration=%d, expected 220", gaps[1].duration))
 end
 
@@ -91,7 +91,7 @@ do
     local result = gap_lifecycle.update_gaps_after_edit("v1", all_clips, {c1 = true}, SEQ_FPS)
     local gaps = extract_gaps(result)
     assert(#gaps == 1, string.format("expected 1 gap, got %d", #gaps))
-    assert(gaps[1].timeline_start == 150, string.format("gap start=%d, expected 150", gaps[1].timeline_start))
+    assert(gaps[1].sequence_start == 150, string.format("gap start=%d, expected 150", gaps[1].sequence_start))
     assert(gaps[1].duration == 150, string.format("gap duration=%d, expected 150", gaps[1].duration))
 end
 
@@ -127,7 +127,7 @@ do
     local result = gap_lifecycle.update_gaps_after_edit("v1", all_clips, {c2 = true}, SEQ_FPS)
     local gaps = extract_gaps(result)
     assert(#gaps == 1, string.format("gaps should merge, expected 1, got %d", #gaps))
-    assert(gaps[1].timeline_start == 100, string.format("merged gap start=%d, expected 100", gaps[1].timeline_start))
+    assert(gaps[1].sequence_start == 100, string.format("merged gap start=%d, expected 100", gaps[1].sequence_start))
     assert(gaps[1].duration == 400, string.format("merged gap duration=%d, expected 400", gaps[1].duration))
 end
 
@@ -145,9 +145,9 @@ do
     local result = gap_lifecycle.update_gaps_after_edit("v1", all_clips, {c_new = true}, SEQ_FPS)
     local gaps = extract_gaps(result)
     assert(#gaps == 2, string.format("gap should split, expected 2, got %d", #gaps))
-    assert(gaps[1].timeline_start == 100, string.format("gap1 start=%d, expected 100", gaps[1].timeline_start))
+    assert(gaps[1].sequence_start == 100, string.format("gap1 start=%d, expected 100", gaps[1].sequence_start))
     assert(gaps[1].duration == 100, string.format("gap1 duration=%d, expected 100", gaps[1].duration))
-    assert(gaps[2].timeline_start == 300, string.format("gap2 start=%d, expected 300", gaps[2].timeline_start))
+    assert(gaps[2].sequence_start == 300, string.format("gap2 start=%d, expected 300", gaps[2].sequence_start))
     assert(gaps[2].duration == 200, string.format("gap2 duration=%d, expected 200", gaps[2].duration))
 end
 

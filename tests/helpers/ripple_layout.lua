@@ -95,7 +95,7 @@ local DEFAULT_CONFIG = {
             name = "V1 Left",
             track_key = "v1",
             media_key = "main",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 1500,
             source_in = 0,
             fps_numerator = 1000,
@@ -106,7 +106,7 @@ local DEFAULT_CONFIG = {
             name = "V1 Right",
             track_key = "v1",
             media_key = "main",
-            timeline_start = 3500,
+            sequence_start = 3500,
             duration = 1200,
             source_in = 0,
             fps_numerator = 1000,
@@ -187,7 +187,7 @@ local function build_config(opts)
                     end),
                     track_key = inferred_track_key,
                     media_key = "main",
-                    timeline_start = override.timeline_start or 0,
+                    sequence_start = override.sequence_start or 0,
                     duration = override.duration or 1000,
                     source_in = override.source_in or 0,
                     fps_numerator = override.fps_numerator or cfg.fps_numerator,
@@ -217,7 +217,7 @@ local function build_clip_sql(cfg, clip)  -- luacheck: ignore 211
 
     return string.format([[INSERT INTO clips (
         id, project_id, clip_kind, name, track_id, media_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         fps_numerator, fps_denominator, enabled, offline, created_at, modified_at)
         VALUES ('%s', '%s', 'timeline', '%s', '%s', '%s', '%s', %d, %d, %d, %d,
                 %d, %d, 1, 0, %d, %d);
@@ -228,7 +228,7 @@ local function build_clip_sql(cfg, clip)  -- luacheck: ignore 211
         track.id,
         media.id,
         cfg.sequence_id,
-        clip.timeline_start,
+        clip.sequence_start,
         clip.duration,
         clip.source_in,
         source_out,
@@ -365,7 +365,7 @@ function M.create(opts)
             track_id = track.id,
             owner_sequence_id = cfg.sequence_id,
             sequence_id = nested_seq_id,
-            timeline_start_frame = c.timeline_start,
+            sequence_start_frame = c.sequence_start,
             duration_frames = c.duration,
             source_in_frame = c.source_in,
             source_out_frame = c.source_in + c.duration,
@@ -410,7 +410,7 @@ function M.create(opts)
     end
 
     --- Compute the gap clip ID for a gap at a given position on a track.
-    -- Gap IDs follow the format: gap_<track_id>_<timeline_start>
+    -- Gap IDs follow the format: gap_<track_id>_<sequence_start>
     -- @param track_key string Track key (e.g., "v1") — resolved to track.id
     -- @param gap_start number Timeline position where the gap starts (integer frames)
     -- @return string Gap clip ID

@@ -86,7 +86,7 @@ local function create_clip_via_insert(spec)
         track_id             = spec.track,
         owner_sequence_id    = "default_sequence",
         sequence_id   = source_sequence_id,
-        timeline_start_frame = spec.start,
+        sequence_start_frame = spec.start,
         duration_frames      = spec.duration,
         source_in_frame      = 0,
         source_out_frame     = spec.duration,

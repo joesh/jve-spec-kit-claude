@@ -73,7 +73,7 @@ local clip = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 48,
         source_in_frame = 0,
         source_out_frame = 48,
@@ -115,9 +115,9 @@ if not deserialized.frame_rate or deserialized.frame_rate.fps_numerator ~= 24 th
     os.exit(1)
 end
 
--- timeline_start is now an integer (not Rational), verify it survives JSON
-if type(deserialized.timeline_start) ~= "number" then
-    print("❌ timeline_start should be integer, got: " .. type(deserialized.timeline_start))
+-- sequence_start is now an integer (not Rational), verify it survives JSON
+if type(deserialized.sequence_start) ~= "number" then
+    print("❌ sequence_start should be integer, got: " .. type(deserialized.sequence_start))
     os.exit(1)
 end
 
@@ -125,14 +125,14 @@ print("✅ JSON round-trip preserves fps fields and integer coordinates")
 
 print("\n=== Test 3: Undo helper can access integer coords from deserialized state ===")
 -- All coordinates are now plain integers
-local timeline_start = deserialized.timeline_start
-if type(timeline_start) ~= "number" then
-    print("❌ timeline_start should be number, got: " .. type(timeline_start))
+local sequence_start = deserialized.sequence_start
+if type(sequence_start) ~= "number" then
+    print("❌ sequence_start should be number, got: " .. type(sequence_start))
     os.exit(1)
 end
 
-if timeline_start ~= 0 then
-    print(string.format("❌ Wrong timeline_start: expected 0, got %s", tostring(timeline_start)))
+if sequence_start ~= 0 then
+    print(string.format("❌ Wrong sequence_start: expected 0, got %s", tostring(sequence_start)))
     os.exit(1)
 end
 

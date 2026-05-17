@@ -5,7 +5,7 @@
 --      actual DB state, not their stale typed value),
 --   2) surface the failure message via the on_error banner callback.
 --
--- Reproducer: TSO 2026-04-20 18:08:25 — user edited clip.timeline_start in
+-- Reproducer: TSO 2026-04-20 18:08:25 — user edited clip.sequence_start in
 -- single-edit mode; Clip.save rejected with VIDEO_OVERLAP; commit path
 -- logged a warning but field kept the stale value and no banner showed.
 --
@@ -47,7 +47,7 @@ print("=== Inspector: commit-failure → revert + error banner ===\n")
 -- Stub entry with set_value / blur_revert call tracking.
 local function make_entry(last_model_value)
     local e = {
-        field_key     = "timeline_start",
+        field_key     = "sequence_start",
         field_type    = "TIMECODE",
         property_type = "TIMECODE",
         default_value = 0,

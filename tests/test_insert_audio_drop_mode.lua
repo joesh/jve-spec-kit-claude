@@ -57,7 +57,7 @@ local function build_fixture()
                ('a4', 'p1', 'a4.wav', '/tmp/a4.wav', 200000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v',  'p1', 'm', 'm-v1', 'vid', 0, 100,    0, 100,    1, 1.0, 0, 0, 0),
                ('mr-a1', 'p1', 'm', 'm-a1', 'a1',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
@@ -74,7 +74,7 @@ local function clips_in_seq(db, owner)
         SELECT c.id, c.track_id, c.master_audio_track_id, t.track_type, t.track_index
         FROM clips c JOIN tracks t ON t.id = c.track_id
         WHERE c.owner_sequence_id = ?
-        ORDER BY t.track_type DESC, t.track_index ASC, c.timeline_start_frame ASC
+        ORDER BY t.track_type DESC, t.track_index ASC, c.sequence_start_frame ASC
     ]])
     stmt:bind_value(1, owner)
     assert(stmt:exec())
@@ -130,7 +130,7 @@ do
     local result = Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
     })
     local clips = clips_in_seq(db, "e")
     assert(#clips == 5, string.format(
@@ -146,7 +146,7 @@ do
     Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         audio_drop_mode      = "composite",
     })
     local clips = clips_in_seq(db, "e")
@@ -166,7 +166,7 @@ do
     local result = Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         audio_drop_mode      = "expanded",
     })
     -- Edit should now have A1..A4 (3 auto-created).
@@ -230,7 +230,7 @@ do
         VALUES ('e-a2', 'e', 'A2', 'AUDIO', 2);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -242,14 +242,14 @@ do
     local r = Insert.execute({
         sequence_id          = "e",
         source_sequence_id   = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         audio_drop_mode      = "expanded",
     })
     assert(r, "Insert with expanded must succeed when ripple can clear the way")
 
     -- Blocker shifted forward; new expanded clips occupy frame 0.
     local s = db:prepare(
-        "SELECT timeline_start_frame FROM clips WHERE id='blocker'")
+        "SELECT sequence_start_frame FROM clips WHERE id='blocker'")
     s:exec(); s:next()
     local blocker_start = s:value(0); s:finalize()
     assert(blocker_start > 0, string.format(
@@ -264,7 +264,7 @@ do
     local ok = pcall(Insert.execute, {
         sequence_id          = "e",
         source_sequence_id   = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         audio_drop_mode      = "channels",
     })
     assert(not ok, "unknown audio_drop_mode refused")

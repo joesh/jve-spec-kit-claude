@@ -36,7 +36,7 @@ local clip_count = clip_count_stmt:value(0)
 clip_count_stmt:finalize()
 assert(clip_count > 0, "expected importer to create timeline clips")
 
-local negative_start_stmt = assert(db:prepare("SELECT COUNT(*) FROM clips WHERE timeline_start_frame < 0"))
+local negative_start_stmt = assert(db:prepare("SELECT COUNT(*) FROM clips WHERE sequence_start_frame < 0"))
 assert(negative_start_stmt:exec() and negative_start_stmt:next())
 local negative_count = negative_start_stmt:value(0)
 negative_start_stmt:finalize()

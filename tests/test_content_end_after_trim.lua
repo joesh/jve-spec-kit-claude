@@ -91,7 +91,7 @@ local insert_cmd = Command.create("Insert", "proj1")
 insert_cmd:set_parameter("source_sequence_id", mc_id)
 insert_cmd:set_parameter("target_video_track_id", "vt1")
 insert_cmd:set_parameter("sequence_id", "seq1")
-insert_cmd:set_parameter("timeline_start_frame", 50)
+insert_cmd:set_parameter("sequence_start_frame", 50)
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert failed: " .. tostring(result.error_message))
 
@@ -133,8 +133,8 @@ local trimmed_clip = Clip.load(clip_id)
 assert(trimmed_clip, "clip disappeared after trim")
 assert(trimmed_clip.duration == 50,
     string.format("Expected duration=50 after trim, got %d", trimmed_clip.duration))
-assert(trimmed_clip.timeline_start == 50,
-    string.format("Expected timeline_start=50, got %d", trimmed_clip.timeline_start))
+assert(trimmed_clip.sequence_start == 50,
+    string.format("Expected sequence_start=50, got %d", trimmed_clip.sequence_start))
 
 -- Undo should restore content_end to 150
 undo()

@@ -5,7 +5,7 @@
 -- content inside the window moves.
 --
 -- Effect on the clip row:
---   timeline_start_frame  unchanged
+--   sequence_start_frame  unchanged
 --   duration_frames       unchanged
 --   source_in_frame       += delta_source_frames
 --   source_out_frame      += delta_source_frames
@@ -50,7 +50,7 @@ function M.execute(args)
         "Slip clip=" .. args.clip_id)
 
     Clip.update_bounds(args.clip_id,
-        clip.timeline_start_frame, clip.duration_frames,
+        clip.sequence_start_frame, clip.duration_frames,
         new_source_in, new_source_out)
 
     log.event("Slip clip=%s delta=%d", args.clip_id, delta)
@@ -59,7 +59,7 @@ function M.execute(args)
         clip_id = args.clip_id,
         delta   = delta,
         prior   = {
-            timeline_start_frame = clip.timeline_start_frame,
+            sequence_start_frame = clip.sequence_start_frame,
             duration_frames      = clip.duration_frames,
             source_in_frame      = clip.source_in_frame,
             source_out_frame     = clip.source_out_frame,
@@ -93,7 +93,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             inserts = {}, deletes = {},
             updates = { {
                 clip_id          = args.clip_id,
-                start_value      = fresh.timeline_start_frame,
+                start_value      = fresh.sequence_start_frame,
                 duration_value   = fresh.duration_frames,
                 source_in_value  = fresh.source_in_frame,
                 source_out_value = fresh.source_out_frame,
@@ -109,7 +109,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local prior = args.prior_state
         assert(prior, "Undo Slip: prior_state missing")
         Clip.update_bounds(args.clip_id,
-            prior.timeline_start_frame, prior.duration_frames,
+            prior.sequence_start_frame, prior.duration_frames,
             prior.source_in_frame, prior.source_out_frame)
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)

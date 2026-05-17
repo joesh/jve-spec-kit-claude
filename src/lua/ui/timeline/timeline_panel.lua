@@ -680,7 +680,7 @@ local function insert_clips_sequentially(project_id, seq_id, v1_track_id, clips)
             sequence_id           = seq_id,
             source_sequence_id    = clip.source_sequence_id,
             target_video_track_id = v1_track_id,
-            timeline_start_frame  = playhead,
+            sequence_start_frame  = playhead,
             advance_playhead      = false,
         })
         assert(result and result.success,
@@ -2937,10 +2937,10 @@ local function zoom_to_fit_if_first_open(sequence)
     local min_start, max_end
     for _, clip in ipairs(clips) do
         if not clip.is_gap then
-            local s = clip.timeline_start
+            local s = clip.sequence_start
             local d = clip.duration
             assert(type(s) == "number", string.format(
-                "zoom_to_fit_if_first_open: clip %s has non-number timeline_start: %s",
+                "zoom_to_fit_if_first_open: clip %s has non-number sequence_start: %s",
                 tostring(clip.id), type(s)))
             assert(type(d) == "number", string.format(
                 "zoom_to_fit_if_first_open: clip %s has non-number duration: %s",
@@ -3374,7 +3374,7 @@ function M:navigate_to_clip(clip_id)
     local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
     for _, clip in ipairs(clips) do
         if clip.id == clip_id then
-            local frame = clip.timeline_start_frame or clip.timeline_start or 0
+            local frame = clip.sequence_start_frame or clip.sequence_start or 0
             timeline_state.set_playhead_position(frame)
             timeline_state.surface_playhead()
             timeline_state.set_selection({{id = clip_id}})
@@ -3404,13 +3404,13 @@ function M:get_clips()
             duration = clip.duration_frames or clip.duration or 0,
             enabled = clip.enabled ~= false,
             volume = clip.volume or 1.0,
-            timeline_start_frame = clip.timeline_start_frame or clip.timeline_start or 0,
+            sequence_start_frame = clip.sequence_start_frame or clip.sequence_start or 0,
             track_id = clip.track_id or "",
             properties = {},
         }
     end
     table.sort(clips, function(a, b)
-        return a.timeline_start_frame < b.timeline_start_frame
+        return a.sequence_start_frame < b.sequence_start_frame
     end)
     return clips
 end

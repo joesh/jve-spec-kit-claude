@@ -51,7 +51,7 @@ local db = database.get_connection()
 assert(db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame,
         fps_mismatch_policy, enabled, volume, mark_in_frame, mark_out_frame,
         playhead_frame, created_at, modified_at)
@@ -95,7 +95,7 @@ assert(db:exec(string.format([[
 local r_ins = command_manager.execute("Insert", {
     sequence_id          = seq_id,
     source_sequence_id   = mc_seq_id,
-    timeline_start_frame = 130,
+    sequence_start_frame = 130,
     project_id           = project_id,
 })
 assert(r_ins and r_ins.success == false,

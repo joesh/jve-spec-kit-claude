@@ -7,7 +7,7 @@
 --
 -- Resolved entry must:
 --   - source_in/out are in file-native units of the played portion: [20, 70).
---   - outer timeline_start = 500 (clip's own start, since the entry covers
+--   - outer sequence_start = 500 (clip's own start, since the entry covers
 --     the entire clip window).
 --   - duration = 50 (the clip occupies 50 outer frames).
 --
@@ -45,13 +45,13 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'x', '/tmp/v.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 -- Clip picks master sub-range [20, 70).
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c', 'p1', 'e', 'e-v1', 'm', 'c', 500, 50, 20, 70, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
@@ -70,9 +70,9 @@ assert(e.source_in == 20 and e.source_out == 70, string.format(
     "source range must be the file-native portion the clip exposes; "
     .. "expected [20, 70), got [%s, %s)",
     tostring(e.source_in), tostring(e.source_out)))
-assert(e.timeline_start == 500 and e.duration == 50, string.format(
+assert(e.sequence_start == 500 and e.duration == 50, string.format(
     "outer position is the clip's window: expected start=500 dur=50; "
     .. "got start=%s dur=%s",
-    tostring(e.timeline_start), tostring(e.duration)))
+    tostring(e.sequence_start), tostring(e.duration)))
 
 print("✅ test_resolve_clip_subrange.lua passed")

@@ -63,7 +63,7 @@ local function make_clip(name, start, dur)
         track_id = track.id,
         owner_sequence_id = seq.id,
         sequence_id = mc_seq_id,
-        timeline_start_frame = start,
+        sequence_start_frame = start,
         duration_frames = dur,
         source_in_frame = 0,
         source_out_frame = dur,
@@ -194,15 +194,15 @@ do
     assert(#remaining == 2,
         string.format("Expected 2 clips remaining, got %d", #remaining))
 
-    -- Sort by timeline_start for predictable ordering
-    table.sort(remaining, function(a, b) return a.timeline_start < b.timeline_start end)
+    -- Sort by sequence_start for predictable ordering
+    table.sort(remaining, function(a, b) return a.sequence_start < b.sequence_start end)
 
     assert(remaining[1].id == clip_e.id, "Clip E should be first")
-    assert(remaining[1].timeline_start == 0, "Clip E should stay at 0")
+    assert(remaining[1].sequence_start == 0, "Clip E should stay at 0")
     assert(remaining[2].id == clip_g.id, "Clip G should be second")
-    assert(remaining[2].timeline_start == 24,
+    assert(remaining[2].sequence_start == 24,
         string.format("Clip G should shift from 48 to 24, got %d",
-            remaining[2].timeline_start))
+            remaining[2].sequence_start))
     print("  ✓ clip F ripple-deleted, clip G shifted to frame 24")
 
     clip_e:delete()

@@ -11,7 +11,7 @@
 ---     * clip.master_audio_track_id IS NULL (already-expanded refuses).
 ---     * Nested sequence has >= 2 audio tracks ("nothing to expand").
 ---     * No collision: every owner A target track empty across the
----       source clip's [timeline_start, timeline_start + duration).
+---       source clip's [sequence_start, sequence_start + duration).
 ---
 ---   Mutation:
 ---     1. For each A track of the nested sequence (sorted by index):
@@ -97,7 +97,7 @@ local function build_placement_plan(clip, clip_id, sequence_id)
         }
     end
 
-    local outer_lo = clip.timeline_start_frame
+    local outer_lo = clip.sequence_start_frame
     local outer_hi = outer_lo + clip.duration_frames
     for _, p in ipairs(plan) do
         if p.owner_track_id and p.owner_track_id ~= clip.track_id then
@@ -140,7 +140,7 @@ end
 -- and expanded_by_index[track_index → clip_id].
 local function insert_expanded_clips(plan, clip, sequence_id)
     local expanded_ids, by_index = {}, {}
-    local outer_lo = clip.timeline_start_frame
+    local outer_lo = clip.sequence_start_frame
     for _, p in ipairs(plan) do
         local new_id = uuid.generate()
         Clip.create({
@@ -150,7 +150,7 @@ local function insert_expanded_clips(plan, clip, sequence_id)
             track_id              = p.owner_track_id,
             sequence_id    = clip.sequence_id,
             name                  = clip.name,
-            timeline_start_frame  = outer_lo,
+            sequence_start_frame  = outer_lo,
             duration_frames       = clip.duration_frames,
             source_in_frame       = clip.source_in_frame,
             source_out_frame      = clip.source_out_frame,

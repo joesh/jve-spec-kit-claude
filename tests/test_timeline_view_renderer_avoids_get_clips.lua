@@ -18,8 +18,8 @@ _G.timeline = {
 local seq_rate = { fps_numerator = 24, fps_denominator = 1 }
 
 local clips = {
-    { id = "c1", track_id = "v1", timeline_start = 0, duration = 24, enabled = true },
-    { id = "c2", track_id = "v1", timeline_start = 48, duration = 24, enabled = true },
+    { id = "c1", track_id = "v1", sequence_start = 0, duration = 24, enabled = true },
+    { id = "c2", track_id = "v1", sequence_start = 48, duration = 24, enabled = true },
 }
 
 local state = {

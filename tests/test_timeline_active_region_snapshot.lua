@@ -8,7 +8,7 @@ local function clip(id, track_id, start_frames, duration_frames, fps_num, fps_de
     return {
         id = id,
         track_id = track_id,
-        timeline_start = start_frames,
+        sequence_start = start_frames,
         duration = duration_frames,
         source_in = 0,
         source_out = duration_frames,

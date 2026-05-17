@@ -47,7 +47,7 @@ local VIEWPORT_DURATION = 100000
 local CLIP_START = 5000
 local CLIP_DURATION = 500
 local clips = {
-    { id = "c1", track_id = "v1", timeline_start = CLIP_START, duration = CLIP_DURATION, enabled = true, clip_kind = "video" },
+    { id = "c1", track_id = "v1", sequence_start = CLIP_START, duration = CLIP_DURATION, enabled = true, clip_kind = "video" },
 }
 
 local viewport_start_time = 0

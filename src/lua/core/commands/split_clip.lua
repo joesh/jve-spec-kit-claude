@@ -3,16 +3,16 @@
 -- Divides one clip at a chosen owner-timeline frame into two adjacent
 -- clips that together cover the same owner range. Per commands.md §Split:
 --
---   Left half:  timeline_start unchanged;
+--   Left half:  sequence_start unchanged;
 --               duration = split_offset (owner frames);
 --               source_in  unchanged;
 --               source_out = source_in + source_offset.
---   Right half: timeline_start = orig_ts + split_offset;
+--   Right half: sequence_start = orig_ts + split_offset;
 --               duration = orig_dur - split_offset;
 --               source_in  = orig_source_in + source_offset;
 --               source_out unchanged.
 --
--- split_offset = split_frame - original.timeline_start (owner frames).
+-- split_offset = split_frame - original.sequence_start (owner frames).
 -- source_offset = owner_delta_to_source(clip.fps_mismatch_policy, split_offset,
 --                                      owner.fps, nested.fps).
 --
@@ -25,7 +25,7 @@
 -- new link groups for the second halves — see T045a (blade.lua) for the
 -- cross-track razor. link_group relinking is NOT this command's concern.
 --
--- Refuses: split_frame at or outside [timeline_start, timeline_start+duration).
+-- Refuses: split_frame at or outside [sequence_start, sequence_start+duration).
 -- Refusal is loud; DB unchanged.
 --
 -- SQL isolation: all DB access via models.
@@ -53,8 +53,8 @@ local function mutation_entry(row)
         track_sequence_id     = row.owner_sequence_id,
         track_id              = row.track_id,
         sequence_id    = row.sequence_id,
-        start_value           = row.timeline_start_frame,
-        timeline_start        = row.timeline_start_frame,
+        start_value           = row.sequence_start_frame,
+        sequence_start        = row.sequence_start_frame,
         duration_value        = row.duration_frames,
         duration              = row.duration_frames,
         source_in             = row.source_in_frame,
@@ -86,17 +86,17 @@ function M.execute(args)
         args.clip_id, clip.owner_sequence_id, args.sequence_id))
 
     local split_frame = args.split_frame
-    local clip_end    = clip.timeline_start_frame + clip.duration_frames
-    assert(split_frame > clip.timeline_start_frame and split_frame < clip_end,
+    local clip_end    = clip.sequence_start_frame + clip.duration_frames
+    assert(split_frame > clip.sequence_start_frame and split_frame < clip_end,
         string.format(
             "SplitClip: split_frame=%d must be strictly inside clip [%d, %d)",
-            split_frame, clip.timeline_start_frame, clip_end))
+            split_frame, clip.sequence_start_frame, clip_end))
 
     local owner  = Sequence.find(args.sequence_id)
     local nested = Sequence.find(clip.sequence_id)
     assert(owner and nested, "SplitClip: owner or nested sequence not found")
 
-    local split_offset  = split_frame - clip.timeline_start_frame
+    local split_offset  = split_frame - clip.sequence_start_frame
     local source_offset = Clip.owner_delta_to_source(
         clip.fps_mismatch_policy, split_offset,
         owner.fps_numerator,  owner.fps_denominator,
@@ -107,7 +107,7 @@ function M.execute(args)
 
     local right_id           = args.second_clip_id or uuid.generate()
     -- right_half_offset: optional caller-supplied displacement of the right
-    -- half's timeline_start away from split_frame. Used by BatchRippleEdit's
+    -- half's sequence_start away from split_frame. Used by BatchRippleEdit's
     -- cut-mode ripple to place the right half at its post-ripple position
     -- in one shot (so BRE doesn't have to bulk-shift it afterwards, which
     -- would entangle BRE's planned_mutations with SplitClip's own undo).
@@ -127,7 +127,7 @@ function M.execute(args)
     assert(database.savepoint(SAVEPOINT), "SplitClip: savepoint failed")
     local ok, err = pcall(function()
         Clip.update_bounds(args.clip_id,
-            clip.timeline_start_frame, left_new_duration,
+            clip.sequence_start_frame, left_new_duration,
             clip.source_in_frame, left_new_source_out)
 
         Clip._create_v13_row({
@@ -137,7 +137,7 @@ function M.execute(args)
             track_id              = clip.track_id,
             sequence_id    = clip.sequence_id,
             name                  = clip.name,
-            timeline_start_frame  = right_timeline,
+            sequence_start_frame  = right_timeline,
             duration_frames       = right_duration,
             source_in_frame       = right_source_in,
             source_out_frame      = right_source_out,
@@ -170,7 +170,7 @@ function M.execute(args)
         split_offset    = split_offset,
         source_offset   = source_offset,
         prior = {
-            timeline_start_frame = clip.timeline_start_frame,
+            sequence_start_frame = clip.sequence_start_frame,
             duration_frames      = clip.duration_frames,
             source_in_frame      = clip.source_in_frame,
             source_out_frame     = clip.source_out_frame,
@@ -250,7 +250,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local ok, err = pcall(function()
             Clip.delete_one(second)
             Clip.update_bounds(args.clip_id,
-                prior.timeline_start_frame, prior.duration_frames,
+                prior.sequence_start_frame, prior.duration_frames,
                 prior.source_in_frame, prior.source_out_frame)
         end)
         if not ok then

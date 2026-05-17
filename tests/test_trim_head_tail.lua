@@ -61,7 +61,7 @@ local function check(label, condition)
 end
 
 local function get_clip(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames, source_in_frame, source_out_frame FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames, source_in_frame, source_out_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec())
     if stmt:next() then
@@ -114,7 +114,7 @@ local function create_clip(id, track_id, start, duration, source_in)
         track_id = track_id,
         sequence_id = master_seq_id,
         name = "Clip " .. id,
-        timeline_start_frame = start,
+        sequence_start_frame = start,
         duration_frames = duration,
         source_in_frame = source_in,
         source_out_frame = source_in + duration,

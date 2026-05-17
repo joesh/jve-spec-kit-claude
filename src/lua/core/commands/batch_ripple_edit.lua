@@ -153,9 +153,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local delta_max = nil
         assert(type(clip.duration) == "number", "compute_roll_constraint: clip.duration must be integer")
 
-        assert(original and type(original.timeline_start) == "number", "compute_roll_constraint: original.timeline_start must be integer")
+        assert(original and type(original.sequence_start) == "number", "compute_roll_constraint: original.sequence_start must be integer")
         assert(original and type(original.duration) == "number", "compute_roll_constraint: original.duration must be integer")
-        local original_start_frames = original.timeline_start
+        local original_start_frames = original.sequence_start
         local original_end_frames = original_start_frames + original.duration
 
         if normalized_edge == "in" then
@@ -449,7 +449,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Fields on the shared timeline_state clip object that BRE must not
     -- mutate during dry-run. Snapshot at build, verify at finalize.
     local SHARED_CLIP_FIELDS = {
-        "timeline_start", "duration", "source_in", "source_out", "track_id", "is_gap",
+        "sequence_start", "duration", "source_in", "source_out", "track_id", "is_gap",
     }
 
     local function build_clip_cache(ctx)
@@ -637,7 +637,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local right = {
             id             = right_id,
             track_id       = track_id,
-            timeline_start = right_pos,
+            sequence_start = right_pos,
             duration       = right_duration,
             is_gap         = false,
         }
@@ -647,7 +647,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local insert_pos = #track_clips + 1
         for j, tc in ipairs(track_clips) do
-            if tc.timeline_start > right_pos then
+            if tc.sequence_start > right_pos then
                 insert_pos = j
                 break
             end
@@ -662,10 +662,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Returns the left-half table (already shrunk to split_offset).
     local function dispatch_cut_split(ctx, c, track_clips, trim_point, right_half_offset)
         local orig_duration = c.duration
-        local split_offset  = trim_point - c.timeline_start
+        local split_offset  = trim_point - c.sequence_start
         assert(split_offset >= 1 and split_offset < orig_duration, string.format(
             "dispatch_cut_split: trim_point %d not strictly inside clip %s [%d, %d)",
-            trim_point, tostring(c.id), c.timeline_start, c.timeline_start + orig_duration))
+            trim_point, tostring(c.id), c.sequence_start, c.sequence_start + orig_duration))
         assert(type(right_half_offset) == "number" and right_half_offset >= 0, string.format(
             "dispatch_cut_split: right_half_offset must be non-negative integer; got %s",
             tostring(right_half_offset)))
@@ -692,7 +692,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Inspect each edge's boundary frame and apply per-track sync_mode semantics:
     --
     --   'ripple': find the clip on the synced track that is CO-LOCATED with the
-    --             anchor clip (same timeline_start AND same end frame) when the
+    --             anchor clip (same sequence_start AND same end frame) when the
     --             operation is a SHRINK (out-edge: delta<0; in-edge: delta>0).
     --             That clip's matching edge is added to edge_infos so it is
     --             trimmed together with the anchor, preventing the upstream-blocker
@@ -733,7 +733,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local function clip_end(clip)
-            return clip.timeline_start + clip.duration
+            return clip.sequence_start + clip.duration
         end
 
         -- A shrink trims the clip shorter. Co-trim is only needed (and safe)
@@ -760,12 +760,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false
         end
 
-        -- Find the timeline_start of the first non-gap clip starting at or after
+        -- Find the sequence_start of the first non-gap clip starting at or after
         -- `after_frame`. Returns nil if no such clip exists.
         local function first_content_downstream_start(clips, after_frame)
             for _, c in ipairs(clips) do
-                if not c.is_gap and c.timeline_start >= after_frame then
-                    return c.timeline_start
+                if not c.is_gap and c.sequence_start >= after_frame then
+                    return c.sequence_start
                 end
             end
             return nil
@@ -778,12 +778,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- would silently remove a valid upstream constraint on that track.
         local function dispatch_colocated_edge(track_id, track_clips, base_clip,
                                                primary_clips, edge_type)
-            local base_start         = base_clip.timeline_start
+            local base_start         = base_clip.sequence_start
             local base_end           = clip_end(base_clip)
             local primary_ds_start   = first_content_downstream_start(primary_clips, base_end)
             for _, c in ipairs(track_clips) do
                 if not c.is_gap
-                    and c.timeline_start == base_start
+                    and c.sequence_start == base_start
                     and clip_end(c)      == base_end
                 then
                     local c_ds_start = first_content_downstream_start(track_clips, base_end)
@@ -851,9 +851,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     -- for an in-edge it is at the anchor's left boundary.
                     local trim_point
                     if edge_bracket == "out" then
-                        trim_point = base_clip.timeline_start + base_clip.duration
+                        trim_point = base_clip.sequence_start + base_clip.duration
                     else
-                        trim_point = base_clip.timeline_start
+                        trim_point = base_clip.sequence_start
                     end
 
                     local track_clips = ctx.track_clip_map[track_id]
@@ -873,7 +873,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     if command_manager.is_undo_redo_in_progress() then
                         for _, c in ipairs(track_clips) do
                             if not c.is_gap then
-                                local c_end = c.timeline_start + c.duration
+                                local c_end = c.sequence_start + c.duration
                                 if c_end == trim_point then
                                     ctx.cut_left_halves[c.id] = true
                                 end
@@ -888,8 +888,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local to_split = {}
                     for _, c in ipairs(track_clips) do
                         if not c.is_gap then
-                            local c_end = c.timeline_start + c.duration
-                            if c.timeline_start < trim_point and c_end > trim_point then
+                            local c_end = c.sequence_start + c.duration
+                            if c.sequence_start < trim_point and c_end > trim_point then
                                 to_split[#to_split + 1] = c
                             end
                         end
@@ -930,18 +930,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, edge_info in ipairs(ctx.edge_infos) do
             if edge_info.trim_type ~= "roll" then
                 local clip = ctx.clip_lookup[edge_info.clip_id]
-                if clip and type(clip.timeline_start) == "number"
+                if clip and type(clip.sequence_start) == "number"
                    and type(clip.duration) == "number" then
                     selected_tracks[clip.track_id] = true
                     local normalized = edge_utils.to_bracket(edge_info.edge_type)
                     if normalized == "out" then
                         table.insert(entries, {
-                            frame = clip.timeline_start + clip.duration,
+                            frame = clip.sequence_start + clip.duration,
                             is_in_edge = false,
                         })
                     else
                         table.insert(entries, {
-                            frame = clip.timeline_start,
+                            frame = clip.sequence_start,
                             is_in_edge = true,
                         })
                     end
@@ -957,9 +957,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function find_gap_at_boundary(track_clips, boundary_frame)
         for _, clip in ipairs(track_clips) do
             if clip.is_gap == true then
-                local clip_end = clip.timeline_start + clip.duration
-                if clip.timeline_start == boundary_frame or
-                   (clip.timeline_start <= boundary_frame and clip_end > boundary_frame) then
+                local clip_end = clip.sequence_start + clip.duration
+                if clip.sequence_start == boundary_frame or
+                   (clip.sequence_start <= boundary_frame and clip_end > boundary_frame) then
                     return clip
                 end
             end
@@ -982,10 +982,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return nil
         end
         if is_in_edge then
-            return find_first_media(function(c) return c.timeline_start > boundary_frame end)
-                or find_first_media(function(c) return c.timeline_start >= boundary_frame end)
+            return find_first_media(function(c) return c.sequence_start > boundary_frame end)
+                or find_first_media(function(c) return c.sequence_start >= boundary_frame end)
         end
-        return find_first_media(function(c) return c.timeline_start >= boundary_frame end)
+        return find_first_media(function(c) return c.sequence_start >= boundary_frame end)
     end
 
     -- Create a zero-length gap clip anchored at `anchor_frame` and
@@ -1015,7 +1015,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- clips, shifting the propagated boundary past them (Joe's
         -- V4-extends-but-V1-clip-doesn't-ripple bug).
         for _, c in ipairs(track_clips) do
-            if not c.is_gap and c.timeline_start == boundary_frame then
+            if not c.is_gap and c.sequence_start == boundary_frame then
                 return synthesize_implied_gap(ctx, track_id, boundary_frame)
             end
         end
@@ -1026,7 +1026,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- clip past the spanning one.
         local anchor_clip = find_implied_gap_anchor_clip(track_clips, boundary_frame, is_in_edge)
         if not anchor_clip then return nil end
-        return synthesize_implied_gap(ctx, track_id, anchor_clip.timeline_start)
+        return synthesize_implied_gap(ctx, track_id, anchor_clip.sequence_start)
     end
 
     -- Append a gap.in edge into edge_infos, capturing its original state
@@ -1044,7 +1044,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             -- The ripple boundary on this propagated track. Used by
             -- compute_ripple_point so the propagation anchors at the
             -- edit frame even when the injected edge belongs to a
-            -- spanning gap whose own timeline_start is far upstream
+            -- spanning gap whose own sequence_start is far upstream
             -- (which would otherwise collapse earliest_ripple_time to
             -- the gap's start and shift unrelated clips).
             implicit_boundary_frame = boundary_frame,
@@ -1194,7 +1194,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             master_audio_track_id = base.master_audio_track_id,
             fps_mismatch_policy = base.fps_mismatch_policy,
             track_id = base.track_id,
-            timeline_start = base.timeline_start,
+            sequence_start = base.sequence_start,
             duration = base.duration,
             source_in = base.source_in,
             source_out = base.source_out,
@@ -1261,7 +1261,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     local function apply_edge_ripple(clip, edge_type, delta_frames, trim_type, seq_fps_num, seq_fps_den)
         assert(type(clip.duration) == "number", "apply_edge_ripple: clip.duration must be integer")
-        assert(type(clip.timeline_start) == "number", "apply_edge_ripple: clip.timeline_start must be integer")
+        assert(type(clip.sequence_start) == "number", "apply_edge_ripple: clip.sequence_start must be integer")
         assert(type(delta_frames) == "number", "apply_edge_ripple: delta_frames must be integer")
 
         local new_duration, new_source_in, new_source_out
@@ -1269,7 +1269,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             new_duration, new_source_in, new_source_out =
                 compute_in_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
             if trim_type == "roll" then
-                clip.timeline_start = clip.timeline_start + delta_frames
+                clip.sequence_start = clip.sequence_start + delta_frames
             end
         elseif edge_type == "out" then
             new_duration, new_source_in, new_source_out =
@@ -1286,13 +1286,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             clip.duration = 0
             clip.source_in = new_source_in
             clip.source_out = new_source_out
-            return clip.timeline_start, true, true  -- success, deleted_clip=true
+            return clip.sequence_start, true, true  -- success, deleted_clip=true
         end
 
         clip.duration = new_duration
         clip.source_in = new_source_in
         clip.source_out = new_source_out
-        return clip.timeline_start, true, false
+        return clip.sequence_start, true, false
     end
 
     -- Return the bracket ("in" / "out") of the lead edge, or nil when
@@ -1623,7 +1623,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         table.insert(ctx.preview_affected_clips, {
             clip_id = clip.id,
-            new_start_value = clip.timeline_start,
+            new_start_value = clip.sequence_start,
             new_duration = clip.duration,
             edge_type = normalized_edge,
             raw_edge_type = edge_info.edge_type,
@@ -1641,7 +1641,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     --
     -- For implicit-injected gap edges (inject_implicit_gap_edges), the
     -- carried `implicit_boundary_frame` wins: a spanning gap's own
-    -- timeline_start can sit far upstream of the edit's anchor and
+    -- sequence_start can sit far upstream of the edit's anchor and
     -- would otherwise pull earliest_ripple_time down to that upstream
     -- frame, shifting every unrelated clip on every track without a
     -- per-track override.
@@ -1657,7 +1657,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return b
         end
         local source = original or clip
-        local ts = (source and source.timeline_start) or clip.timeline_start
+        local ts = (source and source.sequence_start) or clip.sequence_start
         local dur = (source and source.duration) or clip.duration
         if normalized_edge == "in" then
             return ts
@@ -1752,8 +1752,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     local partial = prefix_shift[i - 1]
                     if partial ~= 0 and seed.clip_id then
                         local clip = ctx.modified_clips[seed.clip_id]
-                        if clip and type(clip.timeline_start) == "number" then
-                            clip.timeline_start = clip.timeline_start + partial
+                        if clip and type(clip.sequence_start) == "number" then
+                            clip.sequence_start = clip.sequence_start + partial
                         end
                     end
                 end
@@ -1839,13 +1839,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
     -- After apply_same_track_partial_shifts re-positions clips, the
     -- preview entries captured by record_preview_for_edge may hold stale
-    -- timeline_start values. Refresh them from ctx.modified_clips.
+    -- sequence_start values. Refresh them from ctx.modified_clips.
     local function refresh_preview_start_values(ctx)
         if not (ctx.dry_run and ctx.preview_affected_clips) then return end
         for _, entry in ipairs(ctx.preview_affected_clips) do
             local clip = ctx.modified_clips[entry.clip_id]
-            if clip and type(clip.timeline_start) == "number" then
-                entry.new_start_value = clip.timeline_start
+            if clip and type(clip.sequence_start) == "number" then
+                entry.new_start_value = clip.sequence_start
             end
         end
     end
@@ -1908,12 +1908,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                or (ctx.cut_left_halves and ctx.cut_left_halves[clip.id]) then
                 goto continue
             end
-            if clip.timeline_start >= boundary_frame then
+            if clip.sequence_start >= boundary_frame then
                 if not first_downstream then
                     first_downstream = clip
                 end
             else
-                local clip_end = clip.timeline_start + clip.duration
+                local clip_end = clip.sequence_start + clip.duration
                 if clip_end > upstream_end then
                     upstream_end = clip_end
                     upstream_id = clip.id
@@ -1979,7 +1979,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if boundary then
                 local first_ds, upstream_end, upstream_id = find_track_boundary_neighbors(ctx, track_id, boundary)
                 if first_ds and upstream_id and not ctx.edited_clip_lookup[upstream_id] then
-                    local track_max_left = -(first_ds.timeline_start - upstream_end)
+                    local track_max_left = -(first_ds.sequence_start - upstream_end)
                     -- Only this track's own shift amount can be blocked
                     -- here; don't clamp tracks that fit inside their room.
                     local this_shift = track_shift_amount(ctx, track_id)
@@ -2048,7 +2048,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Canonical shape: { type, track_id, shift_frames, start_frame }.
     -- start_frame is the pre-shift position of the first clip that
     -- participates in the shift; every clip on the track with
-    -- timeline_start_frame >= start_frame gets moved by shift_frames.
+    -- sequence_start_frame >= start_frame gets moved by shift_frames.
     local function emit_bulk_shift_mutations(ctx)
         for track_id in pairs(ctx.affected_tracks) do
             local boundary = track_ripple_boundary(ctx, track_id)
@@ -2060,7 +2060,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         type = "bulk_shift",
                         track_id = track_id,
                         shift_frames = shift_frames,
-                        start_frame = first_ds.timeline_start,
+                        start_frame = first_ds.sequence_start,
                     })
                 end
             end
@@ -2082,10 +2082,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     for _, clip in ipairs(ctx.track_clip_map[track_id]) do
                         local is_shifted = not clip.is_gap
                             and not ctx.edited_clip_lookup[clip.id]
-                            and clip.timeline_start >= first_ds.timeline_start
+                            and clip.sequence_start >= first_ds.sequence_start
                         if is_shifted then
                             add_preview_shift(ctx, clip.id,
-                                clip.timeline_start + shift_frames, clip.duration)
+                                clip.sequence_start + shift_frames, clip.duration)
                         end
                     end
                 end
@@ -2161,17 +2161,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Updates carry it directly; deletes carry it on `previous`.
     local function mutation_sort_key(mut)
         if mut.type == "update" then
-            assert(type(mut.timeline_start_frame) == "number",
-                "build_planned_mutations: update missing timeline_start_frame")
-            return mut.timeline_start_frame
+            assert(type(mut.sequence_start_frame) == "number",
+                "build_planned_mutations: update missing sequence_start_frame")
+            return mut.sequence_start_frame
         end
         if mut.type == "delete" then
             local prev = mut.previous
             assert(type(prev) == "table",
                 "build_planned_mutations: delete missing previous state")
-            local start_value = prev.timeline_start or prev.start_value
+            local start_value = prev.sequence_start or prev.start_value
             assert(type(start_value) == "number",
-                "build_planned_mutations: delete previous timeline_start must be integer")
+                "build_planned_mutations: delete previous sequence_start must be integer")
             return start_value
         end
         error("build_planned_mutations: unsupported mutation type for sorting: " .. tostring(mut.type))
@@ -2187,14 +2187,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local original = ctx.original_states_map[id]
             if clip and clip.is_gap == true then
                 if ctx.dry_run then
-                    assert(type(clip.timeline_start) == "number",
-                        "build_planned_mutations: gap timeline_start must be integer")
+                    assert(type(clip.sequence_start) == "number",
+                        "build_planned_mutations: gap sequence_start must be integer")
                     assert(type(clip.duration) == "number",
                         "build_planned_mutations: gap duration must be integer")
                     table.insert(gap_mutations, {
                         type = "gap_preview",
                         clip_id = id,
-                        timeline_start_frame = clip.timeline_start,
+                        sequence_start_frame = clip.sequence_start,
                         duration_frames = clip.duration,
                     })
                 end
@@ -2339,7 +2339,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_update_mutation(ctx.command, seq_id, {
                     clip_id = mut.clip_id,
                     track_id = mut.track_id,
-                    start_value = mut.timeline_start_frame,
+                    start_value = mut.sequence_start_frame,
                     duration_value = mut.duration_frames,
                     source_in_value = mut.source_in_frame,
                     source_out_value = mut.source_out_frame,
@@ -2468,8 +2468,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     local function anchor_clip_id_for_propagated_track(track_clips, boundary_frames, raw_edge_type)
         for _, c in ipairs(track_clips) do
             if c.is_gap
-                and c.timeline_start <= boundary_frames
-                and (c.timeline_start + c.duration) >= boundary_frames then
+                and c.sequence_start <= boundary_frames
+                and (c.sequence_start + c.duration) >= boundary_frames then
                 return c.id
             end
         end
@@ -2739,10 +2739,10 @@ lower_bound_start_frames = function(track_clips, boundary_frames)
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = track_clips[mid]
-        if not clip or type(clip.timeline_start) ~= "number" then
+        if not clip or type(clip.sequence_start) ~= "number" then
             return 1
         end
-        local start_frames = clip.timeline_start
+        local start_frames = clip.sequence_start
         if start_frames < boundary_frames then
             lo = mid + 1
         else
@@ -2770,12 +2770,12 @@ compute_neighbor_bounds = function(all_clips, original_state, clip_id)
         return nil, nil, nil, nil
     end
     local track_id = original_state.track_id
-    local start_value = original_state.timeline_start
+    local start_value = original_state.sequence_start
     local duration_value = original_state.duration
     if not start_value or not duration_value then
         return nil, nil, nil, nil
     end
-    assert(type(start_value) == "number", "compute_neighbor_bounds: timeline_start must be integer")
+    assert(type(start_value) == "number", "compute_neighbor_bounds: sequence_start must be integer")
     assert(type(duration_value) == "number", "compute_neighbor_bounds: duration must be integer")
 
     local start_frames = start_value
@@ -2789,9 +2789,9 @@ compute_neighbor_bounds = function(all_clips, original_state, clip_id)
     assert(all_clips, "compute_neighbor_bounds: all_clips is nil")
     for _, other in ipairs(all_clips) do
         if other.id ~= clip_id and other.track_id == track_id then
-            assert(type(other.timeline_start) == "number", "compute_neighbor_bounds: other.timeline_start must be integer")
+            assert(type(other.sequence_start) == "number", "compute_neighbor_bounds: other.sequence_start must be integer")
             assert(type(other.duration) == "number", "compute_neighbor_bounds: other.duration must be integer")
-            local other_start_frames = other.timeline_start
+            local other_start_frames = other.sequence_start
             local other_end_frames = other_start_frames + other.duration
 
             if other_end_frames <= start_frames then

@@ -64,7 +64,7 @@ local function create_clip(id, track_id, start_frame, duration_frame)
     local clip_stmt = conn:prepare([[
         INSERT INTO clips (id, project_id, name, track_id,
                             owner_sequence_id, sequence_id,
-                            timeline_start_frame, duration_frames,
+                            sequence_start_frame, duration_frames,
                             source_in_frame, source_out_frame,
                             master_layer_track_id, master_audio_track_id,
                             fps_mismatch_policy,
@@ -86,7 +86,7 @@ local function create_clip(id, track_id, start_frame, duration_frame)
 end
 
 local function fetch_clip(id)
-    local stmt = database.get_connection():prepare([[SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?]])
+    local stmt = database.get_connection():prepare([[SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(id))
     local start_val = stmt:value(0)
@@ -110,7 +110,7 @@ local function clip_exists_at(track_id, start_ms)
     -- Convert MS to frames for query
     local start_frame = math.floor(start_ms * 30.0 / 1000.0 + 0.5)
     local stmt = database.get_connection():prepare([[
-        SELECT 1 FROM clips WHERE track_id = ? AND timeline_start_frame = ? LIMIT 1
+        SELECT 1 FROM clips WHERE track_id = ? AND sequence_start_frame = ? LIMIT 1
     ]])
     assert(stmt, "failed to prepare clip lookup")
     assert(stmt:bind_value(1, track_id))
@@ -177,7 +177,7 @@ timeline_state.get_clips_at_time = function(time_ms, allowed)
     local results = {}
     -- Check DB directly
     local conn = database.get_connection()
-    local q = conn:prepare("SELECT id, timeline_start_frame, duration_frames FROM clips")
+    local q = conn:prepare("SELECT id, sequence_start_frame, duration_frames FROM clips")
     if q:exec() then
         while q:next() do
             local start = q:value(1) * 1000.0 / 30.0

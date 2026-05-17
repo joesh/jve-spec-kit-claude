@@ -86,7 +86,7 @@ db:exec(string.format([[
 
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mref_v', 'proj', 'msa', 'msa_v', 'media_a023', 0, %d,

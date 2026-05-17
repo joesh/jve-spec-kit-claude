@@ -2,10 +2,10 @@
 
 -- Sequence.native_duration_for_medium must return a DURATION (length),
 -- not an absolute end-of-timeline frame. For a master sequence whose
--- media_refs sit at timeline_start_frame = file_tc_origin (per the
+-- media_refs sit at sequence_start_frame = file_tc_origin (per the
 -- TIMECODE-IS-TRUTH memory), the bug is:
 --
---   SELECT MAX(timeline_start_frame + duration_frames) FROM media_refs
+--   SELECT MAX(sequence_start_frame + duration_frames) FROM media_refs
 --
 -- returns tc_origin + duration_frames. Callers (Overwrite via
 -- place_shared.apply_nested_marks → compute_owner_duration) treat the

@@ -41,7 +41,7 @@ EMP.TMB_SET_SEQUENCE_RESOLUTION(tmb, 1920, 1080)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
     clip_id = "same-file-v1",
     media_path = TEST_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = math.min(100, total_frames),
     source_in = 0,
     rate_num = info.fps_num,
@@ -56,7 +56,7 @@ local v2_duration = math.min(50, total_frames - v2_source_in)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 2, {{
     clip_id = "same-file-v2",
     media_path = TEST_PATH,
-    timeline_start = v2_start,
+    sequence_start = v2_start,
     duration = v2_duration,
     source_in = v2_source_in,
     rate_num = info.fps_num,

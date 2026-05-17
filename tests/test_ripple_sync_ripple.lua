@@ -43,13 +43,13 @@ local layout = ripple_layout.create({
     clips = {
         order = {"c_v1", "c_v1_ds", "c_a1", "c_a1_ds"},
         c_v1    = {id="c_v1",    track_key="v1", media_key="main",
-                   timeline_start=0,   duration=150, source_in=1000, fps_numerator=1000, fps_denominator=1},
+                   sequence_start=0,   duration=150, source_in=1000, fps_numerator=1000, fps_denominator=1},
         c_v1_ds = {id="c_v1_ds", track_key="v1", media_key="main",
-                   timeline_start=150, duration=150, source_in=1150, fps_numerator=1000, fps_denominator=1},
+                   sequence_start=150, duration=150, source_in=1150, fps_numerator=1000, fps_denominator=1},
         c_a1    = {id="c_a1",    track_key="a1", media_key="main",
-                   timeline_start=0,   duration=150, source_in=1000, fps_numerator=1000, fps_denominator=1},
+                   sequence_start=0,   duration=150, source_in=1000, fps_numerator=1000, fps_denominator=1},
         c_a1_ds = {id="c_a1_ds", track_key="a1", media_key="main",
-                   timeline_start=150, duration=150, source_in=1150, fps_numerator=1000, fps_denominator=1},
+                   sequence_start=150, duration=150, source_in=1150, fps_numerator=1000, fps_denominator=1},
     },
 })
 
@@ -62,7 +62,7 @@ assert(ok, "FAIL: tracks.sync_mode column missing — migration not applied")
 print("  sync_mode='ripple' set on both tracks")
 
 local function clip_ts(id)
-    local s = db:prepare("SELECT timeline_start_frame FROM clips WHERE id=?")
+    local s = db:prepare("SELECT sequence_start_frame FROM clips WHERE id=?")
     assert(s); s:bind_value(1, id); s:exec(); s:next()
     local v = s:value(0); s:finalize()
     assert(v ~= nil, "clip " .. id .. " not found"); return v

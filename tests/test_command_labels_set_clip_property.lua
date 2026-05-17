@@ -23,10 +23,10 @@ check("property_name=name, value='new name'",
         { property_name = "name", value = "new name" }),
     "name = new name")
 
-check("property_name=timeline_start, value=240",
+check("property_name=sequence_start, value=240",
     labels.detail_for_params("SetClipProperty",
-        { property_name = "timeline_start", value = 240 }),
-    "timeline_start = 240")
+        { property_name = "sequence_start", value = 240 }),
+    "sequence_start = 240")
 
 -- Legacy callers using params.field still work.
 check("legacy params.field (back-compat)",

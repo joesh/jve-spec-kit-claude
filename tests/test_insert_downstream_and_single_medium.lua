@@ -5,7 +5,7 @@
 --
 --   * Downstream ripple preserves relative spacing among existing clips
 --     on target tracks. An Insert at frame F with duration D shifts every
---     clip with timeline_start >= F forward by D on each target track;
+--     clip with sequence_start >= F forward by D on each target track;
 --     non-target tracks are untouched (differs from legacy AddClips which
 --     rippled ALL tracks).
 --
@@ -34,8 +34,8 @@ assert(type(Insert.execute) == "function",
 
 local function clips_on_track(db, track_id)
     local stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames
-        FROM clips WHERE track_id = ? ORDER BY timeline_start_frame
+        SELECT id, sequence_start_frame, duration_frames
+        FROM clips WHERE track_id = ? ORDER BY sequence_start_frame
     ]])
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "clips_on_track: exec failed")
@@ -43,7 +43,7 @@ local function clips_on_track(db, track_id)
     while stmt:next() do
         list[#list + 1] = {
             id = stmt:value(0),
-            timeline_start = stmt:value(1),
+            sequence_start = stmt:value(1),
             duration = stmt:value(2),
         }
     end
@@ -101,7 +101,7 @@ do
                ('med-v-pre', 'p1', 'pre.mov', '/tmp/pre.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 1, 1.0, 0, 0, 0),
                ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 96000, 0, 96000, 1, 1.0, 0, 0, 0),
@@ -120,7 +120,7 @@ do
     }) do
         assert(db:exec(string.format([[
             INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-                sequence_id, name, timeline_start_frame, duration_frames,
+                sequence_id, name, sequence_start_frame, duration_frames,
                 source_in_frame, source_out_frame,
                 fps_mismatch_policy, enabled, volume, playhead_frame,
                 created_at, modified_at)
@@ -133,7 +133,7 @@ do
     -- Target tracks: V1 (explicit) + A1 (default pick).
     Insert.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 50,
+        sequence_start_frame = 50,
         target_video_track_id = "e-v1",
         fps_mismatch_policy = "passthrough",
     })
@@ -144,26 +144,26 @@ do
     local v1 = clips_on_track(db, "e-v1")
     assert(#v1 == 3, string.format("V1 should have 3 clips; got %d", #v1))
     assert(v1[1].id == "pre_v_early"
-           and v1[1].timeline_start == 0 and v1[1].duration == 50,
+           and v1[1].sequence_start == 0 and v1[1].duration == 50,
         "pre_v_early must be untouched")
-    assert(v1[2].timeline_start == 50 and v1[2].duration == 60,
+    assert(v1[2].sequence_start == 50 and v1[2].duration == 60,
         string.format("new V clip at [50, 110); got [%d, %d)",
-            v1[2].timeline_start, v1[2].timeline_start + v1[2].duration))
+            v1[2].sequence_start, v1[2].sequence_start + v1[2].duration))
     assert(v1[3].id == "pre_v_late"
-           and v1[3].timeline_start == 160 and v1[3].duration == 50,
+           and v1[3].sequence_start == 160 and v1[3].duration == 50,
         string.format("pre_v_late expected shifted to [160,210); got [%d,%d)",
-            v1[3].timeline_start, v1[3].timeline_start + v1[3].duration))
+            v1[3].sequence_start, v1[3].sequence_start + v1[3].duration))
 
     -- V2: non-target track. pre_v2_late must be untouched at [100, 150).
     local v2 = clips_on_track(db, "e-v2")
     assert(#v2 == 1 and v2[1].id == "pre_v2_late"
-           and v2[1].timeline_start == 100 and v2[1].duration == 50,
+           and v2[1].sequence_start == 100 and v2[1].duration == 50,
         "pre_v2_late on V2 (non-target) must be untouched by Insert's ripple")
 
     -- A1 is a target track; only the new A clip. No pre-existing clips to
     -- ripple. One clip at [50, 110).
     local a1 = clips_on_track(db, "e-a1")
-    assert(#a1 == 1 and a1[1].timeline_start == 50 and a1[1].duration == 60,
+    assert(#a1 == 1 and a1[1].sequence_start == 50 and a1[1].duration == 60,
         "A1 should have just the new A clip at [50, 110)")
 
     print("  ok")
@@ -196,14 +196,14 @@ do
         VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
     ]]))
 
     local result = Insert.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         fps_mismatch_policy = "passthrough",
     })
 
@@ -248,7 +248,7 @@ do
         VALUES ('med-a', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 48000,
             1, 1.0, 0, 0, 0);
@@ -256,7 +256,7 @@ do
 
     local result = Insert.execute({
         sequence_id = "e", source_sequence_id = "m",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         fps_mismatch_policy = "passthrough",
     })
 
@@ -275,9 +275,9 @@ do
     -- nested.audio_sample_rate: 48000 samples / 48000 Hz = 1 second;
     -- at owner 24/1 = 24 owner frames. Domain-derived; not from code.
     local a1 = clips_on_track(db, "e-a1")
-    assert(a1[1].timeline_start == 0 and a1[1].duration == 24, string.format(
+    assert(a1[1].sequence_start == 0 and a1[1].duration == 24, string.format(
         "A-only owner duration expected 24 (48000 samples @ 48k → 1s @ 24fps); got [%d,%d)",
-        a1[1].timeline_start, a1[1].timeline_start + a1[1].duration))
+        a1[1].sequence_start, a1[1].sequence_start + a1[1].duration))
     print("  ok")
 end
 

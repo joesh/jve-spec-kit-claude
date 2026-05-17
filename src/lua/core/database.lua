@@ -253,7 +253,7 @@ end
 --   3: c.track_id
 --   4: c.owner_sequence_id
 --   5: c.sequence_id
---   6: c.timeline_start_frame
+--   6: c.sequence_start_frame
 --   7: c.duration_frames
 --   8: c.source_in_frame
 --   9: c.source_out_frame
@@ -351,7 +351,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         master_audio_track_id = query:value(11),
         fps_mismatch_policy = query:value(12),
 
-        timeline_start = assert(query:value(6), string.format("load_clips: clip %s missing timeline_start", clip_id)),
+        sequence_start = assert(query:value(6), string.format("load_clips: clip %s missing sequence_start", clip_id)),
         duration = assert(query:value(7), string.format("load_clips: clip %s missing duration", clip_id)),
         source_in = assert(query:value(8), string.format("load_clips: clip %s missing source_in", clip_id)),
         source_out = assert(query:value(9), string.format("load_clips: clip %s missing source_out", clip_id)),
@@ -959,7 +959,7 @@ function M.load_clips(sequence_id)
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
                c.owner_sequence_id, c.sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -982,7 +982,7 @@ function M.load_clips(sequence_id)
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.owner_sequence_id = ?
         GROUP BY c.id
-        ORDER BY c.timeline_start_frame ASC
+        ORDER BY c.sequence_start_frame ASC
     ]])
 
     if not query then
@@ -1027,7 +1027,7 @@ function M.load_master_virtual_clips(master_seq_id)
 
     local query = db_connection:prepare([[
         SELECT mr.id, mr.project_id, mr.track_id,
-               mr.timeline_start_frame, mr.duration_frames,
+               mr.sequence_start_frame, mr.duration_frames,
                mr.source_in_frame, mr.source_out_frame,
                mr.enabled,
                t.track_type, t.name AS track_name,
@@ -1038,7 +1038,7 @@ function M.load_master_virtual_clips(master_seq_id)
         JOIN sequences s ON s.id = mr.owner_sequence_id
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE mr.owner_sequence_id = ?
-        ORDER BY mr.timeline_start_frame ASC
+        ORDER BY mr.sequence_start_frame ASC
     ]])
     assert(query, "load_master_virtual_clips: failed to prepare query")
     query:bind_value(1, master_seq_id)
@@ -1063,7 +1063,7 @@ function M.load_master_virtual_clips(master_seq_id)
             local media_path = query:value(15)
             local offline_note = query:value(16)
 
-            assert(tl_start, "load_master_virtual_clips: media_ref missing timeline_start_frame")
+            assert(tl_start, "load_master_virtual_clips: media_ref missing sequence_start_frame")
             assert(duration, "load_master_virtual_clips: media_ref missing duration_frames")
             assert(src_in and src_out, "load_master_virtual_clips: media_ref missing source range")
 
@@ -1074,8 +1074,8 @@ function M.load_master_virtual_clips(master_seq_id)
             -- (renderer, gap recompute, viewport math). Without this, an
             -- audio span at sample N would land at frame N — ~2000× past
             -- where it belongs at typical 48kHz/24fps.
-            local timeline_start = tl_start
-            local timeline_duration = duration
+            local sequence_start = tl_start
+            local sequence_duration = duration
             if track_type == "AUDIO" then
                 assert(audio_rate and audio_rate > 0, string.format(
                     "load_master_virtual_clips: master %s has audio media_ref %s on "
@@ -1083,8 +1083,8 @@ function M.load_master_virtual_clips(master_seq_id)
                     tostring(master_seq_id), tostring(mref_id), tostring(track_id),
                     tostring(audio_rate)))
                 -- frame = sample × fps / sample_rate
-                timeline_start = math.floor(tl_start * fps_num / (fps_den * audio_rate))
-                timeline_duration = math.floor(duration * fps_num / (fps_den * audio_rate))
+                sequence_start = math.floor(tl_start * fps_num / (fps_den * audio_rate))
+                sequence_duration = math.floor(duration * fps_num / (fps_den * audio_rate))
             end
 
             local clip = {
@@ -1096,8 +1096,8 @@ function M.load_master_virtual_clips(master_seq_id)
                 track_sequence_id = master_seq_id,
                 sequence_id = master_seq_id,
                 source_sequence_kind = "master",
-                timeline_start = timeline_start,
-                duration = timeline_duration,
+                sequence_start = sequence_start,
+                duration = sequence_duration,
                 source_in = src_in,    -- source-media units (samples for audio, frames for video)
                 source_out = src_out,
                 frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
@@ -1139,7 +1139,7 @@ function M.load_clip_entry(clip_id)
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
                c.owner_sequence_id, c.sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -1347,7 +1347,7 @@ local function build_master_clip_entry(q)
         media_id       = media_id,
 
         -- Listing-level defaults (browsers display the whole master).
-        timeline_start = 0,
+        sequence_start = 0,
         duration       = media_duration or 0,
         source_in      = 0,
         source_out     = media_duration or 0,
@@ -1466,8 +1466,8 @@ function M.load_sequences(project_id)
         local clips = M.load_clips(sequence.id)
         local max_end = 0  -- integer frames
         for _, clip in ipairs(clips) do
-            if clip.timeline_start and clip.duration then
-                local clip_end = clip.timeline_start + clip.duration
+            if clip.sequence_start and clip.duration then
+                local clip_end = clip.sequence_start + clip.duration
                 if clip_end > max_end then
                     max_end = clip_end
                 end

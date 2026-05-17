@@ -99,16 +99,16 @@ for _, c in ipairs(v1_clips) do
         v1_media_clips[#v1_media_clips + 1] = c
     end
 end
-table.sort(v1_media_clips, function(a, b) return a.timeline_start < b.timeline_start end)
+table.sort(v1_media_clips, function(a, b) return a.sequence_start < b.sequence_start end)
 assert(#v1_media_clips == 3,
     "3 dropped clips must produce 3 clips on V1; got " .. #v1_media_clips)
-assert(v1_media_clips[1].timeline_start == 0
-    and v1_media_clips[2].timeline_start == 120
-    and v1_media_clips[3].timeline_start == 210,
+assert(v1_media_clips[1].sequence_start == 0
+    and v1_media_clips[2].sequence_start == 120
+    and v1_media_clips[3].sequence_start == 210,
     string.format("clips must lay serially (0, 120, 210); got (%d, %d, %d)",
-        v1_media_clips[1].timeline_start,
-        v1_media_clips[2].timeline_start,
-        v1_media_clips[3].timeline_start))
+        v1_media_clips[1].sequence_start,
+        v1_media_clips[2].sequence_start,
+        v1_media_clips[3].sequence_start))
 
 -- ── Case B: drop ONE existing sequence → opens as tab, no new sequence ──
 -- Return to the blank state.

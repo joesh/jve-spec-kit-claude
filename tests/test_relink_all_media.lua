@@ -121,21 +121,21 @@ local offline_master = _Sequence.ensure_master(offline_media.id, project_id)
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Online-Shot', '%s', '%s', '%s',
         0, 100, 100, 200, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Offline-Shot1', '%s', '%s', '%s',
         100, 80, 50, 130, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('%s', '%s', 'Offline-Shot2', '%s', '%s', '%s',

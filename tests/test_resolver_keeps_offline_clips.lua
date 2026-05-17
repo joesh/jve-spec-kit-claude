@@ -65,13 +65,13 @@ assert(db:exec(string.format(
 -- Master media_ref spans the whole file
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
-    .. "media_id, source_in_frame, source_out_frame, timeline_start_frame, "
+    .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
     .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p', 'm', 'm-a1', 'med', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
 -- Edit clip references master, picking the full master window
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
-    .. "sequence_id, name, timeline_start_frame, duration_frames, "
+    .. "sequence_id, name, sequence_start_frame, duration_frames, "
     .. "source_in_frame, source_out_frame, fps_mismatch_policy, enabled, "
     .. "volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c', 'p', 'e', 'e-a1', 'm', 'c', 0, 250, 0, 250, "
@@ -108,8 +108,8 @@ assert(e.enabled == true or e.enabled == 1, string.format(
     .. "got %s — forcing it false silences the beep", tostring(e.enabled)))
 assert(e.media_kind == "audio",
     "media_kind must still classify as audio")
-assert(type(e.timeline_start) == "number" and type(e.duration) == "number",
-    "timeline_start/duration must be numbers (resolver shape contract)")
+assert(type(e.sequence_start) == "number" and type(e.duration) == "number",
+    "sequence_start/duration must be numbers (resolver shape contract)")
 
 -- Same for video: build a parallel video media_ref and check.
 assert(db:exec(
@@ -127,12 +127,12 @@ assert(db:exec(string.format(
     OFFLINE_VIDEO)))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
-    .. "media_id, source_in_frame, source_out_frame, timeline_start_frame, "
+    .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
     .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('vmr', 'p', 'm', 'm-v1', 'vmed', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
-    .. "sequence_id, name, timeline_start_frame, duration_frames, "
+    .. "sequence_id, name, sequence_start_frame, duration_frames, "
     .. "source_in_frame, source_out_frame, fps_mismatch_policy, enabled, "
     .. "volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('vc', 'p', 'e', 'e-v1', 'm', 'vc', 0, 250, 0, 250, "

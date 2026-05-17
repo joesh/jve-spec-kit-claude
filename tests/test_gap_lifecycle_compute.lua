@@ -14,7 +14,7 @@ local function clip(id, track_id, start, dur)
     return {
         id = id,
         track_id = track_id,
-        timeline_start = start,
+        sequence_start = start,
         duration = dur,
         is_gap = false,
         media_id = "media_1",
@@ -31,8 +31,8 @@ local function assert_gap(gap, expected_start, expected_dur, track_id, label)
     assert(gap.is_gap == true, string.format("%s: clip_kind=%s, expected gap", label, tostring(gap.clip_kind)))
     assert(gap.media_id == nil, string.format("%s: media_id should be nil", label))
     assert(gap.track_id == track_id, string.format("%s: track_id=%s, expected %s", label, tostring(gap.track_id), tostring(track_id)))
-    assert(gap.timeline_start == expected_start,
-        string.format("%s: timeline_start=%s, expected %d", label, tostring(gap.timeline_start), expected_start))
+    assert(gap.sequence_start == expected_start,
+        string.format("%s: sequence_start=%s, expected %d", label, tostring(gap.sequence_start), expected_start))
     assert(gap.duration == expected_dur,
         string.format("%s: duration=%s, expected %d", label, tostring(gap.duration), expected_dur))
     assert(type(gap.id) == "string" and gap.id:find("^gap_"), string.format("%s: id=%s, expected gap_ prefix", label, tostring(gap.id)))

@@ -50,7 +50,7 @@ local function create_gap_tmb(opts)
     local clip_a = {
         clip_id = "clip-A",
         media_path = media_path,
-        timeline_start = opts.clip_a_start,
+        sequence_start = opts.clip_a_start,
         duration = opts.clip_a_duration,
         source_in = opts.clip_a_source_in or 0,
         rate_num = RATE_NUM,
@@ -60,7 +60,7 @@ local function create_gap_tmb(opts)
     local clip_b = {
         clip_id = "clip-B",
         media_path = media_path,
-        timeline_start = opts.clip_b_start,
+        sequence_start = opts.clip_b_start,
         duration = opts.clip_b_duration,
         source_in = opts.clip_b_source_in or 0,
         rate_num = RATE_NUM,

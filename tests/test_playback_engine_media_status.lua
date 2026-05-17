@@ -65,7 +65,7 @@ local function build_entry(path)
         media_path     = path,
         clip_id        = "c1",
         fps_numerator  = 24, fps_denominator = 1,
-        timeline_start = 0, duration = 10,
+        sequence_start = 0, duration = 10,
         source_in      = 0, source_out = 10,
         volume         = 1.0,
         track_index    = 0,

@@ -15,8 +15,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_pure_gap_after.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}  -- 1000 frame gap
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}  -- 1000 frame gap
         }
     })
 
@@ -34,8 +34,8 @@ do
     assert(result.success, "Pure gap in-edge ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == 1700,
-        string.format("Right clip should shift left by 300, got %d", after_right.timeline_start))
+    assert(after_right.sequence_start == 1700,
+        string.format("Right clip should shift left by 300, got %d", after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -45,8 +45,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_pure_gap_before.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2500, duration = 1000}  -- 1500 frame gap
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2500, duration = 1000}  -- 1500 frame gap
         }
     })
 
@@ -64,8 +64,8 @@ do
     assert(result.success, "Pure gap out-edge ripple should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == 2100,
-        string.format("Right clip should shift left by 400, got %d", after_right.timeline_start))
+    assert(after_right.sequence_start == 2100,
+        string.format("Right clip should shift left by 400, got %d", after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -75,9 +75,9 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_gap_roll.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000},  -- 1000 frame gap
-            v1_downstream = {timeline_start = 4000, duration = 500}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000},  -- 1000 frame gap
+            v1_downstream = {sequence_start = 4000, duration = 500}
         }
     })
 
@@ -100,10 +100,10 @@ do
     local after_downstream = Clip.load(layout.clips.v1_downstream.id, layout.db)
 
     -- Roll: right clip in-point moves right, duration shrinks. Downstream stays put.
-    assert(after_right.timeline_start == 2200,
-        string.format("Right clip should move right by 200 (roll), got %d", after_right.timeline_start))
-    assert(after_downstream.timeline_start == 4000,
-        string.format("Downstream clip should NOT shift in roll, got %d", after_downstream.timeline_start))
+    assert(after_right.sequence_start == 2200,
+        string.format("Right clip should move right by 200 (roll), got %d", after_right.sequence_start))
+    assert(after_downstream.sequence_start == 4000,
+        string.format("Downstream clip should NOT shift in roll, got %d", after_downstream.sequence_start))
 
     layout:cleanup()
 end
@@ -113,10 +113,10 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_multi_gap_sync.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000},  -- V1 gap = 1000
-            v2 = {timeline_start = 1500, duration = 800},
-            v2_right = {timeline_start = 3000, duration = 500}   -- V2 gap = 700
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000},  -- V1 gap = 1000
+            v2 = {sequence_start = 1500, duration = 800},
+            v2_right = {sequence_start = 3000, duration = 500}   -- V2 gap = 700
         }
     })
 
@@ -140,10 +140,10 @@ do
     local after_v2_right = Clip.load(layout.clips.v2_right.id, layout.db)
 
     -- Should clamp to smallest gap (700 frames on V2)
-    assert(after_v1_right.timeline_start == 1300,
-        string.format("V1 should shift by clamped delta (700), got %d", after_v1_right.timeline_start))
-    assert(after_v2_right.timeline_start == 2300,
-        string.format("V2 should shift by same clamped delta (700), got %d", after_v2_right.timeline_start))
+    assert(after_v1_right.sequence_start == 1300,
+        string.format("V1 should shift by clamped delta (700), got %d", after_v1_right.sequence_start))
+    assert(after_v2_right.sequence_start == 2300,
+        string.format("V2 should shift by same clamped delta (700), got %d", after_v2_right.sequence_start))
 
     layout:cleanup()
 end
@@ -154,10 +154,10 @@ do
         db_path = "/tmp/jve/test_batch_ripple_cross_track_gaps.db",
         clips = {
             order = {"v1_left", "v1_right", "v2_left", "v2_right"},  -- Exclude default v2 clip
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000},
-            v2_left = {timeline_start = 0, duration = 1500},
-            v2_right = {timeline_start = 2500, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000},
+            v2_left = {sequence_start = 0, duration = 1500},
+            v2_right = {sequence_start = 2500, duration = 1000}
         }
     })
 
@@ -182,10 +182,10 @@ do
     local after_v2_right = Clip.load(layout.clips.v2_right.id, layout.db)
 
     -- Both clips shift together due to cross-track ripple
-    assert(after_v1_right.timeline_start == 1700,
-        string.format("V1 right should shift left by 300, got %d", after_v1_right.timeline_start))
-    assert(after_v2_right.timeline_start == 2200,
-        string.format("V2 right should shift left by 300, got %d", after_v2_right.timeline_start))
+    assert(after_v1_right.sequence_start == 1700,
+        string.format("V1 right should shift left by 300, got %d", after_v1_right.sequence_start))
+    assert(after_v2_right.sequence_start == 2200,
+        string.format("V2 right should shift left by 300, got %d", after_v2_right.sequence_start))
 
     layout:cleanup()
 end

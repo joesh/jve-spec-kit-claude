@@ -71,7 +71,7 @@ local tests = {
     name = "in-edge V1 only: co-located audio co-trims (Do ripple)",
     -- 015 'ripple' semantics: B and D are co-located (same start 200, same end 500).
     -- When V1.B's in-edge shrinks by +40, A1.D (co-located) is co-trimmed too.
-    -- In-edge ripple: timeline_start stays fixed (200), end moves left by 40.
+    -- In-edge ripple: sequence_start stays fixed (200), end moves left by 40.
     -- Both B and D become 200-460 (duration 260); downstream E and F shift to 460.
     before = [[
         V1: [A 0-200][B 200-500][E 500-700]
@@ -103,7 +103,7 @@ local tests = {
     -- gap [0, 1500) spans the V1 in-edge boundary 100. Before the
     -- fix, inject_implicit_gap_edges injected a synthetic "in" edge
     -- for that spanning gap; compute_ripple_point returned the gap's
-    -- timeline_start = 0, collapsing earliest_ripple_time to 0 and
+    -- sequence_start = 0, collapsing earliest_ripple_time to 0 and
     -- sweeping the entire timeline into the GLOBAL shift block.
     -- Result: every clip on every other track (including A2.Upstream
     -- at frame 30) would shift +50 (Joe's "long stereo mix moves
@@ -524,13 +524,13 @@ do
         clips = {
             order = {"v1_a", "v1_b", "a1_c", "a1_d"},
             v1_a = {id = "clip_A", name = "A", track_key = "v1", media_key = "main",
-                     timeline_start = 0, duration = 300, source_in = 0},
+                     sequence_start = 0, duration = 300, source_in = 0},
             v1_b = {id = "clip_B", name = "B", track_key = "v1", media_key = "main",
-                     timeline_start = 300, duration = 200, source_in = 400},
+                     sequence_start = 300, duration = 200, source_in = 400},
             a1_c = {id = "clip_C", name = "C", track_key = "a1", media_key = "main",
-                     timeline_start = 0, duration = 300, source_in = 0},
+                     sequence_start = 0, duration = 300, source_in = 0},
             a1_d = {id = "clip_D", name = "D", track_key = "a1", media_key = "main",
-                     timeline_start = 300, duration = 200, source_in = 400},
+                     sequence_start = 300, duration = 200, source_in = 400},
         },
     })
 
@@ -547,7 +547,7 @@ do
 
     -- Verify change happened
     local b = Clip.load("clip_B")
-    assert(b.timeline_start == 250, "undo test: B should be at 250 after trim")
+    assert(b.sequence_start == 250, "undo test: B should be at 250 after trim")
 
     -- Undo
     local undo_result = command_manager.undo()
@@ -556,9 +556,9 @@ do
     -- All clips restored
     local function check(id, exp_start, exp_dur)
         local c = Clip.load(id)
-        assert(c.timeline_start == exp_start and c.duration == exp_dur,
+        assert(c.sequence_start == exp_start and c.duration == exp_dur,
             string.format("undo: %s expected %d-%d, got %d-%d",
-                id, exp_start, exp_start + exp_dur, c.timeline_start, c.timeline_start + c.duration))
+                id, exp_start, exp_start + exp_dur, c.sequence_start, c.sequence_start + c.duration))
     end
     check("clip_A", 0, 300)
     check("clip_B", 300, 200)

@@ -38,7 +38,7 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'm', '/tmp/m.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'seq-master', 'trk-master-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 
@@ -51,7 +51,7 @@ local good_id = Clip.create({
     track_id = "trk-edit-v1",
     sequence_id = "seq-master",
     name = "c1",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,
@@ -71,7 +71,7 @@ local ok, err = pcall(function()
         track_id = "trk-master-v1",
         sequence_id = "seq-edit",
         name = "bad",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -97,7 +97,7 @@ local ok_nopol = pcall(function()
         track_id = "trk-edit-v1",
         sequence_id = "seq-master",
         name = "no-policy",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,

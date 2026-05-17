@@ -13,7 +13,7 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         v1_right = {
-            timeline_start = 2000  -- Creates 500-frame gap (2000 - 1500)
+            sequence_start = 2000  -- Creates 500-frame gap (2000 - 1500)
         }
     }
 })
@@ -39,24 +39,24 @@ assert(result.success, "Gap closure should succeed")
 local left = Clip.load(clips.v1_left.id, db)
 local right = Clip.load(clips.v1_right.id, db)
 
-assert(left.timeline_start == 0, "Upstream clip should stay anchored")
+assert(left.sequence_start == 0, "Upstream clip should stay anchored")
 assert(left.duration == 1500, "Upstream clip duration unchanged")
-assert(right.timeline_start == 1500,
-    string.format("Downstream clip should be adjacent; expected 1500, got %d", right.timeline_start))
+assert(right.sequence_start == 1500,
+    string.format("Downstream clip should be adjacent; expected 1500, got %d", right.sequence_start))
 
 -- CRITICAL: Check that no zombie clips exist between the two clips in DB
 -- (Gap clips are in-memory only, never in DB)
 local stmt = db:prepare([[
-    SELECT id, timeline_start_frame, duration_frames
+    SELECT id, sequence_start_frame, duration_frames
     FROM clips
     WHERE track_id = ?
-    AND timeline_start_frame >= ?
-    AND timeline_start_frame < ?
-    ORDER BY timeline_start_frame
+    AND sequence_start_frame >= ?
+    AND sequence_start_frame < ?
+    ORDER BY sequence_start_frame
 ]])
 stmt:bind_value(1, tracks.v1.id)
-stmt:bind_value(2, left.timeline_start + left.duration)
-stmt:bind_value(3, right.timeline_start)
+stmt:bind_value(2, left.sequence_start + left.duration)
+stmt:bind_value(3, right.sequence_start)
 
 local gap_exists = false
 if stmt:exec() then

@@ -125,7 +125,7 @@ local base_clip_id = Clip.create({
         sequence_id = MC_TEST,
         track_id = "imported_v1",
         owner_sequence_id = "imported_sequence",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 5000,
         source_in_frame = 0,
         source_out_frame = 5000,
@@ -160,7 +160,7 @@ local insert_cmd = Command.create("Insert", 'default_project')
 insert_cmd:set_parameter("source_sequence_id", masterclip_insert_id)
 insert_cmd:set_parameter("sequence_id", "imported_sequence")
 insert_cmd:set_parameter("target_video_track_id", "imported_v1")
-insert_cmd:set_parameter("timeline_start_frame", 111400)
+insert_cmd:set_parameter("sequence_start_frame", 111400)
 insert_cmd:set_parameter("advance_playhead", true)
 
 local execute_result = command_manager.execute(insert_cmd)

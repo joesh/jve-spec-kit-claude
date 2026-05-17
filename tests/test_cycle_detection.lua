@@ -34,7 +34,7 @@ assert(db:exec(
 local function insert_clip(id, owner, nested, track)
     assert(db:exec(string.format(
         "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-        .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+        .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
         .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', '%s', '%s', '%s', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)",
         id, owner, track, nested)))

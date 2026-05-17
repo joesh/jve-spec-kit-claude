@@ -9,8 +9,8 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 
 local function build_command(layout, clips, tracks, delta, lead_clip)
     -- Compute gap IDs based on layout geometry
-    -- v1_left always starts at its timeline_start, gap starts at v1_left.timeline_start + v1_left.duration
-    local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+    -- v1_left always starts at its sequence_start, gap starts at v1_left.sequence_start + v1_left.duration
+    local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
     local gap_id = string.format("gap_%s_%d", tracks.v1.id, v1_gap_start)
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
@@ -56,9 +56,9 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 1600, duration = 1000},
-            v2 = {timeline_start = 1200, duration = 1200}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 1600, duration = 1000},
+            v2 = {sequence_start = 1200, duration = 1200}
         }
     })
     local clips = layout.clips
@@ -73,17 +73,17 @@ do
     assert(not payload.clamped_edges or next(payload.clamped_edges) == nil,
         "Dragging V2 ] right should not clamp to the gap")
     local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
-    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.timeline_start + 1800,
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.sequence_start + 1800,
         string.format("Preview shift for V1 right should move right by 1800 (expected %d, got %s)",
-            clips.v1_right.timeline_start + 1800,
+            clips.v1_right.sequence_start + 1800,
             tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value)))
 
     -- Execute: V1 right clip should move by the full delta.
-    local before = Clip.load(clips.v1_right.id, layout.db).timeline_start
+    local before = Clip.load(clips.v1_right.id, layout.db).sequence_start
     local cmd = build_command(layout, clips, tracks, 1800, "v2")
     local result = command_manager.execute(cmd)
     assert(result.success, "BatchRippleEdit execute failed for expansion scenario")
-    local after = Clip.load(clips.v1_right.id, layout.db).timeline_start
+    local after = Clip.load(clips.v1_right.id, layout.db).sequence_start
     assert(after - before == 1800,
         string.format("V1 right clip should move by 1800 frames (got %d)", after - before))
 
@@ -103,9 +103,9 @@ do
             }
         },
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 3000, duration = 1000},
-            v2 = {timeline_start = 1500, duration = 1200}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 3000, duration = 1000},
+            v2 = {sequence_start = 1500, duration = 1200}
         }
     })
     local clips = layout.clips
@@ -130,9 +130,9 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2600, duration = 1000},
-            v2 = {timeline_start = 1500, duration = 1200}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2600, duration = 1000},
+            v2 = {sequence_start = 1500, duration = 1200}
         }
     })
     local clips = layout.clips
@@ -144,14 +144,14 @@ do
     local ok, payload = executor(dry_cmd)
     assert(ok and type(payload) == "table", "Dry run should succeed for shrink scenario")
     local shift_entry = find_shifted_clip(payload, clips.v1_right.id)
-    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.timeline_start - 500,
+    assert(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value == clips.v1_right.sequence_start - 500,
         string.format("Preview shift for V1 right should move left by 500 (expected %d, got %s)",
-            clips.v1_right.timeline_start - 500,
+            clips.v1_right.sequence_start - 500,
             tostring(shift_entry and shift_entry.new_start_value and shift_entry.new_start_value)))
 
     local left_before = Clip.load(clips.v1_left.id, layout.db)
     local right_before = Clip.load(clips.v1_right.id, layout.db)
-    local gap_before = right_before.timeline_start - (left_before.timeline_start + left_before.duration)
+    local gap_before = right_before.sequence_start - (left_before.sequence_start + left_before.duration)
 
     local cmd = build_command(layout, clips, tracks, -500, "v2")
     local result = command_manager.execute(cmd)
@@ -159,10 +159,10 @@ do
 
     local left_after = Clip.load(clips.v1_left.id, layout.db)
     local right_after = Clip.load(clips.v1_right.id, layout.db)
-    local gap_after = right_after.timeline_start - (left_after.timeline_start + left_after.duration)
+    local gap_after = right_after.sequence_start - (left_after.sequence_start + left_after.duration)
 
-    assert(right_after.timeline_start == right_before.timeline_start - 500,
-        string.format("V1 right should shift left by 500 (expected %d, got %d)", right_before.timeline_start - 500, right_after.timeline_start))
+    assert(right_after.sequence_start == right_before.sequence_start - 500,
+        string.format("V1 right should shift left by 500 (expected %d, got %d)", right_before.sequence_start - 500, right_after.sequence_start))
     assert(gap_after == gap_before - 500,
         string.format("Gap should shrink by 500 frames (expected %d, got %d)", gap_before - 500, gap_after))
 

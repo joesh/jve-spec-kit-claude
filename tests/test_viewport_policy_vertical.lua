@@ -13,7 +13,7 @@ local Signals = require("core.signals")
 local data = require("ui.timeline.state.timeline_state_data")
 
 local function reset_viewport()
-    data.state.clips = { { timeline_start = 0, duration = 10000 } }
+    data.state.clips = { { sequence_start = 0, duration = 10000 } }
     data.state.playhead_position = 100
     data.state.viewport_start_time = 0
     data.state.viewport_duration = 1000
@@ -52,8 +52,8 @@ do
     local cmd = make_cmd({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 100, duration_frames = 200 },
-            { track_id = "a2", timeline_start_frame = 150, duration_frames = 200 },
+            { track_id = "v1", sequence_start_frame = 100, duration_frames = 200 },
+            { track_id = "a2", sequence_start_frame = 150, duration_frames = 200 },
         },
         updates = {},
         deletes = {},
@@ -81,7 +81,7 @@ do
     local cmd = make_cmd({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 100, duration_frames = 200 },
+            { track_id = "v1", sequence_start_frame = 100, duration_frames = 200 },
         },
         updates = {},
         deletes = {},
@@ -117,7 +117,7 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { previous = { track_id = "v3", timeline_start = 100, duration = 200 } },
+            { previous = { track_id = "v3", sequence_start = 100, duration = 200 } },
         },
     })
     viewport_policy.apply_post_command("redo", cmd)

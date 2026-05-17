@@ -49,7 +49,7 @@ db:exec([[
 
 local function clips_snapshot()
     local clips = {}
-    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY timeline_start_frame")
+    local stmt = db:prepare("SELECT id, track_id, sequence_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY sequence_start_frame")
     assert(stmt:exec())
     while stmt:next() do
         clips[#clips + 1] = {
@@ -73,7 +73,7 @@ local function find_clip(id)
 end
 
 local function assert_no_overlaps()
-    local stmt = db:prepare("SELECT id, track_id, timeline_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY track_id, timeline_start_frame")
+    local stmt = db:prepare("SELECT id, track_id, sequence_start_frame, duration_frames FROM clips WHERE owner_sequence_id = 'default_sequence' ORDER BY track_id, sequence_start_frame")
     assert(stmt:exec())
     local prev = {}
     while stmt:next() do
@@ -144,7 +144,7 @@ local function create_clip_command(params)
         track_id = params.track_id,
         owner_sequence_id = 'default_sequence',
         sequence_id = master_seq_id,
-        timeline_start_frame = params.start_value,
+        sequence_start_frame = params.start_value,
         duration_frames = params.duration,
         source_in_frame = 0,
         source_out_frame = params.duration,

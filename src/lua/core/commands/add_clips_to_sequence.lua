@@ -211,7 +211,7 @@ local function place_clips(track_map, project_id, sequence_id)
             track_id              = p.track_id,
             sequence_id    = d.sequence_id,
             name                  = d.name or "Timeline Clip",
-            timeline_start_frame  = interval.start_frame,
+            sequence_start_frame  = interval.start_frame,
             duration_frames       = d.duration,
             source_in_frame       = d.source_in,
             source_out_frame      = d.source_out,
@@ -348,8 +348,8 @@ local function build_executor_mutation_bucket(sequence_id, result)
                 track_sequence_id     = clip.owner_sequence_id,
                 track_id              = clip.track_id,
                 sequence_id    = clip.sequence_id,
-                start_value           = clip.timeline_start,
-                timeline_start        = clip.timeline_start,
+                start_value           = clip.sequence_start,
+                sequence_start        = clip.sequence_start,
                 duration_value        = clip.duration,
                 duration              = clip.duration,
                 source_in             = clip.source_in,
@@ -439,7 +439,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, cap in pairs(occluded) do
             for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
-                    tr.prior.timeline_start_frame,
+                    tr.prior.sequence_start_frame,
                     tr.prior.duration_frames,
                     tr.prior.source_in_frame,
                     tr.prior.source_out_frame)
@@ -454,7 +454,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     track_id              = d.track_id,
                     sequence_id    = d.sequence_id,
                     name                  = d.name,
-                    timeline_start_frame  = d.timeline_start_frame,
+                    sequence_start_frame  = d.sequence_start_frame,
                     duration_frames       = d.duration_frames,
                     source_in_frame       = d.source_in_frame,
                     source_out_frame      = d.source_out_frame,

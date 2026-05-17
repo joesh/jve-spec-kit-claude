@@ -14,19 +14,19 @@ local layout = ripple_layout.create({
     clips = {
         order = {"v1_left", "v2_blocker", "v2_shift", "v1_right"},
         v1_right = {
-            timeline_start = 4200,
+            sequence_start = 4200,
             duration = 1200
         },
         v2_blocker = {
             id = "clip_v2_blocker",
             track_key = "v2",
-            timeline_start = 3600,
+            sequence_start = 3600,
             duration = 400
         },
         v2_shift = {
             id = "clip_v2_shift",
             track_key = "v2",
-            timeline_start = 4400,
+            sequence_start = 4400,
             duration = 800
         }
     }

@@ -52,7 +52,7 @@ db:exec(string.format([[
     VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v' WHERE id = 'mc_seq';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+        source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mc_seq_mr', 'proj1', 'mc_seq', 'mc_seq_v', 'mc_media',
         0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
@@ -62,7 +62,7 @@ db:exec(string.format([[
 local function insert_clip(id, track_id, start, dur)
     assert(db:exec(string.format(
         "INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, " ..
-        "timeline_start_frame, duration_frames, source_in_frame, source_out_frame, " ..
+        "sequence_start_frame, duration_frames, source_in_frame, source_out_frame, " ..
         "master_layer_track_id, master_audio_track_id, fps_mismatch_policy, " ..
         "enabled, volume, playhead_frame, created_at, modified_at) " ..
         "VALUES ('%s', 'proj1', '%s', '%s', 'seq1', 'mc_seq', %d, %d, 0, %d, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d)",

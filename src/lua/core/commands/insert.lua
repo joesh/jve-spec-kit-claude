@@ -29,19 +29,19 @@ local log           = require("core.logger").for_area("commands")
 
 -- M.execute — pure-logic entry point. Args and return shape documented below.
 function M.execute(args)
-    -- timeline_start_frame is optional at the SPEC layer because the
+    -- sequence_start_frame is optional at the SPEC layer because the
     -- editor's user-mode Insert is "insert at playhead." When omitted,
     -- resolve from the owner sequence's authoritative playhead_position.
     -- Loud-fail if neither is available — no silent default to 0
     -- (rule 2.13).
-    if args.timeline_start_frame == nil then
+    if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
             "Insert: sequence %s not found (cannot resolve playhead fallback)",
             tostring(args.sequence_id)))
         assert(type(owner.playhead_position) == "number", string.format(
-            "Insert: timeline_start_frame omitted and sequence %s has no "
+            "Insert: sequence_start_frame omitted and sequence %s has no "
             .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.timeline_start_frame = owner.playhead_position
+        args.sequence_start_frame = owner.playhead_position
     end
 
     -- 015 F2: ensure identity patches exist for every source track in the
@@ -79,7 +79,7 @@ function M.execute(args)
     end
 
     -- Ripple target tracks BEFORE inserting so the new clip doesn't collide.
-    -- The right halves created by split_track_at_insertion (timeline_start
+    -- The right halves created by split_track_at_insertion (sequence_start
     -- == plan.start_frame) get picked up here and shifted along with all
     -- downstream clips.
     local rippled = {}
@@ -122,9 +122,9 @@ local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
         source_sequence_id    = { required = true,  kind = "string" },
-        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
         -- No silent default-to-0 (rule 2.13).
-        timeline_start_frame  = { kind = "number" },
+        sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
         target_audio_track_id = { kind = "string" },
         fps_mismatch_policy   = { kind = "string" },
@@ -231,8 +231,8 @@ local function build_insert_mutation_entry(clip_id)
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
         sequence_id    = clip.sequence_id,
-        start_value           = clip.timeline_start,
-        timeline_start        = clip.timeline_start,
+        start_value           = clip.sequence_start,
+        sequence_start        = clip.sequence_start,
         duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
@@ -271,7 +271,7 @@ local function build_executor_mutation_bucket(args, result)
             -- Emit at PRE-shift so the bucket's bulk_shift moves it to the
             -- final position in-memory, mirroring the DB sequence.
             entry.start_value    = entry.start_value    - track_shift
-            entry.timeline_start = entry.timeline_start - track_shift
+            entry.sequence_start = entry.sequence_start - track_shift
             bucket.inserts[#bucket.inserts + 1] = entry
         end
         for _, tr in ipairs(cap.trimmed) do
@@ -282,7 +282,7 @@ local function build_executor_mutation_bucket(args, result)
                 clip_id          = row.id,
                 id               = row.id,
                 track_id         = row.track_id,
-                start_value      = row.timeline_start_frame,
+                start_value      = row.sequence_start_frame,
                 duration_value   = row.duration_frames,
                 source_in_value  = row.source_in_frame,
                 source_out_value = row.source_out_frame,
@@ -334,7 +334,7 @@ local function build_undo_mutation_bucket(args, created_ids, rippled, splits)
             bucket.updates[#bucket.updates + 1] = {
                 clip_id          = tr.id,
                 id               = tr.id,
-                start_value      = tr.prior.timeline_start_frame,
+                start_value      = tr.prior.sequence_start_frame,
                 duration_value   = tr.prior.duration_frames,
                 source_in_value  = tr.prior.source_in_frame,
                 source_out_value = tr.prior.source_out_frame,
@@ -357,7 +357,7 @@ local function reverse_split_captures(splits)
     for _, cap in pairs(splits) do
         for _, tr in ipairs(cap.trimmed) do
             Clip.update_bounds(tr.id,
-                tr.prior.timeline_start_frame, tr.prior.duration_frames,
+                tr.prior.sequence_start_frame, tr.prior.duration_frames,
                 tr.prior.source_in_frame,      tr.prior.source_out_frame)
         end
     end

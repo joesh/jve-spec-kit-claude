@@ -56,7 +56,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb1, SR, CHANNELS)
 local enabled_clip = {
     clip_id = "enabled-001",
     media_path = media_path,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 100,
     source_in = 50,  -- non-zero!
     rate_num = FPS_NUM,
@@ -86,7 +86,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb2, SR, CHANNELS)
 local far_clip = {
     clip_id = "far-001",
     media_path = media_path,
-    timeline_start = 200,
+    sequence_start = 200,
     duration = 100,
     source_in = 0,
     rate_num = FPS_NUM,
@@ -158,7 +158,7 @@ Clip.create({
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -175,7 +175,7 @@ Clip.create({
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,

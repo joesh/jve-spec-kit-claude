@@ -45,17 +45,17 @@ VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 108
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_v', 'proj1', 'Video Clip', 'trk_v', 'seq1', 'master_med1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Create audio clip at frame 0, duration 100
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_a', 'proj1', 'Audio Clip', 'trk_a', 'seq1', 'master_med1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
@@ -76,8 +76,8 @@ command_manager.init("seq1", "proj1")
 -- Record original positions
 local video_before = Clip.load("clip_v")
 local audio_before = Clip.load("clip_a")
-assert(video_before.timeline_start == 0, "video should start at 0")
-assert(audio_before.timeline_start == 0, "audio should start at 0")
+assert(video_before.sequence_start == 0, "video should start at 0")
+assert(audio_before.sequence_start == 0, "audio should start at 0")
 
 -- Nudge ONLY the video clip by 10 frames
 local result = command_manager.execute("Nudge", {
@@ -95,11 +95,11 @@ local video_after = Clip.load("clip_v")
 local audio_after = Clip.load("clip_a")
 
 -- Video should have moved
-assert(video_after.timeline_start == 10,
-    string.format("video should be at frame 10, got %d", video_after.timeline_start))
+assert(video_after.sequence_start == 10,
+    string.format("video should be at frame 10, got %d", video_after.sequence_start))
 
 -- Audio should NOT have moved (it was not selected)
-assert(audio_after.timeline_start == 0,
-    string.format("audio should still be at frame 0 (not selected), got %d", audio_after.timeline_start))
+assert(audio_after.sequence_start == 0,
+    string.format("audio should still be at frame 0 (not selected), got %d", audio_after.sequence_start))
 
 print("✅ test_nudge_respects_selection.lua passed")

@@ -14,7 +14,7 @@
 ---      copied from the parent).
 ---   2. Create one track on S matching the source track's type/index.
 ---   3. Move each selected clip into S: owner_sequence_id ← S;
----      track_id ← S's new track; timeline_start_frame translated by
+---      track_id ← S's new track; sequence_start_frame translated by
 ---      -min_selected_start (so S's content starts at frame 0).
 ---   4. INSERT one new clip on the parent at min_selected_start with
 ---      sequence_id = S; duration = (max_end - min_start);
@@ -51,7 +51,7 @@ local function migrate_clip_to_S(clip_id, new_owner, new_track, new_start)
     -- created the track) so no collision is possible.
     Clip.update(clip_id, {
         track_id             = new_track,
-        timeline_start_frame = new_start,
+        sequence_start_frame = new_start,
     })
     -- Sequence transfer requires a separate model entry point. Add via
     -- direct UPDATE on the row (bypassing Clip.update which doesn't
@@ -103,7 +103,7 @@ end
 local function compute_selection_span(clip_rows)
     local min_start, max_end
     for _, r in ipairs(clip_rows) do
-        local s = r.timeline_start_frame
+        local s = r.sequence_start_frame
         local e = s + r.duration_frames
         if min_start == nil or s < min_start then min_start = s end
         if max_end == nil or e > max_end then max_end = e end
@@ -152,10 +152,10 @@ local function migrate_selection_into_S(clip_rows, new_seq_id, new_track_id, min
             clip_id              = r.id,
             prior_owner_id       = r.owner_sequence_id,
             prior_track_id       = r.track_id,
-            prior_timeline_start = r.timeline_start_frame,
+            prior_sequence_start = r.sequence_start_frame,
         }
         migrate_clip_to_S(r.id, new_seq_id, new_track_id,
-            r.timeline_start_frame - min_start)
+            r.sequence_start_frame - min_start)
     end
     return moved
 end
@@ -172,7 +172,7 @@ local function insert_replacement_clip(parent, sequence_id, track_id,
         track_id              = track_id,
         sequence_id    = new_seq_id,
         name                  = "Nested",
-        timeline_start_frame  = min_start,
+        sequence_start_frame  = min_start,
         duration_frames       = span,
         source_in_frame       = 0,
         source_out_frame      = span,
@@ -233,7 +233,7 @@ function M.undo(capture)
     for _, m in ipairs(capture.moved) do
         Clip.update(m.clip_id, {
             track_id             = m.prior_track_id,
-            timeline_start_frame = m.prior_timeline_start,
+            sequence_start_frame = m.prior_sequence_start,
         })
         Clip.transfer_owner(m.clip_id, m.prior_owner_id)
     end

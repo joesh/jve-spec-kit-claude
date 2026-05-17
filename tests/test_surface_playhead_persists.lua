@@ -24,7 +24,7 @@ local function install_stub_strip(seq_id)
 end
 
 local function reset(viewport_start, viewport_duration, playhead)
-    data.state.clips = { { timeline_start = 0, duration = 100000 } }
+    data.state.clips = { { sequence_start = 0, duration = 100000 } }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration

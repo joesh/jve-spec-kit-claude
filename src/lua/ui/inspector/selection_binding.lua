@@ -508,7 +508,7 @@ function M.apply_multi_edit(ui_state)
     local pending = {}
     for key, entry in pairs(schema_view.field_widgets) do
         -- Skip fields that can't be safely replicated across N items.
-        -- E.g. clip.timeline_start: applying same value to two clips on one
+        -- E.g. clip.sequence_start: applying same value to two clips on one
         -- track raises VIDEO_OVERLAP (TSO 2026-04-20 15:26:46). Per-clip
         -- positioning belongs in single-edit mode, not multi-edit Apply.
         if entry.dirty and entry.pending_value ~= nil and entry.multi_editable then

@@ -71,7 +71,7 @@ print("\n--- 1: Video clips with non-zero source_in ---")
 -- V13: clips no longer carry fps_*; rate comes from the nested master
 -- sequence (kind='master') the clip references via source_sequence_id.
 local video_clips = query_all([[
-    SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
+    SELECT c.sequence_start_frame, c.source_in_frame, c.duration_frames,
            ns.fps_numerator, ns.fps_denominator
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
@@ -79,13 +79,13 @@ local video_clips = query_all([[
     JOIN sequences ns ON c.sequence_id = ns.id
     WHERE s.name = 'resolve audio tracks tutorial'
       AND t.track_type = 'VIDEO' AND t.name = 'V1'
-    ORDER BY c.timeline_start_frame
+    ORDER BY c.sequence_start_frame
 ]])
 
 assert(#video_clips == 6, string.format("expected 6 V1 clips, got %d", #video_clips))
 
--- Known-answer: (timeline_start, source_in, duration, fps_num, fps_den)
--- source_in is at native media rate (60fps), timeline_start/duration at sequence rate (24fps).
+-- Known-answer: (sequence_start, source_in, duration, fps_num, fps_den)
+-- source_in is at native media rate (60fps), sequence_start/duration at sequence rate (24fps).
 local expected_video = {
     {86400, 5473, 362, 60, 1},
     {86762, 6475, 49, 60, 1},
@@ -115,7 +115,7 @@ print("\n--- 2: V/A source_in correspondence ---")
 -- The audio sample rate lives on the media row (and nested seq's
 -- audio_sample_rate). Verify both — they should match.
 local audio_clips = query_all([[
-    SELECT c.timeline_start_frame, c.source_in_frame, c.duration_frames,
+    SELECT c.sequence_start_frame, c.source_in_frame, c.duration_frames,
            ns.audio_sample_rate, m.audio_sample_rate
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
@@ -126,7 +126,7 @@ local audio_clips = query_all([[
     WHERE s.name = 'resolve audio tracks tutorial'
       AND t.track_type = 'AUDIO' AND t.name = 'A1'
     GROUP BY c.id
-    ORDER BY c.timeline_start_frame
+    ORDER BY c.sequence_start_frame
 ]])
 
 assert(#audio_clips == 6, string.format("expected 6 A1 clips, got %d", #audio_clips))
@@ -184,7 +184,7 @@ assert(a6[2] == 12002000, "clip 6 src_in: " .. tostring(a6[2]))
 assert(a6[4] == 48000, "clip 6 master seq audio_sample_rate: " .. tostring(a6[4]))
 -- This clip's source_in does NOT follow the V/A * 800 rule because it's
 -- a different clip with speed=0.38 (the DRP speed affects source mapping)
--- V1 clip 6: tl=90084, src_in=14998 — different timeline_start too
+-- V1 clip 6: tl=90084, src_in=14998 — different sequence_start too
 assert(a6[1] ~= video_clips[6][1], "clip 6 should have different tl_start than V1 clip 6")
 print("  PASS: audio clip 6 has independent coordinates (speed=0.38)")
 
@@ -198,7 +198,7 @@ print("\n--- 4: Multi-track source_in (Timeline 1 — FogTL) ---")
 -- V13 master sequences hold V+A media_refs from one media; JOIN multiplies.
 -- EXISTS keeps one row per clip.
 local fog_v1 = query_all([[
-    SELECT c.timeline_start_frame, c.source_in_frame
+    SELECT c.sequence_start_frame, c.source_in_frame
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
@@ -209,7 +209,7 @@ local fog_v1 = query_all([[
         WHERE mr.owner_sequence_id = c.sequence_id
           AND m.name = 'FogTL.mp4'
       )
-    ORDER BY c.timeline_start_frame
+    ORDER BY c.sequence_start_frame
 ]])
 assert(#fog_v1 == 2, "expected 2 trimmed FogTL on V1, got " .. #fog_v1)
 assert(fog_v1[1][2] == 57, "FogTL V1 clip1 src_in: " .. tostring(fog_v1[1][2]))
@@ -217,7 +217,7 @@ assert(fog_v1[2][2] == 57, "FogTL V1 clip2 src_in: " .. tostring(fog_v1[2][2]))
 
 -- V2: one FogTL at src_in=156 (different trim point!)
 local fog_v2 = query_all([[
-    SELECT c.timeline_start_frame, c.source_in_frame
+    SELECT c.sequence_start_frame, c.source_in_frame
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id

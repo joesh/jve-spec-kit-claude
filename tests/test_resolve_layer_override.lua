@@ -36,7 +36,7 @@ for _, name in ipairs({"V1", "V2", "V3"}) do
         name, name, name)))
     assert(db:exec(string.format(
         "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-        .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+        .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
         .. "enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('mr-%s', 'p1', 'm', 'm-%s', 'med-%s', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)",
         name, name, name)))
@@ -52,14 +52,14 @@ assert(db:exec(
 -- Clip A: no override, should pick default (V1 → angle-V1.mov).
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "master_layer_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, "
     .. "created_at, modified_at) "
     .. "VALUES ('c-A', 'p1', 'e', 'e-v1', 'm', 'A', 0, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0)"))
 -- Clip B: override to V2.
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "master_layer_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, "
     .. "created_at, modified_at) "
     .. "VALUES ('c-B', 'p1', 'e', 'e-v1', 'm', 'B', 200, 100, 0, 100, 'm-V2', 'passthrough', 1, 1.0, 0, 0, 0)"))

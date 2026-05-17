@@ -85,7 +85,7 @@ local clip_a = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -103,7 +103,7 @@ local clip_b = Clip.create({
         track_id = "track_v1",
         owner_sequence_id = "sequence",
         sequence_id = MC_TEST,
-        timeline_start_frame = 100,
+        sequence_start_frame = 100,
         duration_frames = 100,
         source_in_frame = 100,
         source_out_frame = 200,
@@ -133,7 +133,7 @@ local cmd = Command.create("Overwrite", "project")
 cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 cmd:set_parameter("clip_name", "Clip C")
 
 print("Executing Overwrite (50-150)...")
@@ -168,10 +168,10 @@ else
 end
 
 -- Clip B
-if b_after.timeline_start == 150 then
+if b_after.sequence_start == 150 then
     print("✅ Clip B start is 150 (Correct)")
 else
-    print(string.format("❌ Clip B start mismatch: expected 150, got %d", b_after.timeline_start))
+    print(string.format("❌ Clip B start mismatch: expected 150, got %d", b_after.sequence_start))
     os.exit(1)
 end
 if b_after.duration == 50 then
@@ -182,10 +182,10 @@ else
 end
 
 -- Clip C
-if c_after.timeline_start == 50 then
+if c_after.sequence_start == 50 then
     print("✅ Clip C start is 50 (Correct)")
 else
-    print(string.format("❌ Clip C start mismatch: expected 50, got %d", c_after.timeline_start))
+    print(string.format("❌ Clip C start mismatch: expected 50, got %d", c_after.sequence_start))
     os.exit(1)
 end
 if c_after.duration == 100 then

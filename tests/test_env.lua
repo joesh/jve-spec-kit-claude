@@ -304,7 +304,7 @@ end
 -- @param val Value to check
 -- @param expected_type Expected type string ("number", "string", "table", etc.)
 -- @param context Description for error message
--- @usage assert_type(clip.timeline_start, "number", "clip.timeline_start")
+-- @usage assert_type(clip.sequence_start, "number", "clip.sequence_start")
 function M.assert_type(val, expected_type, context)
     local actual = type(val)
     if actual ~= expected_type then

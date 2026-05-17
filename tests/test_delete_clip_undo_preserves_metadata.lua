@@ -58,10 +58,10 @@ VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 5200, 0, 5200, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
     ('clip1', 'proj1', 'TestClip', 'v1', '_v13_placeholder_master', 'seq1', 100, 200, 5000, 5200, 1, 0.42, 30, 170, 85, %d, %d, NULL, NULL, 'resample');
 ]], now, now))
 
@@ -121,7 +121,7 @@ check("mark_in=30", get_clip_field("clip1", "mark_in_frame") == 30)
 check("mark_out=170", get_clip_field("clip1", "mark_out_frame") == 170)
 check("playhead=85", get_clip_field("clip1", "playhead_frame") == 85)
 -- Also verify core fields survived
-check("timeline_start=100", get_clip_field("clip1", "timeline_start_frame") == 100)
+check("sequence_start=100", get_clip_field("clip1", "sequence_start_frame") == 100)
 check("duration=200", get_clip_field("clip1", "duration_frames") == 200)
 check("name=TestClip", get_clip_field("clip1", "name") == "TestClip")
 

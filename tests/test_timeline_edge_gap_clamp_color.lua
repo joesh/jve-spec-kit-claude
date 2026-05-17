@@ -12,10 +12,10 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         v1_right = {
-            timeline_start = 1800,
+            sequence_start = 1800,
             duration = 1200
         },
-        v2 = {timeline_start = 2000, duration = 1000}
+        v2 = {sequence_start = 2000, duration = 1000}
     }
 })
 local clips = layout.clips
@@ -68,7 +68,7 @@ timeline = {
     update = function() end
 }
 
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 local clip_edge = {clip_id = clips.v2.id, edge_type = "out", track_id = tracks.v2.id, trim_type = "ripple"}

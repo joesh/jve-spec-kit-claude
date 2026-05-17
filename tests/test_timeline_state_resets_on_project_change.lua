@@ -53,8 +53,8 @@ assert(#data.state.tracks > 0, "precondition: expected tracks loaded from Projec
 
 -- Simulate in-flight user state that ought to be gone after a project change.
 data.state.clips = {
-    { id = "c1", track_id = "tr-A", timeline_start = 0, duration = 100, clip_kind = "media" },
-    { id = "c2", track_id = "tr-A", timeline_start = 200, duration = 50, clip_kind = "media" },
+    { id = "c1", track_id = "tr-A", sequence_start = 0, duration = 100, clip_kind = "media" },
+    { id = "c2", track_id = "tr-A", sequence_start = 200, duration = 50, clip_kind = "media" },
 }
 data.state.selected_clips = { data.state.clips[1] }
 data.state.selected_edges = { { clip_id = "c1", edge_type = "out" } }

@@ -100,7 +100,7 @@ local function assert_import_invariants(db, sequence_id)
     end
 
     local clips = database.load_clips(sequence_id)
-    table.sort(clips, function(a, b) return a.timeline_start < b.timeline_start end)
+    table.sort(clips, function(a, b) return a.sequence_start < b.sequence_start end)
 
     for _, clip in ipairs(clips) do
         assert(clip.owner_sequence_id == sequence_id,
@@ -116,18 +116,18 @@ local function assert_import_invariants(db, sequence_id)
     end
 
     for track_id, track_clips in pairs(clips_by_track) do
-        table.sort(track_clips, function(a, b) return a.timeline_start < b.timeline_start end)
+        table.sort(track_clips, function(a, b) return a.sequence_start < b.sequence_start end)
         local previous_end = nil
         local prev_clip = nil
         for _, clip in ipairs(track_clips) do
-            local start_value = clip.timeline_start
+            local start_value = clip.sequence_start
             local duration = clip.duration
             if previous_end then
                 assert(start_value >= previous_end,
                     string.format("Track %s overlaps: clip %s starts at %d before previous end %d (prev clip %s ts=%d dur=%d)",
                         track_id, clip.id, start_value, previous_end,
                         prev_clip and prev_clip.id or "?",
-                        prev_clip and prev_clip.timeline_start or -1,
+                        prev_clip and prev_clip.sequence_start or -1,
                         prev_clip and prev_clip.duration or -1))
             end
             previous_end = start_value + duration
@@ -153,7 +153,7 @@ local function fetch_video_clips(db, sequence_id)
         end
     end
 
-    table.sort(videos, function(a, b) return a.timeline_start < b.timeline_start end)
+    table.sort(videos, function(a, b) return a.sequence_start < b.sequence_start end)
     return videos
 end
 
@@ -163,7 +163,7 @@ local function fetch_clip_state(db, clip_id)
         return nil
     end
     return {
-        start_value = entry.timeline_start,
+        start_value = entry.sequence_start,
         duration = entry.duration
     }
 end
@@ -216,9 +216,9 @@ for _, clip_index in ipairs(CLIP_CASES) do
 
     local delta_applied = target_after.duration - target_duration
     assert(delta_applied < 0, "Ripple should shorten target clip")
-    assert(downstream_after.start_value == downstream.timeline_start + delta_applied,
+    assert(downstream_after.start_value == downstream.sequence_start + delta_applied,
         string.format("Clip %s start mismatch after ripple: expected %d, got %d",
-            downstream.id, downstream.timeline_start + delta_applied, downstream_after.start_value))
+            downstream.id, downstream.sequence_start + delta_applied, downstream_after.start_value))
 
     print(string.format("  RippleEdit shifted downstream clip for case index %d (applied delta %d)", clip_index, delta_applied))
 end

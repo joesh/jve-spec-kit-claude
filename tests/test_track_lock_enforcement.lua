@@ -43,7 +43,7 @@ assert(db:exec([[
     VALUES ('m', 'p', 'm.mov', '/tmp/m.mov', 240, 24, 1, 1920, 1080, 0, 0);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr', 'p', 'msa', 'msa-v1', 'm', 0, 240, 0, 240, 1, 1.0, 0, 0, 0);
     INSERT INTO patches (id, sequence_id, track_type, source_shape,
@@ -51,7 +51,7 @@ assert(db:exec([[
     VALUES ('p-v1','rec','VIDEO',1,1,1,1,0);
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame,
         fps_mismatch_policy, enabled, volume, mark_in_frame, mark_out_frame,
         playhead_frame, created_at, modified_at)
@@ -66,7 +66,7 @@ require("test_env").touch_media_fixtures()
 command_manager.init("rec", "p")
 
 local function clip_state(clip_id)
-    local s = db:prepare("SELECT timeline_start_frame, duration_frames, enabled "
+    local s = db:prepare("SELECT sequence_start_frame, duration_frames, enabled "
         .. "FROM clips WHERE id = ?")
     s:bind_value(1, clip_id); assert(s:exec()); assert(s:next())
     local r = { ts = s:value(0), dur = s:value(1), enabled = s:value(2) }
@@ -80,7 +80,7 @@ local before_v1 = clip_state("c-on-locked")
 local r1 = command_manager.execute("Insert", {
     sequence_id          = "rec",
     source_sequence_id   = "msa",
-    timeline_start_frame = 200,
+    sequence_start_frame = 200,
     project_id           = "p",
 })
 assert(r1 and r1.success == false,

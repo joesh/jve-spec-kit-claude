@@ -35,8 +35,8 @@ end
 
 db.load_clips = function(sequence_id)
     return {
-        {id = "clip_test_1", track_id = "v1", timeline_start = 10, duration = 20, source_in = 0, source_out = 20},
-        {id = "clip_test_2", track_id = "a1", timeline_start = 30, duration = 10, source_in = 0, source_out = 10},
+        {id = "clip_test_1", track_id = "v1", sequence_start = 10, duration = 20, source_in = 0, source_out = 20},
+        {id = "clip_test_2", track_id = "a1", sequence_start = 30, duration = 10, source_in = 0, source_out = 10},
     }
 end
 

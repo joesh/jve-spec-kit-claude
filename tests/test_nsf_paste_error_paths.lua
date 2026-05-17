@@ -154,7 +154,7 @@ local mc = create_mc("med_outside", 500)
 local cmd = Command.create("Overwrite", "proj")
 cmd:set_parameters({
     source_sequence_id = mc, target_video_track_id = "v1", sequence_id = "seq",
-    timeline_start_frame = 500,
+    sequence_start_frame = 500,
     advance_playhead = false,
 })
 do

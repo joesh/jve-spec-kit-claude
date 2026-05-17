@@ -44,7 +44,7 @@ VALUES ('mc_seq', 'proj1', 'mc_seq', 'master', 30, 1, 48000, 1920, 1080, 0, 0)]]
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_seq_v1', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v1' WHERE id = 'mc_seq']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mc_seq_mr', 'proj1', 'mc_seq', 'mc_seq_v1', 'mc_seq_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
 
 -- Timeline sequence
@@ -87,10 +87,10 @@ VALUES ('master_media1', 'proj1', 'media1_master', 'master', 30, 1, 48000, 1920,
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media1', 'proj1', 'master_media1', 'master_v_media1', 'media1', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     
     ('mc_clip', 'proj1', 'Source', 'mc_v1', 'master_media1', 'mc_seq', 0, 10000, 0, 10000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
@@ -98,7 +98,7 @@ VALUES
 
 -- Existing timeline clip with volume=0.3 (quiet clip that will be partially overwritten)
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
 VALUES
     
     ('existing', 'proj1', 'Quiet', 'v1', 'master_media1', 'seq1', 0, 200, 0, 200, 1, 0.3, %d, %d, NULL, NULL, 'resample', 0);
@@ -120,8 +120,8 @@ local function execute_cmd(name, params)
             params.source_out = nil
             params.duration = nil
         end
-        if params.playhead and not params.timeline_start_frame then
-            params.timeline_start_frame = params.playhead
+        if params.playhead and not params.sequence_start_frame then
+            params.sequence_start_frame = params.playhead
             params.playhead = nil
         end
     end
@@ -177,7 +177,7 @@ undo()
 check("undo: existing clip exists", get_clip_field("existing", "id") == "existing")
 check("undo: volume=0.3", math.abs((get_clip_field("existing", "volume") or 0) - 0.3) < 0.001)
 check("undo: duration=200", get_clip_field("existing", "duration_frames") == 200)
-check("undo: timeline_start=0", get_clip_field("existing", "timeline_start_frame") == 0)
+check("undo: sequence_start=0", get_clip_field("existing", "sequence_start_frame") == 0)
 
 -- Summary
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))

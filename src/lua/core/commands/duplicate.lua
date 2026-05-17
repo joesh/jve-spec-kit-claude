@@ -13,7 +13,7 @@
 --   - enabled, volume
 --   - all clip_channel_override rows
 -- and shifts:
---   - timeline_start_frame += delta_frames
+--   - sequence_start_frame += delta_frames
 -- onto target_track_id (must be a track in the same owner sequence).
 --
 -- The duplicate gets a fresh uuid; original is untouched.
@@ -55,10 +55,10 @@ function M.execute(args)
         "Duplicate: clip %s owner=%s != sequence_id=%s",
         args.clip_id, clip.owner_sequence_id, args.sequence_id))
 
-    local new_timeline_start = clip.timeline_start_frame + args.delta_frames
-    assert(new_timeline_start >= 0, string.format(
-        "Duplicate: new timeline_start_frame=%d < 0 (delta=%d, was=%d)",
-        new_timeline_start, args.delta_frames, clip.timeline_start_frame))
+    local new_sequence_start = clip.sequence_start_frame + args.delta_frames
+    assert(new_sequence_start >= 0, string.format(
+        "Duplicate: new sequence_start_frame=%d < 0 (delta=%d, was=%d)",
+        new_sequence_start, args.delta_frames, clip.sequence_start_frame))
 
     local new_id = args.new_clip_id or uuid.generate()
 
@@ -73,7 +73,7 @@ function M.execute(args)
             track_id              = args.target_track_id,
             sequence_id    = clip.sequence_id,
             name                  = clip.name,
-            timeline_start_frame  = new_timeline_start,
+            sequence_start_frame  = new_sequence_start,
             duration_frames       = clip.duration_frames,
             source_in_frame       = clip.source_in_frame,
             source_out_frame      = clip.source_out_frame,
@@ -133,7 +133,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             inserts = { {
                 clip_id              = new.id,
                 track_id             = new.track_id,
-                timeline_start_value = new.timeline_start_frame,
+                sequence_start_value = new.sequence_start_frame,
                 duration_value       = new.duration_frames,
                 source_in_value      = new.source_in_frame,
                 source_out_value     = new.source_out_frame,

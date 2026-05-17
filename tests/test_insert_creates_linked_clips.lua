@@ -90,7 +90,7 @@ local function build_fixture(project_fps_mismatch_policy)
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100,
             1, 1.0, 0, 0, 0)
@@ -98,7 +98,7 @@ local function build_fixture(project_fps_mismatch_policy)
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 192000, 0, 192000,
             1, 1.0, 0, 0, 0)
@@ -126,7 +126,7 @@ local function load_clip_row(db, clip_id)
     local stmt = db:prepare([[
         SELECT id, owner_sequence_id, track_id, sequence_id,
                source_in_frame, source_out_frame,
-               timeline_start_frame, duration_frames,
+               sequence_start_frame, duration_frames,
                master_layer_track_id, fps_mismatch_policy,
                name, enabled, volume, playhead_frame
         FROM clips WHERE id = ?
@@ -141,7 +141,7 @@ local function load_clip_row(db, clip_id)
         source_sequence_id     = stmt:value(3),
         source_in_frame        = stmt:value(4),
         source_out_frame       = stmt:value(5),
-        timeline_start_frame   = stmt:value(6),
+        sequence_start_frame   = stmt:value(6),
         duration_frames        = stmt:value(7),
         master_layer_track_id  = stmt:value(8),
         fps_mismatch_policy    = stmt:value(9),
@@ -166,7 +166,7 @@ end
 
 local function clips_on_track(db, track_id)
     local stmt = db:prepare(
-        "SELECT id FROM clips WHERE track_id = ? ORDER BY timeline_start_frame")
+        "SELECT id FROM clips WHERE track_id = ? ORDER BY sequence_start_frame")
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "clips_on_track: exec failed")
     local ids = {}
@@ -187,7 +187,7 @@ local function run_case(label, project_policy, explicit_arg_policy,
     local result = insert_mod.execute({
         sequence_id = ids.edit_id,
         source_sequence_id = ids.master_id,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         target_video_track_id = ids.edit_v1,
         target_audio_track_id = ids.edit_a1,
         fps_mismatch_policy = explicit_arg_policy,  -- nil = inherit
@@ -220,7 +220,7 @@ local function run_case(label, project_policy, explicit_arg_policy,
     local ac = load_clip_row(db, a_clips[1])
 
     -- Fields shared by both V and A: owner/nested, layer override NULL,
-    -- policy frozen, source_in 0, timeline_start 0, owner-timebase duration,
+    -- policy frozen, source_in 0, sequence_start 0, owner-timebase duration,
     -- enabled, name.
     for _, c in ipairs({ vc, ac }) do
         assert(c.owner_sequence_id == ids.edit_id, string.format(
@@ -237,9 +237,9 @@ local function run_case(label, project_policy, explicit_arg_policy,
             c.id, tostring(c.fps_mismatch_policy), expected_policy))
         assert(c.source_in_frame == 0, string.format(
             "clip %s source_in_frame=%d expected 0", c.id, c.source_in_frame))
-        assert(c.timeline_start_frame == 0, string.format(
-            "clip %s timeline_start_frame=%d expected 0",
-            c.id, c.timeline_start_frame))
+        assert(c.sequence_start_frame == 0, string.format(
+            "clip %s sequence_start_frame=%d expected 0",
+            c.id, c.sequence_start_frame))
         assert(c.duration_frames == expected_duration_frames, string.format(
             "clip %s duration_frames=%d expected %d (%s)",
             c.id, c.duration_frames, expected_duration_frames, expected_policy))

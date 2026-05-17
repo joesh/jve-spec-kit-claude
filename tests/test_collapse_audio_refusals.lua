@@ -9,7 +9,7 @@
 --   * Different source_sequence_id across selection.
 --   * Divergent source windows (per-track slip — refused, the genuine
 --     expressiveness Expand buys).
---   * Different timeline_start/duration across selection.
+--   * Different sequence_start/duration across selection.
 --   * Different fps_mismatch_policy.
 --   * Not all in one link group.
 --   * Duplicate master_audio_track_id values in selection.
@@ -69,7 +69,7 @@ local function build_fixture()
                ('a4', 'p1', 'a4.wav', '/tmp/a4.wav', 200000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v',  'p1', 'm', 'm-v1', 'vid', 0, 100,    0, 100,    1, 1.0, 0, 0, 0),
                ('mr-a1', 'p1', 'm', 'm-a1', 'a1',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
@@ -78,7 +78,7 @@ local function build_fixture()
                ('mr-a4', 'p1', 'm', 'm-a4', 'a4',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -142,7 +142,7 @@ refuse_test("different nested", function(db)
     assert(db:exec(string.format([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr2-a1', 'p1', 'm2', 'm2-a1', 'a1', 0, 200000, 0, 200000,
                 1, 1.0, 0, 0, 0);
@@ -165,7 +165,7 @@ refuse_test("duplicate master_audio_track_id", function(db)
     assert(db:exec("UPDATE clips SET track_id='e-a1', master_audio_track_id = 'm-a1' WHERE id = 'ca2'"))
     -- Move ca2 out of overlap with ca1 to avoid the schema's video-overlap-
     -- type collision (here it's audio so no trigger; safe).
-    assert(db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'ca2'"))
+    assert(db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'ca2'"))
 end, { sequence_id = "e", clip_ids = { "ca1", "ca2" } }, "distinct")
 
 print("✅ test_collapse_audio_refusals.lua passed")

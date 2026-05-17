@@ -51,8 +51,8 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
-local gap_end = clips.v1_right.timeline_start
+local gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
+local gap_end = clips.v1_right.sequence_start
 
 local affected_rects = {}
 local original_timeline = _G.timeline

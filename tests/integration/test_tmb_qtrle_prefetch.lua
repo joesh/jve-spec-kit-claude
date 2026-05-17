@@ -45,7 +45,7 @@ EMP.TMB_SET_SEQUENCE_RESOLUTION(tmb, 1920, 1080)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
     clip_id = "test-qtrle-001",
     media_path = QTRLE_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = total_frames,
     source_in = 0,
     rate_num = info.fps_num,

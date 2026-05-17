@@ -83,7 +83,7 @@ local function build_clipboard_payload(clip_ids)
     for _, clip_id in ipairs(clip_ids) do
         local clip = Clip.load_optional(clip_id)
         if clip and clip.sequence_id then
-            earliest = math.min(earliest, clip.timeline_start)
+            earliest = math.min(earliest, clip.sequence_start)
             assert(clip.frame_rate
                 and clip.frame_rate.fps_numerator
                 and clip.frame_rate.fps_denominator,
@@ -99,7 +99,7 @@ local function build_clipboard_payload(clip_ids)
                 fps_mismatch_policy   = clip.fps_mismatch_policy,
                 owner_sequence_id     = clip.owner_sequence_id,
                 track_type            = clip.track_type,
-                timeline_start        = clip.timeline_start,
+                sequence_start        = clip.sequence_start,
                 duration              = clip.duration,
                 source_in             = clip.source_in,
                 source_out            = clip.source_out,
@@ -111,7 +111,7 @@ local function build_clipboard_payload(clip_ids)
         "Cut: none of %d clip_ids could be loaded for clipboard — Cut must "
         .. "not silently degrade to Delete", #clip_ids))
     for _, entry in ipairs(payloads) do
-        entry.offset_frames = entry.timeline_start - earliest
+        entry.offset_frames = entry.sequence_start - earliest
     end
     return payloads, earliest
 end
@@ -233,7 +233,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_insert_mutation(command, mut_seq, {
                     id = state.id,
                     track_id = state.track_id,
-                    start_value = state.timeline_start,
+                    start_value = state.sequence_start,
                     duration_value = state.duration,
                     source_in_value = state.source_in,
                     source_out_value = state.source_out,

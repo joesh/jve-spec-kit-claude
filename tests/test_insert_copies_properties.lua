@@ -71,7 +71,7 @@ local insert_cmd = Command.create("Insert", "proj")
 insert_cmd:set_parameter("sequence_id", "timeline_seq")
 insert_cmd:set_parameter("source_sequence_id", master_id)
 insert_cmd:set_parameter("target_video_track_id", "tv1")
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 insert_cmd:set_parameter("clip_name", "Inserted Clip")
 local insert_result = command_manager.execute(insert_cmd)
 assert(insert_result.success,

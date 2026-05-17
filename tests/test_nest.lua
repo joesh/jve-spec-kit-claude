@@ -11,7 +11,7 @@
 --     2. Create matching tracks on S for each track_type/track_index of
 --        the selected clips.
 --     3. Move each selected clip into S: owner_sequence_id ← S;
---        track_id ← S's equivalent track; timeline_start_frame
+--        track_id ← S's equivalent track; sequence_start_frame
 --        translated by -min_selected_start so clips are relative to S.
 --     4. INSERT one new clip on the parent at min_selected_start, with
 --        source_sequence_id = S, source_in=0, source_out=S.duration,
@@ -57,13 +57,13 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
         -- Three clips on edit V1 starting at 100, 200, 300; each 100 frames.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -79,10 +79,10 @@ end
 
 local function clips_in_sequence(db, seq_id)
     local stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames,
+        SELECT id, track_id, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame, sequence_id
         FROM clips WHERE owner_sequence_id = ?
-        ORDER BY timeline_start_frame ASC, id ASC
+        ORDER BY sequence_start_frame ASC, id ASC
     ]])
     stmt:bind_value(1, seq_id)
     assert(stmt:exec())
@@ -91,7 +91,7 @@ local function clips_in_sequence(db, seq_id)
         rows[#rows + 1] = {
             id = stmt:value(0),
             track_id = stmt:value(1),
-            timeline_start = stmt:value(2),
+            sequence_start = stmt:value(2),
             duration = stmt:value(3),
             source_in = stmt:value(4),
             source_out = stmt:value(5),
@@ -137,9 +137,9 @@ do
     assert(#s_clips == 3,
         "new sequence holds 3 clips; got " .. tostring(#s_clips))
     -- min_start was 100; clips translated to start at [0, 100, 200).
-    assert(s_clips[1].timeline_start == 0
-       and s_clips[2].timeline_start == 100
-       and s_clips[3].timeline_start == 200,
+    assert(s_clips[1].sequence_start == 0
+       and s_clips[2].sequence_start == 100
+       and s_clips[3].sequence_start == 200,
         "clips translated to start at 0/100/200 inside the new sequence")
     for i = 1, 3 do
         assert(s_clips[i].duration == 100, "duration preserved")
@@ -151,7 +151,7 @@ do
         "parent has 1 replacement clip; got " .. tostring(#e_clips))
     local rep = e_clips[1]
     assert(rep.id == result.new_clip_id, "result.new_clip_id matches")
-    assert(rep.timeline_start == 100,
+    assert(rep.sequence_start == 100,
         "replacement starts at min_selected_start (100)")
     assert(rep.duration == 300,
         "replacement covers the full selection span (100..400)")
