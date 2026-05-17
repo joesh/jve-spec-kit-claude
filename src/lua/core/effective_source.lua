@@ -1,34 +1,30 @@
 --- Effective source: who is currently "the source" for edit operations?
 ---
---- The effective source is a master sequence id, derived from two
---- independent input streams:
+--- Precedence (NOT recency):
 ---
----   1. The source viewer's loaded master (via `source_loaded_changed`).
----   2. The project browser's current selection (via `selection_hub`).
+---   1. If the project browser is the active panel AND its selection
+---      contains an insertable item (master_clip or timeline-as-sequence),
+---      that item is the source.
+---   2. Otherwise: whatever sequence is loaded in the source viewer
+---      (may be nil = no source loaded).
 ---
---- Priority — recency rule among the two source inputs:
+--- "Active panel" comes from `selection_hub` — the currently focused panel,
+--- not a sticky historical state. Clicking from the browser into the
+--- timeline immediately reverts the precedence to rule 2; the browser
+--- only "owns" the source while it's the focused panel.
 ---
----   "Most-recently-activated among {source_viewer, browser} wins,
----    provided it has a valid value. If the most-recent winner has no
----    value, fall back to whichever of the two does."
----
---- Activating means becoming the focused panel (selection_hub's active
---- panel). Activating any OTHER panel (e.g. timeline) does NOT change
---- the recency — clicking a src-btn on the timeline shifts focus there
---- but the previously-selected source survives.
----
---- "Valid value" = source viewer has a clip loaded, or browser has a
---- master_clip/timeline item selected.
+--- A source can be a master clip OR a nested sequence. Both resolve to a
+--- master sequence id via `master_seq_id_of`.
 ---
 --- Emits `effective_source_changed(new_master_seq_id, prev_master_seq_id)`
---- whenever the computed value changes (and only then — no spurious fires
---- on selection events that don't move the effective source).
+--- whenever the computed `M.get()` value changes.
 ---
 --- Consumers:
----   - `command_manager.execute_interactive` injects `sequence_id`
----     from `effective_source.get()` when params lacks it. This is how
----     Insert/Overwrite invoked from keymaps (e.g. F10) acquire their
----     source argument.
+---   - `command_manager.execute_interactive` calls `resolve_for_edit` to
+---     inject `source_sequence_id` for Insert/Overwrite (and any future
+---     command declaring source_sequence_id in its arg spec). The resolver
+---     returns either a valid source id, or a `problem` table that the
+---     command layer surfaces as a user-facing popup.
 ---   - `timeline_panel` listens for `effective_source_changed` to
 ---     re-render patch buttons and seed identity patches on the active
 ---     record sequence.
@@ -43,49 +39,11 @@ local selection_hub = require("ui.selection_hub")
 
 local M = {}
 
--- Internal state — only the derived `_current` is observable via M.get().
--- The two underlying inputs are kept so a change in either recomputes the
--- effective answer without re-asking source_viewer / selection_hub.
-local SOURCE_INPUT_PANELS = { source_monitor = true, project_browser = true }
-
-local _source_viewer_seq_id    = nil
-local _browser_master_seq_id   = nil  -- current browser-selected master (nil if none)
-local _last_active_source_input = nil  -- "source_monitor" | "project_browser" | nil
-local _current                 = nil
-
-local function compute_effective()
-    -- Recency rule: between the two source inputs, whichever was activated
-    -- most recently wins — provided it has a value. If the recency winner
-    -- has no value, the other input is the answer (this is the recency
-    -- rule's tiebreaker, not a fallback for a missing required value).
-    local sv  = _source_viewer_seq_id
-    local br  = _browser_master_seq_id
-    if _last_active_source_input == "source_monitor" and sv ~= nil then return sv end
-    if _last_active_source_input == "project_browser" and br ~= nil then return br end
-    -- Recency winner has no value (or neither has been activated yet) —
-    -- pick whichever has a value; nil if neither does.
-    if sv ~= nil then return sv end
-    return br
-end
-
-local function recompute_and_emit()
-    local next_value = compute_effective()
-    if next_value == _current then return end
-    local prev = _current
-    _current = next_value
-    Signals.emit("effective_source_changed", _current, prev)
-end
-
-local function on_source_loaded_changed(new_master_seq_id, _prev_seq_id)
-    -- nil = source viewer cleared; non-nil must be a non-empty string id.
-    assert(new_master_seq_id == nil
-           or (type(new_master_seq_id) == "string" and new_master_seq_id ~= ""),
-        string.format("effective_source.on_source_loaded_changed: "
-            .. "new_master_seq_id must be string or nil; got %s (%s)",
-            type(new_master_seq_id), tostring(new_master_seq_id)))
-    _source_viewer_seq_id = new_master_seq_id
-    recompute_and_emit()
-end
+-- Internal state.
+local _source_viewer_seq_id = nil
+local _browser_items        = {}    -- last persisted project_browser selection
+local _active_panel_id      = nil
+local _current              = nil
 
 --- THE predicate: given a normalized browser-selection item, return the
 --- master sequence id this item represents as an Insert/Overwrite
@@ -111,34 +69,64 @@ function M.master_seq_id_of(item)
     return nil
 end
 
--- Pick the first source-shaped entry from a browser-selection items list.
--- Single-source-of-truth via M.master_seq_id_of.
---
--- selection_hub's contract is that items is always a table (possibly
--- empty). Assert that — silent-skip on non-table would hide a contract
--- breach in the selection plumbing.
-local function pick_master_seq_id_from_items(items)
-    assert(type(items) == "table",
-        "effective_source: selection_hub listener got non-table items: " .. type(items))
-    for _, it in ipairs(items) do
-        local id = M.master_seq_id_of(it)
-        if id ~= nil then return id end
+local function browser_is_active()
+    return _active_panel_id == "project_browser"
+end
+
+-- First item in `_browser_items` that resolves to a master sequence id
+-- via master_seq_id_of. Returns (item, seq_id) or (nil, nil).
+local function first_insertable_browser_item()
+    for _, it in ipairs(_browser_items) do
+        local seq = M.master_seq_id_of(it)
+        if seq ~= nil then return it, seq end
     end
-    return nil
+    return nil, nil
+end
+
+-- Compute the "ambient" effective source: the precedence rule with no
+-- destination-awareness (no cycle filtering). This is what M.get() returns
+-- and what feeds `effective_source_changed` for non-edit consumers like
+-- patch-seeding and src-btn rendering — they only need to know "what's the
+-- source UI-wise", not "is it valid against destination X".
+local function compute_current()
+    if browser_is_active() then
+        local _, seq = first_insertable_browser_item()
+        if seq ~= nil then return seq end
+        -- Non-empty browser selection but no insertable item, OR empty
+        -- selection. Either way: rule 2 (fall through to source viewer).
+        -- `resolve_for_edit` distinguishes the two for popup purposes.
+    end
+    return _source_viewer_seq_id
+end
+
+local function recompute_and_emit()
+    local next_value = compute_current()
+    if next_value == _current then return end
+    local prev = _current
+    _current = next_value
+    Signals.emit("effective_source_changed", _current, prev)
+end
+
+local function on_source_loaded_changed(new_master_seq_id, _prev_seq_id)
+    assert(new_master_seq_id == nil
+           or (type(new_master_seq_id) == "string" and new_master_seq_id ~= ""),
+        string.format("effective_source.on_source_loaded_changed: "
+            .. "new_master_seq_id must be string or nil; got %s (%s)",
+            type(new_master_seq_id), tostring(new_master_seq_id)))
+    _source_viewer_seq_id = new_master_seq_id
+    recompute_and_emit()
 end
 
 local function on_selection_changed(_items, panel_id)
-    -- Always recompute browser-selected source from the hub's persisted
-    -- selection — independent of which panel is currently active. The
-    -- browser's selection survives focus shifts (e.g. clicking a src-btn
-    -- on the timeline).
-    _browser_master_seq_id = pick_master_seq_id_from_items(
-        selection_hub.get_selection("project_browser"))
-    -- Track recency among the two source inputs. Activating any other
-    -- panel (timeline, etc.) does NOT change recency.
-    if SOURCE_INPUT_PANELS[panel_id] then
-        _last_active_source_input = panel_id
-    end
+    -- Always pull the latest browser selection from the hub — `panel_id`
+    -- here is the currently-active panel (any), not necessarily browser.
+    -- The browser's persisted selection survives focus shifts.
+    local items = selection_hub.get_selection("project_browser")
+    assert(type(items) == "table", string.format(
+        "effective_source.on_selection_changed: selection_hub.get_selection "
+        .. "must return a table; got %s", type(items)))
+    _browser_items = items
+    _active_panel_id = panel_id
     recompute_and_emit()
 end
 
@@ -147,16 +135,84 @@ Signals.connect("source_loaded_changed", on_source_loaded_changed)
 selection_hub.register_listener(on_selection_changed)
 
 --- Get the current effective master sequence id (or nil if no source).
+--- Destination-agnostic — use `resolve_for_edit` for edit-command dispatch.
 function M.get()
     return _current
 end
 
+--- Resolve the source for an interactive edit command into a given
+--- destination sequence. Returns `(seq_id, nil)` on success, or
+--- `(nil, problem)` where `problem` is a structured table the UI layer
+--- formats into a popup. Possible kinds:
+---
+---   * "not_insertable"   — browser is active, selection exists, but
+---                          first item isn't a master_clip or timeline.
+---                          problem.label = item.display_name
+---   * "missing_item"     — no source available at all.
+---                          problem.cmd = command name
+---   * "cycle_self"       — chosen source == destination.
+---                          problem.seq_name
+---   * "cycle_transitive" — chosen source already contains destination.
+---                          problem.dest_name, problem.src_name
+---
+--- The cycle checks duplicate the invariant guarded in
+--- `_place_shared.pick_endpoints`; that assert remains as defense-in-depth.
+--- Surfacing the failure here lets us show a user-friendly popup instead
+--- of an internal Lua stacktrace warning.
+function M.resolve_for_edit(rec_id, cmd_name)
+    assert(rec_id and rec_id ~= "",
+        "effective_source.resolve_for_edit: rec_id required")
+    assert(cmd_name and cmd_name ~= "",
+        "effective_source.resolve_for_edit: cmd_name required")
+
+    local seq
+    if browser_is_active() and #_browser_items > 0 then
+        local _, found = first_insertable_browser_item()
+        if found ~= nil then
+            seq = found
+        else
+            local first = _browser_items[1]
+            local label = first.display_name
+            assert(type(label) == "string" and label ~= "", string.format(
+                "effective_source.resolve_for_edit: first browser item missing "
+                .. "display_name (item_type=%s) — normalize_* contract violated",
+                tostring(first.item_type)))
+            return nil, { kind = "not_insertable", label = label }
+        end
+    else
+        seq = _source_viewer_seq_id
+    end
+
+    if seq == nil then
+        return nil, { kind = "missing_item", cmd = cmd_name }
+    end
+
+    local Sequence = require("models.sequence")
+    if seq == rec_id then
+        return nil, {
+            kind     = "cycle_self",
+            seq_name = Sequence.get_name(rec_id),
+        }
+    end
+
+    local Cycle = require("models.cycle")
+    if Cycle.would_create_cycle(rec_id, seq) then
+        return nil, {
+            kind      = "cycle_transitive",
+            dest_name = Sequence.get_name(rec_id),
+            src_name  = Sequence.get_name(seq),
+        }
+    end
+
+    return seq, nil
+end
+
 --- Test-only reset. Restores module state without re-subscribing.
 function M._reset_for_tests()
-    _source_viewer_seq_id    = nil
-    _browser_master_seq_id   = nil
-    _last_active_source_input = nil
-    _current                 = nil
+    _source_viewer_seq_id = nil
+    _browser_items        = {}
+    _active_panel_id      = nil
+    _current              = nil
 end
 
 return M

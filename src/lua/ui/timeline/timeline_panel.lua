@@ -792,21 +792,29 @@ local function close_tab(sequence_id)
     -- still "owns" this seq. When source master transitions A→B, the strip's
     -- source-tab singleton is reloaded in place: strip_tab.sequence_id is
     -- now B even though open_tabs[A] still holds a reference to it. If we
-    -- naively called close_source_tab() here we'd close B (current source)
+    -- naively closed via state here we'd close B (current source)
     -- instead of just doing Qt cleanup for A. The seq_id check guards that.
     assert(tab.strip_tab, string.format(
         "close_tab: open_tabs[%s] missing strip_tab — strip/open_tabs drift",
         tostring(sequence_id)))
+    -- Capture the active-sequence pointer BEFORE close_displayed_tab runs.
+    -- That helper may call core.clear() (when the strip ends up empty),
+    -- which sets data.state.sequence_id = nil — if we read current_sequence
+    -- after that, the active-closing branch below misfires (nil != seq_id)
+    -- and unload_sequence never runs, leaving last_open_sequence_id stale.
+    local current_sequence_before = state.get_sequence_id and state.get_sequence_id()
+
     if tab.strip_tab.sequence_id == sequence_id then
-        local strip = timeline_state.get_tab_strip()
         if tab.strip_tab.kind == "source" then
-            strip:close_source_tab()
             -- Mirror into the persisted setting so a subsequent restart
             -- doesn't resurrect this seq as a SourceTab.
             set_persisted_source_tab_seq_id(nil)
-        else
-            strip:close_record_tab(tab.strip_tab)
         end
+        -- Delegate strip close + body re-pull (if displayed) to the state
+        -- layer. close_displayed_tab handles the asymmetry where the
+        -- closed tab WAS displayed but was NOT active (source-tab case)
+        -- by calling activate_displayed on the new displayed sequence.
+        timeline_state.close_displayed_tab(sequence_id)
     end
 
     open_tabs[sequence_id] = nil
@@ -815,8 +823,7 @@ local function close_tab(sequence_id)
         auto_source_tab_id = nil
     end
 
-    local current_sequence = state.get_sequence_id and state.get_sequence_id()
-    if current_sequence == sequence_id then
+    if current_sequence_before == sequence_id then
         local next_id = tab_order[#tab_order] or tab_order[1]
         if next_id then
             M.load_sequence(next_id)
@@ -825,11 +832,20 @@ local function close_tab(sequence_id)
             M.unload_sequence()
         end
     else
-        -- Tab styling tracks the DISPLAYED tab, not the active record.
+        -- close_displayed_tab already refreshed the body if the closed
+        -- tab was displayed. Tab styling tracks DISPLAYED, not active.
         update_tab_styles(timeline_state.get_displayed_tab_id())
     end
     update_tab_scroll_arrows()
     persist_open_tabs()
+
+    -- Reclaim keyboard focus on the timeline body. When a tab's close
+    -- button widget is destroyed, Qt's default focus-fallback lands on
+    -- the next-in-tab-order widget — for this layout that's the
+    -- timecode entry (TSO 2026-05-17). After a close the user is back
+    -- to driving the timeline (arrow keys, JKL, mark in/out), so focus
+    -- belongs on the clips area, not the typing field.
+    focus_timeline_view()
 
     if was_source_tab then
         Signals.emit("source_tab_visibility_changed", false)
@@ -914,7 +930,20 @@ ensure_tab_for_sequence = function(sequence_id)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(close_button, close_handler_name)
 
-    qt_constants.LAYOUT.ADD_WIDGET(tab_bar_tabs_layout, container)
+    -- Source tab is forced leftmost (FR-001 singleton-first). Other tabs
+    -- append at the end. Match Qt layout order to the Lua tab_order
+    -- model on insertion — without this, opening a source tab AFTER a
+    -- record tab put the source visually to the right while tab_order
+    -- said position 1, and only restore_tab_order on next startup fixed it.
+    if strip_tab.kind == "source" then
+        assert(qt_constants.LAYOUT.INSERT_WIDGET,
+            "open_tab: LAYOUT.INSERT_WIDGET binding required for source-tab insert")
+        qt_constants.LAYOUT.INSERT_WIDGET(tab_bar_tabs_layout, container, 0)
+        table.insert(tab_order, 1, sequence_id)
+    else
+        qt_constants.LAYOUT.ADD_WIDGET(tab_bar_tabs_layout, container)
+        table.insert(tab_order, sequence_id)
+    end
 
     open_tabs[sequence_id] = {
         container = container,
@@ -925,15 +954,6 @@ ensure_tab_for_sequence = function(sequence_id)
         close_handler = close_handler_name,
         strip_tab = strip_tab,
     }
-    -- Source tab is forced leftmost (FR-001 singleton-first). Other tabs
-    -- append at the end. reorder_tab_widgets restores Qt layout order from
-    -- tab_order; keeping the array in canonical order keeps the strip and
-    -- the persisted open_sequence_ids consistent.
-    if strip_tab.kind == "source" then
-        table.insert(tab_order, 1, sequence_id)
-    else
-        table.insert(tab_order, sequence_id)
-    end
     update_tab_scroll_arrows()
 end
 
@@ -1738,25 +1758,41 @@ Signals.connect("source_loaded_changed", function(new_master_seq_id, prev_seq_id
 end)
 
 -- 015 F2: identity-patch seeding follows the EFFECTIVE source (source
--- viewer OR active-browser master_clip selection). source_loaded_changed
--- above handles tab management — distinct concern. This handler:
+-- viewer OR active-browser master_clip selection):
 --   1. Seeds identity rows at the new shape (idempotent; existing
 --      user-rerouted/disabled rows are preserved).
 --   2. Triggers a full src-btn rerender so the header reflects the new
 --      source's tracks (or, if source went to nil, hides all src-btns).
--- Both branches must run even when new_master_seq_id is nil — that's
--- precisely when src-btns must disappear (spec §2b-i).
-Signals.connect("effective_source_changed",
-    function(new_master_seq_id, _prev_master_seq_id)
-        local record_seq_id = state.get_sequence_id and state.get_sequence_id()
-        if new_master_seq_id and record_seq_id then
-            require("models.patch").ensure_identity_for_source(
-                record_seq_id, new_master_seq_id)
-        end
-        -- Always rerender — covers both "new source loaded" (show its
-        -- src-btns) and "source unloaded → nil" (hide all src-btns).
-        rerender_all_src_btns()
-    end)
+-- Both branches must run even when source is nil — that's precisely when
+-- src-btns must disappear (spec §2b-i).
+--
+-- Two trigger signals because identity is a function of (rec_seq, source):
+--   • effective_source_changed — source side moves while rec stays
+--   • active_sequence_changed   — rec side moves while source stays
+-- Either can leave the panel rendering stale src-btns (or unseeded
+-- patches for an unseen rec/source shape combination). Same body runs
+-- on both; both reads come from current state, not the signal payload,
+-- so the handler is symmetric.
+local function reseed_and_rerender_src_btns()
+    -- state.get_sequence_id is wired during init; if it isn't, the signal
+    -- has fired before the panel is set up — that's a startup-order bug
+    -- and we want the stack trace, not a silent skip. rerender_all_src_btns
+    -- already calls state.get_sequence_id() without a guard for the same
+    -- reason.
+    local record_seq_id = state.get_sequence_id()
+    local source_seq_id = require("core.effective_source").get()
+    -- Both ids may legitimately be nil before any project is open or any
+    -- source is loaded; that's the "hide src-btns" branch (spec §2b-i)
+    -- and intentionally produces no seeding work.
+    if record_seq_id and record_seq_id ~= "" and source_seq_id then
+        require("models.patch").ensure_identity_for_source(
+            record_seq_id, source_seq_id)
+    end
+    rerender_all_src_btns()
+end
+
+Signals.connect("effective_source_changed", reseed_and_rerender_src_btns)
+Signals.connect("active_sequence_changed",  reseed_and_rerender_src_btns)
 
 -- Build one track-header row (the per-track block shared by video and audio
 -- header builders). Both builders previously inlined ~90 lines of identical
@@ -2906,12 +2942,26 @@ function M.create(opts)
             viewer_seek_pending = true
             qt_create_single_shot_timer(VIEWER_SEEK_DEFER_MS, function()
                 viewer_seek_pending = false
+                -- Cancelled by displayed_tab_cleared while pending: the
+                -- captured target was a stale frame from the closed
+                -- sequence (its extent may not contain that frame anymore).
+                if viewer_seek_target == nil then return end
                 local target = viewer_seek_target
                 if target == last_viewer_playhead then return end
                 last_viewer_playhead = target
                 get_view_engine():seek_to_frame(target)
             end)
         end
+    end)
+
+    -- Displayed tab cleared (close-last-tab / ShowSourceTab no-master /
+    -- Toggle no-master): a deferred viewer seek scheduled against the
+    -- closed sequence's playhead must NOT fire — it would Park a stale
+    -- frame against the new (or absent) sequence's bounds. Cancel the
+    -- pending target; the timer callback gates on viewer_seek_target nil.
+    Signals.connect("displayed_tab_cleared", function(_prev_seq_id)
+        viewer_seek_target = nil
+        last_viewer_playhead = nil
     end)
 
     return container

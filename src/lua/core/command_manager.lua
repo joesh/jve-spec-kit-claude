@@ -391,6 +391,12 @@ end
 --   UI caller having to do it themselves.
 -- - If active context is missing, we error (this is a bug, not a case to
 --   "defensively" hide).
+-- - Return value: the executor's result table on a successful dispatch, or
+--   `nil` when the dispatch was aborted because `effective_source` produced
+--   a user-facing problem (no source loaded, non-insertable selection,
+--   cycle). The popup is shown before this function returns; callers may
+--   treat `nil` as "user has been told what went wrong, no further action
+--   needed".
 function M.execute_interactive(command_name, params)
     params = params or {}
 
@@ -421,6 +427,36 @@ function M.execute_interactive(command_name, params)
     local ts = require("ui.timeline.timeline_state")
     local playhead_pre = ts.get_playhead_position()
 
+    -- 015 F2: resolve source_sequence_id for commands that declare it
+    -- (Insert, Overwrite). The resolver is destination-aware — passing
+    -- active_sequence_id lets it detect self/transitive cycles upfront
+    -- and surface a user-facing popup instead of bubbling a Lua
+    -- stacktrace warning out of _place_shared.pick_endpoints.
+    -- Commands that don't declare source_sequence_id in their arg spec
+    -- skip this entirely — the field is irrelevant to them.
+    --
+    -- Object-form dispatch (Command object instead of a name string) is
+    -- used by callers that build their own param table (e.g. inspectable
+    -- setters); those carry source_sequence_id themselves when needed and
+    -- don't benefit from auto-injection.
+    if type(command_name) == "string" and params.source_sequence_id == nil then
+        local spec = registry.get_spec(command_name)
+        if spec and spec.args and spec.args.source_sequence_id then
+            assert(active_sequence_id and active_sequence_id ~= "", string.format(
+                "execute_interactive: command %s requires source_sequence_id "
+                .. "resolution but no active sequence is set", command_name))
+            local effective_source = require("core.effective_source")
+            local seq, problem = effective_source.resolve_for_edit(
+                active_sequence_id, command_name)
+            if problem ~= nil then
+                require("ui.edit_source_popup").show(problem)
+                if wrapped_ui then M.end_command_event() end
+                return nil
+            end
+            params.source_sequence_id = seq
+        end
+    end
+
     local result = nil
     local executed_command = nil
     local status, exec_err = xpcall(function()
@@ -428,69 +464,6 @@ function M.execute_interactive(command_name, params)
             local pid, pid_err = ensure_active_project_id()
             assert(pid, pid_err)
             params.project_id = pid
-        end
-        -- Focus-aware routing: resolve sequence_id and playhead from active monitor.
-        -- This ensures mark/playhead commands target the focused viewer (source or timeline),
-        -- matching FCP7/Resolve behavior where I/O keys target the active viewer.
-        local ok_pm, pm = pcall(require, "ui.panel_manager")
-        local active_monitor = nil
-        if ok_pm and pm and pm.get_active_sequence_monitor then
-            active_monitor = pm.get_active_sequence_monitor()
-        end
-        if params.sequence_id == nil then
-            -- FR-005 active/displayed split: edits target active_sequence_id
-            -- (the record), movement (marks, playhead) targets the displayed
-            -- tab (what the user is looking at — may be a source master).
-            -- We discriminate via the command's mutates_clips flag: false
-            -- means it's a non-mutating sequence-state write (marks, playhead,
-            -- view-state) and belongs on whatever the user sees. Edit
-            -- commands keep the existing active_monitor path so Insert /
-            -- Overwrite still land on the record even with the source tab
-            -- displayed in the timeline panel.
-            -- Movement commands (mutates_clips=false: marks, playhead, view
-            -- state) target what the user is *looking at*. For focused upper
-            -- monitors that's already what active_monitor returns
-            -- (source_monitor → loaded master; timeline_monitor → active
-            -- record). The timeline panel is special — it's not a monitor,
-            -- and timeline_monitor.sequence_id is always the active record
-            -- even when the panel's displayed tab is a source master. Bridge
-            -- the gap by asking timeline_state when timeline-panel-focused.
-            -- execute_interactive accepts a name STRING or a Command object;
-            -- only the string form is keyboard-shortcut dispatch where we
-            -- need this focus-aware injection. Object form already carries
-            -- the caller's chosen sequence_id (or has its own resolution).
-            local spec = type(command_name) == "string"
-                and registry.get_spec(command_name) or nil
-            local is_movement = spec ~= nil and spec.mutates_clips == false
-            if is_movement then
-                local panel_id = require("ui.focus_manager").get_focused_panel()
-                if panel_id == "timeline" or panel_id == "timeline_panel" then
-                    params.sequence_id = ts.get_movement_target_sequence_id()
-                end
-            end
-            if params.sequence_id == nil then
-                if active_monitor and active_monitor.sequence_id then
-                    params.sequence_id = active_monitor.sequence_id
-                elseif active_sequence_id ~= nil and active_sequence_id ~= "" then
-                    params.sequence_id = active_sequence_id
-                end
-            end
-        end
-        if params.playhead == nil then
-            if active_monitor and active_monitor.engine and active_monitor.engine.get_position then
-                params.playhead = active_monitor.engine:get_position()
-            end
-        end
-        -- 015 F2: inject source_sequence_id from the effective source
-        -- (browser selection if browser is active, else source viewer's
-        -- loaded master). Keymaps like F10 ("Overwrite advance_playhead=true")
-        -- don't carry a source argument — execute_interactive supplies it.
-        -- GLOBAL_ALLOWED_KEYS whitelists source_sequence_id so commands that
-        -- don't declare it simply ignore the extra param (same pattern as
-        -- sequence_id/project_id/playhead). effective_source is pure Lua;
-        -- require failure is a real bug, so no pcall.
-        if params.source_sequence_id == nil then
-            params.source_sequence_id = require("core.effective_source").get()
         end
         result, executed_command = M.execute(command_name, params)
     end, debug.traceback)
@@ -972,6 +945,22 @@ function M.init(sequence_id, project_id)
     -- Per-Sequence Undo: activate the initial sequence's timeline stack
     M.activate_timeline_stack(sequence_id)
 
+    -- 017: bootstrap the role-bound playback transport for this project so
+    -- TogglePlay / MovePlayhead / shuttle dispatch correctly. Idempotent
+    -- (transport.init asserts if already initialized) — guard so tests that
+    -- call command_manager.init repeatedly don't trip the assert. Wrapped
+    -- in pcall because transport.init → PlaybackEngine.new pulls in
+    -- qt_constants which legacy headless tests cannot satisfy; tests
+    -- exercising the new transport path bootstrap qt_constants themselves
+    -- before calling command_manager.init.
+    pcall(function()
+        local transport = require("core.playback.transport")
+        if transport.bound_project_id() ~= project_id then
+            if transport.is_bootstrapped() then transport.shutdown() end
+            transport.init(project_id)
+        end
+    end)
+
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
     local Sequence = require("models.sequence")
     local seq = Sequence.load(sequence_id)
@@ -1359,7 +1348,70 @@ local function execute_nested_command(command, exec_scope)
 end
 
 -- Main execute function
+-- 017 FR-005/020/021a: sequence_id + playhead auto-injection.
+--
+-- Single rule, driven by the schema arg's `required` flag:
+--   args.sequence_id = { required = true }   → ACTIVE-RECORD routing.
+--     Edit-class commands (Insert, Overwrite, Blade, Trim, Nudge,
+--     SelectClips, AddTrack, etc.) always land on the active record
+--     regardless of what the user is parked on — you can't edit the
+--     master from the source tab.
+--   args.sequence_id = {}  (not required)     → DISPLAYED-SIDE routing.
+--     Movement-class (MovePlayhead, GoToStart/End, SetMark, etc.) acts
+--     on whatever the user is parked on (source tab/viewer or record
+--     timeline) per transport.engine_for_target().
+--
+-- Overrides:
+--   SPEC.targets_rec_sequence = true   force ACTIVE-RECORD (rarely needed
+--     since the required-flag rule covers most cases; provided for
+--     commands that don't declare sequence_id in args).
+--   SPEC.caller_supplied_sequence_id = true   no injection at all. Used
+--     by sequence-management commands (DeleteSequence, RenameSequence)
+--     and metadata setters where the caller (menu, dialog, tree click)
+--     always supplies an explicit id.
+local function inject_sequence_context(command_or_name, params)
+    if type(command_or_name) ~= "string" then return end
+    if params.sequence_id ~= nil then return end
+
+    local spec = registry.get_spec(command_or_name)
+    if spec == nil then return end
+    local seq_arg = spec.args and spec.args.sequence_id
+    if seq_arg == nil then return end
+
+    if spec.caller_supplied_sequence_id == true then return end
+
+    if spec.targets_rec_sequence == true or seq_arg.required == true then
+        if active_sequence_id ~= nil and active_sequence_id ~= "" then
+            params.sequence_id = active_sequence_id
+        end
+        return
+    end
+
+    -- Movement-class routing — single source: transport.engine_for_target().
+    -- Pre-bootstrap (no transport, e.g. tests that command_manager.init
+    -- without opening a project): use active_sequence_id. That's the same
+    -- value transport.engine_for_target() would resolve to once bootstrapped
+    -- under the default target ('record' per FR-008a), so it's not a
+    -- competing source — it's the same source, observed earlier.
+    local transport = require("core.playback.transport")
+    if transport.is_bootstrapped() then
+        local te = transport.engine_for_target()
+        if te ~= nil and te.loaded_sequence_id ~= nil then
+            params.sequence_id = te.loaded_sequence_id
+            if params.playhead == nil then
+                params.playhead = te:get_position()
+            end
+            return
+        end
+    end
+    if active_sequence_id ~= nil and active_sequence_id ~= "" then
+        params.sequence_id = active_sequence_id
+    end
+end
+
 function M.execute(command_or_name, params)
+    params = params or {}
+    inject_sequence_context(command_or_name, params)
     -- Auto-wrap in command event if none active (avoids requiring every call site to wrap)
     local auto_wrapped = false
     if not command_event_origin or command_event_depth == 0 then
