@@ -470,7 +470,7 @@ do
     assert(info.width == 1920, "width=1920")
     assert(info.height == 1080, "height=1080")
     assert(info.name == "TestSeq", "name=TestSeq")
-    assert(info.kind == "sequence", "kind=nested")
+    assert(info.kind == "sequence", "kind='sequence'")
     assert(info.audio_sample_rate == 48000, "audio_sample_rate=48000")
 
     print("  get_sequence_info passed")

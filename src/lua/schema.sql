@@ -257,7 +257,7 @@ CREATE TABLE IF NOT EXISTS clips (
 
     -- Where on this sequence's track the clip sits. timeline_start_frame and
     -- duration_frames are in the OWNER sequence's timebase; source_in/out are
-    -- in the NESTED sequence's timebase. The ratio between them is set by
+    -- in the source sequence's timebase. The ratio between them is set by
     -- fps_mismatch_policy below. Neither timebase is carried on this row —
     -- callers dereference owner_sequence_id / sequence_id as needed.
     timeline_start_frame INTEGER NOT NULL,
@@ -511,7 +511,7 @@ CREATE TRIGGER trg_clips_owner_kind_insert
 BEFORE INSERT ON clips
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_update;
@@ -519,7 +519,7 @@ CREATE TRIGGER trg_clips_owner_kind_update
 BEFORE UPDATE ON clips
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 -- ============================================================================

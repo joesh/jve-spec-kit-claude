@@ -312,7 +312,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local nested_kind = query:value(20)
+    local source_kind = query:value(20)
     local nested_fps_num = query:value(21)
     local nested_fps_den = query:value(22)
     if not nested_fps_num or not nested_fps_den then
@@ -346,7 +346,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         owner_sequence_id = owner_sequence_id,
         track_sequence_id = owner_sequence_id,
         sequence_id = sequence_id,
-        nested_sequence_kind = nested_kind,
+        source_sequence_kind = source_kind,
         master_layer_track_id = query:value(10),
         master_audio_track_id = query:value(11),
         fps_mismatch_policy = query:value(12),
@@ -356,7 +356,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         source_in = assert(query:value(8), string.format("load_clips: clip %s missing source_in", clip_id)),
         source_out = assert(query:value(9), string.format("load_clips: clip %s missing source_out", clip_id)),
 
-        -- The clip's source_in/out are in the NESTED sequence's timebase.
+        -- The clip's source_in/out are in the source sequence's timebase.
         frame_rate = {
             fps_numerator = nested_fps_num,
             fps_denominator = nested_fps_den,
@@ -1095,7 +1095,7 @@ function M.load_master_virtual_clips(master_seq_id)
                 owner_sequence_id = master_seq_id,
                 track_sequence_id = master_seq_id,
                 sequence_id = master_seq_id,
-                nested_sequence_kind = "master",
+                source_sequence_kind = "master",
                 timeline_start = timeline_start,
                 duration = timeline_duration,
                 source_in = src_in,    -- source-media units (samples for audio, frames for video)

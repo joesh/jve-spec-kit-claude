@@ -198,7 +198,7 @@ local function test_get_sequence_info()
     assert(info.width == 1920, "Expected width=1920")
     assert(info.height == 1080, "Expected height=1080")
     assert(info.name == "TestTimeline", "Expected name=TestTimeline")
-    assert(info.kind == "sequence", "Expected kind=nested")
+    assert(info.kind == "sequence", "Expected kind='sequence'")
     assert(info.audio_sample_rate == 48000, "Expected audio_sample_rate=48000")
     print("  test_get_sequence_info passed")
 end

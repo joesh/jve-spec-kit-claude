@@ -5,6 +5,8 @@
 **Status**: Draft
 **Input**: User description: "Timeline placements become uniform nested-sequence references. The only true Clip rows in the system live inside master sequences. This generalizes synced clips, multicam, and compound clips into a single primitive: 'a master sequence placed on a timeline.'"
 
+> **Terminology note (added after landing)**: this spec — and the supporting docs in this folder (`quickstart.md`, `research.md`, `data-model.md`, etc.) — uses `kind='nested'` for non-master sequences. **That value was renamed before this branch shipped.** The schema's authoritative CHECK constraint is now `kind IN ('master', 'sequence')`. Read every appearance of `kind='nested'` in this folder as `kind='sequence'`. The rest of the model (nesting semantics, clip → sequence references, cycle prevention) is unchanged. The codebase is fully consistent on the new value — schema triggers, fields, and tests all use `'sequence'`.
+
 ---
 
 ## ⚡ Quick Guidelines

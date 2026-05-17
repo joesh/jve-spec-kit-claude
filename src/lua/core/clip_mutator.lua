@@ -240,7 +240,7 @@ local function load_track_clips(db, track_id)
             track_id = stmt:value(3),
             owner_sequence_id = stmt:value(4),
             sequence_id = nested_id,
-            nested_sequence_kind = stmt:value(20),
+            source_sequence_kind = stmt:value(20),
             master_layer_track_id = stmt:value(10),
             master_audio_track_id = stmt:value(11),
             fps_mismatch_policy = stmt:value(12),
@@ -950,7 +950,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         created_at = stmt:value(15),
         modified_at = stmt:value(16),
         track_type = track_type,
-        nested_sequence_kind = stmt:value(20),
+        source_sequence_kind = stmt:value(20),
         -- V13-resolved chain leaf (nil when nested is itself nested).
         media_id = stmt:value(23),
     }

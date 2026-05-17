@@ -656,7 +656,7 @@ function M:get_source_extent(target_rate)
     local database = require("core.database")
     local db = assert(database.get_connection(),
         string.format("Media:get_source_extent: no database connection (media_id=%s)", tostring(self.id)))
-    -- V13: clip.source_in/out are in the NESTED sequence's timebase. Walk
+    -- V13: clip.source_in/out are in the source sequence's timebase. Walk
     -- clips → nested → master.media_refs to find clips referencing this
     -- media. fps_numerator/denominator come from the nested sequence (the
     -- clip's source-side timebase).

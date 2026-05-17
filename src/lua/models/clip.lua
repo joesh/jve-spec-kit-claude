@@ -115,7 +115,7 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         modified_at = query:value(19),
 
         track_type           = query:value(20),
-        nested_sequence_kind = query:value(23),
+        source_sequence_kind = query:value(23),
     }
 
     -- V13-resolved chain leaf: media chain leaks through the LEFT JOIN
