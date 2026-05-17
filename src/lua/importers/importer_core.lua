@@ -250,14 +250,31 @@ local function build_media_metadata(media_item, native_rate)
     end
     local json = require("dkjson")
     local mst = media_item.media_start_time
-    local start_tc_value = math.floor(mst * native_rate + 0.5)
-    local meta = {
-        start_tc_value = start_tc_value,
-        start_tc_rate  = native_rate,
-    }
-
     local audio_sr = media_item.audio_sample_rate
-    if audio_sr and audio_sr > 0 then
+    local has_video = media_item.has_video and true or false
+    local has_audio = audio_sr and audio_sr > 0
+
+    local meta = {}
+    if not (has_video or has_audio) then
+        -- Bad / malformed media item with neither V nor A characteristics.
+        -- Leave metadata empty; downstream consumers gate on has_video /
+        -- has_audio and won't attempt to read TC. ensure_master will
+        -- refuse to build a master for this row.
+        return json.encode(meta)
+    end
+    -- V pair written ONLY for files that actually have a video stream.
+    -- Pre-normalization (≤ 2026-05-16) wrote start_tc_value for audio-
+    -- only files too (using native_rate==sr), which was the 4-second-
+    -- late overload — retired by feedback_timecode_is_truth's unified
+    -- model. Audio-only files now carry their TC exclusively in the
+    -- start_tc_audio_* pair.
+    local start_tc_value
+    if has_video then
+        start_tc_value = math.floor(mst * native_rate + 0.5)
+        meta.start_tc_value = start_tc_value
+        meta.start_tc_rate  = native_rate
+    end
+    if has_audio then
         meta.start_tc_audio_samples = math.floor(mst * audio_sr + 0.5)
         meta.start_tc_audio_rate    = audio_sr
     end
@@ -266,15 +283,19 @@ local function build_media_metadata(media_item, native_rate)
     -- decodable TracksBA, unmatched PMC enrichment). No override detection
     -- in that case — pre-feature behavior (file_original_timecode absent).
     if media_item.file_tc_seconds then
-        local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
-        if file_tc_video ~= start_tc_value then
-            meta.file_original_timecode = file_tc_video
-            if audio_sr and audio_sr > 0 then
-                meta.file_original_timecode_audio =
-                    math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+        if has_video then
+            local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
+            if file_tc_video ~= start_tc_value then
+                meta.file_original_timecode = file_tc_video
+                log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
+                    start_tc_value, file_tc_video, start_tc_value - file_tc_video)
             end
-            log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
-                start_tc_value, file_tc_video, start_tc_value - file_tc_video)
+        end
+        if has_audio then
+            local file_tc_audio = math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+            if file_tc_audio ~= meta.start_tc_audio_samples then
+                meta.file_original_timecode_audio = file_tc_audio
+            end
         end
     end
 

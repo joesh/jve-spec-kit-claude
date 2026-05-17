@@ -27,14 +27,18 @@ for name, idx in pairs({ V1 = 1, A1 = 1, A2 = 2 }) do
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('trk-%s', 'm', '%s', '%s', %d)", name, name, ttype, idx)))
 end
--- Three media files.
-for _, m in ipairs({ { id = "mf-v", path = "/tmp/vid.mov" },
-                     { id = "mf-a1", path = "/tmp/a1.wav" },
-                     { id = "mf-a2", path = "/tmp/a2.wav" } }) do
+-- Three media files. Audio files need audio_channels + audio_sample_rate
+-- so the resolver can convert master.fps-frame offsets to file-relative
+-- samples on AUDIO MR rows (post-unification of master MR placement units).
+for _, m in ipairs({ { id = "mf-v",  path = "/tmp/vid.mov", a_ch = 0, a_sr = 0     },
+                     { id = "mf-a1", path = "/tmp/a1.wav",  a_ch = 1, a_sr = 48000 },
+                     { id = "mf-a2", path = "/tmp/a2.wav",  a_ch = 1, a_sr = 48000 } }) do
     assert(db:exec(string.format(
         "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
-        .. "fps_numerator, fps_denominator, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', 'n', '%s', 100, 24, 1, 0, 0)", m.id, m.path)))
+        .. "fps_numerator, fps_denominator, audio_channels, audio_sample_rate, "
+        .. "created_at, modified_at) "
+        .. "VALUES ('%s', 'p1', 'n', '%s', 100, 24, 1, %d, %d, 0, 0)",
+        m.id, m.path, m.a_ch, m.a_sr)))
 end
 -- Three media_refs covering 0..100 in each stream.
 local refs = {
@@ -65,10 +69,23 @@ assert(#entries == 3, "expected 3 entries, got " .. tostring(#entries))
 
 local by_path = {}
 for _, e in ipairs(entries) do by_path[e.media_path] = e end
+-- VIDEO source range is in media.fps frames (== master.fps frames for this
+-- master): the MR spans frames 0..100. AUDIO source range is in file-
+-- natural samples: 100 master.fps frames at sr=48000, fps=24 ⇒ 200000
+-- samples. The resolver converts the master.fps-frame offset to samples
+-- when computing audio file ranges (post placement-unit unification).
+local expected_source_out = {
+    ["/tmp/vid.mov"] = 100,
+    ["/tmp/a1.wav"]  = 200000,
+    ["/tmp/a2.wav"]  = 200000,
+}
 for _, p in ipairs({"/tmp/vid.mov", "/tmp/a1.wav", "/tmp/a2.wav"}) do
     assert(by_path[p], "missing entry for " .. p)
-    assert(by_path[p].source_in == 0 and by_path[p].source_out == 100,
-        "source range wrong for " .. p)
+    assert(by_path[p].source_in == 0
+        and by_path[p].source_out == expected_source_out[p],
+        string.format("source range wrong for %s: got [%s,%s) expected [0,%d)",
+            p, tostring(by_path[p].source_in), tostring(by_path[p].source_out),
+            expected_source_out[p]))
     assert(#by_path[p].provenance == 1,
         "provenance length must be 1 for a leaf master; got "
         .. tostring(#by_path[p].provenance) .. " for " .. p)

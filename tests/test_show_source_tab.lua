@@ -60,6 +60,7 @@ command_manager.init("rec_seq", "proj")
 -- contract by stubbing switch_to_source_tab and asserting it's called
 -- with the loaded master's seq_id.
 local stub_switch_calls = {}
+local stub_clear_calls = 0
 
 local mock_monitor = { sequence_id = nil }
 function mock_monitor:get_loaded_master_seq_id() return self.sequence_id end
@@ -78,6 +79,10 @@ package.loaded["ui.timeline.timeline_state"] = {
     switch_to_source_tab = function(seq_id)
         table.insert(stub_switch_calls, seq_id)
     end,
+    -- 2026-05-17: when no master is loaded, ShowSourceTab now blanks the
+    -- body via timeline_state.clear() instead of auto-seeding a "random"
+    -- master from the DB. The test pins that blank-on-empty contract.
+    clear = function() stub_clear_calls = stub_clear_calls + 1 end,
     get_sequence_id        = function() return "rec_seq" end,
     get_active_sequence_id = function() return "rec_seq" end,
     get_project_id         = function() return "proj" end,
@@ -89,11 +94,14 @@ package.loaded["ui.timeline.timeline_state"] = {
     switch_to_record_tab   = function() end,
 }
 
--- ShowSourceTab seeds the source monitor with the first project master
--- when none is loaded. Stub source_viewer to mirror that load into the
--- mock_monitor so subsequent get_loaded_master_seq_id() returns it.
+-- source_viewer.load_master_clip must NOT be called by ShowSourceTab
+-- anymore (2026-05-17): the user chose nothing, so the editor shows
+-- nothing — no auto-seed. The stub records calls so the test can fail
+-- loudly if the retired path is ever taken again.
+local source_viewer_seeds = {}
 package.loaded["ui.source_viewer"] = {
     load_master_clip = function(clip_id)
+        table.insert(source_viewer_seeds, clip_id)
         mock_monitor.sequence_id = clip_id
     end,
 }
@@ -121,28 +129,34 @@ assert(#stub_switch_calls >= 1 and stub_switch_calls[#stub_switch_calls] == "src
     .. "must delegate to the canonical pointer-update entry point")
 print("  signal emitted, switch_to_source_tab called with src_master — OK")
 
--- ── (b) Execute with no source loaded: seed first project master ───────────
--- New behavior (2026-05-13): rather than no-op, ShowSourceTab seeds the
--- source monitor with the first master in the project and opens the tab.
--- This gives Window→Source Tab a useful effect on a clean session instead
--- of silently doing nothing.
-print("-- (b) ShowSourceTab with no source loaded seeds first master --")
+-- ── (b) Execute with no source loaded: blank the body ────────────────────
+-- 2026-05-17: the auto-seed-first-master behavior was retired (it
+-- fabricated user intent — picked a "random clip" per the live report).
+-- New contract: no master loaded → blank the body, same blank state as
+-- closing the last tab. switch_to_source_tab MUST NOT be called (no
+-- master to associate with). source_viewer.load_master_clip MUST NOT
+-- be called (no auto-seed). source_tab_visibility_changed MUST NOT
+-- fire — nothing became visible.
+print("-- (b) ShowSourceTab with no source loaded blanks the body --")
 mock_monitor.sequence_id = nil
 local n_vis = #vis_log
 local n_switch = #stub_switch_calls
+local n_clear = stub_clear_calls
+local n_seed  = #source_viewer_seeds
 
 local r2 = command_manager.execute("ShowSourceTab", {})
 assert(r2 and r2.success,
     "FAIL: ShowSourceTab failed: " .. tostring(r2 and r2.error_message))
-assert(#vis_log == n_vis + 1 and vis_log[#vis_log] == true,
-    "FAIL: source_tab_visibility_changed(true) must fire")
--- The fixture's only master is 'src_master'. Seed must pick it up.
-assert(#stub_switch_calls == n_switch + 1,
-    "FAIL: switch_to_source_tab must be called after seeding the first master")
-assert(stub_switch_calls[#stub_switch_calls] == "src_master",
-    "FAIL: seeded master must be the first project master ('src_master'); got "
-    .. tostring(stub_switch_calls[#stub_switch_calls]))
-print("  seeded first project master + opened tab — OK")
+assert(stub_clear_calls == n_clear + 1,
+    "FAIL: timeline_state.clear() must be called when no master is loaded")
+assert(#stub_switch_calls == n_switch,
+    "FAIL: switch_to_source_tab must NOT be called (no master to show)")
+assert(#source_viewer_seeds == n_seed,
+    "FAIL: source_viewer.load_master_clip must NOT be called — the "
+    .. "auto-seed-first-master path is retired (fabricated user intent)")
+assert(#vis_log == n_vis,
+    "FAIL: source_tab_visibility_changed must NOT fire — nothing became visible")
+print("  no-master path blanks body, no auto-seed, no spurious visibility signal — OK")
 
 -- ── (c) Idempotent: calling again when tab is already open ───────────────
 print("-- (c) idempotent re-open --")

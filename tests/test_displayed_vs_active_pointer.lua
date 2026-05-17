@@ -26,6 +26,9 @@
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
+-- switch_to_source_tab now binds the source engine eagerly (no silent
+-- pcall fallback). Tests exercising tab switches need the qt stub.
+require("helpers.test_017_setup").install_qt_stub()
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")

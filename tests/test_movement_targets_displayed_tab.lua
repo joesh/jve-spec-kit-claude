@@ -17,6 +17,8 @@
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
+-- Tab switches now bind the role-engine eagerly (no silent pcall fallback).
+require("helpers.test_017_setup").install_qt_stub()
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")

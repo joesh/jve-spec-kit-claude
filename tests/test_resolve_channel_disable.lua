@@ -31,8 +31,8 @@ assert(db:exec(
     .. "VALUES ('e-a1', 'e', 'A1', 'AUDIO', 1)"))
 assert(db:exec(
     "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
-    .. "fps_numerator, fps_denominator, audio_channels, created_at, modified_at) "
-    .. "VALUES ('med', 'p1', 'wav', '/tmp/x.wav', 48000, 48000, 1, 4, 0, 0)"))
+    .. "fps_numerator, fps_denominator, audio_channels, audio_sample_rate, created_at, modified_at) "
+    .. "VALUES ('med', 'p1', 'wav', '/tmp/x.wav', 48000, 48000, 1, 4, 48000, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
     .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "

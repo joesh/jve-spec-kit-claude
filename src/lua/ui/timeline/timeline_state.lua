@@ -110,9 +110,23 @@ function M.init(sequence_id, project_id)
 end
 -- Strip-authoritative: clearing the active-sequence reference also drops
 -- the strip's displayed pointer so external readers see "no displayed tab".
+-- We capture the outgoing displayed sequence id BEFORE clearing the strip
+-- so core.clear can emit displayed_tab_cleared(prev_seq_id) — subscribers
+-- (playback engine, deferred viewer seeks) need the id to know which
+-- engine/timer to shut down.
+--
+-- Flush per-sequence view-state to the OUTGOING row BEFORE the strip is
+-- cleared. core.persist_state_to_db resolves the target row via
+-- strip_holder; clearing the strip first would leave the gate seeing nil
+-- and silently drop the dirty bit, losing the user's unsaved viewport /
+-- scroll / selection on the round-trip.
 M.clear = function()
+    local prev_seq_id = strip_holder.displayed_sequence_id()
+    if prev_seq_id then
+        core.persist_state_to_db(true)
+    end
     tab_strip:clear_displayed()
-    return core.clear()
+    return core.clear(prev_seq_id)
 end
 M.set_project_id = core.set_project_id
 M.reset = data.reset
@@ -124,16 +138,21 @@ M.reload_clips = core.reload_clips
 -- Master id → SourceTab (singleton, opened on demand). Non-master → record
 -- tab (opened on demand, idempotent). Once the strip is synced we delegate
 -- to `core.activate_displayed` to load tracks/clips/marks into data.state.
--- The flush-before-swap ordering inside core still works: it reads the
--- previous displayed via the strip below before the load swaps it.
+--
+-- Flush ordering (data-corruption bait, fixed 2026-05-17): persist
+-- resolves the target DB row via strip_holder, so any pending
+-- per-sequence view-state (debounced viewport/scroll/selection) MUST be
+-- flushed BEFORE the strip pointer is swapped. Without the pre-swap
+-- flush, the dirty A-side values get written to B's row when B becomes
+-- displayed — A's pending edits silently corrupt B's persisted playhead
+-- / viewport / selection.
 function M.activate_displayed(seq_id)
     assert(type(seq_id) == "string" and seq_id ~= "",
         "timeline_state.activate_displayed: seq_id required")
-    -- Capture prev BEFORE we mutate the strip — core needs the OUTGOING
-    -- sequence id to flush its view-state to the right DB row, and the
-    -- strip is now the only place that holds it.
-    local prev_tab = tab_strip:get_displayed()
-    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+    local prev_seq_id = strip_holder.displayed_sequence_id()
+    if prev_seq_id and prev_seq_id ~= seq_id then
+        core.persist_state_to_db(true)
+    end
 
     local Sequence = require("models.sequence")
     local seq = Sequence.load(seq_id)
@@ -151,6 +170,68 @@ function M.activate_displayed(seq_id)
         tab_strip:switch_displayed(rec_tab)
     end
     return core.activate_displayed(seq_id, prev_seq_id)
+end
+
+--- Close a tab and refresh body content if it was the displayed tab.
+--- The strip's close handler falls the displayed pointer back to a
+--- remaining tab (source-tab close → active record; record-tab close →
+--- another record or source). The body must follow — otherwise the
+--- strip says "displayed is X" while data.state.clips still holds Y's
+--- content (TSO 2026-05-16: clicked × on source tab, body kept
+--- rendering master's V1 clip under the now-record-only strip).
+---
+--- Does NOT touch the active pointer or open_tabs/Qt state — those are
+--- panel-layer concerns. Panel-level close_tab wraps this call.
+function M.close_displayed_tab(seq_id)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "timeline_state.close_displayed_tab: seq_id required")
+    local prev_seq_id = strip_holder.displayed_sequence_id()
+    local was_displayed = prev_seq_id == seq_id
+
+    -- Flush any pending per-sequence view-state to the OUTGOING row
+    -- before the strip mutation below changes which row persist resolves
+    -- to. Without this the dirty viewport/playhead written during the
+    -- final pre-close interactions leaks into the incoming displayed
+    -- sequence's row (or is silently dropped when the strip empties).
+    if was_displayed then
+        core.persist_state_to_db(true)
+    end
+
+    -- Close in the strip. Source-vs-record dispatch comes from the
+    -- strip's own tab kind, not from the caller's claim — keeps the
+    -- panel layer from having to know which singleton the seq_id maps to.
+    local source_tab = tab_strip:get_source_tab()
+    if source_tab and source_tab.sequence_id == seq_id then
+        tab_strip:close_source_tab()
+    else
+        local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
+        if rec_tab then
+            tab_strip:close_record_tab(rec_tab)
+        end
+    end
+
+    if was_displayed then
+        local new_displayed = tab_strip:get_displayed()
+        if new_displayed then
+            -- Call core.activate_displayed directly with the pre-close
+            -- prev_seq_id. The public M.activate_displayed re-reads the
+            -- strip for prev, which by now matches new_displayed (the
+            -- strip already swapped), and core short-circuits on equal
+            -- prev/new — body never reloads.
+            return core.activate_displayed(new_displayed.sequence_id, prev_seq_id)
+        end
+        -- Strip is empty after close (source-only configuration where the
+        -- user closes the lone source tab). The body MUST blank — without
+        -- this clear data.state.clips keeps the closed sequence's clips
+        -- under an empty strip (TSO 2026-05-17). MVC: no displayed →
+        -- model holds no clips → views render blank by pulling.
+        --
+        -- prev_seq_id is the sequence that JUST closed — pass it through so
+        -- core.clear emits displayed_tab_cleared(prev_seq_id) and the
+        -- playback engine (or any other transport subscriber) can stop the
+        -- engine that had been driving the closed sequence.
+        core.clear(prev_seq_id)
+    end
 end
 M.add_listener = data.add_listener
 M.remove_listener = data.remove_listener
@@ -438,6 +519,14 @@ M.get_displayed_tab_id   = function()
     return displayed and displayed.sequence_id or nil
 end
 
+-- 017: returns the kind of the currently-displayed timeline tab ("source"
+-- or "record"), or nil when the panel is blank. The transport target is
+-- derived from this — never stored independently.
+M.get_displayed_tab_kind = function()
+    local displayed = tab_strip:get_displayed()
+    return displayed and displayed.kind or nil
+end
+
 -- Movement-class commands (SetPlayhead, SetMarkIn/Out, GoToMarkIn/Out, ...)
 -- fired from the timeline panel target the *displayed* tab. Movement is
 -- not an edit (FR-005): edits go to active_sequence_id, but marks and the
@@ -471,6 +560,11 @@ function M.switch_to_source_tab(source_seq_id)
     end
     tab_strip:switch_displayed(source_tab)
     core.activate_displayed(source_seq_id, prev_seq_id)
+    -- 017: transport target is DERIVED from displayed-tab kind — no
+    -- explicit set is needed. Bind the source engine to this master so
+    -- Space/J/K/L have a sequence to act on. bind_role_to_sequence is
+    -- a no-op pre-bootstrap (headless tests).
+    require("core.playback.transport").bind_role_to_sequence("source", source_seq_id)
 end
 
 -- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
@@ -490,8 +584,14 @@ function M.switch_to_record_tab(seq_id)
         or tab_strip:open_record_tab(seq_id)
     tab_strip:switch_active_record(rec_tab)
     core.activate_displayed(seq_id, prev_seq_id)
+    -- 017: transport target is DERIVED from displayed-tab kind. The
+    -- switch_displayed call above updates the strip's pointer; the next
+    -- transport.get_target() resolves to "record".
     if prev_active ~= seq_id then
         data.state.sequence_id = seq_id
+        -- 017 FR-005a/b: rebind the record-role engine to the new active
+        -- sequence (no-op pre-bootstrap).
+        require("core.playback.transport").bind_role_to_sequence("record", seq_id)
         Signals.emit("active_sequence_changed", seq_id, prev_active)
     end
 end

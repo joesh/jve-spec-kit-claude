@@ -270,7 +270,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         if not media or not source_in_abs then
             return source_in_abs
         end
+        -- Prefer V TC, fall back to audio TC for audio-only media (post-
+        -- normalization V is nil there; audio clip's source_in is in sample
+        -- TC space, so origin must come from start_tc_audio_samples or the
+        -- subtraction produces a giant file_offset and the roll silently
+        -- clamps to zero on audio).
         local tc_origin = media:get_start_tc()
+        if not tc_origin then
+            tc_origin = media:get_audio_start_tc()
+        end
         if not tc_origin then
             return source_in_abs
         end

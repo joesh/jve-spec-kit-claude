@@ -74,7 +74,7 @@ package.loaded["core.qt_constants"] = {
 -- here would let us miss the case where the renderer fires the signal
 -- on EVERY frame even when value doesn't change — that's the same
 -- failure mode but cheaper to detect.
-local media_status = require("core.media.media_status")
+require("core.media.media_status")  -- side-effect: registers handlers
 
 package.loaded["core.media.offline_frame_cache"] = {
     get_frame = function() return "offline_overlay" end,

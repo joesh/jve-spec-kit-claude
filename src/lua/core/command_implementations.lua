@@ -22,6 +22,7 @@ local command_modules = {
     "set_patch", "set_sequence_metadata", "set_sync_mode", "set_track_heights", "set_track_mix_value",
     "setup_project", "show_source_tab", "split_clip", "step_frame",
     "toggle_clip_enabled", "toggle_fullscreen_view", "toggle_maximize_panel",
+    "toggle_source_record_tab",
     "toggle_timecode_focus", "toggle_track_preference", "toggle_track_waveform_display",
     "trim_head", "trim_tail",
 }

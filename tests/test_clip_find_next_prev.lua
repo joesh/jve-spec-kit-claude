@@ -44,7 +44,7 @@ assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
                      width, height, audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
     VALUES('media_a', 'proj', '/test/a.mov', 'a', 1000, 24, 1, 1920, 1080, 2, 48000, 'h264',
-           0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
+           0, 0, '{"start_tc_value":0,"start_tc_rate":24,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}')
 ]]))
 local Sequence = require("models.sequence")
 Sequence.ensure_master("media_a", "proj", { id = "master_a" })

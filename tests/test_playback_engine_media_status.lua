@@ -146,7 +146,7 @@ print("(B) _path_is_active_in_tmb: OK")
 
 -- Reach into the module-level connection set up by _setup_playback_controller
 -- by instantiating an engine and priming its internal state the same way.
-local engine = PlaybackEngine.new({
+local engine = PlaybackEngine.new("source", {
     on_show_frame   = function() end,
     on_show_gap     = function() end,
     on_set_rotation = function() end,

@@ -223,12 +223,16 @@ local function probe_result_from_emp_info(info)
         local sr = info.audio_sample_rate
         result.fps_num = sr
         result.fps_den = 1
-        -- Same presence-flag semantics as video: report start_tc only
-        -- when a real source (BWF time_reference or sufficient stream
-        -- start_time) was found. Plain MP3s and non-BWF WAVs report no TC.
+        -- Audio-only files: write the audio TC pair only. The pre-
+        -- normalization convention also wrote start_tc_value with rate=sr
+        -- (the overload), which produced the 4-second-late playback bug
+        -- on DRP audio masters when start_tc_value (DRP claim) drifted
+        -- from start_tc_audio_samples (BWF time_reference). Leaving
+        -- start_tc_value nil is the post-normalization invariant: V
+        -- fields are V-only, audio TC lives only on start_tc_audio_*.
         if info.has_audio_tc_origin then
-            result.start_tc_value = info.first_sample_tc
-            result.start_tc_rate = sr
+            result.start_tc_audio_samples = info.first_sample_tc
+            result.start_tc_audio_rate    = sr
         end
         if info.has_duration and info.duration_us and info.duration_us > 0 then
             local samples = math.floor(
@@ -408,14 +412,16 @@ local function probe_file_ffprobe(file_path)
         end
     end
 
-    -- Extract TC: Strategy 2 — BWF time_reference (audio files without video TC)
-    if not result.start_tc_value and data.format and data.format.tags then
+    -- Extract TC: Strategy 2 — BWF time_reference (audio files without
+    -- video TC). Writes the A pair only; the V pair stays nil for audio-
+    -- only files (post-normalization, retires the overload).
+    if not result.start_tc_audio_samples and data.format and data.format.tags then
         local time_ref = tonumber(data.format.tags.time_reference)
         if time_ref then
             local sample_rate = result.fps_num
-            if sample_rate and sample_rate > 0 then
-                result.start_tc_value = time_ref
-                result.start_tc_rate = sample_rate
+            if sample_rate and sample_rate > 0 and not result.width then
+                result.start_tc_audio_samples = time_ref
+                result.start_tc_audio_rate    = sample_rate
             end
         end
     end
@@ -638,13 +644,31 @@ end
 --   the candidate file is in file TC space. Pass (file_original_timecode - start_tc_value)
 --   to remap. Nil = no remap (camera footage).
 -- @return boolean True if candidate range fully contains the source extent
+-- Pick the candidate's TC (value, rate) for matcher comparisons. Returns the
+-- V pair when the probed file has a video stream with TC; otherwise the A
+-- pair (sample TC at sample rate) for audio-only files. nil,nil when neither
+-- is present. This mirrors media_relink_dialog's media_start_tc selection so
+-- both sides of the comparison live in the same TC space — sample TC for
+-- audio-only, video TC for V/V+A.
+local function probe_candidate_tc(probe_result)
+    if not probe_result then return nil, nil end
+    if probe_result.start_tc_value and probe_result.start_tc_rate then
+        return probe_result.start_tc_value, probe_result.start_tc_rate
+    end
+    if probe_result.start_tc_audio_samples and probe_result.start_tc_audio_rate then
+        return probe_result.start_tc_audio_samples, probe_result.start_tc_audio_rate
+    end
+    return nil, nil
+end
+
 function M.check_extent_containment(extent_start, extent_end, probe_result, stored_rate, tc_remap_offset)
     assert(extent_start and extent_end, "check_extent_containment: extent_start and extent_end required")
     assert(type(probe_result) == "table", "check_extent_containment: probe_result required")
     assert(type(stored_rate) == "number" and stored_rate > 0,
         "check_extent_containment: stored_rate must be positive")
 
-    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(probe_result)
+    if not cand_tc_value or not cand_tc_rate then
         return false
     end
     if not probe_result.duration_frames then
@@ -656,9 +680,9 @@ function M.check_extent_containment(extent_start, extent_end, probe_result, stor
     local abs_end = extent_end + (tc_remap_offset or 0)
 
     -- Candidate range at stored_rate
-    local cand_start = probe_result.start_tc_value
-    if stored_rate ~= probe_result.start_tc_rate then
-        cand_start = math.floor(probe_result.start_tc_value * stored_rate / probe_result.start_tc_rate + 0.5)
+    local cand_start = cand_tc_value
+    if stored_rate ~= cand_tc_rate then
+        cand_start = math.floor(cand_tc_value * stored_rate / cand_tc_rate + 0.5)
     end
 
     local cand_dur = probe_result.duration_frames
@@ -804,11 +828,7 @@ local function check_candidate_tc(cand_path, media_info, matching_rules, probe_f
     end
 
     local probe_result = probe_fn(cand_path)
-    local cand_tc_value, cand_tc_rate
-    if probe_result then
-        cand_tc_value = probe_result.start_tc_value
-        cand_tc_rate  = probe_result.start_tc_rate
-    end
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(probe_result)
 
     if not (cand_tc_value and cand_tc_rate) then
         log.detail("  %s: no candidate TC — accepting on non-TC criteria",
@@ -968,11 +988,12 @@ local function partition_candidates(media_info, candidates, stored_rate, tc_rema
         elseif cand.probe_result then
             local ref_tc = media_info.media_file_original_tc
                 or media_info.media_start_tc_value
-            if ref_tc and cand.probe_result.start_tc_value then
-                local cand_tc = cand.probe_result.start_tc_value
-                if cand.probe_result.start_tc_rate ~= stored_rate then
+            local cand_tc_value, cand_tc_rate = probe_candidate_tc(cand.probe_result)
+            if ref_tc and cand_tc_value then
+                local cand_tc = cand_tc_value
+                if cand_tc_rate ~= stored_rate then
                     cand_tc = math.floor(cand_tc * stored_rate
-                        / cand.probe_result.start_tc_rate + 0.5)
+                        / cand_tc_rate + 0.5)
                 end
                 local offset = cand_tc - ref_tc
                 -- Plausible trim: candidate starts at/after the original file,
@@ -992,9 +1013,15 @@ end
 -- case so the pre-relink values aren't overwritten with blanks.
 local function probed_tc_for_metadata(probe_result)
     if not probe_result then return nil end
-    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
-        return nil
-    end
+    -- Post-normalization: accept V pair OR A pair (or both). Audio-only
+    -- files have only the A pair; video-only / V+A with V TC have at
+    -- least the V pair. Refuse only when neither is present (plain MP3,
+    -- non-BWF WAV, video without tmcd) — nothing to sync into metadata.
+    local has_v = probe_result.start_tc_value ~= nil
+        and probe_result.start_tc_rate ~= nil
+    local has_a = probe_result.start_tc_audio_samples ~= nil
+        and probe_result.start_tc_audio_rate ~= nil
+    if not has_v and not has_a then return nil end
     return {
         start_tc_value = probe_result.start_tc_value,
         start_tc_rate = probe_result.start_tc_rate,
@@ -1051,9 +1078,10 @@ end
 -- the caller continues looking at other candidates.
 local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
     local pr = cand.probe_result
-    local cand_start = pr.start_tc_value or 0
-    if stored_rate and pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
-        cand_start = math.floor(cand_start * stored_rate / pr.start_tc_rate + 0.5)
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(pr)
+    local cand_start = cand_tc_value or 0
+    if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
+        cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
     end
     local cand_dur = pr.duration_frames or 0
     if pr.fps_num and pr.fps_den then
@@ -1113,9 +1141,10 @@ local function coverage_for_candidate(cand, stored_rate)
         end
     end
 
-    local cov_start = pr.start_tc_value or 0
-    if pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
-        cov_start = math.floor(cov_start * stored_rate / pr.start_tc_rate + 0.5)
+    local cov_value, cov_rate = probe_candidate_tc(pr)
+    local cov_start = cov_value or 0
+    if cov_rate and cov_rate ~= stored_rate then
+        cov_start = math.floor(cov_start * stored_rate / cov_rate + 0.5)
     end
     return {
         kind = "partial_coverage",

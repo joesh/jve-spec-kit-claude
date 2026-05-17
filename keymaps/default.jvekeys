@@ -28,28 +28,36 @@
 "Shift+F12" = "ToggleProfiler"
 
 [Transport]
+# 017 FR-020 transport-class: fires from every focus context that can
+# carry a transport (timeline panel, both monitors). Routing to the
+# displayed side happens via command_manager's sequence_id auto-injection
+# (see inject_sequence_context).
 "Space" = "TogglePlay @timeline @source_monitor @timeline_monitor"
 "J" = "ShuttleReverse @timeline @source_monitor @timeline_monitor"
 "K" = "ShuttleStop @timeline @source_monitor @timeline_monitor"
 "L" = "ShuttleForward @timeline @source_monitor @timeline_monitor"
 
 [Navigation]
-"Home" = "GoToStart @timeline @source_monitor"
-"End" = "GoToEnd @timeline @source_monitor"
-"Up" = "GoToPrevEdit @timeline @source_monitor"
-"Down" = "GoToNextEdit @timeline @source_monitor"
+# 017 FR-020 movement-class: same multi-scope reach as Transport. Acts on
+# transport.engine_for_target().loaded_sequence_id via auto-injection.
+"Home" = "GoToStart @timeline @source_monitor @timeline_monitor"
+"End" = "GoToEnd @timeline @source_monitor @timeline_monitor"
+"Up" = "GoToPrevEdit @timeline @source_monitor @timeline_monitor"
+"Down" = "GoToNextEdit @timeline @source_monitor @timeline_monitor"
 # Left/Right handled in keyboard_shortcuts.lua (arrow repeat management)
 "Tab" = "ToggleTimecodeFocus @timeline"
 # Shift+Tab intentionally unbound — user-mappable via the keyboard customization UI
 
 [Marks]
-"I" = "SetMark in @timeline @source_monitor"
-"O" = "SetMark out @timeline @source_monitor"
-"Shift+I" = "GoToMark in @timeline @source_monitor"
-"Shift+O" = "GoToMark out @timeline @source_monitor"
-"Alt+I" = "ClearMark in @timeline @source_monitor"
-"Alt+O" = "ClearMark out @timeline @source_monitor"
-"Alt+X" = "ClearMarks @timeline @source_monitor"
+# 017 FR-020 movement-class: mark commands target the displayed side
+# (source tab → master marks; record tab → timeline marks).
+"I" = "SetMark in @timeline @source_monitor @timeline_monitor"
+"O" = "SetMark out @timeline @source_monitor @timeline_monitor"
+"Shift+I" = "GoToMark in @timeline @source_monitor @timeline_monitor"
+"Shift+O" = "GoToMark out @timeline @source_monitor @timeline_monitor"
+"Alt+I" = "ClearMark in @timeline @source_monitor @timeline_monitor"
+"Alt+O" = "ClearMark out @timeline @source_monitor @timeline_monitor"
+"Alt+X" = "ClearMarks @timeline @source_monitor @timeline_monitor"
 "X" = "MarkClipExtent @timeline"
 
 [Timeline]
@@ -65,9 +73,11 @@
 "Cmd+Shift+BracketLeft" = "TrimHead @timeline"
 "Cmd+Shift+BracketRight" = "TrimTail @timeline"
 "D" = "ToggleClipEnabled @timeline"
-"F" = "MatchFrame @timeline"
-"Alt+F" = "FindMasterClipInBrowser @timeline @source_monitor"
-"Shift+F" = "RevealInFilesystem @timeline"
+# 017 FR-021/021a: clip-context commands are global-scope so they reach
+# every focus that can carry a selected clip (timeline_monitor included).
+"F" = "MatchFrame"
+"Alt+F" = "FindMasterClipInBrowser"
+"Shift+F" = "RevealInFilesystem"
 "Cmd+L" = "LinkClips @timeline"
 "Cmd+Shift+L" = "UnlinkClips @timeline"
 "Cmd+Delete" = "CloseGap @timeline"

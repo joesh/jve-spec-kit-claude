@@ -39,9 +39,9 @@ local function build_fixture()
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
         INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels,
+            fps_numerator, fps_denominator, audio_channels, audio_sample_rate,
             created_at, modified_at)
-        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 2, 0, 0);
+        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 2, 48000, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             timeline_start_frame, duration_frames, enabled, volume, playhead_frame,

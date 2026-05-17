@@ -129,6 +129,7 @@ local bad_track = {
 
 local mock_sequence = {
     id = "seq_with_bad_clip",
+    start_timecode_frame = 0,
     compute_content_end = function() return 100 end,
     get_video_at = function(_self, frame)
         if frame >= 0 and frame < 100 then
@@ -185,7 +186,7 @@ print("=== test_zero_source_range_clip.lua ===")
 
 local PlaybackEngine = require("core.playback.playback_engine")
 local noop = function() end
-local engine = PlaybackEngine.new({
+local engine = PlaybackEngine.new("source", {
     view_id = "test_monitor",
     on_show_frame = noop,
     on_show_gap = noop,

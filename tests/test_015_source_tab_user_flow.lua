@@ -66,19 +66,22 @@ db:exec(string.format([[
     VALUES
       ('ma', 'proj', 'A012', '/tmp/A012.mov', 1200, 24, 1, 48000, 1920, 1080, %d, %d),
       ('mb', 'proj', 'A037', '/tmp/A037.mov',  600, 24, 1, 48000, 1920, 1080, %d, %d);
-    -- Master A: video media_ref in VIDEO FRAMES (master video timebase).
-    -- Master A: audio media_ref in AUDIO SAMPLES (master audio timebase).
-    -- 1,324,752 frames @ 24fps = 55198 sec; × 48000 Hz = 2,649,504,000 samples.
-    -- 1200 frames duration = 50 sec × 48000 = 2,400,000 samples.
-    -- The two media_refs describe the SAME physical span on disk in their
-    -- respective track timebases — what the DRP importer actually writes.
+    -- Post placement-unit unification (2026-05-16): timeline_start_frame
+    -- and duration_frames on EVERY master media_ref live in master.fps
+    -- frames. For dual-medium masters master.fps == video.fps, so V and A
+    -- MRs carry IDENTICAL ts/dur values (they describe the same physical
+    -- span). source_in/_out stay in file-natural units: V frames for the
+    -- VIDEO MR, audio samples for the AUDIO MR.
+    --   1,324,752 frames @ 24fps = 55198 sec TC origin
+    --   1200 frames @ 24fps      = 50 sec extent
+    --   1200 V frames * 48000/24 = 2,400,000 samples (audio source range)
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         timeline_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752,    1200, 1, 1.0, 0, %d, %d),
-      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 2649504000, 2400000, 1, 1.0, 0, %d, %d);
+      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752, 1200, 1, 1.0, 0, %d, %d),
+      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 1324752, 1200, 1, 1.0, 0, %d, %d);
     -- Master B: video at TC origin frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,

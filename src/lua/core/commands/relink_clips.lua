@@ -63,6 +63,12 @@ local SPEC = {
         -- existing value alone. nil entries in Lua tables are sparse,
         -- which is why "__clear__" is a string sentinel instead.
         media_offline_notes = { kind = "table", default = {} },
+        -- Phase 2d undo state: master-sequence start_tc rows captured
+        -- in the executor and consumed by the undoer. Default {} so a
+        -- relink batch with no TC shifts (the common case — pure path
+        -- swap on already-correctly-aligned media) lands an empty list
+        -- and the undo no-ops.
+        master_tc_sync_rows = { kind = "table", default = {} },
     }
 }
 
@@ -219,6 +225,21 @@ function M.register(executors, undoers, db)
         local old_media_durations = Media.batch_set_durations(
             args.media_duration_updates, media_tc_updates)
 
+        -- Phase 2d: sync master sequences' start_timecode_frame to the
+        -- rebased media_refs.timeline_start_frame. media_refs were updated
+        -- in Phase 2c when the probed file's TC origin differed from the
+        -- pre-relink media; the master sequence row's start_timecode_frame
+        -- (set at master creation from the original file's video_tc) is
+        -- otherwise left at the stale value, surfacing in the source
+        -- monitor's TC display as a pre-content origin (TSO 2026-05-16).
+        -- Empty when no media in the relink batch carries a TC shift.
+        local Sequence = require("models.sequence")
+        local master_tc_sync_rows = {}
+        if media_tc_updates and next(media_tc_updates) ~= nil then
+            master_tc_sync_rows = Sequence.find_masters_for_media_tc_sync(media_tc_updates)
+            Sequence.batch_set_master_start_tc(master_tc_sync_rows)
+        end
+
         local t_p2_core = qt_monotonic_s()
         local t_p2_end = t_p2_core
 
@@ -245,6 +266,7 @@ function M.register(executors, undoers, db)
         command:set_parameter("old_media_file_state", old_media_file_state)
         command:set_parameter("old_media_durations", old_media_durations)
         command:set_parameter("old_offline_notes", old_offline_notes)
+        command:set_parameter("master_tc_sync_rows", master_tc_sync_rows)
 
         -- Clip writes don't call mark_dirty on media rows, but any clip
         -- pointed at a different media_id (new split clone, dedupe
@@ -340,6 +362,13 @@ function M.register(executors, undoers, db)
         assert(type(args.old_media_durations) == "table",
             "RelinkClips undo: old_media_durations missing")
         Media.batch_restore_durations(args.old_media_durations)
+
+        -- Phase 2d: Restore master sequences' start_timecode_frame +
+        -- playhead_frame to the pre-relink values. SPEC defaults
+        -- master_tc_sync_rows to {}, so the empty case is just an
+        -- empty iteration inside the restorer — no nil-check needed.
+        require("models.sequence").batch_restore_master_start_tc(
+            args.master_tc_sync_rows)
 
         -- Phase 3: Delete new media records (and their clips)
         -- SPEC guarantees args.new_media_records is a table (default = {}).

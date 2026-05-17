@@ -17,39 +17,23 @@ function M.set_k_held(value)
     k_held = value
 end
 
---- Pick the SequenceMonitor that should receive transport commands.
---- When the timeline panel is focused and showing the source tab, the
---- visible content is the master loaded in source_monitor — so transport
---- must drive that engine, not the record-bonded timeline_monitor.
-local function pick_playback_monitor()
-    local pm = require('ui.panel_manager')
-    local sv = pm.get_active_sequence_monitor()
-    if not sv then return nil end
-    if sv.view_id == "timeline_monitor" then
-        local strip_holder = require("ui.timeline.state.strip_holder")
-        local strip = strip_holder.get()
-        local displayed = strip and strip:get_displayed()
-        if displayed and displayed.kind == "source" then
-            return pm.get_sequence_monitor("source_monitor")
-        end
-    end
-    return sv
+--- 017: the engine that receives transport commands. Single source of
+--- truth: transport.engine_for_target(), driven by the user's selection
+--- of source-monitor vs record-monitor. Returns nil when transport has
+--- not been bootstrapped or nothing is loaded on the target side.
+local function get_target_engine()
+    local transport = require("core.playback.transport")
+    if not transport.is_bootstrapped() then return nil end
+    return transport.engine_for_target()
 end
 
---- Get the PlaybackEngine for the currently active SequenceMonitor.
-local function get_active_engine()
-    local sv = pick_playback_monitor()
-    if not sv then return nil end
-    return sv.engine
-end
-
---- Check if the active view has a sequence loaded and ready for playback.
-local function ensure_playback_initialized()
-    local sv = pick_playback_monitor()
-    if not sv then return false end
-    if not sv.sequence_id then return false end
-    if sv.total_frames <= 0 then return false end
-    return true
+--- True iff the target engine has a sequence loaded. FR-027: when nothing
+--- is loaded, the command layer makes Space a no-op rather than asserting
+--- inside the engine.
+local function target_ready()
+    local engine = get_target_engine()
+    if engine == nil then return false end
+    return engine.loaded_sequence_id ~= nil
 end
 
 function M.register(executors, undoers, db)
@@ -59,9 +43,10 @@ function M.register(executors, undoers, db)
     end
 
     local function toggle_play_executor(command)
-        if not ensure_playback_initialized() then return true end
-        local engine = get_active_engine()
-        assert(engine, "TogglePlay: engine is nil after playback initialized")
+        -- FR-027: target engine has nothing loaded → clean no-op (no error).
+        if not target_ready() then return true end
+        local engine = get_target_engine()
+        assert(engine, "TogglePlay: engine is nil after target_ready")
         if engine:is_playing() then
             engine:stop()
             sync_playing_state(false)
@@ -73,9 +58,9 @@ function M.register(executors, undoers, db)
     end
 
     local function shuttle_forward_executor(command)
-        if not ensure_playback_initialized() then return true end
-        local engine = get_active_engine()
-        assert(engine, "ShuttleForward: engine is nil after playback initialized")
+        if not target_ready() then return true end
+        local engine = get_target_engine()
+        assert(engine, "ShuttleForward: engine is nil after target_ready")
         if k_held then
             engine:slow_play(1)   -- K+L = slow forward
         else
@@ -86,9 +71,9 @@ function M.register(executors, undoers, db)
     end
 
     local function shuttle_reverse_executor(command)
-        if not ensure_playback_initialized() then return true end
-        local engine = get_active_engine()
-        assert(engine, "ShuttleReverse: engine is nil after playback initialized")
+        if not target_ready() then return true end
+        local engine = get_target_engine()
+        assert(engine, "ShuttleReverse: engine is nil after target_ready")
         if k_held then
             engine:slow_play(-1)  -- K+J = slow reverse
         else
@@ -100,8 +85,10 @@ function M.register(executors, undoers, db)
 
     local function shuttle_stop_executor(command)
         k_held = true
-        local engine = get_active_engine()
-        if engine then engine:stop() end
+        if target_ready() then
+            local engine = get_target_engine()
+            if engine:is_playing() then engine:stop() end
+        end
         sync_playing_state(false)
         return true
     end

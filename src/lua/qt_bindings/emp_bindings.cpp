@@ -1853,6 +1853,21 @@ static int lua_playback_deactivate_audio(lua_State* L) {
     return 0;
 }
 
+// 017 / FR-022: PLAYBACK.SET_LOG_TAG(controller, tag)
+// Pure FFI wrapper — parameter validation only. The C++ controller stores
+// the string and prefixes every JVE_LOG_*(Ticks, ...) line it emits, so
+// log streams from source-engine and record-engine are disambiguable.
+static int lua_playback_set_log_tag(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    if (!lua_isstring(L, 2)) {
+        return luaL_error(L, "PLAYBACK.SET_LOG_TAG: tag must be a string");
+    }
+    size_t len = 0;
+    const char* tag = lua_tolstring(L, 2, &len);
+    controller->SetLogTag(std::string(tag, len));
+    return 0;
+}
+
 // PLAYBACK.SET_SPEED(controller, signed_speed)
 static int lua_playback_set_speed(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
@@ -2511,6 +2526,9 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "ACTIVATE_AUDIO");
     lua_pushcfunction(L, lua_playback_deactivate_audio);
     lua_setfield(L, -2, "DEACTIVATE_AUDIO");
+    // 017 / FR-022: per-engine log tag plumbing for [ticks] disambiguation.
+    lua_pushcfunction(L, lua_playback_set_log_tag);
+    lua_setfield(L, -2, "SET_LOG_TAG");
     lua_pushcfunction(L, lua_playback_set_speed);
     lua_setfield(L, -2, "SET_SPEED");
     lua_pushcfunction(L, lua_playback_play_burst);

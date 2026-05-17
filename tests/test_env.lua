@@ -416,4 +416,25 @@ function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, d
     return Sequence.ensure_master(media_id, project_id)
 end
 
+-- Isolate the user keymap store from the developer's real ~/.jve dir.
+-- Without this, tests that load_active_or_default would pick up the
+-- developer's autosave files and overlay them on the bundled Default,
+-- silently breaking tests that depend on a clean keymap state.
+do
+    local store = require("core.user_keymap_store")
+    -- Per-process unique sandbox. Previously used os.time() + math.random(),
+    -- but luaJIT defaults math.random's seed to 1 per process — so under
+    -- parallel test runs (make -j4) multiple processes started in the same
+    -- second pick the same sandbox path and `rm -rf` each other's state.
+    -- Address of a fresh table gives a process-unique value; pairing with
+    -- os.time() keeps the path human-recognizable.
+    local proc_tag = assert(tostring({}):match("0x(%x+)"),
+        "test_env: failed to derive process-unique tag from table address — "
+        .. "luaJIT runtime no longer renders 0x<hex> in tostring(table)?")
+    local sandbox = string.format("/tmp/jve_test_keymap_%d_%s",
+        os.time(), proc_tag)
+    os.execute(string.format("rm -rf %q && mkdir -p %q", sandbox, sandbox))
+    store.set_base_dir(sandbox)
+end
+
 return M

@@ -1,51 +1,49 @@
---- GoToEnd: move playhead to the last frame in the active monitor
---
--- Respects focus: operates on whichever SequenceMonitor (source or timeline)
--- is currently active via panel_manager.
---
--- For timeline: last clip end. For source: total_frames.
---
--- @file go_to_end.lua
+--- GoToEnd: park the playhead at the first frame past content (exclusive
+--- out-point of the sequence). Movement-class (FR-020): sequence_id is
+--- auto-injected from the displayed-side engine.
+---
+--- @file go_to_end.lua
 local M = {}
 
 local SPEC = {
     undoable = false,
+    mutates_clips = false,
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },
+        sequence_id = {},
     }
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToEnd"] = function(command)
         local args = command:get_all_parameters()
+        assert(args.sequence_id and args.sequence_id ~= "",
+            "GoToEnd: sequence_id is required (auto-injected)")
 
-        local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_monitor()
-        assert(sv and sv.sequence_id, "GoToEnd: no sequence loaded in active view")
+        local Sequence = require("models.sequence")
+        local sequence = Sequence.load(args.sequence_id)
+        assert(sequence, "GoToEnd: sequence not found: " .. tostring(args.sequence_id))
 
-        -- End = first frame past content (exclusive out-point)
-        assert(sv.total_frames > 0, "GoToEnd: total_frames must be > 0")
-        local end_frame = sv.total_frames
+        -- End = first frame past content (exclusive out-point). Compute from
+        -- the sequence's own content_duration so we don't depend on a view's
+        -- in-memory total_frames mirror.
+        local duration = sequence:content_duration()
+        assert(duration > 0, "GoToEnd: sequence content_duration must be > 0")
+        local end_frame = sequence.start_timecode_frame + duration
 
         if args.dry_run then
             return true, { end_frame = end_frame }
         end
 
-        if sv.engine:is_playing() then
-            sv.engine:stop()
-        end
-
-        -- Update model — playhead_changed signal drives view (seek + viewport scroll)
-        local Sequence = require("models.sequence")
-        local sequence = Sequence.load(sv.sequence_id)
-        assert(sequence, "GoToEnd: sequence not found: " .. tostring(sv.sequence_id))
         sequence.playhead_position = end_frame
         sequence:save()
         local Signals = require("core.signals")
-        Signals.emit("playhead_changed", sv.sequence_id, end_frame)
+        Signals.emit("playhead_changed", args.sequence_id, end_frame)
 
-        -- Scroll timeline viewport to keep playhead visible
+        require("core.playback.transport").seek_target_if_loaded(
+            args.sequence_id, end_frame)
+
         local timeline_state = require("ui.timeline.timeline_state")
         timeline_state.surface_playhead()
         return true

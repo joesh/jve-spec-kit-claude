@@ -134,6 +134,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq1",
+            start_timecode_frame = 0,
             name = "Test",
             kind = "sequence",
             width = 1920, height = 1080,
@@ -213,7 +214,7 @@ PlaybackEngine.init_audio(mock_audio)
 local function make_engine()
     local surface = make_surface()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(fh, _meta)
             qt_constants_mock.EMP.SURFACE_SET_FRAME(surface, fh)
         end,

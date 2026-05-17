@@ -118,4 +118,13 @@ M.SHIFTED_TO_UNSHIFTED = {
     [40]  = 57,   -- ParenLeft (()    → 9
 }
 
+-- Inverse mapping for human-readable display: a canonical (unshifted_key,
+-- Shift) pair is presented as the shifted glyph alone, since the glyph
+-- already encodes Shift on a QWERTY layout. E.g. format_shortcut(2, Shift)
+-- → "@" rather than "Shift+2"; Ctrl+Shift+/ → "Ctrl+?".
+M.UNSHIFTED_TO_SHIFTED = {}
+for shifted, unshifted in pairs(M.SHIFTED_TO_UNSHIFTED) do
+    M.UNSHIFTED_TO_SHIFTED[unshifted] = shifted
+end
+
 return M

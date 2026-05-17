@@ -192,9 +192,17 @@ local function build_media_infos(media_list, widgets)
     local tc_by_id = {}     -- media_id → {value, rate}; rate may be nil
     local rates_by_id = {}  -- per-stream target rates: {video_rate=, audio_sample_rate=}
     for _, media in ipairs(media_list) do
+        -- Prefer V TC (frames at video fps). For audio-only files post-
+        -- normalization V is nil — fall back to audio TC in samples at
+        -- sample rate. The matcher operates in whatever unit stored_rate
+        -- dictates, so an audio-only pairing of (samples, sr) is just as
+        -- valid for containment checks as (frames, fps) is for V.
         local tc_value, tc_rate = media:get_start_tc()
+        local atc_value, atc_rate = media:get_audio_start_tc()
+        if not tc_value then
+            tc_value, tc_rate = atc_value, atc_rate
+        end
         tc_by_id[media.id] = { value = tc_value, rate = tc_rate }
-        local _, atc_rate = media:get_audio_start_tc()
         local audio_rate_for_extent = atc_rate or media.audio_sample_rate
         if audio_rate_for_extent == 0 then audio_rate_for_extent = nil end
         rates_by_id[media.id] = {

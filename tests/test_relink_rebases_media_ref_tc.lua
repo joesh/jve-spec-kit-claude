@@ -97,7 +97,6 @@ local SAMPLES_PER_FRAME = SR / FPS  -- 1920
 
 local OLD_TC_AUDIO = OLD_TC * SAMPLES_PER_FRAME
 local NEW_TC_AUDIO = NEW_TC * SAMPLES_PER_FRAME
-local OLD_DUR_AUDIO = OLD_DUR * SAMPLES_PER_FRAME
 local NEW_DUR_AUDIO = NEW_DUR * SAMPLES_PER_FRAME
 
 local CLIP_SRC_IN  = 2036633   -- inside [NEW_TC, NEW_TC + NEW_DUR) and [OLD_TC, OLD_TC + OLD_DUR)
@@ -253,22 +252,50 @@ print(string.format("  ✓ v_ref: ts=%d src=[%d,%d) dur=%d  (probed TC)",
     v_ref_post.timeline_start_frame, v_ref_post.source_in_frame,
     v_ref_post.source_out_frame, v_ref_post.duration_frames))
 
--- Audio media_refs: independent timebase (samples), independent delta.
+-- Audio media_refs (post placement-unit unification):
+--   timeline_start_frame / duration_frames are in master.fps frames —
+--     identical to the video MR for dual-medium masters.
+--   source_in_frame / source_out_frame stay in file-natural samples —
+--     C++ TMB subtracts first_sample_tc against these. Sub-frame BWF
+--     precision lives on media.start_tc_audio_samples; placement
+--     columns are frame-aligned.
 for _, a_ref in ipairs(a_refs) do
-    assert(a_ref.timeline_start_frame == NEW_TC_AUDIO, string.format(
-        "post: a_ref.timeline_start must rebase in audio-sample space "
-        .. "(got %d, want %d)",
-        a_ref.timeline_start_frame, NEW_TC_AUDIO))
+    assert(a_ref.timeline_start_frame == NEW_TC, string.format(
+        "post: a_ref.timeline_start_frame must rebase to the new video TC "
+        .. "(master.fps frames, uniform with video MR). got %d, want %d",
+        a_ref.timeline_start_frame, NEW_TC))
+    assert(a_ref.duration_frames == NEW_DUR, string.format(
+        "post: a_ref.duration_frames must rebase to master.fps frames "
+        .. "(got %d, want %d)", a_ref.duration_frames, NEW_DUR))
     assert(a_ref.source_in_frame == NEW_TC_AUDIO, string.format(
-        "post: a_ref.source_in must equal new audio TC origin (got %d, want %d)",
-        a_ref.source_in_frame, NEW_TC_AUDIO))
+        "post: a_ref.source_in_frame (samples) must equal new audio TC "
+        .. "origin (got %d, want %d)", a_ref.source_in_frame, NEW_TC_AUDIO))
     assert(a_ref.source_out_frame == NEW_TC_AUDIO + NEW_DUR_AUDIO, string.format(
-        "post: a_ref.source_out must equal new_audio_origin + new_audio_dur "
-        .. "(got %d, want %d)",
+        "post: a_ref.source_out_frame (samples) must equal "
+        .. "new_audio_origin + new_audio_dur (got %d, want %d)",
         a_ref.source_out_frame, NEW_TC_AUDIO + NEW_DUR_AUDIO))
 end
 print(string.format("  ✓ a_ref (n=%d): ts=%d src_out=%d  (probed audio TC)",
     #a_refs, a_refs[1].timeline_start_frame, a_refs[1].source_out_frame))
+
+-- Phase 2d: the MASTER sequence's start_timecode_frame must follow the
+-- rebased media_ref. Pre-relink it carried OLD_TC (from ensure_master at
+-- import). After relink it must equal NEW_TC so source-monitor TC display
+-- and clip-resolution math agree with the linked file's actual origin.
+local master_post = Sequence.load(master_seq)
+assert(master_post.start_timecode_frame == NEW_TC, string.format(
+    "post: master.start_timecode_frame must rebase to new TC origin. "
+    .. "Got %d, expected %d. Stale cached value surfaces in the source-"
+    .. "monitor TC display and produces a pre-content origin (TSO 2026-05-16).",
+    master_post.start_timecode_frame, NEW_TC))
+-- Playhead was sitting at OLD_TC (default from ensure_master); it should
+-- also follow the new origin so the source viewer doesn't land before
+-- the content range begins.
+assert(master_post.playhead_position == NEW_TC, string.format(
+    "post: master.playhead_position must follow start_tc rebase when it "
+    .. "was sitting at the origin; got %d, expected %d",
+    master_post.playhead_position, NEW_TC))
+print("  ✓ master.start_timecode_frame + playhead synced to new TC")
 
 -- Clip is unchanged: its source_in/out are absolute TC moments; the
 -- relink rewires the media_ref under them, not the clip.
@@ -302,5 +329,15 @@ assert(v_ref_undo.source_out_frame == OLD_TC + OLD_DUR,
 assert(v_ref_undo.duration_frames == OLD_DUR,
     "undo: v_ref.duration must restore")
 print("  ✓ media_ref TC + extent restored after undo")
+
+-- Phase 2d undo: master start_tc + playhead must come back to OLD_TC.
+local master_undo = Sequence.load(master_seq)
+assert(master_undo.start_timecode_frame == OLD_TC, string.format(
+    "undo: master.start_timecode_frame must restore to OLD_TC %d, got %d",
+    OLD_TC, master_undo.start_timecode_frame))
+assert(master_undo.playhead_position == OLD_TC, string.format(
+    "undo: master.playhead_position must restore to OLD_TC %d, got %d",
+    OLD_TC, master_undo.playhead_position))
+print("  ✓ master.start_timecode_frame + playhead restored after undo")
 
 print("\n✅ test_relink_rebases_media_ref_tc.lua passed")

@@ -887,7 +887,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             log.detail("FCP7 import: media '%s' no <samplecharacteristics><samplerate>; "
                 .. "using spec-implied default 48000 Hz", tostring(media_info.name or key))
         end
-        local meta = { start_tc_value = 0, start_tc_rate = fps_num }
+        -- Post-normalization: V pair only when file has a video stream,
+        -- A pair only when it has audio. FCP7 XML carries no per-file TC,
+        -- so origins seed at 0 — runtime probe refines via
+        -- media:_ensure_tc_extracted when the file is reachable. Malformed
+        -- entries with neither V nor A characteristics get empty metadata;
+        -- ensure_master will refuse to build a master for them downstream.
+        local has_video = width and width > 0
+        local meta = {}
+        if has_video then
+            meta.start_tc_value = 0
+            meta.start_tc_rate  = fps_num
+        end
         if audio_ch > 0 then
             meta.start_tc_audio_samples = 0
             meta.start_tc_audio_rate    = audio_sr

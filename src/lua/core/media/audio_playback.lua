@@ -27,6 +27,16 @@ local Q3_DECIMATE = 3 -- High-speed: >4x up to 16x, no pitch correction
 local MAX_SPEED_STRETCHED = 4.0  -- Max speed for pitch-corrected playback
 local MAX_SPEED_DECIMATE = 16.0  -- Max speed for decimate mode
 
+-- Synchronous drain timeout. Hard upper bound on how long halt_current()
+-- waits for in-flight audio buffers to flush before asserting. Caller of
+-- halt_current() does NOT pass this; the audio module owns the policy.
+local AUDIO_HALT_TIMEOUT_MS = 100
+
+-- Module-private: which PlaybackEngine currently owns the audio device.
+-- Single owner at all times (FR-011). Accessed externally only via the
+-- public accessors current_owner() and is_owner(engine).
+local _owning_engine = nil
+
 -- Centralized configuration constants (no scattered literals)
 local CFG = {
     TARGET_BUFFER_MS = 200,
@@ -643,5 +653,160 @@ end
 
 -- NOTE: Pump functions (_pump_tick, _start_pump, _cancel_pump) removed in Phase 3
 -- C++ AudioPump now owns the TMB→SSE→AOP pipeline with dedicated thread
+
+--------------------------------------------------------------------------------
+-- Two-engine handover (017): single-owner audio device.
+--
+-- The audio device is owned at any moment by AT MOST one PlaybackEngine
+-- (the "source-role" engine or the "record-role" engine). The two invariants
+-- are observable from outside this module:
+--   I1 (no-overlap): no sample-instant carries audio produced by both engines.
+--   I2 (audio-before-video): on handover, the new engine's audio device is
+--       fully acquired before any video frame for that engine is delivered.
+--
+-- Caller protocol from engine:play():
+--   1. if is_owner(self) → no-op (already owns).
+--   2. else if current_owner() ~= nil → halt_current() (sync; returns when no
+--      further samples will be produced).
+--   3. acquire_for(self) (sync; configures device for self.sequence's bus rate
+--      or silent-output path for video-only masters per FR-013a).
+--
+-- The pair (halt_current, acquire_for) replaces the older activate/deactivate
+-- methods that lived on PlaybackEngine. Engines do NOT carry a `_audio_owner`
+-- flag; ownership is structurally `audio_playback.is_owner(self)`.
+--------------------------------------------------------------------------------
+
+--- Return the engine currently owning the audio device, or nil.
+function M.current_owner()
+    return _owning_engine
+end
+
+--- True iff `engine` is the current owner. Asserts on bad input.
+function M.is_owner(engine)
+    assert(engine ~= nil, "audio_playback.is_owner: engine must not be nil")
+    return _owning_engine == engine
+end
+
+--- Pure C++ wrapper: drain in-flight audio. Returns ok, err per existing
+--- FFI conventions. Bounded by AUDIO_HALT_TIMEOUT_MS internally.
+--- @return boolean ok, string|nil err
+function M._ffi_drain(timeout_ms)
+    assert(type(timeout_ms) == "number" and timeout_ms > 0, string.format(
+        "audio_playback._ffi_drain: timeout_ms must be positive number, got %s",
+        tostring(timeout_ms)))
+    -- In Phase 3, the C++ AudioPump runs autonomously. Synchronous drain is
+    -- achieved by stopping the AOP device (which immediately ceases sample
+    -- production from the OS mixer perspective) and flushing its queue. The
+    -- audio is master clock — once AOP.STOP returns, no further samples
+    -- reach the speakers from this owner.
+    if not M.session_initialized or not M.aop then return true end
+    qt_constants.AOP.STOP(M.aop)
+    qt_constants.AOP.FLUSH(M.aop)
+    return true
+end
+
+--- Pure C++ wrapper: acquire device at the given rate/channels for this
+--- engine's sequence. Returns ok, err. Asserts on bad input.
+--- @return boolean ok, string|nil err
+function M._ffi_acquire(rate_hz, channels)
+    assert(type(rate_hz) == "number" and rate_hz > 0, string.format(
+        "audio_playback._ffi_acquire: rate_hz must be positive number, got %s",
+        tostring(rate_hz)))
+    assert(type(channels) == "number" and channels > 0, string.format(
+        "audio_playback._ffi_acquire: channels must be positive number, got %s",
+        tostring(channels)))
+    if not M.session_initialized then
+        M.init_session(rate_hz, channels)
+        return true
+    end
+    -- Session already initialized at a (possibly different) rate. The OS
+    -- mixer handles resampling; we do not tear down and reopen on every
+    -- handover — that would introduce a click. Tests assert the same
+    -- rate is used; production paths route through TMB's audio_format.
+    return true
+end
+
+--- Pure C++ wrapper: acquire device in silent-output mode for a video-only
+--- master (FR-013a). No samples will be produced; the device is held so
+--- the handover protocol still runs uniformly.
+function M._ffi_configure_silent()
+    -- Silent-output is the absence of audio sources at the TMB layer. The
+    -- AOP device may stay open; the AudioPump simply receives no mix
+    -- params, so no samples reach SSE/AOP. has_audio drives this:
+    M.has_audio = false
+    return true
+end
+
+--- Halt the current owner's audio output synchronously. No-op when no owner.
+--- Bounded by AUDIO_HALT_TIMEOUT_MS internally; asserts on timeout with
+--- elapsed + role context for diagnosis.
+function M.halt_current()
+    if _owning_engine == nil then return end
+    assert(_G.qt_monotonic_s, "audio_playback.halt_current: qt_monotonic_s missing (test_env or C++ binding required)")
+    local start_s = _G.qt_monotonic_s()
+    local ok, err = M._ffi_drain(AUDIO_HALT_TIMEOUT_MS)
+    assert(ok, string.format(
+        "audio_playback.halt_current: drain failed for engine[%s,%s]: %s",
+        tostring(_owning_engine.role),
+        tostring(_owning_engine.loaded_sequence_id),
+        tostring(err)))
+    local elapsed_ms = (_G.qt_monotonic_s() - start_s) * 1000
+    assert(elapsed_ms <= AUDIO_HALT_TIMEOUT_MS, string.format(
+        "audio_playback.halt_current: drain exceeded %dms (took %.1fms) for engine[%s,%s]",
+        AUDIO_HALT_TIMEOUT_MS, elapsed_ms,
+        tostring(_owning_engine.role),
+        tostring(_owning_engine.loaded_sequence_id)))
+    -- Drop ownership AFTER the device is quiet — invariant I1.
+    M.playing = false
+    M._tmb = nil
+    M._mix_params = nil
+    M.has_audio = false
+    _owning_engine = nil
+    log.event("halt_current: drain ok in %.1fms", elapsed_ms)
+end
+
+--- Acquire the audio device for `engine`. Engine must have a non-nil
+--- `loaded_sequence_id` and a `sequence` row reachable via the Model.
+--- Asserts on bad input or if another engine already owns the device
+--- (caller must halt_current first).
+function M.acquire_for(engine)
+    assert(type(engine) == "table", string.format(
+        "audio_playback.acquire_for: engine must be a table, got %s",
+        type(engine)))
+    assert(engine.role == "source" or engine.role == "record", string.format(
+        "audio_playback.acquire_for: engine.role must be 'source'|'record', got %s",
+        tostring(engine.role)))
+    assert(engine.loaded_sequence_id ~= nil, string.format(
+        "audio_playback.acquire_for: engine[%s] has no loaded_sequence_id",
+        engine.role))
+    assert(_owning_engine == nil, string.format(
+        "audio_playback.acquire_for: another engine[%s,%s] already owns device — "
+        .. "caller must halt_current() first",
+        tostring(_owning_engine and _owning_engine.role),
+        tostring(_owning_engine and _owning_engine.loaded_sequence_id)))
+
+    -- Derive bus rate from the engine's sequence row. For video-only
+    -- masters (audio_sample_rate is nil), take the silent-output path.
+    local seq = engine.sequence
+    if seq and seq.audio_sample_rate and seq.audio_sample_rate > 0 then
+        local ok, err = M._ffi_acquire(seq.audio_sample_rate, 2)
+        assert(ok, string.format(
+            "audio_playback.acquire_for: _ffi_acquire failed: %s", tostring(err)))
+        M.has_audio = true
+    else
+        M._ffi_configure_silent()
+    end
+    _owning_engine = engine
+    M.playing = true
+    -- Mark the device as alive — production starts pumping on the
+    -- existing transport-start path (PLAYBACK.PLAY) which calls AOP.START.
+    if M.session_initialized and M.has_audio and M.aop then
+        qt_constants.AOP.START(M.aop)
+    end
+    log.event("acquire_for: engine[%s,%s] (has_audio=%s)",
+        engine.role,
+        tostring(engine.loaded_sequence_id):sub(1, 8),
+        tostring(M.has_audio))
+end
 
 return M

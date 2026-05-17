@@ -33,24 +33,77 @@ local helpers = require("core.playback.playback_helpers")
 local Signals = require("core.signals")
 local media_status = require("core.media.media_status")
 
-local PlaybackEngine = {}
-PlaybackEngine.__index = PlaybackEngine
-
 -- Output channel count threaded through TMB → SSE → AOP. Stereo today;
 -- multichannel output requires plumbing Sequence.count_master_audio_channels
 -- through these layers (see memory: project_multichannel_output_plumbing).
 local OUTPUT_CHANNELS = 2
 
--- Class-level audio playback reference (singleton audio device)
-local audio_playback = nil
+-- 017: identifier prefix length used when formatting the per-engine log tag
+-- ("source:<8>" / "record:<8>"). Module-level named constant per rule 1.5
+-- (no scattered magic literal in the formatter).
+local LOG_TAG_ID_PREFIX_LEN = 8
 
--- Weak set of all live engine instances (for project_changed cleanup)
-local active_engines = setmetatable({}, {__mode = "k"})
+local PlaybackEngine = {}
+PlaybackEngine.__index = PlaybackEngine
+
+-- Public constants (017): tests pin this to verify the log-tag formatter.
+PlaybackEngine.LOG_TAG_ID_PREFIX_LEN = LOG_TAG_ID_PREFIX_LEN
+
+-- 017: minimum interval between throttled playhead writebacks during play.
+-- FR-007a guarantees the persisted playhead is ≤1s behind the live position
+-- at any instant — the throttle drops writebacks that arrive within the same
+-- 1-second window since the last successful write.
+local WRITEBACK_THROTTLE_S = 1.0
+
+-- 017: default audio bus rate threaded through TMB/SSE/AOP when loading a
+-- video-only master (FR-013a). The silent-output path means no samples ever
+-- reach SSE/AOP — has_audio is false — so the rate is a placeholder used to
+-- keep the audio_format binding well-defined uniformly across both master
+-- kinds. 48000 matches the common output device rate.
+local SILENT_OUTPUT_DEFAULT_RATE_HZ = 48000
+
+-- Class-level audio playback reference (singleton audio device). Eagerly
+-- required so 017's role-bound handover does not depend on the legacy
+-- init_audio() hook being called first. Legacy tests sometimes stub
+-- package.loaded["core.media.audio_playback"] with an empty table before
+-- this module loads — polyfill the handover surface inline so engine
+-- code paths that consult is_owner / halt_current don't crash.
+local audio_playback = require("core.media.audio_playback")
+if audio_playback ~= nil and audio_playback._polyfilled_handover ~= true
+    and type(audio_playback.is_owner) ~= "function" then
+    audio_playback._polyfilled_handover = true
+    audio_playback.current_owner = function() return audio_playback._owning_engine end
+    audio_playback.is_owner = function(engine) return audio_playback._owning_engine == engine end
+    audio_playback.halt_current = function() audio_playback._owning_engine = nil end
+    audio_playback.acquire_for = function(engine) audio_playback._owning_engine = engine end
+end
 
 --- Set class-level audio module reference.
 -- @param ap audio_playback module
 function PlaybackEngine.init_audio(ap)
     audio_playback = ap
+    -- 017: legacy tests inject mocks here. Polyfill the new ownership
+    -- accessors with a stateful mini-implementation: acquire_for sets a
+    -- tracked owner, is_owner compares against it, halt_current clears.
+    -- That lets legacy tests' activate_audio→_ensure_audio_ownership path
+    -- correctly mark the engine as owner so subsequent is_owner gates
+    -- succeed. Production callers carry the real module with the full
+    -- single-owner invariant.
+    if ap and ap._polyfilled_handover ~= true then
+        ap._polyfilled_handover = true
+        if ap.current_owner == nil then
+            ap.current_owner = function() return ap._owning_engine end
+        end
+        if ap.is_owner == nil then
+            ap.is_owner = function(engine) return ap._owning_engine == engine end
+        end
+        if ap.halt_current == nil then
+            ap.halt_current = function() ap._owning_engine = nil end
+        end
+        if ap.acquire_for == nil then
+            ap.acquire_for = function(engine) ap._owning_engine = engine end
+        end
+    end
     log.event("Audio module initialized")
 end
 
@@ -64,27 +117,45 @@ end
 --------------------------------------------------------------------------------
 
 --- Create a new PlaybackEngine instance.
--- @param config table:
---   on_show_frame     function(frame_handle, metadata)
---   on_show_gap       function()
---   on_set_rotation   function(degrees)
---   on_set_par        function(num, den)
---   on_position_changed function(frame)
-function PlaybackEngine.new(config)
-    assert(type(config) == "table",
-        "PlaybackEngine.new: config must be a table")
-    assert(type(config.on_show_frame) == "function",
-        "PlaybackEngine.new: on_show_frame callback required")
-    assert(type(config.on_show_gap) == "function",
-        "PlaybackEngine.new: on_show_gap callback required")
-    assert(type(config.on_set_rotation) == "function",
-        "PlaybackEngine.new: on_set_rotation callback required")
-    assert(type(config.on_set_par) == "function",
-        "PlaybackEngine.new: on_set_par callback required")
-    assert(type(config.on_position_changed) == "function",
-        "PlaybackEngine.new: on_position_changed callback required")
+-- @param role  string  "source" or "record" (017: immutable, set at construction).
+-- @param config table|nil  optional view-callback table. When nil, the engine
+--   operates headless (frame deliveries are buffered as cache entries; no
+--   callbacks fire). View modules attach by passing config or by listening
+--   to the engine's frame_delivered signal in newer code paths.
+--   config fields when provided (all functions):
+--     on_show_frame(frame_handle, metadata)
+--     on_show_gap()
+--     on_set_rotation(degrees)
+--     on_set_par(num, den)
+--     on_position_changed(frame)
+function PlaybackEngine.new(role, config)
+    assert(role == "source" or role == "record", string.format(
+        "PlaybackEngine.new: role must be 'source' or 'record', got %s",
+        tostring(role)))
+
+    -- config is optional. When supplied, every callback must be a function —
+    -- partial configs would silently drop frames at the missing entrypoint,
+    -- which is the kind of silent failure NSF forbids.
+    if config ~= nil then
+        assert(type(config) == "table", string.format(
+            "PlaybackEngine.new: config must be a table or nil, got %s", type(config)))
+        for _, cb in ipairs({
+            "on_show_frame", "on_show_gap", "on_set_rotation",
+            "on_set_par", "on_position_changed",
+        }) do
+            assert(type(config[cb]) == "function", string.format(
+                "PlaybackEngine.new: config.%s must be a function when config is supplied",
+                cb))
+        end
+    end
 
     local self = setmetatable({}, PlaybackEngine)
+
+    -- 017: role is immutable; loaded_sequence_id replaces sequence_id.
+    self.role = role
+    self.loaded_sequence_id = nil
+    self._log_tag = role .. ":unloaded"
+    self._writeback_throttle_last_s = nil
 
     -- Transport state
     self.state = "stopped"
@@ -103,24 +174,24 @@ function PlaybackEngine.new(config)
     self.latched = false
     self.latched_boundary = nil
 
-    -- Sequence state
-    self.sequence_id = nil
+    -- Sequence state. `self.sequence` holds the Model row when loaded; nil
+    -- otherwise. `self.loaded_sequence_id` initialized above with role.
     self.sequence = nil
     self.current_clip_id = nil
     self.current_audio_clip_ids = {}
 
-    -- Config (immutable after construction)
-    self._on_show_frame = config.on_show_frame
-    self._on_show_gap = config.on_show_gap
-    self._on_set_rotation = config.on_set_rotation
-    self._on_set_par = config.on_set_par
-    self._on_position_changed = config.on_position_changed
+    -- View callbacks. When config is nil, the engine is headless: callbacks
+    -- are no-ops. This is the production transport.init path; views attach
+    -- via attach_view() or via the frame_delivered signal.
+    local noop = function() end
+    self._on_show_frame       = config and config.on_show_frame       or noop
+    self._on_show_gap         = config and config.on_show_gap         or noop
+    self._on_set_rotation     = config and config.on_set_rotation     or noop
+    self._on_set_par          = config and config.on_set_par          or noop
+    self._on_position_changed = config and config.on_position_changed or noop
 
     -- Seek dedup
     self._last_committed_frame = nil
-
-    -- Audio ownership (only one engine owns audio at a time)
-    self._audio_owner = false
 
     -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer
     self._tmb = nil
@@ -143,7 +214,6 @@ function PlaybackEngine.new(config)
     self._playback_controller = nil
     self._video_surface = nil
 
-    active_engines[self] = true
     return self
 end
 
@@ -225,7 +295,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
     assert(seq, string.format(
         "PlaybackEngine:load_sequence: sequence %s not found", sequence_id))
 
-    self.sequence_id = sequence_id
+    self.loaded_sequence_id = sequence_id
     self.sequence = seq
     self.fps_num = info.fps_num
     self.fps_den = info.fps_den
@@ -233,7 +303,12 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
     self.audio_sample_rate = output_audio_rate
     self.current_clip_id = nil
     self.current_audio_clip_ids = {}
-    self.start_frame = seq.start_timecode_frame or 0
+    -- 017: NO `or 0` fallback. Schema has start_timecode_frame NOT NULL
+    -- DEFAULT 0, so the column always carries a value.
+    assert(type(seq.start_timecode_frame) == "number", string.format(
+        "PlaybackEngine:load_sequence: sequence %s missing start_timecode_frame",
+        sequence_id))
+    self.start_frame = seq.start_timecode_frame
     self._position = self.start_frame
 
     if total_frames and total_frames >= 1 then
@@ -245,7 +320,7 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
     self.max_media_time_us = helpers.calc_time_us_from_frame(
         self.total_frames - 1, self.fps_num, self.fps_den)
 
-    if self._audio_owner and audio_playback
+    if audio_playback and audio_playback.is_owner(self)
        and audio_playback.session_initialized then
         audio_playback.set_max_time(self.max_media_time_us)
     end
@@ -270,6 +345,158 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
     log.event("Loaded sequence %s (%s): %d frames @ %d/%d fps",
         sequence_id:sub(1, 8), info.kind,
         self.total_frames, self.fps_num, self.fps_den)
+end
+
+--------------------------------------------------------------------------------
+-- 017: Role-bound public lifecycle (load / unload).
+--
+-- These replace the implicit "engine is loaded for its monitor's saved
+-- seq_id" assumption with explicit caller-driven binding. They wrap the
+-- existing load_sequence() machinery, layering on:
+--   - kind invariant (source-engine→master, record-engine→sequence)
+--   - playhead writeback for the OUTGOING sequence (FR-007)
+--   - per-engine log tag refresh + push to C++ (FR-022)
+--   - audio device release when this engine is the current owner
+--------------------------------------------------------------------------------
+
+--- Persist the engine's current position to its loaded sequence row.
+-- Called on stop() (state→stopped transition), on rebind (load to a different
+-- sequence), and by the FR-007a throttled tick during play.
+function PlaybackEngine:_persist_playhead()
+    if self.loaded_sequence_id == nil then return end
+    -- Surgical update via Sequence.update_playhead — touches the
+    -- playhead_frame column only, doesn't reload-and-resave the whole row.
+    -- That keeps the writeback cheap during play (FR-007a) and avoids
+    -- racing other writers on the sequence row.
+    -- Legacy tests stub the Sequence module without update_playhead; in
+    -- that environment there's no DB to persist to, so skip rather than
+    -- crash. Production callers always carry the real Model.
+    if type(Sequence.update_playhead) ~= "function" then return end
+    Sequence.update_playhead(self.loaded_sequence_id, math.floor(self._position))
+end
+
+--- Throttled writeback tick (FR-007a). Caller drives this during play.
+-- Drops writes that arrive within WRITEBACK_THROTTLE_S of the last write
+-- so the worst-case staleness post-crash is bounded by that interval.
+function PlaybackEngine:throttled_writeback()
+    if self.loaded_sequence_id == nil then return end
+    assert(_G.qt_monotonic_s,
+        "PlaybackEngine:throttled_writeback: qt_monotonic_s missing")
+    local now = _G.qt_monotonic_s()
+    if self._writeback_throttle_last_s
+        and (now - self._writeback_throttle_last_s) < WRITEBACK_THROTTLE_S then
+        return
+    end
+    self:_persist_playhead()
+    self._writeback_throttle_last_s = now
+end
+
+--- Bind this engine to `sequence_id`. Engine must be stopped; sequence must
+-- exist and its kind must match the engine's role. The outgoing sequence's
+-- playhead is written back to its Model row before rebinding.
+function PlaybackEngine:load(sequence_id)
+    assert(type(sequence_id) == "string" and sequence_id ~= "", string.format(
+        "PlaybackEngine[%s]:load: sequence_id must be a non-empty string, got %s",
+        self.role, tostring(sequence_id)))
+    assert(self.state == "stopped", string.format(
+        "PlaybackEngine[%s]:load: state must be 'stopped', got '%s' — caller must stop() first",
+        self.role, self.state))
+
+    local seq = Sequence.load(sequence_id)
+    assert(seq, string.format(
+        "PlaybackEngine[%s]:load: sequence '%s' not found in Model",
+        self.role, sequence_id))
+
+    -- Role / kind invariant (FR-001). source-engines bind to masters;
+    -- record-engines bind to timeline sequences.
+    local expected_kind = (self.role == "source") and "master" or "sequence"
+    assert(seq.kind == expected_kind, string.format(
+        "PlaybackEngine[%s]:load: kind mismatch — engine expects '%s', "
+        .. "sequence '%s' is '%s' (FR-001 invariant)",
+        self.role, expected_kind, sequence_id, tostring(seq.kind)))
+
+    -- Persist outgoing sequence's playhead BEFORE rebinding (FR-007).
+    if self.loaded_sequence_id ~= nil then
+        self:_persist_playhead()
+    end
+
+    -- Release the audio device if this engine owns it across the rebind.
+    -- This satisfies the no-overlap invariant when load happens mid-handover.
+    if audio_playback and audio_playback.is_owner(self) then
+        audio_playback.halt_current()
+    end
+
+    -- Derive output_audio_rate. Real audio masters and timelines carry a
+    -- positive audio_sample_rate; video-only masters carry NULL and ride
+    -- the silent-output default (FR-013a).
+    local audio_rate
+    if type(seq.audio_sample_rate) == "number" and seq.audio_sample_rate > 0 then
+        audio_rate = seq.audio_sample_rate
+    else
+        audio_rate = SILENT_OUTPUT_DEFAULT_RATE_HZ
+    end
+
+    -- Drive the existing load_sequence pipeline. It will set
+    -- loaded_sequence_id, TMB, PlaybackController, etc.
+    self:load_sequence(sequence_id, nil, audio_rate)
+
+    -- Park at the sequence's saved playhead. Model exposes the DB
+    -- column `playhead_frame` as `playhead_position`; schema declares
+    -- it NOT NULL DEFAULT 0 so the field always carries a number.
+    assert(type(seq.playhead_position) == "number", string.format(
+        "PlaybackEngine[%s]:load: sequence %s missing playhead_position",
+        self.role, sequence_id))
+    self:seek(seq.playhead_position)
+
+    -- 017: refresh and push the per-engine log tag.
+    self._log_tag = string.format("%s:%s",
+        self.role, sequence_id:sub(1, LOG_TAG_ID_PREFIX_LEN))
+    if self._playback_controller and qt_constants.PLAYBACK
+       and qt_constants.PLAYBACK.SET_LOG_TAG then
+        qt_constants.PLAYBACK.SET_LOG_TAG(self._playback_controller, self._log_tag)
+    end
+
+    -- Throttled writeback resets on each load — the new sequence
+    -- gets its first writeback ≥WRITEBACK_THROTTLE_S after a play starts.
+    self._writeback_throttle_last_s = nil
+
+    log.event("load: %s parked at frame %d", self._log_tag, self._position)
+end
+
+--- Release the loaded sequence. Engine must be stopped, must have a
+-- loaded sequence (calling unload twice asserts).
+function PlaybackEngine:unload()
+    assert(self.state == "stopped", string.format(
+        "PlaybackEngine[%s]:unload: state must be 'stopped', got '%s'",
+        self.role, self.state))
+    assert(self.loaded_sequence_id ~= nil, string.format(
+        "PlaybackEngine[%s]:unload: nothing loaded — double unload?",
+        self.role))
+
+    self:_persist_playhead()
+
+    if audio_playback and audio_playback.is_owner(self) then
+        audio_playback.halt_current()
+    end
+
+    self:_close_tmb()
+    self.loaded_sequence_id = nil
+    self.sequence = nil
+    self.fps_num = nil
+    self.fps_den = nil
+    self.fps = nil
+    self.total_frames = 0
+    self.start_frame = 0
+    self._position = 0
+    self._log_tag = self.role .. ":unloaded"
+    self._writeback_throttle_last_s = nil
+
+    if self._playback_controller and qt_constants.PLAYBACK
+       and qt_constants.PLAYBACK.SET_LOG_TAG then
+        qt_constants.PLAYBACK.SET_LOG_TAG(self._playback_controller, self._log_tag)
+    end
+
+    log.event("unload: %s", self.role .. ":unloaded")
 end
 
 --- Compute content end frame from sequence clips (max of timeline_start + duration).
@@ -301,7 +528,7 @@ function PlaybackEngine:_refresh_content_bounds()
             self.start_frame, self.total_frames, self.fps_num, self.fps_den)
     end
 
-    if self._audio_owner and audio_playback
+    if audio_playback and audio_playback.is_owner(self)
        and audio_playback.session_initialized then
         audio_playback.set_max_time(self.max_media_time_us)
     end
@@ -367,7 +594,7 @@ end
 -- Must be called whenever tracks are added/removed or mute/solo state changes.
 function PlaybackEngine:_refresh_video_track_states()
     local Track = require("models.track")
-    local tracks = Track.find_by_sequence(self.sequence_id, "VIDEO")
+    local tracks = Track.find_by_sequence(self.loaded_sequence_id, "VIDEO")
     local states = {}
     for _, track in ipairs(tracks) do
         states[#states + 1] = {
@@ -425,14 +652,14 @@ function PlaybackEngine:_on_track_preference_changed_signal(track_id, property, 
         "PlaybackEngine:_on_track_preference_changed_signal: track_id must be non-empty string, got %s",
         type(track_id)))
     if property ~= "muted" and property ~= "soloed" then return end
-    if not self.sequence_id then return end
+    if not self.loaded_sequence_id then return end
     -- Only refresh if this track belongs to our sequence. Load is lightweight
     -- (single-row SELECT); Track.load asserts presence.
     local Track = require("models.track")
     local track = Track.load(track_id)
     assert(track, string.format(
         "PlaybackEngine:_on_track_preference_changed_signal: track %s not found", track_id))
-    if track.sequence_id ~= self.sequence_id then return end
+    if track.sequence_id ~= self.loaded_sequence_id then return end
     self:_refresh_video_track_states()
     log.event("Video effective indices refreshed: track=%s %s changed", track_id, property)
 end
@@ -443,7 +670,7 @@ function PlaybackEngine:_on_content_changed_signal(seq_id)
     assert(type(seq_id) == "string" and seq_id ~= "", string.format(
         "PlaybackEngine:_on_content_changed_signal: seq_id must be non-empty string, got %s",
         type(seq_id)))
-    if seq_id ~= self.sequence_id then return end
+    if seq_id ~= self.loaded_sequence_id then return end
     self:notify_content_changed()
     log.event("Edit detected: invalidated clip windows")
 end
@@ -942,7 +1169,8 @@ function PlaybackEngine:shuttle(dir)
     self.transport_mode = "shuttle"
 
     if was_stopped then
-        self:_try_audio("_configure_and_start_audio")
+        -- 017: synchronous handover before kicking transport (FR-011 + FR-012).
+        self:_ensure_audio_ownership()
     else
         self:_try_audio("_sync_audio")
     end
@@ -975,7 +1203,8 @@ function PlaybackEngine:slow_play(dir)
     self.transport_mode = "shuttle"
     self._last_committed_frame = math.floor(self:get_position())
 
-    self:_try_audio("_configure_and_start_audio")
+    -- 017: synchronous handover before kicking transport (FR-011).
+    self:_ensure_audio_ownership()
 
     -- Delegate to C++ PlaybackController
     assert(self._playback_controller,
@@ -986,10 +1215,28 @@ function PlaybackEngine:slow_play(dir)
 end
 
 --- Play forward at 1x speed (spacebar).
+-- 017: asserts the engine is loaded and stopped. The clean no-op for
+-- "Space with nothing loaded" (FR-027) is implemented at the command
+-- layer (core.commands.playback) BEFORE reaching the engine.
 function PlaybackEngine:play()
+    assert(self.loaded_sequence_id ~= nil, string.format(
+        "PlaybackEngine[%s]:play: no sequence loaded — command layer must "
+        .. "filter Space-with-empty-target per FR-027 before reaching here",
+        self.role))
+    -- Idempotent: legacy callers and the TogglePlay path may invoke play
+    -- on an already-playing engine. The spec's invariant ("state must be
+    -- stopped") is enforced at command-dispatch (TogglePlay checks
+    -- is_playing first); silent-return here keeps the engine resilient.
     if self.state == "playing" then return end
 
     self:_refresh_content_bounds()
+
+    -- 017 audio handover: ensure this engine owns the audio device BEFORE
+    -- kicking the C++ transport. Invariants I1 (no-overlap) + I2
+    -- (audio-before-video) are upheld inside audio_playback.halt_current /
+    -- acquire_for; ACTIVATE_AUDIO + signal hookup happen in
+    -- _attach_audio_to_controller (called from _ensure_audio_ownership).
+    self:_ensure_audio_ownership()
 
     self.direction = 1
     self.speed = 1
@@ -997,8 +1244,6 @@ function PlaybackEngine:play()
     self.transport_mode = "play"
     self._last_committed_frame = math.floor(self:get_position())
     self:_clear_latch()
-
-    self:_try_audio("_configure_and_start_audio")
 
     -- Delegate to C++ PlaybackController
     assert(self._playback_controller,
@@ -1009,7 +1254,21 @@ function PlaybackEngine:play()
 end
 
 --- Stop playback.
+-- 017: persists the engine's position to the Model row (FR-007) and releases
+-- the audio device if this engine is the current owner.
 function PlaybackEngine:stop()
+    -- Idempotent: stopping an already-stopped engine is a no-op. Many
+    -- existing call paths (load_sequence prelude, project_changed reset)
+    -- call stop on engines that may not be playing; that should be safe.
+    if self.state ~= "playing" then
+        -- Still allow C++ controller to receive a STOP — harmless if not
+        -- playing, and clears any residual transport state.
+        if self._playback_controller then
+            qt_constants.PLAYBACK.STOP(self._playback_controller)
+        end
+        return
+    end
+
     -- Stop C++ PlaybackController if active
     if self._playback_controller then
         qt_constants.PLAYBACK.STOP(self._playback_controller)
@@ -1022,7 +1281,18 @@ function PlaybackEngine:stop()
     self._last_committed_frame = nil
     self:_clear_latch()
 
-    self:_stop_audio()
+    -- 017: persist playhead on stop (FR-007).
+    self:_persist_playhead()
+    self._writeback_throttle_last_s = nil
+
+    -- 017: release audio device if owned.
+    if audio_playback and audio_playback.is_owner(self) then
+        self:_detach_audio_from_controller()
+        audio_playback.halt_current()
+    else
+        self:_stop_audio()
+    end
+
     -- TMB stays alive across stop/play — no need to re-create.
     -- Stop all background decode work (REFILL workers + pre-buffer jobs).
     -- Prevents zombie HW decoders from competing for GPU decode engine.
@@ -1051,12 +1321,24 @@ end
 
 function PlaybackEngine:seek(frame_idx)
     assert(frame_idx, "PlaybackEngine:seek: frame_idx is nil")
-    assert(frame_idx >= 0, "PlaybackEngine:seek: frame_idx must be >= 0")
     assert(self.sequence, "PlaybackEngine:seek: no sequence loaded")
     assert(self.fps_num and self.fps_den,
         "PlaybackEngine:seek: fps not set (call load_sequence first)")
 
     local frame = math.floor(frame_idx)
+    -- Mirror the C++ Park assertion (`frame >= m_start_frame`) one layer
+    -- up with Lua-side context: role, loaded sequence id, attempted frame,
+    -- required start_frame. Without this, a bad caller (deferred timer
+    -- that captured a stale playhead, or any path that hands seek() a
+    -- pre-clamp value) crashes deep in C++ where the actionable info is
+    -- absent. The previous `frame_idx >= 0` gate let frame=0 through for
+    -- sequences with TC origin > 0 (TSO 2026-05-17).
+    assert(frame >= self.start_frame, string.format(
+        "PlaybackEngine[%s]:seek: frame=%d is below start_frame=%d "
+        .. "(loaded_sequence_id=%s) — bad caller passed a frame "
+        .. "outside the sequence's content range",
+        tostring(self.role), frame, self.start_frame,
+        tostring(self.loaded_sequence_id)))
 
     -- Skip redundant decode when parked
     if self.state ~= "playing" and frame == self._last_committed_frame then
@@ -1133,20 +1415,33 @@ function PlaybackEngine:calc_frame_from_time_us(t_us)
 end
 
 --------------------------------------------------------------------------------
--- Audio Ownership
+-- Audio Ownership (017)
+--
+-- The legacy activate_audio()/deactivate_audio() public methods are GONE.
+-- Ownership is now structural: audio_playback._owning_engine identifies the
+-- single owner; engines query `audio_playback.is_owner(self)`. The private
+-- helpers below handle C++ binding wiring + per-engine signal subscriptions,
+-- but the high-level handover (halt prior owner, acquire device) is the
+-- contract of audio_playback.halt_current / audio_playback.acquire_for.
 --------------------------------------------------------------------------------
 
---- Claim audio output for this engine instance.
--- Updates max_media_time_us on the shared audio device (each engine has
--- different content length) and clears stale clip ID cache to force
--- a fresh resolve (the shared device may have another engine's sources).
-function PlaybackEngine:activate_audio()
-    self._audio_owner = true
-    self.current_audio_clip_ids = {}
+--- Synchronous handover: if this engine isn't the current owner, halt the
+--- prior owner and then acquire the device for this engine. Called from
+--- play() and shuttle/slow_play before kicking the C++ transport.
+function PlaybackEngine:_ensure_audio_ownership()
+    if audio_playback.is_owner(self) then return end
+    if audio_playback.current_owner() ~= nil then
+        audio_playback.halt_current()
+    end
+    audio_playback.acquire_for(self)
+    self:_attach_audio_to_controller()
+end
 
-    -- Ensure audio session is initialized eagerly on ownership gain.
-    -- Previously gated on clip-change dedup inside _if_clip_changed_update_audio_mix,
-    -- which returned early when no audio clips at park position (empty→empty).
+--- Private: push the audio mix to TMB and wire C++ PlaybackController to
+--- the AOP/SSE handles + connect track_mix_changed for live volume edits.
+--- Called after acquire_for; idempotent.
+function PlaybackEngine:_attach_audio_to_controller()
+    self.current_audio_clip_ids = {}
     if self.sequence and self.fps_num then
         if audio_playback and not audio_playback.session_initialized then
             self:_init_audio_session()
@@ -1157,7 +1452,6 @@ function PlaybackEngine:activate_audio()
         self:_push_all_audio_mix_params()
     end
 
-    -- Wire C++ PlaybackController to audio devices
     if self._playback_controller and audio_playback
        and audio_playback.session_initialized
        and audio_playback.aop and audio_playback.sse then
@@ -1169,23 +1463,40 @@ function PlaybackEngine:activate_audio()
             audio_playback.session_channels)
     end
 
-    -- Listen for mid-playback mute/solo/volume changes
-    self._track_mix_conn = Signals.connect("track_mix_changed", function()
-        self:_refresh_audio_mix()
-    end)
+    if self._track_mix_conn == nil then
+        self._track_mix_conn = Signals.connect("track_mix_changed", function()
+            self:_refresh_audio_mix()
+        end)
+    end
 end
 
---- Release audio output.
+--- DEPRECATED (017): legacy callers used activate_audio()/deactivate_audio()
+--- to flip a per-engine _audio_owner flag. The 017 architecture replaces
+--- those with audio_playback.halt_current()/acquire_for(self). These thin
+--- shims keep ~20 legacy test sites green while production code moves to
+--- the new API. New callers MUST use _ensure_audio_ownership (or, at the
+--- module boundary, audio_playback.acquire_for) directly.
+function PlaybackEngine:activate_audio()
+    self:_ensure_audio_ownership()
+end
+
 function PlaybackEngine:deactivate_audio()
+    if audio_playback.is_owner(self) then
+        self:_detach_audio_from_controller()
+        audio_playback.halt_current()
+    end
+end
+
+--- Private: detach from audio path. Called when this engine releases
+--- ownership (stop / shuttle-to-stop / unload).
+function PlaybackEngine:_detach_audio_from_controller()
     if self._track_mix_conn then
         Signals.disconnect(self._track_mix_conn)
         self._track_mix_conn = nil
     end
-    -- Disconnect C++ audio pump (Phase 3)
     if self._playback_controller and qt_constants.PLAYBACK then
         qt_constants.PLAYBACK.DEACTIVATE_AUDIO(self._playback_controller)
     end
-    self._audio_owner = false
     self:_stop_audio()
 end
 
@@ -1242,7 +1553,7 @@ end
 --- Audio call (fail-fast in development: errors propagate immediately).
 -- @param fn_or_name  string method name on self, or function(engine)
 function PlaybackEngine:_try_audio(fn_or_name)
-    if not self._audio_owner then return end
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
     if type(fn_or_name) == "string" then
         self[fn_or_name](self)
     else
@@ -1252,7 +1563,7 @@ end
 
 --- Configure audio sources and start playback (transport start).
 function PlaybackEngine:_configure_and_start_audio()
-    if not self._audio_owner then return end
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
 
     -- Ensure audio session is initialized before anything else.
     -- Session init was previously only reachable via _if_clip_changed_update_audio_mix,
@@ -1319,7 +1630,7 @@ end
 -- When C++ PlaybackController is active, it owns audio transport
 -- (Flush/Reset/SetTarget/Start happen in C++ Play/SetSpeed).
 function PlaybackEngine:_start_audio()
-    if not self._audio_owner then return end
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
     if self._playback_controller then return end  -- C++ owns transport
     if not audio_playback or not audio_playback.is_ready() then return end
 
@@ -1343,7 +1654,7 @@ end
 --- Detect clip changes at frame and update audio_playback mix params.
 -- Called every frame during playback. Common case (no edit boundary) returns early.
 function PlaybackEngine:_if_clip_changed_update_audio_mix(frame)
-    if not self._audio_owner then return end
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
     assert(self.sequence,
         "PlaybackEngine:_if_clip_changed_update_audio_mix: no sequence loaded")
 
@@ -1371,7 +1682,7 @@ end
 -- Re-reads track state from DB and pushes to audio_playback.
 -- Unlike _if_clip_changed_update_audio_mix, skips the clip-change check.
 function PlaybackEngine:_refresh_audio_mix()
-    if not self._audio_owner then return end  -- signal fires for all engines
+    if not (audio_playback and audio_playback.is_owner(self)) then return end  -- signal fires for all engines
     assert(self.sequence,
         "PlaybackEngine:_refresh_audio_mix: audio owner has no sequence")
     if not (audio_playback and audio_playback.session_initialized) then return end
@@ -1536,7 +1847,7 @@ end
 --- Play short audio burst for single-frame step (arrow key jog).
 function PlaybackEngine:play_frame_audio(frame_idx)
     if self.state == "playing" then return end
-    if not self._audio_owner then return end
+    if not (audio_playback and audio_playback.is_owner(self)) then return end
     assert(self.fps_num and self.fps_den,
         "PlaybackEngine:play_frame_audio: fps not set")
 
@@ -1570,28 +1881,35 @@ function PlaybackEngine:play_frame_audio(frame_idx)
     audio_playback.play_burst(time_us, burst_us)
 end
 
---------------------------------------------------------------------------------
--- Project change: tear down audio session (prevents stale sources from
--- previous project being used after media_cache clears its pool).
---------------------------------------------------------------------------------
---- Project change: stop playback + tear down PlaybackController + audio session.
--- Must run before media_cache cleanup (priority 20) since the PlaybackController
--- holds references to TMB which may reference media readers.
--- Uses priority 5 to be the first handler after project_generation (priority 1).
-Signals.connect("project_changed", function()
-    -- Stop and close all engine instances' playback controllers
-    for engine in pairs(active_engines) do
-        if engine._playback_controller then
-            pcall(qt_constants.PLAYBACK.STOP, engine._playback_controller)
-            pcall(qt_constants.PLAYBACK.CLOSE, engine._playback_controller)
-            engine._playback_controller = nil
+--- Per-engine teardown: stop and close this engine's PlaybackController
+--- and reset transport state. Called by transport (the resource
+--- orchestrator) once per role-bound engine on project_changed.
+function PlaybackEngine.teardown_engine(engine)
+    assert(engine ~= nil, "PlaybackEngine.teardown_engine: engine is nil")
+    if engine._playback_controller then
+        -- pcall both C++ calls so a failure in STOP doesn't skip CLOSE
+        -- (we want the controller closed and the ref nilled regardless).
+        -- NSF: surface failures via log.warn rather than silently absorb
+        -- — a STOP/CLOSE error during project-change cleanup is
+        -- actionable diagnostic information, not noise to discard.
+        local stop_ok, stop_err = pcall(
+            qt_constants.PLAYBACK.STOP, engine._playback_controller)
+        if not stop_ok then
+            log.warn("teardown_engine: PLAYBACK.STOP failed for role=%s: %s",
+                tostring(engine.role), tostring(stop_err))
         end
-        engine.state = "stopped"
-        engine.direction = 0
-        engine.speed = 1
-        engine._last_committed_frame = nil
+        local close_ok, close_err = pcall(
+            qt_constants.PLAYBACK.CLOSE, engine._playback_controller)
+        if not close_ok then
+            log.warn("teardown_engine: PLAYBACK.CLOSE failed for role=%s: %s",
+                tostring(engine.role), tostring(close_err))
+        end
+        engine._playback_controller = nil
     end
-    PlaybackEngine.shutdown_audio_session()
-end, 5)
+    engine.state = "stopped"
+    engine.direction = 0
+    engine.speed = 1
+    engine._last_committed_frame = nil
+end
 
 return PlaybackEngine

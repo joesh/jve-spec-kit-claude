@@ -136,6 +136,7 @@ local mock_next_audio_entries = {}
 
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return 200 end,
     get_video_at = function(self, frame) return mock_video_entries end,
     get_next_video = function(self, boundary) return mock_next_video_entries end,
@@ -227,7 +228,7 @@ PlaybackEngine.init_audio(mock_audio)
 
 local function make_engine()
     local log = { positions = {} }
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,

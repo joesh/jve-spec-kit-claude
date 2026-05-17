@@ -177,7 +177,14 @@ local function find_adjacent_pair(track_id, min_headroom)
             -- Check media headroom: can clip_a extend its out edge?
             local media = Media.load(a_media_id)
             if media and media.duration then
-                local tc_origin = media:get_start_tc() or 0
+                -- Prefer V TC, fall back to audio TC for audio-only media
+                -- (post-normalization V TC is nil there — source_in lives in
+                -- sample space, so the headroom origin must be sample TC).
+                local tc_origin = media:get_start_tc()
+                if not tc_origin then
+                    tc_origin = media:get_audio_start_tc()
+                end
+                tc_origin = tc_origin or 0
                 local file_src_in = a.source_in - tc_origin
                 if file_src_in < 0 then file_src_in = 0 end
                 local available = media.duration - file_src_in - a.duration

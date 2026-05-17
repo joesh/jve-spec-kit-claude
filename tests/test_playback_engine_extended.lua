@@ -141,6 +141,7 @@ local audio_at_map = nil  -- nil = use default
 local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return mock_content_end end,
     get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
@@ -260,7 +261,7 @@ local function make_engine()
 
     reset_playback()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -717,18 +718,16 @@ do
     assert(PlaybackEngine.get_audio().session_initialized,
         "audio session must be initialized before project_changed")
 
-    -- Verify project_changed handler is registered
-    assert(signal_handlers["project_changed"],
-        "PlaybackEngine must register a project_changed signal handler")
-    local found_handler = false
-    for _, entry in ipairs(signal_handlers["project_changed"]) do
-        if type(entry.handler) == "function" then
-            found_handler = true
-            entry.handler("new_project_id")
-        end
-    end
-    assert(found_handler,
-        "project_changed must have a function handler from playback_engine")
+    -- 017 module-responsibility split: project_changed → engine cleanup
+    -- flows via transport (the resource orchestrator) walking the two
+    -- role-bound engines and calling per-engine teardown + audio session
+    -- shutdown. The engine module exposes the building blocks; transport
+    -- composes them. This test exercises the engine-side contract: a
+    -- direct shutdown_audio_session call must de-init the audio session.
+    -- Per-engine teardown is covered by transport's own tests.
+    assert(type(PlaybackEngine.shutdown_audio_session) == "function",
+        "PlaybackEngine must expose shutdown_audio_session")
+    PlaybackEngine.shutdown_audio_session()
 
     -- Module ref preserved (allows re-init on next play) but session shut down
     assert(PlaybackEngine.get_audio() ~= nil,
@@ -885,7 +884,7 @@ do
     -- _try_audio when not audio owner → no-op (no error)
     -- WHITE-BOX: NSF test — verifying defensive guard on private method.
     -- No public API to test "not audio owner" path without another engine.
-    engine._audio_owner = false  -- luacheck: ignore
+    mock_audio._owning_engine = nil  -- luacheck: ignore
     ok = pcall(function()
         engine:_try_audio(function()
             error("should not reach")

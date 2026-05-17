@@ -161,6 +161,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq1",
+            start_timecode_frame = 0,
             compute_content_end = function() return 200 end,
             get_video_at = function(_, frame)
                 if frame >= 0 and frame < 200 then return { mock_clip_entry } end
@@ -217,7 +218,7 @@ PlaybackEngine.init_audio(mock_audio)
 local function make_engine()
     local surface = make_surface()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(fh, _meta)
             -- Mirrors SequenceMonitor:_on_show_frame exactly
             qt_constants_mock.EMP.SURFACE_SET_FRAME(surface, fh)
