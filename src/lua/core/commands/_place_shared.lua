@@ -22,6 +22,7 @@ local Track     = require("models.track")
 local Clip      = require("models.clip")
 local clip_link = require("models.clip_link")
 local Cycle     = require("models.cycle")
+local subframe_math = require("core.subframe_math")
 
 --- Pick the effective fps-mismatch policy for a place operation.
 --- Chain: explicit arg → owner sequence override (non-NULL) → project default.
@@ -445,28 +446,57 @@ local function insert_video_clip(plan, next_id)
     })
 end
 
+-- 018 FR-008 / FR-025: convert plan-internal (samples, sample_count) into
+-- canonical (master.fps frame, ticks subframe) at the clip write boundary.
+-- plan.audio_source_in is in SAMPLES at the nested master's effective audio
+-- rate; tgt.source_out is the sample count. Resolver expects master.fps
+-- frames + sample residual carried in source_*_subframe.
+local function convert_audio_samples_to_frame_subframe(plan, samples)
+    local rate = Sequence.effective_audio_sample_rate(plan.nested)
+    assert(rate and rate > 0, string.format(
+        "place_shared.insert_audio_clips: nested %s has no effective audio "
+        .. "rate (FR-008 conversion needs it)", tostring(plan.nested.id)))
+    local proj = assert(Project.load(plan.owner.project_id), string.format(
+        "place_shared.insert_audio_clips: project %s not found",
+        tostring(plan.owner.project_id)))
+    local mch = proj:get_master_clock_hz()
+    local tpf = subframe_math.ticks_per_frame(mch,
+        plan.nested.fps_numerator, plan.nested.fps_denominator)
+    local ticks = subframe_math.samples_to_ticks(samples, rate, mch)
+    -- Lua multi-return truncation gotcha: `return f(...), x` keeps only the
+    -- first return of f. Capture explicitly.
+    local frame, sub = subframe_math.unpack(ticks, tpf)
+    return frame, sub
+end
+
 local function insert_audio_clips(plan, next_id)
     local audio_targets = plan.audio_targets
     if not audio_targets or #audio_targets == 0 then return {} end
-    local a_in = plan.audio_source_in
-    assert(a_in, "place_shared.write_clips: audio targets without audio_source_in")
+    local a_in_samples = plan.audio_source_in
+    assert(a_in_samples, "place_shared.write_clips: audio targets without audio_source_in")
+
+    -- Convert the source_in offset once (same for every audio target).
+    local in_frame, in_sub = convert_audio_samples_to_frame_subframe(plan, a_in_samples)
+
     local ids = {}
     for _, tgt in ipairs(audio_targets) do
-        -- 018 FR-013: edit commands write frame-aligned audio clips
-        -- (subframe = 0). Sample-precise sub-frame edits are a future feature.
+        -- tgt.source_out is the source range in SAMPLES from the plan;
+        -- absolute file-sample boundary is a_in_samples + tgt.source_out.
+        local out_frame, out_sub = convert_audio_samples_to_frame_subframe(
+            plan, a_in_samples + tgt.source_out)
         ids[#ids + 1] = Clip.create({
             id                    = next_id(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = tgt.track_id,
-            sequence_id    = plan.nested.id,
+            sequence_id           = plan.nested.id,
             name                  = plan.base_name,
             sequence_start_frame  = plan.start_frame,
             duration_frames       = plan.owner_duration,
-            source_in_frame       = a_in,
-            source_out_frame      = a_in + tgt.source_out,
-            source_in_subframe    = 0,
-            source_out_subframe   = 0,
+            source_in_frame       = in_frame,
+            source_out_frame      = out_frame,
+            source_in_subframe    = in_sub,
+            source_out_subframe   = out_sub,
             master_layer_track_id = nil,
             master_audio_track_id = tgt.master_audio_track_id,
             fps_mismatch_policy   = plan.policy,

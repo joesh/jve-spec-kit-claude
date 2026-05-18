@@ -27,7 +27,8 @@ assert(db:exec(require('import_schema')))
 -- Seed a default project/sequence/tracks (mirrors layout.lua defaults)
 assert(db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('default_project', 'Default Project', 'resample', 0, 0, '{}');
+    VALUES ('default_project', 'Default Project', 'resample', 0, 0,
+            '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
     INSERT INTO sequences (
         id, project_id, name, kind,

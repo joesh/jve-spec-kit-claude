@@ -248,15 +248,15 @@ local function run_case(label, project_policy, explicit_arg_policy,
             "clip name must be non-empty string (schema NOT NULL)")
     end
 
-    -- Per-medium source_out: different units on purpose. Video clip's
-    -- source range is in master video frames (100 at 25fps); audio clip's
-    -- is in master audio samples (192000 at 48kHz) — both four wall-clock
-    -- seconds, different unit systems.
+    -- 018 FR-008: BOTH video AND audio clip source ranges are now in
+    -- master.fps frames (with sample residual in source_*_subframe). 4
+    -- seconds at 25fps + 48 kHz is exactly 100 frames with subframe=0;
+    -- the legacy "audio = 192000 samples" expectation was the FR-025 bug.
     assert(vc.source_out_frame == 100, string.format(
         "video clip source_out_frame=%d expected 100 (master video frames)",
         vc.source_out_frame))
-    assert(ac.source_out_frame == 192000, string.format(
-        "audio clip source_out_frame=%d expected 192000 (master audio samples)",
+    assert(ac.source_out_frame == 100, string.format(
+        "audio clip source_out_frame=%d expected 100 (master.fps frames per 018 FR-008)",
         ac.source_out_frame))
 
     -- Link group: one id shared between the V and A clips.
