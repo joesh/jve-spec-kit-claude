@@ -9,7 +9,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 10
+M.SCHEMA_VERSION = 11
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"

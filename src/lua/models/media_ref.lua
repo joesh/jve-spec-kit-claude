@@ -82,13 +82,22 @@ function M.create(fields)
     M.assert_owning_is_master(db, id, fields.owner_sequence_id)
 
     local now = fields.created_at or os.time()
+    -- 018 (V11): audio_sample_rate denormalized from media for resolver hot path.
+    -- Required when the underlying media has audio (FR-008 needs it for sample math).
+    -- NULL only for video-only media_refs.
+    if fields.audio_sample_rate ~= nil then
+        assert(type(fields.audio_sample_rate) == "number" and fields.audio_sample_rate > 0,
+            string.format("MediaRef.create: audio_sample_rate must be positive integer when provided; got %s",
+                tostring(fields.audio_sample_rate)))
+    end
     local stmt = db:prepare([[
         INSERT INTO media_refs (
             id, project_id, owner_sequence_id, track_id, media_id,
             source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+            audio_sample_rate,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "MediaRef.create: failed to prepare INSERT")
     stmt:bind_value(1, id)
@@ -100,13 +109,14 @@ function M.create(fields)
     stmt:bind_value(7, fields.source_out_frame)
     stmt:bind_value(8, fields.sequence_start_frame)
     stmt:bind_value(9, fields.duration_frames)
-    stmt:bind_value(10, to_int_bool(fields.enabled))
-    stmt:bind_value(11, fields.volume)
-    stmt:bind_value(12, fields.mark_in_frame)   -- nullable
-    stmt:bind_value(13, fields.mark_out_frame)  -- nullable
-    stmt:bind_value(14, fields.playhead_frame)
-    stmt:bind_value(15, now)
-    stmt:bind_value(16, fields.modified_at or now)
+    stmt:bind_value(10, fields.audio_sample_rate)  -- nullable per V11
+    stmt:bind_value(11, to_int_bool(fields.enabled))
+    stmt:bind_value(12, fields.volume)
+    stmt:bind_value(13, fields.mark_in_frame)   -- nullable
+    stmt:bind_value(14, fields.mark_out_frame)  -- nullable
+    stmt:bind_value(15, fields.playhead_frame)
+    stmt:bind_value(16, now)
+    stmt:bind_value(17, fields.modified_at or now)
 
     local ok = stmt:exec()
     stmt:finalize()
@@ -122,6 +132,7 @@ function M.find(id)
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, media_id,
                source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+               audio_sample_rate,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
                created_at, modified_at
         FROM media_refs WHERE id = ?
@@ -141,13 +152,14 @@ function M.find(id)
             source_out_frame = stmt:value(6),
             sequence_start_frame = stmt:value(7),
             duration_frames = stmt:value(8),
-            enabled = stmt:value(9) == 1,
-            volume = stmt:value(10),
-            mark_in_frame = stmt:value(11),
-            mark_out_frame = stmt:value(12),
-            playhead_frame = stmt:value(13),
-            created_at = stmt:value(14),
-            modified_at = stmt:value(15),
+            audio_sample_rate = stmt:value(9),
+            enabled = stmt:value(10) == 1,
+            volume = stmt:value(11),
+            mark_in_frame = stmt:value(12),
+            mark_out_frame = stmt:value(13),
+            playhead_frame = stmt:value(14),
+            created_at = stmt:value(15),
+            modified_at = stmt:value(16),
         }
     end
     stmt:finalize()

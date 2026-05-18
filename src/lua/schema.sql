@@ -1,6 +1,12 @@
--- JVE Database Schema V10
+-- JVE Database Schema V11
+-- Feature 018: Uniform Clip Source Timebase + Canonical-Clock Sub-Frame Primitives.
+--   - clips.source_in_subframe / source_out_subframe (INTEGER, NULL for video, NOT NULL for audio)
+--   - media_refs.audio_sample_rate (INTEGER, denormalized from media row)
+--   - sequences.audio_sample_rate MUST be NULL on kind='master' (INV-7)
+--   - projects.settings carries default_fps {num,den} and master_clock_hz (default 192000)
+--   - INV-3 .. INV-7 triggers enforce subframe presence/bound + fps/clock single-writer
 -- Feature 015: Source-in-Timeline — adds tracks.sync_mode column and patches table.
--- No backward compatibility with V9 or earlier (rule 2.15: re-import on schema change).
+-- No backward compatibility with V10 or earlier (rule 2.15: re-import on schema change).
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -14,7 +20,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (10);
+INSERT OR IGNORE INTO schema_version (version) VALUES (11);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -217,6 +223,11 @@ CREATE TABLE IF NOT EXISTS media_refs (
     sequence_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
+    -- 018 (V11): audio sample rate denormalized from media.audio_sample_rate at insert time.
+    -- NULL allowed for video-only media_refs. Read by resolver (FR-008) per-emit; denorm
+    -- avoids a media join in the hot path.
+    audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate > 0),
+
     -- Source timebase is the referenced media's (media.fps_numerator/denominator);
     -- not carried on this row to avoid denormalization.
 
@@ -251,9 +262,14 @@ CREATE TABLE IF NOT EXISTS clips (
     -- master_clip_id column with clearer semantics.
     sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
 
-    -- Window into the nested sequence's timebase.
+    -- Window into the source sequence's timebase.
+    -- source_*_frame: integer frames in source sequence's fps.
+    -- source_*_subframe (018, V11): integer ticks at project.master_clock_hz, in [0, ticks_per_frame).
+    --   NULL on video clips; NOT NULL on audio clips. Enforced by INV-3 + INV-4.
     source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
+    source_in_subframe INTEGER,
+    source_out_subframe INTEGER,
 
     -- Where on this sequence's track the clip sits. sequence_start_frame and
     -- duration_frames are in the OWNER sequence's timebase; source_in/out are
@@ -579,4 +595,167 @@ BEGIN
         LIMIT 1
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;
+END;
+
+-- ============================================================================
+-- 018 INVARIANT TRIGGERS — sub-frame primitives + fps/clock single-writer
+-- ============================================================================
+-- INV-3: clips subframe presence by clip kind (FR-001)
+--   VIDEO clips MUST have NULL subframes.
+--   AUDIO clips MUST have non-NULL subframes.
+-- INV-4: clips subframe bound (FR-002)
+--   0 <= source_*_subframe < master_clock_hz * source_seq.fps_den / source_seq.fps_num.
+-- INV-5: sequences.fps_num/den single-writer (FR-031)
+--   UPDATE rejected unless db_session_flags has '_conform_sequence_in_progress' row.
+-- INV-6: projects.settings.master_clock_hz single-writer (FR-028)
+--   UPDATE OF settings that changes master_clock_hz rejected unless
+--   db_session_flags has '_set_master_clock_in_progress' row.
+-- INV-7: sequences.audio_sample_rate must be NULL on kind='master' (FR-004)
+--
+-- Session-flag pattern: SQLite non-TEMP triggers cannot reference temp.*,
+-- so the flag table is a permanent table (db_session_flags). Commands INSERT
+-- the flag row inside their transaction and DELETE before COMMIT. On rollback
+-- the flag row goes with the transaction — defense-in-depth.
+
+CREATE TABLE IF NOT EXISTS db_session_flags (
+    name TEXT PRIMARY KEY
+);
+
+-- ---------- INV-3 — subframe presence by clip kind ----------
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_kind_insert;
+CREATE TRIGGER trg_clips_subframe_kind_insert
+BEFORE INSERT ON clips
+BEGIN
+    SELECT CASE
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
+             AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
+        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+             AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
+        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+    END;
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_kind_update;
+CREATE TRIGGER trg_clips_subframe_kind_update
+BEFORE UPDATE OF source_in_subframe, source_out_subframe, track_id ON clips
+BEGIN
+    SELECT CASE
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
+             AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
+        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+             AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
+        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+    END;
+END;
+
+-- ---------- INV-4 — subframe bound ----------
+-- ticks_per_frame = master_clock_hz * source_seq.fps_den / source_seq.fps_num.
+-- master_clock_hz pulled from projects.settings JSON via json_extract.
+-- SQLite JSON1 is compiled into the lsqlite3 build used by JVE.
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_bound_insert;
+CREATE TRIGGER trg_clips_subframe_bound_insert
+BEFORE INSERT ON clips
+WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
+BEGIN
+    SELECT CASE
+        WHEN NEW.source_in_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        WHEN NEW.source_out_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        WHEN NEW.source_in_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        WHEN NEW.source_out_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+    END;
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_bound_update;
+CREATE TRIGGER trg_clips_subframe_bound_update
+BEFORE UPDATE OF source_in_subframe, source_out_subframe, sequence_id ON clips
+WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
+BEGIN
+    SELECT CASE
+        WHEN NEW.source_in_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        WHEN NEW.source_out_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        WHEN NEW.source_in_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        WHEN NEW.source_out_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+    END;
+END;
+
+-- ---------- INV-5 — sequences.fps_num/den single-writer ----------
+-- Allowed only when temp table _conform_sequence_in_progress exists
+-- (ConformSequence creates it inside its transaction).
+
+DROP TRIGGER IF EXISTS trg_sequences_fps_guard;
+CREATE TRIGGER trg_sequences_fps_guard
+BEFORE UPDATE OF fps_numerator, fps_denominator ON sequences
+WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
+                  WHERE name = '_conform_sequence_in_progress')
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-5: sequences.fps_num/den mutable only via ConformSequence');
+END;
+
+-- ---------- INV-6 — projects.settings.master_clock_hz single-writer ----------
+-- Fires only when the master_clock_hz value within settings actually changes,
+-- and only when SetProjectMasterClock's temp-table flag is absent.
+
+DROP TRIGGER IF EXISTS trg_projects_master_clock_guard;
+CREATE TRIGGER trg_projects_master_clock_guard
+BEFORE UPDATE OF settings ON projects
+WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
+                  WHERE name = '_set_master_clock_in_progress')
+  AND json_extract(NEW.settings, '$.master_clock_hz')
+      IS NOT json_extract(OLD.settings, '$.master_clock_hz')
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-6: projects.settings.master_clock_hz mutable only via SetProjectMasterClock');
+END;
+
+-- ---------- INV-7 — master.audio_sample_rate must be NULL ----------
+
+DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_insert;
+CREATE TRIGGER trg_sequences_master_audio_rate_null_insert
+BEFORE INSERT ON sequences
+WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
+END;
+
+DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_update;
+CREATE TRIGGER trg_sequences_master_audio_rate_null_update
+BEFORE UPDATE OF kind, audio_sample_rate ON sequences
+WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
 END;
