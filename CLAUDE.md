@@ -24,6 +24,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files; project settings live in `projects.settings` JSON column (014-two-phase-project)
 - Lua (LuaJIT 2.1) for UI/command/data layers; C++17 (Qt 6.x) for performance-critical timeline/render layers (no C++ changes anticipated by this feature). + existing `core/command_manager`, `core/signals`, `core/ripple/batch/pipeline`, `core/clip_mutator`, `models/track`, `ui/timeline/timeline_panel`, `ui/source_viewer`, `ui/panel_manager`. SQLite (lsqlite3) for project persistence. JSON in `~/.jve/` for per-user app preferences. (015-source-in-timeline)
 - SQLite `.jvp` project files. Forward-only migration: add `tracks.sync_mode` column; create `patches` table. Per-user preference `source_routing_view` persists as JSON in `~/.jve/` alongside existing prefs (`recent_projects.json`, `file_browser_paths.json`, etc.). (015-source-in-timeline)
+- Lua (LuaJIT 2.1) for the model, command, importer, and edit-command layers; C++17 (Qt 6.x) for any binding-layer touches (none expected — this feature lives entirely above the C++/Qt boundary). (018-uniform-clip-source)
+- SQLite `.jvp` project files. Schema bumps from V10 → V11 in this feature. (018-uniform-clip-source)
 
 READ ENGINEERING.md
 
