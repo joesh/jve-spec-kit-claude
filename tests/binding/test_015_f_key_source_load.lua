@@ -66,12 +66,12 @@ db:exec(string.format([[
 
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        sequence_start_frame, duration_frames,
+        sequence_start_frame, duration_frames, audio_sample_rate,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200, %d, 1200, 1, 1.0, 0, %d, %d),
-      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, %d, 2400000, 1, 1.0, 0, %d, %d),
-      ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0,  600, 0,    600, 1, 1.0, 0, %d, %d);
+      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200, %d, 1200, NULL,  1, 1.0, 0, %d, %d),
+      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, %d, 2400000, 48000, 1, 1.0, 0, %d, %d),
+      ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0,  600, 0,    600, NULL,  1, 1.0, 0, %d, %d);
 ]], now,now,                              -- projects (2)
     now,now, now,now, now,now,            -- 3 sequences (6)
     now,now, now,now,                     -- 2 media (4)

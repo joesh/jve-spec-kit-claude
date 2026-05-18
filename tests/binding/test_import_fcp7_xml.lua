@@ -79,8 +79,9 @@ local function bootstrap_schema(conn)
     assert(conn, "bootstrap_schema requires a database connection")
     assert(conn:exec(require('import_schema')), "Failed to create schema tables")
     assert(conn:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
-        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy, settings)
+        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough',
+                '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
         INSERT INTO sequences (
             id, project_id, name, kind,
@@ -601,11 +602,13 @@ end
 
 local function fetch_single_clip_id(sequence_id)
     assert(sequence_id, "fetch_single_clip_id: sequence_id required")
-    -- V13: every clip is on the owner sequence's tracks (clips must be owned by a kind='sequence' sequence).
+    -- 018: pick a VIDEO clip — MoveClipToTrack target below is a VIDEO track,
+    -- and INV-3 forbids moving an AUDIO clip (carries source_*_subframe) onto
+    -- a VIDEO track without first nulling the sub-frame columns.
     local stmt = db:prepare([[
         SELECT c.id FROM clips c
         JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ?
+        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
         LIMIT 1
     ]])
     assert(stmt, "fetch_single_clip_id: prepare failed")
@@ -648,7 +651,11 @@ local move_cmd = Command.create("MoveClipToTrack", "default_project")
 move_cmd:set_parameter("clip_id", clip_for_move)
 move_cmd:set_parameter("target_track_id", video_tracks[2])
 move_cmd:set_parameter("skip_occlusion", true)
-assert(command_manager.execute(move_cmd).success, "MoveClipToTrack should succeed")
+do
+    local r = command_manager.execute(move_cmd)
+    assert(r and r.success, "MoveClipToTrack should succeed; got result="
+        .. require("dkjson").encode(r) .. " last_error=" .. tostring(command_manager.get_last_error and command_manager.get_last_error()))
+end
 local nudge_cmd2 = Command.create("Nudge", "default_project")
 nudge_cmd2:set_parameter("nudge_amount", -10)
 nudge_cmd2:set_parameter("selected_clip_ids", {clip_for_move})

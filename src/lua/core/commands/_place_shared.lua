@@ -794,6 +794,9 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
                 duration_frames       = right_duration,
                 source_in_frame       = e.source_in_frame + source_offset,
                 source_out_frame      = e.source_out_frame,
+                -- 018 FR-014: split preserves any pre-existing subframe.
+                source_in_subframe    = e.source_in_subframe,
+                source_out_subframe   = e.source_out_subframe,
                 master_layer_track_id = e.master_layer_track_id,
                 fps_mismatch_policy   = e.fps_mismatch_policy,
                 enabled               = e.enabled,

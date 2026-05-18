@@ -1194,7 +1194,8 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
                name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+               source_in_subframe, source_out_subframe
         FROM clips
         WHERE track_id = ?
           AND sequence_start_frame < ?
@@ -1227,6 +1228,8 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
             mark_in_frame         = stmt:value(14),
             mark_out_frame        = stmt:value(15),
             playhead_frame        = stmt:value(16),
+            source_in_subframe    = stmt:value(17),
+            source_out_subframe   = stmt:value(18),
         }
     end
     stmt:finalize()
