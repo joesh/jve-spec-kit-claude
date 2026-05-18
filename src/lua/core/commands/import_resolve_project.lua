@@ -380,6 +380,8 @@ function M.register(executors, undoers, db)
             height = parse_result.project.settings.height,
             audio_sample_rate = args.audio_sample_rate
                 or pick_majority(parse_result),
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 },
         }
 
         local project = Project.create(parse_result.project.name, {
@@ -491,6 +493,8 @@ function M.register(executors, undoers, db)
             frame_rate = import_result_raw.project.frame_rate,
             width = import_result_raw.project.width,
             height = import_result_raw.project.height,
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 },
         }
 
         local project = Project.create(import_result_raw.project.name, {

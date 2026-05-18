@@ -110,13 +110,17 @@ print("  PASS: 6 video clips — all source_in values match DRP <In>")
 -- ═══════════════════════════════════════════════════════════════
 print("\n--- 2: V/A source_in correspondence ---")
 
--- V13: audio clips and video clips for the same media share one master
--- sequence; that master's fps_* reflects the media's VIDEO fps.
--- The audio sample rate lives on the media row (and nested seq's
--- audio_sample_rate). Verify both — they should match.
+-- 018: source_in_frame is in master.fps frames + a sub-frame in master-clock
+-- ticks (rule INV-3/INV-4). master_clock_hz = 192000. With 60fps video and
+-- 48000 Hz audio, spf=800 samples/frame and tpf=3200 ticks/frame.
+-- master.audio_sample_rate is NULL per INV-7; the file rate lives on media.
+-- Column order matters: query_all stops at the first NULL value, so
+-- columns guaranteed non-NULL come first. ns.audio_sample_rate is NULL
+-- on masters per INV-7 — keep it last.
 local audio_clips = query_all([[
     SELECT c.sequence_start_frame, c.source_in_frame, c.duration_frames,
-           ns.audio_sample_rate, m.audio_sample_rate
+           c.source_in_subframe, m.audio_sample_rate,
+           ns.audio_sample_rate
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences s ON t.sequence_id = s.id
@@ -132,37 +136,41 @@ local audio_clips = query_all([[
 assert(#audio_clips == 6, string.format("expected 6 A1 clips, got %d", #audio_clips))
 
 -- First 5 clips are paired V/A from same media at ~60fps video / 48kHz audio.
--- Both source_in values are at their native rates, computed independently
--- from the same DRP <In> field. Due to independent rounding, the exact ratio
--- audio/video ≈ 48000/60 = 800 but may differ by a few samples.
--- Known-answer audio values (from probe):
-local expected_audio = {
-    {86400, 4378000},    -- V/A pair 1
-    {86762, 5180000},    -- V/A pair 2
-    {86811, 5298000},    -- V/A pair 3
-    {86856, 5502000},    -- V/A pair 4
-    {87383, 6602000},    -- V/A pair 5
+-- Audio file-sample positions are recovered from (frame, subframe_ticks) as
+-- frame*spf + ticks_to_samples(subframe_ticks). The values below are the
+-- file-natural sample positions derived from the DRP <In> probe.
+local expected_audio_samples = {
+    4378000,   -- pair 1
+    5180000,   -- pair 2
+    5298000,   -- pair 3
+    5502000,   -- pair 4
+    6602000,   -- pair 5
 }
+
+local SPF = 800       -- samples_per_frame at 60fps × 48000Hz
+local SUB_TICKS_PER_SAMPLE = 192000 / 48000  -- master_clock_hz / audio_sr = 4
 
 for i = 1, 5 do
     local v = video_clips[i]
     local a = audio_clips[i]
-    -- Same timeline position
     assert(v[1] == a[1], string.format(
         "clip %d: V tl_start=%d != A tl_start=%d", i, v[1], a[1]))
-    -- Audio source_in matches known value
-    assert(a[2] == expected_audio[i][2], string.format(
-        "clip %d: expected audio src_in=%d, got %d",
-        i, expected_audio[i][2], a[2]))
-    -- V13: audio sample rate lives on media + master seq, both should be 48000.
-    assert(a[4] == 48000, string.format(
-        "clip %d: master seq audio_sample_rate should be 48000, got %s",
-        i, tostring(a[4])))
+    -- Recover file-sample from (frame, subframe_ticks). a[4] = source_in_subframe.
+    local samples = a[2] * SPF + math.floor(a[4] / SUB_TICKS_PER_SAMPLE)
+    assert(samples == expected_audio_samples[i], string.format(
+        "clip %d: recovered audio sample %d (frame=%d sub_ticks=%d) " ..
+        "should equal %d", i, samples, a[2], a[4], expected_audio_samples[i]))
+    -- File rate lives on media.
     assert(a[5] == 48000, string.format(
         "clip %d: media audio_sample_rate should be 48000, got %s",
         i, tostring(a[5])))
+    -- INV-7: master sequence carries NO audio_sample_rate. (Column 6, will
+    -- be nil — query_all's break-on-nil stops here, which is fine.)
+    assert(a[6] == nil, string.format(
+        "clip %d: master seq audio_sample_rate must be NULL (INV-7); got %s",
+        i, tostring(a[6])))
 end
-print("  PASS: 5 V/A pairs — audio source_in at 48kHz native rate")
+print("  PASS: 5 V/A pairs — audio (frame, subframe) recovers native sample positions")
 
 -- ═══════════════════════════════════════════════════════════════
 -- 3. Clip 6 is a different DRP clip (speed=0.38, different coordinates)
@@ -172,16 +180,18 @@ print("\n--- 3: Non-unity speed audio clip ---")
 local a6 = audio_clips[6]
 -- Known-answer (derived from DRP XML, not code tracing):
 -- <In>=6000|00e0401cd451d83f → 6000 whole frames + sub-frame hex that
--- decodes as LE IEEE-754 double to 0.37999…
--- Per commit 9b5d306f, importer snaps both video AND audio to whole
--- source frames (Resolve Media-Manage cuts on whole-frame boundaries
--- for both): in_frame = ceil(6000.38 - 1e-6) = 6001.
--- At 48 kHz audio native rate via 24fps timeline:
---   src_in = 6001 × 48000 / 24 = 12,002,000 samples.
--- tl=90082, src_in=12002000, dur=6, audio_sample_rate=48000.
+-- decodes as LE IEEE-754 double to 0.37999… (Resolve probe value).
+-- The DRP <In> is expressed in SOURCE frames at the file's video rate
+-- (24fps). The master sequence runs at 60fps, so the file-sample anchor
+-- is 12,002,000 (post-Resolve-snap to a whole source frame at 24fps:
+-- 6001 source-frames * 2000 samples/frame). 018 stores this in master.fps
+-- frames + sub-frame ticks: 12_002_000 = 15002*800 + 1600/4.
 assert(a6[1] == 90082, "clip 6 tl_start: " .. tostring(a6[1]))
-assert(a6[2] == 12002000, "clip 6 src_in: " .. tostring(a6[2]))
-assert(a6[4] == 48000, "clip 6 master seq audio_sample_rate: " .. tostring(a6[4]))
+local a6_samples = a6[2] * SPF + math.floor(a6[4] / SUB_TICKS_PER_SAMPLE)
+assert(a6_samples == 12002000, string.format(
+    "clip 6 file-sample anchor (frame=%d sub_ticks=%d → %d) should equal 12002000",
+    a6[2], a6[4], a6_samples))
+assert(a6[6] == nil, "clip 6 master seq audio_sample_rate must be NULL (INV-7): " .. tostring(a6[6]))
 -- This clip's source_in does NOT follow the V/A * 800 rule because it's
 -- a different clip with speed=0.38 (the DRP speed affects source mapping)
 -- V1 clip 6: tl=90084, src_in=14998 — different sequence_start too

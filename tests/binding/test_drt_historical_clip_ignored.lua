@@ -104,7 +104,11 @@ assert(db:exec([[
 local importer_core = require("importers.importer_core")
 -- importer_core asserts audio_sample_rate is supplied (no silent default).
 local import_result = importer_core.import_into_project('hp', r, {
-    project_settings = { audio_sample_rate = 48000 },
+    project_settings = {
+        audio_sample_rate = 48000,
+        master_clock_hz = 192000,
+        default_fps = { num = 24, den = 1 },
+    },
 })
 
 -- Find the saved clip whose parse-side original_clip pointed at phantom_path.

@@ -38,7 +38,7 @@ local TC_ORIGIN_24FPS = 1324752  -- 15:19:58:00 @ 24fps — camera-original
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
     VALUES ('proj', 'F Key Test', 'resample', %d, %d,
-            '{"last_open_sequence_id":"rec","open_sequence_ids":["rec"]}');
+            '{"last_open_sequence_id":"rec","open_sequence_ids":["rec"],"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -46,7 +46,7 @@ db:exec(string.format([[
         view_duration_frames, created_at, modified_at)
     VALUES
       ('rec', 'proj', 'Record', 'sequence', 25, 1, 48000, 1920, 1080, 100, 0, 1500, %d, %d),
-      ('msa', 'proj', 'A012',   'master', 24, 1, 48000, 1920, 1080,   0, 0,  300, %d, %d),
+      ('msa', 'proj', 'A012',   'master', 24, 1,  NULL, 1920, 1080,   0, 0,  300, %d, %d),
       ('msb', 'proj', 'A037',   'master', 24, 1,  NULL, 1920, 1080,   0, 0,  300, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

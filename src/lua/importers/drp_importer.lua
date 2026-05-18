@@ -465,7 +465,10 @@ end
 local function parse_project_metadata(project_elem)
     local project = {
         name = "Untitled Project",
-        settings = {}
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 },
+        }
     }
 
     if not project_elem then

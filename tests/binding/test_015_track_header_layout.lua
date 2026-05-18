@@ -41,7 +41,7 @@ local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
     VALUES ('proj', 'Header Layout', 'resample', %d, %d,
-            '{"last_open_sequence_id":"rec","open_sequence_ids":["rec"]}');
+            '{"last_open_sequence_id":"rec","open_sequence_ids":["rec"],"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
 
     INSERT INTO sequences (id, project_id, name, kind,
