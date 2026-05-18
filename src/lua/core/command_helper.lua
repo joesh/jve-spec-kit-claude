@@ -457,6 +457,8 @@ function M.restore_clip_state(state)
             "restore_clip_state: state.volume required")
         assert(type(state.playhead) == "number",
             "restore_clip_state: state.playhead required")
+        -- 018 V1 / INV-3: thread captured subframes through restore. Captures
+        -- preserve audio (0,0) and video (nil,nil) per FR-013 / INV-3.
         local new_id = Clip.create({
             id = state.id,
             project_id = state.project_id,
@@ -468,6 +470,8 @@ function M.restore_clip_state(state)
             duration_frames = state.duration,
             source_in_frame = state.source_in,
             source_out_frame = state.source_out,
+            source_in_subframe = state.source_in_subframe,
+            source_out_subframe = state.source_out_subframe,
             master_layer_track_id = state.master_layer_track_id,
             master_audio_track_id = state.master_audio_track_id,
             fps_mismatch_policy = state.fps_mismatch_policy,
@@ -536,6 +540,10 @@ function M.capture_clip_state(clip)
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
+        -- 018 V11 / INV-3 / FR-005: subframe round-trips through capture.
+        -- Audio clips carry non-NULL (0..tpf-1); video carries NULL.
+        source_in_subframe = clip.source_in_subframe,
+        source_out_subframe = clip.source_out_subframe,
         name = clip.name,
         enabled = clip.enabled,
         frame_rate = rate,

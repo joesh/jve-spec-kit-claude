@@ -257,23 +257,25 @@ end
 --   7: c.duration_frames
 --   8: c.source_in_frame
 --   9: c.source_out_frame
---   10: c.master_layer_track_id
---   11: c.master_audio_track_id
---   12: c.fps_mismatch_policy
---   13: c.enabled
---   14: c.created_at
---   15: c.modified_at
---   16: t.sequence_id            (track's owning sequence — must match owner_sequence_id)
---   17: t.track_type             ('VIDEO' or 'AUDIO')
---   18: owner_seq.fps_numerator  (owner sequence timebase)
---   19: owner_seq.fps_denominator
---   20: nested_seq.kind          ('master' or 'sequence')
---   21: nested_seq.fps_numerator (clip-side / source-side timebase = nested seq's rate)
---   22: nested_seq.fps_denominator
---   23: mr.media_id              (NULL when nested is itself nested, or master has no media_ref)
---   24: m.name                   (NULL when no media join)
---   25: m.file_path              (NULL when no media join)
---   26: m.offline_note           (NULL when no media join)
+--   10: c.source_in_subframe    (018; NULL for video, INTEGER for audio)
+--   11: c.source_out_subframe   (018; NULL for video, INTEGER for audio)
+--   12: c.master_layer_track_id
+--   13: c.master_audio_track_id
+--   14: c.fps_mismatch_policy
+--   15: c.enabled
+--   16: c.created_at
+--   17: c.modified_at
+--   18: t.sequence_id            (track's owning sequence — must match owner_sequence_id)
+--   19: t.track_type             ('VIDEO' or 'AUDIO')
+--   20: owner_seq.fps_numerator  (owner sequence timebase)
+--   21: owner_seq.fps_denominator
+--   22: nested_seq.kind          ('master' or 'sequence')
+--   23: nested_seq.fps_numerator (clip-side / source-side timebase = nested seq's rate)
+--   24: nested_seq.fps_denominator
+--   25: mr.media_id              (NULL when nested is itself nested, or master has no media_ref)
+--   26: m.name                   (NULL when no media join)
+--   27: m.file_path              (NULL when no media join)
+--   28: m.offline_note           (NULL when no media join)
 local function build_clip_from_query_row(query, requested_sequence_id)
     if not query then
         return nil
@@ -290,7 +292,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
     end
 
     local owner_sequence_id = query:value(4)
-    local track_sequence_id = query:value(16)
+    local track_sequence_id = query:value(18)
     if not owner_sequence_id then
         error(string.format(
             "FATAL: load_clips: clip %s missing owner_sequence_id",
@@ -312,9 +314,9 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local source_kind = query:value(20)
-    local nested_fps_num = query:value(21)
-    local nested_fps_den = query:value(22)
+    local source_kind = query:value(22)
+    local nested_fps_num = query:value(23)
+    local nested_fps_den = query:value(24)
     if not nested_fps_num or not nested_fps_den then
         error(string.format(
             "FATAL: load_clips: missing nested-sequence fps for clip %s (nested=%s)",
@@ -322,8 +324,8 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local owner_fps_num = query:value(18)
-    local owner_fps_den = query:value(19)
+    local owner_fps_num = query:value(20)
+    local owner_fps_den = query:value(21)
     if not owner_fps_num or not owner_fps_den then
         error(string.format(
             "FATAL: load_clips: missing owner-sequence fps for clip %s (owner=%s)",
@@ -331,12 +333,12 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local media_id = query:value(23)
-    local media_name = query:value(24)
-    local media_path = query:value(25)
-    local offline_note = query:value(26)
+    local media_id = query:value(25)
+    local media_name = query:value(26)
+    local media_path = query:value(27)
+    local offline_note = query:value(28)
 
-    local track_type = query:value(17)
+    local track_type = query:value(19)
 
     local clip = {
         id = clip_id,
@@ -347,14 +349,18 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         track_sequence_id = owner_sequence_id,
         sequence_id = sequence_id,
         source_sequence_kind = source_kind,
-        master_layer_track_id = query:value(10),
-        master_audio_track_id = query:value(11),
-        fps_mismatch_policy = query:value(12),
+        master_layer_track_id = query:value(12),
+        master_audio_track_id = query:value(13),
+        fps_mismatch_policy = query:value(14),
 
         sequence_start = assert(query:value(6), string.format("load_clips: clip %s missing sequence_start", clip_id)),
         duration = assert(query:value(7), string.format("load_clips: clip %s missing duration", clip_id)),
         source_in = assert(query:value(8), string.format("load_clips: clip %s missing source_in", clip_id)),
         source_out = assert(query:value(9), string.format("load_clips: clip %s missing source_out", clip_id)),
+
+        -- 018: subframe round-trips through load (NULL for video, INTEGER for audio).
+        source_in_subframe = query:value(10),
+        source_out_subframe = query:value(11),
 
         -- The clip's source_in/out are in the source sequence's timebase.
         frame_rate = {
@@ -362,9 +368,9 @@ local function build_clip_from_query_row(query, requested_sequence_id)
             fps_denominator = nested_fps_den,
         },
 
-        enabled = query:value(13) == 1,
-        created_at = query:value(14),
-        modified_at = query:value(15),
+        enabled = query:value(15) == 1,
+        created_at = query:value(16),
+        modified_at = query:value(17),
 
         track_type = track_type,
 
@@ -961,6 +967,7 @@ function M.load_clips(sequence_id)
                c.owner_sequence_id, c.sequence_id,
                c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
+               c.source_in_subframe, c.source_out_subframe,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
@@ -1149,6 +1156,7 @@ function M.load_clip_entry(clip_id)
                c.owner_sequence_id, c.sequence_id,
                c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
+               c.source_in_subframe, c.source_out_subframe,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
@@ -1175,7 +1183,7 @@ function M.load_clip_entry(clip_id)
 
     local clip = nil
     if query:exec() and query:next() then
-        clip = build_clip_from_query_row(query, query:value(16))
+        clip = build_clip_from_query_row(query, query:value(18))  -- 018: t.sequence_id shifted from 16 → 18 after subframe cols at 10,11
     end
 
     query:finalize()

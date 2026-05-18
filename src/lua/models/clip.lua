@@ -938,6 +938,33 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
 end
 
+-- 018 (V11 / INV-3 / FR-013): explicit accessor for "frame-aligned" clip
+-- creation. Caller invokes by name to acknowledge FR-013's "marks UX is
+-- frame-aligned today; subframe = 0 for new audio clips" contract. This is
+-- NOT a silent fallback (rule 2.13): the call site's choice of this
+-- function over the strict path IS the value-declaration.
+--
+-- Returns (sub_in, sub_out) tuple to splat into the fields table at the
+-- audio-creating call site:
+--   local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
+--   Clip.create({ ..., source_in_subframe = sub_in, source_out_subframe = sub_out })
+function M.subframe_defaults_for(db, track_id)
+    assert(db, "Clip.subframe_defaults_for: db connection required")
+    assert(track_id and track_id ~= "",
+        "Clip.subframe_defaults_for: track_id required")
+    local stmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(stmt, "Clip.subframe_defaults_for: prepare failed")
+    stmt:bind_value(1, track_id)
+    assert(stmt:exec(), "Clip.subframe_defaults_for: exec failed")
+    assert(stmt:next(), string.format(
+        "Clip.subframe_defaults_for: track not found for id=%s", tostring(track_id)))
+    local tt = stmt:value(0)
+    stmt:finalize()
+    if tt == "AUDIO" then return 0, 0 end
+    return nil, nil
+end
+
+-- (Internal) Same as above but called from _create_v13_row's audit path.
 -- 018 (V11 / INV-3 / FR-013): subframe columns presence is driven by the
 -- clip's track_type. AUDIO requires both source_*_subframe non-NULL; VIDEO
 -- requires both NULL. Caller passes both explicitly — no silent default
