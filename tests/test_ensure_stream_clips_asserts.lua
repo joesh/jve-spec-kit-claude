@@ -31,7 +31,8 @@ local function fake_master(opts)
 end
 
 expect_error("missing frame_rate fails loud", function()
-    local s = fake_master({ audio_sample_rate = 48000 })
+    -- 018: masters carry no audio_sample_rate; pass nil per INV-7.
+    local s = fake_master({ audio_sample_rate = nil })
     s:video_stream()
 end, "missing frame_rate")
 
@@ -41,11 +42,12 @@ expect_error("nested sequence without audio_sample_rate refused", function()
         { id = "e", kind = "sequence" })
 end, "audio_sample_rate is required for non%-master")
 
--- Sequence.create: zero/negative audio_sample_rate is rejected even on master.
-expect_error("master with zero audio_sample_rate refused", function()
+-- 018 INV-7: masters MUST have NULL audio_sample_rate (audio rate is
+-- per-media_ref, not per-master). Passing any non-NULL value is refused.
+expect_error("master with non%-NULL audio_sample_rate refused (INV-7)", function()
     Sequence.create("m", "p1", FR, 1920, 1080,
-        { id = "m", kind = "master", audio_sample_rate = 0 })
-end, "audio_sample_rate must be a positive number")
+        { id = "m", kind = "master", audio_sample_rate = 48000 })
+end, "audio_sample_rate=nil")
 
 -- Sequence.create: master may carry NULL audio_sample_rate (video-only).
 do

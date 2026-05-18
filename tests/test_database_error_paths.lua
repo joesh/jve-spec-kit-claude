@@ -105,8 +105,8 @@ VALUES ('master_nomedia', 'proj1', 'nomedia_master', 'master', 24, 1, NULL, 1920
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_a_nomedia', 'master_nomedia', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('clip3', 'proj1', '', 'trk_a1', 'master_nomedia', 'seq1', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('clip3', 'proj1', '', 'trk_a1', 'master_nomedia', 'seq1', 0, 200, 0, 200, 0, 0, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Empty sequence for zero-clip tests
