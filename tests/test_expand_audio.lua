@@ -87,7 +87,7 @@ local function build_fixture()
                 0, 100, 0, 100, NULL, NULL, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0),
                ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough',
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg', 'cv', 'video', 0, 1),

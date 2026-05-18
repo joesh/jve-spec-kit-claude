@@ -64,10 +64,10 @@ local function build_fixture()
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('cv',  'p1', 'e', 'e-v1', 'm', 'cv',  0, 100, 0, 100, NULL, NULL,    NULL, NULL,  'passthrough', 1, 1.0, 0, 0, 0),
-               ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1', 0, 100, 0, 200000, NULL, 'm-a1','passthrough', 1, 1.0, 0, 0, 0),
-               ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2', 0, 100, 0, 200000, NULL, 'm-a2','passthrough', 1, 1.0, 0, 0, 0),
-               ('ca3', 'p1', 'e', 'e-a3', 'm', 'ca3', 0, 100, 0, 200000, NULL, 'm-a3','passthrough', 1, 1.0, 0, 0, 0),
-               ('ca4', 'p1', 'e', 'e-a4', 'm', 'ca4', 0, 100, 0, 200000, NULL, 'm-a4','passthrough', 1, 1.0, 0, 0, 0);
+               ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1', 0, 100, 0, 200000, 0, 0, NULL, 'm-a1','passthrough', 1, 1.0, 0, 0, 0),
+               ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2', 0, 100, 0, 200000, 0, 0, NULL, 'm-a2','passthrough', 1, 1.0, 0, 0, 0),
+               ('ca3', 'p1', 'e', 'e-a3', 'm', 'ca3', 0, 100, 0, 200000, 0, 0, NULL, 'm-a3','passthrough', 1, 1.0, 0, 0, 0),
+               ('ca4', 'p1', 'e', 'e-a4', 'm', 'ca4', 0, 100, 0, 200000, 0, 0, NULL, 'm-a4','passthrough', 1, 1.0, 0, 0, 0);
         -- Add an override on ca2 so the round-trip preserves a non-trivial state.
         INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
         VALUES ('ca2', 0, 0, -6.0);

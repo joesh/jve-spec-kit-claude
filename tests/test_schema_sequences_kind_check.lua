@@ -19,11 +19,13 @@ assert(db:exec(string.format(
     "projects INSERT failed — projects.fps_mismatch_policy column missing (T008 not landed?)")
 
 local function kind_insert(kind)
+    -- 018 INV-7: masters must have NULL audio_sample_rate.
+    local asr = kind == "master" and "NULL" or "48000"
     local sql = string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
         .. "audio_sample_rate, width, height, created_at, modified_at) "
-        .. "VALUES ('s-%s', '%s', 'n', '%s', 24, 1, 48000, 1920, 1080, 0, 0)",
-        kind, PROJECT_ID, kind)
+        .. "VALUES ('s-%s', '%s', 'n', '%s', 24, 1, %s, 1920, 1080, 0, 0)",
+        kind, PROJECT_ID, kind, asr)
     return db:exec(sql)
 end
 
