@@ -18,6 +18,9 @@ local function round_half_away_from_zero(x)
     if x >= 0 then return math.floor(x + 0.5) end
     return -math.floor(-x + 0.5)
 end
+-- Exposed for callers that need the canonical FR-008 rounding rule outside
+-- the sample/tick conversions (e.g. SetProjectMasterClock's per-clip rescale).
+M.round_half_away_from_zero = round_half_away_from_zero
 
 local function assert_int(name, v)
     assert(type(v) == "number" and v == math.floor(v),

@@ -265,6 +265,141 @@ function Project.set_fps_mismatch_policy(id, policy)
     return prior
 end
 
+--- 018 FR-036b: read current master_clock_hz from projects.settings JSON.
+function Project.get_master_clock_hz_for_id(id)
+    assert(id and id ~= "", "Project.get_master_clock_hz_for_id: id required")
+    local conn = resolve_db(nil)
+    local stmt = conn:prepare(
+        "SELECT json_extract(settings, '$.master_clock_hz') FROM projects WHERE id = ?")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Project.get_master_clock_hz_for_id: exec failed")
+    assert(stmt:next(), string.format(
+        "Project.get_master_clock_hz_for_id: project %s not found", id))
+    local v = stmt:value(0); stmt:finalize()
+    assert(type(v) == "number" and v > 0, string.format(
+        "Project.get_master_clock_hz_for_id: project %s has invalid mch=%s",
+        id, tostring(v)))
+    return v
+end
+
+--- 018 FR-036b helpers — used by SetProjectMasterClock command.
+--- collect_audio_clips: returns one row per clip with NON-NULL subframes,
+--- shape { id, in_sub, out_sub }, deterministic by id.
+function Project.collect_audio_clips(project_id)
+    assert(project_id and project_id ~= "",
+        "Project.collect_audio_clips: project_id required")
+    local conn = resolve_db(nil)
+    local stmt = conn:prepare([[
+        SELECT id, source_in_subframe, source_out_subframe
+        FROM clips
+        WHERE project_id = ? AND source_in_subframe IS NOT NULL
+        ORDER BY id ASC
+    ]])
+    assert(stmt, "Project.collect_audio_clips: prepare failed")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), "Project.collect_audio_clips: exec failed")
+    local rows = {}
+    while stmt:next() do
+        rows[#rows + 1] = {
+            id = stmt:value(0), in_sub = stmt:value(1), out_sub = stmt:value(2),
+        }
+    end
+    stmt:finalize()
+    return rows
+end
+
+--- 018 FR-036b: transactionally rescale clip subframes and rewrite
+--- master_clock_hz. The caller passes the new clock and the pre-captured
+--- (id, in_sub, out_sub) rows. Returns the post-rescale subframes for undo.
+--- INV-6 flag is set inside the savepoint and cleared before release.
+function Project.transition_master_clock_hz(project_id, new_mch, pre_subs, rescale_fn)
+    assert(project_id and project_id ~= "",
+        "Project.transition_master_clock_hz: project_id required")
+    assert(type(new_mch) == "number" and new_mch > 0
+        and math.floor(new_mch) == new_mch,
+        "Project.transition_master_clock_hz: new_mch must be positive integer")
+    assert(type(pre_subs) == "table",
+        "Project.transition_master_clock_hz: pre_subs table required")
+    assert(type(rescale_fn) == "function",
+        "Project.transition_master_clock_hz: rescale_fn(in_sub, out_sub) injector required")
+
+    local SAVEPOINT = "project_set_master_clock"
+    local SESSION_FLAG = "_set_master_clock_in_progress"
+
+    local db_mod = require("core.database")
+    local conn = resolve_db(nil)
+    assert(db_mod.savepoint(SAVEPOINT),
+        "Project.transition_master_clock_hz: savepoint failed")
+
+    local ok, result_or_err = pcall(function()
+        local flag_ins = conn:prepare(
+            "INSERT INTO db_session_flags (name) VALUES (?)")
+        flag_ins:bind_value(1, SESSION_FLAG)
+        assert(flag_ins:exec(), "set INV-6 flag failed")
+        flag_ins:finalize()
+
+        -- ORDER MATTERS: write settings FIRST so INV-4's tpf computation
+        -- (= new_mch * fps_den / fps_num) uses the NEW clock. Then the
+        -- per-clip rescale UPDATEs see ticks_per_frame derived from the
+        -- new clock and bound the new subframes correctly. Reverse order
+        -- (clips first) breaks undo-direction (upscale) when new subframe
+        -- values are larger than the OLD-clock tpf.
+        local fetch = conn:prepare("SELECT settings FROM projects WHERE id = ?")
+        fetch:bind_value(1, project_id)
+        assert(fetch:exec() and fetch:next(), "fetch settings failed")
+        local s_str = fetch:value(0); fetch:finalize()
+        local json = require("dkjson")
+        local decoded = assert(json.decode(s_str), "settings not JSON")
+        decoded.master_clock_hz = new_mch
+        local new_settings = json.encode(decoded)
+
+        local upd_set = conn:prepare(
+            "UPDATE projects SET settings = ?, modified_at = ? WHERE id = ?")
+        upd_set:bind_value(1, new_settings)
+        upd_set:bind_value(2, os.time())
+        upd_set:bind_value(3, project_id)
+        local set_ok = upd_set:exec()
+        local set_err
+        if not set_ok then set_err = conn:last_error() end
+        upd_set:finalize()
+        assert(set_ok, "settings UPDATE failed: " .. tostring(set_err))
+
+        local upd_sub = conn:prepare(
+            "UPDATE clips SET source_in_subframe = ?, source_out_subframe = ? WHERE id = ?")
+        local post = {}
+        for _, c in ipairs(pre_subs) do
+            local new_in, new_out = rescale_fn(c.in_sub, c.out_sub)
+            upd_sub:bind_value(1, new_in)
+            upd_sub:bind_value(2, new_out)
+            upd_sub:bind_value(3, c.id)
+            local sub_ok = upd_sub:exec()
+            local err
+            if not sub_ok then err = conn:last_error() end
+            upd_sub:reset(); upd_sub:clear_bindings()
+            assert(sub_ok, string.format(
+                "rescale clip %s failed: %s", tostring(c.id), tostring(err)))
+            post[#post + 1] = { id = c.id, in_sub = new_in, out_sub = new_out }
+        end
+        upd_sub:finalize()
+
+        local flag_del = conn:prepare("DELETE FROM db_session_flags WHERE name = ?")
+        flag_del:bind_value(1, SESSION_FLAG)
+        assert(flag_del:exec(), "clear INV-6 flag failed")
+        flag_del:finalize()
+
+        return post
+    end)
+
+    if not ok then
+        db_mod.rollback_to_savepoint(SAVEPOINT)
+        db_mod.release_savepoint(SAVEPOINT)
+        error(result_or_err, 0)
+    end
+    assert(db_mod.release_savepoint(SAVEPOINT),
+        "Project.transition_master_clock_hz: release savepoint failed")
+    return result_or_err
+end
+
 --- 018 FR-036a: read current default_fps from projects.settings JSON. Returns
 --- (num, den) integer pair. Asserts the key is present (rule 2.13 — never
 --- silently invent a default).
