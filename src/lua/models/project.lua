@@ -265,6 +265,85 @@ function Project.set_fps_mismatch_policy(id, policy)
     return prior
 end
 
+--- 018 FR-036a: read current default_fps from projects.settings JSON. Returns
+--- (num, den) integer pair. Asserts the key is present (rule 2.13 — never
+--- silently invent a default).
+function Project.get_default_fps(id)
+    assert(id and id ~= "", "Project.get_default_fps: id required")
+    local conn = resolve_db(nil)
+    local stmt = conn:prepare([[
+        SELECT json_extract(settings, '$.default_fps.num'),
+               json_extract(settings, '$.default_fps.den')
+        FROM projects WHERE id = ?
+    ]])
+    assert(stmt, "Project.get_default_fps: prepare failed")
+    stmt:bind_value(1, id)
+    assert(stmt:exec(), "Project.get_default_fps: exec failed")
+    assert(stmt:next(), string.format("Project.get_default_fps: project %s not found", id))
+    local n, d = stmt:value(0), stmt:value(1)
+    stmt:finalize()
+    assert(type(n) == "number" and n > 0 and type(d) == "number" and d > 0,
+        string.format("Project.get_default_fps: project %s has invalid default_fps (%s/%s)",
+            id, tostring(n), tostring(d)))
+    return n, d
+end
+
+--- 018 FR-036a: write projects.settings.default_fps to (num, den). Read-modify-
+--- write the settings JSON to preserve other keys (including master_clock_hz —
+--- triggers INV-6 guard, but value is unchanged so trigger sees IS NOT distinct
+--- and stays quiet). Returns the prior (num, den) for undo.
+function Project.set_default_fps(id, fps_numerator, fps_denominator)
+    assert(id and id ~= "", "Project.set_default_fps: id required")
+    assert(type(fps_numerator) == "number" and fps_numerator > 0
+        and math.floor(fps_numerator) == fps_numerator,
+        string.format("Project.set_default_fps: fps_numerator must be positive integer; got %s",
+            tostring(fps_numerator)))
+    assert(type(fps_denominator) == "number" and fps_denominator > 0
+        and math.floor(fps_denominator) == fps_denominator,
+        string.format("Project.set_default_fps: fps_denominator must be positive integer; got %s",
+            tostring(fps_denominator)))
+
+    local conn = resolve_db(nil)
+    local fetch = conn:prepare("SELECT settings FROM projects WHERE id = ?")
+    assert(fetch, "Project.set_default_fps: fetch prepare failed")
+    fetch:bind_value(1, id)
+    assert(fetch:exec(), "Project.set_default_fps: fetch exec failed")
+    assert(fetch:next(), string.format(
+        "Project.set_default_fps: project %s not found", id))
+    local settings_str = fetch:value(0)
+    fetch:finalize()
+    assert(type(settings_str) == "string" and settings_str ~= "",
+        "Project.set_default_fps: settings JSON missing on project " .. id)
+
+    local json = require("dkjson")
+    local decoded = json.decode(settings_str)
+    assert(type(decoded) == "table",
+        "Project.set_default_fps: settings not valid JSON")
+    local old = decoded.default_fps
+    assert(type(old) == "table" and old.num and old.den,
+        "Project.set_default_fps: existing default_fps missing (FR-028)")
+    local prior_num, prior_den = old.num, old.den
+    assert(prior_num ~= fps_numerator or prior_den ~= fps_denominator, string.format(
+        "Project.set_default_fps: new fps %d/%d equals current; no-op rejected",
+        fps_numerator, fps_denominator))
+
+    decoded.default_fps = { num = fps_numerator, den = fps_denominator }
+    local new_settings = json.encode(decoded)
+
+    local upd = conn:prepare(
+        "UPDATE projects SET settings = ?, modified_at = ? WHERE id = ?")
+    assert(upd, "Project.set_default_fps: update prepare failed")
+    upd:bind_value(1, new_settings)
+    upd:bind_value(2, os.time())
+    upd:bind_value(3, id)
+    local ok = upd:exec()
+    local err
+    if not ok then err = conn:last_error() end
+    upd:finalize()
+    assert(ok, "Project.set_default_fps: exec failed: " .. tostring(err))
+    return prior_num, prior_den
+end
+
 --- 018 FR-028: every project carries master_clock_hz in settings JSON. This
 --- accessor parses the settings string and asserts the key is present
 --- (rule 2.13 — never silently fall back to a default).
