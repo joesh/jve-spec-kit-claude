@@ -2779,6 +2779,39 @@ end
 ---
 --- @param master_id string  must reference a kind='master' sequence
 --- @return integer  total audio channel count
+--- 018 (FR-004 / INV-7): masters carry no audio_sample_rate. For placement
+--- math that needs a master's audio rate (samples-per-frame, owner-duration
+--- conversion), derive from the first audio media_ref inside the master.
+--- Multi-rate audio per master (Acceptance Scenario 2) requires further
+--- per-stream handling; this helper preserves the single-rate common case.
+--- For regular sequences, returns `audio_sample_rate` directly.
+---
+--- @param seq table Loaded sequence row (must have .id, .kind, .audio_sample_rate)
+--- @return integer audio sample rate in Hz
+function Sequence.effective_audio_sample_rate(seq)
+    assert(type(seq) == "table" and seq.id,
+        "Sequence.effective_audio_sample_rate: seq table with id required")
+    if seq.audio_sample_rate then return seq.audio_sample_rate end
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT mr.audio_sample_rate FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO'
+          AND mr.audio_sample_rate IS NOT NULL
+        LIMIT 1
+    ]])
+    assert(stmt, "Sequence.effective_audio_sample_rate: prepare failed")
+    stmt:bind_value(1, seq.id)
+    assert(stmt:exec(), "Sequence.effective_audio_sample_rate: exec failed")
+    local rate
+    if stmt:next() then rate = stmt:value(0) end
+    stmt:finalize()
+    assert(rate, string.format(
+        "Sequence.effective_audio_sample_rate: master %s has no audio media_ref with audio_sample_rate",
+        tostring(seq.id)))
+    return rate
+end
+
 function Sequence.count_master_audio_channels(master_id)
     assert(master_id and master_id ~= "",
         "Sequence.count_master_audio_channels: master_id required")
