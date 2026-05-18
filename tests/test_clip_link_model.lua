@@ -76,11 +76,13 @@ for _, c in ipairs({
     {"clip_v2", "trk_v", 100, 50},
     {"clip_a2", "trk_a", 100, 50},
 }) do
+    -- 018 INV-3: AUDIO clips need non-NULL subframes (0,0); VIDEO need NULL.
+    local sub_lit = (c[2] == "trk_a") and "0, 0" or "NULL, NULL"
     assert(db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
-    ('%s', 'proj1', '%s', '%s', 'seq1', 'master_med1', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    ]], c[1], c[1], c[2], c[3], c[4], c[4], now, now)))
+    ('%s', 'proj1', '%s', '%s', 'seq1', 'master_med1', %d, %d, 0, %d, %s, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ]], c[1], c[1], c[2], c[3], c[4], c[4], sub_lit, now, now)))
 end
 
 -- Helper: count rows in clip_links

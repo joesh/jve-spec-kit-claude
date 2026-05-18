@@ -78,17 +78,22 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(opts.kind == "master" or opts.kind == "sequence",
         "Sequence.create: opts.kind must be 'master' or 'sequence' (V9 schema); got "
         .. tostring(opts.kind))
-    -- audio_sample_rate is required for every sequence EXCEPT a master
-    -- whose source media has no audio (kind='master' + no audio media_refs
-    -- will ever be inserted). Schema permits NULL only for that case.
-    -- Callers force the issue by passing nil explicitly; everywhere else
-    -- it is mandatory. Rule 2.13: no silent fallback.
-    if opts.audio_sample_rate ~= nil then
-        assert(type(opts.audio_sample_rate) == "number" and opts.audio_sample_rate > 0,
-            "Sequence.create: opts.audio_sample_rate must be a positive number when provided (rule 2.13)")
+    -- 018 (FR-004, INV-7): masters MUST have audio_sample_rate = NULL.
+    -- Audio rate is per-media_ref. Regular sequences (kind='sequence') still
+    -- carry an audio rate as their playback-monitor rate. Rule 2.13: no silent
+    -- coercion — caller passes nil explicitly for masters.
+    if opts.kind == "master" then
+        assert(opts.audio_sample_rate == nil,
+            "Sequence.create: kind='master' must have audio_sample_rate=nil (INV-7; "
+            .. "audio rate is per-media_ref, not per-master)")
     else
-        assert(opts.kind == "master",
-            "Sequence.create: opts.audio_sample_rate is required for non-master sequences (rule 2.13)")
+        if opts.audio_sample_rate ~= nil then
+            assert(type(opts.audio_sample_rate) == "number" and opts.audio_sample_rate > 0,
+                "Sequence.create: opts.audio_sample_rate must be a positive number when provided (rule 2.13)")
+        else
+            assert(false,
+                "Sequence.create: opts.audio_sample_rate is required for non-master sequences (rule 2.13)")
+        end
     end
 
     local sequence = {

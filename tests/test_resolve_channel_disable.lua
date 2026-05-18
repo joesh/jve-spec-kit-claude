@@ -40,9 +40,9 @@ assert(db:exec(
     .. "VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('c', 'p1', 'e', 'e-a1', 'm', 'c', 0, 48000, 0, 48000, 'passthrough', 1, 1.0, 0, 0, 0)"))
+    .. "VALUES ('c', 'p1', 'e', 'e-a1', 'm', 'c', 0, 48000, 0, 48000, 0, 0, 'passthrough', 1, 1.0, 0, 0, 0)"))
 -- Override: channel 2 disabled on this clip.
 assert(db:exec(
     "INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db) "

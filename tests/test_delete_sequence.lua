@@ -239,7 +239,7 @@ reset_test_sequences()
 -- Create a master sequence
 local master_seq = Sequence.create("Master Sequence", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_sample_rate = 48000,id = "master_seq", kind = "master"})
+    { id = "master_seq", kind = "master"})  -- 018: masters carry no audio_sample_rate
 assert(master_seq:save(), "Failed to save master sequence")
 
 asserts._set_enabled_for_tests(false)

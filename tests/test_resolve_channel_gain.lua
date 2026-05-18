@@ -47,14 +47,14 @@ assert(db:exec(
 -- Clip B: override to -6 dB on channel 0 — should win.
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('A', 'p1', 'e', 'e-a1', 'm', 'A', 0, 48000, 0, 48000, 'passthrough', 1, 1.0, 0, 0, 0)"))
+    .. "VALUES ('A', 'p1', 'e', 'e-a1', 'm', 'A', 0, 48000, 0, 48000, 0, 0, 'passthrough', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('B', 'p1', 'e', 'e-a1', 'm', 'B', 100000, 48000, 0, 48000, 'passthrough', 1, 1.0, 0, 0, 0)"))
+    .. "VALUES ('B', 'p1', 'e', 'e-a1', 'm', 'B', 100000, 48000, 0, 48000, 0, 0, 'passthrough', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db) "
     .. "VALUES ('B', 0, 1, -6.0)"))

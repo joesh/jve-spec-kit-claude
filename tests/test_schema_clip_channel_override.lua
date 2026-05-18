@@ -59,7 +59,7 @@ assert(db:exec(
     .. "VALUES ('trk-a1', 'seq-edit', 'A1', 'AUDIO', 1)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
-    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('clip-1', 'p1', 'seq-edit', 'trk-a1', 'seq-master', "
     .. "'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))

@@ -19,8 +19,10 @@ assert(db:exec(
 
 -- Helper: wrap the 2-step create+save as a single call.
 local function make_sequence(name, kind)
+    -- 018 INV-7: masters carry no audio_sample_rate; regular sequences require it.
+    local asr = (kind == "master") and nil or 48000
     local s = Sequence.create(name, "p1", {  fps_numerator = 24, fps_denominator = 1 },
-        1920, 1080, { kind = kind, audio_sample_rate = 48000 })
+        1920, 1080, { kind = kind, audio_sample_rate = asr })
     assert(s:save(), "Sequence:save failed")
     return s.id
 end

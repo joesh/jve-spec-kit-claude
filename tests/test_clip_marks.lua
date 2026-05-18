@@ -176,7 +176,7 @@ assert(db:exec([[
     )
     VALUES (
         'mc_master', 'proj', 'MC Master', 'master',
-        24, 1, 48000,
+        24, 1, NULL,
         1920, 1080,
         0, 240, 0,
         0, 0
