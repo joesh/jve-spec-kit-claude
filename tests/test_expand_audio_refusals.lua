@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=4)
 -- T056b / CT-C20b (013): ExpandAudio refusal cases.
 --
 -- Per FR-023 + commands.md §ExpandAudio: refusals are loud (rule 1.14)
@@ -58,10 +59,11 @@ local function multi_track_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough',
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
@@ -102,10 +104,11 @@ local function single_track_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough',
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
@@ -168,10 +171,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('blocker', 'p1', 'e', 'e-a2', 'm', 'blocker',
-                50, 100, 0, 200000, NULL, NULL, 'passthrough',
+                50, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
     local pre = clip_count(db, "e")
@@ -208,10 +212,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('cv', 'p1', 'e', 'e-v1', 'm', 'cv',
-                0, 100, 0, 100, NULL, NULL, 'passthrough',
+                0, 100, 0, 100, NULL, NULL, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
     local pre = clip_count(db, "e")

@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 #!/usr/bin/env luajit
 
 -- 015 F2 regression: F9/F10 (Insert/Overwrite from keymap) must honor patch
@@ -133,10 +134,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES
-          ('blk-v', 'p1','e','e-v2','m','blk-v',  0, 50,  0, 50,  NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+          ('blk-v', 'p1','e','e-v2','m','blk-v',  0, 50,  0, 50, NULL, NULL,  NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
           ('blk-a', 'p1','e','e-a3','m','blk-a',  0, 50,  0, 50,  NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
     ]]))
     local Overwrite = require("core.commands.overwrite")

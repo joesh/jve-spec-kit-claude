@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T056d / CT-C21 (013): CollapseAudio happy path.
 --
 -- Per FR-024 + commands.md §CollapseAudio:
@@ -68,9 +69,10 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('cv',  'p1', 'e', 'e-v1', 'm', 'cv',  0, 100, 0, 100,    NULL, NULL,  'passthrough', 1, 1.0, 0, 0, 0),
+        VALUES ('cv',  'p1', 'e', 'e-v1', 'm', 'cv',  0, 100, 0, 100, NULL, NULL,    NULL, NULL,  'passthrough', 1, 1.0, 0, 0, 0),
                ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1', 0, 100, 0, 200000, NULL, 'm-a1','passthrough', 1, 1.0, 0, 0, 0),
                ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2', 0, 100, 0, 200000, NULL, 'm-a2','passthrough', 1, 1.0, 0, 0, 0),
                ('ca3', 'p1', 'e', 'e-a3', 'm', 'ca3', 0, 100, 0, 200000, NULL, 'm-a3','passthrough', 1, 1.0, 0, 0, 0),

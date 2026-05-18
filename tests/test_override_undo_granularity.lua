@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T052 (013): FR-020 per-override undo granularity.
 --
 -- "Each clip-level override change ... MUST be a single undoable
@@ -61,10 +62,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough',
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()

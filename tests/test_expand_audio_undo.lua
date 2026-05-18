@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T056c / CT-C20c (013): ExpandAudio undo.
 --
 -- A single ExpandAudio.undo restores the source composite clip + its
@@ -59,10 +60,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('cv', 'p1', 'e', 'e-v1', 'm', 'cv',
-                0, 100, 0, 100, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+                0, 100, 0, 100, NULL, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
                 0, 100, 0, 200000, NULL, NULL, 'passthrough', 1, 0.75, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)

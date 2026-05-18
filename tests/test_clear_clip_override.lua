@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=2)
 -- T051 / CT-C12 (013): ClearClipOverride.
 --
 -- Per contracts/commands.md §ClearClipOverride:
@@ -59,10 +60,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('cv', 'p1', 'e', 'e-v1', 'm', 'cv',
-                0, 100, 0, 100,
+                0, 100, 0, 100, NULL, NULL,
                 'm-v2', 'resample',
                 1, 1.0, 0, 0, 0);
         -- Audio clip with channel-1 override (enabled=0, gain_db=-9).
@@ -70,10 +72,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'resample',
                 1, 1.0, 0, 0, 0);
         INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)

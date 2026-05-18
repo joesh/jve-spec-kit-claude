@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=3)
 -- T021a / CT-R4b (013): audio-track selector — symmetric to video.
 --
 -- Per FR-005 / FR-023 + resolver.md track-selector step:
@@ -89,10 +90,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-comp', 'p1', 'e', 'e-a1', 'm', 'composite',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]))
@@ -121,10 +123,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-a2', 'p1', 'e', 'e-a1', 'm', 'expanded-A2',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]))
@@ -152,10 +155,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-d', 'p1', 'e', 'e-a1', 'm', 'dangling',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]))

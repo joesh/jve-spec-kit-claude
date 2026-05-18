@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T049 / CT-C10 (013): ToggleClipChannel.
 --
 -- Domain behavior (commands.md §ToggleClipChannel):
@@ -75,10 +76,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c', 'p1', 'e', 'e-a1', 'm', 'c',
-                0, 48000, 0, 48000,
+                0, 48000, 0, 48000, 0, 0,
                 NULL, 'resample',
                 1, 1.0, 0, 0, 0);
     ]]))

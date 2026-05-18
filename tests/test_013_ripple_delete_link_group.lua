@@ -58,17 +58,24 @@ end
 
 local function seed_clip(db, clip_id, track_id, sequence_start, duration,
                         source_in, source_out)
+    -- 018 INV-3 subframe: AUDIO needs (0,0), VIDEO needs NULL.
+    local _tt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    _tt:bind_value(1, track_id)
+    assert(_tt:exec()); assert(_tt:next())
+    local _sub_lit = _tt:value(0) == "AUDIO" and "0, 0" or "NULL, NULL"
+    _tt:finalize()
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d,
+        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d, %s,
             'passthrough', 1, 1.0, 0, 0, 0)
     ]], clip_id, track_id, clip_id, sequence_start, duration,
-       source_in, source_out)))
+       source_in, source_out, _sub_lit)))
 end
 
 local function link_clips(db, group_id, members)

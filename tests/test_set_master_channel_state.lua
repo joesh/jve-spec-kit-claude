@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T058 / CT-C14 (013): SetMasterChannelState.
 --
 -- Per FR-006 / FR-007 / commands.md §SetMasterChannelState:
@@ -54,10 +55,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('tracking', 'p1', 'e', 'e-a1', 'm', 'tracking',
-                0, 48000, 0, 48000, NULL, 'resample',
+                0, 48000, 0, 48000, 0, 0, NULL, 'resample',
                 1, 1.0, 0, 0, 0),
                ('overridden', 'p1', 'e', 'e-a1', 'm', 'overridden',
                 100000, 48000, 0, 48000, NULL, 'resample',

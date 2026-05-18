@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=5)
 -- T039a (013): sequence_content_changed signal contract spy.
 --
 -- Every command class that mutates a sequence's clip set MUST emit
@@ -56,16 +57,23 @@ local function base_fixture()
 end
 
 local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
+    -- 018 INV-3 subframe: AUDIO needs (0,0), VIDEO needs NULL.
+    local _tt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    _tt:bind_value(1, track_id)
+    assert(_tt:exec()); assert(_tt:next())
+    local _sub_lit = _tt:value(0) == "AUDIO" and "0, 0" or "NULL, NULL"
+    _tt:finalize()
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d,
+        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d, %s,
             'passthrough', 1, 1.0, 0, 0, 0)
-    ]], id, track_id, id, ts, dur, src_in, src_out)))
+    ]], id, track_id, id, ts, dur, src_in, src_out, _sub_lit)))
 end
 
 -- A spy that captures every emit of sequence_content_changed.
@@ -380,10 +388,11 @@ do  -- ToggleClipChannel (T054)
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
     ]]))
     local ToggleClipChannel = require("core.commands.toggle_clip_channel")
     assert_emit_for("ToggleClipChannel", "e", function()
@@ -400,10 +409,11 @@ do  -- SetClipChannelGain (T055)
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
     ]]))
     local SetClipChannelGain = require("core.commands.set_clip_channel_gain")
     assert_emit_for("SetClipChannelGain", "e", function()
@@ -432,10 +442,11 @@ do  -- ClearClipOverride (channel + layer) (T056)
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, NULL, 'resample', 1, 1.0, 0, 0, 0);
+                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
         VALUES ('ca', 0, 0, -3.0);
     ]]))
@@ -537,10 +548,11 @@ do  -- ExpandAudio (T056i) — emits on parent.
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
     local ExpandAudio = require("core.commands.expand_audio")
@@ -573,10 +585,11 @@ do  -- CollapseAudio (T056j) — emits on parent.
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1',
-                0, 100, 0, 200000, NULL, 'm-a1', 'passthrough', 1, 1.0, 0, 0, 0),
+                0, 100, 0, 200000, 0, 0, NULL, 'm-a1', 'passthrough', 1, 1.0, 0, 0, 0),
                ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2',
                 0, 100, 0, 200000, NULL, 'm-a2', 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)

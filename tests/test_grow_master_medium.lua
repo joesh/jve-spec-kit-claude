@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=3)
 -- T060a / T064a (013): GrowMasterMedium — owning command for FR-007 /
 -- Acceptance Scenario 7.
 --
@@ -62,10 +63,11 @@ local function build_fixture()
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1', 'p1', 'e', 'e-v1', 'm', 'c1',
-                0, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+                0, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c2', 'p1', 'e', 'e-v1', 'm', 'c2',
                 200, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c3', 'p1', 'e', 'e-v1', 'm', 'c3',
@@ -182,10 +184,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1-a', 'p1', 'e', 'e-a1', 'm', 'c1-a',
-                0, 100, 0, 200000, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg-c1', 'c1', 'video', 0, 1),
                ('lg-c1', 'c1-a', 'audio', 0, 1);
@@ -301,10 +304,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1-a', 'p1', 'e', 'e-a1', 'm', 'c1-a',
-                0, 100, 0, 200000, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg-c1', 'c1', 'video', 0, 1),
                ('lg-c1', 'c1-a', 'audio', 0, 1);

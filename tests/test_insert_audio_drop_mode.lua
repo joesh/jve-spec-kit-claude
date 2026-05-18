@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T056h / CT-C1b (013): Insert audio_drop_mode arg.
 --
 -- Per FR-002 + FR-025 + commands.md §Insert/Overwrite:
@@ -232,10 +233,11 @@ do
             sequence_id, name,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('blocker', 'p1', 'e', 'e-a2', 'm', 'blocker',
-                0, 100, 0, 200000, NULL, NULL, 'passthrough',
+                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0);
     ]]))
 
