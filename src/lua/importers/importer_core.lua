@@ -770,6 +770,10 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     local now = os.time()
+                    -- 018 FR-010 / FR-013: DRP/importer_core writes are
+                    -- frame-aligned (subframe = 0 for audio, NULL for video).
+                    local sub_in, sub_out = Clip.subframe_defaults_for(
+                        require("core.database").get_connection(), track.id)
                     local clip_id = Clip.create({
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
@@ -780,6 +784,8 @@ function M.import_into_project(project_id, parse_result, opts)
                         duration_frames       = clip_data.duration,
                         source_in_frame       = source_in_final,
                         source_out_frame      = source_out_final,
+                        source_in_subframe    = sub_in,
+                        source_out_subframe   = sub_out,
                         master_layer_track_id = nil,
                         master_audio_track_id = nil,
                         fps_mismatch_policy   = "resample",

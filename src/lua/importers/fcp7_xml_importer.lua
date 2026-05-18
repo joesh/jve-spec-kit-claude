@@ -983,6 +983,10 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         -- V13 Clip.create: single-table form. sequence_id required.
         -- Returns the new clip id (string) — INSERT happens inside.
         local now = os.time()
+        -- 018 FR-011 / FR-013: FCP7 imports are frame-aligned; subframe = 0
+        -- on AUDIO clips, NULL on VIDEO. Derive from track_type.
+        local sub_in, sub_out = Clip.subframe_defaults_for(
+            require("core.database").get_connection(), track_id)
         local clip_id = Clip.create({
             id = reuse_id,
             project_id = project_id,
@@ -994,6 +998,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             duration_frames = duration,
             source_in_frame = source_in,
             source_out_frame = source_out,
+            source_in_subframe = sub_in,
+            source_out_subframe = sub_out,
             master_layer_track_id = nil,
             master_audio_track_id = nil,
             fps_mismatch_policy = "resample",

@@ -447,6 +447,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         for _, cap in pairs(occluded) do
             for _, d in ipairs(cap.deleted) do
+                -- 018 FR-015: restore round-trips subframe from captured row.
                 Clip.create({
                     id                    = d.id,
                     project_id            = d.project_id,
@@ -458,6 +459,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     duration_frames       = d.duration_frames,
                     source_in_frame       = d.source_in_frame,
                     source_out_frame      = d.source_out_frame,
+                    source_in_subframe    = d.source_in_subframe,
+                    source_out_subframe   = d.source_out_subframe,
                     master_layer_track_id = d.master_layer_track_id,
                     fps_mismatch_policy   = d.fps_mismatch_policy,
                     enabled               = d.enabled,

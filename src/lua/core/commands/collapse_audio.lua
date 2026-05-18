@@ -166,6 +166,7 @@ end
 -- into per-channel gain below; the row itself carries volume=1.
 local function insert_composite_clip(sequence_id, first, topmost)
     local composite_id = uuid.generate()
+    -- 018 FR-014: collapse onto topmost track preserves subframe from source.
     Clip.create({
         id                    = composite_id,
         project_id            = first.project_id,
@@ -177,6 +178,8 @@ local function insert_composite_clip(sequence_id, first, topmost)
         duration_frames       = first.duration_frames,
         source_in_frame       = first.source_in_frame,
         source_out_frame      = first.source_out_frame,
+        source_in_subframe    = first.source_in_subframe,
+        source_out_subframe   = first.source_out_subframe,
         master_layer_track_id = nil,
         master_audio_track_id = nil,
         fps_mismatch_policy   = first.fps_mismatch_policy,

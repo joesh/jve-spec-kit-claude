@@ -459,6 +459,8 @@ local function insert_audio_clips(plan, next_id)
     assert(a_in, "place_shared.write_clips: audio targets without audio_source_in")
     local ids = {}
     for _, tgt in ipairs(audio_targets) do
+        -- 018 FR-013: edit commands write frame-aligned audio clips
+        -- (subframe = 0). Sample-precise sub-frame edits are a future feature.
         ids[#ids + 1] = Clip.create({
             id                    = next_id(),
             project_id            = plan.owner.project_id,
@@ -470,6 +472,8 @@ local function insert_audio_clips(plan, next_id)
             duration_frames       = plan.owner_duration,
             source_in_frame       = a_in,
             source_out_frame      = a_in + tgt.source_out,
+            source_in_subframe    = 0,
+            source_out_subframe   = 0,
             master_layer_track_id = nil,
             master_audio_track_id = tgt.master_audio_track_id,
             fps_mismatch_policy   = plan.policy,
@@ -613,6 +617,9 @@ local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
     Clip.update_bounds(e.id,
         e.sequence_start_frame, left_duration,
         e.source_in_frame, e.source_out_frame - left_source_delta)
+    -- 018 FR-014: split must preserve any pre-existing subframe through the
+    -- right half. Inherit verbatim from e (which already carries them as
+    -- loaded by database.load_clips).
     local right_id = Clip.create({
         id                    = uuid.generate(),
         project_id            = e.project_id,
@@ -624,6 +631,8 @@ local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
         duration_frames       = right_duration,
         source_in_frame       = e.source_in_frame + right_source_delta,
         source_out_frame      = e.source_out_frame,
+        source_in_subframe    = e.source_in_subframe,
+        source_out_subframe   = e.source_out_subframe,
         master_layer_track_id = e.master_layer_track_id,
         fps_mismatch_policy   = e.fps_mismatch_policy,
         enabled               = e.enabled,

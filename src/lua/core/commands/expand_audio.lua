@@ -143,6 +143,8 @@ local function insert_expanded_clips(plan, clip, sequence_id)
     local outer_lo = clip.sequence_start_frame
     for _, p in ipairs(plan) do
         local new_id = uuid.generate()
+        -- 018 FR-014: ExpandAudio creates AUDIO clips; preserve any
+        -- subframe from the source clip (frame-aligned input = 0,0).
         Clip.create({
             id                    = new_id,
             project_id            = clip.project_id,
@@ -154,6 +156,8 @@ local function insert_expanded_clips(plan, clip, sequence_id)
             duration_frames       = clip.duration_frames,
             source_in_frame       = clip.source_in_frame,
             source_out_frame      = clip.source_out_frame,
+            source_in_subframe    = clip.source_in_subframe,
+            source_out_subframe   = clip.source_out_subframe,
             master_layer_track_id = nil,
             master_audio_track_id = p.nested_track_id,
             fps_mismatch_policy   = clip.fps_mismatch_policy,

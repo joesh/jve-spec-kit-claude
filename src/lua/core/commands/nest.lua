@@ -165,6 +165,10 @@ end
 local function insert_replacement_clip(parent, sequence_id, track_id,
                                        new_clip_id, new_seq_id,
                                        min_start, span)
+    -- 018 FR-013: track_type-driven subframe (audio = 0,0; video = nil,nil).
+    local Clip = require("models.clip")
+    local sub_in, sub_out = Clip.subframe_defaults_for(
+        require("core.database").get_connection(), track_id)
     Clip.create({
         id                    = new_clip_id,
         project_id            = parent.project_id,
@@ -176,6 +180,8 @@ local function insert_replacement_clip(parent, sequence_id, track_id,
         duration_frames       = span,
         source_in_frame       = 0,
         source_out_frame      = span,
+        source_in_subframe    = sub_in,
+        source_out_subframe   = sub_out,
         master_layer_track_id = nil,
         fps_mismatch_policy   = "passthrough",  -- same timebase as parent
         enabled               = true,
