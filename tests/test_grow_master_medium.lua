@@ -69,9 +69,9 @@ local function build_fixture()
         VALUES ('c1', 'p1', 'e', 'e-v1', 'm', 'c1',
                 0, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c2', 'p1', 'e', 'e-v1', 'm', 'c2',
-                200, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+                200, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c3', 'p1', 'e', 'e-v1', 'm', 'c3',
-                400, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                400, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
     return db

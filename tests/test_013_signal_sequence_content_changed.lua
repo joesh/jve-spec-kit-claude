@@ -591,7 +591,7 @@ do  -- CollapseAudio (T056j) — emits on parent.
         VALUES ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1',
                 0, 100, 0, 200000, 0, 0, NULL, 'm-a1', 'passthrough', 1, 1.0, 0, 0, 0),
                ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2',
-                0, 100, 0, 200000, NULL, 'm-a2', 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, 'm-a2', 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg', 'ca1', 'audio', 0, 1),
                ('lg', 'ca2', 'audio', 0, 1);
