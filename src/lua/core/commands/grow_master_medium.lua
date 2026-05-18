@@ -34,8 +34,10 @@ local Clip      = require("models.clip")
 local ClipLink  = require("models.clip_link")
 local Media     = require("models.media")
 local MediaRef  = require("models.media_ref")
+local Project   = require("models.project")
 local Sequence  = require("models.sequence")
 local Track     = require("models.track")
+local subframe_math = require("core.subframe_math")
 local uuid      = require("uuid")
 local log       = require("core.logger").for_area("commands")
 
@@ -137,6 +139,7 @@ local function add_master_audio_stream(master, media_id, media, sample_rate, opt
         source_out_frame     = duration_samples,
         sequence_start_frame = 0,
         duration_frames      = duration_samples,
+        audio_sample_rate    = sample_rate,
         enabled              = true,
         volume               = 1.0,
         playhead_frame       = 0,
@@ -170,18 +173,29 @@ local function build_companion_for_video_clip(c, master, sample_rate)
     local dur_samples = audio_samples_for_video_duration(
         c.duration_frames,
         master.fps_numerator, master.fps_denominator, sample_rate)
+    -- 018 FR-008: clip.source_*_frame is in master.fps frames, with sample
+    -- residual in source_*_subframe. Convert the [0, dur_samples] window.
+    local proj = Project.load(c.project_id)
+    assert(proj, "GrowMasterMedium: project " .. tostring(c.project_id) .. " missing")
+    local mch = proj:get_master_clock_hz()
+    local tpf = subframe_math.ticks_per_frame(mch,
+        master.fps_numerator, master.fps_denominator)
+    local out_ticks = subframe_math.samples_to_ticks(dur_samples, sample_rate, mch)
+    local out_frame, out_sub = subframe_math.unpack(out_ticks, tpf)
     local companion_id = uuid.generate()
     Clip.create({
         id                    = companion_id,
         project_id            = c.project_id,
         owner_sequence_id     = c.owner_sequence_id,
         track_id              = dst_a_track_id,
-        sequence_id    = master.id,
+        sequence_id           = master.id,
         name                  = (c.name or "Clip") .. " (audio)",
         sequence_start_frame  = c.sequence_start_frame,
         duration_frames       = c.duration_frames,
         source_in_frame       = 0,
-        source_out_frame      = dur_samples,
+        source_in_subframe    = 0,
+        source_out_frame      = out_frame,
+        source_out_subframe   = out_sub,
         master_layer_track_id = nil,
         fps_mismatch_policy   = c.fps_mismatch_policy,
         enabled               = true,

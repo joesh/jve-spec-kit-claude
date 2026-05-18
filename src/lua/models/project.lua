@@ -16,11 +16,34 @@ local function resolve_db(db)
     return conn
 end
 
+-- 018 T007 (FR-028 / FR-036a): every project has master_clock_hz and
+-- default_fps in its settings JSON. Defaults are 192000 Hz and 24/1.
+-- Captured as a string constant so the default path doesn't pay an encode
+-- on every project create.
+local DEFAULT_PROJECT_SETTINGS_JSON =
+    '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}'
+
 local function ensure_settings_json(settings)
-    if type(settings) == "string" and settings ~= "" then
-        return settings
+    if type(settings) ~= "string" or settings == "" then
+        return DEFAULT_PROJECT_SETTINGS_JSON
     end
-    return "{}"
+    -- Caller-provided settings MUST already carry master_clock_hz and
+    -- default_fps (FR-028, rule 2.13 — no silent injection of required values).
+    -- json_decode + integer presence check.
+    local json = require("dkjson")
+    local decoded = json.decode(settings)
+    assert(type(decoded) == "table", string.format(
+        "Project.create: opts.settings is not valid JSON: %s", tostring(settings)))
+    assert(decoded.master_clock_hz and decoded.master_clock_hz > 0, string.format(
+        "Project.create: opts.settings missing master_clock_hz (FR-028); got %s",
+        tostring(settings)))
+    assert(decoded.default_fps and decoded.default_fps.num
+        and decoded.default_fps.num > 0
+        and decoded.default_fps.den and decoded.default_fps.den > 0,
+        string.format(
+        "Project.create: opts.settings missing default_fps {num,den} (FR-036a); got %s",
+        tostring(settings)))
+    return settings
 end
 
 function Project.create(name, opts)
@@ -240,6 +263,21 @@ function Project.set_fps_mismatch_policy(id, policy)
     upd:finalize()
     assert(ok, "Project.set_fps_mismatch_policy: exec failed")
     return prior
+end
+
+--- 018 FR-028: every project carries master_clock_hz in settings JSON. This
+--- accessor parses the settings string and asserts the key is present
+--- (rule 2.13 — never silently fall back to a default).
+function Project:get_master_clock_hz()
+    assert(type(self.settings) == "string" and self.settings ~= "",
+        "Project:get_master_clock_hz: settings missing on project " .. tostring(self.id))
+    local json = require("dkjson")
+    local decoded = json.decode(self.settings)
+    assert(type(decoded) == "table",
+        "Project:get_master_clock_hz: settings not JSON on project " .. tostring(self.id))
+    assert(decoded.master_clock_hz and decoded.master_clock_hz > 0,
+        "Project:get_master_clock_hz: master_clock_hz missing on project " .. tostring(self.id))
+    return decoded.master_clock_hz
 end
 
 --- Commit the identity update transaction started by update_identity.

@@ -948,6 +948,18 @@ end
 -- audio-creating call site:
 --   local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
 --   Clip.create({ ..., source_in_subframe = sub_in, source_out_subframe = sub_out })
+-- Pure kind-dispatch variant for callers that already hold a track row.
+-- Commands MUST use this (SQL isolation; rule 1.10).
+function M.subframe_defaults_for_track_type(track_type)
+    assert(track_type == "VIDEO" or track_type == "AUDIO", string.format(
+        "Clip.subframe_defaults_for_track_type: track_type must be "
+        .. "'VIDEO' or 'AUDIO', got %s", tostring(track_type)))
+    if track_type == "AUDIO" then return 0, 0 end
+    return nil, nil
+end
+
+-- DB-bound variant for callers that hold only a track_id (importer paths,
+-- model-layer helpers). Looks up the track_type and delegates.
 function M.subframe_defaults_for(db, track_id)
     assert(db, "Clip.subframe_defaults_for: db connection required")
     assert(track_id and track_id ~= "",
@@ -960,8 +972,7 @@ function M.subframe_defaults_for(db, track_id)
         "Clip.subframe_defaults_for: track not found for id=%s", tostring(track_id)))
     local tt = stmt:value(0)
     stmt:finalize()
-    if tt == "AUDIO" then return 0, 0 end
-    return nil, nil
+    return M.subframe_defaults_for_track_type(tt)
 end
 
 -- (Internal) Same as above but called from _create_v13_row's audit path.
@@ -1630,6 +1641,7 @@ function M.load_v13_row(id)
         SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
                name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
+               source_in_subframe, source_out_subframe,
                master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips WHERE id = ?
@@ -1650,14 +1662,16 @@ function M.load_v13_row(id)
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
-            master_layer_track_id = stmt:value(10),
-            master_audio_track_id = stmt:value(11),
-            fps_mismatch_policy   = stmt:value(12),
-            enabled               = stmt:value(13) == 1,
-            volume                = stmt:value(14),
-            mark_in_frame         = stmt:value(15),
-            mark_out_frame        = stmt:value(16),
-            playhead_frame        = stmt:value(17),
+            source_in_subframe    = stmt:value(10),
+            source_out_subframe   = stmt:value(11),
+            master_layer_track_id = stmt:value(12),
+            master_audio_track_id = stmt:value(13),
+            fps_mismatch_policy   = stmt:value(14),
+            enabled               = stmt:value(15) == 1,
+            volume                = stmt:value(16),
+            mark_in_frame         = stmt:value(17),
+            mark_out_frame        = stmt:value(18),
+            playhead_frame        = stmt:value(19),
         }
     end
     stmt:finalize()
@@ -1746,6 +1760,8 @@ function M.restore_v13_state(state)
         duration_frames       = r.duration_frames,
         source_in_frame       = r.source_in_frame,
         source_out_frame      = r.source_out_frame,
+        source_in_subframe    = r.source_in_subframe,
+        source_out_subframe   = r.source_out_subframe,
         master_layer_track_id = r.master_layer_track_id,
         master_audio_track_id = r.master_audio_track_id,
         fps_mismatch_policy   = r.fps_mismatch_policy,

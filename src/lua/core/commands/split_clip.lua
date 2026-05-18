@@ -130,17 +130,28 @@ function M.execute(args)
             clip.sequence_start_frame, left_new_duration,
             clip.source_in_frame, left_new_source_out)
 
+        -- 018 FR-023: split must preserve sub-frame precision through the
+        -- split point. owner_delta_to_source returns frames-only today, so
+        -- the right half can only inherit the original clip's subframes
+        -- verbatim. For frame-aligned source ranges (the common case until
+        -- sample-precise edit UX lands), this is correct; for non-zero
+        -- subframes a future Phase 3.6 extension will make
+        -- owner_delta_to_source return (frame, subframe) with carry.
+        local right_source_in_sub  = clip.source_in_subframe
+        local right_source_out_sub = clip.source_out_subframe
         Clip._create_v13_row({
             id                    = right_id,
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
-            track_id              = clip.track_id,
-            sequence_id    = clip.sequence_id,
+            track_id               = clip.track_id,
+            sequence_id           = clip.sequence_id,
             name                  = clip.name,
             sequence_start_frame  = right_timeline,
             duration_frames       = right_duration,
             source_in_frame       = right_source_in,
             source_out_frame      = right_source_out,
+            source_in_subframe    = right_source_in_sub,
+            source_out_subframe   = right_source_out_sub,
             master_layer_track_id = clip.master_layer_track_id,
             fps_mismatch_policy   = clip.fps_mismatch_policy,
             enabled               = clip.enabled,
