@@ -50,18 +50,23 @@ local function load_project_policy(project_id)
     return project.fps_mismatch_policy
 end
 
-local function place_clip(args, master_seq_id, media_name, fps_mismatch_policy)
+local function place_clip(args, track, master_seq_id, media_name, fps_mismatch_policy)
     local source_out = args.source_in_frame + args.duration_frames
+    -- 018 FR-013: audio clips are frame-aligned (subframe = 0) at edit time.
+    -- Video clips have NULL subframes per INV-3.
+    local is_audio = track.track_type == "AUDIO"
     return Clip.create({
         project_id           = args.project_id,
         owner_sequence_id    = args.sequence_id,
-        sequence_id   = master_seq_id,
+        sequence_id          = master_seq_id,
         track_id             = args.track_id,
         name                 = media_name,
         sequence_start_frame = args.sequence_start_frame,
         duration_frames      = args.duration_frames,
         source_in_frame      = args.source_in_frame,
         source_out_frame     = source_out,
+        source_in_subframe   = is_audio and 0 or nil,
+        source_out_subframe  = is_audio and 0 or nil,
         fps_mismatch_policy  = fps_mismatch_policy,
         enabled              = true,
         volume               = 1.0,
@@ -73,7 +78,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["AddClipToTrack"] = function(command)
         local args = command:get_all_parameters()
 
-        load_and_validate_track(args)
+        local track = load_and_validate_track(args)
 
         local media = Media.load(args.media_id)
         assert(media, string.format(
@@ -86,7 +91,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             "AddClipToTrack: ensure_master returned nil for media_id='%s'",
             tostring(args.media_id)))
 
-        local clip_id = place_clip(args, master_seq_id, media.name, fps_mismatch_policy)
+        local clip_id = place_clip(args, track, master_seq_id, media.name, fps_mismatch_policy)
         log.event("AddClipToTrack: clip=%s on track=%s media=%s",
             clip_id, args.track_id, args.media_id)
         return true

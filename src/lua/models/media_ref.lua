@@ -71,6 +71,27 @@ local function to_int_bool(v)
     error("MediaRef: boolean must be true/false or 1/0; got " .. tostring(v))
 end
 
+-- 018 V3 / FR-008: AUDIO media_refs MUST carry audio_sample_rate; the
+-- resolver depends on it for sample math. Pull track_type and assert
+-- explicitly — no silent default (rule 2.13).
+local function assert_audio_rate_for_kind(db, fields, id)
+    local stmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(stmt, "MediaRef.create: prepare track_type query failed")
+    stmt:bind_value(1, fields.track_id)
+    assert(stmt:exec(), "MediaRef.create: track_type query failed")
+    assert(stmt:next(), string.format(
+        "MediaRef.create: track not found for track_id=%s (media_ref=%s)",
+        tostring(fields.track_id), tostring(id)))
+    local tt = stmt:value(0)
+    stmt:finalize()
+    if tt == "AUDIO" then
+        assert(fields.audio_sample_rate ~= nil, string.format(
+            "MediaRef.create: AUDIO media_ref %s missing audio_sample_rate "
+            .. "(track_id=%s; rule 2.13 — no silent default; FR-008 requires it)",
+            tostring(id), tostring(fields.track_id)))
+    end
+end
+
 --- Create a media_ref row. Returns its id.
 --- Enforces "media_refs must be owned by a kind='master' sequence" at write time.
 function M.create(fields)
@@ -80,6 +101,7 @@ function M.create(fields)
     local db = database.get_connection()
     local id = fields.id or uuid.generate()
     M.assert_owning_is_master(db, id, fields.owner_sequence_id)
+    assert_audio_rate_for_kind(db, fields, id)
 
     local now = fields.created_at or os.time()
     -- 018 (V11): audio_sample_rate denormalized from media for resolver hot path.

@@ -938,6 +938,42 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
 end
 
+-- 018 (V11 / INV-3 / FR-013): subframe columns presence is driven by the
+-- clip's track_type. AUDIO requires both source_*_subframe non-NULL; VIDEO
+-- requires both NULL. Caller passes both explicitly — no silent default
+-- (rule 2.13).
+local function fetch_track_type(db, clip_id, track_id)
+    local tstmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(tstmt, "Clip._create_v13_row: prepare track_type query failed")
+    tstmt:bind_value(1, track_id)
+    assert(tstmt:exec(), "Clip._create_v13_row: track_type query failed")
+    assert(tstmt:next(), string.format(
+        "Clip._create_v13_row: track not found for id=%s (clip=%s)",
+        tostring(track_id), tostring(clip_id)))
+    local tt = tstmt:value(0)
+    tstmt:finalize()
+    return tt
+end
+
+local function resolve_subframe_for_kind(db, clip_id, fields)
+    local tt = fetch_track_type(db, clip_id, fields.track_id)
+    if tt == "AUDIO" then
+        assert(fields.source_in_subframe ~= nil, string.format(
+            "Clip._create_v13_row: AUDIO clip %s missing source_in_subframe "
+            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            tostring(clip_id)))
+        assert(fields.source_out_subframe ~= nil, string.format(
+            "Clip._create_v13_row: AUDIO clip %s missing source_out_subframe "
+            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            tostring(clip_id)))
+        return fields.source_in_subframe, fields.source_out_subframe
+    end
+    assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
+        string.format("Clip._create_v13_row: video clip %s must have NULL subframes (INV-3)",
+            tostring(clip_id)))
+    return nil, nil
+end
+
 function M._create_v13_row(fields)
     assert(type(fields) == "table", "Clip.create (v13): fields table required")
     for _, col in ipairs(V13_REQUIRED) do
@@ -951,33 +987,7 @@ function M._create_v13_row(fields)
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
     assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
 
-    -- 018 (V11): subframe columns. INV-3 requires:
-    --   VIDEO clips → both subframes NULL.
-    --   AUDIO clips → both subframes non-NULL (default 0/0 per FR-013).
-    -- Look up the track's type to drive the default. Callers may override
-    -- (importers with sample-precise audio pass non-zero subframes via
-    -- clip_position.write_audio_source after creation; today's edit commands
-    -- create frame-aligned audio = (0, 0)).
-    local track_type
-    do
-        local tstmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
-        assert(tstmt, "Clip._create_v13_row: prepare track_type query failed")
-        tstmt:bind_value(1, fields.track_id)
-        assert(tstmt:exec(), "Clip._create_v13_row: track_type query failed")
-        assert(tstmt:next(), "Clip._create_v13_row: track not found for id=" .. tostring(fields.track_id))
-        track_type = tstmt:value(0)
-        tstmt:finalize()
-    end
-    local sub_in, sub_out
-    if track_type == "AUDIO" then
-        sub_in  = fields.source_in_subframe  ~= nil and fields.source_in_subframe  or 0
-        sub_out = fields.source_out_subframe ~= nil and fields.source_out_subframe or 0
-    else
-        -- VIDEO (or any non-AUDIO track type): subframes MUST be NULL per INV-3.
-        assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
-            string.format("Clip._create_v13_row: video clip %s must not supply subframe (INV-3)", id))
-        sub_in, sub_out = nil, nil
-    end
+    local sub_in, sub_out = resolve_subframe_for_kind(db, id, fields)
 
     local now = fields.created_at or os.time()
     local stmt = db:prepare([[

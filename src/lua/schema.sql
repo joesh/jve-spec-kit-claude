@@ -749,6 +749,31 @@ END;
 
 -- ---------- INV-7 — master.audio_sample_rate must be NULL ----------
 
+-- ---------- INV-8 — audio media_refs MUST carry audio_sample_rate ----------
+-- 018 V5: schema-layer enforcement of FR-008 prerequisite. The resolver
+-- reads media_refs.audio_sample_rate per-emit; NULL on an AUDIO row is a
+-- writer bug that must be caught at insert time, not silently coerced.
+
+DROP TRIGGER IF EXISTS trg_media_refs_audio_rate_required_insert;
+CREATE TRIGGER trg_media_refs_audio_rate_required_insert
+BEFORE INSERT ON media_refs
+WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+     AND NEW.audio_sample_rate IS NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+END;
+
+DROP TRIGGER IF EXISTS trg_media_refs_audio_rate_required_update;
+CREATE TRIGGER trg_media_refs_audio_rate_required_update
+BEFORE UPDATE OF audio_sample_rate, track_id ON media_refs
+WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+     AND NEW.audio_sample_rate IS NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+END;
+
 DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_insert;
 CREATE TRIGGER trg_sequences_master_audio_rate_null_insert
 BEFORE INSERT ON sequences
