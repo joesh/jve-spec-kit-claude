@@ -1025,13 +1025,21 @@ function M.load_master_virtual_clips(master_seq_id)
         "load_master_virtual_clips: master_seq_id required")
     assert(db_connection, "load_master_virtual_clips: no db connection")
 
+    -- 018 (V11): audio_sample_rate is now per-media_ref (denormalized from
+    -- media), not per-sequence. Masters have NULL sequences.audio_sample_rate
+    -- per INV-7. The audio rate is the file's audio rate, denormalized onto
+    -- the media_ref row at insert. COALESCE through `media` is defense-in-depth
+    -- for callers that bypass MediaRef.create and leave mr.audio_sample_rate
+    -- NULL — same semantic value (both refer to the same file). Once all
+    -- write paths populate mr.audio_sample_rate, the COALESCE becomes a no-op.
     local query = db_connection:prepare([[
         SELECT mr.id, mr.project_id, mr.track_id,
                mr.sequence_start_frame, mr.duration_frames,
                mr.source_in_frame, mr.source_out_frame,
                mr.enabled,
                t.track_type, t.name AS track_name,
-               s.fps_numerator, s.fps_denominator, s.audio_sample_rate,
+               s.fps_numerator, s.fps_denominator,
+               COALESCE(mr.audio_sample_rate, m.audio_sample_rate),
                m.id, m.name, m.file_path, m.offline_note
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id

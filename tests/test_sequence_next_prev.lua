@@ -74,12 +74,12 @@ UPDATE sequences SET default_video_layer_track_id = 'master_v_media_v' WHERE id 
 INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_v', 'proj', 'master_media_v', 'master_v_media_v', 'media_v', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', 'master_media_v', 0, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', 'master_media_v', 200, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', 'master_media_v', 50, 100, 10, 110, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a1', 'proj', 'A1', 'a1', 'seq', 'master_media_a', 0, 100, 0, 200000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a2', 'proj', 'A2', 'a1', 'seq', 'master_media_a', 200, 100, 200000, 400000, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', 'master_media_v', 0, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', 'master_media_v', 200, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', 'master_media_v', 50, 100, 10, 110, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a1', 'proj', 'A1', 'a1', 'seq', 'master_media_a', 0, 100, 0, 200000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a2', 'proj', 'A2', 'a1', 'seq', 'master_media_a', 200, 100, 200000, 400000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
 local seq = Sequence.load("seq")
 assert(seq, "Failed to load test sequence")

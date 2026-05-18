@@ -72,9 +72,10 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
     .. "sequence_id, name, sequence_start_frame, duration_frames, "
-    .. "source_in_frame, source_out_frame, fps_mismatch_policy, enabled, "
+    .. "source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
+    .. "fps_mismatch_policy, enabled, "
     .. "volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('c', 'p', 'e', 'e-a1', 'm', 'c', 0, 250, 0, 250, "
+    .. "VALUES ('c', 'p', 'e', 'e-a1', 'm', 'c', 0, 250, 0, 250, 0, 0, "
     .. "'passthrough', 1, 1.0, 0, 0, 0)"))
 
 local Sequence = require("models.sequence")

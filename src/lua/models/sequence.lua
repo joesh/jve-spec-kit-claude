@@ -2793,11 +2793,15 @@ function Sequence.effective_audio_sample_rate(seq)
         "Sequence.effective_audio_sample_rate: seq table with id required")
     if seq.audio_sample_rate then return seq.audio_sample_rate end
     local conn = resolve_db()
+    -- 018: prefer mr.audio_sample_rate (denormalized from media at insert);
+    -- COALESCE through `media` for legacy rows where the denorm is missing.
     local stmt = conn:prepare([[
-        SELECT mr.audio_sample_rate FROM media_refs mr
+        SELECT COALESCE(mr.audio_sample_rate, m.audio_sample_rate)
+        FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
+        LEFT JOIN media m ON m.id = mr.media_id
         WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO'
-          AND mr.audio_sample_rate IS NOT NULL
+          AND (mr.audio_sample_rate IS NOT NULL OR m.audio_sample_rate IS NOT NULL)
         LIMIT 1
     ]])
     assert(stmt, "Sequence.effective_audio_sample_rate: prepare failed")
