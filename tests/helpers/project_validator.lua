@@ -197,14 +197,10 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
     if sequence_id_filter then
         where_clause = string.format(" AND t.sequence_id = '%s'", sequence_id_filter)
     end
-    -- V13: clip's source units depend on the OWNER track type:
-    --   * VIDEO clips → source_in/out are in nested-sequence FRAMES at
-    --     nested.fps_numerator/denominator. Unity = dur * nested_fps/seq_fps.
-    --   * AUDIO clips → source_in/out are in nested-sequence SAMPLES at
-    --     nested.audio_sample_rate. Unity = dur * audio_sr / seq_fps.
-    -- The pre-013 single-fps formula generated false ABSURD_SPEED on every
-    -- audio clip with implied speed = audio_sample_rate / seq_fps. See
-    -- todo_audio_media_tc_rate_normalization in MEMORY.md.
+    -- 018: clip.source_in/out are in master.fps frames for BOTH VIDEO and
+    -- AUDIO clips (sample residual lives in source_*_subframe). Unity =
+    -- dur * master_fps / seq_fps regardless of track type. Per INV-7 the
+    -- master row has audio_sample_rate=NULL (rate lives on media_refs).
     local sql = string.format([[
         SELECT c.id, c.name, c.source_in_frame, c.source_out_frame,
                c.duration_frames,
@@ -241,21 +237,12 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
         -- Reverse clips have negative source range — use absolute value for speed
         if actual_source_range < 0 then actual_source_range = -actual_source_range end
 
-        -- Pick the right source-unit rate per track type (see comment above).
-        local src_num, src_den
-        if track_type == "AUDIO" then
-            if not (nested_audio_sr and nested_audio_sr > 0) then
-                fail(result, string.format(
-                    "MISSING_AUDIO_RATE: audio clip %s (%s) — nested master "
-                    .. "%s has no audio_sample_rate; importer dropped it",
-                    tostring(clip_id), tostring(stmt:value(1)),
-                    tostring(stmt:value(0))))
-                return
-            end
-            src_num, src_den = nested_audio_sr, 1
-        else
-            src_num, src_den = clip_fps_num, clip_fps_den
-        end
+        -- 018: BOTH VIDEO and AUDIO clip source units are master.fps frames.
+        -- track_type and nested_audio_sr are no longer used in this check;
+        -- left in the SELECT for diagnostic context only.
+        local _ = track_type
+        local _ = nested_audio_sr
+        local src_num, src_den = clip_fps_num, clip_fps_den
 
         -- Unity source range = duration * source_rate / seq_rate
         local unity_source_range = duration * src_num * seq_fps_den

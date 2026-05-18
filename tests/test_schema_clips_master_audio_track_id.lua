@@ -29,8 +29,8 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -64,11 +64,11 @@ do
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-comp', 'p1', 'e', 'e-a1', 'm', 'composite',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]), "INSERT with master_audio_track_id=NULL must succeed (composite)")
@@ -84,11 +84,11 @@ do
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-exp', 'p1', 'e', 'e-a1', 'm', 'expanded-A2',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]), "INSERT with master_audio_track_id='m-a2' must succeed")
@@ -104,11 +104,11 @@ do
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-bad', 'p1', 'e', 'e-a1', 'm', 'bad',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'no-such-track', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]])
@@ -130,11 +130,11 @@ do
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-pin', 'p1', 'e', 'e-a1', 'm', 'pinned-A2',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]))

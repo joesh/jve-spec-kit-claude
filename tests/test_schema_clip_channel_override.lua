@@ -44,8 +44,8 @@ assert(cols["clip_id"].pk > 0 and cols["channel_index"].pk > 0,
 -- Scaffold: project, nested sequence with a clip, + master for the clip to reference.
 assert(db:exec("PRAGMA foreign_keys = ON"))
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
@@ -62,7 +62,7 @@ assert(db:exec(
     .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('clip-1', 'p1', 'seq-edit', 'trk-a1', 'seq-master', "
-    .. "'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
+    .. "'c', 0, 100, 0, 100, 0, 0, 'passthrough', 1, 1.0, 0, 0, 0)"))
 
 -- Good.
 assert(db:exec(
