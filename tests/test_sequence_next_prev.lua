@@ -58,7 +58,7 @@ assert(db:exec([[
 assert(db:exec([[
     -- V13 master sequence for media_a
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a' AND default_video_layer_track_id IS NULL;
@@ -67,7 +67,7 @@ VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0
 
 -- V13 master sequence for media_v
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_v', 'proj', 'media_v_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_v', 'proj', 'media_v_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_v', 'master_media_v', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_v' WHERE id = 'master_media_v' AND default_video_layer_track_id IS NULL;

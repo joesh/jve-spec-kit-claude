@@ -705,7 +705,10 @@ function Sequence.ensure_master(media_id, project_id, opts)
             has_video        = has_video,
             has_audio        = has_audio,
             sample_rate      = sample_rate,
-            seq_audio_rate   = sample_rate,  -- nil for video-only; schema permits NULL on kind='master'
+            -- 018 (FR-004, INV-7): masters MUST have NULL audio_sample_rate.
+            -- Audio rate is per-media_ref (a master may hold heterogeneous
+            -- audio rates — synced-sound camera + field recorder, etc.).
+            seq_audio_rate   = nil,
             width            = has_video and media.width  or nil,
             height           = has_video and media.height or nil,
             video_tc         = video_tc,
@@ -782,6 +785,9 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 source_out_frame     = dims.audio_tc + dims.duration_samples,
                 sequence_start_frame = dims.audio_tc,
                 duration_frames      = dims.duration_samples,
+                -- 018 (V11, FR-004): per-media_ref audio rate; denormalized
+                -- from media for resolver hot path (avoid join at decode time).
+                audio_sample_rate    = dims.sample_rate,
                 enabled              = true,
                 volume               = 1.0,
                 playhead_frame       = 0,

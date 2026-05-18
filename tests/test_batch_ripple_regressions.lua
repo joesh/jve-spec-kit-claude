@@ -56,7 +56,7 @@ local function build_manual_timeline(config)
     -- V13 master sequence + track + media_ref (created once per setup).
     db:exec([[
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_main', 'default_project', 'media_main_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_main', 'default_project', 'media_main_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_main', 'master_media_main', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_main' WHERE id = 'master_media_main';

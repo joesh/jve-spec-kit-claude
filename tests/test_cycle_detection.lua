@@ -28,7 +28,7 @@ end
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('M', 'p1', 'M', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('M', 'p1', 'M', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 
 -- Insert a chain A → B → C (via clips). D is isolated; M is a master leaf.
 local function insert_clip(id, owner, nested, track)

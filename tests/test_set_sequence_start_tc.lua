@@ -35,7 +35,7 @@ local function build_fixture()
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             video_start_tc_frame, audio_start_tc_samples,
             created_at, modified_at)
-        VALUES ('s', 'p1', 's', 'master', 24, 1, 48000, 1920, 1080,
+        VALUES ('s', 'p1', 's', 'master', 24, 1, NULL, 1920, 1080,
                 86400, 172800000, 0, 0);
     ]]))
     return db

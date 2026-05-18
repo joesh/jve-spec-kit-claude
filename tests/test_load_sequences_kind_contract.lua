@@ -32,7 +32,7 @@ assert(db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
     VALUES
-      ('m1', 'p', 'master-one', 'master',   24, 1, 48000, 1920, 1080, %d, %d),
+      ('m1', 'p', 'master-one', 'master',   24, 1, NULL, 1920, 1080, %d, %d),
       ('s1', 'p', 'gold',       'sequence', 24, 1, 48000, 1920, 1080, %d, %d),
       ('s2', 'p', 'silver',     'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now, now, now, now, now, now, now)))

@@ -31,7 +31,7 @@ db:exec(string.format([[
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
         VALUES ('rec','proj','Rec','sequence',24,1,48000,1920,1080,0,0,300,%d,%d),
-               ('src','proj','SrcMaster','master',24,1,48000,1920,1080,0,0,300,%d,%d);
+               ('src','proj','SrcMaster','master',24,1,NULL,1920,1080,0,0,300,%d,%d);
 ]], now, now, now, now, now, now))
 
 -- Two distinct engines so we can prove which one received play().

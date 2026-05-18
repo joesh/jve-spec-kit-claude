@@ -41,11 +41,11 @@ local function build_fixture()
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
+        VALUES ('m', 'p1', 'master', 'master', 24, 1, NULL, 1920, 1080, NULL, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m-pre', 'p1', 'pre', 'master', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
+        VALUES ('m-pre', 'p1', 'pre', 'master', 24, 1, NULL, 1920, 1080, NULL, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -390,7 +390,7 @@ do
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m120', 'p1', 'm120', 'master', 24, 1, 48000, 1920, 1080,
+        VALUES ('m120', 'p1', 'm120', 'master', 24, 1, NULL, 1920, 1080,
             NULL, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m120-v1', 'm120', 'V1', 'VIDEO', 1);

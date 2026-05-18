@@ -46,8 +46,8 @@ db:exec(string.format([[
         view_duration_frames, created_at, modified_at)
     VALUES
       ('rec',     'proj', 'Record',   'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d),
-      ('mst_a',   'proj', 'A008.mov', 'master', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d),
-      ('mst_b',   'proj', 'A037.mov', 'master', 24, 1, 48000, 1920, 1080, 0, 0, 1000, %d, %d);
+      ('mst_a',   'proj', 'A008.mov', 'master', 24, 1, NULL, 1920, 1080, 0, 0, 1000, %d, %d),
+      ('mst_b',   'proj', 'A037.mov', 'master', 24, 1, NULL, 1920, 1080, 0, 0, 1000, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES

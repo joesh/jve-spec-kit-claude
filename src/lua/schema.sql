@@ -715,10 +715,17 @@ END;
 -- (ConformSequence creates it inside its transaction).
 
 DROP TRIGGER IF EXISTS trg_sequences_fps_guard;
+-- INV-5 trigger fires only on ACTUAL change. SQLite's BEFORE UPDATE OF col
+-- fires whenever the column appears in the SET clause regardless of value,
+-- so callers writing a row-image with unchanged fps would trigger spurious
+-- aborts. Comparing NEW vs OLD makes the trigger value-driven, matching the
+-- intent (FR-031 forbids *mutation*, not *no-op rewrite*).
 CREATE TRIGGER trg_sequences_fps_guard
 BEFORE UPDATE OF fps_numerator, fps_denominator ON sequences
 WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
                   WHERE name = '_conform_sequence_in_progress')
+  AND (NEW.fps_numerator IS NOT OLD.fps_numerator
+       OR NEW.fps_denominator IS NOT OLD.fps_denominator)
 BEGIN
     SELECT RAISE(ABORT,
         'INV-5: sequences.fps_num/den mutable only via ConformSequence');

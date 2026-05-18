@@ -25,7 +25,7 @@ assert(db:exec(
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
@@ -129,7 +129,7 @@ assert(pcall(Clip.assert_within_master_coverage, "seq-master", 100, "roll-test")
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-empty-master', 'p1', 'em', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-empty-master', 'p1', 'em', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 assert(pcall(Clip.assert_within_master_coverage, "seq-empty-master", 99999, "empty-master"),
     "master with no media_refs must be a no-op (coverage_max=nil)")
 

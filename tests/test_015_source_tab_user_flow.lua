@@ -51,8 +51,8 @@ db:exec(string.format([[
       -- Master A: video + audio. Schema requires audio_sample_rate non-NULL
       -- when there's an audio media_ref. Camera-original media at TC origin
       -- 1,324,752 video frames (= 15:19:58:00 @ 24fps).
-      ('msa',  'proj', 'A012',   'master', 24, 1, 48000, 1920, 1080,   0, 0,  300, %d, %d),
-      ('msb',  'proj', 'A037',   'master', 24, 1, 48000, 1920, 1080,   0, 0,  300, %d, %d);
+      ('msa',  'proj', 'A012',   'master', 24, 1, NULL, 1920, 1080,   0, 0,  300, %d, %d),
+      ('msb',  'proj', 'A037',   'master', 24, 1, NULL, 1920, 1080,   0, 0,  300, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES
       ('rv1', 'rec', 'V1', 'VIDEO', 1, 1),

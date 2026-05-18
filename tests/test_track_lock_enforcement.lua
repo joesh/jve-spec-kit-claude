@@ -30,7 +30,7 @@ assert(db:exec([[
         playhead_frame, view_start_frame, view_duration_frames,
         created_at, modified_at)
     VALUES ('rec', 'p', 'Rec',  'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, 0, 0),
-           ('msa', 'p', 'M',    'master',   24, 1, 48000, 1920, 1080, 0, 0, 300, 0, 0);
+           ('msa', 'p', 'M',    'master',   24, 1, NULL, 1920, 1080, 0, 0, 300, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect)
     VALUES

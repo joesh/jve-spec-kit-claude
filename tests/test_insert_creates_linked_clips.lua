@@ -45,7 +45,7 @@ local function build_fixture(project_fps_mismatch_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('m', 'p1', 'master', 'master', 25, 1, NULL, 1920, 1080, 0, 0)
     ]]))
     -- Edit sequence (nested) at 24/1.
     assert(db:exec([[

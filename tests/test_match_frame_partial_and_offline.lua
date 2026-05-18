@@ -132,7 +132,7 @@ VALUES ('m_missing', 'p', 'missing.mov', '%s', 500, 30, 1, 1920, 1080, 0,
 -- media_ref duration_frames=100 → master valid range [50, 150).
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_partial', 'p', 'Master Partial', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_partial', 'p', 'Master Partial', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 50);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)
@@ -147,7 +147,7 @@ VALUES ('mr_partial', 'p', 'master_partial', 'mp_v', 'm_partial',
 -- Master for the missing-file media — full range, but file_path won't exist.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_missing', 'p', 'Master Missing', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_missing', 'p', 'Master Missing', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)
@@ -255,7 +255,7 @@ VALUES ('m_stale_volume', 'p', 'stale.mov', '%s', 500, 30, 1, 1920, 1080, 0,
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_stale', 'p', 'Master Stale', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_stale', 'p', 'Master Stale', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 50);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)

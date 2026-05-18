@@ -37,8 +37,8 @@ db:exec(string.format([[
         view_duration_frames, created_at, modified_at)
     VALUES ('rec1', 'proj', 'Rec 1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
            ('rec2', 'proj', 'Rec 2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
-           ('src',  'proj', 'Src',   'master', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d),
-           ('src2', 'proj', 'Src2',  'master', 24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
+           ('src',  'proj', 'Src',   'master', 24, 1, NULL, 1920, 1080, 0, 0, 300, %d, %d),
+           ('src2', 'proj', 'Src2',  'master', 24, 1, NULL, 1920, 1080, 0, 0, 300, %d, %d)
 ]], now, now, now, now, now, now, now, now))
 
 -- ── 1. empty strip ────────────────────────────────────────────────────────

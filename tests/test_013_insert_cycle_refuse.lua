@@ -94,7 +94,7 @@ do
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m',  'p1', 'm',  'master', 24, 1, 48000, 1920, 1080, 0, 0),
+        VALUES ('m',  'p1', 'm',  'master', 24, 1, NULL, 1920, 1080, 0, 0),
                ('e1', 'p1', 'e1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0),
                ('e2', 'p1', 'e2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)

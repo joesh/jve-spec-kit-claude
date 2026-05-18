@@ -46,7 +46,7 @@ db:exec(string.format([[
     VALUES
       ('rec', 'proj', 'Record', 'sequence', 25, 1, 48000, 1920, 1080,
             0, 100, 0, 1500, %d, %d),
-      ('src', 'proj', 'A023', 'master', 24, 1, 48000, 1920, 1080,
+      ('src', 'proj', 'A023', 'master', 24, 1, NULL, 1920, 1080,
             0, 0, 0, 2784, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)

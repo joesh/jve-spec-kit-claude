@@ -108,7 +108,7 @@ db:exec(string.format([[
 
     -- V13 master sequences (one per media). Tests reference them by id.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_clip_a', 'default_project', 'Master A', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('master_clip_a', 'default_project', 'Master A', 'master', 30, 1, NULL, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mca_v', 'master_clip_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mca_v' WHERE id = 'master_clip_a';
@@ -116,7 +116,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_a', 'default_project', 'master_clip_a', 'mca_v', 'media_a', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_clip_b', 'default_project', 'Master B', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('master_clip_b', 'default_project', 'Master B', 'master', 30, 1, NULL, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mcb_v', 'master_clip_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mcb_v' WHERE id = 'master_clip_b';
@@ -124,7 +124,7 @@ INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, s
 VALUES ('mr_b', 'default_project', 'master_clip_b', 'mcb_v', 'media_b', 0, 500, 0, 500, 1, 1.0, 0, 0, 0);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_clip_audio_a1', 'default_project', 'Master Audio A1', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('master_clip_audio_a1', 'default_project', 'Master Audio A1', 'master', 30, 1, NULL, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mca_a', 'master_clip_audio_a1', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
@@ -133,7 +133,7 @@ VALUES ('mr_aud', 'default_project', 'master_clip_audio_a1', 'mca_a', 'media_aud
 -- Empty master with no media_refs — used by clip_no_parent so MatchFrame
 -- exercises the 'no master content' path.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_empty', 'default_project', 'Empty Master', 'master', 30, 1, 48000, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
+VALUES ('master_empty', 'default_project', 'Empty Master', 'master', 30, 1, NULL, 1920, 1080, strftime('%%s','now'), strftime('%%s','now'));
 
 INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES

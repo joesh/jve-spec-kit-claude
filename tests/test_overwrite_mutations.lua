@@ -58,7 +58,7 @@ db:exec(string.format([[
 
     -- V13 master sequence + track + media_ref for media_stub
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_stub', 'default_project', 'media_stub_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_stub', 'default_project', 'media_stub_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_stub', 'master_media_stub', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_stub' WHERE id = 'master_media_stub';

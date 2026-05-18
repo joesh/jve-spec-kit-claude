@@ -36,7 +36,7 @@ local function init_database(path)
         VALUES ('media_b', 'default_project', 'B', '/tmp/jve/b.mov', 10000, 1000, 1, 1920, 1080, 2, 'prores', 0, 0, '{}');
         -- V13 master sequence + track + media_ref for media_a
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+VALUES ('master_media_a', 'default_project', 'media_a_master', 'master', 30, 1, NULL, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a';
@@ -45,7 +45,7 @@ VALUES ('mr_media_a', 'default_project', 'master_media_a', 'master_v_media_a', '
 
 -- V13 master sequence + track + media_ref for media_b
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_b', 'default_project', 'media_b_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+VALUES ('master_media_b', 'default_project', 'media_b_master', 'master', 30, 1, NULL, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_b', 'master_media_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_b' WHERE id = 'master_media_b';

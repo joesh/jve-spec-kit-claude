@@ -45,7 +45,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080,
+        VALUES ('m', 'p1', 'master', 'master', 25, 1, NULL, 1920, 1080,
             NULL, 0, 0)
     ]]))
     -- Second V-only master for the pre-existing clip. Independent so the
@@ -55,7 +55,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m-pre', 'p1', 'master-pre', 'master', 25, 1, 48000, 1920, 1080,
+        VALUES ('m-pre', 'p1', 'master-pre', 'master', 25, 1, NULL, 1920, 1080,
             NULL, 0, 0)
     ]]))
     -- Edit sequence (nested) at 24/1.

@@ -951,16 +951,45 @@ function M._create_v13_row(fields)
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
     assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
 
+    -- 018 (V11): subframe columns. INV-3 requires:
+    --   VIDEO clips → both subframes NULL.
+    --   AUDIO clips → both subframes non-NULL (default 0/0 per FR-013).
+    -- Look up the track's type to drive the default. Callers may override
+    -- (importers with sample-precise audio pass non-zero subframes via
+    -- clip_position.write_audio_source after creation; today's edit commands
+    -- create frame-aligned audio = (0, 0)).
+    local track_type
+    do
+        local tstmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+        assert(tstmt, "Clip._create_v13_row: prepare track_type query failed")
+        tstmt:bind_value(1, fields.track_id)
+        assert(tstmt:exec(), "Clip._create_v13_row: track_type query failed")
+        assert(tstmt:next(), "Clip._create_v13_row: track not found for id=" .. tostring(fields.track_id))
+        track_type = tstmt:value(0)
+        tstmt:finalize()
+    end
+    local sub_in, sub_out
+    if track_type == "AUDIO" then
+        sub_in  = fields.source_in_subframe  ~= nil and fields.source_in_subframe  or 0
+        sub_out = fields.source_out_subframe ~= nil and fields.source_out_subframe or 0
+    else
+        -- VIDEO (or any non-AUDIO track type): subframes MUST be NULL per INV-3.
+        assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
+            string.format("Clip._create_v13_row: video clip %s must not supply subframe (INV-3)", id))
+        sub_in, sub_out = nil, nil
+    end
+
     local now = fields.created_at or os.time()
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, owner_sequence_id, track_id, sequence_id,
             name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "Clip._create_v13_row: prepare failed")
     stmt:bind_value(1, id)
@@ -973,16 +1002,18 @@ function M._create_v13_row(fields)
     stmt:bind_value(8, fields.duration_frames)
     stmt:bind_value(9, fields.source_in_frame)
     stmt:bind_value(10, fields.source_out_frame)
-    stmt:bind_value(11, fields.master_layer_track_id)  -- nullable
-    stmt:bind_value(12, fields.master_audio_track_id)  -- nullable (Expand/Collapse)
-    stmt:bind_value(13, fields.fps_mismatch_policy)
-    stmt:bind_value(14, to_int_bool(fields.enabled))
-    stmt:bind_value(15, fields.volume)
-    stmt:bind_value(16, fields.mark_in_frame)    -- nullable
-    stmt:bind_value(17, fields.mark_out_frame)   -- nullable
-    stmt:bind_value(18, fields.playhead_frame)
-    stmt:bind_value(19, now)
-    stmt:bind_value(20, fields.modified_at or now)
+    stmt:bind_value(11, sub_in)                          -- nullable per INV-3
+    stmt:bind_value(12, sub_out)                         -- nullable per INV-3
+    stmt:bind_value(13, fields.master_layer_track_id)    -- nullable
+    stmt:bind_value(14, fields.master_audio_track_id)    -- nullable (Expand/Collapse)
+    stmt:bind_value(15, fields.fps_mismatch_policy)
+    stmt:bind_value(16, to_int_bool(fields.enabled))
+    stmt:bind_value(17, fields.volume)
+    stmt:bind_value(18, fields.mark_in_frame)            -- nullable
+    stmt:bind_value(19, fields.mark_out_frame)           -- nullable
+    stmt:bind_value(20, fields.playhead_frame)
+    stmt:bind_value(21, now)
+    stmt:bind_value(22, fields.modified_at or now)
 
     local ok = stmt:exec()
     local err

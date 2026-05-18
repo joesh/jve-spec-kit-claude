@@ -74,7 +74,7 @@ db:exec(string.format([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for media_dest
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_dest', 'default_project', 'media_dest_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_dest', 'default_project', 'media_dest_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_dest', 'master_media_dest', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_dest' WHERE id = 'master_media_dest';
@@ -83,7 +83,7 @@ VALUES ('mr_media_dest', 'default_project', 'master_media_dest', 'master_v_media
 
 -- V13 master sequence + track + media_ref for media_keep
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_keep', 'default_project', 'media_keep_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_keep', 'default_project', 'media_keep_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_keep', 'master_media_keep', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_keep' WHERE id = 'master_media_keep';
@@ -92,7 +92,7 @@ VALUES ('mr_media_keep', 'default_project', 'master_media_keep', 'master_v_media
 
 -- V13 master sequence + track + media_ref for media_move
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_move', 'default_project', 'media_move_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_move', 'default_project', 'media_move_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_move', 'master_media_move', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_move' WHERE id = 'master_media_move';

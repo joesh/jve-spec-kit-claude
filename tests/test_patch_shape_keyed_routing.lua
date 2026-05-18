@@ -79,9 +79,9 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, created_at, modified_at)
-    VALUES ('src_4ch', 'proj', 'src4', 'master', 24, 1, 48000, 1920, 1080, %d, %d),
-           ('src_2ch', 'proj', 'src2', 'master', 24, 1, 48000, 1920, 1080, %d, %d),
-           ('src_4ch_alt','proj','src4b','master', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('src_4ch', 'proj', 'src4', 'master', 24, 1, NULL, 1920, 1080, %d, %d),
+           ('src_2ch', 'proj', 'src2', 'master', 24, 1, NULL, 1920, 1080, %d, %d),
+           ('src_4ch_alt','proj','src4b','master', 24, 1, NULL, 1920, 1080, %d, %d)
 ]], now, now, now, now, now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
