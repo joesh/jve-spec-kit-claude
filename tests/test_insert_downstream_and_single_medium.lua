@@ -71,8 +71,8 @@ do
     -- Project + V+stereo-A master (60 frames video, 96000 samples audio
     -- = 2 seconds at 48kHz to match video wall-clock), edit seq at 24/1.
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -101,12 +101,12 @@ do
                ('med-v-pre', 'p1', 'pre.mov', '/tmp/pre.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 1, 1.0, 0, 0, 0),
-               ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 96000, 0, 96000, 1, 1.0, 0, 0, 0),
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 96000, 0, 96000, 48000, 1, 1.0, 0, 0, 0),
                ('mr-v-pre', 'p1', 'm-pre', 'm-pre-v1', 'med-v-pre',
-                    0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+                    0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
 
     -- Three existing clips on edit:
@@ -176,8 +176,8 @@ print("-- video-only master = 1 clip, no link group --")
 do
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -196,9 +196,9 @@ do
         VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
     ]]))
 
     local result = Insert.execute({
@@ -229,8 +229,8 @@ print("-- audio-only master = 1 A clip, no link group --")
 do
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -248,9 +248,9 @@ do
         VALUES ('med-a', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 48000,
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 48000, 48000,
             1, 1.0, 0, 0, 0);
     ]]))
 

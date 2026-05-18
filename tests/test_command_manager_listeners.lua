@@ -21,8 +21,8 @@ create_schema(db)
 
 local now = os.time()
 db:exec(string.format([[ 
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('test_project', 'Listener Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('test_project', 'Listener Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, frame_rate, audio_sample_rate, width, height,
         timecode_start_frame, playhead_value, selected_clip_ids, selected_edge_infos,

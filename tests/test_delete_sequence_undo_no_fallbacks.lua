@@ -21,8 +21,8 @@ local now = os.time()
 
 -- Insert project
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- Insert sequence with NON-DEFAULT values (not 1920x1080, not 48000, not 24fps)

@@ -53,8 +53,8 @@ local project_id = "proj_cas_001"
 local sequence_id = "seq_cas_001"
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('%s', 'Test', 'resample', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('%s', 'Test', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)",
     project_id, now, now))
 db:exec(string.format(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
@@ -113,8 +113,8 @@ do
     local project_id2 = "proj_cas_002"
     local sequence_id2 = "seq_cas_002"
     db:exec(string.format(
-        "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-        .. "VALUES ('%s', 'Test2', 'resample', %d, %d)",
+        "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+        .. "VALUES ('%s', 'Test2', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)",
         project_id2, now, now))
     db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "

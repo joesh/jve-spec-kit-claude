@@ -64,8 +64,8 @@ VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, NULL, 1920, 1
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000, 0, 1000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
 
 INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
@@ -189,9 +189,9 @@ assert(db:exec([[
     UPDATE sequences SET default_video_layer_track_id = 'mc_master_v' WHERE id = 'mc_master';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
         source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_mc_master', 'proj', 'mc_master', 'mc_master_v', 'media1',
-        0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]]))
 
 local Clip = require("models.clip")

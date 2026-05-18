@@ -23,13 +23,6 @@ local Clip      = require("models.clip")
 local clip_link = require("models.clip_link")
 local Cycle     = require("models.cycle")
 
--- 018 (FR-004 / INV-7): masters carry no audio_sample_rate. For placement
--- math that needs a master's audio rate, delegate to the model-layer helper
--- (SQL isolation: commands can't open DB directly).
-local function effective_audio_sample_rate(nested)
-    return Sequence.effective_audio_sample_rate(nested)
-end
-
 --- Pick the effective fps-mismatch policy for a place operation.
 --- Chain: explicit arg → owner sequence override (non-NULL) → project default.
 function M.pick_policy(explicit, owner_seq)
@@ -174,7 +167,7 @@ local function apply_nested_marks(nested, mediums, v_dur, a_dur)
     end
     if mediums.AUDIO then
         local samples_per_frame =
-            effective_audio_sample_rate(nested) * nested.fps_denominator / nested.fps_numerator
+            Sequence.effective_audio_sample_rate(nested) * nested.fps_denominator / nested.fps_numerator
         local a_lo = math.floor(lo * samples_per_frame + 0.5)
         local a_hi = math.floor(hi * samples_per_frame + 0.5)
         assert(a_lo >= 0 and a_hi <= a_dur and a_hi > a_lo, string.format(
@@ -199,7 +192,7 @@ local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
     end
     -- Audio-only: samples @ master-effective rate → seconds → owner frames.
     -- 018: rate is now per-media_ref; pick via effective_audio_sample_rate helper.
-    local seconds = a_dur / effective_audio_sample_rate(nested)
+    local seconds = a_dur / Sequence.effective_audio_sample_rate(nested)
     return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
 end
 

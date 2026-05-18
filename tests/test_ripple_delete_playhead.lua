@@ -18,8 +18,8 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -41,8 +41,8 @@ VALUES ('mc_test', 'default_project', 'mc_test', 'master', 30, 1, NULL, 1920, 10
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_test_v1', 'mc_test', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_test_v1' WHERE id = 'mc_test']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mc_test_mr', 'default_project', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mc_test_mr', 'default_project', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 48000, 1, 1.0, 0, 0, 0)]]))
 
 local function create_media(id, duration_value)
     local media = Media.create({

@@ -34,8 +34,8 @@ local db = database.get_connection()
 
 
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- Sequence with all fields populated (non-default values to detect loss)
@@ -98,16 +98,16 @@ VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 5200, 0, 5200, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 5200, 0, 5200, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
-    ('clip_a', 'proj1', 'VideoClip', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 1000, 1100, 1, 0.75, 10, 90, 50, %d, %d, NULL, NULL, 'resample');
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy)
+VALUES ('clip_a', 'proj1', 'VideoClip', 'v1', '_v13_placeholder_master', 'seq1', 0, 100, 1000, 1100, NULL, NULL, 1, 0.75, 10, 90, 50, %d, %d, NULL, NULL, 'resample');
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy) VALUES
-    ('clip_b', 'proj1', 'AudioClip', 'a1', '_v13_placeholder_master', 'seq1', 0, 200, 5000, 5200, 1, 0.5, 20, 180, 0, %d, %d, NULL, NULL, 'resample');
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, volume, mark_in_frame, mark_out_frame, playhead_frame, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy)
+VALUES ('clip_b', 'proj1', 'AudioClip', 'a1', '_v13_placeholder_master', 'seq1', 0, 200, 5000, 5200, 0, 0, 1, 0.5, 20, 180, 0, %d, %d, NULL, NULL, 'resample');
 ]], now, now))
 
 -- Clip links (A/V sync)

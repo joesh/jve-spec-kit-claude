@@ -36,8 +36,8 @@ end
 local function build_fixture(project_policy, existing_clip_policy)
     local db = fresh_db()
     assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', '%s', 0, 0)
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', '%s', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0)
     ]], project_policy)))
 
     -- V-only master (60 frames at 25fps).
@@ -95,17 +95,17 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v-pre', 'p1', 'm-pre', 'm-pre-v1', 'med-v-pre',
-            0, 200, 0, 200, 1, 1.0, 0, 0, 0)
+            0, 200, 0, 200, 48000, 1, 1.0, 0, 0, 0)
     ]]))
 
     -- Pre-existing clip on edit.V1 at [50, 150). Uses 'passthrough' policy

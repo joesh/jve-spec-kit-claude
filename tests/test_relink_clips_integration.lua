@@ -104,25 +104,22 @@ local a_clip_1 = uuid.generate()
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'V-Shot1', '%s', '%s', '%s',
-        0, 100, 100, 200, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+VALUES ('%s', '%s', 'V-Shot1', '%s', '%s', '%s', 0, 100, 100, 200, NULL, NULL, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'V-Shot2', '%s', '%s', '%s',
-        100, 50, 500, 550, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+VALUES ('%s', '%s', 'V-Shot2', '%s', '%s', '%s', 100, 50, 500, 550, NULL, NULL, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 
     INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('%s', '%s', 'A-Shot1', '%s', '%s', '%s',
-        0, 100, 4800000, 9600000, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+VALUES ('%s', '%s', 'A-Shot1', '%s', '%s', '%s', 0, 100, 4800000, 9600000, 0, 0, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 ]], v_clip_1, project_id, v1_track, video_master, seq_id, now, now,
     v_clip_2, project_id, v1_track, video_master, seq_id, now, now,
     a_clip_1, project_id, a1_track, audio_master, seq_id, now, now))

@@ -33,8 +33,8 @@ local M1, M2, M3 = "m1", "m2", "m3"
 local P1, P2, P3 = "/fixture/A.mov", "/fixture/B.mov", "/fixture/C.mov"
 
 assert(conn:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('%s', 'Test', 'resample', strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('%s', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO media (id, project_id, name, file_path, duration_frames,
     fps_numerator, fps_denominator, is_still, offline_note,
     created_at, modified_at)

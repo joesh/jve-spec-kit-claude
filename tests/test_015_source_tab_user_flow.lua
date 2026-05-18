@@ -40,8 +40,8 @@ db:exec(require("import_schema"))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'P', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
@@ -75,17 +75,17 @@ db:exec(string.format([[
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752,    1200, 1, 1.0, 0, %d, %d),
-      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 2649504000, 2400000, 1, 1.0, 0, %d, %d);
+      ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752,    1200, 48000, 1, 1.0, 0, %d, %d),
+      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 2649504000, 2400000, 48000, 1, 1.0, 0, %d, %d);
     -- Master B: video at TC origin frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0, 600, 0, 600, 1, 1.0, 0, %d, %d);
+      ('mrb_v', 'proj', 'msb', 'bv1', 'mb', 0, 600, 0, 600, 48000, 1, 1.0, 0, %d, %d);
 ]], now,now, now,now, now,now, now,now, now,now, now,now, now,now, now,now, now,now))
 
 command_mgr.init("rec", "proj")

@@ -37,8 +37,8 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -58,8 +58,8 @@ local function build_fixture()
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
         -- Three clips on edit V1 starting at 100, 200, 300; each 100 frames.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,

@@ -36,8 +36,8 @@ local db = fresh_db()
 -- After Insert, rec sequence must contain A tracks at indices {1,2,3,4,5}
 -- with the new tracks at EXACTLY 2, 4, 5.
 assert(db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('p1', 'p', 'passthrough', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
@@ -54,8 +54,8 @@ assert(db:exec([[
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('mr-a','p1','m','m-a1','a', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+    VALUES ('mr-a','p1','m','m-a1','a', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
     INSERT INTO patches (id, sequence_id, track_type, source_shape,
         source_track_index, record_track_index, enabled, created_at)
     VALUES ('p-a1','e','AUDIO',1,1,5,1,0);

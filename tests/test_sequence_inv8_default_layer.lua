@@ -14,15 +14,17 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 
 -- Helper: wrap the 2-step create+save as a single call.
 local function make_sequence(name, kind)
     -- 018 INV-7: masters carry no audio_sample_rate; regular sequences require it.
-    local asr = (kind == "master") and nil or 48000
+    -- (Lua ternary `cond and nil or x` collapses to x — must use explicit branch.)
+    local opts = { kind = kind }
+    if kind ~= "master" then opts.audio_sample_rate = 48000 end
     local s = Sequence.create(name, "p1", {  fps_numerator = 24, fps_denominator = 1 },
-        1920, 1080, { kind = kind, audio_sample_rate = asr })
+        1920, 1080, opts)
     assert(s:save(), "Sequence:save failed")
     return s.id
 end

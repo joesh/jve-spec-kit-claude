@@ -358,6 +358,9 @@ function M.create(opts)
         local media_cfg = cfg.media[c.media_key]
         local nested_seq_id = master_seq_for_media[media_cfg.id]
         assert(nested_seq_id, "ripple_layout: missing master sequence for media " .. tostring(media_cfg.id))
+        -- 018 INV-3: AUDIO clips frame-aligned (subframe = 0); VIDEO clips
+        -- NULL. Pure kind dispatch — no DB call.
+        local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track.track_type)
         local clip_id = Clip.create({
             id = c.id,
             project_id = cfg.project_id,
@@ -369,6 +372,8 @@ function M.create(opts)
             duration_frames = c.duration,
             source_in_frame = c.source_in,
             source_out_frame = c.source_in + c.duration,
+            source_in_subframe = sub_in,
+            source_out_subframe = sub_out,
             fps_mismatch_policy = "resample",
             enabled = (c.enabled == nil) and 1 or c.enabled,
             volume = 1.0,

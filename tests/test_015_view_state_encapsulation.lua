@@ -37,8 +37,8 @@ db:exec(require("import_schema"))
 local now = os.time()
 -- Record sequence with a known persisted playhead at frame 4242.
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'P', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,

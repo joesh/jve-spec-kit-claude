@@ -36,8 +36,8 @@ local SEQ_A = "seq-clear-a"
 local SEQ_B = "seq-clear-b"
 
 assert(conn:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('%s', 'Clear Test', 'resample', strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('%s', 'Clear Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
     created_at, modified_at)

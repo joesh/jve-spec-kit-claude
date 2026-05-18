@@ -31,8 +31,8 @@ end
 local function build_fixture(owner_fps_num, nested_fps_num)
     local db = fresh_db()
     assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -51,9 +51,9 @@ local function build_fixture(owner_fps_num, nested_fps_num)
         VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', 2000, %d, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 2000, 0, 2000,
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 2000, 0, 2000, 48000,
             1, 1.0, 0, 0, 0);
     ]], nested_fps_num, owner_fps_num, nested_fps_num)))
     return db

@@ -29,8 +29,8 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -107,7 +107,9 @@ local function create_clip(id, track_id, start, duration, source_in)
     local Sequence = require('models.sequence')
     local master_seq_id = Sequence.ensure_master(media_id, 'proj')
     local now = os.time()
-    require('models.clip').create({
+    local Clip = require('models.clip')
+    local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
+    Clip.create({
         id = id,
         project_id = 'proj',
         owner_sequence_id = 'seq',
@@ -118,6 +120,8 @@ local function create_clip(id, track_id, start, duration, source_in)
         duration_frames = duration,
         source_in_frame = source_in,
         source_out_frame = source_in + duration,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         fps_mismatch_policy = "resample",
         enabled = true,
         volume = 1.0,

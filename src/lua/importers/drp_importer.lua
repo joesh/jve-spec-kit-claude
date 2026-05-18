@@ -2492,11 +2492,16 @@ local function init_project_database(jvp_path, parse_result, picked_audio_rate)
     end
 
     local json = require("dkjson")
+    -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
+    -- on every project; populated here to the spec'd defaults. DRPs don't
+    -- carry a master-clock concept of their own.
     local settings = {
         frame_rate        = parse_result.project.settings.frame_rate,
         width             = parse_result.project.settings.width,
         height            = parse_result.project.settings.height,
         audio_sample_rate = picked_audio_rate,
+        master_clock_hz   = 192000,
+        default_fps       = { num = 24, den = 1 },
     }
     local project = Project.create(parse_result.project.name, {
         settings            = json.encode(settings),

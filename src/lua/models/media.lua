@@ -1355,17 +1355,17 @@ local function include_extent_row(stmt, media_rates, result)
         result[mid].video = bucket
         include_in_extent(bucket, src_in, src_out)
     elseif track_type == "AUDIO" and rates.audio_sample_rate then
-        assert(audio_sample_rate and audio_sample_rate > 0, string.format(
-            "batch_get_source_extents: nested sequence for media %s has no "
-            .. "audio_sample_rate; cannot scale audio clip extent", tostring(mid)))
+        -- 018: clip.source_*_frame is in master.fps frames for AUDIO too.
+        -- Convert (frame) → samples using the file's audio rate. Under
+        -- INV-7 the master row's audio_sample_rate is NULL — rates.audio_sample_rate
+        -- carries the file-native rate provided by the caller.
         local target = rates.audio_sample_rate
-        if math.abs(audio_sample_rate - target) > 0.01 then
-            src_in  = math.floor(src_in  * target / audio_sample_rate + 0.5)
-            src_out = math.floor(src_out * target / audio_sample_rate + 0.5)
-        end
+        local samples_per_frame = target * fps_den / fps_num
+        local src_in_samples  = math.floor(src_in  * samples_per_frame + 0.5)
+        local src_out_samples = math.floor(src_out * samples_per_frame + 0.5)
         local bucket = result[mid].audio or { rate = target }
         result[mid].audio = bucket
-        include_in_extent(bucket, src_in, src_out)
+        include_in_extent(bucket, src_in_samples, src_out_samples)
     end
 end
 

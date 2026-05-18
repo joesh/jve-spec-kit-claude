@@ -38,7 +38,7 @@ local function setup_db(path)
     end
 
     exec_safe(string.format([[ 
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     ]], now, now), "Insert Project")
 -- V13: synthesize placeholder media + master sequence for clip references.
 do

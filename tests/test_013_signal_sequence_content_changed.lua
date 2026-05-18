@@ -32,8 +32,8 @@ end
 local function base_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -49,9 +49,9 @@ local function base_fixture()
         VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
     return db
 end
@@ -361,9 +361,9 @@ local function override_fixture()
         VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'a-med', 0, 48000, 0, 48000,
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'a-med', 0, 48000, 0, 48000, 48000,
                 1, 1.0, 0, 0, 0);
     ]]))
     return db
@@ -540,10 +540,10 @@ do  -- ExpandAudio (T056i) — emits on parent.
         VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
-               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,
@@ -577,10 +577,10 @@ do  -- CollapseAudio (T056j) — emits on parent.
         VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
-               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,
             sequence_start_frame, duration_frames,

@@ -46,8 +46,8 @@ local TC_ORIGIN_25     = 1248362       -- 13:52:29:07 @ 25fps
 local SAMPLE_RATE      = 48000
 
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- The stale media row (matches the bug report).
@@ -76,7 +76,7 @@ db:exec(string.format([[
         view_start_frame, view_duration_frames, created_at, modified_at)
     VALUES ('rec_bootstrap', 'proj', 'Bootstrap', 'sequence', 25, 1, %d, 1920, 1080,
             0, 0, 0, 300, %d, %d),
-           ('msa', 'proj', 'A023 Master', 'master', 25, 1, %d, 1920, 1080,
+           ('msa', 'proj', 'A023 Master', 'master', 25, 1, NULL, 1920, 1080,
             %d, 0, 0, %d, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -87,13 +87,13 @@ db:exec(string.format([[
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mref_v', 'proj', 'msa', 'msa_v', 'media_a023', 0, %d,
-            %d, %d, 1, 1.0, 0, %d, %d),
+            %d, %d, 48000, 1, 1.0, 0, %d, %d),
       ('mref_a', 'proj', 'msa', 'msa_a', 'media_a023', 0, %d,
-            %d, %d, 1, 1.0, 0, %d, %d);
-]], SAMPLE_RATE, now, now, SAMPLE_RATE, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
+            %d, %d, 48000, 1, 1.0, 0, %d, %d);
+]], SAMPLE_RATE, now, now, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
     OLD_DUR_FRAMES, TC_ORIGIN_25, OLD_DUR_FRAMES, now, now,
     OLD_DUR_SAMPLES, TC_ORIGIN_25 * SAMPLE_RATE / 25, OLD_DUR_SAMPLES,
     now, now))

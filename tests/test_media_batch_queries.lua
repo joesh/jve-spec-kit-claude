@@ -130,6 +130,9 @@ db:exec(
 --- Make a clip on a named track at a specific timeline start so we
 --- don't trip the VIDEO_OVERLAP trigger.
 local function make_clip(params)
+    -- 018 INV-3: subframes per track kind (0 for AUDIO, NULL for VIDEO).
+    local sub_in, sub_out = Clip.subframe_defaults_for(
+        require("core.database").get_connection(), params.track_id)
     local c = Clip.create({
         name = "Clip " .. params.id,
         id = params.id,
@@ -141,6 +144,8 @@ local function make_clip(params)
         duration_frames = params.source_out - params.source_in,
         source_in_frame = params.source_in,
         source_out_frame = params.source_out,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,

@@ -163,8 +163,8 @@ db:exec(require("import_schema"))
 -- Create a project + media + masterclip sequence
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO media (id, project_id, file_path, name, duration_frames,
         fps_numerator, fps_denominator, width, height,
@@ -175,6 +175,19 @@ db:exec(string.format([[
 
 local mc_id = test_env.create_test_masterclip_sequence(
     "proj1", "TestClip", 24, 1, 300, "media1")
+
+-- 018 FR-005: video-only masters loaded into the source viewer derive
+-- their output audio rate from the active record sequence. Provide a
+-- record sequence and wire timeline_state at it.
+assert(db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
+        playhead_frame, created_at, modified_at)
+    VALUES ('rec1', 'proj1', 'Rec', 'sequence', 24, 1, 48000, 1920, 1080,
+        0, 300, 0, %d, %d)
+]], now, now)))
+local _ts = require("ui.timeline.timeline_state")
+_ts.init("rec1", "proj1")
 
 mock_renderer_info[mc_id] = {
     fps_num = 24, fps_den = 1,

@@ -204,17 +204,26 @@ local function place_clips(track_map, project_id, sequence_id)
             "AddClipsToSequence: clip_desc.duration must be a positive integer")
 
         local clip_id = d.clip_id or uuid.generate()
+        -- 018 INV-3: AUDIO clips carry source subframes (integer, default 0);
+        -- VIDEO clips must have NULL subframes. Default from d.role; allow
+        -- callers to override via d.source_in_subframe / d.source_out_subframe.
+        local role_track_type = (d.role == "audio") and "AUDIO" or "VIDEO"
+        local def_sub_in, def_sub_out = Clip.subframe_defaults_for_track_type(role_track_type)
+        local sub_in  = d.source_in_subframe  ~= nil and d.source_in_subframe  or def_sub_in
+        local sub_out = d.source_out_subframe ~= nil and d.source_out_subframe or def_sub_out
         Clip._create_v13_row({
             id                    = clip_id,
             project_id            = project_id,
             owner_sequence_id     = sequence_id,
             track_id              = p.track_id,
-            sequence_id    = d.sequence_id,
+            sequence_id           = d.sequence_id,
             name                  = d.name or "Timeline Clip",
             sequence_start_frame  = interval.start_frame,
             duration_frames       = d.duration,
             source_in_frame       = d.source_in,
             source_out_frame      = d.source_out,
+            source_in_subframe    = sub_in,
+            source_out_subframe   = sub_out,
             master_layer_track_id = d.master_layer_track_id,  -- nullable
             fps_mismatch_policy   = d.fps_mismatch_policy,
             enabled               = (d.enabled ~= false),

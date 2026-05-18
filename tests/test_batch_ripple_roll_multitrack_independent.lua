@@ -26,8 +26,8 @@ local now = os.time()
 -- Track 1: clip_a has no next neighbor (space to extend)
 -- Track 2: clip_b has blocking_clip immediately at 100 (no space)
 local seed = string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, selected_clip_ids, selected_edge_infos, view_start_frame, view_duration_frames, created_at, modified_at)
     VALUES ('seq', 'proj', 'Timeline', 'sequence', 30, 1, 48000, 1920, 1080, 0, '[]', '[]', 0, 240, %d, %d);
@@ -45,8 +45,8 @@ VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, NULL, 1920, 1
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 200, 0, 200, 1, 1.0, 0, strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 200, 0, 200, 48000, 1, 1.0, 0, strftime('%%s','now'), strftime('%%s','now'));
 
 INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES

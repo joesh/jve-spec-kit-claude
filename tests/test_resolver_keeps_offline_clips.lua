@@ -36,8 +36,8 @@ assert(f == nil,
     "test setup: OFFLINE_PATH must not exist on disk (got it back from io.open)")
 
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p', 'p', 'passthrough', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p', 'p', 'passthrough', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 -- Master (V13: holds media_refs)
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, "
@@ -66,8 +66,8 @@ assert(db:exec(string.format(
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
     .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
-    .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('mr', 'p', 'm', 'm-a1', 'med', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
+    .. "duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at) "
+    .. "VALUES ('mr', 'p', 'm', 'm-a1', 'med', 0, 250, 0, 250, 48000, 1, 1.0, 0, 0, 0)"))
 -- Edit clip references master, picking the full master window
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
@@ -129,8 +129,8 @@ assert(db:exec(string.format(
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
     .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
-    .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('vmr', 'p', 'm', 'm-v1', 'vmed', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
+    .. "duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at) "
+    .. "VALUES ('vmr', 'p', 'm', 'm-v1', 'vmed', 0, 250, 0, 250, 48000, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
     .. "sequence_id, name, sequence_start_frame, duration_frames, "

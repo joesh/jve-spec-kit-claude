@@ -37,8 +37,8 @@ local NOTE_JSON = '{"kind":"partial_coverage","candidate_path":"/fixture/covered
     '"covered_start_tc":86400,"covered_end_tc":86500,"rate":25}'
 
 assert(conn:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('%s', 'Test', 'resample', strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('%s', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO media (id, project_id, name, file_path, duration_frames,
     fps_numerator, fps_denominator, is_still, offline_note, created_at, modified_at)
 VALUES

@@ -98,6 +98,8 @@ local clip1_id = Clip.create({
         fps_mismatch_policy = "resample",
         playhead_frame = 0,
         enabled = 1,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
     })
 local clip1 = Clip.load(clip1_id)
 assert(clip1.volume == 0.501187, "create: volume should be 0.501187, got " .. tostring(clip1.volume))
@@ -125,6 +127,8 @@ local clip2_id = Clip.create({
         volume = 1.0,
         playhead_frame = 0,
         enabled = 1,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
     })
 local clip2 = Clip.load(clip2_id)
 assert(clip2.volume == 1.0, "default: volume should be 1.0, got " .. tostring(clip2.volume))
@@ -162,6 +166,8 @@ local clip3_id = Clip.create({
         fps_mismatch_policy = "resample",
         playhead_frame = 0,
         enabled = 1,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
     })
 local clip3 = Clip.load(clip3_id)
 
@@ -207,6 +213,8 @@ local ok, err = pcall(function()
         fps_mismatch_policy = "resample",
         playhead_frame = 0,
         enabled = 1,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
     })
     bad:save()
 end)
@@ -231,6 +239,8 @@ local clip_silent_id = Clip.create({
         fps_mismatch_policy = "resample",
         playhead_frame = 0,
         enabled = 1,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
     })
 local clip_silent = Clip.load(clip_silent_id)
 assert(clip_silent.volume == 0.0, "create: volume should be 0.0, got " .. tostring(clip_silent.volume))

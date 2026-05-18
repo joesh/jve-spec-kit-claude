@@ -46,8 +46,8 @@ db:exec(require("import_schema"))
 local now = os.time()
 -- Project
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'P', 'resample', %d, %d)
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d)
 ]], now, now))
 -- Record sequence 1
 db:exec(string.format([[

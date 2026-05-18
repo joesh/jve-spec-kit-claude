@@ -162,13 +162,13 @@ end
 
 -- INSERT one replacement clip on the parent that wraps S over the same
 -- timeline window the selection used to occupy.
-local function insert_replacement_clip(parent, sequence_id, track_id,
+local function insert_replacement_clip(parent, sequence_id, track_id, track_type,
                                        new_clip_id, new_seq_id,
                                        min_start, span)
     -- 018 FR-013: track_type-driven subframe (audio = 0,0; video = nil,nil).
+    -- Pure variant — SQL isolation (rule 1.10): commands can't open DB.
     local Clip = require("models.clip")
-    local sub_in, sub_out = Clip.subframe_defaults_for(
-        require("core.database").get_connection(), track_id)
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track_type)
     Clip.create({
         id                    = new_clip_id,
         project_id            = parent.project_id,
@@ -211,7 +211,7 @@ function M.execute(args)
     create_nested_sequence(parent, new_seq_id)
     create_mirrored_track(source_track, new_seq_id, new_track_id)
     local moved = migrate_selection_into_S(clip_rows, new_seq_id, new_track_id, min_start)
-    insert_replacement_clip(parent, sequence_id, src_track_id,
+    insert_replacement_clip(parent, sequence_id, src_track_id, source_track.track_type,
                             new_clip_id, new_seq_id, min_start, span)
 
     log.event("Nest: parent=%s S=%s moved=%d span=%d at=%d",

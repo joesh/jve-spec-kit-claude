@@ -33,8 +33,8 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
 
         -- Multicam master with V1, V2, V3 (each its own media file) +
         -- one A track. Default layer = V1.
@@ -75,10 +75,10 @@ local function build_fixture()
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v1', 'p1', 'm', 'm-v1', 'mv1', 0, 100, 0, 100, 1, 1.0, 0, 0, 0),
-               ('mr-v2', 'p1', 'm', 'm-v2', 'mv2', 0, 100, 0, 100, 1, 1.0, 0, 0, 0),
-               ('mr-v3', 'p1', 'm', 'm-v3', 'mv3', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v1', 'p1', 'm', 'm-v1', 'mv1', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-v2', 'p1', 'm', 'm-v2', 'mv2', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-v3', 'p1', 'm', 'm-v3', 'mv3', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
         -- Clip 'tracking' with master_layer_track_id NULL (inherits master default).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,

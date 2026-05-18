@@ -19,8 +19,8 @@ local now = os.time()
 
 -- Setup: project, sequence, tracks
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
@@ -57,25 +57,19 @@ local _MC = _Sequence.ensure_master("med1", "proj1")
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('clip_video', 'proj1', 'Video', 'trk_v',
-        'seq1', '%s',
-        0, 1000, 0, 1000, NULL, NULL, 'resample',
-        1, 1.0, 0, %d, %d);
+VALUES ('clip_video', 'proj1', 'Video', 'trk_v', 'seq1', '%s', 0, 1000, 0, 1000, NULL, NULL, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 ]], _MC, now, now))
 
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id,
         owner_sequence_id, sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
+        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('clip_audio', 'proj1', 'Audio', 'trk_a',
-        'seq1', '%s',
-        0, 1000, 0, 1000, NULL, NULL, 'resample',
-        1, 1.0, 0, %d, %d);
+VALUES ('clip_audio', 'proj1', 'Audio', 'trk_a', 'seq1', '%s', 0, 1000, 0, 1000, 0, 0, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
 ]], _MC, now, now))
 
 -- Link them

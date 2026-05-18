@@ -30,8 +30,8 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,

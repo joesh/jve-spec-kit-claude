@@ -403,7 +403,8 @@ fetch_sequence_clips = function(db, sequence_id)
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
                c.volume, c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
-               t.track_type
+               t.track_type,
+               c.source_in_subframe, c.source_out_subframe
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         WHERE c.track_id IN (
@@ -447,6 +448,8 @@ fetch_sequence_clips = function(db, sequence_id)
                 playhead_value = assert(tonumber(clip_stmt:value(19)),
                     "fetch_sequence_clips: NULL playhead_frame for clip " .. tostring(clip_id)),
                 track_type = clip_stmt:value(20),
+                source_in_subframe  = clip_stmt:value(21),
+                source_out_subframe = clip_stmt:value(22),
             }
 
             -- Fetch properties for this clip
@@ -715,11 +718,12 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
             sequence_id, owner_sequence_id,
             sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,
             enabled, created_at, modified_at,
             volume, mark_in_frame, mark_out_frame, playhead_frame
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     if not stmt then return false, "UndoDeleteSequence: Failed to prepare clip insert" end
 
@@ -745,16 +749,18 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
         stmt:bind_value(8, clip.duration_value)
         stmt:bind_value(9, clip.source_in_value)
         stmt:bind_value(10, clip.source_out_value)
-        stmt:bind_value(11, clip.master_layer_track_id)
-        stmt:bind_value(12, clip.master_audio_track_id)
-        stmt:bind_value(13, clip.fps_mismatch_policy)
-        stmt:bind_value(14, clip.enabled and 1 or 0)
-        stmt:bind_value(15, clip.created_at)
-        stmt:bind_value(16, clip.modified_at)
-        stmt:bind_value(17, clip.volume)
-        if clip.mark_in_value  then stmt:bind_value(18, clip.mark_in_value)  end
-        if clip.mark_out_value then stmt:bind_value(19, clip.mark_out_value) end
-        stmt:bind_value(20, clip.playhead_value)
+        stmt:bind_value(11, clip.source_in_subframe)   -- nullable for VIDEO
+        stmt:bind_value(12, clip.source_out_subframe)  -- nullable for VIDEO
+        stmt:bind_value(13, clip.master_layer_track_id)
+        stmt:bind_value(14, clip.master_audio_track_id)
+        stmt:bind_value(15, clip.fps_mismatch_policy)
+        stmt:bind_value(16, clip.enabled and 1 or 0)
+        stmt:bind_value(17, clip.created_at)
+        stmt:bind_value(18, clip.modified_at)
+        stmt:bind_value(19, clip.volume)
+        if clip.mark_in_value  then stmt:bind_value(20, clip.mark_in_value)  end
+        if clip.mark_out_value then stmt:bind_value(21, clip.mark_out_value) end
+        stmt:bind_value(22, clip.playhead_value)
         if not stmt:exec() then
             stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore clip"
         end

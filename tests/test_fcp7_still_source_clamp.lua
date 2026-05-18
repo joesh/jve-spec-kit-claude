@@ -16,8 +16,8 @@ assert(database.init(DB_PATH), "schema init failed")
 local db = database.get_connection()
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('p1', 'test', 'passthrough', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('p1', 'test', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
 ]])
 
 -- Minimal parsed_result: one sequence, one video track, one still clip.

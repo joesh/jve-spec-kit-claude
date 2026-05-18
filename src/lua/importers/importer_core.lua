@@ -27,6 +27,10 @@ local Track = require("models.track")
 local Clip = require("models.clip")
 local Property = require("models.property")
 local clip_link = require("models.clip_link")
+-- 018: sub-frame math primitive for audio clip source position conversion
+-- (file samples → master.fps frame + master_clock_hz tick subframe). Pure
+-- numeric helper; no DB coupling.
+local subframe_math = require("core.subframe_math")
 
 -- ---------------------------------------------------------------------------
 -- Helper: Frame rate to rational
@@ -490,6 +494,29 @@ local function resolve_clip_source_range(clip_data)
     return clip_data.source_in, source_out
 end
 
+-- 018 (FR-022 / FR-008): convert an audio clip's file-natural sample
+-- position to the (frame, subframe) representation in the master sequence's
+-- timebase + project master_clock_hz tick space. Composes subframe_math
+-- primitives — pure numerics, no DB coupling. Every invalid input asserts
+-- (delegated to subframe_math which names the offending parameter).
+--
+--   samples         : file-natural sample position (>= 0 integer)
+--   file_rate       : audio file's native sample rate (Hz, > 0 integer)
+--   master_fps_num  : master sequence fps numerator (> 0 integer)
+--   master_fps_den  : master sequence fps denominator (> 0 integer)
+--   master_clock_hz : project master clock rate (Hz, > 0 integer)
+--
+-- Returns (frame, subframe) canonical: 0 <= subframe < ticks_per_frame.
+function M.compute_audio_clip_source(samples, file_rate,
+                                     master_fps_num, master_fps_den,
+                                     master_clock_hz)
+    local total_ticks = subframe_math.samples_to_ticks(
+        samples, file_rate, master_clock_hz)
+    local tpf = subframe_math.ticks_per_frame(
+        master_clock_hz, master_fps_num, master_fps_den)
+    return subframe_math.unpack(total_ticks, tpf)
+end
+
 -- Resolve the bin a master sequence belongs in. Try, in order: pool-by-uuid
 -- → pool-by-name (via media_by_uuid/path lookup) → pool-by-basename →
 -- "Unorganized" fallback. Returns the bin id (always non-nil when an
@@ -638,6 +665,17 @@ function M.import_into_project(project_id, parse_result, opts)
     local project_settings = opts.project_settings or parse_result.project.settings
     local sub_report = opts.progress_cb or function() end
 
+    -- 018 (FR-028): project_settings.master_clock_hz drives every per-clip
+    -- audio sample → (frame, subframe) conversion below. Asserted once here
+    -- so we fail loud at the entry of the import rather than per-clip
+    -- (rule 1.14). DRP / prproj importers populate this at parse time.
+    local master_clock_hz = project_settings and project_settings.master_clock_hz
+    assert(master_clock_hz and master_clock_hz > 0, string.format(
+        "importer_core.import_into_project: project_settings.master_clock_hz "
+        .. "required (FR-028); got %s. The format-specific parser must populate "
+        .. "this in parse_result.project.settings before calling import_into_project.",
+        tostring(master_clock_hz)))
+
     local tag_service = require("core.tag_service")
     local uuid = require("uuid")
 
@@ -770,10 +808,37 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     local now = os.time()
-                    -- 018 FR-010 / FR-013: DRP/importer_core writes are
-                    -- frame-aligned (subframe = 0 for audio, NULL for video).
-                    local sub_in, sub_out = Clip.subframe_defaults_for(
-                        require("core.database").get_connection(), track.id)
+                    -- 018 (FR-001 / FR-008 / FR-022): clip.source_in_frame /
+                    -- source_out_frame are uniformly in the master sequence's
+                    -- fps timebase across both mediums. Audio sub-sample
+                    -- residual lives in source_*_subframe (master_clock_hz
+                    -- ticks). The parser delivers source_in/out in
+                    -- file-natural units (samples for audio, frames for
+                    -- video); the audio path converts here. INV-3 forces
+                    -- subframe NULL on video, non-NULL on audio.
+                    local src_in_frame, sub_in
+                    local src_out_frame, sub_out
+                    if track.track_type == "AUDIO" then
+                        local master_seq = Sequence.find(master_seq_id)
+                        assert(master_seq, string.format(
+                            "importer_core: master %s not loadable after ensure_master",
+                            tostring(master_seq_id)))
+                        src_in_frame, sub_in = M.compute_audio_clip_source(
+                            source_in_final, clip_data.native_rate,
+                            master_seq.fps_numerator, master_seq.fps_denominator,
+                            master_clock_hz)
+                        src_out_frame, sub_out = M.compute_audio_clip_source(
+                            source_out_final, clip_data.native_rate,
+                            master_seq.fps_numerator, master_seq.fps_denominator,
+                            master_clock_hz)
+                    else
+                        -- VIDEO: source_in/out from parser are already in
+                        -- master.fps frames; subframe NULL per INV-3.
+                        local defaults_in, defaults_out =
+                            Clip.subframe_defaults_for_track_type(track.track_type)
+                        src_in_frame, sub_in   = source_in_final,  defaults_in
+                        src_out_frame, sub_out = source_out_final, defaults_out
+                    end
                     local clip_id = Clip.create({
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
@@ -782,8 +847,8 @@ function M.import_into_project(project_id, parse_result, opts)
                         name                  = clip_data.name or "Untitled Clip",
                         sequence_start_frame  = clip_data.start_value,
                         duration_frames       = clip_data.duration,
-                        source_in_frame       = source_in_final,
-                        source_out_frame      = source_out_final,
+                        source_in_frame       = src_in_frame,
+                        source_out_frame      = src_out_frame,
                         source_in_subframe    = sub_in,
                         source_out_subframe   = sub_out,
                         master_layer_track_id = nil,

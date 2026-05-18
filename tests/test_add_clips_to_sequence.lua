@@ -27,7 +27,7 @@ db:exec(require('import_schema'))
 -- Insert Project/Sequence (30fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 -- V13: synthesize placeholder media + master sequence for clip references.
 do
@@ -171,6 +171,8 @@ end
 
 -- Helper: create existing clip
 local function create_clip(id, track_id, start_frame, duration_frames)
+    -- 018 INV-3: AUDIO clips carry subframes (0 default), VIDEO get NULL.
+    local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
     local clip = Clip.create({
         name = "Clip " .. id,
         id = id,
@@ -182,6 +184,8 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         enabled = true,
         fps_mismatch_policy = "resample",
         volume = 1.0,
@@ -427,7 +431,7 @@ result = execute_command("AddClipsToSequence", {
     project_id = "project",
     edit_type = "insert",
 })
-assert(result.success, "AV insert should succeed")
+assert(result.success, "AV insert should succeed: " .. tostring(result.error_message))
 assert(count_clips("track_v1") == 1, "Should have 1 clip on V1")
 assert(count_clips("track_a1") == 1, "Should have 1 clip on A1")
 

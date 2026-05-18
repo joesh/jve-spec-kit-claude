@@ -25,8 +25,8 @@ print("=== Snapshot Manager Integer Coords Tests ===")
 -- Setup
 --------------------------------------------------------------------------------
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
@@ -67,9 +67,9 @@ db:exec([[
         WHERE id = 'master_seq_for_med1';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame, sequence_start_frame,
-        duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+        duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_med1', 'proj1', 'master_seq_for_med1', 'master_v_med1',
-        'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        'med1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]])
 
 --------------------------------------------------------------------------------

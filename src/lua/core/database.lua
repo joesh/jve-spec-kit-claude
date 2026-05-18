@@ -361,6 +361,12 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         -- 018: subframe round-trips through load (NULL for video, INTEGER for audio).
         source_in_subframe = query:value(10),
         source_out_subframe = query:value(11),
+        -- T018 tripwire (defense-in-depth mirror of INV-3): if a row reaches
+        -- the load path with a kind/subframe-presence mismatch, the schema
+        -- triggers should have already blocked the write — but a raw SQL
+        -- bypass or a partial migration would surface here at read time
+        -- rather than silently producing wrong audio math at the resolver.
+        -- Asserts are below after track_type is computed.
 
         -- The clip's source_in/out are in the source sequence's timebase.
         frame_rate = {
@@ -375,6 +381,31 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         track_type = track_type,
 
     }
+
+    -- T018 / 018 tripwire (defense-in-depth mirror of INV-3): a clip's
+    -- subframe presence must match its track_type. Schema triggers enforce
+    -- this on writes; this load-side assert catches any raw-SQL bypass and
+    -- dies loudly with the offending clip + track_type + subframe values
+    -- (rule 1.14) rather than letting wrong audio math flow downstream.
+    if track_type == "AUDIO" then
+        assert(clip.source_in_subframe ~= nil
+            and clip.source_out_subframe ~= nil,
+            string.format(
+            "load_clips (INV-3 tripwire): AUDIO clip %s has NULL "
+            .. "source_*_subframe (sub_in=%s, sub_out=%s)",
+            tostring(clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
+    elseif track_type == "VIDEO" then
+        assert(clip.source_in_subframe == nil
+            and clip.source_out_subframe == nil,
+            string.format(
+            "load_clips (INV-3 tripwire): VIDEO clip %s has non-NULL "
+            .. "source_*_subframe (sub_in=%s, sub_out=%s)",
+            tostring(clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
+    end
     -- V13-resolved chain leaf: nested→master→media_ref→media. Substructure
     -- so consumers see clearly that these are denormalized join results,
     -- not direct columns on `clips`. NULL when the nested sequence is itself
@@ -1033,12 +1064,9 @@ function M.load_master_virtual_clips(master_seq_id)
     assert(db_connection, "load_master_virtual_clips: no db connection")
 
     -- 018 (V11): audio_sample_rate is now per-media_ref (denormalized from
-    -- media), not per-sequence. Masters have NULL sequences.audio_sample_rate
-    -- per INV-7. The audio rate is the file's audio rate, denormalized onto
-    -- the media_ref row at insert. COALESCE through `media` is defense-in-depth
-    -- for callers that bypass MediaRef.create and leave mr.audio_sample_rate
-    -- NULL — same semantic value (both refer to the same file). Once all
-    -- write paths populate mr.audio_sample_rate, the COALESCE becomes a no-op.
+    -- media at insert), not per-sequence. Masters have NULL
+    -- sequences.audio_sample_rate per INV-7. INV-8 guarantees every AUDIO
+    -- media_ref carries mr.audio_sample_rate; VIDEO rows leave it NULL.
     local query = db_connection:prepare([[
         SELECT mr.id, mr.project_id, mr.track_id,
                mr.sequence_start_frame, mr.duration_frames,
@@ -1046,7 +1074,7 @@ function M.load_master_virtual_clips(master_seq_id)
                mr.enabled,
                t.track_type, t.name AS track_name,
                s.fps_numerator, s.fps_denominator,
-               COALESCE(mr.audio_sample_rate, m.audio_sample_rate),
+               mr.audio_sample_rate,
                m.id, m.name, m.file_path, m.offline_note
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id

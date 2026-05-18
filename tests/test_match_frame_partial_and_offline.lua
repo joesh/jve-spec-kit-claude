@@ -101,8 +101,8 @@ assert(not fs_utils_test.file_exists(MISSING_PATH), string.format(
     MISSING_PATH))
 
 db:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('p', 'Project', 'resample', %d, %d);
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('p', 'Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height,
@@ -140,9 +140,9 @@ VALUES ('mp_v', 'master_partial', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mp_v' WHERE id = 'master_partial';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
     source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_partial', 'p', 'master_partial', 'mp_v', 'm_partial',
-    50, 150, 0, 100, 1, 1.0, 0, 0, 0);
+    50, 150, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
 -- Master for the missing-file media — full range, but file_path won't exist.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
@@ -155,9 +155,9 @@ VALUES ('mm_v', 'master_missing', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mm_v' WHERE id = 'master_missing';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
     source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_missing', 'p', 'master_missing', 'mm_v', 'm_missing',
-    0, 500, 0, 500, 1, 1.0, 0, 0, 0);
+    0, 500, 0, 500, 48000, 1, 1.0, 0, 0, 0);
 
 -- Timeline clips.
 --   c_partial: source_in=10 → 40f BEFORE master valid range start (50).
@@ -263,9 +263,9 @@ VALUES ('ms_v', 'master_stale', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'ms_v' WHERE id = 'master_stale';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
     source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_stale', 'p', 'master_stale', 'ms_v', 'm_stale_volume',
-    50, 150, 0, 100, 1, 1.0, 0, 0, 0);
+    50, 150, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
 INSERT INTO clips (id, project_id, name, track_id, sequence_id,
     owner_sequence_id, sequence_start_frame, duration_frames,

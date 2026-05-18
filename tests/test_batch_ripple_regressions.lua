@@ -33,8 +33,8 @@ local function build_manual_timeline(config)
     assert(db:exec(SCHEMA_SQL))
     local now = os.time()
     assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('default_project', 'Default', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('default_project', 'Default', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
                                width, height, view_start_frame, view_duration_frames, playhead_frame,

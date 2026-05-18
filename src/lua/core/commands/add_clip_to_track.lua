@@ -52,9 +52,9 @@ end
 
 local function place_clip(args, track, master_seq_id, media_name, fps_mismatch_policy)
     local source_out = args.source_in_frame + args.duration_frames
-    -- 018 FR-013: audio clips are frame-aligned (subframe = 0) at edit time.
-    -- Video clips have NULL subframes per INV-3.
-    local is_audio = track.track_type == "AUDIO"
+    -- 018 FR-013: kind-aware subframe defaults (AUDIO → 0,0 frame-aligned;
+    -- VIDEO → nil,nil per INV-3).
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track.track_type)
     return Clip.create({
         project_id           = args.project_id,
         owner_sequence_id    = args.sequence_id,
@@ -65,8 +65,8 @@ local function place_clip(args, track, master_seq_id, media_name, fps_mismatch_p
         duration_frames      = args.duration_frames,
         source_in_frame      = args.source_in_frame,
         source_out_frame     = source_out,
-        source_in_subframe   = is_audio and 0 or nil,
-        source_out_subframe  = is_audio and 0 or nil,
+        source_in_subframe   = sub_in,
+        source_out_subframe  = sub_out,
         fps_mismatch_policy  = fps_mismatch_policy,
         enabled              = true,
         volume               = 1.0,

@@ -49,8 +49,8 @@ do
     -- Cycle check fires before any duration / media inspection in
     -- _place_shared, so the fixture only needs the sequence + a track.
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -89,8 +89,8 @@ do
     -- referencing E2. Now E2 is reachable from E1 — Insert E1 into E2
     -- would close the loop.
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
@@ -107,9 +107,9 @@ do
         VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
         -- E2 contains a clip referencing master M (non-zero effective duration).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
             sequence_id, name,

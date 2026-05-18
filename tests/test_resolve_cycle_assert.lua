@@ -14,8 +14,8 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 
 -- Two nested sequences A and B. We create A→B and B→A cycles directly via SQL,
 -- bypassing the model layer's would_create_cycle check.

@@ -14,8 +14,8 @@ local db = database.get_connection()
 -- Arrange: need a project row so the FK is satisfied.
 local PROJECT_ID = "proj-T001"
 assert(db:exec(string.format(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('%s', 'p', 'resample', 0, 0)", PROJECT_ID)),
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('%s', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)", PROJECT_ID)),
     "projects INSERT failed — projects.fps_mismatch_policy column missing (T008 not landed?)")
 
 local function kind_insert(kind)

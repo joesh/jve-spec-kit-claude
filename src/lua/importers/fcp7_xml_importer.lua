@@ -984,9 +984,9 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         -- Returns the new clip id (string) — INSERT happens inside.
         local now = os.time()
         -- 018 FR-011 / FR-013: FCP7 imports are frame-aligned; subframe = 0
-        -- on AUDIO clips, NULL on VIDEO. Derive from track_type.
-        local sub_in, sub_out = Clip.subframe_defaults_for(
-            require("core.database").get_connection(), track_id)
+        -- on AUDIO clips, NULL on VIDEO. Pure track_type dispatch — no DB
+        -- handle (rule 1.10: importers go through models, not raw connections).
+        local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track_type)
         local clip_id = Clip.create({
             id = reuse_id,
             project_id = project_id,

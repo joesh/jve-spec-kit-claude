@@ -37,8 +37,8 @@ local now = os.time()
 
 -- One record sequence + two master sequences (each with V1 + A1 + media_refs).
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'P', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -69,24 +69,24 @@ db:exec(string.format([[
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       -- Video media_ref in master VIDEO timebase (frames @ 24fps).
       -- Audio media_ref in master AUDIO timebase (samples @ 48kHz).
       -- 318650 frames @ 24fps = 13277.083 sec × 48000 Hz = 637,300,000 samples.
       -- 1200 frames duration = 50 sec × 48000 = 2,400,000 samples.
-      ('mref_a_v', 'proj', 'mst_a', 'a_v1', 'med_a', 0, 1200,    318650,    1200,    1, 1.0, 0, %d, %d),
-      ('mref_a_a', 'proj', 'mst_a', 'a_a1', 'med_a', 0, 2400000, 637300000, 2400000, 1, 1.0, 0, %d, %d);
+      ('mref_a_v', 'proj', 'mst_a', 'a_v1', 'med_a', 0, 1200,    318650,    1200, 48000,    1, 1.0, 0, %d, %d),
+      ('mref_a_a', 'proj', 'mst_a', 'a_a1', 'med_a', 0, 2400000, 637300000, 2400000, 48000, 1, 1.0, 0, %d, %d);
 
     -- Master B: TC origin at frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      ('mref_b_v', 'proj', 'mst_b', 'b_v1', 'med_b', 0, 600,     0, 600,     1, 1.0, 0, %d, %d),
+      ('mref_b_v', 'proj', 'mst_b', 'b_v1', 'med_b', 0, 600,     0, 600, 48000,     1, 1.0, 0, %d, %d),
       -- 600 frames @ 24fps = 25 sec × 48000 = 1,200,000 samples.
-      ('mref_b_a', 'proj', 'mst_b', 'b_a1', 'med_b', 0, 1200000, 0, 1200000, 1, 1.0, 0, %d, %d);
+      ('mref_b_a', 'proj', 'mst_b', 'b_a1', 'med_b', 0, 1200000, 0, 1200000, 48000, 1, 1.0, 0, %d, %d);
 ]], now, now,
     now, now, now, now, now, now,
     now, now, now, now,

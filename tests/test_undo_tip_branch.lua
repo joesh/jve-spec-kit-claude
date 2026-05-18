@@ -40,8 +40,8 @@ local project_id = "proj_tip_001"
 local sequence_id = "seq_tip_001"
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('%s', 'T', 'resample', %d, %d)", project_id, now, now))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('%s', 'T', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)", project_id, now, now))
 db:exec(string.format(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "

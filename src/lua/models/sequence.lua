@@ -3,6 +3,10 @@
 local database = require("core.database")
 local uuid = require("uuid")
 local log = require("core.logger").for_area("media")
+-- 018: sub-frame math primitive (FR-006). Used by resolve_master_leaf to
+-- convert the (master-frame, master-clock-tick) source position carried by
+-- the recursion seam into a file-natural sample offset for audio media_refs.
+local subframe_math = require("core.subframe_math")
 
 local Sequence = {}
 Sequence.__index = Sequence
@@ -888,6 +892,85 @@ end
 -- Source-unit semantics: video source coords are frames at frame_rate;
 -- audio source coords are samples at sample_rate.
 -- @return table {video_clips = {...}, audio_clips = {...}}
+-- Common row-shape for one media_ref reshaped into a "stream clip". Video
+-- clips carry frame_rate (sequence-level); audio clips carry sample_rate
+-- (per-media_ref, INV-8 guaranteed non-NULL — masters have no aggregate
+-- audio_sample_rate per INV-7).
+local function load_master_video_streams(conn, track_id, video_frame_rate)
+    local out = {}
+    local stmt = conn:prepare([[
+        SELECT id, track_id, media_id, source_in_frame, source_out_frame,
+               sequence_start_frame, duration_frames,
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+        FROM media_refs WHERE track_id = ?
+        ORDER BY sequence_start_frame ASC
+    ]])
+    assert(stmt, "ensure_stream_clips: video media_refs prepare failed")
+    stmt:bind_value(1, track_id)
+    assert(stmt:exec(), "ensure_stream_clips: video media_refs exec failed")
+    while stmt:next() do
+        out[#out + 1] = {
+            id             = stmt:value(0),
+            track_id       = stmt:value(1),
+            media_id       = stmt:value(2),
+            source_in      = stmt:value(3),
+            source_out     = stmt:value(4),
+            sequence_start = stmt:value(5),
+            duration       = stmt:value(6),
+            enabled        = stmt:value(7) == 1,
+            volume         = stmt:value(8),
+            mark_in        = stmt:value(9),
+            mark_out       = stmt:value(10),
+            playhead_frame = stmt:value(11),
+            frame_rate     = video_frame_rate,
+        }
+    end
+    stmt:finalize()
+    return out
+end
+
+local function load_master_audio_streams(conn, track_id, master_seq_id)
+    local out = {}
+    -- 018 INV-8: every AUDIO media_ref carries mr.audio_sample_rate at
+    -- insert (denormalized from media). The per-master single-rate
+    -- assumption is gone (FR-034 / INV-7).
+    local stmt = conn:prepare([[
+        SELECT id, track_id, media_id, source_in_frame, source_out_frame,
+               sequence_start_frame, duration_frames,
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+               audio_sample_rate
+        FROM media_refs WHERE track_id = ?
+        ORDER BY sequence_start_frame ASC
+    ]])
+    assert(stmt, "ensure_stream_clips: audio media_refs prepare failed")
+    stmt:bind_value(1, track_id)
+    assert(stmt:exec(), "ensure_stream_clips: audio media_refs exec failed")
+    while stmt:next() do
+        local rate = stmt:value(12)
+        assert(rate and rate > 0, string.format(
+            "ensure_stream_clips (INV-8): audio media_ref %s on master %s "
+            .. "missing audio_sample_rate",
+            tostring(stmt:value(0)), tostring(master_seq_id)))
+        out[#out + 1] = {
+            id             = stmt:value(0),
+            track_id       = stmt:value(1),
+            media_id       = stmt:value(2),
+            source_in      = stmt:value(3),
+            source_out     = stmt:value(4),
+            sequence_start = stmt:value(5),
+            duration       = stmt:value(6),
+            enabled        = stmt:value(7) == 1,
+            volume         = stmt:value(8),
+            mark_in        = stmt:value(9),
+            mark_out       = stmt:value(10),
+            playhead_frame = stmt:value(11),
+            sample_rate    = rate,
+        }
+    end
+    stmt:finalize()
+    return out
+end
+
 local function ensure_stream_clips(self)
     assert(self.kind == "master", string.format(
         "Sequence.ensure_stream_clips: sequence %s is not a master (kind=%s)",
@@ -897,80 +980,30 @@ local function ensure_stream_clips(self)
         return self._cached_stream_clips
     end
 
-    -- Master sequences are constructed with NOT NULL fps + audio_sample_rate
-    -- by Sequence.ensure_master, so the table form is always present. Assert
-    -- before any DB work so a malformed master row fails loud at the source
-    -- rather than producing nil-fielded rate tables that crash consumers
-    -- later (the project_browser orphan-master crash class).
+    -- Master sequences are constructed with NOT NULL fps by
+    -- Sequence.ensure_master. INV-7 says master.audio_sample_rate is NULL —
+    -- per-rate is per-media_ref now (INV-8). Assert frame_rate before any
+    -- DB work so a malformed master row fails loud at the source.
     local video_frame_rate = self.frame_rate
     assert(video_frame_rate
         and video_frame_rate.fps_numerator
         and video_frame_rate.fps_denominator,
         string.format("ensure_stream_clips: master sequence %s missing frame_rate",
             tostring(self.id)))
-    -- audio_sample_rate is NULL on video-only masters (no audio media_refs
-    -- ever land on them). Assert validity only when audio tracks exist.
-    local audio_sample_rate = self.audio_sample_rate
-    if audio_sample_rate ~= nil then
-        assert(audio_sample_rate > 0, string.format(
-            "ensure_stream_clips: master sequence %s has invalid audio_sample_rate=%s",
-            tostring(self.id), tostring(audio_sample_rate)))
-    end
 
     local Track = require("models.track")
     local conn = resolve_db()
-
     local video_tracks = Track.find_by_sequence(self.id, "VIDEO")
     local audio_tracks = Track.find_by_sequence(self.id, "AUDIO")
 
-    local function load_for_track(track_id, rate_field, rate_value)
-        local out = {}
-        local stmt = conn:prepare([[
-            SELECT id, track_id, media_id, source_in_frame, source_out_frame,
-                   sequence_start_frame, duration_frames,
-                   enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
-            FROM media_refs WHERE track_id = ?
-            ORDER BY sequence_start_frame ASC
-        ]])
-        assert(stmt, "ensure_stream_clips: media_refs prepare failed")
-        stmt:bind_value(1, track_id)
-        assert(stmt:exec(), "ensure_stream_clips: media_refs exec failed")
-        while stmt:next() do
-            local row = {
-                id             = stmt:value(0),
-                track_id       = stmt:value(1),
-                media_id       = stmt:value(2),
-                source_in      = stmt:value(3),
-                source_out     = stmt:value(4),
-                sequence_start = stmt:value(5),
-                duration       = stmt:value(6),
-                enabled        = stmt:value(7) == 1,
-                volume         = stmt:value(8),
-                mark_in        = stmt:value(9),
-                mark_out       = stmt:value(10),
-                playhead_frame = stmt:value(11),
-            }
-            row[rate_field] = rate_value
-            out[#out + 1] = row
-        end
-        stmt:finalize()
-        return out
-    end
-
     local video_clips, audio_clips = {}, {}
     for _, t in ipairs(video_tracks) do
-        for _, r in ipairs(load_for_track(t.id, "frame_rate", video_frame_rate)) do
+        for _, r in ipairs(load_master_video_streams(conn, t.id, video_frame_rate)) do
             video_clips[#video_clips + 1] = r
         end
     end
-    if #audio_tracks > 0 then
-        assert(audio_sample_rate and audio_sample_rate > 0, string.format(
-            "ensure_stream_clips: master sequence %s has %d audio track(s) but "
-            .. "audio_sample_rate is missing",
-            tostring(self.id), #audio_tracks))
-    end
     for _, t in ipairs(audio_tracks) do
-        for _, r in ipairs(load_for_track(t.id, "sample_rate", audio_sample_rate)) do
+        for _, r in ipairs(load_master_audio_streams(conn, t.id, self.id)) do
             audio_clips[#audio_clips + 1] = r
         end
     end
@@ -1012,47 +1045,11 @@ end
 -- TIMEBASE CONVERSION (for master sequences)
 -- =============================================================================
 
---- Convert video frames to audio samples using this sequence's video rate
--- and the first audio stream's sample rate
--- @param frame number Frame position in video timebase
--- @return number|nil Sample position, or nil if no audio stream
-function Sequence:frame_to_samples(frame)
-    assert(type(frame) == "number", "Sequence:frame_to_samples: frame must be a number")
-
-    local audio = self:audio_streams()[1]
-    if not audio then
-        return nil
-    end
-
-    local sample_rate = audio.sample_rate
-    local video_fps_num = self.frame_rate.fps_numerator
-    local video_fps_den = self.frame_rate.fps_denominator
-
-    -- samples = frame * (sample_rate / video_fps)
-    --         = frame * sample_rate * video_fps_den / video_fps_num
-    return math.floor(frame * sample_rate * video_fps_den / video_fps_num)
-end
-
---- Convert audio samples to video frames using this sequence's video rate
--- and the first audio stream's sample rate
--- @param samples number Sample position in audio timebase
--- @return number|nil Frame position, or nil if no audio stream
-function Sequence:samples_to_frame(samples)
-    assert(type(samples) == "number", "Sequence:samples_to_frame: samples must be a number")
-
-    local audio = self:audio_streams()[1]
-    if not audio then
-        return nil
-    end
-
-    local sample_rate = audio.sample_rate
-    local video_fps_num = self.frame_rate.fps_numerator
-    local video_fps_den = self.frame_rate.fps_denominator
-
-    -- frame = samples * video_fps / sample_rate
-    --       = samples * video_fps_num / (video_fps_den * sample_rate)
-    return math.floor(samples * video_fps_num / (video_fps_den * sample_rate))
-end
+-- 018 (FR-016, FR-017): Sequence:frame_to_samples / Sequence:samples_to_frame
+-- removed. These assumed a single "first audio stream sample rate" per master
+-- — INV-7 explicitly invalidates that (masters have NULL audio_sample_rate;
+-- rate is per-media_ref). Sample/tick conversion goes through subframe_math
+-- with explicit per-media_ref audio_sample_rate inputs.
 
 -- =============================================================================
 -- MARK METHODS (read/write sequence-level mark_in/mark_out)
@@ -1134,79 +1131,16 @@ function Sequence:get_effective_out(total_frames)
 end
 
 -- =============================================================================
--- EFFECTIVE SOURCE RANGE ACCESSORS (for edit commands)
+-- 018 (FR-016, FR-017): legacy dual-unit mark accessors deleted.
 -- =============================================================================
--- These accessors return the effective source_in/source_out for each stream,
--- accounting for sequence marks when set. Marks are in video frame space;
--- audio accessors convert to sample space using coordinate-aware conversion.
-
---- Get effective video source_in: mark_in if set, otherwise video clip's source_in.
--- @return number Video frame position (absolute TC)
-function Sequence:get_effective_video_in()
-    if self.mark_in then
-        return self.mark_in
-    end
-    local video = self:video_stream()
-    assert(video, "Sequence:get_effective_video_in: no video stream")
-    return video.source_in
-end
-
---- Get effective video source_out: mark_out if set, otherwise video clip's source_out.
--- @return number Video frame position (absolute TC)
-function Sequence:get_effective_video_out()
-    if self.mark_out then
-        return self.mark_out
-    end
-    local video = self:video_stream()
-    assert(video, "Sequence:get_effective_video_out: no video stream")
-    return video.source_out
-end
-
---- Convert a video frame position to an audio sample position, accounting for
--- the different coordinate origins of video and audio streams.
--- @param frame number Absolute TC video frame position
--- @return number Audio sample position in the audio stream's coordinate space
-function Sequence:video_frame_to_audio_sample(frame)
-    assert(type(frame) == "number", "Sequence:video_frame_to_audio_sample: frame must be a number")
-
-    local video = self:video_stream()
-    assert(video, "Sequence:video_frame_to_audio_sample: no video stream")
-    local audio = self:audio_streams()[1]
-    assert(audio, "Sequence:video_frame_to_audio_sample: no audio stream")
-
-    local sample_rate = audio.sample_rate
-    local video_fps_num = self.frame_rate.fps_numerator
-    local video_fps_den = self.frame_rate.fps_denominator
-
-    -- Convert relative to video origin, then to samples, then add audio origin
-    local relative_frame = frame - video.source_in
-    local relative_samples = math.floor(relative_frame * sample_rate * video_fps_den / video_fps_num)
-    return audio.source_in + relative_samples
-end
-
---- Get effective audio source_in: converts mark_in to sample space if set,
--- otherwise returns audio clip's source_in.
--- @return number Audio sample position
-function Sequence:get_effective_audio_in()
-    if self.mark_in then
-        return self:video_frame_to_audio_sample(self.mark_in)
-    end
-    local audio = self:audio_streams()[1]
-    assert(audio, "Sequence:get_effective_audio_in: no audio stream")
-    return audio.source_in
-end
-
---- Get effective audio source_out: converts mark_out to sample space if set,
--- otherwise returns audio clip's source_out.
--- @return number Audio sample position
-function Sequence:get_effective_audio_out()
-    if self.mark_out then
-        return self:video_frame_to_audio_sample(self.mark_out)
-    end
-    local audio = self:audio_streams()[1]
-    assert(audio, "Sequence:get_effective_audio_out: no audio stream")
-    return audio.source_out
-end
+-- The pre-018 Sequence:get_effective_video_in/out, get_effective_audio_in/out,
+-- video_frame_to_audio_sample existed to paper over the audio-source-in-samples
+-- vs. video-source-in-frames mismatch on mixed-media masters. 018 standardises
+-- on master.fps frames for clip.source_in_frame across both mediums, with
+-- sub-frame precision in clip.source_*_subframe (master-clock ticks). Mark
+-- conversion is now frame-only via the existing get_in / get_out / set_in /
+-- set_out accessors above; sample-precise file positions are derived inside
+-- resolve_master_leaf via subframe_math (FR-008).
 
 -- =============================================================================
 -- PLAYHEAD RESOLUTION (used by Renderer and Mixer)
@@ -1903,12 +1837,18 @@ end
 -- Enumerate media_refs on a master sequence, optionally filtered to a single
 -- track. Each row comes back as a table.
 local function list_media_refs(db, master_seq_id, only_track_id)
+    -- 018: mr.audio_sample_rate is denormalized from media.audio_sample_rate
+    -- at media_ref insert (INV-8 requires non-NULL on AUDIO rows). The
+    -- resolver consumes it to compute file-natural sample offsets for audio
+    -- entries — without it the clip-to-media-ref seam can't bridge from
+    -- master.fps frames to file samples.
     local sql = [[
         SELECT mr.id, mr.track_id, mr.media_id, mr.source_in_frame, mr.source_out_frame,
                mr.sequence_start_frame, mr.duration_frames,
                mr.enabled, mr.volume,
                t.track_type, t.track_index,
-               m.file_path, m.audio_channels
+               m.file_path, m.audio_channels,
+               mr.audio_sample_rate
         FROM media_refs mr
         JOIN tracks t ON mr.track_id = t.id
         JOIN media m ON mr.media_id = m.id
@@ -1937,6 +1877,7 @@ local function list_media_refs(db, master_seq_id, only_track_id)
             track_index = stmt:value(10),
             file_path = stmt:value(11),
             audio_channels = stmt:value(12) or 0,
+            audio_sample_rate = stmt:value(13),
         }
     end
     stmt:finalize()
@@ -1948,10 +1889,17 @@ end
 -- index ascending, then sequence_start ascending — so the output of a sequence
 -- with many clips is deterministic (G-R11).
 local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
+    -- 018: source_in_subframe / source_out_subframe carry the residual
+    -- master-clock ticks within the (frame, subframe) source position.
+    -- INV-3 guarantees non-NULL on AUDIO clips, NULL on VIDEO clips. The
+    -- recursion seam in resolve_nested threads these into the next-level
+    -- resolve_seq_range call so the leaf can compute file-natural samples
+    -- without losing sub-frame precision.
     local stmt = db:prepare([[
         SELECT c.id, c.track_id, c.sequence_id,
                c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
+               c.source_in_subframe, c.source_out_subframe,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.volume,
@@ -1980,13 +1928,15 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
             duration = stmt:value(4),
             source_in = stmt:value(5),
             source_out = stmt:value(6),
-            master_layer_track_id = stmt:value(7),
-            master_audio_track_id = stmt:value(8),
-            fps_mismatch_policy = stmt:value(9),
-            enabled = stmt:value(10) == 1,
-            volume = stmt:value(11),
-            track_type = stmt:value(12),
-            track_index = stmt:value(13),
+            source_in_subframe = stmt:value(7),
+            source_out_subframe = stmt:value(8),
+            master_layer_track_id = stmt:value(9),
+            master_audio_track_id = stmt:value(10),
+            fps_mismatch_policy = stmt:value(11),
+            enabled = stmt:value(12) == 1,
+            volume = stmt:value(13),
+            track_type = stmt:value(14),
+            track_index = stmt:value(15),
         }
     end
     stmt:finalize()
@@ -2008,109 +1958,237 @@ local function round_int(x)
     return -math.floor(-x + 0.5)
 end
 
--- Resolve a master sequence over a master-coord range [master_lo, master_hi).
+-- 018: read the project's master_clock_hz (FR-028) once per master leaf and
+-- cache on the resolver context. Asserts non-NULL; the bg project-open path
+-- guarantees the settings JSON carries it (T007).
+local function fetch_master_clock_hz(db, project_id, context)
+    if context.master_clock_hz then return context.master_clock_hz end
+    assert(project_id and project_id ~= "",
+        "Sequence.resolve: project_id required to read master_clock_hz")
+    local stmt = db:prepare(
+        "SELECT json_extract(settings, '$.master_clock_hz') FROM projects WHERE id = ?")
+    assert(stmt, "Sequence.resolve: master_clock_hz prepare failed")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), "Sequence.resolve: master_clock_hz exec failed")
+    local mch
+    if stmt:next() then mch = stmt:value(0) end
+    stmt:finalize()
+    assert(mch and mch > 0, string.format(
+        "Sequence.resolve: project %s has no master_clock_hz in settings "
+        .. "(018 T007 must run at project open)", tostring(project_id)))
+    context.master_clock_hz = mch
+    return mch
+end
+
+-- 018: master sequence's fps. Cached on context per seq_id to avoid repeat
+-- SQL inside the per-media_ref loop.
+local function fetch_master_fps(db, seq_id, context)
+    context.master_fps_cache = context.master_fps_cache or {}
+    local cached = context.master_fps_cache[seq_id]
+    if cached then return cached.num, cached.den, cached.project_id end
+    local stmt = db:prepare(
+        "SELECT fps_numerator, fps_denominator, project_id FROM sequences WHERE id = ?")
+    assert(stmt, "Sequence.resolve: master fps prepare failed")
+    stmt:bind_value(1, seq_id)
+    assert(stmt:exec(), "Sequence.resolve: master fps exec failed")
+    assert(stmt:next(), string.format(
+        "Sequence.resolve: sequence %s not found", tostring(seq_id)))
+    local num, den, proj = stmt:value(0), stmt:value(1), stmt:value(2)
+    stmt:finalize()
+    assert(num and num > 0 and den and den > 0, string.format(
+        "Sequence.resolve: sequence %s has invalid fps %s/%s",
+        tostring(seq_id), tostring(num), tostring(den)))
+    context.master_fps_cache[seq_id] = { num = num, den = den, project_id = proj }
+    return num, den, proj
+end
+
+-- Total master-clock ticks for a (frame, subframe) pair at a given tpf.
+-- Used both for overlap comparison and as the input to ticks_to_samples.
+local function pack_pos_ticks(frame, subframe, tpf)
+    return frame * tpf + subframe
+end
+
+-- Whether the [mr.start, mr.end) frame extent (treated as subframe=0 at both
+-- endpoints) overlaps the request's (frame, subframe) range. Comparison is in
+-- packed master-clock-tick space so sub-frame range endpoints are honored.
+local function mref_overlaps_request(r, lo_f, lo_s, hi_f, hi_s, tpf)
+    local r_lo_ticks = pack_pos_ticks(r.sequence_start, 0, tpf)
+    local r_hi_ticks = pack_pos_ticks(r.sequence_start + r.duration, 0, tpf)
+    local req_lo_ticks = pack_pos_ticks(lo_f, lo_s, tpf)
+    local req_hi_ticks = pack_pos_ticks(hi_f, hi_s, tpf)
+    return r_hi_ticks > req_lo_ticks and r_lo_ticks < req_hi_ticks
+end
+
+-- Apply the layer / audio-track-selector filter at this level (FR-005, FR-023).
+-- Returns true if this mr passes; false if a filter excludes it.
+local function mref_passes_filter(r, layer_track_id, audio_track_id)
+    if r.track_type == "VIDEO" and layer_track_id ~= nil then
+        return r.track_id == layer_track_id
+    end
+    if r.track_type == "AUDIO" and audio_track_id ~= nil then
+        return r.track_id == audio_track_id
+    end
+    return true
+end
+
+-- Clip the request range to the media_ref's [start, end) extent. When the
+-- mref boundary takes over, the corresponding subframe is 0 (the request
+-- entered the mref at a whole-frame boundary on the mref side).
+local function clip_to_mref_extent(r, lo_f, lo_s, hi_f, hi_s)
+    local r_lo, r_hi = r.sequence_start, r.sequence_start + r.duration
+    local out_lo_f, out_lo_s, out_hi_f, out_hi_s
+    if lo_f < r_lo then
+        out_lo_f, out_lo_s = r_lo, 0
+    else
+        out_lo_f, out_lo_s = lo_f, lo_s
+    end
+    if hi_f > r_hi or (hi_f == r_hi and hi_s > 0) then
+        out_hi_f, out_hi_s = r_hi, 0
+    else
+        out_hi_f, out_hi_s = hi_f, hi_s
+    end
+    return out_lo_f, out_lo_s, out_hi_f, out_hi_s
+end
+
+-- Compute the file-natural source position for a VIDEO media_ref. Video files
+-- share the master.fps frame timebase for source positions (FR-003) — subframe
+-- is irrelevant on video (video is frame-quantized).
+local function compute_video_source_range(r, lo_f, hi_f)
+    local file_in  = r.source_in + (lo_f - r.sequence_start)
+    local file_out = r.source_in + (hi_f - r.sequence_start)
+    return file_in, file_out
+end
+
+-- Compute the file-natural sample position for an AUDIO media_ref. Per
+-- data-model.md "Resolution to file-natural sample":
+--     file_sample = mr.source_in (file-natural samples)
+--                 + ticks_to_samples(frame_delta * tpf + subframe,
+--                                    mr.audio_sample_rate, master_clock_hz)
+-- Composes the whole-frame contribution and the sub-frame residual into a
+-- single round in the math primitive (FR-008 single-rounding-rule).
+local function compute_audio_source_sample(r, master_frame, master_subframe,
+                                            tpf, master_clock_hz)
+    local frame_delta = master_frame - r.sequence_start
+    assert(frame_delta >= 0, string.format(
+        "Sequence.resolve compute_audio_source_sample: frame_delta < 0 "
+        .. "(master_frame=%d, mr.sequence_start=%d, mr=%s)",
+        master_frame, r.sequence_start, tostring(r.id)))
+    assert(r.audio_sample_rate and r.audio_sample_rate > 0, string.format(
+        "Sequence.resolve (INV-8): media_ref %s on AUDIO track lacks "
+        .. "audio_sample_rate", tostring(r.id)))
+    local total_ticks = subframe_math.pack(frame_delta, master_subframe, tpf)
+    return r.source_in + subframe_math.ticks_to_samples(
+        total_ticks, r.audio_sample_rate, master_clock_hz)
+end
+
+-- Build the entry base shared by every emission from one media_ref. The base
+-- carries master-coord sequence_start/duration (resolve_nested translates to
+-- outer-coord) and file-natural source_in/source_out.
+--
+-- Pass media_path AND user-set enabled state through unchanged regardless of
+-- online/offline. Offline routing is the responsibility of downstream
+-- consumers: playback_engine._build_tmb_clip queries media_status.get and
+-- sets ClipInfo.offline=true on the TMB clip; timeline_view_renderer +
+-- offline_frame_cache key on media_path to render the OFFLINE overlay.
+local function build_mref_entry_base(r, lo_f, hi_f, file_in, file_out, outer_chain)
+    return {
+        media_path     = r.file_path,
+        media_id       = r.media_id,
+        source_in      = file_in,
+        source_out     = file_out,
+        sequence_start = lo_f,        -- master coords; outer translates
+        duration       = hi_f - lo_f, -- master coords (integer frames)
+        volume         = r.volume,
+        enabled        = r.enabled,
+        effects        = {},
+        provenance     = build_provenance(outer_chain, r.id),
+        -- Default owner-track tagging for the case where this master is the
+        -- outermost sequence (e.g. source viewer playing the master directly).
+        -- resolve_nested overwrites these when recursion bubbles outwards.
+        owner_track_index = r.track_index,
+        owner_track_type  = r.track_type,
+        owner_clip_id     = r.id,
+    }
+end
+
+local function emit_video_entry(entries, r, base)
+    base.media_kind    = "video"
+    base.track_role    = "video"
+    base.channel_index = nil
+    entries[#entries + 1] = base
+end
+
+-- One audio entry per channel. Channel-state stays separate from volume
+-- until the final composition pass — any clip in the chain may replace it
+-- via clip_channel_override without needing to divide out a stale factor.
+local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, outer_chain)
+    local n_ch = r.audio_channels
+    if n_ch == 0 then n_ch = 1 end  -- mono fallback when metadata missing
+    for ch = 0, n_ch - 1 do
+        local ms_enabled, ms_gain_db =
+            fetch_master_channel_state(db, master_seq_id, ch)
+        entries[#entries + 1] = {
+            media_path     = base.media_path,
+            media_id       = base.media_id,
+            media_kind     = "audio",
+            source_in      = base.source_in,
+            source_out     = base.source_out,
+            sequence_start = base.sequence_start,
+            duration       = base.duration,
+            track_role     = "audio",
+            channel_index  = ch,
+            volume         = base.volume,
+            enabled        = base.enabled,
+            effects        = {},
+            provenance     = build_provenance(outer_chain, r.id),
+            owner_track_index = r.track_index,
+            owner_track_type  = r.track_type,
+            owner_clip_id     = r.id,
+            channel_state  = { enabled = ms_enabled, gain_db = ms_gain_db },
+        }
+    end
+end
+
+-- Resolve a master sequence over a request range expressed as (frame, subframe)
+-- endpoints in the master's own fps timebase + project master-clock ticks.
 -- Iterate media_refs that overlap; emit one ResolvedEntry per row (V) or per
--- channel (A), with master-coord positioning and file-native source range.
--- Audio entries carry a per-channel `channel_state` table; the outer caller
--- composes that into volume/enabled at finalization time, allowing any clip
--- in the chain to replace the master's channel state with its override
--- without divide-by-stale-factor math.
+-- channel (A). Video entries' file-source range stays in master.fps frames
+-- (FR-003); audio entries are sample-precise via subframe_math (FR-008).
 --
 -- Track selectors (symmetric per FR-005 / FR-023):
 --   layer_track_id    — non-nil restricts V media_refs to that track.
 --   audio_track_id    — non-nil restricts A media_refs to that track
---                       (Expand/Collapse audio path). nil = composite
---                       (every A media_ref emits, today's behavior).
-local function resolve_master_leaf(db, seq_id, master_lo, master_hi,
-                                   layer_track_id, audio_track_id, outer_chain)
-    local entries = {}
-    local all = list_media_refs(db, seq_id, nil)
+--                       (Expand/Collapse audio path). nil = composite.
+local function resolve_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
+                                   layer_track_id, audio_track_id,
+                                   outer_chain, context)
+    assert(type(context) == "table",
+        "Sequence.resolve_master_leaf: context table required (018 master_clock_hz)")
+    local fps_num, fps_den, project_id = fetch_master_fps(db, seq_id, context)
+    local master_clock_hz = fetch_master_clock_hz(db, project_id, context)
+    local tpf = subframe_math.ticks_per_frame(master_clock_hz, fps_num, fps_den)
 
-    for _, r in ipairs(all) do
-        local r_lo = r.sequence_start
-        local r_hi = r.sequence_start + r.duration
-        local include
-        if r.track_type == "VIDEO" and layer_track_id ~= nil then
-            include = (r.track_id == layer_track_id)
-        elseif r.track_type == "AUDIO" and audio_track_id ~= nil then
-            include = (r.track_id == audio_track_id)
-        else
-            include = true
-        end
-        if include and r_hi > master_lo and r_lo < master_hi then
-            local lo = math.max(r_lo, master_lo)
-            local hi = math.min(r_hi, master_hi)
-            local file_in  = r.source_in + (lo - r.sequence_start)
-            local file_out = r.source_in + (hi - r.sequence_start)
-            -- Pass media_path AND user-set enabled state through unchanged
-            -- regardless of online/offline. Offline routing is the
-            -- responsibility of downstream consumers:
-            --   * playback_engine._build_tmb_clip queries media_status.get
-            --     and sets ClipInfo.offline=true on the TMB clip → C++ TMB
-            --     emits the audible beep placeholder.
-            --   * timeline_view_renderer + offline_frame_cache key on
-            --     media_path to render the visual OFFLINE overlay.
-            -- Blanking media_path here used to filter offline clips out of
-            -- get_{audio,video}_in_range entirely, which silenced beeps
-            -- and blacked out the offline overlay during playback.
-            local base = {
-                media_path     = r.file_path,
-                media_id       = r.media_id,
-                source_in      = file_in,
-                source_out     = file_out,
-                sequence_start = lo,            -- master coords; outer translates
-                duration       = hi - lo,       -- master coords
-                volume         = r.volume,      -- leaf media_ref's own volume
-                enabled        = r.enabled,
-                effects        = {},
-                provenance     = build_provenance(outer_chain, r.id),
-                -- Default owner-track tagging for the case where this master
-                -- is the outermost sequence (e.g. source viewer playing the
-                -- master directly). resolve_nested overwrites these when
-                -- recursion bubbles outwards. Without this default, entries
-                -- returned to consumers would have no track tag and crash
-                -- in playback_engine's TMB routing.
-                owner_track_index = r.track_index,
-                owner_track_type  = r.track_type,
-                owner_clip_id     = r.id,
-            }
+    local entries = {}
+    for _, r in ipairs(list_media_refs(db, seq_id, nil)) do
+        if mref_passes_filter(r, layer_track_id, audio_track_id)
+           and mref_overlaps_request(r, lo_f, lo_s, hi_f, hi_s, tpf) then
+            local m_lo_f, m_lo_s, m_hi_f, m_hi_s =
+                clip_to_mref_extent(r, lo_f, lo_s, hi_f, hi_s)
+            local file_in, file_out
             if r.track_type == "VIDEO" then
-                base.media_kind   = "video"
-                base.track_role   = "video"
-                base.channel_index = nil
-                entries[#entries + 1] = base
+                file_in, file_out = compute_video_source_range(r, m_lo_f, m_hi_f)
             else
-                local n_ch = r.audio_channels
-                if n_ch == 0 then n_ch = 1 end  -- mono fallback when metadata missing
-                for ch = 0, n_ch - 1 do
-                    local ms_enabled, ms_gain_db =
-                        fetch_master_channel_state(db, seq_id, ch)
-                    local e = {
-                        media_path     = base.media_path,
-                        media_id       = base.media_id,
-                        media_kind     = "audio",
-                        source_in      = base.source_in,
-                        source_out     = base.source_out,
-                        sequence_start = base.sequence_start,
-                        duration       = base.duration,
-                        track_role     = "audio",
-                        channel_index  = ch,
-                        volume         = base.volume,
-                        enabled        = base.enabled,
-                        effects        = {},
-                        provenance     = build_provenance(outer_chain, r.id),
-                        -- See base.owner_track_* above.
-                        owner_track_index = r.track_index,
-                        owner_track_type  = r.track_type,
-                        owner_clip_id     = r.id,
-                        -- Channel state stays SEPARATE from volume until the
-                        -- final composition pass — any clip in the chain may
-                        -- replace it via clip_channel_override without
-                        -- needing to divide out a previously-multiplied factor.
-                        channel_state  = { enabled = ms_enabled, gain_db = ms_gain_db },
-                    }
-                    entries[#entries + 1] = e
-                end
+                file_in = compute_audio_source_sample(
+                    r, m_lo_f, m_lo_s, tpf, master_clock_hz)
+                file_out = compute_audio_source_sample(
+                    r, m_hi_f, m_hi_s, tpf, master_clock_hz)
+            end
+            local base = build_mref_entry_base(r, m_lo_f, m_hi_f,
+                file_in, file_out, outer_chain)
+            if r.track_type == "VIDEO" then
+                emit_video_entry(entries, r, base)
+            else
+                emit_audio_channel_entries(entries, r, base, db, seq_id, outer_chain)
             end
         end
     end
@@ -2145,11 +2223,18 @@ end
 --   * fold clip.volume into the entry's volume; AND clip.enabled into enabled;
 --   * for audio entries, replace channel_state with this clip's override row
 --     when present (per-channel — sparse table; absent row = inherit).
-local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
+local function resolve_nested(db, seq_id, outer_lo_f, outer_lo_s,
+                              outer_hi_f, outer_hi_s, context,
                               outer_chain, layer_filter_for_v,
                               audio_filter_for_a)
     local entries = {}
-    local clips = list_clips_overlapping(db, seq_id, outer_lo, outer_hi)
+    -- 018: clip overlap is still resolved on integer frame extents (the
+    -- query bound). Subframe granularity at the outer endpoints can only
+    -- include clips that frame-overlap; sub-frame-only overlap on this
+    -- (sequence-of-sequences) layer is impossible because clip endpoints
+    -- and the outer query are themselves at frame granularity for
+    -- list_clips_overlapping. Subframe enters the math at the master leaf.
+    local clips = list_clips_overlapping(db, seq_id, outer_lo_f, outer_hi_f)
     for _, c in ipairs(clips) do
         -- Layer filter at THIS level: filter clips whose track_type is VIDEO
         -- to the chosen V track only. Symmetrically filter AUDIO clips by
@@ -2237,8 +2322,29 @@ local function resolve_nested(db, seq_id, outer_lo, outer_hi, context,
             for i, v in ipairs(outer_chain) do inner_chain[i] = v end
             inner_chain[#inner_chain + 1] = c.id
 
+            -- 018: thread sub-frame through the recursion seam. VIDEO clips
+            -- have NULL subframes per INV-3 (no sub-frame concept on video);
+            -- the explicit 0 here carries the "no sub-frame component" intent
+            -- into the audio-leaf math (which ignores it for video entries).
+            -- AUDIO clips MUST have non-NULL subframes per INV-3; the load
+            -- path asserts this.
+            local c_lo_s, c_hi_s
+            if c.track_type == "AUDIO" then
+                assert(c.source_in_subframe ~= nil and c.source_out_subframe ~= nil,
+                    string.format(
+                    "Sequence.resolve (INV-3): audio clip %s has NULL subframe(s)",
+                    tostring(c.id)))
+                c_lo_s, c_hi_s = c.source_in_subframe, c.source_out_subframe
+            else
+                assert(c.source_in_subframe == nil and c.source_out_subframe == nil,
+                    string.format(
+                    "Sequence.resolve (INV-3): video clip %s has non-NULL subframe(s)",
+                    tostring(c.id)))
+                c_lo_s, c_hi_s = 0, 0
+            end
             local inner = resolve_seq_range(db, c.sequence_id,
-                c.source_in, c.source_out, context, inner_chain,
+                c.source_in, c_lo_s, c.source_out, c_hi_s,
+                context, inner_chain,
                 layer_for_inner, audio_for_inner)
 
             -- No double-counting: V clips materialize only V media; A only A.
@@ -2291,7 +2397,7 @@ end
 -- the V / A track selectors that apply at the directly-referenced level
 -- (master leaf or nested clip filter). NULL = composite/default for that
 -- medium.
-resolve_seq_range = function(db, seq_id, range_lo, range_hi, context,
+resolve_seq_range = function(db, seq_id, lo_f, lo_s, hi_f, hi_s, context,
                              outer_chain,
                              layer_for_directly_referenced,
                              audio_for_directly_referenced)
@@ -2305,12 +2411,12 @@ resolve_seq_range = function(db, seq_id, range_lo, range_hi, context,
     local kind = fetch_kind(db, seq_id)
     local entries
     if kind == "master" then
-        entries = resolve_master_leaf(db, seq_id, range_lo, range_hi,
+        entries = resolve_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             layer_for_directly_referenced,
             audio_for_directly_referenced,
-            outer_chain)
+            outer_chain, context)
     else
-        entries = resolve_nested(db, seq_id, range_lo, range_hi,
+        entries = resolve_nested(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             context, outer_chain,
             layer_for_directly_referenced,
             audio_for_directly_referenced)
@@ -2333,6 +2439,11 @@ local function finalize_entries(entries)
     return entries
 end
 
+-- Public boundary: callers pass integer-frame range endpoints. The resolver
+-- internally threads (frame, subframe) pairs; sub-frame at the public
+-- endpoint is implicitly 0 (FR-013 — today's marks UX is frame-aligned).
+-- The actual sub-frame contribution enters at every recursion seam where
+-- a clip's stored source_in_subframe / source_out_subframe is consumed.
 function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
     assert(seq_id, "Sequence:resolve_in_range: seq_id required")
     assert(type(start_frame) == "number", "start_frame must be number")
@@ -2340,7 +2451,8 @@ function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
     assert(type(context) == "table", "context table required")
     context.recursing_into = context.recursing_into or {}
     local db = resolve_db()
-    local entries = resolve_seq_range(db, seq_id, start_frame, end_frame,
+    local entries = resolve_seq_range(db, seq_id,
+        start_frame, 0, end_frame, 0,
         context, {}, nil, nil)
     return finalize_entries(entries)
 end
@@ -2793,15 +2905,13 @@ function Sequence.effective_audio_sample_rate(seq)
         "Sequence.effective_audio_sample_rate: seq table with id required")
     if seq.audio_sample_rate then return seq.audio_sample_rate end
     local conn = resolve_db()
-    -- 018: prefer mr.audio_sample_rate (denormalized from media at insert);
-    -- COALESCE through `media` for legacy rows where the denorm is missing.
+    -- 018 / INV-8: every AUDIO media_ref carries audio_sample_rate at insert.
     local stmt = conn:prepare([[
-        SELECT COALESCE(mr.audio_sample_rate, m.audio_sample_rate)
+        SELECT mr.audio_sample_rate
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
-        LEFT JOIN media m ON m.id = mr.media_id
         WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO'
-          AND (mr.audio_sample_rate IS NOT NULL OR m.audio_sample_rate IS NOT NULL)
+          AND mr.audio_sample_rate IS NOT NULL
         LIMIT 1
     ]])
     assert(stmt, "Sequence.effective_audio_sample_rate: prepare failed")
