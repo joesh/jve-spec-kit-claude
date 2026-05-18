@@ -103,12 +103,6 @@ local function read_clip_frames(db, id)
     return i, o
 end
 
--- round_half_away_from_zero (matches subframe_math).
-local function rhaz(x)
-    if x >= 0 then return math.floor(x + 0.5) end
-    return -math.floor(-x + 0.5)
-end
-
 -- Case 1: scale 192000 → 48000 (1/4); audio subframes scale; video untouched.
 print("-- happy: scale 192k → 48k, audio subs scale 1/4, video untouched --")
 do

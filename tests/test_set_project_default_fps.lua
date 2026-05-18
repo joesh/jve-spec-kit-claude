@@ -191,7 +191,7 @@ print("-- no-op rejected --")
 do
     fresh()
     local refused
-    local ok, _err = pcall(function()
+    local ok = pcall(function()
         local r = command_manager.execute("SetProjectDefaultFps", {
             project_id      = "p",
             fps_numerator   = 24,

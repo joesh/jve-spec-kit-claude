@@ -1328,8 +1328,7 @@ local function include_extent_row(stmt, media_rates, result)
     local src_out          = stmt:value(2)
     local fps_num          = stmt:value(3)
     local fps_den          = stmt:value(4)
-    local audio_sample_rate = stmt:value(5)
-    local track_type       = stmt:value(6)
+    local track_type       = stmt:value(5)
     assert(src_in, string.format(
         "batch_get_source_extents: clip on media %s has NULL source_in_frame",
         tostring(mid)))
@@ -1381,7 +1380,7 @@ local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rat
     local sql = string.format([[
         SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator,
-               nested.audio_sample_rate, t.track_type
+               t.track_type
         FROM clips c
         JOIN sequences nested ON nested.id = c.sequence_id
         JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id

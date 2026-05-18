@@ -41,7 +41,6 @@ assert(db:exec(string.format([[
     now + 2, now + 2)))
 
 local rec      = Sequence.load("rec")
-local rec_b    = Sequence.load("rec_b")
 local vmstr    = Sequence.load("vmstr")
 local orphan   = Sequence.load("vmstr_orphan")
 

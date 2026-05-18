@@ -80,10 +80,10 @@ Each command's modification preserves subframes through its math; new clips get 
 
 ## Phase 3.9: Acceptance + cross-cutting tests
 
-- [ ] **T048** [P] Write `tests/test_overwrite_acceptance_bit_identical.lua` (FR-025) per `quickstart.md` § "Recipe (automated)". Requires `--test` mode (full bindings). Compares resolver-decoded vs direct-file-read samples for bit-identity at divisor file rates.
-- [ ] **T049** [P] Write `tests/test_master_order_independence.lua` (FR-033) — two masters with same media added in opposite orders; assert resolver output bit-identical for any clip range.
-- [ ] **T050** [P] Write `tests/test_multi_rate_audio_master.lua` (FR-034) — master holding 48k + 96k audio + 23.976 video media_refs; assert both audio streams decode at native rates with no resampling errors.
-- [ ] **T051** Run T048, T049, T050.
+- [ ] **T048** [P] DEFERRED — requires `--test` mode (C++ decode + peak cache bindings). FR-025 audibility is already pinned by `tests/test_018_fr025_overwrite_audio_audible.lua` (resolver entries point at correct file + sample range); bit-identity vs raw file read needs a separate `--test`-mode harness, tracked outside this feature.
+- [x] **T049** [P] `tests/test_master_order_independence.lua` (FR-033) — GREEN. Two masters same media opposite insertion order; resolver bit-identical via file_sig + explicit media_id check.
+- [x] **T050** [P] `tests/test_multi_rate_audio_master.lua` (FR-034) — GREEN. V+A48k+A96k master; native rates preserved, no silent resample collapse.
+- [x] **T051** Ran T049, T050 → both green. T048 deferred.
 
 ## Phase 3.10: Documentation + final cleanup
 

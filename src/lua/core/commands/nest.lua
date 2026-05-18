@@ -166,8 +166,6 @@ local function insert_replacement_clip(parent, sequence_id, track_id, track_type
                                        new_clip_id, new_seq_id,
                                        min_start, span)
     -- 018 FR-013: track_type-driven subframe (audio = 0,0; video = nil,nil).
-    -- Pure variant — SQL isolation (rule 1.10): commands can't open DB.
-    local Clip = require("models.clip")
     local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track_type)
     Clip.create({
         id                    = new_clip_id,
