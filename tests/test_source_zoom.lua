@@ -176,9 +176,10 @@ db:exec(string.format([[
 local mc_id = test_env.create_test_masterclip_sequence(
     "proj1", "TestClip", 24, 1, 300, "media1")
 
--- 018 FR-005: video-only masters loaded into the source viewer derive
--- their output audio rate from the active record sequence. Provide a
--- record sequence and wire timeline_state at it.
+-- 018 FR-005: a project must have at least one record sequence so the audio
+-- bus rate resolver (audio_bus_rate.resolve_for_monitor case 3) can pick it
+-- up without an active sequence having been set yet. No timeline_state
+-- wiring needed — production fall-back handles this.
 assert(db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
@@ -186,8 +187,6 @@ assert(db:exec(string.format([[
     VALUES ('rec1', 'proj1', 'Rec', 'sequence', 24, 1, 48000, 1920, 1080,
         0, 300, 0, %d, %d)
 ]], now, now)))
-local _ts = require("ui.timeline.timeline_state")
-_ts.init("rec1", "proj1")
 
 mock_renderer_info[mc_id] = {
     fps_num = 24, fps_den = 1,

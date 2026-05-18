@@ -130,13 +130,24 @@ function M.execute(args)
             clip.sequence_start_frame, left_new_duration,
             clip.source_in_frame, left_new_source_out)
 
-        -- 018 FR-023: split must preserve sub-frame precision through the
-        -- split point. owner_delta_to_source returns frames-only today, so
-        -- the right half can only inherit the original clip's subframes
-        -- verbatim. For frame-aligned source ranges (the common case until
-        -- sample-precise edit UX lands), this is correct; for non-zero
-        -- subframes a future Phase 3.6 extension will make
-        -- owner_delta_to_source return (frame, subframe) with carry.
+        -- 018 FR-023 / NSF: split must preserve sub-frame precision through
+        -- the split point. owner_delta_to_source returns frames-only today,
+        -- so a clip whose source range is already sub-frame-aligned cannot
+        -- be split correctly — refuse loudly until Phase 3.6 lands the
+        -- (frame, subframe) carry math. Frame-aligned clips (subframe==0)
+        -- pass through unchanged.
+        -- Canonical states per INV-3: VIDEO has subframe=NULL, AUDIO has
+        -- subframe∈[0, ticks_per_frame). Anything else (AUDIO with
+        -- subframe>0) refuses until Phase 3.6.
+        local sub_in_ok  = clip.source_in_subframe  == nil or clip.source_in_subframe  == 0
+        local sub_out_ok = clip.source_out_subframe == nil or clip.source_out_subframe == 0
+        assert(sub_in_ok and sub_out_ok, string.format(
+            "SplitClip: clip %s has non-zero subframe "
+            .. "(in=%s out=%s) — sample-precise split deferred to Phase 3.6; "
+            .. "refuse rather than corrupt audio at the cut point",
+            tostring(args.clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
         local right_source_in_sub  = clip.source_in_subframe
         local right_source_out_sub = clip.source_out_subframe
         Clip._create_v13_row({

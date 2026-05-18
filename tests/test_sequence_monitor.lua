@@ -299,13 +299,6 @@ mock_renderer_info["timeline1"] = {
 --------------------------------------------------------------------------------
 local SequenceMonitor = require("ui.sequence_monitor")
 
--- 018 FR-005: video-only masters loaded into the source viewer derive their
--- output audio rate from the ACTIVE RECORD sequence. Wire timeline_state to
--- point at the 'timeline1' record sequence created above so loading a
--- video-only master doesn't trip the no-active-record assert.
-local timeline_state = require("ui.timeline.timeline_state")
-timeline_state.init("timeline1", "proj")
-
 --------------------------------------------------------------------------------
 -- Tests
 --------------------------------------------------------------------------------

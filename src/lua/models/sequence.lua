@@ -2977,4 +2977,30 @@ function Sequence.get_master_channel_state(master_id, channel_index)
     return enabled, gain_db
 end
 
+--- 018 FR-005: pick the first (oldest-created) record sequence's
+--- audio_sample_rate for a project. Used by audio_bus_rate when no
+--- active record is set yet. Returns nil if the project has zero
+--- record sequences with a valid rate.
+function Sequence.find_first_record_audio_rate(project_id)
+    assert(project_id and project_id ~= "",
+        "Sequence.find_first_record_audio_rate: project_id required")
+    local db = require("core.database").get_connection()
+    assert(db, "Sequence.find_first_record_audio_rate: no db connection")
+    local stmt = db:prepare([[
+        SELECT audio_sample_rate FROM sequences
+        WHERE project_id = ? AND kind = 'sequence'
+              AND audio_sample_rate IS NOT NULL
+              AND audio_sample_rate > 0
+        ORDER BY created_at ASC
+        LIMIT 1
+    ]])
+    assert(stmt, "Sequence.find_first_record_audio_rate: prepare failed")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(), "Sequence.find_first_record_audio_rate: exec failed")
+    local rate
+    if stmt:next() then rate = stmt:value(0) end
+    stmt:finalize()
+    return rate
+end
+
 return Sequence

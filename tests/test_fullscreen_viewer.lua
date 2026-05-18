@@ -250,6 +250,11 @@ package.loaded["models.sequence"] = {
             save = function() end,
         }
     end,
+    -- 018 FR-005: audio_bus_rate.resolve_for_monitor needs this injector;
+    -- in this mocked test the sequence already carries audio_sample_rate so
+    -- the case-3 fall-back path isn't exercised, but the injector must be
+    -- callable.
+    find_first_record_audio_rate = function() return 48000 end,
 }
 
 --------------------------------------------------------------------------------
