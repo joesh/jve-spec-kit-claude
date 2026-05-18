@@ -14,6 +14,16 @@
 
 ---
 
+## Clarifications
+
+### Session 2026-05-18
+- Q: Does 018 ship UI for `ConformSequence`, or only the underlying command + tests? → A: Command only, no UI in 018. Menu entry + dialog deferred to a later UX-focused spec.
+- Q: When opening an old `.jvp` written under a pre-018 schema, what should the user experience be? → A: Hard error dialog, project not opened. No partial open, no migration prompt.
+- Q: If the process crashes mid-`ConformSequence` / mid-`SetProjectMasterClock` (SQLite WAL rolls back), what should the next open surface? → A: Silent rollback, no UI. DB rolls back transparently to pre-conform state; no banner, no marker, no recovery prompt. User re-issues the conform if still wanted.
+- Q: At a half-integer boundary, which rounding rule applies to `file_sample_offset = round(subframe * file_sample_rate / master_clock_hz)` (FR-008)? → A: Round half away from zero (`floor(x + 0.5)` for non-negative values). Matches the existing `round_int` helper in `models/sequence.lua` and the convention used by the resolver. Subframes are always non-negative per FR-002, so no sign-handling branch is needed.
+
+---
+
 ## Domain Model (terminology, for future readers)
 
 The remainder of this spec uses these terms precisely. Several of them changed meaning in V13 (013-timeline-placements-as) and earlier specs use older words — flagged below so future readers don't get confused.
@@ -60,7 +70,7 @@ The specific source conditions under which this bug manifests today (non-zero fi
 - What happens when any writer attempts to set a sub-frame value greater than or equal to the ticks-per-frame bound for the relevant master? The system MUST refuse the write with a loud, actionable failure (invariant violation; never a silent fallback or modulo wrap).
 - What happens when a master already has audio media_refs and the user adds a video media_ref at a different native frame rate than the master's fps? The master's `fps` does NOT change. The new media_ref's mismatch is handled by the existing `fps_mismatch_policy`. To force the master's fps to follow the new media, the user runs `ConformSequence` on that master. **Why this doesn't break Acceptance Scenario 3 (order-independence):** master.fps at master creation comes from the project default frame rate (FR-026 / FR-032), NEVER from the first-imported media file's native rate. So in the order-independence scenario, both master A (video first) and master B (audio first) are born with `fps = project_default`, and neither's fps changes as more media gets added. Without that creation rule, order-independence would indeed break — auto-deriving fps from "the first arrival" would make A and B diverge.
 - What happens when a master already has a 48 kHz audio media_ref and the user adds a 96 kHz audio media_ref? Both coexist in the master. Each decodes at its native rate. Sub-frame values on clips referencing this master remain in master-clock ticks; per-media_ref conversion happens at decode time.
-- What happens when an existing project file is opened whose audio clips were written under the legacy sample-only convention OR whose masters carried a `master.audio_sample_rate` field? Per project convention (MEMORY: `feedback_schema_bump_freely`), old data with sample-encoded audio clip source positions or with a master-level audio rate becomes invalid and must be re-imported. There is no in-place migration shim. Note: if you bump the version number then the open command will reject the .jvp.
+- What happens when an existing project file is opened whose audio clips were written under the legacy sample-only convention OR whose masters carried a `master.audio_sample_rate` field? Per project convention (MEMORY: `feedback_schema_bump_freely`), old data with sample-encoded audio clip source positions or with a master-level audio rate becomes invalid and must be re-imported. There is no in-place migration shim. The schema version bump triggers a **hard error dialog at open time** — modal, project not opened, message names the old schema version and instructs the user to re-import from the original source (DRP / FCP7 XML / etc.). No partial open, no migration prompt, no read-only mode. Implementation: `Project.open` asserts on schema version mismatch and surfaces the result through the existing error dialog facility — no silent fail-and-continue path.
 - What happens if a user attempts a sample-precise edit through today's tools (slip by one sample, trim to a zero-crossing)? Out of scope. The primitives support such an operation, but the user-facing tools do not yet offer sub-frame granularity. Today's tools remain frame-aligned and MUST default any new sub-frame value to zero.
 
 ## Requirements *(mandatory)*
@@ -90,7 +100,7 @@ The specific source conditions under which this bug manifests today (non-zero fi
 
 #### Resolution
 
-- **FR-008**: When resolving a clip's source position to a file-natural sample position for decode, the system MUST include the clip's sub-frame value as an additive offset converted from master-clock ticks to file-rate samples via `file_sample_offset = round(subframe * media_ref.audio_sample_rate / project.master_clock_hz)`. A clip whose sub-frame is `N` ticks results in a decode request offset by `round(N * media_ref.audio_sample_rate / master_clock_hz)` samples relative to a clip whose sub-frame is zero. Round-trip MUST be exact when the file rate divides `master_clock_hz`.
+- **FR-008**: When resolving a clip's source position to a file-natural sample position for decode, the system MUST include the clip's sub-frame value as an additive offset converted from master-clock ticks to file-rate samples via `file_sample_offset = round(subframe * media_ref.audio_sample_rate / project.master_clock_hz)`. A clip whose sub-frame is `N` ticks results in a decode request offset by `round(N * media_ref.audio_sample_rate / master_clock_hz)` samples relative to a clip whose sub-frame is zero. Round-trip MUST be exact when the file rate divides `master_clock_hz`. The `round()` operation MUST use round-half-away-from-zero (`floor(x + 0.5)` for non-negative inputs — subframes are non-negative per FR-002, so no sign-handling branch is needed). This rule matches the existing `round_int` helper in `models/sequence.lua` used by the resolver; same rounding everywhere prevents off-by-one mismatches between the subframe path and the existing master-leaf resolver.
 
 #### Importers
 
@@ -108,20 +118,22 @@ The specific source conditions under which this bug manifests today (non-zero fi
 
 #### Conform / settings commands (new in 018)
 
-- **FR-029** (`ConformSequence`): The system MUST provide a `ConformSequence` command that takes a sequence id (of either kind) and a new `(fps_numerator, fps_denominator)`. Under one atomic transaction, the command:
+- **FR-029** (`ConformSequence`): The system MUST provide a `ConformSequence` command that takes a sequence id (of either kind) and a new `(fps_numerator, fps_denominator)`. 018 ships the command at the data-model + command-dispatcher layer only — no menu entry, no dialog, no button. Invokable from scripts and tests; a user-facing UX surface is deferred to a follow-up spec. Under one atomic transaction, the command:
   - Rewrites the sequence's `fps_numerator` / `fps_denominator` (the only legal path to change these — FR-031).
   - For `kind='master'`: rewrites every media_ref inside this master so its `sequence_start_frame` and `duration_frames` (in master-frames) represent the same wall-clock content under the new fps. The media_ref's `source_in` (file-natural samples) is unchanged. (Note: `sequence_start_frame` is the post-018-precursor name for what the code currently calls `timeline_start_frame`; see the precursor commit that lands the rename ahead of this spec's implementation.)
   - For either kind: rewrites every clip in the project whose `sequence_id` points at this sequence, converting `(source_in_frame, source_in_subframe)` and `(source_out_frame, source_out_subframe)` so the same wall-clock content is referenced under the new fps. Subframe values are unchanged by an fps-only conform (they're in master-clock ticks, fps-independent); only frame components rescale; video clips have no subframe to touch (FR-001).
   - For `kind='sequence'`: also rewrites every clip CONTAINED in this sequence — their `sequence_start_frame` and `duration_frames` (in this sequence's frames) so the same wall-clock placement is preserved under the new fps.
   - Is fully undoable as a single command; redo restores the new state.
-  - On any per-row failure, the entire transaction rolls back; the sequence is left in its pre-conform state.
+  - On any per-row failure within the transaction, the entire transaction rolls back; the sequence is left in its pre-conform state.
+  - On process crash mid-transaction: SQLite WAL rolls back to pre-conform state on next open. No banner, no recovery marker, no prompt — the user simply sees the project as it was before they initiated the conform. (Defense-in-depth: if WAL rollback fails to fully restore, the FR-001 / FR-002 / FR-031 invariant triggers catch any resulting inconsistency at the first touched row — silent corruption cannot persist beyond the next operation.)
 - **FR-030a** (`SetProjectDefaultFps`): The system MUST provide a `SetProjectDefaultFps` command that takes a new `(fps_numerator, fps_denominator)` and writes it to `projects.settings`. The command MUST NOT touch any existing sequence, media_ref, or clip — its effect is limited to pre-filling future creations. Undoable.
 - **FR-030b** (`SetProjectMasterClock`): The system MUST provide a `SetProjectMasterClock` command that takes a new integer `master_clock_hz` and, under one atomic transaction:
   - Rewrites `projects.settings.master_clock_hz`.
   - Rewrites every clip's `source_in_subframe` and `source_out_subframe` by `new = round(old * new_clock / old_clock)`.
   - Does NOT touch sequence fps values (clock and fps are independent dimensions).
   - Is fully undoable as a single command.
-  - On any per-row failure, the entire transaction rolls back.
+  - On any per-row failure within the transaction, the entire transaction rolls back.
+  - On process crash mid-transaction: SQLite WAL rolls back to pre-clock-change state on next open. No banner, no recovery marker, no prompt — same crash-recovery semantics as `ConformSequence`. Defense-in-depth: FR-002 subframe-bound invariant catches any post-rollback subframe value left outside `[0, ticks_per_frame)` at first touched row.
 
 #### Legacy accessor removal
 
