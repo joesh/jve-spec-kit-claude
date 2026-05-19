@@ -30,11 +30,15 @@ M.BAR_HEIGHT = 20
 --- job, not this helper's. Kept as a module-level function so the
 --- dispatch math is testable without a Qt harness.
 function M.compute_wheel_frame_delta(delta_x, width, viewport_duration)
-    assert(type(delta_x) == "number", "delta_x must be number")
-    assert(type(width) == "number" and width > 0,
-        "width must be a positive number")
-    assert(type(viewport_duration) == "number" and viewport_duration > 0,
-        "viewport_duration must be a positive number")
+    assert(type(delta_x) == "number",
+        "monitor_mark_bar.compute_wheel_frame_delta: delta_x must be number, got "
+        .. type(delta_x))
+    assert(type(width) == "number" and width > 0, string.format(
+        "monitor_mark_bar.compute_wheel_frame_delta: width must be a positive "
+        .. "number, got %s", tostring(width)))
+    assert(type(viewport_duration) == "number" and viewport_duration > 0, string.format(
+        "monitor_mark_bar.compute_wheel_frame_delta: viewport_duration must be "
+        .. "a positive number, got %s", tostring(viewport_duration)))
     return math.floor((delta_x / width) * viewport_duration + 0.5)
 end
 
