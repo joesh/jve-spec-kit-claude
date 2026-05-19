@@ -95,12 +95,15 @@ local function build_fixture(project_fps_mismatch_policy)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
+    -- Source range in file-natural samples (192000 = 4s @ 48k). Placement
+    -- (sequence_start_frame, duration_frames) in master.fps frames at master
+    -- 25fps: 4s = 100 frames.
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames,
             audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 192000, 0, 192000, 48000,
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 192000, 0, 100, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
 

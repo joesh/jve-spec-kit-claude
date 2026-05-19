@@ -2,7 +2,7 @@
 --- Source-tab virtual clips honor the unified placement convention.
 ---
 --- Domain contract (CLAUDE.md feedback_timecode_is_truth post-unification):
----   media_refs.timeline_start_frame and duration_frames are master.fps
+---   media_refs.sequence_start_frame and duration_frames are master.fps
 ---   frames for V AND A (uniformly). For dual-medium masters master.fps ==
 ---   video fps; for audio-only master.fps == sample_rate. The source-tab
 ---   body's virtual-clip synthesizer must use those columns AS-IS — no
@@ -58,33 +58,35 @@ db:exec(string.format([[
             1920, 1080,
             '{"start_tc_value":%d,"start_tc_rate":%d,"start_tc_audio_samples":%d,"start_tc_audio_rate":%d}',
             %d, %d);
+    -- 018 FR-004: masters carry NULL audio_sample_rate (per-media_ref rate).
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
         fps_denominator, audio_sample_rate, width, height,
         start_timecode_frame, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('%s', '%s', 'A038', 'master', %d, 1, %d, 1920, 1080,
+    VALUES ('%s', '%s', 'A038', 'master', %d, 1, NULL, 1920, 1080,
             %d, %d, %d, %d, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('%s', '%s', 'V1', 'VIDEO', 1, 1),
            ('%s', '%s', 'A1', 'AUDIO', 1, 1);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames, audio_sample_rate,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
-      -- V MR: ts/dur in master.fps frames; source range in V frames
-      ('%s', '%s', '%s', '%s', '%s', %d, %d, %d, %d, 1, 1.0, 0, %d, %d),
-      -- A MR: ts/dur ALSO in master.fps frames (post-unification);
-      -- source range in file-natural samples
-      ('%s', '%s', '%s', '%s', '%s', %d, %d, %d, %d, 1, 1.0, 0, %d, %d);
+      -- V MR: placement in master.fps frames; source range in V frames;
+      -- audio_sample_rate NULL (video rows).
+      ('%s', '%s', '%s', '%s', '%s', %d, %d, %d, %d, NULL, 1, 1.0, 0, %d, %d),
+      -- A MR: placement in master.fps frames (post-unification);
+      -- source range in file-natural samples; audio_sample_rate required.
+      ('%s', '%s', '%s', '%s', '%s', %d, %d, %d, %d, %d, 1, 1.0, 0, %d, %d);
 ]], proj, now, now,
     media_id, proj, DUR_FRAMES, FPS, SR, TC_FRAMES, FPS, TC_SAMPLES, SR, now, now,
-    master_id, proj, FPS, SR, TC_FRAMES, TC_FRAMES, 0, 300, now, now,
+    master_id, proj, FPS, TC_FRAMES, TC_FRAMES, 0, 300, now, now,
     v_track, master_id, a_track, master_id,
     v_mref, proj, master_id, v_track, media_id,
         TC_FRAMES, TC_FRAMES + DUR_FRAMES, TC_FRAMES, DUR_FRAMES, now, now,
     a_mref, proj, master_id, a_track, media_id,
-        TC_SAMPLES, TC_SAMPLES + DUR_SAMPLES, TC_FRAMES, DUR_FRAMES, now, now))
+        TC_SAMPLES, TC_SAMPLES + DUR_SAMPLES, TC_FRAMES, DUR_FRAMES, SR, now, now))
 
 local clips = database.load_master_virtual_clips(master_id)
 assert(type(clips) == "table",
@@ -106,17 +108,17 @@ assert(a_clip, "AUDIO virtual clip missing")
 -- extent, the virtual clips should land at the SAME timeline position
 -- and span the SAME duration. The renderer treats both lanes in master.fps
 -- frame space; any per-track-type unit conversion at load time breaks this.
-assert(v_clip.timeline_start == TC_FRAMES, string.format(
-    "V virtual clip timeline_start: expected %d (master.fps frames), got %d",
-    TC_FRAMES, v_clip.timeline_start))
+assert(v_clip.sequence_start == TC_FRAMES, string.format(
+    "V virtual clip sequence_start: expected %d (master.fps frames), got %d",
+    TC_FRAMES, v_clip.sequence_start))
 assert(v_clip.duration == DUR_FRAMES, string.format(
     "V virtual clip duration: expected %d, got %d",
     DUR_FRAMES, v_clip.duration))
-assert(a_clip.timeline_start == TC_FRAMES, string.format(
-    "A virtual clip timeline_start: expected %d (master.fps frames, "
+assert(a_clip.sequence_start == TC_FRAMES, string.format(
+    "A virtual clip sequence_start: expected %d (master.fps frames, "
     .. "same as V), got %d — pre-unification samples÷spf divide would "
     .. "have produced %d, which is invisible at ruler %d",
-    TC_FRAMES, a_clip.timeline_start,
+    TC_FRAMES, a_clip.sequence_start,
     math.floor(TC_SAMPLES / (SR / FPS)), TC_FRAMES))
 assert(a_clip.duration == DUR_FRAMES, string.format(
     "A virtual clip duration: expected %d (master.fps frames, same "
@@ -129,7 +131,7 @@ assert(a_clip.source_in == TC_SAMPLES and a_clip.source_out == TC_SAMPLES + DUR_
 assert(v_clip.source_in == TC_FRAMES and v_clip.source_out == TC_FRAMES + DUR_FRAMES,
     "video virtual clip's source range must be file-natural V frames")
 
-print(string.format("  ✓ V virtual clip: ts=%d dur=%d", v_clip.timeline_start, v_clip.duration))
+print(string.format("  ✓ V virtual clip: ts=%d dur=%d", v_clip.sequence_start, v_clip.duration))
 print(string.format("  ✓ A virtual clip: ts=%d dur=%d (matches V, no spf divide)",
-    a_clip.timeline_start, a_clip.duration))
+    a_clip.sequence_start, a_clip.duration))
 print("✅ test_load_master_virtual_clips_audio_unit.lua passed")

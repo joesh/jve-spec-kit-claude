@@ -4,7 +4,7 @@
 ---
 --- Domain contract (CLAUDE.md feedback_timecode_is_truth, post-unification):
 ---   For a V+A master (master.fps == video.fps):
----     A MR.timeline_start_frame / .duration_frames are in master.fps
+---     A MR.sequence_start_frame / .duration_frames are in master.fps
 ---     frames — for V+A that means video-frame count, NOT samples.
 ---     source_in_frame / source_out_frame stay in file-natural samples.
 ---   Pre-unification convention stored A MR placement in samples, which
@@ -40,10 +40,11 @@ local A_DUR_SAMPLES = V_DUR_FRAMES * SR / FPS  -- 2_000_000
 assert(db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
     VALUES ('p1', 'p', 'resample', 0, 0);
+    -- 018 FR-004: masters carry NULL audio_sample_rate (per-media_ref rate).
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
-    VALUES ('m', 'p1', 'master', 'master', %d, 1, %d, 1920, 1080, 0, 0);
+    VALUES ('m', 'p1', 'master', 'master', %d, 1, NULL, 1920, 1080, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
     VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1);
     UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
@@ -54,10 +55,10 @@ assert(db:exec(string.format([[
            ('aud', 'p1', 'a.wav', '/tmp/a.wav', %d, %d, 1, 1, 0, 0);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr-v', 'p1', 'm', 'm-v1', 'vid', 0, %d, 0, %d, 1, 1.0, 0, 0, 0);
-]], FPS, SR, V_DUR_FRAMES, FPS, A_DUR_SAMPLES, SR,
+]], FPS, V_DUR_FRAMES, FPS, A_DUR_SAMPLES, SR,
     V_DUR_FRAMES, V_DUR_FRAMES)))
 
 local result = GrowMasterMedium.execute({
@@ -69,7 +70,7 @@ assert(result and result.new_media_ref_id, "GrowMasterMedium must return new MR 
 
 -- Inspect the newly-created master audio media_ref.
 local stmt = db:prepare([[
-    SELECT timeline_start_frame, duration_frames,
+    SELECT sequence_start_frame, duration_frames,
            source_in_frame, source_out_frame
     FROM media_refs WHERE id = ?
 ]])
@@ -92,7 +93,7 @@ assert(dur == V_DUR_FRAMES, string.format(
     .. "appear empty / 2000× off-screen.",
     V_DUR_FRAMES, dur, A_DUR_SAMPLES))
 assert(ts == 0,
-    "audio MR.timeline_start_frame should be 0 for a TC=0 master")
+    "audio MR.sequence_start_frame should be 0 for a TC=0 master")
 assert(sin == 0,
     "audio MR.source_in_frame: file starts at sample 0 (no audio TC)")
 assert(sout == A_DUR_SAMPLES, string.format(

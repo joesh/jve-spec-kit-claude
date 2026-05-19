@@ -18,7 +18,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height, playhead_frame, view_start_frame,
         view_duration_frames, start_timecode_frame, created_at, modified_at)
-        VALUES ('mB','p','MasterB','master',24,1,48000,1920,1080,75,0,300,0,%d,%d);
+        VALUES ('mB','p','MasterB','master',24,1,NULL,1920,1080,75,0,300,0,%d,%d);
 ]], now, now))
 
 local transport = require("core.playback.transport")

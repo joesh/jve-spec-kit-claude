@@ -252,18 +252,23 @@ print(string.format("  ✓ v_ref: ts=%d src=[%d,%d) dur=%d  (probed TC)",
     v_ref_post.sequence_start_frame, v_ref_post.source_in_frame,
     v_ref_post.source_out_frame, v_ref_post.duration_frames))
 
--- Audio media_refs: independent timebase (samples), independent delta.
+-- Audio media_refs (018 post-unification):
+--   sequence_start_frame / duration_frames are in MASTER.FPS FRAMES,
+--     matching the V MR (single timebase across V and A on the master).
+--   source_in_frame / source_out_frame stay in FILE-NATURAL SAMPLES
+--     (the file-side of the MR; the audio decoder needs sample indices).
 for _, a_ref in ipairs(a_refs) do
-    assert(a_ref.sequence_start_frame == NEW_TC_AUDIO, string.format(
-        "post: a_ref.sequence_start must rebase in audio-sample space "
-        .. "(got %d, want %d)",
-        a_ref.sequence_start_frame, NEW_TC_AUDIO))
+    assert(a_ref.sequence_start_frame == NEW_TC, string.format(
+        "post: a_ref.sequence_start must rebase in master.fps-frame space "
+        .. "(same as V MR) (got %d, want %d)",
+        a_ref.sequence_start_frame, NEW_TC))
     assert(a_ref.source_in_frame == NEW_TC_AUDIO, string.format(
-        "post: a_ref.source_in must equal new audio TC origin (got %d, want %d)",
+        "post: a_ref.source_in must equal new audio TC origin in samples "
+        .. "(got %d, want %d)",
         a_ref.source_in_frame, NEW_TC_AUDIO))
     assert(a_ref.source_out_frame == NEW_TC_AUDIO + NEW_DUR_AUDIO, string.format(
         "post: a_ref.source_out must equal new_audio_origin + new_audio_dur "
-        .. "(got %d, want %d)",
+        .. "in samples (got %d, want %d)",
         a_ref.source_out_frame, NEW_TC_AUDIO + NEW_DUR_AUDIO))
 end
 print(string.format("  ✓ a_ref (n=%d): ts=%d src_out=%d  (probed audio TC)",

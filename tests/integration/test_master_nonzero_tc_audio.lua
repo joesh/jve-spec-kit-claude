@@ -1,13 +1,13 @@
 -- Integration test: master sequence at nonzero TC plays audio in source tab.
 --
 -- Regression for TSO 2026-05-16: SSE STARVED chunks=0 on master playback
--- because audio media_ref's `timeline_start_frame` was stored in SAMPLES
+-- because audio media_ref's `sequence_start_frame` was stored in SAMPLES
 -- while the playhead arrived in master.fps VIDEO FRAMES. The overlap
--- check (playhead >= mr.timeline_start) never succeeded for non-zero-TC
+-- check (playhead >= mr.sequence_start) never succeeded for non-zero-TC
 -- masters, so resolve returned no audio entries → audio pump saw "gap"
 -- → silence.
 --
--- Post unification: audio MR's timeline_start_frame + duration_frames are
+-- Post unification: audio MR's sequence_start_frame + duration_frames are
 -- in master.fps frames (uniform with video MR); source_in_frame /
 -- source_out_frame stay in file-natural samples (so C++ TMB's
 -- `source_in - first_sample_tc` still lands on the right file sample).
@@ -153,7 +153,7 @@ print(string.format("  PASS: master.start_timecode_frame=%d", seq.start_timecode
 --         with video; source_in still in file-natural samples).
 -- ───────────────────────────────────────────────────────────────────
 local mr_stmt = assert(db:prepare(
-    "SELECT mr.id, mr.timeline_start_frame, mr.duration_frames, "
+    "SELECT mr.id, mr.sequence_start_frame, mr.duration_frames, "
     .. "mr.source_in_frame, mr.source_out_frame, t.track_type "
     .. "FROM media_refs mr JOIN tracks t ON mr.track_id = t.id "
     .. "WHERE mr.owner_sequence_id = ? AND t.track_type = 'AUDIO' "
@@ -168,7 +168,7 @@ local mr_src_out       = mr_stmt:value(4)
 mr_stmt:finalize()
 
 assert(mr_tl_start == VIDEO_TC_FRAMES, string.format(
-    "audio MR %s timeline_start_frame should be in master.fps frames "
+    "audio MR %s sequence_start_frame should be in master.fps frames "
     .. "(= video TC origin = %d); got %d. Pre-unification this would have "
     .. "been the audio-sample anchor (%d) — that was the bug.",
     mr_id, VIDEO_TC_FRAMES, mr_tl_start, AUDIO_TC_SAMPLES))
@@ -189,7 +189,7 @@ print("  PASS: audio MR placement in master.fps frames; source range in samples"
 -- ───────────────────────────────────────────────────────────────────
 -- Step 5: the regression check — get_audio_at at the master's start
 -- must return audio entries. Pre-fix this returned empty because the
--- audio MR's timeline_start (samples) was compared against the playhead
+-- audio MR's sequence_start (samples) was compared against the playhead
 -- (frames) and never overlapped.
 -- ───────────────────────────────────────────────────────────────────
 local entries_at = seq:get_audio_at(VIDEO_TC_FRAMES)
@@ -259,17 +259,17 @@ assert(e_first.source_out == expected_so, string.format(
     .. "duration in samples (%d + %d = %d); got %s",
     AUDIO_TC_SAMPLES, full_dur_samples, expected_so,
     tostring(e_first.source_out)))
--- And the entry's timeline_start/duration are in master.fps frames
+-- And the entry's sequence_start/duration are in master.fps frames
 -- (filter_and_finalize keeps those as the FULL MR extent for masters).
-assert(e_first.timeline_start == VIDEO_TC_FRAMES, string.format(
-    "audio entry timeline_start (master.fps frames): got %s, expected %d",
-    tostring(e_first.timeline_start), VIDEO_TC_FRAMES))
+assert(e_first.sequence_start == VIDEO_TC_FRAMES, string.format(
+    "audio entry sequence_start (master.fps frames): got %s, expected %d",
+    tostring(e_first.sequence_start), VIDEO_TC_FRAMES))
 assert(e_first.duration == DUR_FRAMES, string.format(
     "audio entry duration (master.fps frames): got %s, expected %d",
     tostring(e_first.duration), DUR_FRAMES))
 print(string.format("  PASS: resolve_in_range entry → "
     .. "timeline=[%d, +%d) master.fps frames; source=[%d, %d) samples",
-    e_first.timeline_start, e_first.duration,
+    e_first.sequence_start, e_first.duration,
     e_first.source_in, e_first.source_out))
 
 os.remove(PATCHED_PATH)

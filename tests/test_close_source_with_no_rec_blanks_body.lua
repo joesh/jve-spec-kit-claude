@@ -51,7 +51,7 @@ db:exec(string.format([[
         fps_denominator, audio_sample_rate, width, height,
         start_timecode_frame, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('master_a039', 'proj', 'A039', 'master', 25, 1, 48000, 1920, 1080,
+    VALUES ('master_a039', 'proj', 'A039', 'master', 25, 1, NULL, 1920, 1080,
             0, 0, 0, 1000, %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -59,7 +59,7 @@ db:exec(string.format([[
 
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_master_v', 'proj', 'master_a039', 'master_v1', 'm_master',
             0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);

@@ -78,7 +78,10 @@ db:exec(string.format([[
         audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES
       ('mra_v', 'proj', 'msa', 'av1', 'ma', 0, 1200,    1324752,    1200, 48000, 1, 1.0, 0, %d, %d),
-      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 2649504000, 2400000, 48000, 1, 1.0, 0, %d, %d);
+      -- 018 post-unification: audio MR placement (sequence_start_frame,
+      -- duration_frames) in master.fps frames, matching V MR. Source range
+      -- stays in file-natural samples.
+      ('mra_a', 'proj', 'msa', 'aa1', 'ma', 0, 2400000, 1324752, 1200, 48000, 1, 1.0, 0, %d, %d);
     -- Master B: video at TC origin frame 0 (file with no embedded TC).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,

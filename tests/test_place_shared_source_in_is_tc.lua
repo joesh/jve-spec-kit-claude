@@ -61,7 +61,7 @@ local function build_fixture()
             width, height, start_timecode_frame,
             created_at, modified_at)
         VALUES ('m', 'p1', 'master', 'master',
-            25, 1, 48000, 1920, 1080, %d, 0, 0)]], TC_ORIGIN))
+            25, 1, NULL, 1920, 1080, %d, 0, 0)]], TC_ORIGIN))
 
     exec(db, string.format([[
         INSERT INTO sequences (id, project_id, name, kind,
@@ -101,17 +101,20 @@ local function build_fixture()
     exec(db, string.format([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', %d, %d, %d, %d,
             1, 1.0, 0, 0, 0)]],
         TC_ORIGIN, TC_ORIGIN + MEDIA_DUR, TC_ORIGIN, MEDIA_DUR))
+    -- AUDIO media_ref: source range in file-natural samples; placement in
+    -- master.fps frames; audio_sample_rate required (the AUDIO-mref
+    -- non-NULL invariant).
     exec(db, string.format([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
+            sequence_start_frame, duration_frames, audio_sample_rate,
             enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 4448640, %d, %d,
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 4448640, %d, %d, 48000,
             1, 1.0, 0, 0, 0)]],
         TC_ORIGIN, MEDIA_DUR))
 
@@ -122,7 +125,7 @@ end
 local function load_clip_row(db, clip_id)
     local stmt = db:prepare([[
         SELECT track_id, source_in_frame, source_out_frame,
-               timeline_start_frame, duration_frames
+               sequence_start_frame, duration_frames
         FROM clips WHERE id = ?]])
     stmt:bind_value(1, clip_id)
     assert(stmt:exec() and stmt:next(),
@@ -163,7 +166,7 @@ do
     local result = Insert.execute({
         sequence_id          = ids.edit_id,
         source_sequence_id   = ids.master_id,
-        timeline_start_frame = 1000,
+        sequence_start_frame = 1000,
     })
     local db = database.get_connection()
     local v = v_clip(db, ids, result.created_clip_ids)
@@ -200,7 +203,7 @@ do
     local result = Insert.execute({
         sequence_id          = ids.edit_id,
         source_sequence_id   = ids.master_id,
-        timeline_start_frame = 2000,
+        sequence_start_frame = 2000,
     })
     local v = v_clip(db, ids, result.created_clip_ids)
     local a = a_clip(db, ids, result.created_clip_ids)

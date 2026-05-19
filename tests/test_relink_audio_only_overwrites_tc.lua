@@ -6,7 +6,7 @@
 --- Domain contract (CLAUDE.md "TIMECODE IS THE SOURCE OF TRUTH"
 --- + feedback_timecode_is_truth post-unification convention):
 ---   For an audio-only master, master.fps == sample_rate. The audio
----   media_ref's timeline_start_frame (master.fps frames = samples)
+---   media_ref's sequence_start_frame (master.fps frames = samples)
 ---   and source_in_frame (file-natural samples) MUST encode the
 ---   same TC moment — both equal to the file's audio TC origin
 ---   in samples. Any divergence between the two means the resolver
@@ -15,7 +15,7 @@
 ---
 --- Live symptom (TSO 2026-05-16, anamnesis-gold-timeline.jvp):
 ---   Long stereo-mix WAV ("Anemnesis Stereo Mix - Online 23012026_01"):
----     media_ref.timeline_start_frame = 172508160 (DRP-claimed TC)
+---     media_ref.sequence_start_frame = 172508160 (DRP-claimed TC)
 ---     media_ref.source_in_frame      = 172320000 (BWF time_reference)
 ---     Δ = 188160 samples = 3.92 s
 ---   Clips on the rec timeline play 4 s late and beep offline on
@@ -37,7 +37,7 @@
 --- normalized post-overload form). Assert that:
 ---   1. media.metadata uses the new clean shape (no audio TC in
 ---      start_tc_value).
----   2. Audio MR timeline_start_frame and source_in_frame both
+---   2. Audio MR sequence_start_frame and source_in_frame both
 ---      equal the BWF audio TC in samples.
 ---   3. They agree on the same TC moment.
 
@@ -61,7 +61,7 @@ local Sequence = require("models.sequence")
 
 local function media_refs_by_type(media_id, track_type)
     local stmt = database.get_connection():prepare([[
-        SELECT mr.id, mr.timeline_start_frame, mr.source_in_frame,
+        SELECT mr.id, mr.sequence_start_frame, mr.source_in_frame,
                mr.source_out_frame, mr.duration_frames
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
@@ -76,7 +76,7 @@ local function media_refs_by_type(media_id, track_type)
     while stmt:next() do
         out[#out + 1] = {
             id = stmt:value(0),
-            timeline_start_frame = stmt:value(1),
+            sequence_start_frame = stmt:value(1),
             source_in_frame = stmt:value(2),
             source_out_frame = stmt:value(3),
             duration_frames = stmt:value(4),
@@ -149,17 +149,17 @@ do
     local a = media_refs_by_type(media_id, "AUDIO")
     assert(#a >= 1, "expected ≥1 audio MR")
     for _, r in ipairs(a) do
-        assert(r.timeline_start_frame == r.source_in_frame, string.format(
+        assert(r.sequence_start_frame == r.source_in_frame, string.format(
             "pre-relink invariant: audio MR ts (%d) must equal source_in (%d) "
             .. "for audio-only master (both express the same TC in samples). "
             .. "If this fires, ensure_master is already producing the bug.",
-            r.timeline_start_frame, r.source_in_frame))
-        assert(r.timeline_start_frame == STALE_TC_SAMP, string.format(
+            r.sequence_start_frame, r.source_in_frame))
+        assert(r.sequence_start_frame == STALE_TC_SAMP, string.format(
             "pre-relink: audio MR ts must equal stale TC (%d), got %d",
-            STALE_TC_SAMP, r.timeline_start_frame))
+            STALE_TC_SAMP, r.sequence_start_frame))
     end
     print(string.format("  ✓ %d audio MR(s): ts=source_in=%d (stale TC)",
-        #a, a[1].timeline_start_frame))
+        #a, a[1].sequence_start_frame))
 end
 
 -- Bootstrap a record sequence so command_manager.init has an edit target.
@@ -226,21 +226,21 @@ print(string.format("  ✓ metadata: start_tc_audio_samples=%d (start_tc_value n
 print("\n--- Post-relink: audio MR ts == source_in == BWF TC (samples) ---")
 local a_refs_post = media_refs_by_type(media_id, "AUDIO")
 for _, r in ipairs(a_refs_post) do
-    assert(r.timeline_start_frame == BWF_TC_SAMP, string.format(
-        "audio MR.timeline_start_frame must rebase to file's BWF audio TC "
+    assert(r.sequence_start_frame == BWF_TC_SAMP, string.format(
+        "audio MR.sequence_start_frame must rebase to file's BWF audio TC "
         .. "(got %d, want %d samples). For audio-only master master.fps == "
         .. "sample_rate, so placement frames === samples.",
-        r.timeline_start_frame, BWF_TC_SAMP))
+        r.sequence_start_frame, BWF_TC_SAMP))
     assert(r.source_in_frame == BWF_TC_SAMP, string.format(
         "audio MR.source_in_frame must equal new BWF TC (got %d, want %d). "
         .. "C++ TMB: file_pos = source_in − first_sample_tc; mismatch with "
         .. "first_sample_tc produces negative offsets → offline beep.",
         r.source_in_frame, BWF_TC_SAMP))
-    assert(r.timeline_start_frame == r.source_in_frame, string.format(
+    assert(r.sequence_start_frame == r.source_in_frame, string.format(
         "audio MR ts (%d) must equal source_in (%d) for audio-only master "
         .. "— resolver walks ts space, decoder reads source_in space; any "
         .. "divergence is the 4-second-late / beep-on-F bug.",
-        r.timeline_start_frame, r.source_in_frame))
+        r.sequence_start_frame, r.source_in_frame))
     assert(r.source_out_frame == BWF_TC_SAMP + DUR_SAMPLES, string.format(
         "audio MR.source_out_frame must equal new_origin + duration "
         .. "(got %d, want %d)", r.source_out_frame, BWF_TC_SAMP + DUR_SAMPLES))
@@ -250,7 +250,7 @@ for _, r in ipairs(a_refs_post) do
         r.duration_frames, DUR_SAMPLES))
 end
 print(string.format("  ✓ %d audio MR(s): ts=source_in=%d, span=[%d, %d)",
-    #a_refs_post, a_refs_post[1].timeline_start_frame,
+    #a_refs_post, a_refs_post[1].sequence_start_frame,
     a_refs_post[1].source_in_frame, a_refs_post[1].source_out_frame))
 
 -- ── Assertion 3: undo restores the stale state ──
@@ -261,7 +261,7 @@ assert(undo_result and undo_result.success,
 do
     local a = media_refs_by_type(media_id, "AUDIO")
     for _, r in ipairs(a) do
-        assert(r.timeline_start_frame == STALE_TC_SAMP and
+        assert(r.sequence_start_frame == STALE_TC_SAMP and
                r.source_in_frame == STALE_TC_SAMP,
             "undo: audio MR ts/source_in must restore to stale TC")
     end

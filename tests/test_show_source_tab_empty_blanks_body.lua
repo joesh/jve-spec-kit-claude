@@ -95,20 +95,20 @@ db:exec(string.format([[
         fps_denominator, audio_sample_rate, width, height,
         start_timecode_frame, playhead_frame, view_start_frame,
         view_duration_frames, created_at, modified_at)
-    VALUES ('master_random', 'proj', 'RandomClip', 'master', 25, 1, 48000,
+    VALUES ('master_random', 'proj', 'RandomClip', 'master', 25, 1, NULL,
             1920, 1080, 0, 0, 0, 100, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
     VALUES ('rand_v1', 'master_random', 'V1', 'VIDEO', 1, 1);
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
-        timeline_start_frame, duration_frames,
+        sequence_start_frame, duration_frames,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_rand', 'proj', 'master_random', 'rand_v1', 'm_random',
             0, 100, 0, 100, 1, 1.0, 0, %d, %d);
 
     -- A real clip on rec to show the "before" state.
     INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-        sequence_id, name, timeline_start_frame, duration_frames,
+        sequence_id, name, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame,
         master_layer_track_id, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)

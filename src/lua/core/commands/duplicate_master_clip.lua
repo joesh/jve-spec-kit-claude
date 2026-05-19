@@ -88,7 +88,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             width, height, {
                 id                       = new_master_id,
                 kind                     = "master",
-                audio_sample_rate               = sample_rate,
+                -- 018 FR-004: masters carry NULL audio_sample_rate (per-
+                -- media_ref rate; a master can hold heterogeneous rates).
+                audio_sample_rate        = nil,
                 start_timecode_frame     = video_start_tc_frame or 0,
                 playhead_frame           = video_start_tc_frame or 0,
                 video_start_tc_frame     = video_start_tc_frame,

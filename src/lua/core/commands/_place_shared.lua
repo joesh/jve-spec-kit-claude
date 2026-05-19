@@ -22,7 +22,6 @@ local Track     = require("models.track")
 local Clip      = require("models.clip")
 local clip_link = require("models.clip_link")
 local Cycle     = require("models.cycle")
-local subframe_math = require("core.subframe_math")
 
 --- Pick the effective fps-mismatch policy for a place operation.
 --- Chain: explicit arg → owner sequence override (non-NULL) → project default.
@@ -148,8 +147,19 @@ end
 -- Honor nested-sequence marks (FCP/Premiere/Resolve UX). mark_in/mark_out
 -- are absolute TC frames in the nested's master.fps timebase. When set,
 -- narrow the video and audio source ranges to the marked sub-region.
--- Returns four values: video_native_dur, video_source_in, audio_native_dur,
--- audio_source_in — all in the nested's master.fps timebase.
+--
+-- Returns four values with mixed units (a deliberate seam against the
+-- audio resolver's file-natural samples world):
+--   video_native_dur  — master.fps frames (V medium has like-units source).
+--   video_source_in   — master.fps frames (TC-space offset into nested).
+--   audio_native_dur  — FILE-NATURAL SAMPLES. Downstream consumers
+--                       (insert_audio_clips, compute_owner_duration_for_plan)
+--                       expect samples so they can index file-source data
+--                       directly. The conversion happens HERE inside the
+--                       AUDIO branch; callers must not re-convert.
+--   audio_source_in   — master.fps frames (TC-space offset). Sample-precise
+--                       file offset is computed downstream via
+--                       convert_audio_samples_to_frame_subframe.
 --
 -- TIMECODE IS THE SOURCE OF TRUTH: clip.source_in_frame must match the
 -- nested's media_refs' sequence_start_frame coordinate system (= TC space
@@ -210,10 +220,14 @@ local function compute_owner_duration_for_plan(policy, owner, nested, mediums,
             owner.fps_numerator, owner.fps_denominator,
             nested.fps_numerator, nested.fps_denominator)
     end
-    -- Audio-only: samples @ master-effective rate → seconds → owner frames.
-    -- 018: rate is now per-media_ref; pick via effective_audio_sample_rate helper.
-    local seconds = a_dur / Sequence.effective_audio_sample_rate(nested)
-    return math.floor(seconds * owner.fps_numerator / owner.fps_denominator + 0.5)
+    -- Audio-only: a_dur is in the nested master's master.fps frames
+    -- (post-unification — every master media_ref stores placement in
+    -- master.fps frames, V and A alike). Convert nested-fps frames →
+    -- owner-fps frames directly; no detour through samples needed.
+    return M.compute_owner_duration(
+        policy, a_dur,
+        owner.fps_numerator, owner.fps_denominator,
+        nested.fps_numerator, nested.fps_denominator)
 end
 
 -- Route one source channel via the patch table at the current source's
@@ -465,44 +479,29 @@ local function insert_video_clip(plan, next_id)
     })
 end
 
--- 018 FR-008 / FR-025: convert plan-internal (samples, sample_count) into
--- canonical (master.fps frame, ticks subframe) at the clip write boundary.
--- plan.audio_source_in is in SAMPLES at the nested master's effective audio
--- rate; tgt.source_out is the sample count. Resolver expects master.fps
--- frames + sample residual carried in source_*_subframe.
-local function convert_audio_samples_to_frame_subframe(plan, samples)
-    local rate = Sequence.effective_audio_sample_rate(plan.nested)
-    assert(rate and rate > 0, string.format(
-        "place_shared.insert_audio_clips: nested %s has no effective audio "
-        .. "rate (FR-008 conversion needs it)", tostring(plan.nested.id)))
-    local proj = assert(Project.load(plan.owner.project_id), string.format(
-        "place_shared.insert_audio_clips: project %s not found",
-        tostring(plan.owner.project_id)))
-    local mch = proj:get_master_clock_hz()
-    local tpf = subframe_math.ticks_per_frame(mch,
-        plan.nested.fps_numerator, plan.nested.fps_denominator)
-    local ticks = subframe_math.samples_to_ticks(samples, rate, mch)
-    -- Lua multi-return truncation gotcha: `return f(...), x` keeps only the
-    -- first return of f. Capture explicitly.
-    local frame, sub = subframe_math.unpack(ticks, tpf)
-    return frame, sub
-end
-
 local function insert_audio_clips(plan, next_id)
     local audio_targets = plan.audio_targets
     if not audio_targets or #audio_targets == 0 then return {} end
-    local a_in_samples = plan.audio_source_in
-    assert(a_in_samples, "place_shared.write_clips: audio targets without audio_source_in")
+    local a_in_frames = plan.audio_source_in
+    assert(a_in_frames, "place_shared.write_clips: audio targets without audio_source_in")
+    assert(type(a_in_frames) == "number" and a_in_frames >= 0 and a_in_frames == math.floor(a_in_frames),
+        string.format("place_shared.insert_audio_clips: audio_source_in must be a "
+        .. "non-negative integer master.fps-frame offset; got %s", tostring(a_in_frames)))
 
-    -- Convert the source_in offset once (same for every audio target).
-    local in_frame, in_sub = convert_audio_samples_to_frame_subframe(plan, a_in_samples)
+    -- 018 FR-008 / FR-025 post-unification: every master media_ref stores
+    -- placement (sequence_start_frame, duration_frames) and clips store
+    -- source ranges (source_in_frame, source_out_frame) in master.fps
+    -- frames. Marks land on integer master.fps-frame boundaries (FR-005),
+    -- so the subframe is 0 here. Sample-precise sub-master-frame placements
+    -- (future user-facing zero-crossing / sample-precise trim) will flow
+    -- through subframe columns at that future feature's write boundary;
+    -- this code path is the no-marks / integer-marks path.
+    local in_frame, in_sub = a_in_frames, 0
 
     local ids = {}
     for _, tgt in ipairs(audio_targets) do
-        -- tgt.source_out is the source range in SAMPLES from the plan;
-        -- absolute file-sample boundary is a_in_samples + tgt.source_out.
-        local out_frame, out_sub = convert_audio_samples_to_frame_subframe(
-            plan, a_in_samples + tgt.source_out)
+        -- tgt.source_out is in master.fps frames (a_dur from apply_nested_marks).
+        local out_frame, out_sub = a_in_frames + tgt.source_out, 0
         ids[#ids + 1] = Clip.create({
             id                    = next_id(),
             project_id            = plan.owner.project_id,

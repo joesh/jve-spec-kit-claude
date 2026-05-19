@@ -2,7 +2,7 @@
 --- Master sequence content-end must be in absolute TC frame space.
 ---
 --- Domain contract: a master sequence's media_refs sit at
---- timeline_start_frame = file_tc_origin (TIMECODE-IS-TRUTH). For
+--- sequence_start_frame = file_tc_origin (TIMECODE-IS-TRUTH). For
 --- playback, the engine treats start_frame = master.start_timecode_frame
 --- (the TC origin) and total_frames = "absolute end frame in the same TC
 --- space." `Sequence:compute_content_end()` is the canonical source of

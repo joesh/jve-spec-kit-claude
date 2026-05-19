@@ -76,7 +76,7 @@ assert(placeholder_master:save(), "save placeholder master")
 local clip_id = uuid.generate()
 db:exec(string.format([[
     INSERT INTO clips (id, project_id, name, track_id, sequence_id,
-        owner_sequence_id, timeline_start_frame, duration_frames,
+        owner_sequence_id, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame, enabled, created_at, modified_at,
         master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
         volume, playhead_frame)

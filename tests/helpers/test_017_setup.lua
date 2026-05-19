@@ -100,8 +100,9 @@ function M.fresh_project_db(db_name)
             fps_numerator, fps_denominator, audio_sample_rate,
             width, height, playhead_frame, view_start_frame,
             view_duration_frames, start_timecode_frame, created_at, modified_at)
+            -- 018 FR-004: masters carry NULL audio_sample_rate (per-media_ref rate).
             VALUES ('rec','p','Rec','sequence',24,1,48000,1920,1080,0,0,300,0,%d,%d),
-                   ('src','p','SrcMaster','master',24,1,48000,1920,1080,0,0,300,0,%d,%d);
+                   ('src','p','SrcMaster','master',24,1,NULL,1920,1080,0,0,300,0,%d,%d);
     ]], now, now, now, now, now, now))
     return { project_id = "p", master_id = "src", record_id = "rec", database = database }
 end

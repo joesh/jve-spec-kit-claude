@@ -65,8 +65,10 @@ assert(db:exec(string.format([[
     VALUES ('mr-v', 'p', 'm', 'm-v1', 'med', 0, %d, 0, %d,
             1, 1.0, 0, %d, %d);
 
-    -- A media_ref: native samples (file-natural unit on media_refs); needs
-    -- audio_sample_rate for INV-8.
+    -- A media_ref: source range in file-natural samples; placement
+    -- (sequence_start_frame, duration_frames) in master.fps frames per
+    -- post-018 unification. audio_sample_rate required (the AUDIO-mref
+    -- non-NULL invariant).
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,
         sequence_start_frame, duration_frames,
@@ -77,7 +79,7 @@ assert(db:exec(string.format([[
     now, now, now, now, now, now,
     NATIVE_FRAMES, now, now,
     NATIVE_FRAMES, NATIVE_FRAMES, now, now,
-    NATIVE_SAMPLES, NATIVE_SAMPLES, now, now)))
+    NATIVE_SAMPLES, NATIVE_FRAMES, now, now)))
 
 require("test_env").touch_media_fixtures()
 

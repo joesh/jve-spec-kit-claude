@@ -4,10 +4,10 @@
 ---
 --- Domain contract (CLAUDE.md feedback_timecode_is_truth + post-unification):
 ---   For a V+A master created from media at non-zero TC:
----     - V MR.timeline_start_frame = V MR.source_in_frame = video TC
+---     - V MR.sequence_start_frame = V MR.source_in_frame = video TC
 ---       (master.fps frames). The MR sits at the file's TC origin and
 ---       spans [tc, tc + dur).
----     - A MR.timeline_start_frame = video TC (master.fps frames =
+---     - A MR.sequence_start_frame = video TC (master.fps frames =
 ---       video frames for V+A), .duration_frames = video-frame extent.
 ---     - A MR.source_in_frame = audio TC (file-natural samples),
 ---       .source_out_frame = audio_tc + duration_samples.
@@ -41,7 +41,7 @@ local Sequence = require("models.sequence")
 local function media_refs(seq_id)
     local stmt = database.get_connection():prepare([[
         SELECT mr.id, t.track_type,
-               mr.timeline_start_frame, mr.duration_frames,
+               mr.sequence_start_frame, mr.duration_frames,
                mr.source_in_frame, mr.source_out_frame
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
@@ -134,7 +134,7 @@ cmd:set_parameter("clip_snapshot", {
     media_id = media_id,
     fps_numerator = FPS,
     fps_denominator = 1,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = DUR_FRAMES,
     source_in = 0,
     source_out = DUR_FRAMES,
@@ -155,7 +155,7 @@ assert(dup_a, "duplicate master missing A MR")
 
 -- V MR: same shape as ensure_master
 assert(dup_v.ts == VIDEO_TC, string.format(
-    "duplicate V MR.timeline_start: expected %d (video_tc), got %d. "
+    "duplicate V MR.sequence_start: expected %d (video_tc), got %d. "
     .. "Writing 0 here puts the duplicate at frame 0 instead of TC, "
     .. "diverging from the original master.",
     VIDEO_TC, dup_v.ts))
@@ -174,7 +174,7 @@ print(string.format("  ✓ V MR: ts=%d dur=%d src=[%d,%d)",
 -- A MR: placement in master.fps frames (= V frames for V+A),
 -- source range in file-natural samples.
 assert(dup_a.ts == VIDEO_TC, string.format(
-    "duplicate A MR.timeline_start: expected %d (master.fps frames, "
+    "duplicate A MR.sequence_start: expected %d (master.fps frames, "
     .. "same as V), got %d. Pre-unification overload wrote samples here "
     .. "and the audio virtual clip became invisible / 1920× misplaced.",
     VIDEO_TC, dup_a.ts))

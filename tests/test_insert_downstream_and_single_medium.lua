@@ -104,7 +104,9 @@ do
             sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 48000, 1, 1.0, 0, 0, 0),
-               ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 96000, 0, 96000, 48000, 1, 1.0, 0, 0, 0),
+               -- A MR: source 0..96000 samples (file-natural). Placement
+               -- in master.fps (24) frames: 96000 / 48000 * 24 = 48 frames.
+               ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 96000, 0, 48, 48000, 1, 1.0, 0, 0, 0),
                ('mr-v-pre', 'p1', 'm-pre', 'm-pre-v1', 'med-v-pre',
                     0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
@@ -250,7 +252,9 @@ do
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 48000, 48000,
+        -- A MR: source 0..48000 samples (1s @ 48k). Placement in master.fps
+        -- (24) frames: 48000 / 48000 * 24 = 24 frames.
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 48000, 0, 24, 48000,
             1, 1.0, 0, 0, 0);
     ]]))
 
