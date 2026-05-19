@@ -55,6 +55,23 @@ function M.compute_owner_duration(policy, nested_native_duration,
     return math.floor(nested_native_duration * ratio + 0.5)
 end
 
+--- Inverse of compute_owner_duration: given an owner-frame count and the
+--- same policy, return the nested-native-frame count it corresponds to.
+--- Used by three-point editing: when the rec mark window pins the
+--- owner-side span, the source-side span must match in time.
+function M.compute_native_from_owner(policy, owner_duration,
+                                     owner_fps_num, owner_fps_den,
+                                     nested_fps_num, nested_fps_den)
+    if policy == "passthrough" then
+        return owner_duration
+    end
+    assert(policy == "resample",
+        "place_shared.compute_native_from_owner: unknown policy " .. tostring(policy))
+    local ratio = (owner_fps_num / owner_fps_den)
+                / (nested_fps_num / nested_fps_den)
+    return math.floor(owner_duration / ratio + 0.5)
+end
+
 --- Pick the owner track for a given medium. Caller-specified track wins; else
 --- first track of that type on the owner. Asserts type + ownership.
 function M.pick_target_track(owner_id, track_type, explicit_track_id)
@@ -373,6 +390,33 @@ function M.plan_placement(args)
 
     local owner_duration = compute_owner_duration_for_plan(
         policy, owner, nested, mediums, v_dur, a_dur)
+
+    -- Three-point editing: when the owner (record) has both mark-in and
+    -- mark-out, the placed clip's owner-side span IS the rec window —
+    -- not whatever the source-side range happens to project to. Recompute
+    -- the source-side native durations from the rec window so source_out
+    -- matches in time. This is the case the user invokes by setting
+    -- rec_in + rec_out (+ optionally src_in) and pressing F10.
+    if type(owner.mark_in) == "number" and type(owner.mark_out) == "number" then
+        local rec_window = owner.mark_out - owner.mark_in
+        assert(rec_window > 0, string.format(
+            "place_shared: owner rec_window <= 0 (mark_in=%d mark_out=%d)",
+            owner.mark_in, owner.mark_out))
+        owner_duration = rec_window
+        if mediums.VIDEO then
+            v_dur = M.compute_native_from_owner(
+                policy, rec_window,
+                owner.fps_numerator, owner.fps_denominator,
+                nested.fps_numerator, nested.fps_denominator)
+        end
+        if mediums.AUDIO then
+            a_dur = M.compute_native_from_owner(
+                policy, rec_window,
+                owner.fps_numerator, owner.fps_denominator,
+                nested.fps_numerator, nested.fps_denominator)
+        end
+    end
+
     assert(owner_duration > 0, "place_shared: computed owner_duration <= 0")
 
     local targets = {}

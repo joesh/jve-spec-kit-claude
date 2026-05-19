@@ -35,16 +35,23 @@ end
 
 
 function M.execute(args)
-    -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
-    -- See insert.lua for rationale (rule 2.13 — no silent default-to-0).
+    -- sequence_start_frame resolution priority (three-point editing):
+    --   1. explicit args.sequence_start_frame (caller pinned it)
+    --   2. owner's rec mark-in (user marked the destination window)
+    --   3. owner's playhead (no marks: drop at the cursor)
     if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
-            "Overwrite: sequence %s not found (cannot resolve playhead fallback)",
+            "Overwrite: sequence %s not found (cannot resolve start_frame)",
             tostring(args.sequence_id)))
-        assert(type(owner.playhead_position) == "number", string.format(
-            "Overwrite: sequence_start_frame omitted and sequence %s has no "
-            .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.sequence_start_frame = owner.playhead_position
+        if type(owner.mark_in) == "number" then
+            args.sequence_start_frame = owner.mark_in
+        else
+            assert(type(owner.playhead_position) == "number", string.format(
+                "Overwrite: sequence_start_frame omitted and sequence %s has "
+                .. "neither mark_in nor playhead_position to anchor on",
+                tostring(args.sequence_id)))
+            args.sequence_start_frame = owner.playhead_position
+        end
     end
 
     -- 015 F2: ensure identity patches exist for every source track in the
