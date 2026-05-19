@@ -331,10 +331,15 @@ function M.create(widget, state_module)
             if math.abs(x - playhead_x) < 10 then
                 state_module.set_dragging_playhead(true)
             else
-                -- Click anywhere on ruler to set playhead
-                -- pixel_to_time now returns integer frame, already snapped
+                -- Click anywhere on ruler to set playhead. Dispatch via
+                -- SetPlayhead only — the playhead_changed listener in
+                -- timeline_core_state updates data.state.playhead_position
+                -- when the displayed sequence matches (MVC: model writes
+                -- → signal → view-cache reload). Writing data.state
+                -- directly here AND via the listener was redundant and
+                -- a latent desync hazard when the command's pre-write
+                -- transforms the value (clamps, snaps).
                 local snapped_frame = state_module.pixel_to_time(x, width)
-                state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
                     sequence_id = state_module.get_movement_target_sequence_id(),
@@ -354,9 +359,10 @@ function M.create(widget, state_module)
                     scrub_mode_active = true
                 end
 
-                -- pixel_to_time returns integer frame, already snapped
+                -- pixel_to_time returns integer frame, already snapped.
+                -- SetPlayhead → playhead_changed → data.state update (MVC);
+                -- no direct cache write here (see press branch comment).
                 local snapped_frame = state_module.pixel_to_time(x, width)
-                state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
                     sequence_id = state_module.get_movement_target_sequence_id(),

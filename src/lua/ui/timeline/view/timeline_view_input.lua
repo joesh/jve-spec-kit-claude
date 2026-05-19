@@ -727,8 +727,11 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             end
 
         elseif state.is_dragging_playhead() then
+            -- SetPlayhead → playhead_changed → data.state cache update
+            -- (MVC; see timeline_ruler.lua press branch). No direct
+            -- cache write here — that path would race the command's
+            -- value transforms.
             local time = state.pixel_to_time(x, width)
-            state.set_playhead_position(time)
             command_manager.execute_interactive("SetPlayhead", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_movement_target_sequence_id(),
