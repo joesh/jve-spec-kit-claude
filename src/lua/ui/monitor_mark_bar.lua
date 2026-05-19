@@ -203,9 +203,11 @@ function M.create(widget, config)
     local handler_name = "monitor_mark_bar_mouse_handler_" .. tostring(widget)
     _G[handler_name] = function(event)
         if event.type == "wheel" then
-            if not has_clip() then return end
+            -- TimelineRenderer.wheelEvent asserts the Lua handler returns
+            -- an explicit boolean. Every branch must return true/false.
+            if not has_clip() then return true end
             local width = select(1, timeline.get_dimensions(widget))
-            if not width or width <= 0 then return end
+            if not width or width <= 0 then return true end
             -- Horizontal trackpad scroll → playhead scrub. Shift+wheel
             -- (or single-axis wheel mice) substitutes delta_y for
             -- delta_x, mirroring the timeline ruler's wheel mapping.
@@ -213,12 +215,13 @@ function M.create(widget, config)
             if math.abs(delta_x) < 0.0001 and event.modifiers and event.modifiers.shift then
                 delta_x = event.delta_y or 0
             end
-            if math.abs(delta_x) < 0.0001 then return end
+            if math.abs(delta_x) < 0.0001 then return true end
             local target = M.compute_wheel_scrub_target(
                 state.playhead, delta_x, width,
                 state.viewport_duration, state.start_frame or 0,
                 state.total_frames)
             on_seek(target)
+            return true
         else
             on_mouse_event(event.type, event.x, event.y, event.button, event)
         end

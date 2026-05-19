@@ -490,19 +490,25 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
                 if (lua_pcall(lua_state_, 1, 1, 0) != LUA_OK) {
                     jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.wheel");
                 } else {
-                    // Wheel handler protocol: must return a boolean indicating
-                    // whether to propagate the event to the parent QScrollArea.
-                    // Asserting (rather than silently defaulting) catches future
-                    // wheel-handler additions that forget to return a value.
-                    if (!lua_isboolean(lua_state_, -1)) {
-                        std::string msg = "TimelineRenderer.wheel: Lua handler '";
-                        msg += mouse_event_handler_;
-                        msg += "' must return a boolean (got ";
-                        msg += lua_typename(lua_state_, lua_type(lua_state_, -1));
-                        msg += ")";
-                        JVE_FAIL(msg.c_str());
+                    // Wheel handler protocol: must return a boolean
+                    // indicating whether C++ should propagate the event
+                    // to the parent QScrollArea. Non-boolean return is a
+                    // contract violation — log loudly (matches the
+                    // log-and-continue pattern used by every other Lua
+                    // callback site so the editor stays running for the
+                    // user's session) and fall back to propagate=false
+                    // (event consumed; safest non-surprising default
+                    // since wheel handlers exist precisely to do
+                    // something with the event).
+                    if (lua_isboolean(lua_state_, -1)) {
+                        propagate = lua_toboolean(lua_state_, -1) != 0;
+                    } else {
+                        JVE_LOG_ERROR(Ui,
+                            "TimelineRenderer.wheel: Lua handler '%s' must return "
+                            "a boolean (got %s) — defaulting to propagate=false",
+                            mouse_event_handler_.c_str(),
+                            lua_typename(lua_state_, lua_type(lua_state_, -1)));
                     }
-                    propagate = lua_toboolean(lua_state_, -1) != 0;
                     lua_pop(lua_state_, 1);
                 }
             }
