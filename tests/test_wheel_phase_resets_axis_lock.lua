@@ -79,22 +79,36 @@ assert(dy_out ~= 0, string.format(
 print("  ✓ ScrollBegin after horizontal+momentum tail unlocks vertical")
 
 -- =============================================================================
--- Test 2: phase=begin resets cumulative tallies, not just mode
+-- Test 2: phase=begin reset is total — next gesture starts from a clean slate
 -- =============================================================================
--- If the reset cleared `mode` but left cum_dx near the threshold, the
--- next small horizontal drift would re-latch horizontal_only on the
--- second event of the new gesture — silently kicking us back into the
--- old behavior. Verify reset is total.
+-- A partial reset (e.g., flipping mode back to tentative but leaving the
+-- horizontal tally near the commit threshold) would re-latch the lock on
+-- the very next small horizontal drift, silently reintroducing the old
+-- behavior. Verify the cleanup is complete via observable output: after
+-- a begin reset, a sub-threshold horizontal drift followed by clear
+-- vertical intent must let vertical through.
 state = scroll_axis_lock.new_state()
 t = 2000
-scroll_axis_lock.apply(state, HORIZONTAL_COMMIT_PX + 5, 0, t, "begin")
+-- First gesture: drive WELL past the horizontal commit threshold.
+scroll_axis_lock.apply(state, HORIZONTAL_COMMIT_PX * 3, 0, t, "begin")
 t = t + 16
+-- New touch.
 scroll_axis_lock.apply(state, 0, 0, t, "begin")
-assert(state.cum_dx == 0 and state.cum_dy == 0 and state.mode == "tentative",
-    string.format("fresh ScrollBegin must clear cum_dx/cum_dy/mode "
-        .. "completely; got cum_dx=%s cum_dy=%s mode=%s",
-        tostring(state.cum_dx), tostring(state.cum_dy), tostring(state.mode)))
-print("  ✓ ScrollBegin clears cumulative tallies and resets mode")
+t = t + 16
+-- A small horizontal drift that is individually well below the commit
+-- threshold; if any cumulative state from the first gesture survived
+-- the begin, this single event would push us past commit and latch
+-- horizontal_only, which would then suppress the dy in the next event.
+scroll_axis_lock.apply(state, HORIZONTAL_COMMIT_PX / 4, 0, t, "update")
+t = t + 16
+-- Clear vertical intent — must pass through.
+local _, dy_passed = scroll_axis_lock.apply(state, 0, VERTICAL_INTENT_PX + 10, t, "update")
+assert(dy_passed ~= 0, string.format(
+    "after a begin reset, a sub-threshold horizontal drift must not "
+    .. "re-latch horizontal_only on the first event — proves the prior "
+    .. "gesture's cumulative tally was fully cleared; got dy=%s",
+    tostring(dy_passed)))
+print("  ✓ begin reset is total (sub-threshold drift doesn't re-latch)")
 
 -- =============================================================================
 -- Test 3: momentum events don't lock a gesture that hasn't committed
