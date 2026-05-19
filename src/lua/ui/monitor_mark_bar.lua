@@ -24,6 +24,29 @@ local M = {}
 
 M.BAR_HEIGHT = 20
 
+--- Translate a horizontal wheel/trackpad delta into a clamped target
+--- playhead frame. delta_x in pixels; the bar maps width pixels onto
+--- viewport_duration frames, so frame_delta = (delta_x / width) *
+--- viewport_duration. Result clamps to [start_frame, total_frames - 1]
+--- so the scrub can't run past either end of the clip extent.
+function M.compute_wheel_scrub_target(playhead, delta_x, width,
+                                      viewport_duration, start_frame, total_frames)
+    assert(type(playhead)          == "number", "playhead must be number")
+    assert(type(delta_x)           == "number", "delta_x must be number")
+    assert(type(width)             == "number" and width > 0,
+        "width must be a positive number")
+    assert(type(viewport_duration) == "number" and viewport_duration > 0,
+        "viewport_duration must be a positive number")
+    assert(type(start_frame)       == "number", "start_frame must be number")
+    assert(type(total_frames)      == "number" and total_frames > start_frame,
+        "total_frames must be > start_frame")
+    local frame_delta = math.floor((delta_x / width) * viewport_duration + 0.5)
+    local target = playhead + frame_delta
+    if target < start_frame      then return start_frame end
+    if target > total_frames - 1 then return total_frames - 1 end
+    return target
+end
+
 -- Colors (matching timeline ruler mark rendering)
 local BACKGROUND_COLOR = "#1e1e1e"
 local MARK_RANGE_FILL = "#19dfeeff"   -- translucent cyan overlay
@@ -179,7 +202,24 @@ function M.create(widget, config)
 
     local handler_name = "monitor_mark_bar_mouse_handler_" .. tostring(widget)
     _G[handler_name] = function(event)
-        if event.type ~= "wheel" then
+        if event.type == "wheel" then
+            if not has_clip() then return end
+            local width = select(1, timeline.get_dimensions(widget))
+            if not width or width <= 0 then return end
+            -- Horizontal trackpad scroll → playhead scrub. Shift+wheel
+            -- (or single-axis wheel mice) substitutes delta_y for
+            -- delta_x, mirroring the timeline ruler's wheel mapping.
+            local delta_x = event.delta_x or 0
+            if math.abs(delta_x) < 0.0001 and event.modifiers and event.modifiers.shift then
+                delta_x = event.delta_y or 0
+            end
+            if math.abs(delta_x) < 0.0001 then return end
+            local target = M.compute_wheel_scrub_target(
+                state.playhead, delta_x, width,
+                state.viewport_duration, state.start_frame or 0,
+                state.total_frames)
+            on_seek(target)
+        else
             on_mouse_event(event.type, event.x, event.y, event.button, event)
         end
     end
