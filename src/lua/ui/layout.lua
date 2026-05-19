@@ -597,6 +597,14 @@ if initial_sequence_id and project_browser_mod.focus_sequence then
     end
 end
 
+-- Override the bootstrap default focus with the per-project saved one.
+-- Runs after the "timeline" default above so first-open (no setting yet)
+-- still lands on the timeline; a subsequent reopen lands wherever the
+-- user last clicked. Unknown saved ids no-op (panel renamed/removed).
+if focus_manager and focus_manager.restore_persisted_focus then
+    focus_manager.restore_persisted_focus(project_id)
+end
+
 -- Install global keyboard shortcut handler (skip in test mode to avoid crashes)
 local test_mode_flag = os.getenv("JVE_TEST_MODE")
 local is_test_mode = test_mode_flag == "1" or test_mode_flag == "true"

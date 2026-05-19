@@ -220,6 +220,20 @@ function M.set_focused_panel(panel_id)
 
     selection_hub.set_active_panel(focused_panel_id)
 
+    -- Persist the new focus to the project row so the next open lands
+    -- on the same panel. Same shape as last_open_sequence_id: written
+    -- from the UI signal site, read on layout-restore. Skipped when no
+    -- project is open (startup before project_open, headless tests) or
+    -- when defocusing all panels (transient state, not user intent).
+    if focused_panel_id then
+        local ok_ts, timeline_state = pcall(require, "ui.timeline.timeline_state")
+        local project_id = ok_ts and timeline_state.get_project_id() or nil
+        if project_id and project_id ~= "" then
+            local database = require("core.database")
+            database.set_project_setting(project_id, "last_focused_panel", focused_panel_id)
+        end
+    end
+
     for _, fn in ipairs(focus_change_callbacks) do
         fn(old_panel_id, focused_panel_id)
     end
@@ -253,6 +267,20 @@ end
 -- Get currently focused panel ID
 function M.get_focused_panel()
     return focused_panel_id
+end
+
+--- Restore the focused panel from project settings (called by layout
+--- after sequence + tab restore). Reads `last_focused_panel` and, if
+--- that panel id is currently registered, focuses it. Unknown ids are
+--- silently skipped — the caller's pre-existing default focus stands.
+function M.restore_persisted_focus(project_id)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "focus_manager.restore_persisted_focus: project_id required")
+    local database = require("core.database")
+    local saved = database.get_project_setting(project_id, "last_focused_panel")
+    if type(saved) ~= "string" or saved == "" then return end
+    if not registered_panels[saved] then return end
+    M.focus_panel(saved)
 end
 
 function M.refresh_highlight(panel_id)
