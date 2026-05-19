@@ -46,7 +46,10 @@ local CLIP_LOAD_SQL = [[
            t.track_type,
            owner_seq.fps_numerator, owner_seq.fps_denominator,
            nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-           mr.media_id, m.name, m.file_path, m.offline_note
+           mr.media_id, m.name, m.file_path, m.offline_note,
+           -- 018: subframes appended at end to avoid shifting older column
+           -- indices. NULL for VIDEO clips (INV-3), 0 or more for AUDIO.
+           c.source_in_subframe, c.source_out_subframe
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
@@ -131,6 +134,13 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         }
         clip.media_path = query:value(28)
     end
+
+    -- 018: source-side subframe (master-clock ticks). NULL for VIDEO per
+    -- INV-3, 0 or more for AUDIO. Consumers that re-create the clip via
+    -- Clip.create must thread these through or the INV-3 trigger fires.
+    clip.source_in_subframe  = query:value(30)
+    clip.source_out_subframe = query:value(31)
+
     return clip
 end
 
@@ -1284,7 +1294,8 @@ function M.find_referencing_nested(sequence_id)
                name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, playhead_frame
+               enabled, volume, playhead_frame,
+               source_in_subframe, source_out_subframe
         FROM clips WHERE sequence_id = ?
         ORDER BY owner_sequence_id, track_id, sequence_start_frame, id
     ]])
@@ -1309,6 +1320,8 @@ function M.find_referencing_nested(sequence_id)
             enabled               = stmt:value(12) == 1,
             volume                = stmt:value(13),
             playhead_frame        = stmt:value(14),
+            source_in_subframe    = stmt:value(15),
+            source_out_subframe   = stmt:value(16),
         }
     end
     stmt:finalize()
@@ -1326,7 +1339,8 @@ function M.list_in_sequence(owner_sequence_id)
                name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+               source_in_subframe, source_out_subframe
         FROM clips WHERE owner_sequence_id = ?
         ORDER BY sequence_start_frame ASC, id ASC
     ]])
@@ -1353,6 +1367,8 @@ function M.list_in_sequence(owner_sequence_id)
             mark_in_frame         = stmt:value(14),
             mark_out_frame        = stmt:value(15),
             playhead_frame        = stmt:value(16),
+            source_in_subframe    = stmt:value(17),
+            source_out_subframe   = stmt:value(18),
         }
     end
     stmt:finalize()
