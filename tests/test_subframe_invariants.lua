@@ -86,7 +86,7 @@ expect_abort([[
         created_at, modified_at)
     VALUES ('c-video-bad', 'p1', 's', 's-v1', 'm',
             0, 100, 0, 0, 0, 100, 'passthrough', 'v', 1, 1.0, 0, 0, 0);
-]], "INV%-3")
+]], "subframe")
 
 -- AUDIO clip MUST have non-NULL subframes.
 expect_abort([[
@@ -98,7 +98,7 @@ expect_abort([[
         created_at, modified_at)
     VALUES ('c-audio-bad', 'p1', 's', 's-a1', 'm',
             0, 100, NULL, NULL, 0, 100, 'passthrough', 'a', 1, 1.0, 0, 0, 0);
-]], "INV%-3")
+]], "subframe")
 
 -- ===========================================================================
 -- INV-4: subframe bound (0 <= sub < ticks_per_frame)
@@ -116,7 +116,7 @@ expect_abort([[
         created_at, modified_at)
     VALUES ('c-sub-neg', 'p1', 's', 's-a1', 'm',
             0, 100, -1, 0, 0, 100, 'passthrough', 'a', 1, 1.0, 0, 0, 0);
-]], "INV%-4")
+]], "subframe")
 
 -- subframe >= ticks_per_frame must be rejected.
 expect_abort([[
@@ -128,7 +128,7 @@ expect_abort([[
         created_at, modified_at)
     VALUES ('c-sub-toobig', 'p1', 's', 's-a1', 'm',
             0, 100, 8000, 0, 0, 100, 'passthrough', 'a', 1, 1.0, 0, 0, 0);
-]], "INV%-4")
+]], "subframe")
 
 -- Boundary: subframe = 7999 must succeed (one less than tpf).
 local ok = db:exec([[
@@ -152,11 +152,11 @@ assert(db:exec("DELETE FROM clips WHERE id = 'c-sub-max'"))
 -- Direct UPDATE without the temp-table flag must be rejected.
 expect_abort([[
     UPDATE sequences SET fps_numerator = 30 WHERE id = 'm';
-]], "INV%-5")
+]], "ConformSequence")
 
 expect_abort([[
     UPDATE sequences SET fps_denominator = 1001 WHERE id = 'm';
-]], "INV%-5")
+]], "ConformSequence")
 
 -- With the temp-table flag set, the UPDATE is allowed.
 assert(db:exec("INSERT INTO db_session_flags VALUES ('_conform_sequence_in_progress')"))
@@ -180,7 +180,7 @@ assert(db:exec("DELETE FROM db_session_flags WHERE name = '_conform_sequence_in_
 expect_abort([[
     UPDATE projects SET settings = '{"master_clock_hz":48000,"default_fps":{"num":24,"den":1}}'
         WHERE id = 'p1';
-]], "INV%-6")
+]], "master_clock_hz is immutable")
 
 -- Settings UPDATE that does NOT change master_clock_hz is allowed
 -- (other keys like default_fps remain mutable through their own command).
@@ -196,7 +196,7 @@ assert(db:exec("INSERT INTO db_session_flags VALUES ('_set_master_clock_in_progr
 expect_abort([[
     UPDATE projects SET settings = '{"master_clock_hz":48000,"default_fps":{"num":30,"den":1}}'
         WHERE id = 'p1';
-]], "INV%-6")
+]], "master_clock_hz is immutable")
 assert(db:exec("DELETE FROM db_session_flags WHERE name = '_set_master_clock_in_progress'"))
 
 -- ===========================================================================
@@ -209,11 +209,11 @@ expect_abort([[
         fps_numerator, fps_denominator, audio_sample_rate, width, height,
         created_at, modified_at)
     VALUES ('m2', 'p1', 'm2', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
-]], "INV%-7")
+]], "audio_sample_rate must be NULL")
 
 -- UPDATE of an existing master to set non-NULL audio_sample_rate must be rejected.
 expect_abort([[
     UPDATE sequences SET audio_sample_rate = 48000 WHERE id = 'm';
-]], "INV%-7")
+]], "audio_sample_rate must be NULL")
 
 print("✅ test_subframe_invariants.lua passed")

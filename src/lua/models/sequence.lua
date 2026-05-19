@@ -84,8 +84,8 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     -- coercion — caller passes nil explicitly for masters.
     if opts.kind == "master" then
         assert(opts.audio_sample_rate == nil,
-            "Sequence.create: kind='master' must have audio_sample_rate=nil (INV-7; "
-            .. "audio rate is per-media_ref, not per-master)")
+            "Sequence.create: kind='master' must have audio_sample_rate=nil "
+            .. "(audio rate is per-media_ref, not per-master; FR-004)")
     else
         if opts.audio_sample_rate ~= nil then
             assert(type(opts.audio_sample_rate) == "number" and opts.audio_sample_rate > 0,
@@ -1073,8 +1073,8 @@ local function load_master_audio_streams(conn, track_id, master_seq_id)
     while stmt:next() do
         local rate = stmt:value(12)
         assert(rate and rate > 0, string.format(
-            "ensure_stream_clips (INV-8): audio media_ref %s on master %s "
-            .. "missing audio_sample_rate",
+            "ensure_stream_clips: audio media_ref %s on master %s "
+            .. "missing audio_sample_rate (FR-004)",
             tostring(stmt:value(0)), tostring(master_seq_id)))
         out[#out + 1] = {
             id             = stmt:value(0),
@@ -1986,7 +1986,7 @@ function Sequence.assert_inv8(id)
     if not has_video then
         -- No video tracks; default_video_layer_track_id must be NULL.
         assert(row.default_video_layer_track_id == nil, string.format(
-            "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s has no video tracks but default_video_layer_track_id=%s "
+            "Sequence.assert_default_video_layer (default_video_layer_track_id must reference a live VIDEO track of this sequence when video tracks exist): sequence %s has no video tracks but default_video_layer_track_id=%s "
             .. "(Sequence.assert_inv8)",
             id, tostring(row.default_video_layer_track_id)))
         return
@@ -1994,7 +1994,7 @@ function Sequence.assert_inv8(id)
 
     -- Has video tracks → default MUST be non-NULL and reference a live V track of this sequence.
     assert(row.default_video_layer_track_id ~= nil, string.format(
-        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s has video tracks but default_video_layer_track_id is NULL "
+        "Sequence.assert_default_video_layer (default_video_layer_track_id must reference a live VIDEO track of this sequence when video tracks exist): sequence %s has video tracks but default_video_layer_track_id is NULL "
         .. "(Sequence.assert_inv8)", id))
 
     local vs = conn:prepare(
@@ -2010,14 +2010,14 @@ function Sequence.assert_inv8(id)
     end
     vs:finalize()
     assert(found, string.format(
-        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s does not exist "
+        "Sequence.assert_default_video_layer (default_video_layer_track_id must reference a live VIDEO track of this sequence when video tracks exist): sequence %s default_video_layer_track_id=%s does not exist "
         .. "(Sequence.assert_inv8)",
         id, tostring(row.default_video_layer_track_id)))
     assert(ttype == "VIDEO", string.format(
-        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s is track_type=%s (expected VIDEO)",
+        "Sequence.assert_default_video_layer (default_video_layer_track_id must reference a live VIDEO track of this sequence when video tracks exist): sequence %s default_video_layer_track_id=%s is track_type=%s (expected VIDEO)",
         id, tostring(row.default_video_layer_track_id), tostring(ttype)))
     assert(tseq == id, string.format(
-        "INV-8 (default_video_layer_track_id must be non-NULL when video tracks exist): sequence %s default_video_layer_track_id=%s belongs to sequence %s (cross-sequence not allowed)",
+        "Sequence.assert_default_video_layer (default_video_layer_track_id must reference a live VIDEO track of this sequence when video tracks exist): sequence %s default_video_layer_track_id=%s belongs to sequence %s (cross-sequence not allowed)",
         id, tostring(row.default_video_layer_track_id), tostring(tseq)))
 end
 

@@ -944,7 +944,7 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
         "Clip: owner_sequence_id=%s not found (clip=%s)",
         tostring(owner_seq_id), tostring(clip_id)))
     assert(kind == "sequence", string.format(
-        "INV-2 (clips must be owned by a kind='sequence' sequence) violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'sequence')",
+        "Clip.create: clips must be owned by a kind='sequence' sequence: clip=%s owner_sequence_id=%s kind='%s' (expected 'sequence')",
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
 end
 
@@ -1008,16 +1008,16 @@ local function subframe_for_kind(db, clip_id, fields)
     if tt == "AUDIO" then
         assert(fields.source_in_subframe ~= nil, string.format(
             "Clip._create_v13_row: AUDIO clip %s missing source_in_subframe "
-            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            .. "(audio clips require non-NULL subframe per FR-013 — no silent default per rule 2.13)",
             tostring(clip_id)))
         assert(fields.source_out_subframe ~= nil, string.format(
             "Clip._create_v13_row: AUDIO clip %s missing source_out_subframe "
-            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            .. "(audio clips require non-NULL subframe per FR-013 — no silent default per rule 2.13)",
             tostring(clip_id)))
         return fields.source_in_subframe, fields.source_out_subframe
     end
     assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
-        string.format("Clip._create_v13_row: video clip %s must have NULL subframes (INV-3)",
+        string.format("Clip._create_v13_row: video clip %s must have NULL subframes (FR-013)",
             tostring(clip_id)))
     return nil, nil
 end

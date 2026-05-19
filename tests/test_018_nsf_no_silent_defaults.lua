@@ -218,9 +218,9 @@ local ok = db:exec([[
     VALUES ('mr-inv8-bad', 'p', 'm', 'm-a-inv8', 'med',
             0, 1000, 0, 1000, NULL, 1, 1.0, NULL, NULL, 0, 0, 0);
 ]])
-assert(not ok, "V5: expected INV-8 ABORT on AUDIO media_ref with NULL audio_sample_rate")
+assert(not ok, "V5: expected schema ABORT on AUDIO media_ref with NULL audio_sample_rate")
 local err = db:last_error() or ""
-assert(err:match("INV%-8"),
-    "V5: expected INV-8 message, got: " .. err)
+assert(err:match("audio_sample_rate"),
+    "V5: expected audio_sample_rate in error message, got: " .. err)
 
 print("✅ test_018_nsf_no_silent_defaults.lua passed")

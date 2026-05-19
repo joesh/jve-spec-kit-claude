@@ -41,7 +41,7 @@ function M.assert_owning_is_master(db, media_ref_id, owner_sequence_id)
         "MediaRef.assert_owning_is_master: owner_sequence_id=%s not found (media_ref=%s)",
         tostring(owner_sequence_id), tostring(media_ref_id)))
     assert(kind == "master", string.format(
-        "INV-1 (media_refs must be owned by a kind='master' sequence) violation in MediaRef.assert_owning_is_master: media_ref=%s owner_sequence_id=%s "
+        "MediaRef.assert_owning_is_master: media_refs must be owned by a kind='master' sequence; media_ref=%s owner_sequence_id=%s "
         .. "kind='%s' (expected 'master')",
         tostring(media_ref_id), tostring(owner_sequence_id), tostring(kind)))
 end

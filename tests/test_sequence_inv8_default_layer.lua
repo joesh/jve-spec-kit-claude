@@ -54,8 +54,8 @@ assert(db:exec(string.format(
 
 local ok, err = pcall(function() Sequence.assert_inv8(vid_id) end)
 assert(not ok, "assert_inv8 must fire when default_video_layer_track_id is NULL with a V track present")
-assert(tostring(err):find("INV%-8"),
-    "error must name INV-8; got: " .. tostring(err))
+assert(tostring(err):find("default_video_layer_track_id", 1, true),
+    "error must name default_video_layer_track_id; got: " .. tostring(err))
 assert(tostring(err):find(vid_id, 1, true),
     "error must name the sequence id; got: " .. tostring(err))
 

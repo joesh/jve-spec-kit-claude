@@ -82,8 +82,8 @@ local ok, err = pcall(function()
     })
 end)
 assert(not ok, "Clip.create on a master sequence must refuse (clips must be kind='sequence')")
-assert(tostring(err):find("INV%-2"),
-    "Clip.create error must name INV-2; got: " .. tostring(err))
+assert(tostring(err):find("kind='sequence'", 1, true),
+    "Clip.create error must name the kind='sequence' rule; got: " .. tostring(err))
 assert(tostring(err):find("seq%-master"),
     "Error must name the offending owner_sequence_id; got: " .. tostring(err))
 assert(tostring(err):find("master"),

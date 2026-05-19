@@ -391,7 +391,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         assert(clip.source_in_subframe ~= nil
             and clip.source_out_subframe ~= nil,
             string.format(
-            "load_clips (INV-3 tripwire): AUDIO clip %s has NULL "
+            "load_clips (subframe-by-kind tripwire): AUDIO clip %s has NULL "
             .. "source_*_subframe (sub_in=%s, sub_out=%s)",
             tostring(clip_id),
             tostring(clip.source_in_subframe),
@@ -400,7 +400,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         assert(clip.source_in_subframe == nil
             and clip.source_out_subframe == nil,
             string.format(
-            "load_clips (INV-3 tripwire): VIDEO clip %s has non-NULL "
+            "load_clips (subframe-by-kind tripwire): VIDEO clip %s has non-NULL "
             .. "source_*_subframe (sub_in=%s, sub_out=%s)",
             tostring(clip_id),
             tostring(clip.source_in_subframe),

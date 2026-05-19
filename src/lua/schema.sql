@@ -516,7 +516,7 @@ CREATE TRIGGER trg_media_refs_owner_kind_insert
 BEFORE INSERT ON media_refs
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'master'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-1: media_refs.owner_sequence_id must reference a kind=master sequence');
+    SELECT RAISE(ABORT, 'media_refs.owner_sequence_id must reference a kind=master sequence');
 END;
 
 DROP TRIGGER IF EXISTS trg_media_refs_owner_kind_update;
@@ -524,7 +524,7 @@ CREATE TRIGGER trg_media_refs_owner_kind_update
 BEFORE UPDATE ON media_refs
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'master'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-1: media_refs.owner_sequence_id must reference a kind=master sequence');
+    SELECT RAISE(ABORT, 'media_refs.owner_sequence_id must reference a kind=master sequence');
 END;
 
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_insert;
@@ -532,7 +532,7 @@ CREATE TRIGGER trg_clips_owner_kind_insert
 BEFORE INSERT ON clips
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
+    SELECT RAISE(ABORT, 'clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_update;
@@ -540,7 +540,7 @@ CREATE TRIGGER trg_clips_owner_kind_update
 BEFORE UPDATE ON clips
 WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
+    SELECT RAISE(ABORT, 'clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 -- ============================================================================
@@ -642,10 +642,10 @@ BEGIN
     SELECT CASE
         WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
              AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
-        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        THEN RAISE(ABORT, 'video clip must have NULL source_in_subframe and source_out_subframe')
         WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
              AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
-        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+        THEN RAISE(ABORT, 'audio clip must have non-NULL source_in_subframe and source_out_subframe')
     END;
 END;
 
@@ -656,10 +656,10 @@ BEGIN
     SELECT CASE
         WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
              AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
-        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        THEN RAISE(ABORT, 'video clip must have NULL source_in_subframe and source_out_subframe')
         WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
              AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
-        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+        THEN RAISE(ABORT, 'audio clip must have non-NULL source_in_subframe and source_out_subframe')
     END;
 END;
 
@@ -675,23 +675,23 @@ WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
 BEGIN
     SELECT CASE
         WHEN NEW.source_in_subframe < 0
-        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        THEN RAISE(ABORT, 'source_in_subframe must be >= 0')
         WHEN NEW.source_out_subframe < 0
-        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        THEN RAISE(ABORT, 'source_out_subframe must be >= 0')
         WHEN NEW.source_in_subframe >= (
             (SELECT json_extract(p.settings, '$.master_clock_hz')
                FROM projects p WHERE p.id = NEW.project_id) *
             (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
             (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
         )
-        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        THEN RAISE(ABORT, 'source_in_subframe >= ticks_per_frame')
         WHEN NEW.source_out_subframe >= (
             (SELECT json_extract(p.settings, '$.master_clock_hz')
                FROM projects p WHERE p.id = NEW.project_id) *
             (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
             (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
         )
-        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+        THEN RAISE(ABORT, 'source_out_subframe >= ticks_per_frame')
     END;
 END;
 
@@ -702,23 +702,23 @@ WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
 BEGIN
     SELECT CASE
         WHEN NEW.source_in_subframe < 0
-        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        THEN RAISE(ABORT, 'source_in_subframe must be >= 0')
         WHEN NEW.source_out_subframe < 0
-        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        THEN RAISE(ABORT, 'source_out_subframe must be >= 0')
         WHEN NEW.source_in_subframe >= (
             (SELECT json_extract(p.settings, '$.master_clock_hz')
                FROM projects p WHERE p.id = NEW.project_id) *
             (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
             (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
         )
-        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        THEN RAISE(ABORT, 'source_in_subframe >= ticks_per_frame')
         WHEN NEW.source_out_subframe >= (
             (SELECT json_extract(p.settings, '$.master_clock_hz')
                FROM projects p WHERE p.id = NEW.project_id) *
             (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
             (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
         )
-        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+        THEN RAISE(ABORT, 'source_out_subframe >= ticks_per_frame')
     END;
 END;
 
@@ -740,7 +740,7 @@ WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
        OR NEW.fps_denominator IS NOT OLD.fps_denominator)
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-5: sequences.fps_num/den mutable only via ConformSequence');
+        'sequences.fps_num/den mutable only via ConformSequence');
 END;
 
 -- ---------- projects.settings.master_clock_hz immutable post-create ----------
@@ -759,7 +759,7 @@ WHEN json_extract(NEW.settings, '$.master_clock_hz')
      IS NOT json_extract(OLD.settings, '$.master_clock_hz')
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-6: projects.settings.master_clock_hz is immutable post-create (canonical value is 705600000 flicks)');
+        'projects.settings.master_clock_hz is immutable post-create (canonical value is 705600000 flicks)');
 END;
 
 -- ---------- master.audio_sample_rate must be NULL on kind=master ----------
@@ -776,7 +776,7 @@ WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
      AND NEW.audio_sample_rate IS NULL
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+        'AUDIO media_ref must have non-NULL audio_sample_rate');
 END;
 
 DROP TRIGGER IF EXISTS trg_media_refs_audio_rate_required_update;
@@ -786,7 +786,7 @@ WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
      AND NEW.audio_sample_rate IS NULL
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+        'AUDIO media_ref must have non-NULL audio_sample_rate');
 END;
 
 DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_insert;
@@ -795,7 +795,7 @@ BEFORE INSERT ON sequences
 WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
+        'sequences.audio_sample_rate must be NULL for kind=''master''');
 END;
 
 DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_update;
@@ -804,5 +804,5 @@ BEFORE UPDATE OF kind, audio_sample_rate ON sequences
 WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
+        'sequences.audio_sample_rate must be NULL for kind=''master''');
 END;

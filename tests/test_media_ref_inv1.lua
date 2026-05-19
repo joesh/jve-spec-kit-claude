@@ -75,8 +75,8 @@ local ok, err = pcall(function()
     })
 end)
 assert(not ok, "MediaRef.create on a nested sequence must refuse (media_refs must be kind='master')")
-assert(tostring(err):find("INV%-1"),
-    "MediaRef.create error must name INV-1; got: " .. tostring(err))
+assert(tostring(err):find("kind='master'", 1, true),
+    "MediaRef.create error must name the kind='master' rule; got: " .. tostring(err))
 assert(tostring(err):find("seq%-edit"),
     "MediaRef.create error must name the offending owner_sequence_id; got: " .. tostring(err))
 assert(tostring(err):find("sequence"),

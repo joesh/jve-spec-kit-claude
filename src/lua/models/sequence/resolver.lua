@@ -5,8 +5,8 @@
 --- M.pick_in_range; helpers are file-private.
 ---
 --- Cross-module dependency: emit_audio_channel_entries calls
---- Sequence.count_master_audio_channels for the INV-5 channel-bound
---- check inside pick_nested. We lazy-require Sequence inside that
+--- Sequence.count_master_audio_channels for the channel_index < master
+--- channel count check inside pick_nested. We lazy-require Sequence inside that
 --- helper to avoid the models.sequence ↔ models.sequence.resolver
 --- top-level cycle.
 ---
@@ -365,8 +365,8 @@ local function compute_audio_source_sample(r, master_frame, master_subframe,
         .. "(master_frame=%d, mr.sequence_start=%d, mr=%s)",
         master_frame, r.sequence_start, tostring(r.id)))
     assert(r.audio_sample_rate and r.audio_sample_rate > 0, string.format(
-        "Sequence.resolve (INV-8): media_ref %s on AUDIO track lacks "
-        .. "audio_sample_rate", tostring(r.id)))
+        "Sequence.resolve: media_ref %s on AUDIO track lacks audio_sample_rate (FR-004)",
+        tostring(r.id)))
     local total_ticks = subframe_math.pack(frame_delta, master_subframe, tpf)
     return r.source_in + subframe_math.ticks_to_samples(
         total_ticks, r.audio_sample_rate, master_clock_hz)
@@ -587,7 +587,7 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     local Override = require("models.clip_channel_override")
                     for _, ov in ipairs(Override.find_all(c.id)) do
                         assert(ov.channel_index < channel_count, string.format(
-                            "Sequence.resolve INV-5 (channel_index must be < master's audio channel count): clip %s has "
+                            "Sequence.resolve: channel_index must be < master's audio channel count: clip %s has "
                             .. "clip_channel_override(channel_index=%d) but "
                             .. "the referenced master sequence %s has only "
                             .. "%d audio channel(s). The master likely "
@@ -639,13 +639,13 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
             if c.track_type == "AUDIO" then
                 assert(c.source_in_subframe ~= nil and c.source_out_subframe ~= nil,
                     string.format(
-                    "Sequence.resolve (INV-3): audio clip %s has NULL subframe(s)",
+                    "Sequence.resolve: audio clip %s has NULL subframe(s)",
                     tostring(c.id)))
                 c_lo_s, c_hi_s = c.source_in_subframe, c.source_out_subframe
             else
                 assert(c.source_in_subframe == nil and c.source_out_subframe == nil,
                     string.format(
-                    "Sequence.resolve (INV-3): video clip %s has non-NULL subframe(s)",
+                    "Sequence.resolve: video clip %s has non-NULL subframe(s)",
                     tostring(c.id)))
                 c_lo_s, c_hi_s = 0, 0
             end

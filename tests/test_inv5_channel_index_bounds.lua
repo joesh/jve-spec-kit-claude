@@ -77,7 +77,7 @@ do
         channel_index = 2,    -- master has 2 channels (indices 0/1); 2 is OOB
     })
     assert(not ok, "ToggleClipChannel must refuse out-of-bounds channel_index")
-    assert(tostring(err):find("INV-5") or tostring(err):find("out of bounds")
+    assert(tostring(err):find("out of bounds")
         or tostring(err):find("channel"),
         "error message names the constraint; got: " .. tostring(err))
     print("  ok")
@@ -118,7 +118,7 @@ do
         })
     end)
     assert(not ok, "resolver must assert on out-of-bounds channel_index override")
-    assert(tostring(err):find("INV-5") or tostring(err):find("channel_index")
+    assert(tostring(err):find("channel_index")
         or tostring(err):find("ca"),
         "channel_index out-of-bounds message must name the clip + bad channel; got: "
         .. tostring(err))
