@@ -788,6 +788,45 @@ function PlaybackEngine:_setup_playback_controller()
     log.event("PlaybackController created and configured")
 end
 
+-- Per-kind dispatch for _provide_clips. Video and audio walk the same
+-- loop body — the asymmetries (which sequence accessor, audio's reverse-
+-- clip sign flip, video-only renderer snapshot, opposite track-index
+-- sort) live here so the loop body stays branch-free.
+local TRACK_KIND_DISPATCH = {
+    video = {
+        get_entries    = function(seq, from, to) return seq:get_video_in_range(from, to) end,
+        compute_speed  = function(engine, entry) return engine:_compute_video_speed_ratio(entry) end,
+        snapshot_clip  = true,
+        indices_field  = "_video_track_indices",
+        index_sort_cmp = function(a, b) return a > b end,   -- video tracks: higher index = lower layer
+    },
+    audio = {
+        get_entries    = function(seq, from, to) return seq:get_audio_in_range(from, to) end,
+        -- Audio conform ratio is always positive (seq_fps / media_fps).
+        -- Multiply by retime direction: -1 for reverse clips (source_in > source_out).
+        compute_speed  = function(engine, entry)
+            local s = engine:_compute_audio_speed_ratio(entry)
+            if entry.source_in and entry.source_out
+                and entry.source_out < entry.source_in then
+                s = -s
+            end
+            return s
+        end,
+        snapshot_clip  = false,
+        indices_field  = "_audio_track_indices",
+        index_sort_cmp = function(a, b) return a < b end,
+    },
+}
+
+-- Add track_idx to indices array if not already present; keep sorted.
+local function register_track_index(indices, track_idx, sort_cmp)
+    for _, idx in ipairs(indices) do
+        if idx == track_idx then return end
+    end
+    indices[#indices + 1] = track_idx
+    table.sort(indices, sort_cmp)
+end
+
 --- Clip provider callback: C++ requests clips for a range.
 -- Queries DB for clips in [from, to), converts to TMB format, adds via TMB_ADD_CLIPS.
 function PlaybackEngine:_provide_clips(from, to, track_type)
@@ -795,68 +834,32 @@ function PlaybackEngine:_provide_clips(from, to, track_type)
         "PlaybackEngine:_provide_clips: from must be number, got %s", type(from)))
     assert(type(to) == "number", string.format(
         "PlaybackEngine:_provide_clips: to must be number, got %s", type(to)))
-    assert(track_type == "video" or track_type == "audio", string.format(
+    local dispatch = TRACK_KIND_DISPATCH[track_type]
+    assert(dispatch, string.format(
         "PlaybackEngine:_provide_clips: track_type must be 'video' or 'audio', got %s",
         tostring(track_type)))
 
-    local entries
-    if track_type == "video" then
-        entries = self.sequence:get_video_in_range(from, to)
-    else
-        entries = self.sequence:get_audio_in_range(from, to)
-    end
-
+    local entries = dispatch.get_entries(self.sequence, from, to)
+    local indices = self[dispatch.indices_field]
     local EMP = qt_constants.EMP
+
     for _, entry in ipairs(entries) do
-        local speed
-        if track_type == "video" then
-            speed = self:_compute_video_speed_ratio(entry)
-        else
-            -- Audio conform ratio is always positive (seq_fps / media_fps).
-            -- Multiply by retime direction: -1 for reverse clips (source_in > source_out).
-            speed = self:_compute_audio_speed_ratio(entry)
-            if entry.source_in and entry.source_out
-                and entry.source_out < entry.source_in then
-                speed = -speed
-            end
-        end
+        local speed = dispatch.compute_speed(self, entry)
         local clip = self:_build_tmb_clip(entry, speed)
-        local track_idx = entry.track_index
-        EMP.TMB_ADD_CLIPS(self._tmb, track_type, track_idx, {clip})
+        EMP.TMB_ADD_CLIPS(self._tmb, track_type, entry.track_index, {clip})
         -- Record that this path is live in TMB so the media_status_changed
         -- listener can skip reloads for paths we never sent to the decoder.
         self._active_media_paths[entry.media_path] = true
-        -- Snapshot source range for the renderer so it can compose
-        -- per-clip partial-coverage frames without hitting the DB. Only
-        -- video clips need this — audio clips don't compose an offline
-        -- frame on the render path.
-        if track_type == "video" then
+        -- Snapshot source range for the renderer so it can compose per-clip
+        -- partial-coverage frames without hitting the DB. Video-only —
+        -- audio clips don't compose an offline frame on the render path.
+        if dispatch.snapshot_clip then
             self._clip_info_by_id[clip.clip_id] = {
                 source_in  = entry.source_in,
                 source_out = entry.source_out,
             }
         end
-
-        -- Track indices: ensure this track is known
-        if track_type == "video" then
-            local found = false
-            for _, idx in ipairs(self._video_track_indices) do
-                if idx == track_idx then found = true; break end
-            end
-            if not found then
-                self._video_track_indices[#self._video_track_indices + 1] = track_idx
-                table.sort(self._video_track_indices, function(a, b) return a > b end)
-            end
-        else
-            local found = false
-            for _, idx in ipairs(self._audio_track_indices) do
-                if idx == track_idx then found = true; break end
-            end
-            if not found then
-                self._audio_track_indices[#self._audio_track_indices + 1] = track_idx
-                table.sort(self._audio_track_indices)
-            end
-        end
+        register_track_index(indices, entry.track_index, dispatch.index_sort_cmp)
     end
 end
 
