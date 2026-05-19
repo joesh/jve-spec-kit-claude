@@ -37,6 +37,20 @@
 local M = {}
 local ui_constants = require("core.ui_constants")
 
+-- The closed set of phase strings the C++ wheel binding emits. nil is
+-- additionally accepted from legacy callers that predate phase routing.
+-- Any OTHER string is a wiring bug — a typo, a stale binding, a
+-- mis-renamed enum — and must fail loudly rather than be silently
+-- treated as "not begin" (which would make the axis-lock reset stop
+-- firing without any visible failure mode).
+local VALID_PHASES = {
+    begin    = true,
+    update   = true,
+    ["end"]  = true,
+    momentum = true,
+    none     = true,
+}
+
 local GESTURE_GAP_MS = ui_constants.TIMELINE.SCROLL_GESTURE_GAP_MS
 local VERTICAL_INTENT_PX = ui_constants.TIMELINE.SCROLL_VERTICAL_INTENT_PX
 local HORIZONTAL_COMMIT_PX = ui_constants.TIMELINE.SCROLL_HORIZONTAL_COMMIT_PX
@@ -123,6 +137,9 @@ end
 --                boundaries; the other values are advisory.
 -- @return (effective_dx, effective_dy) after suppression
 function M.apply(state, dx, dy, now_ms, phase)
+    assert(phase == nil or VALID_PHASES[phase], string.format(
+        "scroll_axis_lock.apply: phase must be nil or one of "
+        .. "begin/update/end/momentum/none; got %q", tostring(phase)))
     reset_on_new_gesture(state, now_ms, phase)
     accumulate_motion(state, dx, dy)
     update_mode(state)

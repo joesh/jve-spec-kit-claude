@@ -135,4 +135,30 @@ assert(dy_out2 ~= 0, string.format(
     tostring(dy_out2), tostring(state.mode)))
 print("  ✓ ScrollBegin overrides momentum-induced horizontal_only")
 
+-- =============================================================================
+-- Test 4: unknown phase strings are rejected (no silent fallback)
+-- =============================================================================
+-- The C++ wheel binding emits one of: "begin", "update", "end",
+-- "momentum", "none", or omits the field entirely (nil) for callers
+-- predating phase routing. Any OTHER string is a wiring bug — a typo
+-- in the binding, a renamed enum, a stale test fixture — and must
+-- fail loudly rather than silently being treated as "not begin".
+state = scroll_axis_lock.new_state()
+local ok, err = pcall(scroll_axis_lock.apply, state, 1, 0, 1000, "bogus")
+assert(not ok, "unknown phase string must raise an assertion")
+assert(err and err:find("scroll_axis_lock"),
+    "assert message must identify scroll_axis_lock as the source; got: " .. tostring(err))
+print("  ✓ unknown phase string raises an assertion")
+
+-- And the documented values plus nil must NOT raise.
+for _, phase in ipairs({ "begin", "update", "end", "momentum", "none" }) do
+    local fresh = scroll_axis_lock.new_state()
+    local pcall_ok = pcall(scroll_axis_lock.apply, fresh, 1, 0, 1000, phase)
+    assert(pcall_ok, "documented phase " .. phase .. " must not raise")
+end
+local fresh = scroll_axis_lock.new_state()
+assert(pcall(scroll_axis_lock.apply, fresh, 1, 0, 1000, nil),
+    "nil phase (legacy callers) must not raise")
+print("  ✓ all documented phases + nil pass validation")
+
 print("\n✅ test_wheel_phase_resets_axis_lock.lua passed")

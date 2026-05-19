@@ -473,7 +473,7 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
             // events at ~60Hz for 1-2s after fingers lift, bridging
             // any timestamp-gap heuristic; phase is the only authoritative
             // signal that a new gesture has started.
-            const char* phase_str = "none";
+            const char* phase_str = nullptr;
             switch (event->phase()) {
                 case Qt::ScrollBegin:        phase_str = "begin";    break;
                 case Qt::ScrollUpdate:       phase_str = "update";   break;
@@ -481,6 +481,13 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
                 case Qt::ScrollMomentum:     phase_str = "momentum"; break;
                 case Qt::NoScrollPhase:      phase_str = "none";     break;
             }
+            // The Lua-side axis lock keys ONLY on phase=="begin" to
+            // reset; an unrecognised value would silently behave as
+            // "not begin" (the bug we are trying to fix) so refuse it
+            // here rather than substitute a default. The enum is closed
+            // in Qt 6.x; this fires only if Qt adds a new value.
+            JVE_ASSERT(phase_str != nullptr,
+                "TimelineRenderer.wheel: unrecognised Qt::ScrollPhase value");
             lua_pushstring(lua_state_, phase_str);
             lua_setfield(lua_state_, -2, "scroll_phase");
 
