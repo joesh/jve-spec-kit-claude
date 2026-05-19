@@ -487,20 +487,18 @@ local function insert_audio_clips(plan, next_id)
         string.format("place_shared.insert_audio_clips: audio_source_in must be a "
         .. "non-negative integer master.fps-frame offset; got %s", tostring(a_in_frames)))
 
-    -- 018 FR-008 / FR-025 post-unification: every master media_ref stores
-    -- placement (sequence_start_frame, duration_frames) and clips store
-    -- source ranges (source_in_frame, source_out_frame) in master.fps
-    -- frames. Marks land on integer master.fps-frame boundaries (FR-005),
-    -- so the subframe is 0 here. Sample-precise sub-master-frame placements
-    -- (future user-facing zero-crossing / sample-precise trim) will flow
-    -- through subframe columns at that future feature's write boundary;
-    -- this code path is the no-marks / integer-marks path.
-    local in_frame, in_sub = a_in_frames, 0
+    -- 018 FR-013: marks land on integer master.fps-frame boundaries, so a
+    -- newly-placed AUDIO clip gets the canonical AUDIO subframe defaults.
+    -- Route through Clip.subframe_defaults_for_track_type so the FR-013 rule
+    -- is encoded in one place — if it ever loosens, this site picks it up.
+    local default_in_sub, default_out_sub =
+        Clip.subframe_defaults_for_track_type("AUDIO")
+    local in_frame = a_in_frames
 
     local ids = {}
     for _, tgt in ipairs(audio_targets) do
         -- tgt.source_out is in master.fps frames (a_dur from apply_nested_marks).
-        local out_frame, out_sub = a_in_frames + tgt.source_out, 0
+        local out_frame = a_in_frames + tgt.source_out
         ids[#ids + 1] = Clip.create({
             id                    = next_id(),
             project_id            = plan.owner.project_id,
@@ -512,8 +510,8 @@ local function insert_audio_clips(plan, next_id)
             duration_frames       = plan.owner_duration,
             source_in_frame       = in_frame,
             source_out_frame      = out_frame,
-            source_in_subframe    = in_sub,
-            source_out_subframe   = out_sub,
+            source_in_subframe    = default_in_sub,
+            source_out_subframe   = default_out_sub,
             master_layer_track_id = nil,
             master_audio_track_id = tgt.master_audio_track_id,
             fps_mismatch_policy   = plan.policy,
