@@ -1,5 +1,5 @@
 -- T028 / CT-R11 (013): deterministic ordering.
--- Given the same DB state, repeated calls to resolve_in_range return the
+-- Given the same DB state, repeated calls to pick_in_range return the
 -- entries in the same order. A sequence with multiple clips overlapping the
 -- same range exercises the ordering path.
 -- Expected to FAIL until T030 lands.
@@ -66,9 +66,9 @@ local ctx = function()
     return { recursing_into = {}, depth = 0, export_mode = false,
              project_fps_mismatch_policy = "passthrough" }
 end
-local first = Sequence:resolve_in_range("e", 0, 48000, ctx())
-local second = Sequence:resolve_in_range("e", 0, 48000, ctx())
-local third = Sequence:resolve_in_range("e", 0, 48000, ctx())
+local first = Sequence:pick_in_range("e", 0, 48000, ctx())
+local second = Sequence:pick_in_range("e", 0, 48000, ctx())
+local third = Sequence:pick_in_range("e", 0, 48000, ctx())
 local o1, o2, o3 = order(first), order(second), order(third)
 assert(o1 == o2, "order should be stable across calls; got " .. o1 .. " vs " .. o2)
 assert(o2 == o3, "order should be stable across calls; got " .. o2 .. " vs " .. o3)

@@ -8,7 +8,7 @@
 --   per TIMECODE IS THE SOURCE OF TRUTH (specs/013/data-model.md §source_*).
 --
 --   Otherwise the resolver's range overlap check (`r_hi > master_lo and
---   r_lo < master_hi` in resolve_master_leaf) finds nothing in the nested,
+--   r_lo < master_hi` in pick_master_leaf) finds nothing in the nested,
 --   _provide_clips returns 0 entries, and the timeline monitor shows gap
 --   even though the clip is on disk.
 --
@@ -218,7 +218,7 @@ do
 
     -- AUDIO source_in MUST be the same absolute TC value as VIDEO —
     -- master.fps timebase (= video frames for mixed media). The resolver
-    -- (Sequence.resolve_master_leaf) converts to file-native samples
+    -- (Sequence.pick_master_leaf) converts to file-native samples
     -- internally using audio_sample_rate * fps_den / fps_num.
     assert(a.source_in_frame == mark_in, string.format(
         "T3: A source_in_frame must equal mark_in %d (master.fps frames, "

@@ -56,7 +56,7 @@ assert(db:exec("PRAGMA foreign_keys = ON"))
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
 local ok, err = pcall(function()
-    Sequence:resolve_in_range("e", 0, 200, {
+    Sequence:pick_in_range("e", 0, 200, {
         recursing_into = {},
         depth = 0,
         export_mode = false,

@@ -110,7 +110,7 @@ do
     ]]))
 
     local ok, err = pcall(function()
-        Sequence:resolve_in_range("e", 0, 1000, {
+        Sequence:pick_in_range("e", 0, 1000, {
             recursing_into = {},
             depth = 0,
             export_mode = false,
@@ -136,7 +136,7 @@ do
         INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
         VALUES ('ca', 1, 0, -6.0)
     ]]))
-    local entries = Sequence:resolve_in_range("e", 0, 1000, {
+    local entries = Sequence:pick_in_range("e", 0, 1000, {
         recursing_into = {},
         depth = 0,
         export_mode = false,

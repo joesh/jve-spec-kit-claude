@@ -1,7 +1,7 @@
 -- T029b (013): thin-wrapper retrofit (T031) pre-impl test.
 -- get_video_in_range and get_audio_in_range preserve the existing flat-entry
 -- shape that TMB consumers expect. They're thin filters over
--- resolve_in_range by media_kind; rule 2.18 FFI stability.
+-- pick_in_range by media_kind; rule 2.18 FFI stability.
 -- Expected to FAIL until T030 + T031 land.
 
 require("test_env")

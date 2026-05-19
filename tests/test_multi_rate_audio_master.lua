@@ -108,7 +108,7 @@ assert(db:exec(string.format([[
 
 require("test_env").touch_media_fixtures()
 
-local entries = Sequence:resolve_in_range("e", 0, NATIVE_V_FRAMES, {
+local entries = Sequence:pick_in_range("e", 0, NATIVE_V_FRAMES, {
     recursing_into = {},
     depth = 0,
     export_mode = false,

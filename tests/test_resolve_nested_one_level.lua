@@ -3,12 +3,12 @@
 -- the clip returns entries whose media_path comes from the master's media_ref,
 -- provenance length is 2 (clip id + media_ref id), and sequence_start is
 -- translated through the clip's window.
--- Expected to FAIL until T030 (resolve_in_range) lands.
+-- Expected to FAIL until T030 (pick_in_range) lands.
 
 require("test_env")
 local database = require("core.database")
 
-local DB_PATH = "/tmp/jve/test_resolve_nested_one_level.db"
+local DB_PATH = "/tmp/jve/test_pick_nested_one_level.db"
 os.remove(DB_PATH)
 assert(database.init(DB_PATH), "schema.sql failed to execute")
 
@@ -48,7 +48,7 @@ assert(db:exec(
 
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
-local entries = Sequence:resolve_in_range("e", 0, 200, {
+local entries = Sequence:pick_in_range("e", 0, 200, {
     recursing_into = {},
     depth = 0,
     export_mode = false,
@@ -69,4 +69,4 @@ assert(#e.provenance == 2,
 assert(e.provenance[1] == "c" and e.provenance[2] == "mr",
     "provenance order: outermost-clip first → leaf-media_ref last")
 
-print("✅ test_resolve_nested_one_level.lua passed")
+print("✅ test_pick_nested_one_level.lua passed")

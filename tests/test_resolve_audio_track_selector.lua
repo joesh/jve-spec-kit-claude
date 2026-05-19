@@ -99,7 +99,7 @@ do
                 1, 1.0, 0, 0, 0)
     ]]))
 
-    local entries = Sequence:resolve_in_range("e", 0, 1000, {
+    local entries = Sequence:pick_in_range("e", 0, 1000, {
         recursing_into = {},
         depth = 0,
         export_mode = false,
@@ -132,7 +132,7 @@ do
                 1, 1.0, 0, 0, 0)
     ]]))
 
-    local entries = Sequence:resolve_in_range("e", 0, 1000, {
+    local entries = Sequence:pick_in_range("e", 0, 1000, {
         recursing_into = {},
         depth = 0,
         export_mode = false,
@@ -171,7 +171,7 @@ do
     assert(db:exec("PRAGMA foreign_keys = ON"))
 
     local ok, err = pcall(function()
-        Sequence:resolve_in_range("e", 0, 1000, {
+        Sequence:pick_in_range("e", 0, 1000, {
             recursing_into = {},
             depth = 0,
             export_mode = false,

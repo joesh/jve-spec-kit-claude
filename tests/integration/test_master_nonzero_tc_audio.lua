@@ -227,7 +227,7 @@ print(string.format("  PASS: get_audio_at(start+1) → +%d samples", SAMPLES_PER
 
 -- ───────────────────────────────────────────────────────────────────
 -- Step 6: get_audio_in_range covers the full active range and produces
--- file-relative source values converted via sr/fps in resolve_master_leaf.
+-- file-relative source values converted via sr/fps in pick_master_leaf.
 -- ───────────────────────────────────────────────────────────────────
 local RANGE_LO = VIDEO_TC_FRAMES
 local RANGE_HI = VIDEO_TC_FRAMES + 10  -- 10 master frames
@@ -246,7 +246,7 @@ local e_first
 for _, e in ipairs(entries_range) do
     if e.media_kind == "audio" then e_first = e; break end
 end
-assert(e_first, "no audio entry in resolve_in_range result")
+assert(e_first, "no audio entry in pick_in_range result")
 assert(e_first.source_in == AUDIO_TC_SAMPLES, string.format(
     "audio entry source_in must equal file's audio TC origin (%d "
     .. "samples); got %s. The resolver converts the master.fps frame "
@@ -267,7 +267,7 @@ assert(e_first.sequence_start == VIDEO_TC_FRAMES, string.format(
 assert(e_first.duration == DUR_FRAMES, string.format(
     "audio entry duration (master.fps frames): got %s, expected %d",
     tostring(e_first.duration), DUR_FRAMES))
-print(string.format("  PASS: resolve_in_range entry → "
+print(string.format("  PASS: pick_in_range entry → "
     .. "timeline=[%d, +%d) master.fps frames; source=[%d, %d) samples",
     e_first.sequence_start, e_first.duration,
     e_first.source_in, e_first.source_out))

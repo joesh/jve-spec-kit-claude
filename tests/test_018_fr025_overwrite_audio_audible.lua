@@ -11,7 +11,7 @@
 -- Lua-level proxy for "audio is audible":
 --   1. After Overwrite, the AUDIO clip's source_*_frame are in master.fps
 --      frames (small numbers, not sample counts).
---   2. Sequence:resolve_in_range over the AUDIO clip's timeline range
+--   2. Sequence:pick_in_range over the AUDIO clip's timeline range
 --      returns an audio entry that resolves all the way to the master's
 --      audio media_ref (chain leaf carries .media_id) — NOT an offline /
 --      missing-media stub.
@@ -127,7 +127,7 @@ assert(a.in_sub == 0 and a.out_sub == 0,
 assert(a.nested_id == "m", "audio clip must reference master 'm'")
 
 -- (2) Resolver returns a non-offline audio chain leaf for the clip's range.
-local entries = Sequence:resolve_in_range("e", a.seq_start, a.seq_start + a.duration, {
+local entries = Sequence:pick_in_range("e", a.seq_start, a.seq_start + a.duration, {
     recursing_into = {},
     depth = 0,
     export_mode = false,

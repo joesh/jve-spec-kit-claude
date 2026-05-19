@@ -36,7 +36,7 @@ assert(database.init(DB_PATH))
 local db = database.get_connection()
 
 -- Helper: seed minimal project + master(audio-mr) + outer(audio-clip) shape.
--- Returns the outer sequence id so the caller can drive resolve_in_range.
+-- Returns the outer sequence id so the caller can drive pick_in_range.
 -- All ids are scenario-prefixed so the three sub-scenarios coexist in one DB.
 local function seed_scenario(prefix, file_rate, subframe_in)
     local project_id   = prefix .. "_p"
@@ -121,7 +121,7 @@ local function round_haz(x)
 end
 
 local function resolve_one_audio_entry(outer_id)
-    local entries = Sequence:resolve_in_range(outer_id, 0, 8, {
+    local entries = Sequence:pick_in_range(outer_id, 0, 8, {
         recursing_into = {},
         depth = 0,
         export_mode = false,

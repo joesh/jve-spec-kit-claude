@@ -1266,7 +1266,7 @@ end
 -- sub-frame precision in clip.source_*_subframe (master-clock ticks). Mark
 -- conversion is now frame-only via the existing get_in / get_out / set_in /
 -- set_out accessors above; sample-precise file positions are derived inside
--- resolve_master_leaf via subframe_math (FR-008).
+-- pick_master_leaf via subframe_math (FR-008).
 
 -- =============================================================================
 -- PLAYHEAD RESOLUTION (used by Renderer and Mixer)
@@ -1302,7 +1302,7 @@ end
 -- V13 master sequences hold media_refs on their tracks; render the
 -- media_ref at the requested playhead and shape the result like the
 -- nested-sequence path so callers don't need to branch.
-local function resolve_master_at(self, tracks, playhead_frame, track_kind)
+local function pick_master_at(self, tracks, playhead_frame, track_kind)
     local Media = require("models.media")
     local conn = resolve_db()
     local results = {}
@@ -1311,7 +1311,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
             SELECT id, media_id, source_in_frame, source_out_frame,
                    sequence_start_frame, duration_frames, enabled, volume
               FROM media_refs WHERE track_id = ? LIMIT 1
-        ]]), "Sequence:resolve_master_at: prepare failed")
+        ]]), "Sequence:pick_master_at: prepare failed")
         stmt:bind_value(1, track.id)
         local row
         if stmt:exec() and stmt:next() then
@@ -1332,7 +1332,7 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
             if playhead_frame >= row.sequence_start and playhead_frame < mr_end then
                 local media = Media.load(row.media_id)
                 assert(media, string.format(
-                    "Sequence:resolve_master_at: media %s not found", tostring(row.media_id)))
+                    "Sequence:pick_master_at: media %s not found", tostring(row.media_id)))
 
                 -- Audio MR placement is in master.fps frames (post unify),
                 -- but source_in / source_out are file-natural samples. The
@@ -1346,14 +1346,14 @@ local function resolve_master_at(self, tracks, playhead_frame, track_kind)
                 if track_kind == "AUDIO" then
                     local sr = media.audio_sample_rate
                     assert(type(sr) == "number" and sr > 0, string.format(
-                        "Sequence:resolve_master_at: media %s has invalid "
+                        "Sequence:pick_master_at: media %s has invalid "
                         .. "audio_sample_rate=%s for AUDIO track",
                         tostring(row.media_id), tostring(sr)))
                     local fps_num = self.frame_rate.fps_numerator
                     local fps_den = self.frame_rate.fps_denominator
                     assert(type(fps_num) == "number" and fps_num > 0
                         and type(fps_den) == "number" and fps_den > 0,
-                        string.format("Sequence:resolve_master_at: master %s "
+                        string.format("Sequence:pick_master_at: master %s "
                             .. "has invalid frame_rate %s/%s",
                             tostring(self.id), tostring(fps_num), tostring(fps_den)))
                     local offset_frames = playhead_frame - row.sequence_start
@@ -1420,7 +1420,7 @@ function Sequence:get_video_at(playhead_frame)
     -- Read the media_ref + its media row to materialise the same shape
     -- callers expect from a nested-sequence get_video_at result.
     if self.kind == "master" then
-        return resolve_master_at(self, tracks, playhead_frame, "VIDEO")
+        return pick_master_at(self, tracks, playhead_frame, "VIDEO")
     end
 
     local results = {}
@@ -1465,7 +1465,7 @@ function Sequence:get_audio_at(playhead_frame)
     end
 
     if self.kind == "master" then
-        return resolve_master_at(self, tracks, playhead_frame, "AUDIO")
+        return pick_master_at(self, tracks, playhead_frame, "AUDIO")
     end
 
     local results = {}
@@ -1655,10 +1655,10 @@ end
 -- can compute speed ratios without re-loading the Media row.
 
 -- Promote a resolver internal entry to the public flat shape. Tags
--- already on the entry from resolve_nested / resolve_master_leaf:
+-- already on the entry from pick_nested / pick_master_leaf:
 -- owner_clip_id, owner_track_index, owner_track_type. Outer-coord
 -- sequence_start / duration are already set to the outermost extent
--- because resolve_nested recurses with each clip's full source window
+-- because pick_nested recurses with each clip's full source window
 -- (not intersected with the playback window), and translate_to_outer
 -- maps that to the outer clip's full extent. media_cache reuses Media
 -- rows across entries in one batch.
@@ -1712,7 +1712,7 @@ end
 -- master_leaf clips entries to the master_lo/master_hi window, so we
 -- pass a wide range and let filter_and_finalize re-narrow by overlap.
 -- For a nested sequence, list_clips_overlapping uses the window to skip
--- non-overlapping outer clips — pass it through unchanged. resolve_nested
+-- non-overlapping outer clips — pass it through unchanged. pick_nested
 -- internally recurses each in-scope clip with its full source window.
 local function pick_resolve_bounds(self, from_frame, to_frame)
     if self.kind == "master" then
@@ -1736,7 +1736,7 @@ function Sequence:get_video_in_range(from_frame, to_frame)
         "Sequence:get_video_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
     local lo, hi = pick_resolve_bounds(self, from_frame, to_frame)
-    local entries = Sequence:resolve_in_range(self.id, lo, hi, {})
+    local entries = Sequence:pick_in_range(self.id, lo, hi, {})
     return filter_and_finalize(entries, "video", from_frame, to_frame)
 end
 
@@ -1755,7 +1755,7 @@ function Sequence:get_audio_in_range(from_frame, to_frame)
         "Sequence:get_audio_in_range: from_frame %d must be < to_frame %d",
         from_frame, to_frame))
     local lo, hi = pick_resolve_bounds(self, from_frame, to_frame)
-    local entries = Sequence:resolve_in_range(self.id, lo, hi, {})
+    local entries = Sequence:pick_in_range(self.id, lo, hi, {})
     return filter_and_finalize(entries, "audio", from_frame, to_frame)
 end
 
@@ -1903,17 +1903,17 @@ function Sequence:set_playhead(frame)
 end
 
 -- ===========================================================================
--- Feature 013: resolve_in_range — public delegate
+-- Feature 013: pick_in_range — public delegate
 -- ===========================================================================
 -- The resolver walks the clip → nested sequence → (recurse) → media_ref →
 -- media chain for a given sequence and time range. Single code path for
 -- playback + export (FR-019). All ~750 LOC of helpers live in
 -- models/sequence/resolver.lua (extracted from this file for 2.6); this
 -- method is the thin Sequence-tier delegate so external call sites (and
--- the 018-uniform-clip-source spec, which names Sequence:resolve_in_range
+-- the 018-uniform-clip-source spec, which names Sequence:pick_in_range
 -- as the public entry point) continue to work unchanged.
-function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
-    return require("models.sequence.resolver").resolve_in_range(
+function Sequence:pick_in_range(seq_id, start_frame, end_frame, context)
+    return require("models.sequence.resolver").pick_in_range(
         resolve_db(), seq_id, start_frame, end_frame, context)
 end
 

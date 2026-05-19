@@ -72,7 +72,7 @@ src/lua/
 │                                       #   clips.media_id removed; master_clip_id
 │                                       #   renamed to nested_sequence_id.
 ├── models/
-│   ├── sequence.lua                    # ensure_master (renamed from ensure_masterclip); resolve_in_range
+│   ├── sequence.lua                    # ensure_master (renamed from ensure_masterclip); pick_in_range
 │   │                                   #   dispatch on kind; cycle detection
 │   ├── clip.lua                        # clips row shape + override resolution helpers;
 │   │                                   #   INV-2 assertion (owner_sequence_id is nested)
@@ -101,10 +101,10 @@ src/lua/
 │   │   └── set_fps_mismatch_policy.lua # NEW: project-level + per-clip override
 │   ├── playback/
 │   │   └── playback_engine.lua         # Consumes resolver; thin-wrapper API stays, delegates
-│   │                                     to resolve_in_range
+│   │                                     to pick_in_range
 │   ├── renderer.lua                    # Lua composition layer; already pull-based
 │   └── export/
-│       └── export_engine.lua           # NEW: shares resolve_in_range with playback (FR-019)
+│       └── export_engine.lua           # NEW: shares pick_in_range with playback (FR-019)
 ├── importers/
 │   ├── drp_importer.lua                # Emit clips (not flattened); synced-clip decoder
 │   │                                     already landed; create kind='master' sequences
@@ -129,7 +129,7 @@ tests/
 ├── test_clip_*.lua                     # clips row shape, override resolution, cycle detection
 ├── test_media_ref_*.lua                # media_refs row shape, INV-1 assertion
 ├── test_timeline_command_*.lua         # One per rewired + new command, black-box
-├── test_resolve_in_range_*.lua         # Resolver recursion, layer/channel overrides,
+├── test_pick_in_range_*.lua         # Resolver recursion, layer/channel overrides,
 │                                         fps-mismatch, cycle defense-in-depth
 ├── test_nest_unnest.lua                # Nest and Unnest; refusal on master unnest
 ├── test_export_resolver_parity.lua     # FR-019: export == playback for same content
@@ -150,7 +150,7 @@ Five questions resolved in `research.md`:
 2. **Override state storage**: dedicated sparse tables (`clip_channel_override`, `media_refs_channel_state`) + one nullable column on `clips` (`master_layer_track_id`). Enables row-level undo per FR-020.
 3. **Cycle detection**: uncached mutation-time DFS + defense-in-depth resolver assert.
 4. **Layer selector + FK**: `track_id` FK with `ON DELETE SET NULL` on the per-clip override; master's own `default_video_layer_track_id` under INV-8.
-5. **Resolver signature + override order**: unified `Sequence:resolve_in_range(seq_id, start, end, context)`; override order layer → channel → gain; same code path for preview and export.
+5. **Resolver signature + override order**: unified `Sequence:pick_in_range(seq_id, start, end, context)`; override order layer → channel → gain; same code path for preview and export.
 
 **Output**: `research.md` with one Decision / Rationale / Alternatives considered block per question.
 
@@ -166,7 +166,7 @@ Five questions resolved in `research.md`:
    - `clip_links` (existing) — unchanged; scopes exclusively to clips (media_refs don't have link groups).
    - State transitions for each override lifecycle + clip creation + nest/unnest are documented.
 
-2. **contracts/resolver.md**: `Sequence:resolve_in_range` interface. Dispatches on `sequences.kind` — master reads `media_refs`, nested recurses via `clips`. Documents cycle-safety, override order, fps-mismatch plumbing, offline loud-fail, export parity. Single code path for playback and export (FR-019).
+2. **contracts/resolver.md**: `Sequence:pick_in_range` interface. Dispatches on `sequences.kind` — master reads `media_refs`, nested recurses via `clips`. Documents cycle-safety, override order, fps-mismatch plumbing, offline loud-fail, export parity. Single code path for playback and export (FR-019).
 
 3. **contracts/commands.md**: per-command entries for rewired existing commands (Insert, Overwrite, Trim, Slip, Slide, Roll, Ripple, Split, Blade, Extend, Delete, Duplicate), new override commands (per-clip and master-level), and new nest/unnest commands.
 
@@ -201,13 +201,13 @@ Load `.specify/templates/tasks-template.md` as base. Generate tasks from Phase 1
 **Ordering Strategy**:
 
 1. **Schema changes first** — `src/lua/schema.sql` migration (add `media_refs`, `media_refs_channel_state`, `clip_channel_override` tables; narrow `sequences.kind`; adjust `clips` columns). Blocks everything else.
-2. **Model layer next** — `media_ref.lua` and `clip.lua` row shapes, INV-1 / INV-2 / INV-3 assertions, cycle detection, `resolve_in_range` dispatch on `sequences.kind`. TDD-first.
+2. **Model layer next** — `media_ref.lua` and `clip.lua` row shapes, INV-1 / INV-2 / INV-3 assertions, cycle detection, `pick_in_range` dispatch on `sequences.kind`. TDD-first.
 3. **Command layer** — `add_clips_to_sequence.lua` → insert/overwrite → trim/roll/slip/slide → ripple/split/blade/extend → delete/duplicate. In roughly this dependency order.
 4. **Override commands (new)** — per-clip layer/channel; master default-layer; master channel state; per-sequence start TC; project fps-mismatch policy.
 5. **Nest / unnest commands** — create + inverse operations; refuse unnest on masters.
 6. **Importers** — DRP (landing on existing synced-clip infra) → FCP7 → prproj → drag-drop/media_reader. Each produces masters with media_refs + clips on target sequences.
 7. **Renderer + inspector UI updates** — kind-branching queries, waveform/offline chain traversal, inspector fields for all three selection targets (clip / master / media_ref).
-8. **Export** — wire to shared `resolve_in_range`; export-only processing-pipeline tests.
+8. **Export** — wire to shared `pick_in_range`; export-only processing-pipeline tests.
 9. **End-to-end integration tests** — one per Acceptance Scenario.
 10. **Cleanup** — delete legacy `clip_kind` / `media_id`-on-timeline-clips code paths (FR-018); no compatibility shims.
 

@@ -63,7 +63,7 @@ assert(db:exec(
 
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
-local entries = Sequence:resolve_in_range("e24", 0, 400, {
+local entries = Sequence:pick_in_range("e24", 0, 400, {
     recursing_into = {},
     depth = 0,
     export_mode = false,

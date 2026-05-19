@@ -63,7 +63,7 @@ assert(db:exec(
 
 -- Deliberately NOT touching fixtures — the file is offline.
 local Sequence = require("models.sequence")
-local entries = Sequence:resolve_in_range("e", 0, 200, {
+local entries = Sequence:pick_in_range("e", 0, 200, {
     recursing_into = {},
     depth = 0,
     export_mode = false,

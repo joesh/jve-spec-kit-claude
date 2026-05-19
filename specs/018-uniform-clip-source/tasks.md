@@ -32,7 +32,7 @@
 ## Phase 3.4: Model + resolver integration
 
 - [x] **T016** [P] Write failing test `tests/test_resolver_subframe.lua` (FR-021) — synthesize clip with subframe=N at 192000 ticks/sec against media_ref at 48000 Hz file rate, assert resolver returns file_sample offset of exactly `N * 48000 / 192000` vs the same clip with subframe=0. Test both divisor (48k) and non-divisor (44.1k) file rates with the latter asserting ≤0.5 sample bound.
-- [x] **T017** Modify `src/lua/models/sequence.lua` `resolve_master_leaf` to consume subframes through `clip_position.frame_subframe_to_samples` (which wraps `subframe_math.ticks_to_samples`). Reuse existing `round_int` since it matches FR-008 rounding (Constitution 2.5 — keep functions algorithm-style).
+- [x] **T017** Modify `src/lua/models/sequence.lua` `pick_master_leaf` to consume subframes through `clip_position.frame_subframe_to_samples` (which wraps `subframe_math.ticks_to_samples`). Reuse existing `round_int` since it matches FR-008 rounding (Constitution 2.5 — keep functions algorithm-style).
 - [x] **T018** Modify `src/lua/core/database.lua` `load_clips` to hydrate the new subframe columns. Tripwire assert on read: audio clip must have non-NULL subframes; video must have NULL. (Defense-in-depth mirrors INV-3.)
 - [x] **T019** Modify `src/lua/models/clip.lua` and `src/lua/core/clip_mutator.lua` so any clip-row construction routes through `clip_position` (no direct field writes). Update INSERT statements in `database.lua` to include the new columns.
 - [x] **T020** Run T016 — PASS.

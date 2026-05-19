@@ -5,7 +5,7 @@
 | Commit | Scope |
 |---|---|
 | `70ddc2ec` | T015 partial + T017 partial: model layer — Phase 3.2 all green |
-| `7fc4325c` | T030: `Sequence:resolve_in_range` + Phase 3.3.a all green |
+| `7fc4325c` | T030: `Sequence:pick_in_range` + Phase 3.3.a all green |
 
 Combined with prior block (11 commits): **13 commits total for 013**.
 
@@ -22,7 +22,7 @@ Combined with prior block (11 commits): **13 commits total for 013**.
 - `Sequence.create` now requires explicit `opts.kind ∈ {'master','nested'}` and `opts.audio_rate` (rule 2.13 — no 48000 default, no 'timeline' default).
 - `Sequence.save` writes V9 columns: `default_video_layer_track_id`, `video_start_tc_frame`, `audio_start_tc_samples`, `fps_mismatch_policy`.
 - NEW `Sequence.find(id)` → row table; `Sequence.update(id, fields)` with INV-8 post-condition; `Sequence.assert_inv8(id)` with actionable error (names seq id, actual kind, actual default — rule 1.14).
-- NEW `Sequence:resolve_in_range(seq_id, start, end, context)` — the resolver. 14 named helpers: is_media_online, fetch_kind, fetch_default_video_layer, assert_layer_ref_valid, fetch_master_channel_state, fetch_clip_channel_override, db_to_linear, list_media_refs, list_clips_overlapping, build_provenance, resolve_master_leaf, resolve_nested, clamp_entries_to_clip_window, resolve_seq_range.
+- NEW `Sequence:pick_in_range(seq_id, start, end, context)` — the resolver. 14 named helpers: is_media_online, fetch_kind, fetch_default_video_layer, assert_layer_ref_valid, fetch_master_channel_state, fetch_clip_channel_override, db_to_linear, list_media_refs, list_clips_overlapping, build_provenance, pick_master_leaf, pick_nested, clamp_entries_to_clip_window, pick_seq_range.
 
 `src/lua/models/clip.lua`:
 - `Clip.create` overloaded: first-arg-is-table dispatches to new V13 path; positional path untouched (legacy callers keep working).

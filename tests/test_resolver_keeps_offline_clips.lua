@@ -8,7 +8,7 @@
 --- media_path. Both depend on the resolver passing the offline clip
 --- through to playback queries with media_path populated.
 ---
---- Pre-fix bug (Apr 26 2026 V13 regression): resolve_master_leaf set
+--- Pre-fix bug (Apr 26 2026 V13 regression): pick_master_leaf set
 ---   media_path = online and r.file_path or nil
 --- and filter_and_finalize then dropped any entry with empty/nil
 --- media_path. Result: offline clips were silently filtered out of

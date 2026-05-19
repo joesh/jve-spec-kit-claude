@@ -3,12 +3,12 @@
 -- the full range returns 3 ResolvedEntry rows with correct media_path from each
 -- media_ref's media_id, source_in/out in file-native units, and provenance of
 -- length 1 (the media_ref id).
--- Expected to FAIL until T030 (resolve_in_range) lands.
+-- Expected to FAIL until T030 (pick_in_range) lands.
 
 require("test_env")
 local database = require("core.database")
 
-local DB_PATH = "/tmp/jve/test_resolve_master_leaf.db"
+local DB_PATH = "/tmp/jve/test_pick_master_leaf.db"
 os.remove(DB_PATH)
 assert(database.init(DB_PATH), "schema.sql failed to execute")
 
@@ -55,14 +55,14 @@ end
 
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
-local entries = Sequence:resolve_in_range("m", 0, 100, {
+local entries = Sequence:pick_in_range("m", 0, 100, {
     recursing_into = {},
     depth = 0,
     export_mode = false,
     project_fps_mismatch_policy = "resample",
 })
 
-assert(type(entries) == "table", "resolve_in_range must return an array")
+assert(type(entries) == "table", "pick_in_range must return an array")
 assert(#entries == 3, "expected 3 entries, got " .. tostring(#entries))
 
 local by_path = {}
@@ -90,4 +90,4 @@ for path, exp in pairs(expected) do
         .. tostring(#e.provenance) .. " for " .. path)
 end
 
-print("✅ test_resolve_master_leaf.lua passed")
+print("✅ test_pick_master_leaf.lua passed")

@@ -100,7 +100,7 @@ function would_create_cycle(owner_seq_id, candidate_target_id):
 **Decision**: Single Lua-side resolver:
 
 ```lua
-Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
+Sequence:pick_in_range(seq_id, start_frame, end_frame, context)
   → list of { media_path, source_in, source_out, timeline_start, track_role, volume, effects, provenance }
 ```
 
@@ -125,7 +125,7 @@ Reversing the order (channel state before layer selection) would apply channel m
 - **Provenance field** on each output carries the chain of row IDs — answers "why does this frame come from this file?" without re-traversing.
 
 **Alternatives considered**:
-- *Separate video and audio functions*: today's `get_video_in_range` / `get_audio_in_range`. Keep as thin wrappers around `resolve_in_range` for incremental migration, retire once callers are migrated.
+- *Separate video and audio functions*: today's `get_video_in_range` / `get_audio_in_range`. Keep as thin wrappers around `pick_in_range` for incremental migration, retire once callers are migrated.
 - *Move resolution to C++*: costs reactivity and testability. Keep in Lua.
 - *Apply overrides on the referenced sequence directly*: violates the "referenced sequence is an undifferentiated source" invariant.
 
@@ -141,4 +141,4 @@ All five questions resolved. No [NEEDS CLARIFICATION] markers remain.
 | 2 | Override state | Sparse `clip_channel_override` rows + nullable `master_layer_track_id` column |
 | 3 | Cycle detection | Uncached mutation-time DFS + defense-in-depth assert at resolve time |
 | 4 | Layer selector + FK | `track_id` reference; `ON DELETE SET NULL` for per-clip override; loud-fail for referenced sequence's own default |
-| 5 | Resolver signature | Unified `Sequence:resolve_in_range`; override order layer → channel → gain |
+| 5 | Resolver signature | Unified `Sequence:pick_in_range`; override order layer → channel → gain |

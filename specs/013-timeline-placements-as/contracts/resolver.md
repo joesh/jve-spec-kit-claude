@@ -14,7 +14,7 @@ The resolver is the single Lua-side function that walks the clip → nested sequ
 ---@param end_frame integer           Exclusive end, same timebase
 ---@param context ResolutionContext   Caller-scoped state (export mode, fps policy, cycle guard)
 ---@return ResolvedEntry[]
-function Sequence:resolve_in_range(seq_id, start_frame, end_frame, context)
+function Sequence:pick_in_range(seq_id, start_frame, end_frame, context)
 ```
 
 ### `ResolutionContext`
@@ -122,7 +122,7 @@ Clips/media_refs straddling the requested range are clamped. Inner recursion's `
 
 ## Contract tests (TDD gates)
 
-Each of these is a failing Lua test written before the resolver implementation. Black-box: the test constructs a minimal sequence graph via the DB, calls `Sequence:resolve_in_range`, and asserts on output shape + values. No internal-function mocking.
+Each of these is a failing Lua test written before the resolver implementation. Black-box: the test constructs a minimal sequence graph via the DB, calls `Sequence:pick_in_range`, and asserts on output shape + values. No internal-function mocking.
 
 ### CT-R1: Master resolution (leaf)
 

@@ -6,7 +6,7 @@
 require("test_env")
 local database = require("core.database")
 
-local DB_PATH = "/tmp/jve/test_resolve_nested_deep.db"
+local DB_PATH = "/tmp/jve/test_pick_nested_deep.db"
 os.remove(DB_PATH)
 assert(database.init(DB_PATH), "schema.sql failed to execute")
 
@@ -53,7 +53,7 @@ assert(db:exec(
 
 require("test_env").touch_media_fixtures()
 local Sequence = require("models.sequence")
-local entries = Sequence:resolve_in_range("outer", 0, 200, {
+local entries = Sequence:pick_in_range("outer", 0, 200, {
     recursing_into = {},
     depth = 0,
     export_mode = false,
@@ -65,4 +65,4 @@ assert(#entries[1].provenance == 3,
     .. tostring(#entries[1].provenance))
 assert(entries[1].media_path == "/tmp/v.mov")
 
-print("✅ test_resolve_nested_deep.lua passed")
+print("✅ test_pick_nested_deep.lua passed")

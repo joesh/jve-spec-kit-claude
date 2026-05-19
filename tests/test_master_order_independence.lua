@@ -119,7 +119,7 @@ assert(db:exec(string.format([[
 require("test_env").touch_media_fixtures()
 
 local function resolve_range_for(seq_start, dur)
-    return Sequence:resolve_in_range("e", seq_start, seq_start + dur, {
+    return Sequence:pick_in_range("e", seq_start, seq_start + dur, {
         recursing_into = {},
         depth = 0,
         export_mode = false,

@@ -1,16 +1,16 @@
---- models/sequence/resolver.lua — resolve_in_range and its helpers (013/018).
+--- models/sequence/resolver.lua — pick_in_range and its helpers (013/018).
 ---
 --- Extracted from models/sequence.lua (~750 LOC) to keep that file
 --- focused on the model surface (2.6). Public entry point is
---- M.resolve_in_range; helpers are file-private.
+--- M.pick_in_range; helpers are file-private.
 ---
 --- Cross-module dependency: emit_audio_channel_entries calls
 --- Sequence.count_master_audio_channels for the INV-5 channel-bound
---- check inside resolve_nested. We lazy-require Sequence inside that
+--- check inside pick_nested. We lazy-require Sequence inside that
 --- helper to avoid the models.sequence ↔ models.sequence.resolver
 --- top-level cycle.
 ---
---- Callers (Sequence:resolve_in_range delegate) inject the open SQLite
+--- Callers (Sequence:pick_in_range delegate) inject the open SQLite
 --- connection; this module never opens one itself.
 
 local subframe_math = require("core.subframe_math")
@@ -183,8 +183,8 @@ local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
     -- 018: source_in_subframe / source_out_subframe carry the residual
     -- master-clock ticks within the (frame, subframe) source position.
     -- The subframe columns are non-NULL on AUDIO clips, NULL on VIDEO (FR-013). The
-    -- recursion seam in resolve_nested threads these into the next-level
-    -- resolve_seq_range call so the leaf can compute file-natural samples
+    -- recursion seam in pick_nested threads these into the next-level
+    -- pick_seq_range call so the leaf can compute file-natural samples
     -- without losing sub-frame precision.
     local stmt = db:prepare([[
         SELECT c.id, c.track_id, c.sequence_id,
@@ -373,7 +373,7 @@ local function compute_audio_source_sample(r, master_frame, master_subframe,
 end
 
 -- Build the entry base shared by every emission from one media_ref. The base
--- carries master-coord sequence_start/duration (resolve_nested translates to
+-- carries master-coord sequence_start/duration (pick_nested translates to
 -- outer-coord) and file-natural source_in/source_out.
 --
 -- Pass media_path AND user-set enabled state through unchanged regardless of
@@ -395,7 +395,7 @@ local function build_mref_entry_base(r, lo_f, hi_f, file_in, file_out, outer_cha
         provenance     = build_provenance(outer_chain, r.id),
         -- Default owner-track tagging for the case where this master is the
         -- outermost sequence (e.g. source viewer playing the master directly).
-        -- resolve_nested overwrites these when recursion bubbles outwards.
+        -- pick_nested overwrites these when recursion bubbles outwards.
         owner_track_index = r.track_index,
         owner_track_type  = r.track_type,
         owner_clip_id     = r.id,
@@ -467,11 +467,11 @@ end
 --   layer_track_id    — non-nil restricts V media_refs to that track.
 --   audio_track_id    — non-nil restricts A media_refs to that track
 --                       (Expand/Collapse audio path). nil = composite.
-local function resolve_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
+local function pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
                                    layer_track_id, audio_track_id,
                                    outer_chain, context)
     assert(type(context) == "table",
-        "Sequence.resolve_master_leaf: context table required (018 master_clock_hz)")
+        "Sequence.pick_master_leaf: context table required (018 master_clock_hz)")
     local fps_num, fps_den, project_id = fetch_master_fps(db, seq_id, context)
     local master_clock_hz = fetch_master_clock_hz(db, project_id, context)
     local tpf = subframe_math.ticks_per_frame(master_clock_hz, fps_num, fps_den)
@@ -503,8 +503,8 @@ local function resolve_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
     return entries
 end
 
--- Forward declaration so resolve_nested can call resolve_seq_range recursively.
-local resolve_seq_range
+-- Forward declaration so pick_nested can call pick_seq_range recursively.
+local pick_seq_range
 
 -- Translate one in-flight entry's master-coord position to outer-coord using
 -- a clip's own source/owner ratio. Mutates in place and returns the entry.
@@ -531,7 +531,7 @@ end
 --   * fold clip.volume into the entry's volume; AND clip.enabled into enabled;
 --   * for audio entries, replace channel_state with this clip's override row
 --     when present (per-channel — sparse table; absent row = inherit).
-local function resolve_nested(db, seq_id, outer_lo_f, outer_lo_s,
+local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                               outer_hi_f, outer_hi_s, context,
                               outer_chain, layer_filter_for_v,
                               audio_filter_for_a)
@@ -649,7 +649,7 @@ local function resolve_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     tostring(c.id)))
                 c_lo_s, c_hi_s = 0, 0
             end
-            local inner = resolve_seq_range(db, c.sequence_id,
+            local inner = pick_seq_range(db, c.sequence_id,
                 c.source_in, c_lo_s, c.source_out, c_hi_s,
                 context, inner_chain,
                 layer_for_inner, audio_for_inner)
@@ -666,7 +666,7 @@ local function resolve_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     -- Tag entry with the outermost owning clip's track so
                     -- consumers (playback TMB routing) know which timeline
                     -- track to address. Recursion bubbles outwards — each
-                    -- enclosing resolve_nested overwrites, so the topmost
+                    -- enclosing pick_nested overwrites, so the topmost
                     -- (outermost) call wins.
                     e.owner_track_index = c.track_index
                     e.owner_track_type  = c.track_type
@@ -704,7 +704,7 @@ end
 -- the V / A track selectors that apply at the directly-referenced level
 -- (master leaf or nested clip filter). NULL = composite/default for that
 -- medium.
-resolve_seq_range = function(db, seq_id, lo_f, lo_s, hi_f, hi_s, context,
+pick_seq_range = function(db, seq_id, lo_f, lo_s, hi_f, hi_s, context,
                              outer_chain,
                              layer_for_directly_referenced,
                              audio_for_directly_referenced)
@@ -718,12 +718,12 @@ resolve_seq_range = function(db, seq_id, lo_f, lo_s, hi_f, hi_s, context,
     local kind = fetch_kind(db, seq_id)
     local entries
     if kind == "master" then
-        entries = resolve_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
+        entries = pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             layer_for_directly_referenced,
             audio_for_directly_referenced,
             outer_chain, context)
     else
-        entries = resolve_nested(db, seq_id, lo_f, lo_s, hi_f, hi_s,
+        entries = pick_nested(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             context, outer_chain,
             layer_for_directly_referenced,
             audio_for_directly_referenced)
@@ -751,13 +751,13 @@ end
 -- endpoint is implicitly 0 (FR-013 — today's marks UX is frame-aligned).
 -- The actual sub-frame contribution enters at every recursion seam where
 -- a clip's stored source_in_subframe / source_out_subframe is consumed.
-function M.resolve_in_range(db, seq_id, start_frame, end_frame, context)
-    assert(seq_id, "Sequence:resolve_in_range: seq_id required")
+function M.pick_in_range(db, seq_id, start_frame, end_frame, context)
+    assert(seq_id, "Sequence:pick_in_range: seq_id required")
     assert(type(start_frame) == "number", "start_frame must be number")
     assert(type(end_frame) == "number", "end_frame must be number")
     assert(type(context) == "table", "context table required")
     context.recursing_into = context.recursing_into or {}
-    local entries = resolve_seq_range(db, seq_id,
+    local entries = pick_seq_range(db, seq_id,
         start_frame, 0, end_frame, 0,
         context, {}, nil, nil)
     return finalize_entries(entries)

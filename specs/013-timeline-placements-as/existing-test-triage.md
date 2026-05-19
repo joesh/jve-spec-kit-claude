@@ -94,7 +94,7 @@ After Joe confirmed Option B + "you have to discover" the DELETE-vs-REWRITE boun
 | `tests/test_ensure_masterclip_uses_media_audio_rate.lua` | Same rename + shape swap; the "audio_sample_rate is rigorously populated, no 48kHz fallback" behavior (recently tightened) must stay asserted. |
 | `tests/test_clip_mutator.lua` | Mutator operates on `clips` rows; after T008 those rows no longer carry `media_id`/`clip_kind`/`offline`. Assertions must pivot to new columns (`nested_sequence_id`, `master_layer_track_id`). |
 | `tests/test_duplicate_clips_preserves_structural_fields.lua` | "Structural fields" list changes: adds `master_layer_track_id`, `fps_mismatch_policy`, `clip_channel_override` row copy (CT-C8); removes `media_id`/`clip_kind`. |
-| `tests/test_renderer_tmb.lua` | TMB still sees flat entries, but upstream now comes from `resolve_in_range` (T031 wrappers). Assertions on entry shape stay; DB-setup flips to new schema. |
+| `tests/test_renderer_tmb.lua` | TMB still sees flat entries, but upstream now comes from `pick_in_range` (T031 wrappers). Assertions on entry shape stay; DB-setup flips to new schema. |
 | `tests/test_inspectable_display_values.lua` | Inspector fields per CT-IN1..IN4 — the fields themselves change (layer override, per-channel overrides, etc.), so this test is partially rewritten and partially superseded by T084/T086. |
 | `tests/test_playback_engine_media_status.lua` | `clip.offline` column is gone; offline is chain-derived. Assertions pivot to the derived-offline path (see CT-RN3). |
 | `tests/test_project_browser_offline_stamp.lua` | Same: offline is a derived state, not a stored column. Browser row still shows "offline" — but derived. |

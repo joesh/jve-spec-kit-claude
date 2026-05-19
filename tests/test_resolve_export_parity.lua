@@ -1,5 +1,5 @@
 -- T027 / CT-R10 (013): export parity.
--- Calling Sequence:resolve_in_range twice with identical args except
+-- Calling Sequence:pick_in_range twice with identical args except
 -- context.export_mode flipped must yield byte-identical output for the same
 -- DB state. FR-019: export-only policies apply ABOVE the resolver, never inside.
 -- Expected to FAIL until T030 lands.
@@ -60,13 +60,13 @@ local function entry_shape_signature(entries)
     return table.concat(parts, "\n")
 end
 
-local preview = Sequence:resolve_in_range("e", 0, 200, {
+local preview = Sequence:pick_in_range("e", 0, 200, {
     recursing_into = {},
     depth = 0,
     export_mode = false,
     project_fps_mismatch_policy = "passthrough",
 })
-local exported = Sequence:resolve_in_range("e", 0, 200, {
+local exported = Sequence:pick_in_range("e", 0, 200, {
     recursing_into = {},
     depth = 0,
     export_mode = true,

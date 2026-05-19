@@ -156,13 +156,13 @@ end
 --                       compute_owner_duration_for_plan now both consume
 --                       master.fps frames directly. Sample-precise file
 --                       offset is computed inside the resolver
---                       (Sequence.resolve_master_leaf) via subframe_math,
+--                       (Sequence.pick_master_leaf) via subframe_math,
 --                       NOT here.
 --   audio_source_in   — master.fps frames (TC-space offset).
 --
 -- TIMECODE IS THE SOURCE OF TRUTH: clip.source_in_frame must match the
 -- nested's media_refs' sequence_start_frame coordinate system (= TC space
--- with offset tc_origin). The resolver (Sequence.resolve_master_leaf)
+-- with offset tc_origin). The resolver (Sequence.pick_master_leaf)
 -- converts to file-natural samples internally for AUDIO media_refs via
 -- audio_sample_rate * fps_denominator / fps_numerator; we must NOT
 -- pre-convert here.

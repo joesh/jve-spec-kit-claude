@@ -117,7 +117,7 @@ end
 
 local function media_path_for_clip(seq_id, clip_id)
     local Sequence = require("models.sequence")
-    local entries = Sequence:resolve_in_range(seq_id, 0, 100000, {
+    local entries = Sequence:pick_in_range(seq_id, 0, 100000, {
         recursing_into = {},
         depth = 0,
         export_mode = false,

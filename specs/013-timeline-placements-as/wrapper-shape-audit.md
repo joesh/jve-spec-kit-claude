@@ -3,7 +3,7 @@
 Enumerates fields read by callers of `Sequence:get_video_in_range` /
 `Sequence:get_audio_in_range` so T031 can verify no field is silently
 dropped by the wrapper rewrite. The wrappers become thin filters over
-`Sequence:resolve_in_range` (per `contracts/resolver.md`, output shape
+`Sequence:pick_in_range` (per `contracts/resolver.md`, output shape
 = `ResolvedEntry`).
 
 ## Canonical entry shape (post-T031) = `ResolvedEntry`
