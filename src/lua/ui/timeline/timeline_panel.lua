@@ -1808,6 +1808,19 @@ local function build_track_header_row(track, track_type, header_color)
         string.format("build_track_header_row: track_type must be VIDEO|AUDIO; got %s",
             tostring(track_type)))
 
+    -- Source-tab headers strip back to the buttons that make sense for
+    -- a master view: M/S (per-track monitoring) and W (audio waveform).
+    -- Patch routing (src/rec), track lock, and sync_mode are
+    -- record-only concerns — masters don't accept patch routing, can't
+    -- be locked-against-edit (no edits target them), and have no
+    -- ripple sync mode.
+    local displayed_kind = state.get_displayed_tab_kind()
+    assert(displayed_kind == "source" or displayed_kind == "record",
+        string.format("build_track_header_row: displayed_tab_kind must be "
+            .. "'source'|'record' (rebuild fires only with a displayed tab); "
+            .. "got %s", tostring(displayed_kind)))
+    local is_source_tab = displayed_kind == "source"
+
     -- state.get_track_height asserts when the track is unknown; the
     -- track here came from state.get_all_tracks so the call is safe.
     -- DEFAULT_TRACK_HEIGHT is returned for tracks that exist but have
@@ -1836,54 +1849,65 @@ local function build_track_header_row(track, track_type, header_color)
 
     local captured_track_id = track.id
 
-    local src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(src_btn, HDR.SRC)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(src_btn, HDR.SRC)
-    qt_constants.PROPERTIES.SET_STYLE(src_btn,
-        build_id_btn_stylesheet(false, source_tab_color))
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
-
-    local rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
-    qt_constants.PROPERTIES.SET_STYLE(rec_btn,
-        build_id_btn_stylesheet(true, selection_color))
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
-
+    local src_btn, rec_btn, lock_btn, sync_btn = nil, nil, nil, nil
     local seq_id = state.get_sequence_id()
-    wire_patch_buttons(src_btn, rec_btn, seq_id, track.id,
-        track.track_index, track_type)
-    install_header_drop_target(header, seq_id, track.track_index, track_type)
 
-    local name_label = qt_constants.WIDGET.CREATE_LABEL(track.name)
+    if not is_source_tab then
+        src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(src_btn, HDR.SRC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(src_btn, HDR.SRC)
+        qt_constants.PROPERTIES.SET_STYLE(src_btn,
+            build_id_btn_stylesheet(false, source_tab_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, src_btn)
+
+        rec_btn = qt_constants.WIDGET.CREATE_BUTTON(track.name)
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(rec_btn, HDR.REC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(rec_btn, HDR.REC)
+        qt_constants.PROPERTIES.SET_STYLE(rec_btn,
+            build_id_btn_stylesheet(true, selection_color))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, rec_btn)
+
+        wire_patch_buttons(src_btn, rec_btn, seq_id, track.id,
+            track.track_index, track_type)
+        install_header_drop_target(header, seq_id, track.track_index, track_type)
+    end
+
+    local label_text = require("ui.timeline.track_header_label").for_display(
+        { name = track.name, track_index = track.track_index, track_type = track_type },
+        displayed_kind)
+    local name_label = qt_constants.WIDGET.CREATE_LABEL(label_text)
     qt_constants.PROPERTIES.SET_STYLE(name_label,
         build_track_header_label_stylesheet())
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(name_label, "Expanding", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(header_layout, name_label)
 
-    local lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(lock_btn, HDR.LOCK)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
-    qt_constants.PROPERTIES.SET_STYLE(lock_btn,
-        build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
-    wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
+    if not is_source_tab then
+        lock_btn = qt_constants.WIDGET.CREATE_BUTTON("🔒")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(lock_btn, HDR.LOCK)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(lock_btn, HDR.LOCK)
+        qt_constants.PROPERTIES.SET_STYLE(lock_btn,
+            build_track_header_btn_stylesheet(track.locked, "#ccaa00"))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, lock_btn)
+        wire_toggle_preference(lock_btn, captured_track_id, "locked", "#ccaa00")
 
-    local sync_btn = qt_constants.WIDGET.CREATE_BUTTON(
-        SYNC_ICONS[track.sync_mode] or "?")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(sync_btn, HDR.SYNC)
-    qt_constants.PROPERTIES.SET_MAX_WIDTH(sync_btn, HDR.SYNC)
-    qt_constants.PROPERTIES.SET_STYLE(sync_btn,
-        build_sync_mode_btn_stylesheet(track.sync_mode))
-    qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
-    wire_sync_mode_cycle(sync_btn, captured_track_id)
+        sync_btn = qt_constants.WIDGET.CREATE_BUTTON(
+            SYNC_ICONS[track.sync_mode] or "?")
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(sync_btn, HDR.SYNC)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(sync_btn, HDR.SYNC)
+        qt_constants.PROPERTIES.SET_STYLE(sync_btn,
+            build_sync_mode_btn_stylesheet(track.sync_mode))
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, sync_btn)
+        wire_sync_mode_cycle(sync_btn, captured_track_id)
+    end
 
     local mute_btn, solo_btn = add_sm_stack_to_layout(
         header_layout, track, captured_track_id)
 
     -- Cells snapshot for T017 inspection (FR-008): records the LTR order of
     -- widgets actually placed in header_layout above.
-    local cells = {"src_btn", "rec_btn", "label", "lock", "sync_mode", "sm_stack"}
+    local cells = is_source_tab
+        and {"label", "sm_stack"}
+        or {"src_btn", "rec_btn", "label", "lock", "sync_mode", "sm_stack"}
 
     -- Audio rows trail a waveform toggle (UI-only state, no undo).
     local wave_btn = nil
