@@ -245,6 +245,7 @@ do
 
     local entry = {
         clip_id = "rev1",
+        media_kind = "video",
         sequence_start = 0, duration = 50,
         source_in = 50, source_out = 0,
         fps_numerator = 25, fps_denominator = 1,
@@ -270,6 +271,7 @@ do
     mock_clips = {
         {
             clip_id = "rev1",
+            media_kind = "video",
             sequence_start = 0, duration = 50,
             source_in = 50, source_out = 0,
             fps_numerator = 25, fps_denominator = 1,
@@ -299,10 +301,18 @@ do
     mock_clips = {
         {
             clip_id = "rev_audio1",
+            media_kind = "audio",
             sequence_start = 0, duration = 50,
-            source_in = 2400000,   -- 50s * 48000
+            source_in = 2400000,   -- 50s * 48000 file-natural samples
             source_out = 0,
-            fps_numerator = 25, fps_denominator = 1,  -- media's video rate (audio path uses this)
+            -- 018: AUDIO entries carry audio_sample_rate (denormalized from
+            -- the mref column); _build_tmb_clip uses it as the TMB rate so
+            -- the decoder interprets source_in correctly as samples.
+            -- fps_numerator/denominator stay set to the media's video fps
+            -- because _compute_audio_speed_ratio needs them for the
+            -- seq-fps/media-fps conform ratio.
+            audio_sample_rate = 48000,
+            fps_numerator = 25, fps_denominator = 1,
             media_path = "/test.wav",
             track_index = 0,
             volume = 1.0,

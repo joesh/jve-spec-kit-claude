@@ -64,6 +64,7 @@ local function build_entry(path)
     return {
         media_path     = path,
         clip_id        = "c1",
+        media_kind     = "video",   -- offline-flag test stays in the video branch
         fps_numerator  = 24, fps_denominator = 1,
         sequence_start = 0, duration = 10,
         source_in      = 0, source_out = 10,

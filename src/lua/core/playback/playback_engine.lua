@@ -1005,6 +1005,9 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
     assert(type(speed_ratio) == "number" and speed_ratio ~= 0 and math.abs(speed_ratio) < 100, string.format(
         "PlaybackEngine:_build_tmb_clip: clip %s speed_ratio must be non-zero (|sr|<100), got %s",
         tostring(entry.clip_id), tostring(speed_ratio)))
+    assert(entry.media_kind == "video" or entry.media_kind == "audio", string.format(
+        "PlaybackEngine:_build_tmb_clip: clip %s missing media_kind (got %s)",
+        tostring(entry.clip_id), tostring(entry.media_kind)))
 
     -- Resolve offline state from media_status — single source of truth.
     -- Was a direct io.open check here; that created two sources of
@@ -1025,14 +1028,30 @@ function PlaybackEngine:_build_tmb_clip(entry, speed_ratio)
         if f then f:close() end
     end
 
+    -- TMB clip rate must be consistent with source_in's unit (TMB does
+    -- `source_origin_us = FrameTime::from_frame(source_in - first_sample_tc, rate)`).
+    -- VIDEO: source_in is frames at the file's video rate → rate = video fps.
+    -- AUDIO: source_in is file-natural samples (chain-leaf, FR-008) →
+    --        rate = audio_sample_rate / 1. Feeding video fps here pointed
+    --        the decoder thousands of seconds past EOF (F10 silent audio).
+    local rate_num, rate_den
+    if entry.media_kind == "video" then
+        rate_num, rate_den = entry.fps_numerator, entry.fps_denominator
+    else
+        assert(type(entry.audio_sample_rate) == "number" and entry.audio_sample_rate > 0,
+            string.format("PlaybackEngine:_build_tmb_clip: audio entry %s missing "
+                .. "audio_sample_rate (INV-8: AUDIO media_refs carry it denormalized)",
+                tostring(entry.clip_id)))
+        rate_num, rate_den = entry.audio_sample_rate, 1
+    end
     return {
         clip_id        = entry.clip_id,
         media_path     = entry.media_path,
         sequence_start = entry.sequence_start,
         duration       = entry.duration,
         source_in      = entry.source_in,
-        rate_num       = entry.fps_numerator,
-        rate_den       = entry.fps_denominator,
+        rate_num       = rate_num,
+        rate_den       = rate_den,
         speed_ratio    = speed_ratio,
         offline        = is_offline,
         volume         = entry.volume,

@@ -2357,6 +2357,13 @@ local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, o
             owner_track_type  = r.track_type,
             owner_clip_id     = r.id,
             channel_state  = { enabled = ms_enabled, gain_db = ms_gain_db },
+            -- 018: source_in/source_out are file-natural samples; consumers
+            -- (PlaybackEngine:_build_tmb_clip → TMB) need the matching rate
+            -- to convert samples → microseconds. r.audio_sample_rate is the
+            -- denormalized mref column (FR-004 / INV-8 — non-NULL on AUDIO
+            -- mrefs). Without this the TMB feeder uses video fps and the
+            -- decoder seeks to a wrong file position (F10 silent audio).
+            audio_sample_rate = r.audio_sample_rate,
         }
     end
 end
