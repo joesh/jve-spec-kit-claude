@@ -34,7 +34,7 @@ require("test_env")
 -- capture the call rather than actually pop a dialog. The stub must be
 -- in place before the require so the popup's local handle points at
 -- our table.
-local last_call = nil
+local last_call  -- luacheck: ignore — first value is overwritten by stub callback at run time
 package.loaded["core.qt_constants"] = {
     DIALOG = {
         SHOW_CONFIRM = function(args) last_call = args end,
