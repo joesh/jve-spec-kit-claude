@@ -166,12 +166,12 @@ local WHEEL_DELTA_EPSILON = 1e-4
 
 --- Apply the asymmetric axis lock to the raw (delta_x, delta_y) wheel
 -- pair, lazily creating the per-view state on first use.
-local function filter_wheel_axis(view, delta_x, delta_y)
+local function filter_wheel_axis(view, delta_x, delta_y, phase)
     if not view._scroll_axis_state then
         view._scroll_axis_state = scroll_axis_lock.new_state()
     end
     return scroll_axis_lock.apply(
-        view._scroll_axis_state, delta_x, delta_y, wheel_timestamp_ms())
+        view._scroll_axis_state, delta_x, delta_y, wheel_timestamp_ms(), phase)
 end
 
 --- Resolve the horizontal-scroll delta from an axis-locked (dx, dy) pair.
@@ -240,13 +240,13 @@ end
 --
 -- @return propagate_vertical:bool — true to let Qt scroll vertically; false
 --         to consume the event and pin the vertical position.
-function M.handle_wheel(view, delta_x, delta_y, modifiers)
+function M.handle_wheel(view, delta_x, delta_y, modifiers, phase)
     assert(type(delta_x) == "number",
         "timeline_view_input.handle_wheel: delta_x must be a number, got " .. type(delta_x))
     assert(type(delta_y) == "number",
         "timeline_view_input.handle_wheel: delta_y must be a number, got " .. type(delta_y))
 
-    local dx, dy = filter_wheel_axis(view, delta_x, delta_y)
+    local dx, dy = filter_wheel_axis(view, delta_x, delta_y, phase)
     scroll_viewport_horizontally(view, effective_horizontal(dx, dy, modifiers))
     return math.abs(dy) >= WHEEL_DELTA_EPSILON
 end

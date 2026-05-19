@@ -160,15 +160,15 @@ function M.create(widget, state_module, track_filter_fn, options)
         input.handle_mouse(view, type, x, y, btn, mods)
         command_manager.end_command_event()
     end
-    local function on_wheel(dx, dy, mods)
-        return input.handle_wheel(view, dx, dy, mods)
+    local function on_wheel(dx, dy, mods, phase)
+        return input.handle_wheel(view, dx, dy, mods, phase)
     end
 
     timeline.set_lua_state(widget)
     local hname = "tl_mouse_" .. tostring(widget):gsub("[^%w]", "_")
     _G[hname] = function(e)
         if e.type == "wheel" then
-            return on_wheel(e.delta_x, e.delta_y, e.modifiers)
+            return on_wheel(e.delta_x, e.delta_y, e.modifiers, e.scroll_phase)
         else
             on_mouse(e.type, e.x, e.y, e.button, e)
         end

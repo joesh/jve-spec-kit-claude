@@ -467,6 +467,23 @@ void TimelineRenderer::wheelEvent(QWheelEvent* event)
             lua_pushnumber(lua_state_, deltaY);
             lua_setfield(lua_state_, -2, "delta_y");
 
+            // Forward Qt's scroll-phase enum so Lua can detect a fresh
+            // fingers-down touch (ScrollBegin) and hard-reset its axis
+            // lock. On macOS the momentum tail (ScrollMomentum) emits
+            // events at ~60Hz for 1-2s after fingers lift, bridging
+            // any timestamp-gap heuristic; phase is the only authoritative
+            // signal that a new gesture has started.
+            const char* phase_str = "none";
+            switch (event->phase()) {
+                case Qt::ScrollBegin:        phase_str = "begin";    break;
+                case Qt::ScrollUpdate:       phase_str = "update";   break;
+                case Qt::ScrollEnd:          phase_str = "end";      break;
+                case Qt::ScrollMomentum:     phase_str = "momentum"; break;
+                case Qt::NoScrollPhase:      phase_str = "none";     break;
+            }
+            lua_pushstring(lua_state_, phase_str);
+            lua_setfield(lua_state_, -2, "scroll_phase");
+
             Qt::KeyboardModifiers mods = event->modifiers();
 #if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
             bool is_command = mods.testFlag(Qt::ControlModifier);

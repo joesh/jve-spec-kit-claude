@@ -109,7 +109,6 @@ print("  ✓ zero-delta wheel is a no-op (still returns true)")
 
 -- No-clip state → no dispatch (still returns true)
 dispatched = {}
-local no_clip_handler_state = true
 package.loaded["ui.monitor_mark_bar"] = nil  -- isolate next create
 local m2 = require("ui.monitor_mark_bar")
 _G.timeline = setmetatable({
@@ -131,6 +130,5 @@ r = h2({type="wheel", delta_x=20, delta_y=0, modifiers={}})
 assert(r == true, "no-clip wheel must return true")
 assert(#dispatched == 0, "no-clip wheel must NOT dispatch")
 print("  ✓ no-clip wheel is a no-op (still returns true)")
-_ = no_clip_handler_state
 
 print("\n✅ test_monitor_mark_bar_wheel_scrubs.lua passed")

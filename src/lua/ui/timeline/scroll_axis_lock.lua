@@ -25,6 +25,14 @@
 --   • A pause of SCROLL_GESTURE_GAP_MS (wall-clock) resets the gesture and
 --     a fresh classification can occur.
 --
+-- A wall-clock pause used to be the only way to start a fresh gesture;
+-- macOS momentum-scroll events (phase = "momentum") arrive at ~60Hz for
+-- 1-2 seconds after fingers lift, which prevents the pause from ever
+-- happening and bridges a new touch into the old gesture. Qt's
+-- QWheelEvent::phase() reports "begin" on every fresh fingers-down
+-- touch; that is the authoritative gesture boundary, and apply()
+-- hard-resets state when it sees phase == "begin".
+--
 -- @file scroll_axis_lock.lua
 local M = {}
 local ui_constants = require("core.ui_constants")
@@ -58,13 +66,24 @@ function M.new_state()
     return { mode = "tentative", cum_dx = 0, cum_dy = 0, frac_x = 0, last_ts = nil }
 end
 
--- Reset the gesture if the inter-event pause exceeds GESTURE_GAP_MS.
-local function reset_if_gesture_gap(state, now_ms)
-    if state.last_ts ~= nil and (now_ms - state.last_ts) > GESTURE_GAP_MS then
-        state.mode = "tentative"
-        state.cum_dx = 0
-        state.cum_dy = 0
-        state.frac_x = 0
+-- Clear gesture state in place. Called from two paths: a wall-clock
+-- pause longer than GESTURE_GAP_MS, and a phase="begin" event from Qt.
+local function clear_state(state)
+    state.mode = "tentative"
+    state.cum_dx = 0
+    state.cum_dy = 0
+    state.frac_x = 0
+end
+
+-- Reset the gesture if either the inter-event pause exceeded
+-- GESTURE_GAP_MS or this event is a fresh fingers-down touch
+-- (phase = "begin"). The phase path is authoritative on macOS where
+-- the momentum tail bridges the timestamp gap.
+local function reset_on_new_gesture(state, now_ms, phase)
+    if phase == "begin" then
+        clear_state(state)
+    elseif state.last_ts ~= nil and (now_ms - state.last_ts) > GESTURE_GAP_MS then
+        clear_state(state)
     end
     state.last_ts = now_ms
 end
@@ -98,9 +117,13 @@ end
 -- @param dx      incoming horizontal delta
 -- @param dy      incoming vertical delta
 -- @param now_ms  monotonic wall-clock timestamp in milliseconds for this event
+-- @param phase   Qt scroll phase string: "begin" (fresh fingers-down),
+--                "update", "end", "momentum", or "none" (legacy mouse wheel
+--                without phase info). Only "begin" affects gesture
+--                boundaries; the other values are advisory.
 -- @return (effective_dx, effective_dy) after suppression
-function M.apply(state, dx, dy, now_ms)
-    reset_if_gesture_gap(state, now_ms)
+function M.apply(state, dx, dy, now_ms, phase)
+    reset_on_new_gesture(state, now_ms, phase)
     accumulate_motion(state, dx, dy)
     update_mode(state)
 
