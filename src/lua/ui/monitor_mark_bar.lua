@@ -24,27 +24,18 @@ local M = {}
 
 M.BAR_HEIGHT = 20
 
---- Translate a horizontal wheel/trackpad delta into a clamped target
---- playhead frame. delta_x in pixels; the bar maps width pixels onto
---- viewport_duration frames, so frame_delta = (delta_x / width) *
---- viewport_duration. Result clamps to [start_frame, total_frames - 1]
---- so the scrub can't run past either end of the clip extent.
-function M.compute_wheel_scrub_target(playhead, delta_x, width,
-                                      viewport_duration, start_frame, total_frames)
-    assert(type(playhead)          == "number", "playhead must be number")
-    assert(type(delta_x)           == "number", "delta_x must be number")
-    assert(type(width)             == "number" and width > 0,
+--- Translate a horizontal wheel/trackpad pixel delta into a frame delta
+--- using the bar's pixel/frame scale (viewport_duration frames over
+--- width pixels). Pure conversion — clamping is the consuming command's
+--- job, not this helper's. Kept as a module-level function so the
+--- dispatch math is testable without a Qt harness.
+function M.compute_wheel_frame_delta(delta_x, width, viewport_duration)
+    assert(type(delta_x) == "number", "delta_x must be number")
+    assert(type(width) == "number" and width > 0,
         "width must be a positive number")
     assert(type(viewport_duration) == "number" and viewport_duration > 0,
         "viewport_duration must be a positive number")
-    assert(type(start_frame)       == "number", "start_frame must be number")
-    assert(type(total_frames)      == "number" and total_frames > start_frame,
-        "total_frames must be > start_frame")
-    local frame_delta = math.floor((delta_x / width) * viewport_duration + 0.5)
-    local target = playhead + frame_delta
-    if target < start_frame      then return start_frame end
-    if target > total_frames - 1 then return total_frames - 1 end
-    return target
+    return math.floor((delta_x / width) * viewport_duration + 0.5)
 end
 
 -- Colors (matching timeline ruler mark rendering)
@@ -59,7 +50,8 @@ local PLAYHEAD_LINE_WIDTH = 2
 
 --- Create a mark bar attached to a ScriptableTimeline widget.
 -- @param widget: ScriptableTimeline widget (created via CREATE_TIMELINE)
--- @param config: { state_provider, has_clip, get_mark_in, get_mark_out, on_seek, on_listener }
+-- @param config: { state_provider, has_clip, get_mark_in, get_mark_out,
+--                  on_seek, on_listener, monitor_view_id }
 -- @return table with {widget, render, on_mouse_event}
 function M.create(widget, config)
     assert(widget, "monitor_mark_bar.create: widget is nil")
@@ -77,12 +69,17 @@ function M.create(widget, config)
         "monitor_mark_bar.create: config.get_mark_out function required")
     assert(type(config.on_listener) == "function",
         "monitor_mark_bar.create: config.on_listener function required")
+    assert(type(config.monitor_view_id) == "string" and config.monitor_view_id ~= "",
+        "monitor_mark_bar.create: config.monitor_view_id required (used to "
+        .. "route wheel/trackpad gestures to the right SequenceMonitor via "
+        .. "command_manager dispatch)")
 
     local state = config.state_provider
     local on_seek = config.on_seek
     local has_clip = config.has_clip
     local get_mark_in = config.get_mark_in
     local get_mark_out = config.get_mark_out
+    local monitor_view_id = config.monitor_view_id
 
     local bar = {
         widget = widget,
@@ -208,19 +205,30 @@ function M.create(widget, config)
             if not has_clip() then return true end
             local width = select(1, timeline.get_dimensions(widget))
             if not width or width <= 0 then return true end
-            -- Horizontal trackpad scroll → playhead scrub. Shift+wheel
-            -- (or single-axis wheel mice) substitutes delta_y for
-            -- delta_x, mirroring the timeline ruler's wheel mapping.
+            -- Horizontal trackpad scroll. Shift+wheel (or single-axis
+            -- wheel mice) substitutes delta_y for delta_x, mirroring
+            -- the timeline ruler's wheel mapping.
             local delta_x = event.delta_x or 0
-            if math.abs(delta_x) < 0.0001 and event.modifiers and event.modifiers.shift then
+            local modifiers = event.modifiers or {}
+            if math.abs(delta_x) < 0.0001 and modifiers.shift then
                 delta_x = event.delta_y or 0
             end
             if math.abs(delta_x) < 0.0001 then return true end
-            local target = M.compute_wheel_scrub_target(
-                state.playhead, delta_x, width,
-                state.viewport_duration, state.start_frame or 0,
-                state.total_frames)
-            on_seek(target)
+            local delta_frames = M.compute_wheel_frame_delta(
+                delta_x, width, state.viewport_duration)
+            if delta_frames == 0 then return true end
+            -- Gesture → command mapping. Static for now; will move to a
+            -- config table when the trackpad/mouse editor lands (analog
+            -- of the keyboard editor). Opt = pan the displayed viewport
+            -- range; everything else = scrub the playhead. Both go
+            -- through command_manager so the future editor can rebind
+            -- the gesture to any other command.
+            local command_name = modifiers.alt and "PanMonitorMarkBar"
+                                                or "ScrubMonitorPlayhead"
+            require("core.command_manager").execute(command_name, {
+                monitor_view_id = monitor_view_id,
+                delta_frames    = delta_frames,
+            })
             return true
         else
             on_mouse_event(event.type, event.x, event.y, event.button, event)

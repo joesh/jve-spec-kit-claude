@@ -458,12 +458,13 @@ function SequenceMonitor:_create_widgets()
     qt_constants.LAYOUT.ADD_WIDGET(content_layout, mark_bar_widget)
 
     self._mark_bar = monitor_mark_bar.create(mark_bar_widget, {
-        state_provider = self,
-        has_clip = function() return self:has_clip() end,
-        get_mark_in = function() return self:get_mark_in() end,
-        get_mark_out = function() return self:get_mark_out() end,
-        on_seek = function(frame) self:seek_to_frame(frame) end,
-        on_listener = function(fn) self:add_listener(fn) end,
+        state_provider  = self,
+        has_clip        = function() return self:has_clip() end,
+        get_mark_in     = function() return self:get_mark_in() end,
+        get_mark_out    = function() return self:get_mark_out() end,
+        on_seek         = function(frame) self:seek_to_frame(frame) end,
+        on_listener     = function(fn) self:add_listener(fn) end,
+        monitor_view_id = self.view_id,
     })
     assert(self._mark_bar, string.format(
         "SequenceMonitor(%s):_create_widgets: monitor_mark_bar.create returned nil",

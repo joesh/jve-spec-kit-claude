@@ -1,99 +1,136 @@
 #!/usr/bin/env luajit
---- Two-finger trackpad scroll on the monitor mark bar scrubs the
---- playhead horizontally. Domain mapping: a horizontal wheel delta of
---- W pixels equals (W / bar_width) * viewport_duration frames of
---- playhead movement. Negative delta moves earlier.
+--- Wheel/trackpad gestures on the monitor mark bar dispatch through
+--- the command system so the gesture→action mapping is rebindable
+--- (gesture editor analog of the keyboard editor, planned).
 ---
---- The new playhead clamps to [start_frame, total_frames - 1] so the
---- scrub can't run off either end of the clip extent.
+--- Mappings (default — overridable when the gesture editor lands):
+---   plain wheel/trackpad horizontal scroll → ScrubMonitorPlayhead
+---   Opt + wheel/trackpad horizontal scroll → PanMonitorMarkBar
+---
+--- Each command receives `monitor_view_id` (which monitor's mark bar
+--- the gesture happened on) and `delta_frames` (pixel delta translated
+--- to a frame count via the bar's pixel/frame scale).
 
 require("test_env")
 
 print("=== test_monitor_mark_bar_wheel_scrubs.lua ===")
 
 local m = require("ui.monitor_mark_bar")
-assert(type(m.compute_wheel_scrub_target) == "function",
-    "monitor_mark_bar.compute_wheel_scrub_target(playhead, delta_x, width, "
-    .. "viewport_duration, start_frame, total_frames) missing")
 
--- Helper: a 1000-frame clip, 200 px wide bar, viewport spans the whole clip.
-local W, VD, SF, TF = 200, 1000, 0, 1000
+-- ── Pixel-to-frame conversion helper ─────────────────────────────────────────
+-- The wheel handler converts pixel deltas to frame deltas using the bar's
+-- pixel/frame scale; the commands themselves consume frame deltas. Keeping
+-- the conversion as a pure helper keeps the dispatch math testable without
+-- a Qt harness.
+assert(type(m.compute_wheel_frame_delta) == "function",
+    "monitor_mark_bar.compute_wheel_frame_delta(delta_x, width, viewport_duration) missing")
 
--- ── Forward scroll: +200 px on a 1000-frame viewport = +1000 frames ──
-local p = m.compute_wheel_scrub_target(100, 200, W, VD, SF, TF)
-assert(p == TF - 1, string.format(
-    "forward scroll past end must clamp to total_frames-1 (%d); got %d",
-    TF - 1, p))
-print("  ✓ forward scroll clamps at end")
+local W, VD = 200, 1000
 
--- ── Modest forward scroll: +20 px = +100 frames ──
-p = m.compute_wheel_scrub_target(100, 20, W, VD, SF, TF)
-assert(p == 200, string.format(
-    "forward 20 px on a 200px bar with 1000-frame viewport = +100 frames "
-    .. "→ 100+100=200; got %d", p))
-print("  ✓ forward scroll moves playhead by (delta/width)*duration frames")
+assert(m.compute_wheel_frame_delta(0,   W, VD) == 0,   "zero pixel delta → zero frames")
+assert(m.compute_wheel_frame_delta(20,  W, VD) == 100, "+20 px / 200 px-wide bar / 1000-frame vp = +100 frames")
+assert(m.compute_wheel_frame_delta(-40, W, VD) == -200, "negative pixel delta → negative frame delta")
+print("  ✓ compute_wheel_frame_delta math")
 
--- ── Backward scroll: -40 px = -200 frames ──
-p = m.compute_wheel_scrub_target(500, -40, W, VD, SF, TF)
-assert(p == 300, string.format("backward 40 px = -200 frames → 300; got %d", p))
-print("  ✓ backward scroll moves playhead backwards")
+-- ── Wheel dispatch: plain wheel → scrub command, Opt → pan command ───────────
+-- Stub command_manager.execute to capture dispatches. Replace it on the
+-- already-loaded module table so the wheel handler's require() returns
+-- this stub.
+local dispatched = {}
+package.loaded["core.command_manager"] = {
+    execute = function(name, args)
+        table.insert(dispatched, { name = name, args = args })
+        return true
+    end,
+}
 
--- ── Backward past start clamps to start_frame ──
-p = m.compute_wheel_scrub_target(10, -500, W, VD, SF, TF)
-assert(p == SF, string.format(
-    "backward scroll past start must clamp to start_frame (%d); got %d",
-    SF, p))
-print("  ✓ backward scroll clamps at start")
-
--- ── Zero delta = no movement ──
-p = m.compute_wheel_scrub_target(100, 0, W, VD, SF, TF)
-assert(p == 100, "zero delta must leave playhead untouched")
-print("  ✓ zero delta is a no-op")
-
--- ── Contract: registered wheel handler returns boolean ──────────────────────
--- C++ TimelineRenderer::wheelEvent asserts the Lua handler returns bool.
--- Build the bar end-to-end and call the registered handler with a wheel
--- event to pin the contract: every wheel branch (no-clip, zero-width,
--- zero-delta, real delta) returns true.
-print("-- wheel handler returns bool contract --")
-
-local seek_log = {}
-local has_clip_flag = true
 local fake_state = {
-    playhead = 100, viewport_start = 0, viewport_duration = 1000,
+    playhead = 100, viewport_start = 0, viewport_duration = VD,
     start_frame = 0, total_frames = 1000,
 }
 local stored_handler
--- Stub every timeline.* helper with a no-op; mark_bar.render calls a
--- bunch of draw primitives we don't care about here. Override only the
--- handlers we DO care about.
 _G.timeline = setmetatable({
     set_mouse_event_handler = function(_, name) stored_handler = name end,
     get_dimensions          = function() return W, m.BAR_HEIGHT end,
 }, { __index = function() return function() end end })
 
 m.create({_id=1}, {
-    state_provider = fake_state,
-    has_clip       = function() return has_clip_flag end,
-    get_mark_in    = function() return nil end,
-    get_mark_out   = function() return nil end,
-    on_seek        = function(f) seek_log[#seek_log + 1] = f end,
-    on_listener    = function() end,
+    state_provider   = fake_state,
+    has_clip         = function() return true end,
+    get_mark_in      = function() return nil end,
+    get_mark_out     = function() return nil end,
+    on_seek          = function() end,
+    on_listener      = function() end,
+    monitor_view_id  = "test_monitor",
 })
-assert(stored_handler and _G[stored_handler],
-    "fixture: set_mouse_event_handler should have registered a handler")
 local handler = _G[stored_handler]
+assert(handler, "fixture: wheel handler must be registered")
 
-local r
-r = handler({type="wheel", delta_x=0, delta_y=0})
-assert(r == true, string.format("zero-delta wheel must return true; got %s", tostring(r)))
+-- Plain wheel (no modifiers) → ScrubMonitorPlayhead
+dispatched = {}
+local r = handler({type="wheel", delta_x=20, delta_y=0, modifiers={}})
+assert(r == true, string.format("wheel handler must return true; got %s", tostring(r)))
+assert(#dispatched == 1, string.format(
+    "plain wheel must dispatch exactly one command; got %d", #dispatched))
+assert(dispatched[1].name == "ScrubMonitorPlayhead", string.format(
+    "plain wheel must dispatch ScrubMonitorPlayhead; got %s",
+    tostring(dispatched[1].name)))
+assert(dispatched[1].args.monitor_view_id == "test_monitor", string.format(
+    "scrub command must carry monitor_view_id; got %s",
+    tostring(dispatched[1].args.monitor_view_id)))
+assert(dispatched[1].args.delta_frames == 100, string.format(
+    "scrub command must carry delta_frames=100; got %s",
+    tostring(dispatched[1].args.delta_frames)))
+print("  ✓ plain wheel dispatches ScrubMonitorPlayhead with delta_frames")
 
-r = handler({type="wheel", delta_x=20, delta_y=0})
-assert(r == true, string.format("real-delta wheel must return true; got %s", tostring(r)))
+-- Opt+wheel → PanMonitorMarkBar
+dispatched = {}
+r = handler({type="wheel", delta_x=20, delta_y=0, modifiers={alt=true}})
+assert(r == true, string.format("Opt+wheel handler must return true; got %s", tostring(r)))
+assert(#dispatched == 1, "Opt+wheel must dispatch exactly one command")
+assert(dispatched[1].name == "PanMonitorMarkBar", string.format(
+    "Opt+wheel must dispatch PanMonitorMarkBar; got %s",
+    tostring(dispatched[1].name)))
+assert(dispatched[1].args.monitor_view_id == "test_monitor",
+    "pan command must carry monitor_view_id")
+assert(dispatched[1].args.delta_frames == 100, string.format(
+    "pan command must carry delta_frames=100; got %s",
+    tostring(dispatched[1].args.delta_frames)))
+print("  ✓ Opt+wheel dispatches PanMonitorMarkBar with delta_frames")
 
-has_clip_flag = false
-r = handler({type="wheel", delta_x=20, delta_y=0})
-assert(r == true, string.format("no-clip wheel must return true; got %s", tostring(r)))
-print("  ✓ every wheel branch returns true (C++ wheelEvent contract)")
+-- Zero delta after no-axis filtering → no dispatch (still returns true)
+dispatched = {}
+r = handler({type="wheel", delta_x=0, delta_y=0, modifiers={}})
+assert(r == true, "zero-delta wheel must return true")
+assert(#dispatched == 0, string.format(
+    "zero-delta wheel must NOT dispatch (saves a no-op command round-trip); "
+    .. "got %d dispatches", #dispatched))
+print("  ✓ zero-delta wheel is a no-op (still returns true)")
+
+-- No-clip state → no dispatch (still returns true)
+dispatched = {}
+local no_clip_handler_state = true
+package.loaded["ui.monitor_mark_bar"] = nil  -- isolate next create
+local m2 = require("ui.monitor_mark_bar")
+_G.timeline = setmetatable({
+    set_mouse_event_handler = function(_, name) stored_handler = name end,
+    get_dimensions          = function() return W, m2.BAR_HEIGHT end,
+}, { __index = function() return function() end end })
+m2.create({_id=2}, {
+    state_provider   = fake_state,
+    has_clip         = function() return false end,
+    get_mark_in      = function() return nil end,
+    get_mark_out     = function() return nil end,
+    on_seek          = function() end,
+    on_listener      = function() end,
+    monitor_view_id  = "test_monitor",
+})
+local h2 = _G[stored_handler]
+dispatched = {}
+r = h2({type="wheel", delta_x=20, delta_y=0, modifiers={}})
+assert(r == true, "no-clip wheel must return true")
+assert(#dispatched == 0, "no-clip wheel must NOT dispatch")
+print("  ✓ no-clip wheel is a no-op (still returns true)")
+_ = no_clip_handler_state
 
 print("\n✅ test_monitor_mark_bar_wheel_scrubs.lua passed")
