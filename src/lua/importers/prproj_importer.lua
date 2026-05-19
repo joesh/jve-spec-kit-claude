@@ -777,7 +777,7 @@ function M.convert(prproj_path, jvp_path, progress_cb)
     local settings = parse_result.project.settings
     -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
     -- on every project; prproj has no master-clock concept of its own.
-    settings.master_clock_hz = 192000
+    settings.master_clock_hz = 705600000
     settings.default_fps = { num = 24, den = 1 }
 
     local project = Project.create(parse_result.project.name, {

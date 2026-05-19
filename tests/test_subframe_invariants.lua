@@ -173,25 +173,30 @@ assert(db:exec("DELETE FROM db_session_flags WHERE name = '_conform_sequence_in_
 -- ===========================================================================
 
 -- Direct settings UPDATE that changes master_clock_hz must be rejected.
+-- Post-018 the canonical clock is 705600000 (flicks) and immutable: every
+-- supported rate divides cleanly so no user-facing reason to change it
+-- exists. The SetProjectMasterClock command is gone; the trigger no
+-- longer has any bypass.
 expect_abort([[
     UPDATE projects SET settings = '{"master_clock_hz":48000,"default_fps":{"num":24,"den":1}}'
         WHERE id = 'p1';
 ]], "INV%-6")
 
--- Settings UPDATE that does NOT change master_clock_hz is allowed.
+-- Settings UPDATE that does NOT change master_clock_hz is allowed
+-- (other keys like default_fps remain mutable through their own command).
 local ok3 = db:exec([[
     UPDATE projects SET settings = '{"master_clock_hz":192000,"default_fps":{"num":30,"den":1}}'
         WHERE id = 'p1';
 ]])
 assert(ok3, "INV-6: non-clock settings UPDATE should succeed, got: " .. (db:last_error() or ""))
 
--- With the flag set, master_clock change is allowed.
+-- Even with the legacy session flag present, the immutable trigger
+-- rejects master_clock_hz changes. Confirms no resurrected bypass.
 assert(db:exec("INSERT INTO db_session_flags VALUES ('_set_master_clock_in_progress')"))
-local ok4 = db:exec([[
+expect_abort([[
     UPDATE projects SET settings = '{"master_clock_hz":48000,"default_fps":{"num":30,"den":1}}'
         WHERE id = 'p1';
-]])
-assert(ok4, "INV-6: UPDATE under flag should succeed, got: " .. (db:last_error() or ""))
+]], "INV%-6")
 assert(db:exec("DELETE FROM db_session_flags WHERE name = '_set_master_clock_in_progress'"))
 
 -- ===========================================================================

@@ -111,9 +111,11 @@ print("  PASS: 6 video clips — all source_in values match DRP <In>")
 print("\n--- 2: V/A source_in correspondence ---")
 
 -- 018: source_in_frame is in master.fps frames + a sub-frame in master-clock
--- ticks (rule INV-3/INV-4). master_clock_hz = 192000. With 60fps video and
--- 48000 Hz audio, spf=800 samples/frame and tpf=3200 ticks/frame.
--- master.audio_sample_rate is NULL per INV-7; the file rate lives on media.
+-- ticks (rule INV-3/INV-4). With 60fps video and 48000 Hz audio,
+-- spf=800 samples/frame. master.audio_sample_rate is NULL per INV-7;
+-- the file rate lives on media. Master-clock-hz read from project
+-- settings rather than hardcoded — canonical is 705600000 (flicks) but
+-- the recovery math should follow whatever the project carries.
 -- Column order matters: query_all stops at the first NULL value, so
 -- columns guaranteed non-NULL come first. ns.audio_sample_rate is NULL
 -- on masters per INV-7 — keep it last.
@@ -148,7 +150,17 @@ local expected_audio_samples = {
 }
 
 local SPF = 800       -- samples_per_frame at 60fps × 48000Hz
-local SUB_TICKS_PER_SAMPLE = 192000 / 48000  -- master_clock_hz / audio_sr = 4
+-- Read master_clock_hz from project settings rather than hardcode — the
+-- canonical value can change (192000 → 705,600,000 flicks during 018)
+-- and the recovery math has to follow.
+local mch_row = query_one(
+    "SELECT json_extract(settings, '$.master_clock_hz') FROM projects LIMIT 1")
+assert(mch_row and mch_row[1] and mch_row[1] > 0,
+    "project must carry master_clock_hz in settings (FR-028)")
+local SUB_TICKS_PER_SAMPLE = mch_row[1] / 48000
+assert(SUB_TICKS_PER_SAMPLE == math.floor(SUB_TICKS_PER_SAMPLE), string.format(
+    "INV-9: master_clock_hz=%d must divide 48000 exactly; got %s ticks/sample",
+    mch_row[1], tostring(SUB_TICKS_PER_SAMPLE)))
 
 for i = 1, 5 do
     local v = video_clips[i]

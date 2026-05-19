@@ -466,7 +466,7 @@ local function parse_project_metadata(project_elem)
     local project = {
         name = "Untitled Project",
         settings = {
-            master_clock_hz = 192000,
+            master_clock_hz = 705600000,
             default_fps = { num = 24, den = 1 },
         }
     }
@@ -2503,7 +2503,7 @@ local function init_project_database(jvp_path, parse_result, picked_audio_rate)
         width             = parse_result.project.settings.width,
         height            = parse_result.project.settings.height,
         audio_sample_rate = picked_audio_rate,
-        master_clock_hz   = 192000,
+        master_clock_hz   = 705600000,
         default_fps       = { num = 24, den = 1 },
     }
     local project = Project.create(parse_result.project.name, {

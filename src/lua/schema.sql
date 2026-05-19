@@ -3,7 +3,7 @@
 --   - clips.source_in_subframe / source_out_subframe (INTEGER, NULL for video, NOT NULL for audio)
 --   - media_refs.audio_sample_rate (INTEGER, denormalized from media row)
 --   - sequences.audio_sample_rate MUST be NULL on kind='master' (INV-7)
---   - projects.settings carries default_fps {num,den} and master_clock_hz (default 192000)
+--   - projects.settings carries default_fps {num,den} and master_clock_hz (canonical 705600000 — flicks; immutable post-create per INV-6)
 --   - INV-3 .. INV-7 triggers enforce subframe presence/bound + fps/clock single-writer
 -- Feature 015: Source-in-Timeline — adds tracks.sync_mode column and patches table.
 -- No backward compatibility with V10 or earlier (rule 2.15: re-import on schema change).
@@ -607,9 +607,12 @@ END;
 --   0 <= source_*_subframe < master_clock_hz * source_seq.fps_den / source_seq.fps_num.
 -- INV-5: sequences.fps_num/den single-writer (FR-031)
 --   UPDATE rejected unless db_session_flags has '_conform_sequence_in_progress' row.
--- INV-6: projects.settings.master_clock_hz single-writer (FR-028)
---   UPDATE OF settings that changes master_clock_hz rejected unless
---   db_session_flags has '_set_master_clock_in_progress' row.
+-- INV-6: projects.settings.master_clock_hz immutable post-create (FR-028)
+--   UPDATE OF settings that changes master_clock_hz is unconditionally
+--   rejected. The canonical clock (705,600,000 — flicks) exactly
+--   represents every supported audio rate and frame rate, so no command
+--   has any reason to change it. INSERT (project create) sets the
+--   canonical value once and never again.
 -- INV-7: sequences.audio_sample_rate must be NULL on kind='master' (FR-004)
 --
 -- Session-flag pattern: SQLite non-TEMP triggers cannot reference temp.*,
@@ -731,20 +734,23 @@ BEGIN
         'INV-5: sequences.fps_num/den mutable only via ConformSequence');
 END;
 
--- ---------- INV-6 — projects.settings.master_clock_hz single-writer ----------
--- Fires only when the master_clock_hz value within settings actually changes,
--- and only when SetProjectMasterClock's temp-table flag is absent.
+-- ---------- INV-6 — projects.settings.master_clock_hz immutable post-create ----------
+-- The canonical master clock (705,600,000 — flicks) exactly represents
+-- every supported audio rate and frame rate, so no user-facing reason to
+-- change it exists. The previous SetProjectMasterClock command is gone;
+-- the trigger now unconditionally rejects any UPDATE that changes the
+-- master_clock_hz value within settings. Other settings keys may still be
+-- UPDATEd freely. INSERT (project create) is not blocked — it sets the
+-- canonical value once and never again.
 
 DROP TRIGGER IF EXISTS trg_projects_master_clock_guard;
 CREATE TRIGGER trg_projects_master_clock_guard
 BEFORE UPDATE OF settings ON projects
-WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
-                  WHERE name = '_set_master_clock_in_progress')
-  AND json_extract(NEW.settings, '$.master_clock_hz')
-      IS NOT json_extract(OLD.settings, '$.master_clock_hz')
+WHEN json_extract(NEW.settings, '$.master_clock_hz')
+     IS NOT json_extract(OLD.settings, '$.master_clock_hz')
 BEGIN
     SELECT RAISE(ABORT,
-        'INV-6: projects.settings.master_clock_hz mutable only via SetProjectMasterClock');
+        'INV-6: projects.settings.master_clock_hz is immutable post-create (canonical value is 705600000 flicks)');
 END;
 
 -- ---------- INV-7 — master.audio_sample_rate must be NULL ----------

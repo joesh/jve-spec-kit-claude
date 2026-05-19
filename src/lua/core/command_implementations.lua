@@ -20,7 +20,7 @@ local command_modules = {
     "relink_clips", "rename_item", "ripple_delete", "ripple_delete_selection",
     "show_keyboard_customization", "show_relink_dialog", "show_source_tab",
     "select_all", "select_browser_items", "select_clips", "set_clip_property",
-    "set_project_default_fps", "set_project_master_clock", "set_project_setting",
+    "set_project_default_fps", "set_project_setting",
     "set_patch", "set_sequence_metadata", "set_sync_mode", "set_track_heights", "set_track_mix_value",
     "setup_project", "show_source_tab", "split_clip", "step_frame",
     "toggle_clip_enabled", "toggle_fullscreen_view", "toggle_maximize_panel",
