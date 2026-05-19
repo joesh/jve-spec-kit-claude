@@ -700,6 +700,9 @@ end
 --- normalized to a common rate. Each clip's source_in/source_out is in its own native
 --- units (video frames at clip fps, audio samples at sample rate). This function converts
 --- every clip to target_rate before computing min/max.
+--- NOTE: 018 subframe precision (clip.source_*_subframe) is DISCARDED — extent is
+--- frame-aligned at target_rate. Callers needing sample-exact extents must read
+--- subframes separately. Tracked: memory/todo_subframe_precision_in_media_selects.md.
 --- @param target_rate number Rate to normalize to (typically media_start_tc_rate)
 --- @return number|nil min_source_in, number|nil max_source_out (both in target_rate units)
 function M:get_source_extent(target_rate)

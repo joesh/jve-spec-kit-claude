@@ -94,10 +94,13 @@ function M.undo(persisted)
     -- numeric columns in order: seq_start then dur for mrefs/inner,
     -- src_in then src_out for outer), we replay those two values in turn.
     local cap = persisted.pre_captured
+    assert(type(cap.mrefs) == "table" and type(cap.inner_clips) == "table"
+        and type(cap.outer_clips) == "table",
+        "ConformSequence.undo: pre_captured must carry mrefs/inner_clips/outer_clips tables")
     local replay = {}
-    for _, m in ipairs(cap.mrefs or {})       do replay[#replay+1] = m.seq_start; replay[#replay+1] = m.dur end
-    for _, c in ipairs(cap.inner_clips or {}) do replay[#replay+1] = c.seq_start; replay[#replay+1] = c.dur end
-    for _, c in ipairs(cap.outer_clips or {}) do replay[#replay+1] = c.src_in;    replay[#replay+1] = c.src_out end
+    for _, m in ipairs(cap.mrefs)       do replay[#replay+1] = m.seq_start; replay[#replay+1] = m.dur end
+    for _, c in ipairs(cap.inner_clips) do replay[#replay+1] = c.seq_start; replay[#replay+1] = c.dur end
+    for _, c in ipairs(cap.outer_clips) do replay[#replay+1] = c.src_in;    replay[#replay+1] = c.src_out end
     local idx = 0
     local function restore_rescaler(_old_unused)
         idx = idx + 1
