@@ -34,17 +34,25 @@ local GAP_MS = ui_constants.TIMELINE.SCROLL_GESTURE_GAP_MS
 -- correspond to fractional-frame motion).
 local current_start = 145127
 local set_calls = {}
+local function record_set(new_start)
+    table.insert(set_calls, new_start)
+    current_start = new_start
+end
 local mock_state = {
     get_viewport_duration = function() return 122 end,
     get_viewport_start_time = function() return current_start end,
-    set_viewport_start_time = function(new_start)
-        table.insert(set_calls, new_start)
-        current_start = new_start
-    end,
+    set_viewport_start_time = record_set,
     flush_pending_notify = function() end,
 }
 local view = { state = mock_state, widget = "mock_widget" }
 _G.timeline = { get_dimensions = function() return 1556 end }
+
+-- Handler dispatches through command_manager → ScrollTimelineViewport →
+-- ui.timeline.timeline_state. Stub the module-level setter so the
+-- per-call observations land in set_calls regardless of dispatch path.
+local real_ts = require("ui.timeline.timeline_state")
+real_ts.get_viewport_start_time = function() return current_start end
+real_ts.set_viewport_start_time = record_set
 
 local function reset(view_obj)
     view_obj._scroll_axis_state = nil

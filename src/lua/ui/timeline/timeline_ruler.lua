@@ -399,17 +399,23 @@ function M.create(widget, state_module)
         if math.abs(horizontal) < 0.0001 and modifiers and modifiers.shift then
             horizontal = delta_y or 0
         end
+        if not horizontal or math.abs(horizontal) <= 0.0001 then return end
 
-        if horizontal and math.abs(horizontal) > 0.0001 then
-            local width = timeline.get_dimensions(widget)
-            if width and width > 0 then
-                local viewport_duration = state_module.get_viewport_duration()
-                local delta_time = (-horizontal / width) * viewport_duration
-                local new_start = math.floor(state_module.get_viewport_start_time() + delta_time)
-                state_module.set_viewport_start_time(new_start)
-                state_module.flush_pending_notify()
-            end
-        end
+        local width = timeline.get_dimensions(widget)
+        if not width or width <= 0 then return end
+
+        -- Pixel→frame conversion stays at the handler (UI layer owns the
+        -- pixel/frame scale). Dispatch through command_manager so a
+        -- future trackpad/mouse editor (analog of the keyboard editor)
+        -- can rebind this gesture. Filter zero-frame and rounding
+        -- before dispatch — the command refuses no-ops.
+        local viewport_duration = state_module.get_viewport_duration()
+        local delta_frames = math.floor((-horizontal / width) * viewport_duration)
+        if delta_frames == 0 then return end
+        command_manager.execute("ScrollTimelineViewport", {
+            delta_frames = delta_frames,
+        })
+        state_module.flush_pending_notify()
     end
 
     -- Initialize

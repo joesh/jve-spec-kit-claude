@@ -213,14 +213,19 @@ local function scroll_viewport_horizontally(view, horizontal)
             .. "(filter_wheel_axis lazily initialises it; this function runs after that)")
     local viewport_duration = view.state.get_viewport_duration()
     local delta_time = (-horizontal / width) * viewport_duration
+    -- Sub-pixel fractional accumulator stays at the handler — the
+    -- command consumes whole-frame deltas only.
     local accumulated = axis_state.frac_x + delta_time
     local whole, residual = math.modf(accumulated)
     axis_state.frac_x = residual
     if whole == 0 then
         return
     end
-    local new_start = view.state.get_viewport_start_time() + whole
-    view.state.set_viewport_start_time(new_start)
+    -- Dispatch through command_manager so a future trackpad/mouse
+    -- editor (analog of the keyboard editor) can rebind this gesture.
+    require("core.command_manager").execute("ScrollTimelineViewport", {
+        delta_frames = whole,
+    })
     view.state.flush_pending_notify()
 end
 

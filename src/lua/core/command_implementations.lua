@@ -19,6 +19,7 @@ local command_modules = {
     "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "nudge_selection", "overwrite",
     "pan_monitor_mark_bar",
     "relink_clips", "rename_item", "ripple_delete", "ripple_delete_selection",
+    "scroll_timeline_viewport",
     "scrub_monitor_playhead",
     "show_keyboard_customization", "show_relink_dialog", "show_source_tab",
     "select_all", "select_browser_items", "select_clips", "set_clip_property",
