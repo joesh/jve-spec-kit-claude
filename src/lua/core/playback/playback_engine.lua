@@ -647,81 +647,6 @@ function PlaybackEngine:notify_content_changed()
     self:_refresh_video_track_states()
 end
 
---- Handler: a track's muted/soloed/locked/enabled flag changed.
--- Recomputes _effective_video_track_indices when the track belongs to our
--- sequence and the changed property affects composite selection (muted/soloed).
-function PlaybackEngine:_on_track_preference_changed_signal(track_id, property, _new_val, _prev_val)
-    assert(type(track_id) == "string" and track_id ~= "", string.format(
-        "PlaybackEngine:_on_track_preference_changed_signal: track_id must be non-empty string, got %s",
-        type(track_id)))
-    if property ~= "muted" and property ~= "soloed" then return end
-    if not self.loaded_sequence_id then return end
-    -- Only refresh if this track belongs to our sequence. Load is lightweight
-    -- (single-row SELECT); Track.load asserts presence.
-    local Track = require("models.track")
-    local track = Track.load(track_id)
-    assert(track, string.format(
-        "PlaybackEngine:_on_track_preference_changed_signal: track %s not found", track_id))
-    if track.sequence_id ~= self.loaded_sequence_id then return end
-    self:_refresh_video_track_states()
-    log.event("Video effective indices refreshed: track=%s %s changed", track_id, property)
-end
-
---- Handler: timeline edit touched `seq_id`. Only react when it's our
---- sequence — other sequences' edits are none of our business.
-function PlaybackEngine:_on_content_changed_signal(seq_id)
-    assert(type(seq_id) == "string" and seq_id ~= "", string.format(
-        "PlaybackEngine:_on_content_changed_signal: seq_id must be non-empty string, got %s",
-        type(seq_id)))
-    if seq_id ~= self.loaded_sequence_id then return end
-    self:notify_content_changed()
-    log.event("Edit detected: invalidated clip windows")
-end
-
---- Handler: media file at `path` had its bytes rewritten in place.
---- Status didn't flip (still online), so the clip list is still valid —
---- we just need TMB to drop decoder state keyed on this path.
-function PlaybackEngine:_on_media_content_changed_signal(path)
-    assert(type(path) == "string" and path ~= "", string.format(
-        "PlaybackEngine:_on_media_content_changed_signal: path must be non-empty string, got %s",
-        type(path)))
-    if not self._tmb then return end
-    qt_constants.EMP.TMB_INVALIDATE_PATH(self._tmb, path)
-    log.event("TMB invalidated for rewritten path: %s", path)
-end
-
---- Handler: media_status flipped for `path`. Drop every cache keyed on
---- this path (InvalidatePath) and, when returning online, also drop
---- TMB's permanent FileNotFound blacklist (ClearOffline). Then force a
---- clip rebuild so ClipInfo.offline — baked in at build time — picks
---- up the new state; without this, an offline→online flip leaves
---- clip.offline stuck at true and GetTrackAudio keeps beeping. Filter
---- by _path_is_active_in_tmb so the startup bg-probe storm doesn't
---- reload for paths we never decoded.
-function PlaybackEngine:_on_media_status_changed_signal(path, status)
-    assert(type(path) == "string" and path ~= "", string.format(
-        "PlaybackEngine:_on_media_status_changed_signal: path must be non-empty string, got %s",
-        type(path)))
-    assert(type(status) == "table", string.format(
-        "PlaybackEngine:_on_media_status_changed_signal: status must be table, got %s",
-        type(status)))
-    assert(type(status.offline) == "boolean", string.format(
-        "PlaybackEngine:_on_media_status_changed_signal: status.offline must be boolean, got %s",
-        type(status.offline)))
-    if not self._tmb then return end
-    if not self:_path_is_active_in_tmb(path) then return end
-    local EMP = qt_constants.EMP
-    EMP.TMB_INVALIDATE_PATH(self._tmb, path)
-    if not status.offline then
-        EMP.TMB_CLEAR_OFFLINE(self._tmb, path)
-    end
-    if self._playback_controller then
-        self:_reset_clip_snapshots()
-        qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
-    end
-    log.event("TMB reacted to status change: %s offline=%s",
-        path, tostring(status.offline))
-end
 
 --------------------------------------------------------------------------------
 -- PlaybackController Setup
@@ -1423,5 +1348,10 @@ end
 -- defined in playback_engine_audio.lua but live on this class — moved
 -- there purely for file-size (2.6) without changing the method surface.
 require("core.playback.playback_engine_audio").install(PlaybackEngine)
+
+-- Install signal-handler methods for track preferences, content edits,
+-- in-place media rewrites, and offline/online file-status flips. Defined
+-- in playback_engine_signals.lua (extracted for 2.6).
+require("core.playback.playback_engine_signals").install(PlaybackEngine)
 
 return PlaybackEngine
