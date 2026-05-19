@@ -350,12 +350,13 @@ function M.create(widget, state_module)
 
         elseif event_type == "move" then
             if state_module.is_dragging_playhead() then
-                -- Activate scrub mode on first drag move (not click)
+                -- Activate scrub mode on first drag move (not click).
+                -- Dispatch through command_manager so the future
+                -- gesture editor can rebind which event drives this
+                -- decoder transition.
                 if not scrub_mode_active then
-                    local qt_c = require("core.qt_constants")
-                    if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-                        qt_c.EMP.SET_DECODE_MODE("scrub")
-                    end
+                    command_manager.execute("SetTimelineDecodeMode",
+                        { mode = "scrub" })
                     scrub_mode_active = true
                 end
 
@@ -375,18 +376,18 @@ function M.create(widget, state_module)
 
             -- Restore decode mode after drag: Play if playback is active,
             -- Park otherwise. Previously always set Park, which left the
-            -- decoder in single-frame mode during active playback.
+            -- decoder in single-frame mode during active playback. The
+            -- play/park choice is contextual (depends on the engine
+            -- state); the EMP side-effect goes through
+            -- SetTimelineDecodeMode for consistency with the scrub-start
+            -- transition (rebindable via the future gesture editor).
             if scrub_mode_active then
-                local qt_c = require("core.qt_constants")
-                if qt_c.EMP and qt_c.EMP.SET_DECODE_MODE then
-                    local pm = require("ui.panel_manager")
-                    local tl_sv = pm.get_sequence_monitor("timeline_monitor")
-                    if tl_sv and tl_sv.engine:is_playing() then
-                        qt_c.EMP.SET_DECODE_MODE("play")
-                    else
-                        qt_c.EMP.SET_DECODE_MODE("park")
-                    end
-                end
+                local pm = require("ui.panel_manager")
+                local tl_sv = pm.get_sequence_monitor("timeline_monitor")
+                local next_mode = (tl_sv and tl_sv.engine:is_playing())
+                    and "play" or "park"
+                command_manager.execute("SetTimelineDecodeMode",
+                    { mode = next_mode })
                 scrub_mode_active = false
             end
         end

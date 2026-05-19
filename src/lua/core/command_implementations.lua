@@ -21,6 +21,7 @@ local command_modules = {
     "relink_clips", "rename_item", "ripple_delete", "ripple_delete_selection",
     "scroll_timeline_viewport",
     "scrub_monitor_playhead",
+    "set_timeline_decode_mode",
     "show_keyboard_customization", "show_relink_dialog", "show_source_tab",
     "select_all", "select_browser_items", "select_clips", "set_clip_property",
     "set_project_default_fps", "set_project_setting",
