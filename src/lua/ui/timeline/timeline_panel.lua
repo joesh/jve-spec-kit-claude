@@ -36,6 +36,11 @@ local MIN_TRACK_HEIGHT = 30
 -- — the edge widget IS the separator now, not an extra delta on top.
 local RESIZE_EDGE_PX = 4
 
+-- Width of the trailing alignment cell shared by both row kinds. Audio
+-- rows render it as the W toggle; video rows render an empty spacer of
+-- the same width so the M/S stacks align across the column.
+local TRAILING_ALIGNMENT_PX = 16
+
 -- Pure math. State owns the "what's this track's height" question (with
 -- its own asserts); the drag handler enforces MIN_TRACK_HEIGHT at the
 -- input boundary. These helpers just convert between row and header
@@ -64,6 +69,16 @@ M.metrics = {
     lane_row_total = function(track_height)
         assert_track_height(track_height, "lane_row_total")
         return track_height
+    end,
+    -- Width of the trailing alignment cell on a track header row. Audio
+    -- rows trail with the W (waveform toggle); video rows have nothing
+    -- to put there but need an equivalent spacer so the M/S stack on
+    -- the two row kinds ends at the same x-coord. Single source of
+    -- truth used by both the renderer and the alignment regression test.
+    row_trailing_alignment_width = function(track_type)
+        assert(track_type == "VIDEO" or track_type == "AUDIO",
+            "row_trailing_alignment_width: track_type must be VIDEO|AUDIO")
+        return TRAILING_ALIGNMENT_PX
     end,
 }
 
@@ -1156,7 +1171,7 @@ local HDR = {
     LOCK = 20,   -- lock toggle
     SYNC = 24,   -- sync-mode toggle (slightly wider to fit larger glyph)
     SM   = 16,   -- each solo/mute button (stacked vertically)
-    WAVE = 16,   -- waveform toggle (audio only)
+    WAVE = TRAILING_ALIGNMENT_PX,  -- waveform toggle (audio only)
 }
 
 -- Sync-mode: cycling order and icon glyphs (unicode stand-ins; proper SVG via QIcon pending)
@@ -1910,6 +1925,8 @@ local function build_track_header_row(track, track_type, header_color)
         or {"src_btn", "rec_btn", "label", "lock", "sync_mode", "sm_stack"}
 
     -- Audio rows trail a waveform toggle (UI-only state, no undo).
+    -- Video rows render an empty spacer of the same width so the M/S
+    -- stacks on both row kinds end at the same x-coord.
     local wave_btn = nil
     if track_type == "AUDIO" then
         wave_btn = qt_constants.WIDGET.CREATE_BUTTON("W")
@@ -1921,6 +1938,12 @@ local function build_track_header_row(track, track_type, header_color)
         qt_constants.LAYOUT.ADD_WIDGET(header_layout, wave_btn)
         wire_waveform_display_toggle(wave_btn, captured_track_id)
         cells[#cells + 1] = "wave"
+    else
+        local trailing_spacer = qt_constants.WIDGET.CREATE()
+        qt_constants.PROPERTIES.SET_MIN_WIDTH(trailing_spacer, TRAILING_ALIGNMENT_PX)
+        qt_constants.PROPERTIES.SET_MAX_WIDTH(trailing_spacer, TRAILING_ALIGNMENT_PX)
+        qt_constants.LAYOUT.ADD_WIDGET(header_layout, trailing_spacer)
+        cells[#cells + 1] = "trailing_spacer"
     end
 
     local refs_entry = {
