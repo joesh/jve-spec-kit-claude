@@ -56,7 +56,7 @@ local rowA = Sequence.find(mA)
 assert(rowA.default_video_layer_track_id == mA_v2, string.format(
     "expected default repointed to %s, got %s",
     mA_v2, tostring(rowA.default_video_layer_track_id)))
-Sequence.assert_inv8(mA)
+Sequence.assert_default_video_layer_valid(mA)
 
 -- Scenario B: master with only V1, NO clips referencing it. Deleting V1
 -- succeeds and leaves default NULL.
@@ -68,7 +68,7 @@ Track.delete(mB_v1)
 local rowB = Sequence.find(mB)
 assert(rowB.default_video_layer_track_id == nil,
     "with no V tracks remaining and no clip refs, default should be NULL")
-Sequence.assert_inv8(mB)
+Sequence.assert_default_video_layer_valid(mB)
 
 -- Scenario C: master with only V1 AND a clip in another sequence referencing
 -- it. Deleting V1 must refuse.

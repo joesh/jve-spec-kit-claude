@@ -1,6 +1,6 @@
 -- T013 (013): sequences.default_video_layer_track_id must be non-NULL
 -- whenever the sequence has at least one video track.
--- Coverage: Sequence.assert_inv8 fires with a message naming the sequence id
+-- Coverage: Sequence.assert_default_video_layer_valid fires with a message naming the sequence id
 -- and the violation when the default is NULL with V tracks present, or points
 -- at a track that's not a VIDEO track of this sequence.
 
@@ -34,7 +34,7 @@ local audio_only_id = make_sequence("audio-only", "master")
 assert(db:exec(string.format(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-a1', '%s', 'A1', 'AUDIO', 1)", audio_only_id)))
-Sequence.assert_inv8(audio_only_id)  -- passes: no V tracks
+Sequence.assert_default_video_layer_valid(audio_only_id)  -- passes: no V tracks
 
 -- Master with a V track.
 local vid_id = make_sequence("vid", "master")
@@ -44,16 +44,16 @@ assert(db:exec(string.format(
 
 -- Set default to the live V track via Sequence.update — default_video_layer_track_id post-check passes.
 Sequence.update(vid_id, { default_video_layer_track_id = "trk-v1" })
-Sequence.assert_inv8(vid_id)
+Sequence.assert_default_video_layer_valid(vid_id)
 
 -- Direct-SQL NULL'ing the default while a V track exists should cause
--- assert_inv8 to fire. (Sequence.update's post-condition check would also fire,
+-- assert_default_video_layer_valid to fire. (Sequence.update's post-condition check would also fire,
 -- but raw SQL bypasses the command layer.)
 assert(db:exec(string.format(
     "UPDATE sequences SET default_video_layer_track_id = NULL WHERE id = '%s'", vid_id)))
 
-local ok, err = pcall(function() Sequence.assert_inv8(vid_id) end)
-assert(not ok, "assert_inv8 must fire when default_video_layer_track_id is NULL with a V track present")
+local ok, err = pcall(function() Sequence.assert_default_video_layer_valid(vid_id) end)
+assert(not ok, "assert_default_video_layer_valid must fire when default_video_layer_track_id is NULL with a V track present")
 assert(tostring(err):find("default_video_layer_track_id", 1, true),
     "error must name default_video_layer_track_id; got: " .. tostring(err))
 assert(tostring(err):find(vid_id, 1, true),
