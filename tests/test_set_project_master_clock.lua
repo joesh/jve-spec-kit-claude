@@ -42,16 +42,17 @@ local function fresh()
             audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mref-a', 'p', 'm', 'm-a1', 'med', 0, 960000, 0, 960000,
                 48000, 1, 1.0, 0, %d, %d);
-        -- TWO audio clips with NON-ZERO subframes (a "near-edge" 7996 and a
-        -- mid-range 3500). Plus a video clip with NULL subframes.
+        -- THREE audio clips: "near-edge" 7996 (safely scales to 1999),
+        -- mid-range 3500, and STRICT-edge 7999 (the max legal subframe at
+        -- old tpf=8000). Plus a video clip with NULL subframes.
         -- At master_clock_hz=192000, fps=24/1: tpf = 192000/24 = 8000.
         --
-        -- NOTE: contract calls for testing the strict edge value tpf-1=7999
-        -- but rhaz(7999*48000/192000) = rhaz(1999.75) = 2000 = new_tpf,
-        -- violating INV-4 (sub < tpf). The contract's "preservation by
-        -- construction" proof is wrong at that extreme. Until that is
-        -- resolved (carry+normalize vs floor-this-step), exercise a
-        -- safe-but-non-zero value 7996 → rhaz(1999.0) = 1999.
+        -- Strict-edge case pins floor-this-step semantics: rhaz scaling
+        -- of 7999 to 48k yields rhaz(1999.75)=2000=new_tpf which would
+        -- violate INV-4 (sub < tpf). The command floors the result to
+        -- new_tpf-1=1999 in this case, losing ≤½ master-clock tick on
+        -- this one boundary per scale. Frames stay untouched. See
+        -- spec contract for SetProjectMasterClock.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id,
             name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
@@ -66,11 +67,15 @@ local function fresh()
                 20, 10, 20, 30, 3500, 6000,
                 NULL, NULL, 'passthrough',
                 1, 1.0, 0, %d, %d),
+               ('a-strict','p', 'e', 'e-a1', 'm', 'AStrict',
+                40, 10, 40, 50, 7999, 7999,
+                NULL, NULL, 'passthrough',
+                1, 1.0, 0, %d, %d),
                ('v-only', 'p', 'e', 'e-v1', 'm', 'VOnly',
                 0, 10, 0, 10, NULL, NULL,
                 NULL, NULL, 'passthrough',
                 1, 1.0, 0, %d, %d);
-    ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now)))
+    ]], now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now, now)))
     command_manager.init('e', 'p')
     return db
 end
@@ -108,10 +113,12 @@ print("-- happy: scale 192k → 48k, audio subs scale 1/4, video untouched --")
 do
     local db = fresh()
     assert(read_mch(db) == 192000, "test setup mch")
-    local edge_in_pre, edge_out_pre = read_clip_subs(db, "a-edge")  -- 7996, 7996
-    local mid_in_pre,  mid_out_pre  = read_clip_subs(db, "a-mid")   --  3500, 6000
+    local edge_in_pre, edge_out_pre     = read_clip_subs(db, "a-edge")   -- 7996, 7996
+    local mid_in_pre,  mid_out_pre      = read_clip_subs(db, "a-mid")    --  3500, 6000
+    local strict_in_pre, strict_out_pre = read_clip_subs(db, "a-strict") -- 7999, 7999
     assert(edge_in_pre == 7996 and edge_out_pre == 7996, "test setup near-edge subs")
     assert(mid_in_pre == 3500 and mid_out_pre == 6000, "test setup mid subs")
+    assert(strict_in_pre == 7999 and strict_out_pre == 7999, "test setup strict-edge subs")
 
     local r = command_manager.execute("SetProjectMasterClock", {
         project_id      = "p",
@@ -133,6 +140,15 @@ do
     assert(mid_in_post == 875 and mid_out_post == 1500, string.format(
         "mid subs must rescale to (875, 1500); got (%s, %s)",
         tostring(mid_in_post), tostring(mid_out_post)))
+
+    -- Strict-edge floor: rhaz(7999*48000/192000) = rhaz(1999.75) = 2000
+    -- which would equal new_tpf (8000/4=2000). INV-4 demands sub < tpf,
+    -- so the command floors the result to new_tpf-1=1999. Precision loss
+    -- is ≤½ master-clock tick (~2.6μs at 192kHz); frames stay untouched.
+    local strict_in_post, strict_out_post = read_clip_subs(db, "a-strict")
+    assert(strict_in_post == 1999 and strict_out_post == 1999, string.format(
+        "strict-edge subs must floor to new_tpf-1=1999; got (%s, %s)",
+        tostring(strict_in_post), tostring(strict_out_post)))
 
     -- Video clip's NULL subframes stay NULL; frames untouched.
     local v_in_sub, v_out_sub = read_clip_subs(db, "v-only")

@@ -284,16 +284,21 @@ end
 
 --- 018 FR-036b helpers — used by SetProjectMasterClock command.
 --- collect_audio_clips: returns one row per clip with NON-NULL subframes,
---- shape { id, in_sub, out_sub }, deterministic by id.
+--- shape { id, in_sub, out_sub, fps_num, fps_den }, deterministic by id.
+--- fps_num/fps_den come from the clip's nested master sequence — they're
+--- what transition_master_clock_hz needs to compute the post-scale
+--- ticks_per_frame per clip and floor strict-edge subframes (INV-4).
 function Project.collect_audio_clips(project_id)
     assert(project_id and project_id ~= "",
         "Project.collect_audio_clips: project_id required")
     local conn = resolve_db(nil)
     local stmt = conn:prepare([[
-        SELECT id, source_in_subframe, source_out_subframe
-        FROM clips
-        WHERE project_id = ? AND source_in_subframe IS NOT NULL
-        ORDER BY id ASC
+        SELECT c.id, c.source_in_subframe, c.source_out_subframe,
+               ns.fps_numerator, ns.fps_denominator
+        FROM clips c
+        JOIN sequences ns ON ns.id = c.sequence_id
+        WHERE c.project_id = ? AND c.source_in_subframe IS NOT NULL
+        ORDER BY c.id ASC
     ]])
     assert(stmt, "Project.collect_audio_clips: prepare failed")
     stmt:bind_value(1, project_id)
@@ -301,7 +306,11 @@ function Project.collect_audio_clips(project_id)
     local rows = {}
     while stmt:next() do
         rows[#rows + 1] = {
-            id = stmt:value(0), in_sub = stmt:value(1), out_sub = stmt:value(2),
+            id      = stmt:value(0),
+            in_sub  = stmt:value(1),
+            out_sub = stmt:value(2),
+            fps_num = stmt:value(3),
+            fps_den = stmt:value(4),
         }
     end
     stmt:finalize()
@@ -369,6 +378,22 @@ function Project.transition_master_clock_hz(project_id, new_mch, pre_subs, resca
         local post = {}
         for _, c in ipairs(pre_subs) do
             local new_in, new_out = rescale_fn(c.in_sub, c.out_sub)
+            -- Floor-this-step (INV-4 enforcement at strict edge): when
+            -- rhaz scaling lifts a subframe value to exactly the new
+            -- ticks_per_frame (e.g. old_sub=old_tpf-1 scaled down rounds
+            -- up by ½), INV-4 (sub < tpf) would fire. Clamp to tpf-1.
+            -- Precision loss ≤ ½ master-clock tick on this one boundary
+            -- per scale. Frames stay untouched per the command contract.
+            assert(type(c.fps_num) == "number" and c.fps_num > 0
+                and type(c.fps_den) == "number" and c.fps_den > 0,
+                string.format(
+                    "Project.transition_master_clock_hz: pre_subs row for clip %s "
+                    .. "missing fps_num/fps_den (got %s/%s) — collect_audio_clips "
+                    .. "must populate these via JOIN on sequences",
+                    tostring(c.id), tostring(c.fps_num), tostring(c.fps_den)))
+            local new_tpf = math.floor(new_mch * c.fps_den / c.fps_num + 0.5)
+            if new_in  == new_tpf then new_in  = new_tpf - 1 end
+            if new_out == new_tpf then new_out = new_tpf - 1 end
             upd_sub:bind_value(1, new_in)
             upd_sub:bind_value(2, new_out)
             upd_sub:bind_value(3, c.id)
