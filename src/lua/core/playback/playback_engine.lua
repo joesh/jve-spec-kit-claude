@@ -992,21 +992,15 @@ end
 -- @param entry table: {media_path, clip, track, ...}
 -- @param speed_ratio number: conform ratio (1.0 for video, seq_fps/media_fps for audio)
 -- @return table matching TMB_SET_TRACK_CLIPS format
--- TMB clip rate must be consistent with source_in's unit (TMB does
--- `source_origin_us = FrameTime::from_frame(source_in - first_sample_tc, rate)`).
--- VIDEO: source_in is frames at the file's video rate → rate = video fps.
--- AUDIO: source_in is file-natural samples (resolver chain leaf, FR-008) →
---        rate = audio_sample_rate / 1. The audio path also carries video fps
---        on the entry for _compute_audio_speed_ratio (seq-fps/media-fps
---        conform); the TWO rates have different roles and must stay separate.
+-- TMB rate must match source_in's unit (FR-008): video fps for VIDEO,
+-- audio sample rate for AUDIO. Audio entries also carry video fps for
+-- _compute_audio_speed_ratio's seq-fps/media-fps conform — different role.
 local function tmb_clip_rate(entry)
     if entry.media_kind == "video" then
         return entry.fps_numerator, entry.fps_denominator
     end
     assert(type(entry.audio_sample_rate) == "number" and entry.audio_sample_rate > 0,
-        string.format("PlaybackEngine tmb_clip_rate: audio entry %s missing "
-            .. "audio_sample_rate (resolver must denormalize from "
-            .. "media_refs.audio_sample_rate per FR-004)",
+        string.format("tmb_clip_rate: audio entry %s missing audio_sample_rate",
             tostring(entry.clip_id)))
     return entry.audio_sample_rate, 1
 end

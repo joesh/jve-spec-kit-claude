@@ -2334,6 +2334,13 @@ end
 -- until the final composition pass — any clip in the chain may replace it
 -- via clip_channel_override without needing to divide out a stale factor.
 local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, outer_chain)
+    -- Resolver invariant: AUDIO mrefs MUST carry audio_sample_rate (FR-004 /
+    -- schema trigger). Surface at the resolver — downstream consumers (TMB
+    -- feeder, audio_playback) need it and shouldn't have to re-assert.
+    assert(type(r.audio_sample_rate) == "number" and r.audio_sample_rate > 0,
+        string.format("emit_audio_channel_entries: mref %s missing audio_sample_rate "
+            .. "(track=%s; AUDIO media_refs require it per FR-004)",
+            tostring(r.id), tostring(r.track_id)))
     local n_ch = r.audio_channels
     if n_ch == 0 then n_ch = 1 end  -- mono fallback when metadata missing
     for ch = 0, n_ch - 1 do
