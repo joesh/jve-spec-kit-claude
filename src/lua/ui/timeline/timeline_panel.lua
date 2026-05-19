@@ -41,6 +41,15 @@ local RESIZE_EDGE_PX = 4
 -- the same width so the M/S stacks align across the column.
 local TRAILING_ALIGNMENT_PX = 16
 
+-- Sentinel scroll-offset value meaning "freshly created sequence — no
+-- user-positioned scroll yet, position the viewport at V1 (the bottom
+-- of the video header stack)." Schema column defaults to this; any
+-- explicit user scroll (including 0/top) overwrites it.
+local UNINITIALIZED_SCROLL_OFFSET = -1
+-- Larger than any plausible content height; Qt clamps to the actual
+-- viewport-bottom max when SET_SCROLL_AREA_V_SCROLL receives this.
+local SCROLL_PAST_MAX = 100000000
+
 -- Pure math. State owns the "what's this track's height" question (with
 -- its own asserts); the drag handler enforces MIN_TRACK_HEIGHT at the
 -- input boundary. These helpers just convert between row and header
@@ -79,6 +88,17 @@ M.metrics = {
         assert(track_type == "VIDEO" or track_type == "AUDIO",
             "row_trailing_alignment_width: track_type must be VIDEO|AUDIO")
         return TRAILING_ALIGNMENT_PX
+    end,
+    UNINITIALIZED_SCROLL_OFFSET = UNINITIALIZED_SCROLL_OFFSET,
+    -- Translate a persisted scroll offset to the value passed to
+    -- SET_SCROLL_AREA_V_SCROLL. Sentinel (-1) → SCROLL_PAST_MAX so Qt
+    -- clamps to the actual content-bottom (V1 visible). Real
+    -- user-saved values pass through unchanged.
+    compute_initial_scroll_target = function(offset)
+        assert(type(offset) == "number",
+            "compute_initial_scroll_target: offset must be a number")
+        if offset == UNINITIALIZED_SCROLL_OFFSET then return SCROLL_PAST_MAX end
+        return offset
     end,
 }
 
@@ -3343,8 +3363,10 @@ end
 function M.restore_scroll_and_splitter()
     if M.timeline_video_scroll then
         local v_off = state.get_video_scroll_offset()
-        log.event("Restoring video scroll offset: %d", v_off)
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, v_off)
+        local target = M.metrics.compute_initial_scroll_target(v_off)
+        log.event("Restoring video scroll offset: stored=%d → target=%d",
+            v_off, target)
+        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, target)
     end
     if M.timeline_audio_scroll then
         local a_off = state.get_audio_scroll_offset()
