@@ -72,6 +72,36 @@ WORDS=$(echo "$BRANCH_NAME" | tr '-' '\n' | grep -v '^$' | head -3 | tr '\n' '-'
 BRANCH_NAME="${FEATURE_NUM}-${WORDS}"
 
 if [ "$HAS_GIT" = true ]; then
+    # Refuse to branch when the working tree is dirty — feature branches must
+    # start from a clean tree, otherwise the new branch silently carries
+    # sibling-session changes from whatever was uncommitted at branch time.
+    if [ -n "$(git status --porcelain)" ]; then
+        echo "Error: working tree is not clean. Commit or stash before /specify." >&2
+        echo "Dirty files:" >&2
+        git status --short >&2
+        exit 1
+    fi
+
+    # Refuse to branch from a feature branch whose commits aren't on master.
+    # If HEAD has commits master doesn't, branching from here orphans them
+    # from the new feature (the 017->018 hazard: 018 was cut from master while
+    # 017 was unmerged, so the new feature ran blind to 017's work).
+    DEFAULT_BRANCH="master"
+    if ! git rev-parse --verify "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+        DEFAULT_BRANCH="main"
+    fi
+    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]; then
+        if ! git merge-base --is-ancestor HEAD "$DEFAULT_BRANCH" 2>/dev/null; then
+            UNMERGED=$(git rev-list --count "$DEFAULT_BRANCH..HEAD" 2>/dev/null || echo "?")
+            echo "Error: current branch '$CURRENT_BRANCH' has $UNMERGED commit(s) not on $DEFAULT_BRANCH." >&2
+            echo "Branching here would orphan them. Merge or rebase '$CURRENT_BRANCH' into $DEFAULT_BRANCH (or check out $DEFAULT_BRANCH) before /specify." >&2
+            echo "Unmerged commits:" >&2
+            git log --oneline "$DEFAULT_BRANCH..HEAD" >&2
+            exit 1
+        fi
+    fi
+
     git checkout -b "$BRANCH_NAME"
 else
     >&2 echo "[specify] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME"
