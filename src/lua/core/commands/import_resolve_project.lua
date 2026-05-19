@@ -193,6 +193,18 @@ end
 --        for imports into an existing project)
 -- @param project_id string: project id value
 -- @param import_result table: {media_ids, sequence_ids, track_ids, clip_ids}
+--- After an import lands a record sequence, focus moves to the
+--- timeline panel so Space/J/K/L route there. If no sequence is
+--- active (browser-only refresh, edge cases), focus stays put.
+--- Exposed on M so the post-import flow can call it AND the focused
+--- behavior is testable in isolation.
+function M.focus_post_import(_project_id)
+    local timeline_state = require("ui.timeline.timeline_state")
+    local active = timeline_state.get_active_sequence_id()
+    if not active or active == "" then return end
+    require("ui.focus_manager").focus_panel("timeline")
+end
+
 local function persist_and_refresh(command, project_id_key, project_id, import_result)
     command:set_parameters({
         [project_id_key] = project_id,
@@ -209,6 +221,8 @@ local function persist_and_refresh(command, project_id_key, project_id, import_r
             project_browser.refresh()
         end
     end
+
+    M.focus_post_import(project_id)
 end
 
 -- Industry-standard sample rate for video projects. Used for sequences
