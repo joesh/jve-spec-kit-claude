@@ -53,7 +53,7 @@ end
 local function place_clip(args, track, master_seq_id, media_name, fps_mismatch_policy)
     local source_out = args.source_in_frame + args.duration_frames
     -- 018 FR-013: kind-aware subframe defaults (AUDIO → 0,0 frame-aligned;
-    -- VIDEO → nil,nil per INV-3).
+    -- VIDEO → nil,nil).
     local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track.track_type)
     return Clip.create({
         project_id           = args.project_id,

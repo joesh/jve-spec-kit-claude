@@ -136,7 +136,7 @@ function M.execute(args)
         -- be split correctly — refuse loudly until Phase 3.6 lands the
         -- (frame, subframe) carry math. Frame-aligned clips (subframe==0)
         -- pass through unchanged.
-        -- Canonical states per INV-3: VIDEO has subframe=NULL, AUDIO has
+        -- Canonical states per FR-013: VIDEO has subframe=NULL, AUDIO has
         -- subframe∈[0, ticks_per_frame). Anything else (AUDIO with
         -- subframe>0) refuses until Phase 3.6.
         local sub_in_ok  = clip.source_in_subframe  == nil or clip.source_in_subframe  == 0

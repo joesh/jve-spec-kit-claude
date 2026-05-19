@@ -10,6 +10,14 @@
 
 local M = {}
 
+-- Canonical master clock. Flicks (705,600,000 Hz) — divisible by every common
+-- video frame rate (24/25/30/48/50/60 and their /1001 variants) and every
+-- common audio sample rate (44.1k/48k/88.2k/96k/176.4k/192k). Immutable
+-- per-project post-create (FR-009 / schema trigger). Every project row writes
+-- this value into projects.settings.master_clock_hz; every importer stamps it
+-- on creation. Reference this constant — do not duplicate the literal.
+M.MASTER_CLOCK_HZ = 705600000
+
 -- Round half away from zero. Matches `round_int` in models/sequence.lua and
 -- the convention used by the resolver — FR-008 single-rounding-rule policy.
 -- Subframes and sample positions are always non-negative per FR-002 and

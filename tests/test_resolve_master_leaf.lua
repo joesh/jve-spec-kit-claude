@@ -27,14 +27,16 @@ for name, idx in pairs({ V1 = 1, A1 = 1, A2 = 2 }) do
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('trk-%s', 'm', '%s', '%s', %d)", name, name, ttype, idx)))
 end
--- Three media files.
-for _, m in ipairs({ { id = "mf-v", path = "/tmp/vid.mov" },
-                     { id = "mf-a1", path = "/tmp/a1.wav" },
-                     { id = "mf-a2", path = "/tmp/a2.wav" } }) do
+-- Three media files. Audio rows carry audio_channels per FR-004; without it
+-- the resolver refuses to emit channel entries (the schema default of 0 is
+-- only legitimate for video-only media).
+for _, m in ipairs({ { id = "mf-v",  path = "/tmp/vid.mov", ch = 0 },
+                     { id = "mf-a1", path = "/tmp/a1.wav",  ch = 1 },
+                     { id = "mf-a2", path = "/tmp/a2.wav",  ch = 1 } }) do
     assert(db:exec(string.format(
         "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
-        .. "fps_numerator, fps_denominator, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', 'n', '%s', 100, 24, 1, 0, 0)", m.id, m.path)))
+        .. "fps_numerator, fps_denominator, audio_channels, created_at, modified_at) "
+        .. "VALUES ('%s', 'p1', 'n', '%s', 100, 24, 1, %d, 0, 0)", m.id, m.path, m.ch)))
 end
 -- Three media_refs covering 0..100 in each stream.
 local refs = {

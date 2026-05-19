@@ -18,6 +18,7 @@
 -- @file import_resolve_project.lua
 local M = {}
 local log = require("core.logger").for_area("media")
+local subframe_math = require("core.subframe_math")
 local file_browser = require("core.file_browser")
 
 -- Schema for .drp import command
@@ -380,7 +381,7 @@ function M.register(executors, undoers, db)
             height = parse_result.project.settings.height,
             audio_sample_rate = args.audio_sample_rate
                 or pick_majority(parse_result),
-            master_clock_hz = 705600000,
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
             default_fps = { num = 24, den = 1 },
         }
 
@@ -493,7 +494,7 @@ function M.register(executors, undoers, db)
             frame_rate = import_result_raw.project.frame_rate,
             width = import_result_raw.project.width,
             height = import_result_raw.project.height,
-            master_clock_hz = 705600000,
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
             default_fps = { num = 24, den = 1 },
         }
 

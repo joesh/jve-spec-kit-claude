@@ -361,7 +361,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         -- 018: subframe round-trips through load (NULL for video, INTEGER for audio).
         source_in_subframe = query:value(10),
         source_out_subframe = query:value(11),
-        -- T018 tripwire (defense-in-depth mirror of INV-3): if a row reaches
+        -- T018 tripwire (defense-in-depth mirror of FR-013 subframe-by-kind): if a row reaches
         -- the load path with a kind/subframe-presence mismatch, the schema
         -- triggers should have already blocked the write — but a raw SQL
         -- bypass or a partial migration would surface here at read time
@@ -382,7 +382,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 
     }
 
-    -- T018 / 018 tripwire (defense-in-depth mirror of INV-3): a clip's
+    -- T018 / 018 tripwire (defense-in-depth mirror of FR-013 subframe-by-kind): a clip's
     -- subframe presence must match its track_type. Schema triggers enforce
     -- this on writes; this load-side assert catches any raw-SQL bypass and
     -- dies loudly with the offending clip + track_type + subframe values
@@ -1065,8 +1065,8 @@ function M.load_master_virtual_clips(master_seq_id)
 
     -- 018 (V11): audio_sample_rate is now per-media_ref (denormalized from
     -- media at insert), not per-sequence. Masters have NULL
-    -- sequences.audio_sample_rate per INV-7. INV-8 guarantees every AUDIO
-    -- media_ref carries mr.audio_sample_rate; VIDEO rows leave it NULL.
+    -- sequences.audio_sample_rate per FR-004. Every AUDIO media_ref carries
+    -- mr.audio_sample_rate at insert; VIDEO rows leave it NULL.
     local query = db_connection:prepare([[
         SELECT mr.id, mr.project_id, mr.track_id,
                mr.sequence_start_frame, mr.duration_frames,

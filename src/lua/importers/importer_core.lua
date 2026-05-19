@@ -835,7 +835,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     -- residual lives in source_*_subframe (master_clock_hz
                     -- ticks). The parser delivers source_in/out in
                     -- file-natural units (samples for audio, frames for
-                    -- video); the audio path converts here. INV-3 forces
+                    -- video); the audio path converts here. FR-013 requires
                     -- subframe NULL on video, non-NULL on audio.
                     local src_in_frame, sub_in
                     local src_out_frame, sub_out
@@ -854,7 +854,7 @@ function M.import_into_project(project_id, parse_result, opts)
                             master_clock_hz)
                     else
                         -- VIDEO: source_in/out from parser are already in
-                        -- master.fps frames; subframe NULL per INV-3.
+                        -- master.fps frames; subframe NULL on video (FR-013).
                         local defaults_in, defaults_out =
                             Clip.subframe_defaults_for_track_type(track.track_type)
                         src_in_frame, sub_in   = source_in_final,  defaults_in

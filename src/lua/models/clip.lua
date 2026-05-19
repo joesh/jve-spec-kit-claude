@@ -48,7 +48,7 @@ local CLIP_LOAD_SQL = [[
            nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
            mr.media_id, m.name, m.file_path, m.offline_note,
            -- 018: subframes appended at end to avoid shifting older column
-           -- indices. NULL for VIDEO clips (INV-3), 0 or more for AUDIO.
+           -- indices. NULL on video clips, 0 or more on audio clips (FR-013).
            c.source_in_subframe, c.source_out_subframe
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
@@ -135,9 +135,9 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         clip.media_path = query:value(28)
     end
 
-    -- 018: source-side subframe (master-clock ticks). NULL for VIDEO per
-    -- INV-3, 0 or more for AUDIO. Consumers that re-create the clip via
-    -- Clip.create must thread these through or the INV-3 trigger fires.
+    -- 018: source-side subframe (master-clock ticks). NULL on video clips,
+    -- 0 or more on audio clips (FR-013). Consumers that re-create the clip
+    -- via Clip.create must thread these through or the schema trigger fires.
     clip.source_in_subframe  = query:value(30)
     clip.source_out_subframe = query:value(31)
 
@@ -948,7 +948,7 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
 end
 
--- 018 (V11 / INV-3 / FR-013): explicit accessor for "frame-aligned" clip
+-- 018 (V11 / FR-013): explicit accessor for "frame-aligned" clip
 -- creation. Caller invokes by name to acknowledge FR-013's "marks UX is
 -- frame-aligned today; subframe = 0 for new audio clips" contract. This is
 -- NOT a silent fallback (rule 2.13): the call site's choice of this
@@ -986,7 +986,7 @@ function M.subframe_defaults_for(db, track_id)
 end
 
 -- (Internal) Same as above but called from _create_v13_row's audit path.
--- 018 (V11 / INV-3 / FR-013): subframe columns presence is driven by the
+-- 018 (V11 / FR-013): subframe columns presence is driven by the
 -- clip's track_type. AUDIO requires both source_*_subframe non-NULL; VIDEO
 -- requires both NULL. Caller passes both explicitly — no silent default
 -- (rule 2.13).
@@ -1060,8 +1060,8 @@ function M._create_v13_row(fields)
     stmt:bind_value(8, fields.duration_frames)
     stmt:bind_value(9, fields.source_in_frame)
     stmt:bind_value(10, fields.source_out_frame)
-    stmt:bind_value(11, sub_in)                          -- nullable per INV-3
-    stmt:bind_value(12, sub_out)                         -- nullable per INV-3
+    stmt:bind_value(11, sub_in)                          -- nullable on video, set on audio (FR-013)
+    stmt:bind_value(12, sub_out)                         -- nullable on video, set on audio (FR-013)
     stmt:bind_value(13, fields.master_layer_track_id)    -- nullable
     stmt:bind_value(14, fields.master_audio_track_id)    -- nullable (Expand/Collapse)
     stmt:bind_value(15, fields.fps_mismatch_policy)
@@ -1388,7 +1388,7 @@ function M.count_referencing_nested(sequence_id, exclude_clip_id)
     stmt:bind_value(2, exclude_clip_id or "")
     assert(stmt:exec(), "Clip.count_referencing_nested: exec failed")
     assert(stmt:next())
-    local n = stmt:value(0) or 0
+    local n = stmt:value(0)
     stmt:finalize()
     return n
 end

@@ -30,10 +30,9 @@ local function determine_next_index(sequence_id, track_type, provided_index)
     stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, track_type)
 
-    local max_index = 0
-    if stmt:exec() and stmt:next() then
-        max_index = stmt:value(0) or 0
-    end
+    assert(stmt:exec(), "Track.determine_next_index: exec failed")
+    assert(stmt:next(), "Track.determine_next_index: aggregate returned no row")
+    local max_index = stmt:value(0)
     stmt:finalize()
 
     return max_index + 1

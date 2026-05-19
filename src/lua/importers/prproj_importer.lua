@@ -18,6 +18,7 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
+local subframe_math = require("core.subframe_math")
 
 -- Premiere's universal tick rate: LCM of all standard frame/sample rates
 local TICKS_PER_SECOND = 254016000000
@@ -777,7 +778,7 @@ function M.convert(prproj_path, jvp_path, progress_cb)
     local settings = parse_result.project.settings
     -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
     -- on every project; prproj has no master-clock concept of its own.
-    settings.master_clock_hz = 705600000
+    settings.master_clock_hz = subframe_math.MASTER_CLOCK_HZ
     settings.default_fps = { num = 24, den = 1 }
 
     local project = Project.create(parse_result.project.name, {

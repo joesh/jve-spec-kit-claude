@@ -1899,8 +1899,8 @@ function PlaybackEngine:play_frame_audio(frame_idx)
 end
 
 --- Per-engine teardown: stop and close this engine's PlaybackController
---- and reset transport state. Called by transport (the resource
---- orchestrator) once per role-bound engine on project_changed.
+--- and reset transport state. Called by transport (which owns the
+--- cross-engine resource lifecycle) once per role-bound engine on project_changed.
 function PlaybackEngine.teardown_engine(engine)
     assert(engine ~= nil, "PlaybackEngine.teardown_engine: engine is nil")
     if engine._playback_controller then

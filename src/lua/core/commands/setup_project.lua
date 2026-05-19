@@ -7,7 +7,7 @@ local json = require("dkjson")
 local SPEC = {
     args = {
         project_id = { required = true },
-        settings = {},
+        settings = { required = true },
     },
     persisted = {
         previous_settings = {},
@@ -19,6 +19,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SetupProject"] = function(command)
         local args = command:get_all_parameters()
         log.event("Executing SetupProject")
+
+        assert(type(args.settings) == "table",
+            string.format("SetupProject: args.settings must be a table, got %s",
+                type(args.settings)))
 
         local project = Project.load(args.project_id, db)
         if not project or project.id == "" then
@@ -37,7 +41,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local decoded = json.decode(project.settings)
             if type(decoded) == "table" then prev = decoded end
         end
-        for k, v in pairs(args.settings or {}) do
+        for k, v in pairs(args.settings) do
             prev[k] = v
         end
         project.settings = json.encode(prev)

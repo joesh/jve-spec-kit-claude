@@ -1474,7 +1474,7 @@ local function include_extent_row(stmt, media_rates, result)
     elseif track_type == "AUDIO" and rates.audio_sample_rate then
         -- 018: clip.source_*_frame is in master.fps frames for AUDIO too.
         -- Convert (frame) → samples using the file's audio rate. Under
-        -- INV-7 the master row's audio_sample_rate is NULL — rates.audio_sample_rate
+        -- FR-004: the master row's audio_sample_rate is NULL — rates.audio_sample_rate
         -- carries the file-native rate provided by the caller.
         local target = rates.audio_sample_rate
         local samples_per_frame = target * fps_den / fps_num

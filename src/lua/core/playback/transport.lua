@@ -184,8 +184,8 @@ end)
 
 -- Project change: tear down both role-bound PlaybackControllers + the
 -- shared audio session BEFORE media_cache clears its reader pool.
--- Transport is the resource orchestrator — it owns the "which engines
--- exist" walk; the engine module owns per-engine teardown semantics.
+-- Transport owns the cross-engine resource lifecycle — it walks "which
+-- engines exist"; the engine module owns per-engine teardown semantics.
 -- Priority 5: after project_generation (priority 1), before media_cache
 -- (priority 20) so PlaybackController finishes with TMB references
 -- before underlying media readers are released.

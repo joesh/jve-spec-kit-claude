@@ -82,7 +82,7 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     assert(opts.kind == "master" or opts.kind == "sequence",
         "Sequence.create: opts.kind must be 'master' or 'sequence' (V9 schema); got "
         .. tostring(opts.kind))
-    -- 018 (FR-004, INV-7): masters MUST have audio_sample_rate = NULL.
+    -- 018 (FR-004): masters MUST have audio_sample_rate = NULL.
     -- Audio rate is per-media_ref. Regular sequences (kind='sequence') still
     -- carry an audio rate as their playback-monitor rate. Rule 2.13: no silent
     -- coercion — caller passes nil explicitly for masters.
@@ -707,7 +707,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
             has_video        = has_video,
             has_audio        = has_audio,
             sample_rate      = sample_rate,
-            -- 018 (FR-004, INV-7): masters MUST have NULL audio_sample_rate.
+            -- 018 (FR-004): masters MUST have NULL audio_sample_rate.
             -- Audio rate is per-media_ref (a master may hold heterogeneous
             -- audio rates — synced-sound camera + field recorder, etc.).
             seq_audio_rate   = nil,
@@ -1023,8 +1023,8 @@ end
 -- @return table {video_clips = {...}, audio_clips = {...}}
 -- Common row-shape for one media_ref reshaped into a "stream clip". Video
 -- clips carry frame_rate (sequence-level); audio clips carry sample_rate
--- (per-media_ref, INV-8 guaranteed non-NULL — masters have no aggregate
--- audio_sample_rate per INV-7).
+-- (per-media_ref, non-NULL on every audio media_ref — masters have no
+-- aggregate audio_sample_rate per FR-004).
 local function load_master_video_streams(conn, track_id, video_frame_rate)
     local out = {}
     local stmt = conn:prepare([[
@@ -1060,9 +1060,9 @@ end
 
 local function load_master_audio_streams(conn, track_id, master_seq_id)
     local out = {}
-    -- 018 INV-8: every AUDIO media_ref carries mr.audio_sample_rate at
+    -- 018 (FR-004): every AUDIO media_ref carries mr.audio_sample_rate at
     -- insert (denormalized from media). The per-master single-rate
-    -- assumption is gone (FR-034 / INV-7).
+    -- assumption is gone (FR-034).
     local stmt = conn:prepare([[
         SELECT id, track_id, media_id, source_in_frame, source_out_frame,
                sequence_start_frame, duration_frames,
@@ -1110,8 +1110,8 @@ local function ensure_stream_clips(self)
     end
 
     -- Master sequences are constructed with NOT NULL fps by
-    -- Sequence.ensure_master. INV-7 says master.audio_sample_rate is NULL —
-    -- per-rate is per-media_ref now (INV-8). Assert frame_rate before any
+    -- Sequence.ensure_master. Master.audio_sample_rate is NULL per FR-004 —
+    -- per-rate is per-media_ref now. Assert frame_rate before any
     -- DB work so a malformed master row fails loud at the source.
     local video_frame_rate = self.frame_rate
     assert(video_frame_rate
@@ -1812,7 +1812,7 @@ function Sequence:compute_content_end()
             stmt:bind_value(2, track_type)
             assert(stmt:exec(), "Sequence:compute_content_end: exec failed (master)")
             assert(stmt:next(), "Sequence:compute_content_end: no row (master)")
-            local v = stmt:value(0) or 0
+            local v = stmt:value(0)
             stmt:finalize()
             return v
         end
@@ -2103,7 +2103,7 @@ end
 local function list_clips_overlapping(db, seq_id, start_frame, end_frame)
     -- 018: source_in_subframe / source_out_subframe carry the residual
     -- master-clock ticks within the (frame, subframe) source position.
-    -- INV-3 guarantees non-NULL on AUDIO clips, NULL on VIDEO clips. The
+    -- The subframe columns are non-NULL on AUDIO clips, NULL on VIDEO (FR-013). The
     -- recursion seam in resolve_nested threads these into the next-level
     -- resolve_seq_range call so the leaf can compute file-natural samples
     -- without losing sub-frame precision.
@@ -2341,8 +2341,13 @@ local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, o
         string.format("emit_audio_channel_entries: mref %s missing audio_sample_rate "
             .. "(track=%s; AUDIO media_refs require it per FR-004)",
             tostring(r.id), tostring(r.track_id)))
+    -- Audio media_refs MUST carry channel count (FR-004 / schema trigger).
+    -- A 0 / nil here means the importer didn't populate it — fail loud.
+    assert(type(r.audio_channels) == "number" and r.audio_channels > 0,
+        string.format("emit_audio_channel_entries: mref %s has audio_channels=%s "
+            .. "(track=%s; AUDIO media_refs require a positive channel count per FR-004)",
+            tostring(r.id), tostring(r.audio_channels), tostring(r.track_id)))
     local n_ch = r.audio_channels
-    if n_ch == 0 then n_ch = 1 end  -- mono fallback when metadata missing
     for ch = 0, n_ch - 1 do
         local ms_enabled, ms_gain_db =
             fetch_master_channel_state(db, master_seq_id, ch)
@@ -2546,12 +2551,11 @@ local function resolve_nested(db, seq_id, outer_lo_f, outer_lo_s,
             for i, v in ipairs(outer_chain) do inner_chain[i] = v end
             inner_chain[#inner_chain + 1] = c.id
 
-            -- 018: thread sub-frame through the recursion seam. VIDEO clips
-            -- have NULL subframes per INV-3 (no sub-frame concept on video);
+            -- 018 (FR-013): thread sub-frame through the recursion seam.
+            -- VIDEO clips have NULL subframes (no sub-frame concept on video);
             -- the explicit 0 here carries the "no sub-frame component" intent
             -- into the audio-leaf math (which ignores it for video entries).
-            -- AUDIO clips MUST have non-NULL subframes per INV-3; the load
-            -- path asserts this.
+            -- AUDIO clips MUST have non-NULL subframes; the load path asserts this.
             local c_lo_s, c_hi_s
             if c.track_type == "AUDIO" then
                 assert(c.source_in_subframe ~= nil and c.source_out_subframe ~= nil,
@@ -2889,7 +2893,7 @@ function Sequence.native_duration_for_medium(id, track_type)
     assert(stmt:exec(), "Sequence.native_duration_for_medium: exec failed")
     assert(stmt:next(),
         "Sequence.native_duration_for_medium: query returned no rows")
-    local d = stmt:value(0) or 0
+    local d = stmt:value(0)
     stmt:finalize()
     return d
 end
@@ -3115,7 +3119,7 @@ end
 ---
 --- @param master_id string  must reference a kind='master' sequence
 --- @return integer  total audio channel count
---- 018 (FR-004 / INV-7): masters carry no audio_sample_rate. For placement
+--- 018 (FR-004): masters carry no audio_sample_rate. For placement
 --- math that needs a master's audio rate (samples-per-frame, owner-duration
 --- conversion), derive from the first audio media_ref inside the master.
 --- Multi-rate audio per master (Acceptance Scenario 2) requires further
@@ -3129,7 +3133,7 @@ function Sequence.effective_audio_sample_rate(seq)
         "Sequence.effective_audio_sample_rate: seq table with id required")
     if seq.audio_sample_rate then return seq.audio_sample_rate end
     local conn = resolve_db()
-    -- 018 / INV-8: every AUDIO media_ref carries audio_sample_rate at insert.
+    -- 018 (FR-004): every AUDIO media_ref carries audio_sample_rate at insert.
     local stmt = conn:prepare([[
         SELECT mr.audio_sample_rate
         FROM media_refs mr
@@ -3166,7 +3170,7 @@ function Sequence.count_master_audio_channels(master_id)
     assert(stmt:exec(), "Sequence.count_master_audio_channels: exec failed")
     assert(stmt:next(),
         "Sequence.count_master_audio_channels: aggregate returned no row")
-    local n = stmt:value(0) or 0
+    local n = stmt:value(0)
     stmt:finalize()
     return n
 end
@@ -3203,7 +3207,7 @@ end
 
 --- 018 FR-035: ConformSequence's transactional rewrite. Caller passes the
 --- target fps and the pre-captured row snapshots that need rescaling; this
---- function does the SAVEPOINT + INV-5 flag + UPDATE choreography and
+--- function does the SAVEPOINT + conform-single-writer flag + UPDATE choreography and
 --- delegates the actual scaled values to the injected rescaler.
 ---
 --- @param sequence_id    string  — the sequence whose fps is changing
@@ -3239,10 +3243,10 @@ function Sequence.conform_fps(sequence_id, new_fps_num, new_fps_den, captured, r
         local flag_ins = conn:prepare(
             "INSERT INTO db_session_flags (name) VALUES (?)")
         flag_ins:bind_value(1, SESSION_FLAG)
-        assert(flag_ins:exec(), "set INV-5 flag failed")
+        assert(flag_ins:exec(), "ConformSequence: set conform-single-writer flag failed")
         flag_ins:finalize()
 
-        -- Sequence fps first (with the flag in place, INV-5 trigger passes).
+        -- Sequence fps first (with the flag in place, the fps single-writer trigger passes).
         local upd_seq = conn:prepare(
             "UPDATE sequences SET fps_numerator = ?, fps_denominator = ?, modified_at = ? WHERE id = ?")
         upd_seq:bind_value(1, new_fps_num)
@@ -3332,7 +3336,7 @@ function Sequence.conform_fps(sequence_id, new_fps_num, new_fps_den, captured, r
 
         local flag_del = conn:prepare("DELETE FROM db_session_flags WHERE name = ?")
         flag_del:bind_value(1, SESSION_FLAG)
-        assert(flag_del:exec(), "clear INV-5 flag failed")
+        assert(flag_del:exec(), "ConformSequence: clear conform-single-writer flag failed")
         flag_del:finalize()
 
         return { mrefs = post_mrefs, inner_clips = post_inner, outer_clips = post_outer }

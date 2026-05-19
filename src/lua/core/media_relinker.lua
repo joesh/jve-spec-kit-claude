@@ -1079,23 +1079,36 @@ end
 local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
     local pr = cand.probe_result
     local cand_tc_value, cand_tc_rate = probe_candidate_tc(pr)
-    local cand_start = cand_tc_value or 0
-    if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
-        cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
-    end
-    local cand_dur = pr.duration_frames or 0
-    if pr.fps_num and pr.fps_den then
-        local probe_rate = pr.fps_num / pr.fps_den
-        if math.abs(probe_rate - stored_rate) > 0.01 then
-            cand_dur = math.floor(
-                cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
+    -- TC and duration can be genuinely absent on probes that lacked metadata;
+    -- this is a diagnostic-only path, so format "?" rather than fake-zero.
+    local cand_start_str, cand_end_str
+    if cand_tc_value then
+        local cand_start = cand_tc_value
+        if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
+            cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
         end
+        cand_start_str = tostring(cand_start)
+        if pr.duration_frames then
+            local cand_dur = pr.duration_frames
+            if pr.fps_num and pr.fps_den then
+                local probe_rate = pr.fps_num / pr.fps_den
+                if math.abs(probe_rate - stored_rate) > 0.01 then
+                    cand_dur = math.floor(
+                        cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
+                end
+            end
+            cand_end_str = tostring(cand_start + cand_dur)
+        else
+            cand_end_str = "?"
+        end
+    else
+        cand_start_str, cand_end_str = "?", "?"
     end
     local c0 = clips[1]
     log.event(
-        "  0-clips detail: cand=[%d,%d]@%s remap=%s first_clip=[%d,%d] "
+        "  0-clips detail: cand=[%s,%s]@%s remap=%s first_clip=[%d,%d] "
         .. "(%d clips total) file=%s",
-        cand_start, cand_start + cand_dur, tostring(stored_rate),
+        cand_start_str, cand_end_str, tostring(stored_rate),
         tostring(tc_remap_offset),
         c0.source_in, c0.source_out, #clips,
         get_filename(cand.path))
@@ -1142,7 +1155,11 @@ local function coverage_for_candidate(cand, stored_rate)
     end
 
     local cov_value, cov_rate = probe_candidate_tc(pr)
-    local cov_start = cov_value or 0
+    -- A candidate with no probed TC can't anchor a partial_coverage note —
+    -- the start/end values would be lies. Caller (compute_partial_coverage)
+    -- treats nil as "skip this candidate".
+    if not cov_value then return nil end
+    local cov_start = cov_value
     if cov_rate and cov_rate ~= stored_rate then
         cov_start = math.floor(cov_start * stored_rate / cov_rate + 0.5)
     end

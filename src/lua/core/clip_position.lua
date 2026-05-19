@@ -3,8 +3,9 @@
 -- DRY accessor for clip source positions (FR-009a). Every edit command and
 -- other mutator of in-memory clip source positions goes through this module.
 -- Direct field writes (`clip.source_in_frame = ...`) are forbidden outside
--- this module. INV-3 (subframe-presence by clip kind) and INV-4 (subframe
--- bound) are asserted at every mutation.
+-- this module. FR-013 (subframe-presence by clip kind: non-NULL on audio,
+-- NULL on video) and the per-frame subframe bound are asserted at every
+-- mutation.
 --
 -- Sample/tick math is NOT in this module — callers compose subframe_math
 -- primitives directly with numeric context they already hold
@@ -45,8 +46,8 @@ end
 
 -- ---------------------------------------------------------------------------
 -- Reads (defense-in-depth tripwires; the schema + load tripwire enforce
--- INV-3 already — this layer fails loud if any caller hands us a malformed
--- in-memory row).
+-- subframe presence-by-kind (FR-013) already — this layer fails loud if
+-- any caller hands us a malformed in-memory row).
 -- ---------------------------------------------------------------------------
 
 function M.read_audio_source(clip)
@@ -56,7 +57,7 @@ function M.read_audio_source(clip)
             tostring(clip.id)))
     assert(clip.source_in_subframe ~= nil and clip.source_out_subframe ~= nil,
         string.format(
-            "clip_position.read_audio_source: audio clip %s has NULL subframe(s) — INV-3 violation",
+            "clip_position.read_audio_source: audio clip %s has NULL subframe(s) — audio clips require non-NULL subframes (FR-013)",
             tostring(clip.id)))
     assert_int("source_in_frame", clip.source_in_frame, clip.id)
     assert_int("source_out_frame", clip.source_out_frame, clip.id)
@@ -73,7 +74,7 @@ function M.read_video_source(clip)
             tostring(clip.id)))
     assert(clip.source_in_subframe == nil and clip.source_out_subframe == nil,
         string.format(
-            "clip_position.read_video_source: video clip %s has non-NULL subframe — INV-3 violation",
+            "clip_position.read_video_source: video clip %s has non-NULL subframe — video clips require NULL subframes (FR-013)",
             tostring(clip.id)))
     assert_int("source_in_frame", clip.source_in_frame, clip.id)
     assert_int("source_out_frame", clip.source_out_frame, clip.id)
@@ -121,7 +122,7 @@ function M.write_video_source(clip, frame_in, frame_out)
     assert_bound("write_video_source", frame_in, frame_out, clip.id)
     clip.source_in_frame  = frame_in
     clip.source_out_frame = frame_out
-    -- Subframe columns remain NULL on video rows (INV-3).
+    -- Subframe columns remain NULL on video rows (FR-013).
 end
 
 -- Frame-aligned audio write (FR-013). subframe = 0 is canonical for any

@@ -30,7 +30,8 @@ function M.resolve_for_monitor(seq, active_id, load_seq, find_first_record)
     assert(type(find_first_record) == "function",
         "audio_bus_rate.resolve_for_monitor: find_first_record injector required")
 
-    -- Case 1: sequence carries its own rate (record sequence, INV-7-exempt master).
+    -- Case 1: sequence carries its own rate (record sequence; masters
+    -- never do per FR-004, so this branch skips them by construction).
     if seq.audio_sample_rate then
         assert(type(seq.audio_sample_rate) == "number" and seq.audio_sample_rate > 0,
             string.format(

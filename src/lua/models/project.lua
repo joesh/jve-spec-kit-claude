@@ -1,5 +1,6 @@
 --- Lua wrapper for the projects table. Keeps parity with the modern Lua-first architecture.
 local database = require("core.database")
+local subframe_math = require("core.subframe_math")
 local uuid = require("uuid")
 
 local Project = {}
@@ -17,18 +18,13 @@ local function resolve_db(db)
 end
 
 -- 018 T007 (FR-028 / FR-036a): every project has master_clock_hz and
--- default_fps in its settings JSON. The canonical master clock is
--- 705,600,000 (a.k.a. "flicks") — exactly divides every supported audio
--- rate (8k/11.025k/16k/22.05k/24k/32k/44.1k/48k/88.2k/96k/176.4k/192k)
--- AND every supported frame rate (24/25/30/48/50/60/100/120 plus the
--- 1001-denominator NTSC family). Subframe ticks ↔ samples is therefore
--- lossless integer arithmetic for every rate combination. The clock is
--- immutable post-create (INV-6), so SetProjectMasterClock no longer
--- exists — there's no rate-precision reason for a user to ever change it.
--- Captured as a string constant so the default path doesn't pay an encode
--- on every project create.
-local DEFAULT_PROJECT_SETTINGS_JSON =
-    '{"master_clock_hz":705600000,"default_fps":{"num":24,"den":1}}'
+-- default_fps in its settings JSON. Canonical clock lives in
+-- core/subframe_math.MASTER_CLOCK_HZ; immutable post-create per FR-009
+-- (schema trigger), so SetProjectMasterClock no longer exists.
+-- Built once at module load so project-create doesn't pay an encode pass.
+local DEFAULT_PROJECT_SETTINGS_JSON = string.format(
+    '{"master_clock_hz":%d,"default_fps":{"num":24,"den":1}}',
+    subframe_math.MASTER_CLOCK_HZ)
 
 local function ensure_settings_json(settings)
     if type(settings) ~= "string" or settings == "" then
@@ -314,7 +310,7 @@ end
 
 --- 018 FR-036a: write projects.settings.default_fps to (num, den). Read-modify-
 --- write the settings JSON to preserve other keys (including master_clock_hz —
---- triggers INV-6 guard, but value is unchanged so trigger sees IS NOT distinct
+--- triggers the master_clock_hz-is-immutable guard (FR-009), but value is unchanged so trigger sees IS NOT distinct
 --- and stays quiet). Returns the prior (num, den) for undo.
 function Project.set_default_fps(id, fps_numerator, fps_denominator)
     assert(id and id ~= "", "Project.set_default_fps: id required")

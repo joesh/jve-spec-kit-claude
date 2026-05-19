@@ -20,6 +20,7 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
+local subframe_math = require("core.subframe_math")
 local drp_binary = require("importers.drp_binary")
 local fs_utils = require("core.fs_utils")
 local shell_capture = fs_utils.shell_capture
@@ -510,7 +511,7 @@ local function parse_project_metadata(project_elem)
     local project = {
         name = "Untitled Project",
         settings = {
-            master_clock_hz = 705600000,
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
             default_fps = { num = 24, den = 1 },
         }
     }
@@ -2552,7 +2553,7 @@ local function init_project_database(jvp_path, parse_result, picked_audio_rate)
         width             = parse_result.project.settings.width,
         height            = parse_result.project.settings.height,
         audio_sample_rate = picked_audio_rate,
-        master_clock_hz   = 705600000,
+        master_clock_hz   = subframe_math.MASTER_CLOCK_HZ,
         default_fps       = { num = 24, den = 1 },
     }
     local project = Project.create(parse_result.project.name, {

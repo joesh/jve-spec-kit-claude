@@ -3,7 +3,7 @@
 --- Rewrites a single sequence's fps_numerator/fps_denominator plus every
 --- dependent row so the resolver produces the same wall-clock content
 --- under the new fps. Atomic, undoable, transactional. ONLY legal path
---- to mutate sequences.fps_*; direct UPDATEs blocked by INV-5.
+--- to mutate sequences.fps_*; direct UPDATEs blocked by the fps single-writer trigger (FR-035).
 ---
 --- See specs/018-uniform-clip-source/contracts/conform_sequence.md.
 ---
