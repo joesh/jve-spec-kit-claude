@@ -148,18 +148,17 @@ end
 -- are absolute TC frames in the nested's master.fps timebase. When set,
 -- narrow the video and audio source ranges to the marked sub-region.
 --
--- Returns four values with mixed units (a deliberate seam against the
--- audio resolver's file-natural samples world):
+-- Returns four values, all in master.fps frames (018 unification — FR-008):
 --   video_native_dur  — master.fps frames (V medium has like-units source).
 --   video_source_in   — master.fps frames (TC-space offset into nested).
---   audio_native_dur  — FILE-NATURAL SAMPLES. Downstream consumers
---                       (insert_audio_clips, compute_owner_duration_for_plan)
---                       expect samples so they can index file-source data
---                       directly. The conversion happens HERE inside the
---                       AUDIO branch; callers must not re-convert.
---   audio_source_in   — master.fps frames (TC-space offset). Sample-precise
---                       file offset is computed downstream via
---                       convert_audio_samples_to_frame_subframe.
+--   audio_native_dur  — master.fps frames. Pre-018 this was file-natural
+--                       samples; insert_audio_clips and
+--                       compute_owner_duration_for_plan now both consume
+--                       master.fps frames directly. Sample-precise file
+--                       offset is computed inside the resolver
+--                       (Sequence.resolve_master_leaf) via subframe_math,
+--                       NOT here.
+--   audio_source_in   — master.fps frames (TC-space offset).
 --
 -- TIMECODE IS THE SOURCE OF TRUTH: clip.source_in_frame must match the
 -- nested's media_refs' sequence_start_frame coordinate system (= TC space
