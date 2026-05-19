@@ -3255,9 +3255,12 @@ local function rebuild_for_displayed_tab()
 end
 
 -- Body-rebuild listener: any pointer transition (record→record,
--- record→source, source→record) flows through here.
+-- record→source, source→record) flows through here. NOTE: outgoing
+-- scroll persistence happens BEFORE the strip swap (timeline_state's
+-- switch_to_*_tab wrappers call persist_scroll_offsets first) — doing
+-- it here would write outgoing values to the incoming row because the
+-- strip pointer has already moved by the time this listener fires.
 Signals.connect("displayed_tab_changed", function(_new, _prev)
-    state.persist_scroll_offsets()   -- prev sequence's offsets
     rebuild_for_displayed_tab()
 end)
 

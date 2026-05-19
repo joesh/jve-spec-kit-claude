@@ -551,6 +551,14 @@ function M.switch_to_source_tab(source_seq_id)
     -- flush outgoing view-state.
     local prev_tab = tab_strip:get_displayed()
     local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+    -- Flush per-sequence view-state (scroll offsets included) to the
+    -- OUTGOING row BEFORE the strip pointer moves. persist resolves the
+    -- target row via the strip's displayed pointer; after the swap it
+    -- would write outgoing values to the incoming row.
+    if prev_seq_id and prev_seq_id ~= source_seq_id then
+        M.persist_scroll_offsets()
+        core.persist_state_to_db(true)
+    end
     -- Ensure the strip has a source tab pointing at this seq, then make it
     -- the displayed pointer. open_source_tab is idempotent (reloads in
     -- place if a source tab is already open).
@@ -579,6 +587,13 @@ function M.switch_to_record_tab(seq_id)
     local prev_active = data.state.sequence_id
     local prev_tab = tab_strip:get_displayed()
     local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+    -- Flush per-sequence view-state (scroll offsets included) to the
+    -- OUTGOING row BEFORE the strip pointer moves. Same rationale as
+    -- switch_to_source_tab — persist resolves via the strip's pointer.
+    if prev_seq_id and prev_seq_id ~= seq_id then
+        M.persist_scroll_offsets()
+        core.persist_state_to_db(true)
+    end
     -- Ensure the strip has a record tab for this seq, then make it both
     -- active and displayed (FR-004). open_record_tab is idempotent.
     local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
