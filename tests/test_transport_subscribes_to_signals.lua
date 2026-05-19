@@ -52,22 +52,21 @@ local teardown_engine_calls = {}    -- ordered list of {engine, ...}
 local audio_shutdown_calls = 0
 local stop_calls_by_engine = {}
 
-local stub_source_engine = {
-    role = "source",
-    sequence = nil,
-    loaded_sequence_id = nil,
-    stop = function(self)
-        stop_calls_by_engine[self.role] = (stop_calls_by_engine[self.role] or 0) + 1
-    end,
-}
-local stub_record_engine = {
-    role = "record",
-    sequence = nil,
-    loaded_sequence_id = nil,
-    stop = function(self)
-        stop_calls_by_engine[self.role] = (stop_calls_by_engine[self.role] or 0) + 1
-    end,
-}
+local function make_stub_engine(role)
+    return {
+        role = role,
+        sequence = nil,
+        loaded_sequence_id = nil,
+        playing = false,
+        is_playing = function(self) return self.playing end,
+        stop = function(self)
+            self.playing = false
+            stop_calls_by_engine[self.role] = (stop_calls_by_engine[self.role] or 0) + 1
+        end,
+    }
+end
+local stub_source_engine = make_stub_engine("source")
+local stub_record_engine = make_stub_engine("record")
 
 package.loaded["core.playback.playback_engine"] = {
     new = function(role)
@@ -133,7 +132,36 @@ assert(stop_calls_by_engine.source == nil and stop_calls_by_engine.record == nil
     "no engine stops when no role-bound engine holds the cleared seq")
 print("  ✓ displayed_tab_cleared with no matching role is a no-op")
 
--- ── Case 4: project_changed → walk roles + per-engine teardown + audio shutdown ──
+-- ── Case 4a: displayed_tab_changed parks both engines mid-play. ──
+-- Spec scenario (017 spec.md line 56): "He presses Space — the master plays
+-- with audio in both windows in lock-step. He clicks a Record tab — master
+-- stops, audio falls silent." Tab swap = stop any playing engine. transport
+-- owns the cross-domain coordination (UI signal → engine action) per
+-- module-responsibility rule.
+stop_calls_by_engine = {}
+stub_source_engine.playing = true
+stub_record_engine.playing = true
+Signals.emit("displayed_tab_changed", "seq_new", "seq_prev")
+assert(stop_calls_by_engine.source == 1, string.format(
+    "displayed_tab_changed must stop the source engine when it is playing; "
+    .. "got %s stop calls", tostring(stop_calls_by_engine.source)))
+assert(stop_calls_by_engine.record == 1, string.format(
+    "displayed_tab_changed must stop the record engine when it is playing; "
+    .. "got %s stop calls", tostring(stop_calls_by_engine.record)))
+print("  ✓ displayed_tab_changed stops both engines when playing")
+
+-- ── Case 4b: displayed_tab_changed is a no-op for parked engines. ──
+-- is_playing() guard avoids spurious stop()/audio-release on engines that
+-- aren't transporting. Idempotent semantics.
+stop_calls_by_engine = {}
+stub_source_engine.playing = false
+stub_record_engine.playing = false
+Signals.emit("displayed_tab_changed", "seq_new", "seq_prev")
+assert(stop_calls_by_engine.source == nil and stop_calls_by_engine.record == nil,
+    "displayed_tab_changed must NOT call stop() on already-parked engines")
+print("  ✓ displayed_tab_changed is a no-op for parked engines")
+
+-- ── Case 5: project_changed → walk roles + per-engine teardown + audio shutdown ──
 teardown_engine_calls = {}
 local audio_before = audio_shutdown_calls
 Signals.emit("project_changed", "new_proj_id")

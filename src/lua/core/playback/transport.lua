@@ -182,6 +182,20 @@ Signals.connect("displayed_tab_cleared", function(prev_seq_id)
     stop_engine_holding(prev_seq_id)
 end)
 
+-- Switching the displayed tab (source↔record, record↔record) parks any
+-- in-flight playback on either engine. Target is derived from displayed
+-- state, so a swap reassigns which engine receives Space/J/K/L. Continuing
+-- to play the prior engine after the user changed what they're looking at
+-- is surprising. Stop both engines unconditionally — engine:stop() is
+-- idempotent when already parked.
+Signals.connect("displayed_tab_changed", function(_new_seq_id, _prev_seq_id)
+    if not M.is_bootstrapped() then return end
+    for _, role in ipairs({"source", "record"}) do
+        local engine = M.engine_for_role(role)
+        if engine:is_playing() then engine:stop() end
+    end
+end)
+
 -- Project change: tear down both role-bound PlaybackControllers + the
 -- shared audio session BEFORE media_cache clears its reader pool.
 -- Transport owns the cross-engine resource lifecycle — it walks "which
