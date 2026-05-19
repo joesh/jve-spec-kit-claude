@@ -97,7 +97,7 @@ audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate >
 ```json
 {
   "default_fps": { "num": 24, "den": 1 },
-  "master_clock_hz": 192000,
+  "master_clock_hz": 705600000,
   "fps_mismatch_policy": "resample"
 }
 ```
@@ -106,7 +106,7 @@ audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate >
 |---|---|---|---|
 | `default_fps.num` | integer | > 0 | At project creation (default 24). User changes via `SetProjectDefaultFps`. |
 | `default_fps.den` | integer | > 0 | At project creation (default 1). User changes via `SetProjectDefaultFps`. |
-| `master_clock_hz` | integer | > 0 | At project creation (default 192000). User changes via `SetProjectMasterClock` only (INV-6). |
+| `master_clock_hz` | integer | > 0 | At project creation. **Canonically `705600000` (flicks) for every project; not user-settable.** Implementation deviation from draft — see spec.md "Implementation Deviations" §1. INV-6 still enforces "no direct UPDATE" (single-writer would be the never-built `SetProjectMasterClock` command). |
 
 `fps_mismatch_policy` is the existing 015-era key; not changed by 018.
 

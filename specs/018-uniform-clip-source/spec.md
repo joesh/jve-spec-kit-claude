@@ -2,7 +2,19 @@
 
 **Feature Branch**: `018-uniform-clip-source`
 **Created**: 2026-05-17
-**Status**: Draft
+**Status**: Implemented (with deviations — see below)
+
+---
+
+## ⚠️ Implementation Deviations from the Draft
+
+Mid-implementation decisions that differ from the draft Input/FRs. Authoritative — the FR text below is preserved for traceability but should be read through this lens.
+
+1. **Master clock = canonical flicks (705,600,000 Hz), not user-mutable.** The draft proposed `master_clock_hz` as a per-project integer settable at creation (default 192000) and mutable via `SetProjectMasterClock`. As implemented, every project uses `master_clock_hz = 705600000` (the flicks unit; divides 24/25/30/48/50/60/100/120 fps AND 8/16/22.05/24/32/44.1/48/88.2/96/192 kHz audio exactly). The value lives in `projects.settings` as a constant for the math primitive's API symmetry, but is **not user-settable** at creation or after. INV-6 still locks the column down (no direct UPDATE). The `SetProjectMasterClock` command and its test (T041/T044) were **not built**; their contract file is retained as informational. Canonical value pinned by `tests/test_master_clock_canonical_flicks.lua`.
+2. **Affected FRs**: FR-027 (default value), FR-028 (mutability), FR-030b (command existence), FR-036b (command test) are superseded. INV-6, FR-008 math, FR-021 resolver semantics, FR-024 invariant rejection of direct settings edits — all retained as written.
+3. **T012 static-scan chokepoint test dropped.** Field-access discipline is enforced by deletion of the legacy accessors (compile-fail on direct field use), not by a static scan. See tasks.md notes.
+
+---
 **Input**: User description: "Uniform clip source timebase with canonical-clock sub-frame primitives. Standardize `clip.source_in_frame` / `source_out_frame` on the source sequence's frame-rate timebase for both video and audio; add `source_in_subframe` / `source_out_subframe` integer columns for sub-frame residual expressed in a project-wide canonical audio clock. Drop `master.audio_sample_rate` (each audio media_ref carries its own rate). A project carries a default frame rate (set at project creation, pre-fills new-sequence/new-master creation, does NOT constrain existing rows) and a canonical audio master clock (default 192000 Hz). Any sequence's `fps` is only mutable via `ConformSequence` post-creation; that command performs a per-sequence rewrite of all dependents (works for both `kind='master'` and `kind='sequence'`). The `SetProjectMasterClock` command performs a project-wide subframe rescale. Primitives, these commands, and tests only — no UI for the default fps / master clock pickers, no other new user tools."
 
 ---
