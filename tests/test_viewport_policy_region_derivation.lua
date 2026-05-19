@@ -51,7 +51,7 @@ do
     local cmd = make_command({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 100, duration_frames = 300 },
+            { track_id = "v1", sequence_start_frame = 100, duration_frames = 300 },
         },
         updates = {},
         deletes = {},
@@ -59,10 +59,10 @@ do
     local region = viewport_policy.derive_change_region(cmd)
     assert(region ~= nil, "insert must produce a region")
     assert(region.time_range.start_frame == 100,
-        string.format("insert region starts at clip.timeline_start=100, got %s",
+        string.format("insert region starts at clip.sequence_start=100, got %s",
             tostring(region.time_range.start_frame)))
     assert(region.time_range.end_frame == 400,
-        string.format("insert region ends at clip.timeline_start+duration=400, got %s",
+        string.format("insert region ends at clip.sequence_start+duration=400, got %s",
             tostring(region.time_range.end_frame)))
     local ok, err = set_equal(region.track_set, {"v1"})
     assert(ok, "insert region tracks must be {v1}: " .. (err or ""))
@@ -76,8 +76,8 @@ do
     local cmd = make_command({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 100, duration_frames = 200 }, -- 100-300
-            { track_id = "a1", timeline_start_frame = 250, duration_frames = 500 }, -- 250-750
+            { track_id = "v1", sequence_start_frame = 100, duration_frames = 200 }, -- 100-300
+            { track_id = "a1", sequence_start_frame = 250, duration_frames = 500 }, -- 250-750
         },
         updates = {},
         deletes = {},
@@ -101,9 +101,9 @@ do
         updates = {
             {
                 track_id = "v2",
-                timeline_start_frame = 500,
+                sequence_start_frame = 500,
                 duration_frames = 100,
-                previous = { track_id = "v1", timeline_start = 100, duration = 100 },
+                previous = { track_id = "v1", sequence_start = 100, duration = 100 },
             },
         },
         deletes = {},
@@ -127,7 +127,7 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { previous = { track_id = "a2", timeline_start = 1000, duration = 250 } },
+            { previous = { track_id = "a2", sequence_start = 1000, duration = 250 } },
         },
     })
     local region = viewport_policy.derive_change_region(cmd)
@@ -147,7 +147,7 @@ do
         seqA = {
             sequence_id = "seqA",
             inserts = {
-                { track_id = "v1", timeline_start_frame = 50, duration_frames = 100 },
+                { track_id = "v1", sequence_start_frame = 50, duration_frames = 100 },
             },
             updates = {},
             deletes = {},
@@ -155,7 +155,7 @@ do
         seqB = {
             sequence_id = "seqB",
             inserts = {
-                { track_id = "v2", timeline_start_frame = 800, duration_frames = 100 },
+                { track_id = "v2", sequence_start_frame = 800, duration_frames = 100 },
             },
             updates = {},
             deletes = {},
@@ -211,7 +211,7 @@ do
     local cmd = make_command({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 100, duration_frames = 200 },
+            { track_id = "v1", sequence_start_frame = 100, duration_frames = 200 },
         },
         updates = {},
         deletes = { "clip_id_a", "clip_id_b" },
@@ -229,7 +229,7 @@ do
         sequence_id = "seq1",
         inserts = {},
         updates = {
-            { track_id = "v1", timeline_start_frame = 500, duration_frames = 100 },
+            { track_id = "v1", sequence_start_frame = 500, duration_frames = 100 },
         },
         deletes = {},
     })
@@ -269,14 +269,14 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { clip_id = "deleted_A", track_id = "v1", timeline_start = 4000, duration = 300 },
-            { clip_id = "deleted_B", track_id = "a1", timeline_start = 4100, duration = 250 },
+            { clip_id = "deleted_A", track_id = "v1", sequence_start = 4000, duration = 300 },
+            { clip_id = "deleted_B", track_id = "a1", sequence_start = 4100, duration = 250 },
         },
     })
     local region = viewport_policy.derive_change_region(cmd)
     assert(region, "rich delete records must yield a region")
-    assert(region.time_range.start_frame == 4000, "spans earliest delete.timeline_start")
-    assert(region.time_range.end_frame == 4350, "spans latest delete.timeline_start+duration")
+    assert(region.time_range.start_frame == 4000, "spans earliest delete.sequence_start")
+    assert(region.time_range.end_frame == 4350, "spans latest delete.sequence_start+duration")
     local set_equal_ok = set_equal(region.track_set, {"v1", "a1"})
     assert(set_equal_ok, "rich deletes track both affected tracks")
     print("  9. rich delete records (clip_id + track + timeline + duration) → region ✓")

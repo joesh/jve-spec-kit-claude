@@ -102,10 +102,16 @@ package.loaded["core.logger"] = {
 
 -- Mock Renderer
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test Seq",
+            kind = "sequence", name = "Test Seq",
             audio_sample_rate = 48000,
         }
     end,
@@ -130,6 +136,7 @@ local mock_next_audio_entries = {}
 
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return 200 end,
     get_video_at = function(self, frame) return mock_video_entries end,
     get_next_video = function(self, boundary) return mock_next_video_entries end,
@@ -221,7 +228,7 @@ PlaybackEngine.init_audio(mock_audio)
 
 local function make_engine()
     local log = { positions = {} }
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,
@@ -240,7 +247,7 @@ local function make_engine_with_controller()
     mock_next_audio_entries = {}
     timer_callbacks = {}
 
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:activate_audio()  -- claim audio ownership via public API
 
     -- Reset tracking AFTER load + audio activation
@@ -411,7 +418,7 @@ do
 
     local engine = make_engine()
     reset_playback_calls()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
 
     assert(find_call("SET_CLIP_PROVIDER"),
         "load_sequence must call SET_CLIP_PROVIDER")
@@ -429,7 +436,7 @@ do
     mock_next_video_entries = {}
     mock_audio_entries = {}
     mock_next_audio_entries = {}
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     -- WHITE-BOX: no public API to remove controller after load_sequence
     engine._playback_controller = nil  -- simulate no C++ controller
 

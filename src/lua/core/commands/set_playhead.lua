@@ -6,9 +6,10 @@ local Signals = require("core.signals")
 
 local SPEC = {
     undoable = false,
+    mutates_clips = false,
     args = {
         project_id = { required = true, kind = "string" },
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
         playhead_position = { required = true },
     },
 }

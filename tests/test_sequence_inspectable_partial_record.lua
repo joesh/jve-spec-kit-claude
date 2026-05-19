@@ -25,8 +25,8 @@ db:exec(require("import_schema"))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 -- Insert a sequence row with real values for marks, playhead, start tc.
 db:exec(string.format([[
@@ -37,7 +37,7 @@ db:exec(string.format([[
          video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
          created_at, modified_at)
     VALUES
-        ('seq', 'proj', 'TestSeq', 'nested', 25, 1, 48000,
+        ('seq', 'proj', 'TestSeq', 'sequence', 25, 1, 48000,
          1920, 1080, 42, 0, 1000,
          91500, 93000, 90000,
          0, 0, 0.5,

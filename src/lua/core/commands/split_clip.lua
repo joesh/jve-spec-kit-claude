@@ -3,16 +3,16 @@
 -- Divides one clip at a chosen owner-timeline frame into two adjacent
 -- clips that together cover the same owner range. Per commands.md §Split:
 --
---   Left half:  timeline_start unchanged;
+--   Left half:  sequence_start unchanged;
 --               duration = split_offset (owner frames);
 --               source_in  unchanged;
 --               source_out = source_in + source_offset.
---   Right half: timeline_start = orig_ts + split_offset;
+--   Right half: sequence_start = orig_ts + split_offset;
 --               duration = orig_dur - split_offset;
 --               source_in  = orig_source_in + source_offset;
 --               source_out unchanged.
 --
--- split_offset = split_frame - original.timeline_start (owner frames).
+-- split_offset = split_frame - original.sequence_start (owner frames).
 -- source_offset = owner_delta_to_source(clip.fps_mismatch_policy, split_offset,
 --                                      owner.fps, nested.fps).
 --
@@ -25,7 +25,7 @@
 -- new link groups for the second halves — see T045a (blade.lua) for the
 -- cross-track razor. link_group relinking is NOT this command's concern.
 --
--- Refuses: split_frame at or outside [timeline_start, timeline_start+duration).
+-- Refuses: split_frame at or outside [sequence_start, sequence_start+duration).
 -- Refusal is loud; DB unchanged.
 --
 -- SQL isolation: all DB access via models.
@@ -52,9 +52,9 @@ local function mutation_entry(row)
         owner_sequence_id     = row.owner_sequence_id,
         track_sequence_id     = row.owner_sequence_id,
         track_id              = row.track_id,
-        nested_sequence_id    = row.nested_sequence_id,
-        start_value           = row.timeline_start_frame,
-        timeline_start        = row.timeline_start_frame,
+        sequence_id    = row.sequence_id,
+        start_value           = row.sequence_start_frame,
+        sequence_start        = row.sequence_start_frame,
         duration_value        = row.duration_frames,
         duration              = row.duration_frames,
         source_in             = row.source_in_frame,
@@ -86,17 +86,17 @@ function M.execute(args)
         args.clip_id, clip.owner_sequence_id, args.sequence_id))
 
     local split_frame = args.split_frame
-    local clip_end    = clip.timeline_start_frame + clip.duration_frames
-    assert(split_frame > clip.timeline_start_frame and split_frame < clip_end,
+    local clip_end    = clip.sequence_start_frame + clip.duration_frames
+    assert(split_frame > clip.sequence_start_frame and split_frame < clip_end,
         string.format(
             "SplitClip: split_frame=%d must be strictly inside clip [%d, %d)",
-            split_frame, clip.timeline_start_frame, clip_end))
+            split_frame, clip.sequence_start_frame, clip_end))
 
     local owner  = Sequence.find(args.sequence_id)
-    local nested = Sequence.find(clip.nested_sequence_id)
+    local nested = Sequence.find(clip.sequence_id)
     assert(owner and nested, "SplitClip: owner or nested sequence not found")
 
-    local split_offset  = split_frame - clip.timeline_start_frame
+    local split_offset  = split_frame - clip.sequence_start_frame
     local source_offset = Clip.owner_delta_to_source(
         clip.fps_mismatch_policy, split_offset,
         owner.fps_numerator,  owner.fps_denominator,
@@ -106,7 +106,17 @@ function M.execute(args)
     local left_new_source_out = clip.source_in_frame + source_offset
 
     local right_id           = args.second_clip_id or uuid.generate()
-    local right_timeline     = split_frame
+    -- right_half_offset: optional caller-supplied displacement of the right
+    -- half's sequence_start away from split_frame. Used by BatchRippleEdit's
+    -- cut-mode ripple to place the right half at its post-ripple position
+    -- in one shot (so BRE doesn't have to bulk-shift it afterwards, which
+    -- would entangle BRE's planned_mutations with SplitClip's own undo).
+    -- Default 0 = right half lives exactly at split_frame.
+    local right_half_offset  = args.right_half_offset or 0
+    assert(type(right_half_offset) == "number" and right_half_offset >= 0,
+        string.format("SplitClip: right_half_offset must be a non-negative integer; got %s",
+            tostring(right_half_offset)))
+    local right_timeline     = split_frame + right_half_offset
     local right_duration     = clip.duration_frames - split_offset
     local right_source_in    = clip.source_in_frame + source_offset
     local right_source_out   = clip.source_out_frame
@@ -117,20 +127,42 @@ function M.execute(args)
     assert(database.savepoint(SAVEPOINT), "SplitClip: savepoint failed")
     local ok, err = pcall(function()
         Clip.update_bounds(args.clip_id,
-            clip.timeline_start_frame, left_new_duration,
+            clip.sequence_start_frame, left_new_duration,
             clip.source_in_frame, left_new_source_out)
 
+        -- 018 FR-023 / NSF: split must preserve sub-frame precision through
+        -- the split point. owner_delta_to_source returns frames-only today,
+        -- so a clip whose source range is already sub-frame-aligned cannot
+        -- be split correctly — refuse loudly until Phase 3.6 lands the
+        -- (frame, subframe) carry math. Frame-aligned clips (subframe==0)
+        -- pass through unchanged.
+        -- Canonical states per FR-013: VIDEO has subframe=NULL, AUDIO has
+        -- subframe∈[0, ticks_per_frame). Anything else (AUDIO with
+        -- subframe>0) refuses until Phase 3.6.
+        local sub_in_ok  = clip.source_in_subframe  == nil or clip.source_in_subframe  == 0
+        local sub_out_ok = clip.source_out_subframe == nil or clip.source_out_subframe == 0
+        assert(sub_in_ok and sub_out_ok, string.format(
+            "SplitClip: clip %s has non-zero subframe "
+            .. "(in=%s out=%s) — sample-precise split deferred to Phase 3.6; "
+            .. "refuse rather than corrupt audio at the cut point",
+            tostring(args.clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
+        local right_source_in_sub  = clip.source_in_subframe
+        local right_source_out_sub = clip.source_out_subframe
         Clip._create_v13_row({
             id                    = right_id,
             project_id            = clip.project_id,
             owner_sequence_id     = clip.owner_sequence_id,
-            track_id              = clip.track_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            track_id               = clip.track_id,
+            sequence_id           = clip.sequence_id,
             name                  = clip.name,
-            timeline_start_frame  = right_timeline,
+            sequence_start_frame  = right_timeline,
             duration_frames       = right_duration,
             source_in_frame       = right_source_in,
             source_out_frame      = right_source_out,
+            source_in_subframe    = right_source_in_sub,
+            source_out_subframe   = right_source_out_sub,
             master_layer_track_id = clip.master_layer_track_id,
             fps_mismatch_policy   = clip.fps_mismatch_policy,
             enabled               = clip.enabled,
@@ -160,7 +192,7 @@ function M.execute(args)
         split_offset    = split_offset,
         source_offset   = source_offset,
         prior = {
-            timeline_start_frame = clip.timeline_start_frame,
+            sequence_start_frame = clip.sequence_start_frame,
             duration_frames      = clip.duration_frames,
             source_in_frame      = clip.source_in_frame,
             source_out_frame     = clip.source_out_frame,
@@ -173,7 +205,8 @@ local SPEC = {
         sequence_id    = { required = true },
         clip_id        = { required = true },
         split_frame    = { required = true },
-        second_clip_id = {},  -- caller-supplied id (optional); else uuid
+        second_clip_id    = {},  -- caller-supplied id (optional); else uuid
+        right_half_offset = {},  -- caller-supplied displacement (optional); else 0
     },
     persisted = {
         prior_state    = {},
@@ -196,14 +229,34 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local right = Clip.load_v13_row(result_or_err.second_clip_id)
         assert(left,  string.format("SplitClip executor: left half %s missing after create", args.clip_id))
         assert(right, string.format("SplitClip executor: right half %s missing after create", result_or_err.second_clip_id))
+
+        -- Hydrate the media chain leaf (resolved_media + media_path) so the
+        -- new right-half row carries the same waveform/peak/offline keys as
+        -- the source clip. Without this the timeline renderer reaches for
+        -- clip.resolved_media.id when fetching peaks, finds nil, and the
+        -- right half renders as a clip with no waveform. Both halves share
+        -- one media chain — load once from the left half.
+        local hydrated_left = Clip.load(args.clip_id)
+        assert(hydrated_left, string.format(
+            "SplitClip executor: chain-resolved left half %s missing after create",
+            args.clip_id))
+        local resolved_media = hydrated_left.resolved_media
+        local media_path     = hydrated_left.media_path
+        local function entry_with_media(row)
+            local e = mutation_entry(row)
+            e.resolved_media = resolved_media
+            e.media_path     = media_path
+            return e
+        end
+
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
-            inserts     = { mutation_entry(right) },
+            inserts     = { entry_with_media(right) },
             deletes     = {},
-            updates     = { mutation_entry(left) },
+            updates     = { entry_with_media(left) },
         })
         Signals.emit("sequence_content_changed", args.sequence_id)
-        return true, { second_clip_id = result_or_err.second_clip_id }
+        return { success = true, result_data = result_or_err }
     end
 
     command_undoers["SplitClip"] = function(command)
@@ -219,7 +272,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local ok, err = pcall(function()
             Clip.delete_one(second)
             Clip.update_bounds(args.clip_id,
-                prior.timeline_start_frame, prior.duration_frames,
+                prior.sequence_start_frame, prior.duration_frames,
                 prior.source_in_frame, prior.source_out_frame)
         end)
         if not ok then

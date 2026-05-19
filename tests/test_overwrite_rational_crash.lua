@@ -29,11 +29,11 @@ db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 -- Insert Project/Sequence
 local now = os.time()
 db:exec(string.format([[ 
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[ 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[ 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -92,7 +92,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 -- Create masterclip sequence for this media (required for Overwrite)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 240, "media_1")
 
 -- Create Existing Clip (0-100 frames)
@@ -101,8 +101,8 @@ local clip_existing = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -117,11 +117,11 @@ print("Created existing clip at 0-100 frames")
 -- Execute Overwrite (Overlap 50-150)
 -- This triggers clip_mutator to resolve occlusion (trim existing clip)
 local cmd = Command.create("Overwrite", "project")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
 -- Rationals
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 
 print("Executing Overwrite...")
 local result = command_manager.execute(cmd)

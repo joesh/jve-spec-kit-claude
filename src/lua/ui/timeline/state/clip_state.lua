@@ -23,11 +23,11 @@ local function normalize_clip_integers(clip)
     if not clip then return false end
 
     -- Handle various field names from database/mutations
-    local timeline_start = clip.timeline_start or clip.start_value
+    local sequence_start = clip.sequence_start or clip.start_value
     local duration = clip.duration or clip.duration_value
 
     -- Assert integer types
-    if type(timeline_start) ~= "number" then
+    if type(sequence_start) ~= "number" then
         clip._invalid = true
         return false
     end
@@ -37,7 +37,7 @@ local function normalize_clip_integers(clip)
     end
 
     -- Normalize field names
-    clip.timeline_start = timeline_start
+    clip.sequence_start = sequence_start
     clip.duration = duration
 
     -- source_in/source_out: alias _value variants from mutations
@@ -100,12 +100,12 @@ local function rebuild_clip_indexes()
 
     for _, list in pairs(track_clip_index) do
         table.sort(list, function(a, b)
-            assert(type(a.timeline_start) == "number",
-                "clip_state: clip missing integer timeline_start in sort (id=" .. tostring(a.id) .. ")")
-            assert(type(b.timeline_start) == "number",
-                "clip_state: clip missing integer timeline_start in sort (id=" .. tostring(b.id) .. ")")
-            local a_start = a.timeline_start
-            local b_start = b.timeline_start
+            assert(type(a.sequence_start) == "number",
+                "clip_state: clip missing integer sequence_start in sort (id=" .. tostring(a.id) .. ")")
+            assert(type(b.sequence_start) == "number",
+                "clip_state: clip missing integer sequence_start in sort (id=" .. tostring(b.id) .. ")")
+            local a_start = a.sequence_start
+            local b_start = b.sequence_start
             if a_start == b_start then
                 assert(a.id and b.id, "clip_state: clip missing id in sort")
                 return a.id < b.id
@@ -173,7 +173,7 @@ function M.get_at_time(time_value, candidate_clips)
 
     local matches = {}
     for _, clip in ipairs(clips) do
-        local start_val = clip.timeline_start or clip.start_value
+        local start_val = clip.sequence_start or clip.start_value
         local duration_val = clip.duration or clip.duration_value
 
         if type(start_val) ~= "number" or type(duration_val) ~= "number" or duration_val <= 0 then
@@ -216,7 +216,7 @@ function M.get_content_end_frame()
 
     local max_end = 0
     for _, clip in ipairs(clips) do
-        local start_val = clip.timeline_start or clip.start_value
+        local start_val = clip.sequence_start or clip.start_value
         local duration_val = clip.duration or clip.duration_value
         if type(start_val) == "number" and type(duration_val) == "number" then
             local clip_end = start_val + duration_val
@@ -258,7 +258,7 @@ function M.apply_mutations(mutations, persist_callback)
 
     --- Apply in-memory bulk_shift mutations.
     -- Canonical shape: { track_id, shift_frames, start_frame }. Every
-    -- clip on the named track with timeline_start >= start_frame gets
+    -- clip on the named track with sequence_start >= start_frame gets
     -- shifted by shift_frames. Mirrors the SQL path in
     -- command_helper.apply_mutations so DB and in-memory stay in sync.
     local function apply_bulk_shifts()
@@ -281,9 +281,9 @@ function M.apply_mutations(mutations, persist_callback)
                 local list = track_clip_index[shift.track_id] or {}
                 local shifted = 0
                 for _, clip in ipairs(list) do
-                    if type(clip.timeline_start) == "number"
-                        and clip.timeline_start >= shift.start_frame then
-                        clip.timeline_start = clip.timeline_start + shift.shift_frames
+                    if type(clip.sequence_start) == "number"
+                        and clip.sequence_start >= shift.start_frame then
+                        clip.sequence_start = clip.sequence_start + shift.shift_frames
                         shifted = shifted + 1
                         changed = true
                     end
@@ -342,7 +342,7 @@ function M.apply_mutations(mutations, persist_callback)
         if not mutations.deletes then return end
         for _, entry in ipairs(mutations.deletes) do
             -- Entries are either raw clip_id strings (legacy/minimal) or
-            -- records {clip_id, track_id, timeline_start, duration} that
+            -- records {clip_id, track_id, sequence_start, duration} that
             -- the viewport policy uses to derive the change region.
             local clip_id = type(entry) == "table" and entry.clip_id or entry
             -- Remove ALL occurrences (duplicates can exist from nested command mutations)
@@ -408,10 +408,10 @@ function M.apply_mutations(mutations, persist_callback)
                         clip.frame_rate = update.frame_rate
                     end
                     -- All values are now integers - direct assignment
-                    if update.start_value and update.start_value ~= clip.timeline_start then
+                    if update.start_value and update.start_value ~= clip.sequence_start then
                         assert(type(update.start_value) == "number",
                             "clip_state.apply_mutations: start_value must be integer")
-                        clip.timeline_start = update.start_value
+                        clip.sequence_start = update.start_value
                         needs_resort = true; changed = true
                     end
                     if update.duration_value and update.duration_value ~= clip.duration then

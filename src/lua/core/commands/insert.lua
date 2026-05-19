@@ -23,25 +23,33 @@ local M = {}
 
 local Clip          = require("models.clip")
 local Sequence      = require("models.sequence")
+local Track         = require("models.track")
 local place_shared  = require("core.commands._place_shared")
 local log           = require("core.logger").for_area("commands")
 
 -- M.execute — pure-logic entry point. Args and return shape documented below.
 function M.execute(args)
-    -- timeline_start_frame is optional at the SPEC layer because the
+    -- sequence_start_frame is optional at the SPEC layer because the
     -- editor's user-mode Insert is "insert at playhead." When omitted,
     -- resolve from the owner sequence's authoritative playhead_position.
     -- Loud-fail if neither is available — no silent default to 0
     -- (rule 2.13).
-    if args.timeline_start_frame == nil then
+    if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
             "Insert: sequence %s not found (cannot resolve playhead fallback)",
             tostring(args.sequence_id)))
         assert(type(owner.playhead_position) == "number", string.format(
-            "Insert: timeline_start_frame omitted and sequence %s has no "
+            "Insert: sequence_start_frame omitted and sequence %s has no "
             .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.timeline_start_frame = owner.playhead_position
+        args.sequence_start_frame = owner.playhead_position
     end
+
+    -- 015 F2: ensure identity patches exist for every source track in the
+    -- nested sequence. Patches are the sole routing mechanism; this is
+    -- the API-layer guarantee that pre-patch source→record identity
+    -- behavior still works without explicit user setup.
+    require("models.patch").ensure_identity_for_source(
+        args.sequence_id, args.source_sequence_id)
 
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
@@ -56,8 +64,13 @@ function M.execute(args)
     -- whose start >= insertion frame) would leave the straddler untouched
     -- and the new clip's INSERT would collide with it on the
     -- video-overlap trigger.
+    -- Every target track (VIDEO + each audio destination) must split + ripple
+    -- before the new clip rows land. Walker is in place_shared so Overwrite
+    -- shares it.
+    local target_track_ids = place_shared.iter_target_track_ids(plan)
+
     local split_captures = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(target_track_ids) do
         local cap = place_shared.split_track_at_insertion(
             track_id, plan.owner, plan.start_frame)
         if cap and (#cap.trimmed > 0 or #cap.split_new_ids > 0) then
@@ -66,11 +79,11 @@ function M.execute(args)
     end
 
     -- Ripple target tracks BEFORE inserting so the new clip doesn't collide.
-    -- The right halves created by split_track_at_insertion (timeline_start
+    -- The right halves created by split_track_at_insertion (sequence_start
     -- == plan.start_frame) get picked up here and shifted along with all
     -- downstream clips.
     local rippled = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(target_track_ids) do
         local ids = Clip.ripple_track_forward(
             track_id, plan.start_frame, plan.owner_duration)
         if #ids > 0 then
@@ -108,10 +121,10 @@ end
 local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
-        nested_sequence_id    = { required = true,  kind = "string" },
-        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        source_sequence_id    = { required = true,  kind = "string" },
+        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
         -- No silent default-to-0 (rule 2.13).
-        timeline_start_frame  = { kind = "number" },
+        sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
         target_audio_track_id = { kind = "string" },
         fps_mismatch_policy   = { kind = "string" },
@@ -128,8 +141,56 @@ local SPEC = {
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
         executed_mutations     = { kind = "table" },
+        auto_track_ids         = { kind = "table" },
     },
 }
+
+-- Spec F2: ensure the record sequence has audio tracks 1..N where N is
+-- the highest record_track_index referenced by an ENABLED patch row.
+-- Patches are the sole routing mechanism: source channels with no patch
+-- row contribute nothing (they don't participate in the edit). Disabled
+-- patches likewise contribute nothing.
+local function auto_create_record_audio_tracks(args)
+    assert(args.source_sequence_id and args.source_sequence_id ~= "",
+        "Insert.auto_create_record_audio_tracks: source_sequence_id required "
+        .. "(SPEC declares it required=true; reaching this helper without it "
+        .. "is a programming error in the executor wiring)")
+
+    local Patch = require("models.patch")
+    local rec_audio = Track.find_by_sequence(args.sequence_id, "AUDIO")
+
+    local max_rec_idx = 0
+    for _, p in ipairs(Patch.find_by_sequence(args.sequence_id)) do
+        if p.track_type == "AUDIO"
+           and p.enabled == 1  -- normalized to INTEGER by Patch.save
+           and p.record_track_index > max_rec_idx then
+            max_rec_idx = p.record_track_index
+        end
+    end
+
+    -- Walk only the indices that don't already have a track. Using
+    -- rec_count+1..max_rec_idx silently misroutes whenever existing
+    -- record tracks are non-contiguous (e.g. user deleted A2 leaving
+    -- A1+A3): Track.determine_next_index would assign MAX+1 ignoring
+    -- the patch's record_track_index. Pin track_index explicitly.
+    local existing_by_idx = {}
+    for _, t in ipairs(rec_audio) do existing_by_idx[t.track_index] = true end
+    local created_ids = {}
+    for i = 1, max_rec_idx do
+        if not existing_by_idx[i] then
+            local t = Track.create_audio(
+                string.format("A%d", i), args.sequence_id,
+                { sync_mode = "ripple", index = i })
+            assert(t:save(), string.format(
+                "Insert: failed to save auto-created audio track A%d "
+                .. "for sequence %s", i, tostring(args.sequence_id)))
+            created_ids[#created_ids + 1] = t.id
+            log.event("Insert: auto-created audio track A%d id=%s "
+                .. "(max enabled patch rec_idx=%d)", i, t.id, max_rec_idx)
+        end
+    end
+    return created_ids
+end
 
 -- Flat executed_mutations list: one entry per row touched. Stable contract
 -- consumed by tests/test_insert_split_behavior, batch-ripple undo, and
@@ -169,9 +230,9 @@ local function build_insert_mutation_entry(clip_id)
         owner_sequence_id     = clip.owner_sequence_id,
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
-        nested_sequence_id    = clip.nested_sequence_id,
-        start_value           = clip.timeline_start,
-        timeline_start        = clip.timeline_start,
+        sequence_id    = clip.sequence_id,
+        start_value           = clip.sequence_start,
+        sequence_start        = clip.sequence_start,
         duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
@@ -210,7 +271,7 @@ local function build_executor_mutation_bucket(args, result)
             -- Emit at PRE-shift so the bucket's bulk_shift moves it to the
             -- final position in-memory, mirroring the DB sequence.
             entry.start_value    = entry.start_value    - track_shift
-            entry.timeline_start = entry.timeline_start - track_shift
+            entry.sequence_start = entry.sequence_start - track_shift
             bucket.inserts[#bucket.inserts + 1] = entry
         end
         for _, tr in ipairs(cap.trimmed) do
@@ -221,7 +282,7 @@ local function build_executor_mutation_bucket(args, result)
                 clip_id          = row.id,
                 id               = row.id,
                 track_id         = row.track_id,
-                start_value      = row.timeline_start_frame,
+                start_value      = row.sequence_start_frame,
                 duration_value   = row.duration_frames,
                 source_in_value  = row.source_in_frame,
                 source_out_value = row.source_out_frame,
@@ -273,7 +334,7 @@ local function build_undo_mutation_bucket(args, created_ids, rippled, splits)
             bucket.updates[#bucket.updates + 1] = {
                 clip_id          = tr.id,
                 id               = tr.id,
-                start_value      = tr.prior.timeline_start_frame,
+                start_value      = tr.prior.sequence_start_frame,
                 duration_value   = tr.prior.duration_frames,
                 source_in_value  = tr.prior.source_in_frame,
                 source_out_value = tr.prior.source_out_frame,
@@ -296,7 +357,7 @@ local function reverse_split_captures(splits)
     for _, cap in pairs(splits) do
         for _, tr in ipairs(cap.trimmed) do
             Clip.update_bounds(tr.id,
-                tr.prior.timeline_start_frame, tr.prior.duration_frames,
+                tr.prior.sequence_start_frame, tr.prior.duration_frames,
                 tr.prior.source_in_frame,      tr.prior.source_out_frame)
         end
     end
@@ -330,6 +391,41 @@ end
 function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Insert"] = function(command)
         local args = command:get_all_parameters()
+
+        -- Validate the source sequence exists before any content checks.
+        if not Sequence.find(args.source_sequence_id) then
+            set_last_error(string.format(
+                "Insert: source_sequence_id '%s' not found",
+                tostring(args.source_sequence_id)))
+            return false
+        end
+
+        -- T042: auto-create any missing record audio tracks (within this undo
+        -- entry so Cmd-Z removes them together with the inserted clip).
+        local auto_ids = auto_create_record_audio_tracks(args)
+        command:set_parameter("auto_track_ids", auto_ids)
+
+        -- If the source sequence has no clips, track creation was the only
+        -- goal (T042 path). Persist empty clip-insertion state and return.
+        local src_mediums = Sequence.contained_mediums(args.source_sequence_id)
+        if not next(src_mediums) then
+            local Signals = require("core.signals")
+            command:set_parameter("created_clip_ids",      {})
+            command:set_parameter("created_link_group_id", "")
+            command:set_parameter("rippled_capture",       {})
+            command:set_parameter("split_capture",         {})
+            command:set_parameter("duration_frames",       0)
+            command:set_parameter("fps_mismatch_policy",   "")
+            command:set_parameter("executed_mutations",    {})
+            command:set_parameter("__timeline_mutations",  {
+                sequence_id = args.sequence_id,
+                inserts = {}, updates = {}, deletes = {},
+                bulk_shifts = {}, placements = {},
+            })
+            Signals.emit("sequence_content_changed", args.sequence_id)
+            return true
+        end
+
         local ok, result_or_err = pcall(M.execute, args)
         if not ok then
             set_last_error("Insert: " .. tostring(result_or_err))
@@ -371,8 +467,22 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         reverse_split_captures(splits)
 
-        command:set_parameter("__timeline_mutations",
-            build_undo_mutation_bucket(args, created_ids, rippled, splits))
+        -- T042: remove auto-created record tracks (reverse order of creation).
+        local auto_ids = args.auto_track_ids
+        assert(type(auto_ids) == "table",
+            "Insert.undo: auto_track_ids not persisted on command")
+        for i = #auto_ids, 1, -1 do
+            Track.delete(auto_ids[i])
+        end
+
+        local undo_bucket = build_undo_mutation_bucket(args, created_ids, rippled, splits)
+        command:set_parameter("__timeline_mutations", undo_bucket)
+        -- When the original Insert had no clips (T042 track-only path), the undo
+        -- bucket is empty — no clip deletions or shifts.  Suppress the run_undoer
+        -- "no __timeline_mutations" error; the undo DID do real work (Track.delete).
+        if #created_ids == 0 then
+            command:set_parameter("__no_timeline_mutations_expected", true)
+        end
 
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)

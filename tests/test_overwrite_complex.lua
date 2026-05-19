@@ -28,11 +28,11 @@ db:exec(require('import_schema'))
 -- Insert Project/Sequence (24fps)
 local now = os.time()
 db:exec(string.format([[ 
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[ 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[ 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -75,7 +75,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 -- Create masterclip sequence for this media (required for Overwrite)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 1000, "media_1")
 
 -- Create Clip A (0-100 frames)
@@ -84,8 +84,8 @@ local clip_a = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -102,8 +102,8 @@ local clip_b = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 100,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 100,
         duration_frames = 100,
         source_in_frame = 100,
         source_out_frame = 200,
@@ -123,17 +123,17 @@ print("Created Clip A (0-100) and Clip B (100-200)")
 
 -- Set marks on masterclip sequence — Overwrite reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(100)
 mc_seq:save()
 
 local cmd = Command.create("Overwrite", "project")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 cmd:set_parameter("clip_name", "Clip C")
 
 print("Executing Overwrite (50-150)...")
@@ -168,10 +168,10 @@ else
 end
 
 -- Clip B
-if b_after.timeline_start == 150 then
+if b_after.sequence_start == 150 then
     print("✅ Clip B start is 150 (Correct)")
 else
-    print(string.format("❌ Clip B start mismatch: expected 150, got %d", b_after.timeline_start))
+    print(string.format("❌ Clip B start mismatch: expected 150, got %d", b_after.sequence_start))
     os.exit(1)
 end
 if b_after.duration == 50 then
@@ -182,10 +182,10 @@ else
 end
 
 -- Clip C
-if c_after.timeline_start == 50 then
+if c_after.sequence_start == 50 then
     print("✅ Clip C start is 50 (Correct)")
 else
-    print(string.format("❌ Clip C start mismatch: expected 50, got %d", c_after.timeline_start))
+    print(string.format("❌ Clip C start mismatch: expected 50, got %d", c_after.sequence_start))
     os.exit(1)
 end
 if c_after.duration == 100 then

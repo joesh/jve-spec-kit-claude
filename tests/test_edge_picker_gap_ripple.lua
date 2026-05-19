@@ -15,7 +15,7 @@ local ui_constants = require("core.ui_constants")
 local gap_clip = {
     id = "gap_v1_0",
     track_id = "v1",
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 120,
     clip_kind = "gap"
 }
@@ -23,9 +23,9 @@ local gap_clip = {
 local clip = {
     id = "clip_a",
     track_id = "v1",
-    timeline_start = 120,
+    sequence_start = 120,
     duration = 80,
-    clip_kind = "nested"
+    clip_kind = "sequence"
 }
 
 local track_clips = {gap_clip, clip}
@@ -34,7 +34,7 @@ local function time_to_pixel(time_obj, _viewport_width)
     return math.floor(time_obj)
 end
 
-local boundary_px = time_to_pixel(clip.timeline_start, 1000)
+local boundary_px = time_to_pixel(clip.sequence_start, 1000)
 local roll_zone = (ui_constants.TIMELINE and ui_constants.TIMELINE.ROLL_ZONE_PX) or 7
 local center_half = math.max(1, math.floor(roll_zone / 2))
 

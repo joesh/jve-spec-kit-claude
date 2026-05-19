@@ -36,18 +36,18 @@ assert(f == nil,
     "test setup: OFFLINE_PATH must not exist on disk (got it back from io.open)")
 
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p', 'p', 'passthrough', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p', 'p', 'passthrough', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 -- Master (V13: holds media_refs)
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, "
     .. "fps_denominator, audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('m', 'p', 'm', 'master', 25, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('m', 'p', 'm', 'master', 25, 1, NULL, 1920, 1080, 0, 0)"))
 -- Nested (edit timeline)
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, "
     .. "fps_denominator, audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('e', 'p', 'e', 'nested', 25, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('e', 'p', 'e', 'sequence', 25, 1, 48000, 1920, 1080, 0, 0)"))
 -- Audio track on master and one on nested
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
@@ -65,16 +65,17 @@ assert(db:exec(string.format(
 -- Master media_ref spans the whole file
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
-    .. "media_id, source_in_frame, source_out_frame, timeline_start_frame, "
-    .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('mr', 'p', 'm', 'm-a1', 'med', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
+    .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
+    .. "duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at) "
+    .. "VALUES ('mr', 'p', 'm', 'm-a1', 'med', 0, 250, 0, 250, 48000, 1, 1.0, 0, 0, 0)"))
 -- Edit clip references master, picking the full master window
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
-    .. "nested_sequence_id, name, timeline_start_frame, duration_frames, "
-    .. "source_in_frame, source_out_frame, fps_mismatch_policy, enabled, "
+    .. "sequence_id, name, sequence_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, "
+    .. "fps_mismatch_policy, enabled, "
     .. "volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('c', 'p', 'e', 'e-a1', 'm', 'c', 0, 250, 0, 250, "
+    .. "VALUES ('c', 'p', 'e', 'e-a1', 'm', 'c', 0, 250, 0, 250, 0, 0, "
     .. "'passthrough', 1, 1.0, 0, 0, 0)"))
 
 local Sequence = require("models.sequence")
@@ -108,8 +109,8 @@ assert(e.enabled == true or e.enabled == 1, string.format(
     .. "got %s — forcing it false silences the beep", tostring(e.enabled)))
 assert(e.media_kind == "audio",
     "media_kind must still classify as audio")
-assert(type(e.timeline_start) == "number" and type(e.duration) == "number",
-    "timeline_start/duration must be numbers (resolver shape contract)")
+assert(type(e.sequence_start) == "number" and type(e.duration) == "number",
+    "sequence_start/duration must be numbers (resolver shape contract)")
 
 -- Same for video: build a parallel video media_ref and check.
 assert(db:exec(
@@ -127,12 +128,12 @@ assert(db:exec(string.format(
     OFFLINE_VIDEO)))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, "
-    .. "media_id, source_in_frame, source_out_frame, timeline_start_frame, "
-    .. "duration_frames, enabled, volume, playhead_frame, created_at, modified_at) "
-    .. "VALUES ('vmr', 'p', 'm', 'm-v1', 'vmed', 0, 250, 0, 250, 1, 1.0, 0, 0, 0)"))
+    .. "media_id, source_in_frame, source_out_frame, sequence_start_frame, "
+    .. "duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at) "
+    .. "VALUES ('vmr', 'p', 'm', 'm-v1', 'vmed', 0, 250, 0, 250, 48000, 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
     "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, "
-    .. "nested_sequence_id, name, timeline_start_frame, duration_frames, "
+    .. "sequence_id, name, sequence_start_frame, duration_frames, "
     .. "source_in_frame, source_out_frame, fps_mismatch_policy, enabled, "
     .. "volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('vc', 'p', 'e', 'e-v1', 'm', 'vc', 0, 250, 0, 250, "

@@ -64,8 +64,9 @@ local function build_entry(path)
     return {
         media_path     = path,
         clip_id        = "c1",
+        media_kind     = "video",   -- offline-flag test stays in the video branch
         fps_numerator  = 24, fps_denominator = 1,
-        timeline_start = 0, duration = 10,
+        sequence_start = 0, duration = 10,
         source_in      = 0, source_out = 10,
         volume         = 1.0,
         track_index    = 0,
@@ -146,7 +147,7 @@ print("(B) _path_is_active_in_tmb: OK")
 
 -- Reach into the module-level connection set up by _setup_playback_controller
 -- by instantiating an engine and priming its internal state the same way.
-local engine = PlaybackEngine.new({
+local engine = PlaybackEngine.new("source", {
     on_show_frame   = function() end,
     on_show_gap     = function() end,
     on_set_rotation = function() end,

@@ -18,7 +18,7 @@ metadata_schemas.FIELD_TYPES = {
     BOOLEAN   = "BOOLEAN",
     -- TIMECODE: integer frame → HH:MM:SS:FF at the active sequence's
     --   frame rate. The codebase stores all timeline positions (playhead,
-    --   marks, clip timeline_start, start_timecode_frame) in absolute
+    --   marks, clip sequence_start, start_timecode_frame) in absolute
     --   timecode space, so format/parse never adds or subtracts an offset.
     --   Used for: every TC field — durations, sequence start, playhead,
     --   marks, source-side positions.
@@ -76,7 +76,7 @@ local function field(def)
     -- multi_editable: whether Apply-in-multi-edit-mode may write this field.
     -- Default true. Set false for structural fields where replicating one
     -- value across N inspectables would violate an invariant — e.g., setting
-    -- the same timeline_start on two clips on the same track produces
+    -- the same sequence_start on two clips on the same track produces
     -- VIDEO_OVERLAP (seen in TSO 2026-04-20 15:26:46).
     local multi_editable = def.multi_editable
     if multi_editable == nil then multi_editable = true end
@@ -109,7 +109,7 @@ local clip_sections = {
     {
         name = "Source Range",
         schema = { fields = {
-            -- timeline_start / duration / source_in / source_out are per-clip
+            -- sequence_start / duration / source_in / source_out are per-clip
             -- structural values. Applying the same value to N clips on the
             -- same track violates non-overlap (VIDEO_OVERLAP in the clips
             -- UNIQUE/CHECK invariant). multi_editable = false: user can still
@@ -118,7 +118,7 @@ local clip_sections = {
             -- NLE terminology: "Record In/Out" = position on the timeline
             -- where the clip is laid down. "Source In/Out" = portion of the
             -- source media used.
-            field { key = "timeline_start",  label = "Record In",   type = T.TIMECODE, multi_editable = false },
+            field { key = "sequence_start",  label = "Record In",   type = T.TIMECODE, multi_editable = false },
             field { key = "duration",        label = "Duration",    type = T.TIMECODE, multi_editable = false },
             field { key = "source_in",       label = "Source In",   type = T.TIMECODE, multi_editable = false },
             field { key = "source_out",      label = "Source Out",  type = T.TIMECODE, multi_editable = false },

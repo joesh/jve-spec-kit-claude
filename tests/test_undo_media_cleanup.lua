@@ -26,12 +26,12 @@ assert(db:exec(SCHEMA_SQL))
 
 -- Insert test data
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('test_project', 'Test Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('test_project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, 0, 0);
+    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'test_project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, 0, 0);
+    VALUES ('default_sequence', 'test_project', 'Default Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 300, 0, '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_v1', 'test_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan) VALUES ('track_default_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 ]])

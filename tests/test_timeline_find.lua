@@ -14,33 +14,33 @@ end
 
 -- ============================================================================
 -- Test data: timeline clips with positions across 3 tracks
--- Sorted by timeline_start for expected find order
+-- Sorted by sequence_start for expected find order
 -- ============================================================================
 
 local clips = {
-    {id = "v1_1", name = "INT_Scene1",     track_id = "V1", timeline_start_frame = 0,    duration_frames = 100, codec = "ProRes", fps = 24, enabled = true, properties = {}},
-    {id = "v2_1", name = "GFX_Lower",      track_id = "V2", timeline_start_frame = 10,   duration_frames = 50,  codec = "ProRes", fps = 24, enabled = true, properties = {}},
-    {id = "v1_2", name = "EXT_Scene2",     track_id = "V1", timeline_start_frame = 100,  duration_frames = 150, codec = "ProRes", fps = 24, enabled = true, properties = {}},
-    {id = "a1_1", name = "INT_Dialogue_1", track_id = "A1", timeline_start_frame = 0,    duration_frames = 250, codec = "WAV",    fps = 48000, enabled = true, properties = {}},
-    {id = "v1_3", name = "INT_Scene3",     track_id = "V1", timeline_start_frame = 250,  duration_frames = 200, codec = "ProRes", fps = 24, enabled = true, properties = {}},
-    {id = "v2_2", name = "Interview_B",    track_id = "V2", timeline_start_frame = 300,  duration_frames = 100, codec = "DNxHD",  fps = 25, enabled = true, properties = {}},
-    {id = "v1_4", name = "EXT_Scene4",     track_id = "V1", timeline_start_frame = 450,  duration_frames = 100, codec = "ProRes", fps = 24, enabled = true, properties = {}},
-    {id = "a1_2", name = "INT_Dialogue_2", track_id = "A1", timeline_start_frame = 250,  duration_frames = 300, codec = "WAV",    fps = 48000, enabled = true, properties = {}},
-    {id = "v1_5", name = "INT_Closing",    track_id = "V1", timeline_start_frame = 550,  duration_frames = 50,  codec = "ProRes", fps = 24, enabled = false, properties = {}},
+    {id = "v1_1", name = "INT_Scene1",     track_id = "V1", sequence_start_frame = 0,    duration_frames = 100, codec = "ProRes", fps = 24, enabled = true, properties = {}},
+    {id = "v2_1", name = "GFX_Lower",      track_id = "V2", sequence_start_frame = 10,   duration_frames = 50,  codec = "ProRes", fps = 24, enabled = true, properties = {}},
+    {id = "v1_2", name = "EXT_Scene2",     track_id = "V1", sequence_start_frame = 100,  duration_frames = 150, codec = "ProRes", fps = 24, enabled = true, properties = {}},
+    {id = "a1_1", name = "INT_Dialogue_1", track_id = "A1", sequence_start_frame = 0,    duration_frames = 250, codec = "WAV",    fps = 48000, enabled = true, properties = {}},
+    {id = "v1_3", name = "INT_Scene3",     track_id = "V1", sequence_start_frame = 250,  duration_frames = 200, codec = "ProRes", fps = 24, enabled = true, properties = {}},
+    {id = "v2_2", name = "Interview_B",    track_id = "V2", sequence_start_frame = 300,  duration_frames = 100, codec = "DNxHD",  fps = 25, enabled = true, properties = {}},
+    {id = "v1_4", name = "EXT_Scene4",     track_id = "V1", sequence_start_frame = 450,  duration_frames = 100, codec = "ProRes", fps = 24, enabled = true, properties = {}},
+    {id = "a1_2", name = "INT_Dialogue_2", track_id = "A1", sequence_start_frame = 250,  duration_frames = 300, codec = "WAV",    fps = 48000, enabled = true, properties = {}},
+    {id = "v1_5", name = "INT_Closing",    track_id = "V1", sequence_start_frame = 550,  duration_frames = 50,  codec = "ProRes", fps = 24, enabled = false, properties = {}},
 }
 
 local find_state = require("core.find_state")
 
 -- ============================================================================
--- Timeline find: matches sorted by timeline_start
+-- Timeline find: matches sorted by sequence_start
 -- ============================================================================
 print("--- timeline find: INT clips ---")
 find_state.clear()
 
--- Sort clips by timeline_start for timeline context
+-- Sort clips by sequence_start for timeline context
 local sorted = {}
 for _, c in ipairs(clips) do sorted[#sorted + 1] = c end
-table.sort(sorted, function(a, b) return a.timeline_start_frame < b.timeline_start_frame end)
+table.sort(sorted, function(a, b) return a.sequence_start_frame < b.sequence_start_frame end)
 
 find_state.execute(sorted, {column = "name", operator = "contains", value = "INT"})
 
@@ -49,7 +49,7 @@ find_state.execute(sorted, {column = "name", operator = "contains", value = "INT
 check("timeline INT: 6 matches", find_state.get_match_count() == 6)
 check("timeline INT: active", find_state.is_active())
 
--- First match should be earliest by timeline_start
+-- First match should be earliest by sequence_start
 local first = find_state.get_current_match()
 check("timeline INT: first match is earliest",
     first == "v1_1" or first == "a1_1")  -- both at frame 0
@@ -74,7 +74,7 @@ find_state.execute(sorted, {column = "name", operator = "contains", value = "Sce
 -- Scene clips: INT_Scene1(0), EXT_Scene2(100), INT_Scene3(250), EXT_Scene4(450) = 4
 check("cross-track: 4 Scene matches", find_state.get_match_count() == 4)
 
--- Verify order is by timeline_start
+-- Verify order is by sequence_start
 local order = {}
 for _ = 1, 4 do
     order[#order + 1] = find_state.get_current_match()

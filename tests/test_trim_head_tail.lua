@@ -29,8 +29,8 @@ local db = database.get_connection()
 db:exec(require('import_schema'))
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -38,7 +38,7 @@ db:exec([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('seq', 'proj', 'Sequence', 'nested', 24, 1, 48000, 1920, 1080, 0, 10000, 0,
+    VALUES ('seq', 'proj', 'Sequence', 'sequence', 24, 1, 48000, 1920, 1080, 0, 10000, 0,
         '[]', '[]', '[]', 0, 0, 0);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -61,7 +61,7 @@ local function check(label, condition)
 end
 
 local function get_clip(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames, source_in_frame, source_out_frame FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames, source_in_frame, source_out_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     assert(stmt:exec())
     if stmt:next() then
@@ -107,17 +107,21 @@ local function create_clip(id, track_id, start, duration, source_in)
     local Sequence = require('models.sequence')
     local master_seq_id = Sequence.ensure_master(media_id, 'proj')
     local now = os.time()
-    require('models.clip').create({
+    local Clip = require('models.clip')
+    local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
+    Clip.create({
         id = id,
         project_id = 'proj',
         owner_sequence_id = 'seq',
         track_id = track_id,
-        nested_sequence_id = master_seq_id,
+        sequence_id = master_seq_id,
         name = "Clip " .. id,
-        timeline_start_frame = start,
+        sequence_start_frame = start,
         duration_frames = duration,
         source_in_frame = source_in,
         source_out_frame = source_in + duration,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         fps_mismatch_policy = "resample",
         enabled = true,
         volume = 1.0,

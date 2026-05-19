@@ -30,11 +30,11 @@ db:exec(require('import_schema'))
 -- Insert Project and default sequence
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('default_sequence', 'project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('default_sequence', 'project', 'Default Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -106,7 +106,7 @@ end
 local function create_test_sequence(id, name)
     local seq = Sequence.create(name, "project",
         { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-        { audio_sample_rate = 48000,id = id, kind = "nested"})
+        { audio_sample_rate = 48000,id = id, kind = "sequence"})
     assert(seq:save(), "Failed to save sequence " .. id)
 
     local track = Track.create_video("V1", id, {id = id .. "_track", index = 1})
@@ -118,8 +118,8 @@ local function create_test_sequence(id, name)
         project_id = "project",
         track_id = track.id,
         owner_sequence_id = id,
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -167,7 +167,7 @@ local function clip_exists(clip_id)
 end
 
 -- Helper: reset test sequences (keep default_sequence + the master MC_TEST
--- whose media_refs are referenced by every test clip's nested_sequence_id)
+-- whose media_refs are referenced by every test clip's source_sequence_id)
 local function reset_test_sequences()
     db:exec(string.format(
         "DELETE FROM clips WHERE owner_sequence_id NOT IN ('default_sequence', '%s')",
@@ -225,20 +225,10 @@ assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.erro
 -- Verify deleted again
 assert(not sequence_exists("seq_1"), "Sequence should be deleted after redo")
 
--- =============================================================================
--- TEST 4: Cannot delete default_sequence
--- =============================================================================
-print("Test 4: Cannot delete default_sequence")
-asserts._set_enabled_for_tests(false)
-result = execute_command("DeleteSequence", {
-    project_id = "project",
-    sequence_id = "default_sequence"
-})
-asserts._set_enabled_for_tests(true)
-assert(not result.success, "DeleteSequence should fail for default_sequence")
-
--- default_sequence should still exist
-assert(sequence_exists("default_sequence"), "Default sequence should not be deleted")
+-- (Former Test 4 — "Cannot delete default_sequence" — removed. The
+-- Sequence.ensure_default mechanism it guarded was removed during the
+-- new-project work; there is no longer a privileged "default sequence"
+-- id and DeleteSequence has no per-id refusal.)
 
 -- =============================================================================
 -- TEST 5: Cannot delete master sequence
@@ -249,7 +239,7 @@ reset_test_sequences()
 -- Create a master sequence
 local master_seq = Sequence.create("Master Sequence", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_sample_rate = 48000,id = "master_seq", kind = "master"})
+    { id = "master_seq", kind = "master"})  -- 018: masters carry no audio_sample_rate
 assert(master_seq:save(), "Failed to save master sequence")
 
 asserts._set_enabled_for_tests(false)
@@ -284,7 +274,7 @@ reset_test_sequences()
 -- Create sequence with multiple tracks
 local seq = Sequence.create("Multi Track Seq", "project",
     { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    { audio_sample_rate = 48000,id = "multi_seq", kind = "nested"})
+    { audio_sample_rate = 48000,id = "multi_seq", kind = "sequence"})
 assert(seq:save(), "Failed to save sequence")
 
 -- Create multiple video tracks
@@ -300,8 +290,8 @@ for i = 1, 3 do
         project_id = "project",
         track_id = "multi_track_" .. i,
         owner_sequence_id = "multi_seq",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = (j-1) * 100,
+        sequence_id = MC_TEST,
+        sequence_start_frame = (j-1) * 100,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,

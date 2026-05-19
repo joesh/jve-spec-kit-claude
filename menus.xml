@@ -105,6 +105,7 @@
   <menu name="Window">
     <item name="Show Project Browser" command="ShowProjectBrowser" checkable="true"/>
     <item name="Show Timeline" command="ShowTimeline" checkable="true"/>
+    <item name="Show Source Tab" command="ShowSourceTab"/>
     <item name="Show Inspector" command="ShowInspector" checkable="true"/>
     <item name="Timeline Index..." command="ShowTimelineIndex"/>
     <item name="Show Viewer" command="ShowViewer" checkable="true"/>

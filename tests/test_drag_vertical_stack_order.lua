@@ -29,8 +29,8 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "clip_low", track_id = "v1", timeline_start = 0, duration = 48},
-            {id = "clip_high", track_id = "v2", timeline_start = 0, duration = 48}
+            {id = "clip_low", track_id = "v1", sequence_start = 0, duration = 48},
+            {id = "clip_high", track_id = "v2", sequence_start = 0, duration = 48}
         }
     end
 }

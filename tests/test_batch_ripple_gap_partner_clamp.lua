@@ -9,8 +9,8 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 local layout = ripple_layout.create({
     db_path = "/tmp/jve/test_batch_ripple_gap_partner_clamp.db",
     clips = {
-        v1_left = {timeline_start = 0, duration = 1000},
-        v1_right = {timeline_start = 4000, duration = 600}
+        v1_left = {sequence_start = 0, duration = 1000},
+        v1_right = {sequence_start = 4000, duration = 600}
     }
 })
 

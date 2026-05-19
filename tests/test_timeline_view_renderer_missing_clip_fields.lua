@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
--- Regression: timeline_view_renderer must not crash when clips are missing timeline_start/duration (Rational).
+-- Regression: timeline_view_renderer must not crash when clips are missing sequence_start/duration (Rational).
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -34,8 +34,11 @@ local state = {
     get_viewport_start_time = function() return 0 end,
     get_viewport_duration = function() return 100 end,
     get_playhead_position = function() return 0 end,
-    get_mark_in = function() return nil end,
-    get_mark_out = function() return nil end,
+    get_mark_in          = function() return nil end,
+    get_mark_out         = function() return nil end,
+    get_display_mark_in  = function() return nil end,
+    get_display_mark_out = function() return nil end,
+    get_ghost_mark       = function() return nil end,
     get_sequence_frame_rate = function() return seq_rate end,
     time_to_pixel = function(t, width)
         local frames = t or 0
@@ -59,7 +62,7 @@ state.get_track_clip_index = function(track_id)
         return nil
     end
     return {
-        { id = "clip_missing_fields", track_id = "v1", timeline_start = nil, duration = nil, enabled = true },
+        { id = "clip_missing_fields", track_id = "v1", sequence_start = nil, duration = nil, enabled = true },
     }
 end
 
@@ -92,4 +95,4 @@ local renderer = require("ui.timeline.view.timeline_view_renderer")
 local ok, err = pcall(renderer.render, view)
 assert(ok, "renderer.render raised error for missing clip fields: " .. tostring(err))
 
-print("✅ timeline_view_renderer tolerates clips missing timeline_start/duration")
+print("✅ timeline_view_renderer tolerates clips missing sequence_start/duration")

@@ -30,7 +30,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('seq', 'proj', 'TestTimeline', 'nested', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
+    VALUES('seq', 'proj', 'TestTimeline', 'sequence', 24, 1, 48000, 1920, 1080, 0, 2000, 0,
            0, 0)
 ]]))
 
@@ -44,20 +44,20 @@ assert(db:exec([[
     INSERT INTO media(id, project_id, file_path, name, duration_frames, fps_numerator, fps_denominator,
                      width, height, audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
     VALUES('media_a', 'proj', '/test/a.mov', 'a', 1000, 24, 1, 1920, 1080, 2, 48000, 'h264',
-           0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
+           0, 0, '{"start_tc_value":0,"start_tc_rate":24,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}')
 ]]))
 local Sequence = require("models.sequence")
 Sequence.ensure_master("media_a", "proj", { id = "master_a" })
 
 -- Layout on track v1:
---   clip_1: frames [0, 48)    (timeline_start=0, duration=48)
+--   clip_1: frames [0, 48)    (sequence_start=0, duration=48)
 --   gap:    frames [48, 100)
---   clip_2: frames [100, 200) (timeline_start=100, duration=100)
---   clip_3: frames [200, 300) (timeline_start=200, duration=100, DISABLED)
---   clip_4: frames [300, 400) (timeline_start=300, duration=100)
+--   clip_2: frames [100, 200) (sequence_start=100, duration=100)
+--   clip_3: frames [200, 300) (sequence_start=200, duration=100, DISABLED)
+--   clip_4: frames [300, 400) (sequence_start=300, duration=100)
 assert(db:exec([[
-    INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
-                     timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+    INSERT INTO clips(id, project_id, name, track_id, owner_sequence_id, sequence_id,
+                     sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
                      master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                      enabled, volume, playhead_frame, created_at, modified_at)
     VALUES

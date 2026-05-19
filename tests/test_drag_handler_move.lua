@@ -58,7 +58,7 @@ do
         {
             id = "clip_a",
             track_id = "track_a",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 24
         }
     }
@@ -90,7 +90,7 @@ do
         {
             id = "clip_a",
             track_id = "track_a",
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 24,
         }
     }
@@ -119,8 +119,8 @@ end
 do
     reset_executed()
     local clips = {
-        { id = "clip_a", track_id = "track_a", timeline_start = 0, duration = 24 },
-        { id = "clip_b", track_id = "track_b", timeline_start = 24, duration = 24 },
+        { id = "clip_a", track_id = "track_a", sequence_start = 0, duration = 24 },
+        { id = "clip_b", track_id = "track_b", sequence_start = 24, duration = 24 },
     }
     local view = make_view("track_b", {
         { id = "track_a", track_type = "VIDEO" },

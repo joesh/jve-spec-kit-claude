@@ -47,7 +47,7 @@ local VIEWPORT_DURATION = 100000
 local CLIP_START = 5000
 local CLIP_DURATION = 500
 local clips = {
-    { id = "c1", track_id = "v1", timeline_start = CLIP_START, duration = CLIP_DURATION, enabled = true, clip_kind = "video" },
+    { id = "c1", track_id = "v1", sequence_start = CLIP_START, duration = CLIP_DURATION, enabled = true, clip_kind = "video" },
 }
 
 local viewport_start_time = 0
@@ -66,8 +66,11 @@ local state = {
     get_viewport_start_time = function() return viewport_start_time end,
     get_viewport_duration = function() return VIEWPORT_DURATION end,
     get_playhead_position = function() return -1 end,  -- offscreen; irrelevant for this test
-    get_mark_in = function() return nil end,
-    get_mark_out = function() return nil end,
+    get_mark_in          = function() return nil end,
+    get_mark_out         = function() return nil end,
+    get_display_mark_in  = function() return nil end,
+    get_display_mark_out = function() return nil end,
+    get_ghost_mark       = function() return nil end,
     get_sequence_frame_rate = function() return seq_rate end,
     get_selected_clips = function() return {} end,
     get_selected_edges = function() return {} end,

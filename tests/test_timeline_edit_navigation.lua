@@ -39,14 +39,14 @@ db:exec(require('import_schema'))
 -- Edit points: 0, 1200, 1500, 2400, 3000, 4500, 5000, 6200
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame,
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested',
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 10000, 2500,
         '[]', '[]', '[]', 0, %d, %d);
 
@@ -74,50 +74,50 @@ db:exec(string.format([[
 
     -- V13 master sequence + track + media_ref for media_clip_a
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_clip_a', 'default_project', 'media_clip_a_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_clip_a', 'default_project', 'media_clip_a_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_a', 'master_media_clip_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_clip_a' WHERE id = 'master_media_clip_a';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_clip_a', 'default_project', 'master_media_clip_a', 'master_v_media_clip_a', 'media_clip_a', 0, 1500, 0, 1500, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_clip_a', 'default_project', 'master_media_clip_a', 'master_v_media_clip_a', 'media_clip_a', 0, 1500, 0, 1500, 48000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_b
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_clip_b', 'default_project', 'media_clip_b_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_clip_b', 'default_project', 'media_clip_b_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_b', 'master_media_clip_b', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_clip_b' WHERE id = 'master_media_clip_b';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_clip_b', 'default_project', 'master_media_clip_b', 'master_v_media_clip_b', 'media_clip_b', 0, 1500, 0, 1500, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_clip_b', 'default_project', 'master_media_clip_b', 'master_v_media_clip_b', 'media_clip_b', 0, 1500, 0, 1500, 48000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_c
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_clip_c', 'default_project', 'media_clip_c_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_clip_c', 'default_project', 'media_clip_c_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_c', 'master_media_clip_c', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_clip_c' WHERE id = 'master_media_clip_c';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_clip_c', 'default_project', 'master_media_clip_c', 'master_v_media_clip_c', 'media_clip_c', 0, 1200, 0, 1200, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_clip_c', 'default_project', 'master_media_clip_c', 'master_v_media_clip_c', 'media_clip_c', 0, 1200, 0, 1200, 48000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_clip_d
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_clip_d', 'default_project', 'media_clip_d_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_clip_d', 'default_project', 'media_clip_d_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_clip_d', 'master_media_clip_d', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_clip_d' WHERE id = 'master_media_clip_d';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_clip_d', 'default_project', 'master_media_clip_d', 'master_v_media_clip_d', 'media_clip_d', 0, 1200, 0, 1200, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_clip_d', 'default_project', 'master_media_clip_d', 'master_v_media_clip_d', 'media_clip_d', 0, 1200, 0, 1200, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_a', 'default_project', 'Clip A', 'track_v1', 'master_media_clip_a', 'default_sequence', 0, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_b', 'default_project', 'Clip B', 'track_v1', 'master_media_clip_b', 'default_sequence', 3000, 1500, 0, 1500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_c', 'default_project', 'Clip C', 'track_v2', 'master_media_clip_c', 'default_sequence', 1200, 1200, 0, 1200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_d', 'default_project', 'Clip D', 'track_v2', 'master_media_clip_d', 'default_sequence', 5000, 1200, 0, 1200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now,

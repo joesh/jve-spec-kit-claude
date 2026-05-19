@@ -108,9 +108,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Compute current edge position
         local edge_position
         if lead_edge.edge_type == "in" then
-            edge_position = clip.timeline_start
+            edge_position = clip.sequence_start
         elseif lead_edge.edge_type == "out" then
-            edge_position = clip.timeline_start + clip.duration
+            edge_position = clip.sequence_start + clip.duration
         else
             set_last_error(string.format("ExtendEdit: unknown edge_type: %s", tostring(lead_edge.edge_type)))
             return false

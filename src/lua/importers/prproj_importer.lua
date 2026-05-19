@@ -18,6 +18,7 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
+local subframe_math = require("core.subframe_math")
 
 -- Premiere's universal tick rate: LCM of all standard frame/sample rates
 local TICKS_PER_SECOND = 254016000000
@@ -297,7 +298,15 @@ end
 
 -- Parse a single ClipItems → TrackItem entry into a clip table, or nil
 -- when the entry is missing required state (skipped with a log line).
-local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
+-- 018: source coords stay in file-native units (samples for audio, frames
+-- for video) — importer_core's audio path converts samples → (master.fps
+-- frame, master-clock-tick subframe). Timeline coords (start/duration) are
+-- always in the sequence's video-fps timebase regardless of track kind,
+-- because the timeline runs on one clock per spec FR-001.
+local function parse_one_track_item(ti_ref, by_id, by_uuid,
+                                    timeline_ticks_per_frame,
+                                    source_ticks_per_unit,
+                                    native_rate)
     local ref_id = ti_ref.attrs and ti_ref.attrs.ObjectRef
     if not ref_id then return nil end
 
@@ -337,8 +346,8 @@ local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
             or get_child_text(media_elem, "ActualMediaFilePath"))
     end
 
-    local start_frame    = ticks_to_frames(start_ticks, ticks_per_frame)
-    local end_frame      = ticks_to_frames(end_ticks,   ticks_per_frame)
+    local start_frame    = ticks_to_frames(start_ticks, timeline_ticks_per_frame)
+    local end_frame      = ticks_to_frames(end_ticks,   timeline_ticks_per_frame)
     local duration_frames = end_frame - start_frame
     if duration_frames <= 0 then
         log.warn("Skipping zero-duration clip '%s' (start=%d end=%d)",
@@ -360,8 +369,9 @@ local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
         name        = clip_name,
         start_value = start_frame,
         duration    = duration_frames,
-        source_in   = ticks_to_frames(in_point_ticks,  ticks_per_frame),
-        source_out  = ticks_to_frames(out_point_ticks, ticks_per_frame),
+        source_in   = ticks_to_frames(in_point_ticks,  source_ticks_per_unit),
+        source_out  = ticks_to_frames(out_point_ticks, source_ticks_per_unit),
+        native_rate = native_rate,
         file_uuid   = media_uuid,
         file_path   = file_path,
         clip_speed  = 1.0,
@@ -369,7 +379,10 @@ local function parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
     }
 end
 
-local function parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, _track_type)
+local function parse_track_clips(track_elem, by_id, by_uuid,
+                                 timeline_ticks_per_frame,
+                                 source_ticks_per_unit,
+                                 native_rate)
     local clips = {}
 
     -- ClipTrack → ClipItems → TrackItems is the standard nesting; any
@@ -382,7 +395,8 @@ local function parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, _t
     if not track_items_elem then return clips end
 
     for _, ti_ref in ipairs(find_all_direct_children(track_items_elem, "TrackItem")) do
-        local clip = parse_one_track_item(ti_ref, by_id, by_uuid, ticks_per_frame)
+        local clip = parse_one_track_item(ti_ref, by_id, by_uuid,
+            timeline_ticks_per_frame, source_ticks_per_unit, native_rate)
         if clip then clips[#clips + 1] = clip end
     end
     return clips
@@ -429,7 +443,18 @@ end
 -- Walk a TrackGroup's <Tracks> list and parse each track. Indexes in
 -- PRPROJ are 0-based; we present them as 1-based to the rest of the
 -- importer pipeline.
-local function parse_track_group_tracks(inner_tg, kind, by_id, by_uuid, ticks_per_frame, tracks)
+-- timeline_ticks_per_frame: always the sequence's VIDEO ticks_per_frame —
+--   one timeline clock per FR-001, used for clip start/duration.
+-- source_ticks_per_unit: per-track. VIDEO tracks use the file's video tpf
+--   (= same as timeline tpf for unity-rate edits). AUDIO tracks use
+--   ticks_per_sample so InPoint/OutPoint decode as file-native samples.
+-- native_rate: per-track. VIDEO = round(fps). AUDIO = audio_sample_rate.
+--   Stamped on each clip so importer_core.compute_audio_clip_source can
+--   convert samples → (master.fps frame, master-clock-tick subframe).
+local function parse_track_group_tracks(inner_tg, kind, by_id, by_uuid,
+                                        timeline_ticks_per_frame,
+                                        source_ticks_per_unit,
+                                        native_rate, tracks)
     if not inner_tg then return end
     local tg_tracks = find_direct_child(inner_tg, "Tracks")
     if not tg_tracks then return end
@@ -441,7 +466,8 @@ local function parse_track_group_tracks(inner_tg, kind, by_id, by_uuid, ticks_pe
                 tracks[#tracks + 1] = {
                     type  = kind,
                     index = (tonumber(track_ref.attrs.Index) or 0) + 1,
-                    clips = parse_track_clips(track_elem, by_id, by_uuid, ticks_per_frame, kind),
+                    clips = parse_track_clips(track_elem, by_id, by_uuid,
+                        timeline_ticks_per_frame, source_ticks_per_unit, native_rate),
                 }
             end
         end
@@ -482,9 +508,14 @@ local function parse_sequence(seq_elem, by_id, by_uuid, media_items)
     local cur_playhead_relative = ticks_to_frames(edit_line_ticks, video_ticks_per_frame)
 
     local tracks = {}
-    parse_track_group_tracks(inner_vtg, "VIDEO", by_id, by_uuid, video_ticks_per_frame, tracks)
+    local video_native_rate = math.floor(fps + 0.5)
+    parse_track_group_tracks(inner_vtg, "VIDEO", by_id, by_uuid,
+        video_ticks_per_frame, video_ticks_per_frame, video_native_rate, tracks)
     if audio_ticks_per_sample then
-        parse_track_group_tracks(inner_atg, "AUDIO", by_id, by_uuid, audio_ticks_per_sample, tracks)
+        local audio_native_rate = math.floor(
+            TICKS_PER_SECOND / audio_ticks_per_sample + 0.5)
+        parse_track_group_tracks(inner_atg, "AUDIO", by_id, by_uuid,
+            video_ticks_per_frame, audio_ticks_per_sample, audio_native_rate, tracks)
     end
 
     return {
@@ -745,6 +776,10 @@ function M.convert(prproj_path, jvp_path, progress_cb)
     local Project = require("models.project")
     local json = require("dkjson")
     local settings = parse_result.project.settings
+    -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
+    -- on every project; prproj has no master-clock concept of its own.
+    settings.master_clock_hz = subframe_math.MASTER_CLOCK_HZ
+    settings.default_fps = { num = 24, den = 1 }
 
     local project = Project.create(parse_result.project.name, {
         settings = json.encode(settings),

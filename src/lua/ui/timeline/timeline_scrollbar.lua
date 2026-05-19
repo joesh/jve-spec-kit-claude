@@ -67,10 +67,14 @@ function M.create(widget, state_module)
         -- Ensure thumb is at least 20 pixels wide
         thumb_width = math.max(20, thumb_width)
 
-        -- Mark In/Out overlay
+        -- Mark In/Out overlay — draws marks of the DISPLAYED tab (FR-038).
+        -- The scrollbar is a rendering surface; on the SourceTab it must
+        -- show source marks, on a RecordTab the record sequence's marks.
+        -- Reading get_mark_in/out (active marks) was a bug — scrollbar
+        -- would draw the active record's marks even while displaying source.
         local function draw_mark_overlay()
-            local mark_in = state_module.get_mark_in and state_module.get_mark_in()
-            local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+            local mark_in = state_module.get_display_mark_in and state_module.get_display_mark_in()
+            local mark_out = state_module.get_display_mark_out and state_module.get_display_mark_out()
             if not mark_in and not mark_out then return end
 
             local colors = state_module.colors or {}

@@ -34,11 +34,11 @@ assert(result.success, result.error_message or "Gap roll execution failed")
 local left = Clip.load(clips.v1_left.id, layout.db)
 local right = Clip.load(clips.v1_right.id, layout.db)
 
-assert(left.timeline_start == 0, "Left clip timeline_start should remain anchored")
+assert(left.sequence_start == 0, "Left clip sequence_start should remain anchored")
 assert(left.duration == 1500, "Left clip duration should not change during roll")
 
-assert(right.timeline_start == 3700,
-    string.format("Right clip start should move right by 200, got %d", right.timeline_start))
+assert(right.sequence_start == 3700,
+    string.format("Right clip start should move right by 200, got %d", right.sequence_start))
 assert(right.duration == 1000,
     string.format("Right clip duration should shrink by 200, got %d", right.duration))
 

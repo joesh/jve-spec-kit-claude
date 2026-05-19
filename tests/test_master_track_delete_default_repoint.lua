@@ -18,12 +18,18 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 
 local function make_sequence(name, kind)
+    local opts = { kind = kind }
+    if kind ~= "master" then
+        -- INV-7: master rows must have audio_sample_rate=nil; rate lives on
+        -- media_refs. Non-master (edit) sequences carry the global rate.
+        opts.audio_sample_rate = 48000
+    end
     local s = Sequence.create(name, "p1", {  fps_numerator = 24, fps_denominator = 1 },
-        1920, 1080, { kind = kind, audio_sample_rate = 48000 })
+        1920, 1080, opts)
     assert(s:save(), "Sequence:save failed")
     return s.id
 end
@@ -76,20 +82,20 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'm', '/tmp/m.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(string.format(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', '%s', '%s', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)",
     mC, mC_v1)))
 
-local edit = make_sequence("edit", "nested")
+local edit = make_sequence("edit", "sequence")
 local edit_v1 = add_track("edit", edit, "VIDEO", 1)
 Clip.create({
     project_id = "p1",
     owner_sequence_id = edit,
     track_id = edit_v1,
-    nested_sequence_id = mC,
+    sequence_id = mC,
     name = "c",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,

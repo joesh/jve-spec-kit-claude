@@ -27,7 +27,7 @@ db:exec(require('import_schema'))
 -- Insert Project/Sequence (30fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 -- V13: synthesize placeholder media + master sequence for clip references.
 do
@@ -75,7 +75,7 @@ local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -142,7 +142,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -171,17 +171,21 @@ end
 
 -- Helper: create existing clip
 local function create_clip(id, track_id, start_frame, duration_frames)
+    -- 018 INV-3: AUDIO clips carry subframes (0 default), VIDEO get NULL.
+    local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
     local clip = Clip.create({
         name = "Clip " .. id,
         id = id,
         project_id = "project",
         track_id = track_id,
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = start_frame,
+        sequence_id = MC_TEST,
+        sequence_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         enabled = true,
         fps_mismatch_policy = "resample",
         volume = 1.0,
@@ -207,7 +211,7 @@ local groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Test Clip",
                 source_in = 0,
@@ -245,7 +249,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,
@@ -287,7 +291,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Overwritten",
                 source_in = 0,
@@ -327,7 +331,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip A",
                 source_in = 0,
@@ -344,7 +348,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Clip B",
                 source_in = 0,
@@ -371,7 +375,7 @@ assert(result.success, "Serial insert should succeed")
 assert(count_clips("track_v1") == 2, "Should have 2 clips on V1")
 
 -- Verify positions: Clip A at 0, Clip B at 100
-local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE track_id = 'track_v1' ORDER BY timeline_start_frame")
+local stmt = db:prepare("SELECT sequence_start_frame FROM clips WHERE track_id = 'track_v1' ORDER BY sequence_start_frame")
 stmt:exec()
 local positions = {}
 while stmt:next() do
@@ -392,7 +396,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip",
                 source_in = 0,
@@ -405,7 +409,7 @@ groups = {
             {
                 role = "audio",
                 channel = 0,
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "AV Clip (Audio)",
                 source_in = 0,
@@ -427,7 +431,7 @@ result = execute_command("AddClipsToSequence", {
     project_id = "project",
     edit_type = "insert",
 })
-assert(result.success, "AV insert should succeed")
+assert(result.success, "AV insert should succeed: " .. tostring(result.error_message))
 assert(count_clips("track_v1") == 1, "Should have 1 clip on V1")
 assert(count_clips("track_a1") == 1, "Should have 1 clip on A1")
 
@@ -480,7 +484,7 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", nested_sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
                 project_id = "project",
                 name = "Inserted",
                 source_in = 0,

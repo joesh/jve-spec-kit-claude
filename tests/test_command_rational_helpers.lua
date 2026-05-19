@@ -29,14 +29,14 @@ local media_id = "test_media_1"
 local now = os.time()
 
 local ok, err = db:exec(string.format(
-    [[INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES (%q, 'Test', 'resample', %d, %d)]],
+    [[INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES (%q, 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d)]],
     project_id, now, now
 ))
 assert(ok, "Failed to insert project: " .. tostring(err))
 
 ok, err = db:exec(string.format(
     [[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-      VALUES (%q, %q, 'Test Seq', 'nested', 24000, 1001, 48000, 1920, 1080, %d, %d)]],
+      VALUES (%q, %q, 'Test Seq', 'sequence', 24000, 1001, 48000, 1920, 1080, %d, %d)]],
     seq_id, project_id, now, now
 ))
 assert(ok, "Failed to insert sequence: " .. tostring(err))

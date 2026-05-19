@@ -33,8 +33,8 @@ local db = database.get_connection()
 -- Seed a project + sequence with all NOT NULL columns populated.
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (
@@ -42,7 +42,7 @@ db:exec(string.format([[
         fps_numerator, fps_denominator, audio_sample_rate,
         width, height,
         created_at, modified_at
-    ) VALUES ('seq1', 'proj1', 'Seq 1', 'nested',
+    ) VALUES ('seq1', 'proj1', 'Seq 1', 'sequence',
               25, 1, 48000,
               1920, 1080,
               %d, %d);
@@ -129,9 +129,9 @@ expect_generation(0, "baseline before Insert")
 local insert_cmd = Command.create("Insert", "proj1")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("target_video_track_id", "v1")
-insert_cmd:set_parameter("nested_sequence_id", mc_id)
+insert_cmd:set_parameter("source_sequence_id", mc_id)
 insert_cmd:set_parameter("clip_name", "clip_a")
-insert_cmd:set_parameter("timeline_start_frame", 100)
+insert_cmd:set_parameter("sequence_start_frame", 100)
 
 local r = command_manager.execute(insert_cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))

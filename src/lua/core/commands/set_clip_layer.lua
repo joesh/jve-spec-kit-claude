@@ -7,7 +7,7 @@
 --- Per FR-013 and contracts/commands.md §SetClipLayer:
 ---   Args: { sequence_id, clip_id, track_id_or_null }
 ---   sequence_id is the clip's owner_sequence_id (rule 2.29).
----   track_id (if non-NULL) MUST belong to clip.nested_sequence_id.
+---   track_id (if non-NULL) MUST belong to clip.sequence_id.
 ---     A track_id that resolves to a different sequence is a corrupt
 ---     command — refuse loudly (rule 1.14 / rule 2.13: no fallback).
 ---   Mutation: UPDATE clips SET master_layer_track_id = ? WHERE id = ?.
@@ -57,11 +57,11 @@ function M.execute(args)
         local owner = Track.get_sequence_id(track_id)
         assert(owner, string.format(
             "SetClipLayer: track %s does not exist", track_id))
-        assert(owner == clip.nested_sequence_id, string.format(
+        assert(owner == clip.sequence_id, string.format(
             "SetClipLayer: track %s belongs to sequence %s, not the clip's "
-            .. "nested_sequence_id %s. The per-clip layer override must "
+            .. "sequence_id %s. The per-clip layer override must "
             .. "name a track of the directly-referenced sequence (FR-013).",
-            track_id, owner, clip.nested_sequence_id))
+            track_id, owner, clip.sequence_id))
     end
 
     local prior_track_id = clip.master_layer_track_id

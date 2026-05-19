@@ -190,25 +190,59 @@ local function probe_result_from_emp_info(info)
             -- stills), we still skip — a 0-frame extent can't contain
             -- anything for containment checks.
             if info.has_duration and info.duration_us and info.duration_us > 0 then
-                result.duration_frames = math.floor(
-                    info.duration_us * info.fps_num
-                        / (info.fps_den * 1000000) + 0.5)
+                -- Prefer the container's authoritative video_frame_count
+                -- when the demuxer exposes it (BRAW SDK). The
+                -- duration_us round-trip is lossy at non-integer fps;
+                -- on 23.976 BRAW the audio derivation in particular
+                -- overshoots by ~1‰ because the container records audio
+                -- at the nominal 24fps rate, not the pulldown rate.
+                if info.video_frame_count and info.video_frame_count > 0 then
+                    result.duration_frames = info.video_frame_count
+                else
+                    result.duration_frames = math.floor(
+                        info.duration_us * info.fps_num
+                            / (info.fps_den * 1000000) + 0.5)
+                end
+                -- For V+A files, also surface the audio-sample extent so
+                -- the relink path can sync audio media_refs (their
+                -- duration_frames are in samples). Same authority order:
+                -- container's audio_sample_count wins over derivation.
+                if info.has_audio and info.audio_sample_rate
+                    and info.audio_sample_rate > 0
+                then
+                    if info.audio_sample_count and info.audio_sample_count > 0 then
+                        result.audio_duration_samples = info.audio_sample_count
+                    else
+                        result.audio_duration_samples = math.floor(
+                            info.duration_us * info.audio_sample_rate / 1000000 + 0.5)
+                    end
+                end
             end
         end
     elseif has_audio_only then
         local sr = info.audio_sample_rate
         result.fps_num = sr
         result.fps_den = 1
-        -- Same presence-flag semantics as video: report start_tc only
-        -- when a real source (BWF time_reference or sufficient stream
-        -- start_time) was found. Plain MP3s and non-BWF WAVs report no TC.
+        -- Audio-only files: write the audio TC pair only. The pre-
+        -- normalization convention also wrote start_tc_value with rate=sr
+        -- (the overload), which produced the 4-second-late playback bug
+        -- on DRP audio masters when start_tc_value (DRP claim) drifted
+        -- from start_tc_audio_samples (BWF time_reference). Leaving
+        -- start_tc_value nil is the post-normalization invariant: V
+        -- fields are V-only, audio TC lives only on start_tc_audio_*.
         if info.has_audio_tc_origin then
-            result.start_tc_value = info.first_sample_tc
-            result.start_tc_rate = sr
+            result.start_tc_audio_samples = info.first_sample_tc
+            result.start_tc_audio_rate    = sr
         end
         if info.has_duration and info.duration_us and info.duration_us > 0 then
-            result.duration_frames = math.floor(
+            local samples = math.floor(
                 info.duration_us * sr / 1000000 + 0.5)
+            -- Convention for A-only files: duration_frames carries the
+            -- sample count (matches Media.create / media_refs).
+            -- Mirror to audio_duration_samples so the relink-duration
+            -- update can sync A media_refs in their sample units.
+            result.duration_frames = samples
+            result.audio_duration_samples = samples
         end
     end
 
@@ -357,19 +391,37 @@ local function probe_file_ffprobe(file_path)
                     elseif stream.nb_frames then
                         result.duration_frames = tonumber(stream.nb_frames)
                     end
+                    -- A-only convention (mirrors probe_result_from_emp_info):
+                    -- duration_frames here IS the sample count. Surface the
+                    -- same value as audio_duration_samples so the relink
+                    -- duration-update path can sync A media_refs.
+                    result.audio_duration_samples = result.duration_frames
+                end
+            elseif stream.codec_type == "audio" and result.width
+                and not result.audio_duration_samples
+            then
+                -- V+A file: mirror EMP path — derive audio sample extent
+                -- from the audio stream's own duration so A media_refs
+                -- can be synced in sample units.
+                local sample_rate = tonumber(stream.sample_rate)
+                if sample_rate and sample_rate > 0 and stream.duration then
+                    result.audio_duration_samples = math.floor(
+                        tonumber(stream.duration) * sample_rate + 0.5)
                 end
             end
         end
     end
 
-    -- Extract TC: Strategy 2 — BWF time_reference (audio files without video TC)
-    if not result.start_tc_value and data.format and data.format.tags then
+    -- Extract TC: Strategy 2 — BWF time_reference (audio files without
+    -- video TC). Writes the A pair only; the V pair stays nil for audio-
+    -- only files (post-normalization, retires the overload).
+    if not result.start_tc_audio_samples and data.format and data.format.tags then
         local time_ref = tonumber(data.format.tags.time_reference)
         if time_ref then
             local sample_rate = result.fps_num
-            if sample_rate and sample_rate > 0 then
-                result.start_tc_value = time_ref
-                result.start_tc_rate = sample_rate
+            if sample_rate and sample_rate > 0 and not result.width then
+                result.start_tc_audio_samples = time_ref
+                result.start_tc_audio_rate    = sample_rate
             end
         end
     end
@@ -485,14 +537,14 @@ function M.find_media_for_clips(db, clip_ids)
     assert(type(clip_ids) == "table" and #clip_ids > 0,
         "find_media_for_clips: clip_ids must be non-empty array")
 
-    -- V13: clips reference master sequences via nested_sequence_id; the
+    -- V13: clips reference master sequences via sequence_id; the
     -- master holds media_refs that point at media. JOIN through both.
     local phs = {}
     for i = 1, #clip_ids do phs[i] = "?" end
     local sql = string.format([[
         SELECT c.id, mr.media_id
           FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
          WHERE c.id IN (%s)
     ]], table.concat(phs, ","))
 
@@ -592,13 +644,31 @@ end
 --   the candidate file is in file TC space. Pass (file_original_timecode - start_tc_value)
 --   to remap. Nil = no remap (camera footage).
 -- @return boolean True if candidate range fully contains the source extent
+-- Pick the candidate's TC (value, rate) for matcher comparisons. Returns the
+-- V pair when the probed file has a video stream with TC; otherwise the A
+-- pair (sample TC at sample rate) for audio-only files. nil,nil when neither
+-- is present. This mirrors media_relink_dialog's media_start_tc selection so
+-- both sides of the comparison live in the same TC space — sample TC for
+-- audio-only, video TC for V/V+A.
+local function probe_candidate_tc(probe_result)
+    if not probe_result then return nil, nil end
+    if probe_result.start_tc_value and probe_result.start_tc_rate then
+        return probe_result.start_tc_value, probe_result.start_tc_rate
+    end
+    if probe_result.start_tc_audio_samples and probe_result.start_tc_audio_rate then
+        return probe_result.start_tc_audio_samples, probe_result.start_tc_audio_rate
+    end
+    return nil, nil
+end
+
 function M.check_extent_containment(extent_start, extent_end, probe_result, stored_rate, tc_remap_offset)
     assert(extent_start and extent_end, "check_extent_containment: extent_start and extent_end required")
     assert(type(probe_result) == "table", "check_extent_containment: probe_result required")
     assert(type(stored_rate) == "number" and stored_rate > 0,
         "check_extent_containment: stored_rate must be positive")
 
-    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(probe_result)
+    if not cand_tc_value or not cand_tc_rate then
         return false
     end
     if not probe_result.duration_frames then
@@ -610,9 +680,9 @@ function M.check_extent_containment(extent_start, extent_end, probe_result, stor
     local abs_end = extent_end + (tc_remap_offset or 0)
 
     -- Candidate range at stored_rate
-    local cand_start = probe_result.start_tc_value
-    if stored_rate ~= probe_result.start_tc_rate then
-        cand_start = math.floor(probe_result.start_tc_value * stored_rate / probe_result.start_tc_rate + 0.5)
+    local cand_start = cand_tc_value
+    if stored_rate ~= cand_tc_rate then
+        cand_start = math.floor(cand_tc_value * stored_rate / cand_tc_rate + 0.5)
     end
 
     local cand_dur = probe_result.duration_frames
@@ -758,11 +828,7 @@ local function check_candidate_tc(cand_path, media_info, matching_rules, probe_f
     end
 
     local probe_result = probe_fn(cand_path)
-    local cand_tc_value, cand_tc_rate
-    if probe_result then
-        cand_tc_value = probe_result.start_tc_value
-        cand_tc_rate  = probe_result.start_tc_rate
-    end
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(probe_result)
 
     if not (cand_tc_value and cand_tc_rate) then
         log.detail("  %s: no candidate TC — accepting on non-TC criteria",
@@ -922,11 +988,12 @@ local function partition_candidates(media_info, candidates, stored_rate, tc_rema
         elseif cand.probe_result then
             local ref_tc = media_info.media_file_original_tc
                 or media_info.media_start_tc_value
-            if ref_tc and cand.probe_result.start_tc_value then
-                local cand_tc = cand.probe_result.start_tc_value
-                if cand.probe_result.start_tc_rate ~= stored_rate then
+            local cand_tc_value, cand_tc_rate = probe_candidate_tc(cand.probe_result)
+            if ref_tc and cand_tc_value then
+                local cand_tc = cand_tc_value
+                if cand_tc_rate ~= stored_rate then
                     cand_tc = math.floor(cand_tc * stored_rate
-                        / cand.probe_result.start_tc_rate + 0.5)
+                        / cand_tc_rate + 0.5)
                 end
                 local offset = cand_tc - ref_tc
                 -- Plausible trim: candidate starts at/after the original file,
@@ -946,14 +1013,37 @@ end
 -- case so the pre-relink values aren't overwritten with blanks.
 local function probed_tc_for_metadata(probe_result)
     if not probe_result then return nil end
-    if not probe_result.start_tc_value or not probe_result.start_tc_rate then
-        return nil
-    end
+    -- Post-normalization: accept V pair OR A pair (or both). Audio-only
+    -- files have only the A pair; video-only / V+A with V TC have at
+    -- least the V pair. Refuse only when neither is present (plain MP3,
+    -- non-BWF WAV, video without tmcd) — nothing to sync into metadata.
+    local has_v = probe_result.start_tc_value ~= nil
+        and probe_result.start_tc_rate ~= nil
+    local has_a = probe_result.start_tc_audio_samples ~= nil
+        and probe_result.start_tc_audio_rate ~= nil
+    if not has_v and not has_a then return nil end
     return {
         start_tc_value = probe_result.start_tc_value,
         start_tc_rate = probe_result.start_tc_rate,
         start_tc_audio_samples = probe_result.start_tc_audio_samples,
         start_tc_audio_rate = probe_result.start_tc_audio_rate,
+    }
+end
+
+-- Build a media_duration_updates entry from the probe — the probed
+-- file's extent is the source of truth for "how long is the linked
+-- file" (the DRP's NumFrames went stale when the file was re-cut on
+-- disk). nil when the probe carries no usable duration; the executor
+-- then leaves duration_frames alone. duration_frames is in V frames @
+-- the probed file's fps; audio_duration_samples is sample count.
+local function probed_duration_for_update(probe_result)
+    if not probe_result then return nil end
+    local v = probe_result.duration_frames
+    local a = probe_result.audio_duration_samples
+    if not v and not a then return nil end
+    return {
+        duration_frames = v,
+        audio_duration_samples = a,
     }
 end
 
@@ -966,6 +1056,7 @@ local function classify_viable(out, media_info, viable)
             new_path = viable[1].path,
             strategy = viable[1].is_segment and "segment" or "filename",
             probed_tc = probed_tc_for_metadata(viable[1].probe_result),
+            probed_duration = probed_duration_for_update(viable[1].probe_result),
         }
         return
     end
@@ -987,23 +1078,37 @@ end
 -- the caller continues looking at other candidates.
 local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
     local pr = cand.probe_result
-    local cand_start = pr.start_tc_value or 0
-    if stored_rate and pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
-        cand_start = math.floor(cand_start * stored_rate / pr.start_tc_rate + 0.5)
-    end
-    local cand_dur = pr.duration_frames or 0
-    if pr.fps_num and pr.fps_den then
-        local probe_rate = pr.fps_num / pr.fps_den
-        if math.abs(probe_rate - stored_rate) > 0.01 then
-            cand_dur = math.floor(
-                cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
+    local cand_tc_value, cand_tc_rate = probe_candidate_tc(pr)
+    -- TC and duration can be genuinely absent on probes that lacked metadata;
+    -- this is a diagnostic-only path, so format "?" rather than fake-zero.
+    local cand_start_str, cand_end_str
+    if cand_tc_value then
+        local cand_start = cand_tc_value
+        if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
+            cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
         end
+        cand_start_str = tostring(cand_start)
+        if pr.duration_frames then
+            local cand_dur = pr.duration_frames
+            if pr.fps_num and pr.fps_den then
+                local probe_rate = pr.fps_num / pr.fps_den
+                if math.abs(probe_rate - stored_rate) > 0.01 then
+                    cand_dur = math.floor(
+                        cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
+                end
+            end
+            cand_end_str = tostring(cand_start + cand_dur)
+        else
+            cand_end_str = "?"
+        end
+    else
+        cand_start_str, cand_end_str = "?", "?"
     end
     local c0 = clips[1]
     log.event(
-        "  0-clips detail: cand=[%d,%d]@%s remap=%s first_clip=[%d,%d] "
+        "  0-clips detail: cand=[%s,%s]@%s remap=%s first_clip=[%d,%d] "
         .. "(%d clips total) file=%s",
-        cand_start, cand_start + cand_dur, tostring(stored_rate),
+        cand_start_str, cand_end_str, tostring(stored_rate),
         tostring(tc_remap_offset),
         c0.source_in, c0.source_out, #clips,
         get_filename(cand.path))
@@ -1049,9 +1154,14 @@ local function coverage_for_candidate(cand, stored_rate)
         end
     end
 
-    local cov_start = pr.start_tc_value or 0
-    if pr.start_tc_rate and pr.start_tc_rate ~= stored_rate then
-        cov_start = math.floor(cov_start * stored_rate / pr.start_tc_rate + 0.5)
+    local cov_value, cov_rate = probe_candidate_tc(pr)
+    -- A candidate with no probed TC can't anchor a partial_coverage note —
+    -- the start/end values would be lies. Caller (compute_partial_coverage)
+    -- treats nil as "skip this candidate".
+    if not cov_value then return nil end
+    local cov_start = cov_value
+    if cov_rate and cov_rate ~= stored_rate then
+        cov_start = math.floor(cov_start * stored_rate / cov_rate + 0.5)
     end
     return {
         kind = "partial_coverage",
@@ -1143,6 +1253,7 @@ local function try_partial_fit_relink(out, media_info, partial_fit_candidates,
             new_path = best_cand.path,
             strategy = best_cand.is_segment and "segment" or "filename",
             probed_tc = probed_tc_for_metadata(best_cand.probe_result),
+            probed_duration = probed_duration_for_update(best_cand.probe_result),
         }
     else
         -- Split: the fitting clips will retarget to a clone of media at
@@ -1190,6 +1301,10 @@ local function try_partial_coverage_relink(out, media_info, partial_fit_candidat
         strategy  = "partial_coverage",
         coverage  = pc.coverage,
         probed_tc = probed_tc_for_metadata(pc.probe_result),
+        -- Update duration to match the (shorter) candidate. Clips that
+        -- reference frames past the new file's end fall into C++ TMB
+        -- EOF handling; the offline_note encodes the missing range.
+        probed_duration = probed_duration_for_update(pc.probe_result),
     }
     return true
 end

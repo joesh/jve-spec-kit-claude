@@ -14,7 +14,7 @@
 ---   Undo: row's prior state (or row-absence sentinel).
 ---   Signal: sequence_content_changed(sequence_id).
 ---
---- First-landing limit: clip.nested_sequence_id must be kind='master'.
+--- First-landing limit: clip.sequence_id must be kind='master'.
 --- Multi-level inheritance (clip → nested → master) is deferred — we'd
 --- need to walk the chain to find the leaf master that owns the channel
 --- state. Refused with a loud message rather than silently picking one.
@@ -63,10 +63,10 @@ function M.execute(args)
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
 
     -- First-landing: require directly-referenced sequence to be a master.
-    local nested = Sequence.find(clip.nested_sequence_id)
+    local nested = Sequence.find(clip.sequence_id)
     assert(nested, string.format(
         "ToggleClipChannel: clip %s nested sequence %s not found",
-        clip_id, tostring(clip.nested_sequence_id)))
+        clip_id, tostring(clip.sequence_id)))
     assert(nested.kind == "master", string.format(
         "ToggleClipChannel: clip %s references a kind='%s' sequence; per-clip "
         .. "channel overrides are first-landing-supported only when the "
@@ -76,11 +76,11 @@ function M.execute(args)
         clip_id, tostring(nested.kind)))
 
     -- channel_index bounds check (defense-in-depth; the resolver also asserts).
-    local channel_count = Sequence.count_master_audio_channels(clip.nested_sequence_id)
+    local channel_count = Sequence.count_master_audio_channels(clip.sequence_id)
     assert(channel_index < channel_count, string.format(
         "ToggleClipChannel: channel_index %d out of bounds for master %s "
         .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
-        channel_index, clip.nested_sequence_id, channel_count))
+        channel_index, clip.sequence_id, channel_count))
 
     local existing = Override.find(clip_id, channel_index)
     local capture = {
@@ -106,7 +106,7 @@ function M.execute(args)
     else
         -- First toggle: materialize inherited and flip.
         local inh_enabled, inh_gain_db =
-            Sequence.get_master_channel_state(clip.nested_sequence_id, channel_index)
+            Sequence.get_master_channel_state(clip.sequence_id, channel_index)
         capture.prior_existed = false
         Override.insert({
             clip_id       = clip_id,

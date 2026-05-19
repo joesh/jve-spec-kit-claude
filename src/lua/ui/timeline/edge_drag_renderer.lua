@@ -159,11 +159,11 @@ end
 -- clip handles so previews stay anchored at the dragged boundary.
 -- All coordinates are integer frames.
 function Renderer.compute_preview_geometry(clip, edge_type, delta, _raw_edge_type)
-    if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+    if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
         return nil, nil
     end
     local normalized_edge = edge_utils.to_bracket(edge_type)
-    local start = clip.timeline_start
+    local start = clip.sequence_start
     local duration = clip.duration
     local delta_frames = type(delta) == "number" and delta or 0
 

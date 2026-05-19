@@ -8,8 +8,8 @@ local roll_detector = require("ui.timeline.roll_detector")
 
 -- Two clips on the same track with a gap between them; roll should NOT be detected.
 local clips = {
-    {id = "a", track_id = "v1", timeline_start = 0, duration = 100},
-    {id = "b", track_id = "v1", timeline_start = 120, duration = 80}, -- 20-frame gap
+    {id = "a", track_id = "v1", sequence_start = 0, duration = 100},
+    {id = "b", track_id = "v1", sequence_start = 120, duration = 80}, -- 20-frame gap
 }
 
 local width = 1000
@@ -20,16 +20,16 @@ end
 
 local entries = {}
 for _, clip in ipairs(clips) do
-    local sx = time_to_px(clip.timeline_start)
-    local ex = time_to_px(clip.timeline_start + clip.duration)
+    local sx = time_to_px(clip.sequence_start)
+    local ex = time_to_px(clip.sequence_start + clip.duration)
     table.insert(entries, {clip = clip, edge = "in", distance = 0, px = sx})
     table.insert(entries, {clip = clip, edge = "out", distance = 0, px = ex})
 end
 
 local function detect_roll_between_clips(left_clip, right_clip, click_x, viewport_width)
     -- Mirror timeline_state.detect_roll_between_clips adjacency rule
-    local boundary_left = left_clip.timeline_start + left_clip.duration
-    local boundary_right = right_clip.timeline_start
+    local boundary_left = left_clip.sequence_start + left_clip.duration
+    local boundary_right = right_clip.sequence_start
     if boundary_left ~= boundary_right then
         return false
     end

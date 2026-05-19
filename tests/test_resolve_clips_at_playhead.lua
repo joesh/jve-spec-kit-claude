@@ -25,13 +25,13 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'ResolveTest', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'ResolveTest', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Seq', 'nested', 25, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq', 'proj', 'Seq', 'sequence', 25, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -91,12 +91,12 @@ test_env.create_test_media({
 local function create_clip(id, track_id, media_id, start_frame, dur)
     local clip = Clip.create({
         project_id = "proj",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         name = id,
         id = id,
         track_id = track_id,
         owner_sequence_id = "seq",
-        timeline_start_frame = start_frame,
+        sequence_start_frame = start_frame,
         duration_frames = dur,
         source_in_frame = 0,
         source_out_frame = dur,

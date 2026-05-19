@@ -38,12 +38,12 @@ db:exec(require("import_schema"))
 -- Seed: project + sequence + track + 4 clips
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24000, 1001, 48000,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24000, 1001, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -61,12 +61,12 @@ db:exec(string.format([[
 -- V13 master sequence + track + media_ref for med1 (created once).
 db:exec([[
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]])
 
 -- 4 clips: video pair (v1, a1) and separate pair (v2, a2)
@@ -76,11 +76,13 @@ for _, c in ipairs({
     {"clip_v2", "trk_v", 100, 50},
     {"clip_a2", "trk_a", 100, 50},
 }) do
+    -- 018 INV-3: AUDIO clips need non-NULL subframes (0,0); VIDEO need NULL.
+    local sub_lit = (c[2] == "trk_a") and "0, 0" or "NULL, NULL"
     assert(db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
-    ('%s', 'proj1', '%s', '%s', 'seq1', 'master_med1', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    ]], c[1], c[1], c[2], c[3], c[4], c[4], now, now)))
+    ('%s', 'proj1', '%s', '%s', 'seq1', 'master_med1', %d, %d, 0, %d, %s, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    ]], c[1], c[1], c[2], c[3], c[4], c[4], sub_lit, now, now)))
 end
 
 -- Helper: count rows in clip_links
@@ -379,15 +381,15 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════════
--- 9. calculate_anchor_time — returns MIN(timeline_start_frame) across linked clips
+-- 9. calculate_anchor_time — returns MIN(sequence_start_frame) across linked clips
 -- ═══════════════════════════════════════════════════════════════
 
 print("\n--- calculate_anchor_time: queries MIN start across linked clips ---")
 do
     -- Create a fresh group
     local gid = ClipLink.create_link_group({
-        { clip_id = "clip_v1", role = "video" },   -- timeline_start_frame = 0
-        { clip_id = "clip_v2", role = "video" },   -- timeline_start_frame = 100
+        { clip_id = "clip_v1", role = "video" },   -- sequence_start_frame = 0
+        { clip_id = "clip_v2", role = "video" },   -- sequence_start_frame = 100
     }, db)
 
     local anchor = ClipLink.calculate_anchor_time(gid, db)

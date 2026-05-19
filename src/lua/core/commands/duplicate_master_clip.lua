@@ -12,7 +12,7 @@ local SPEC = {
                 media_id = { required = true, kind = "string" },
                 fps_numerator = { required = true, kind = "number" },
                 fps_denominator = { required = true, kind = "number" },
-                timeline_start = { kind = "number", default = 0 },
+                sequence_start = { kind = "number", default = 0 },
                 duration = { kind = "number" },
                 source_in = { kind = "number", default = 0 },
                 source_out = { kind = "number" },
@@ -88,13 +88,50 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             width, height, {
                 id                       = new_master_id,
                 kind                     = "master",
-                audio_sample_rate               = sample_rate,
+                -- 018 FR-004: masters carry NULL audio_sample_rate (per-
+                -- media_ref rate; a master can hold heterogeneous rates).
+                audio_sample_rate        = nil,
                 start_timecode_frame     = video_start_tc_frame or 0,
                 playhead_frame           = video_start_tc_frame or 0,
                 video_start_tc_frame     = video_start_tc_frame,
                 audio_start_tc_samples   = audio_start_tc_samples,
             })
         assert(seq:save(), "DuplicateMasterClip: failed to save master sequence")
+
+        -- MR placement convention (matches Sequence.ensure_master:737-815):
+        --   V MR : source_in = timeline_start = video_tc (master.fps frames);
+        --          source range covers [video_tc, video_tc + dur_frames).
+        --   A MR : timeline_start in master.fps frames — video_tc for V+A
+        --          masters (master.fps == video.fps), audio_tc for audio-
+        --          only (master.fps == sample_rate). duration_frames in
+        --          master.fps frames (V duration for V+A; samples for
+        --          audio-only since master.fps==sr). source_in/_out stay
+        --          in file-natural samples.
+        -- Pre-fix DuplicateMasterClip wrote zeros for both timeline_start
+        -- and source_in, and duration_samples for the A MR's
+        -- duration_frames — a pre-unification leftover that broke non-
+        -- zero-TC duplicates (V played from frame 0 instead of TC, audio
+        -- virtual clip 1920× misplaced/sized).
+        -- Mirror ensure_master:678-687: V files MUST carry a V TC origin,
+        -- A files MUST carry an A TC origin. No `or 0` fallback — that
+        -- would silently land the duplicate at frame 0 when the original
+        -- sits at a real TC.
+        if has_video then
+            assert(video_start_tc_frame ~= nil, string.format(
+                "DuplicateMasterClip: media %s has video but no video TC "
+                .. "origin (start_tc_value missing from metadata)",
+                tostring(media_id)))
+        end
+        if has_audio then
+            assert(audio_start_tc_samples ~= nil, string.format(
+                "DuplicateMasterClip: media %s has audio but no audio TC "
+                .. "origin (start_tc_audio_samples missing from metadata)",
+                tostring(media_id)))
+        end
+        local v_tc = video_start_tc_frame
+        local a_tc = audio_start_tc_samples
+        local a_placement_start = has_video and v_tc or a_tc
+        local a_placement_dur   = has_video and duration_frames or duration_samples
 
         if has_video then
             local vtrack = Track.create_video("Video 1", seq.id, { index = 1 })
@@ -104,9 +141,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 owner_sequence_id    = seq.id,
                 track_id             = vtrack.id,
                 media_id             = media_id,
-                source_in_frame      = 0,
-                source_out_frame     = duration_frames,
-                timeline_start_frame = 0,
+                source_in_frame      = v_tc,
+                source_out_frame     = v_tc + duration_frames,
+                sequence_start_frame = v_tc,
                 duration_frames      = duration_frames,
                 enabled              = true,
                 volume               = 1.0,
@@ -127,10 +164,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     owner_sequence_id    = seq.id,
                     track_id             = atrack.id,
                     media_id             = media_id,
-                    source_in_frame      = 0,
-                    source_out_frame     = duration_samples,
-                    timeline_start_frame = 0,
-                    duration_frames      = duration_samples,
+                    source_in_frame      = a_tc,
+                    source_out_frame     = a_tc + duration_samples,
+                    sequence_start_frame = a_placement_start,
+                    duration_frames      = a_placement_dur,
+                    audio_sample_rate    = media.audio_sample_rate,
                     enabled              = true,
                     volume               = 1.0,
                     playhead_frame       = 0,

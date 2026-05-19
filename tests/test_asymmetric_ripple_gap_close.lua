@@ -13,9 +13,9 @@ local db_path = "/tmp/jve/test_asymmetric_ripple_gap_close.db"
 local layout = ripple_layout.create({
     db_path = db_path,
     clips = {
-        v1_left = {timeline_start = 0, duration = 1500},
-        v1_right = {timeline_start = 3500, duration = 1200},
-        v2 = {timeline_start = 2000, duration = 1000}
+        v1_left = {sequence_start = 0, duration = 1500},
+        v1_right = {sequence_start = 3500, duration = 1200},
+        v2 = {sequence_start = 2000, duration = 1000}
     }
 })
 
@@ -26,8 +26,8 @@ local tracks = layout.tracks
 local function current_gap_frames()
     local v1_left = Clip.load(clips.v1_left.id, db)
     local v1_right = Clip.load(clips.v1_right.id, db)
-    return v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration),
-        v1_right.timeline_start
+    return v1_right.sequence_start - (v1_left.sequence_start + v1_left.duration),
+        v1_right.sequence_start
 end
 
 local initial_gap, initial_right_start = current_gap_frames()

@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
--- Regression: clip_state should preserve integer timeline_start/duration values.
+-- Regression: clip_state should preserve integer sequence_start/duration values.
 -- With the integer refactor, no retagging is needed - coords are plain integers.
 
 package.path = package.path
@@ -26,7 +26,7 @@ data.state.clips = {
     {
         id = "c1",
         track_id = "v1",
-        timeline_start = 1500,
+        sequence_start = 1500,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -39,9 +39,9 @@ local indexed = clip_state.get_track_clip_index("v1")
 assert(indexed and #indexed == 1, "expected one indexed clip")
 
 local clip = indexed[1]
-assert(type(clip.timeline_start) == "number", "timeline_start should be integer")
+assert(type(clip.sequence_start) == "number", "sequence_start should be integer")
 assert(type(clip.duration) == "number", "duration should be integer")
-assert(clip.timeline_start == 1500, "expected timeline_start preserved as 1500")
+assert(clip.sequence_start == 1500, "expected sequence_start preserved as 1500")
 assert(clip.duration == 100, "expected duration preserved as 100")
 
 print("✅ clip_state preserves integer timeline times")

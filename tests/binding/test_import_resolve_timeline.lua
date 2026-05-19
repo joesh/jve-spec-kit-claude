@@ -52,11 +52,11 @@ assert_true("schema creation", db:exec(schema_sql))
 assert_true("bootstrap project", db:exec([[
     INSERT INTO projects (id, name, settings, created_at, modified_at, fps_mismatch_policy)
     VALUES ('host_project', 'Host Project',
-            '{"audio_sample_rate":48000}', 0, 0, 'passthrough');
+            '{"audio_sample_rate":48000,"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0, 'passthrough');
 ]]))
 assert_true("bootstrap sequence", db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'nested', 30, 1, 48000, 1920, 1080, 0, 0);
+    VALUES ('host_sequence', 'host_project', 'Host Timeline', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0);
 ]]))
 
 command_manager.init('host_sequence', 'host_project')

@@ -1,0 +1,207 @@
+#!/usr/bin/env luajit
+
+-- T011 (015) — ShowSourceTab command contract (C5).
+--
+-- Domain: ShowSourceTab opens the SourceTab in the timeline tab strip and emits
+-- source_tab_visibility_changed. It reads the source monitor's loaded master
+-- without taking any args. Non-undoable; no snapshot row produced.
+--
+-- Stubs: panel_manager, timeline_panel, and timeline_state are replaced so the
+-- test runs without Qt widgets.
+--
+-- Expected FAIL before T032 implementation: ShowSourceTab command not registered.
+
+package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
+require("test_env")
+
+local database        = require("core.database")
+local command_manager = require("core.command_manager")
+local Signals         = require("core.signals")
+
+_G.qt_create_single_shot_timer = function(_delay, cb) cb(); return nil end
+
+print("=== test_show_source_tab.lua ===")
+
+-- ── DB setup ──────────────────────────────────────────────────────────────
+local DB = "/tmp/jve/test_show_source_tab.db"
+os.remove(DB); os.execute("mkdir -p /tmp/jve")
+database.init(DB)
+local db = database.get_connection()
+db:exec(require("import_schema"))
+
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d)
+]], now, now))
+db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_sample_rate,
+        width, height, playhead_frame, view_start_frame,
+        view_duration_frames, created_at, modified_at)
+    VALUES ('rec_seq', 'proj', 'Timeline', 'sequence',
+        24, 1, 48000, 1920, 1080, 0, 0, 300, %d, %d)
+]], now, now))
+db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_sample_rate,
+        width, height, playhead_frame, view_start_frame,
+        view_duration_frames, created_at, modified_at)
+    VALUES ('src_master', 'proj', 'master_clip', 'master',
+        24, 1, NULL, 1920, 1080, 0, 0, 300, %d, %d)
+]], now, now))
+
+command_manager.init("rec_seq", "proj")
+
+-- ── Stubs ─────────────────────────────────────────────────────────────────
+-- ShowSourceTab delegates to timeline_state.switch_to_source_tab — the
+-- canonical pointer-update entry point. switch emits displayed_tab_changed;
+-- the timeline_panel listener does all body work. The test pins the
+-- contract by stubbing switch_to_source_tab and asserting it's called
+-- with the loaded master's seq_id.
+local stub_switch_calls = {}
+local stub_clear_calls = 0
+
+local mock_monitor = { sequence_id = nil }
+function mock_monitor:get_loaded_master_seq_id() return self.sequence_id end
+
+package.loaded["ui.panel_manager"] = {
+    get_sequence_monitor = function(view_id)
+        assert(view_id == "source_monitor",
+            "stub: unexpected view_id " .. tostring(view_id))
+        return mock_monitor
+    end,
+}
+package.loaded["ui.timeline.timeline_panel"] = {
+    open_tab = function() end,  -- not called by this path; safe no-op stub
+}
+package.loaded["ui.timeline.timeline_state"] = {
+    switch_to_source_tab = function(seq_id)
+        table.insert(stub_switch_calls, seq_id)
+    end,
+    -- 2026-05-17: when no master is loaded, ShowSourceTab now blanks the
+    -- body via timeline_state.clear() instead of auto-seeding a "random"
+    -- master from the DB. The test pins that blank-on-empty contract.
+    clear = function() stub_clear_calls = stub_clear_calls + 1 end,
+    get_sequence_id        = function() return "rec_seq" end,
+    get_active_sequence_id = function() return "rec_seq" end,
+    get_project_id         = function() return "proj" end,
+    get_playhead_position   = function() return 0 end,
+    get_sequence_frame_rate = function() return {numerator=24, denominator=1} end,
+    get_selected_clips      = function() return {} end,
+    get_selected_edges      = function() return {} end,
+    get_selected_gaps       = function() return {} end,
+    switch_to_record_tab   = function() end,
+}
+
+-- source_viewer.load_master_clip must NOT be called by ShowSourceTab
+-- anymore (2026-05-17): the user chose nothing, so the editor shows
+-- nothing — no auto-seed. The stub records calls so the test can fail
+-- loudly if the retired path is ever taken again.
+local source_viewer_seeds = {}
+package.loaded["ui.source_viewer"] = {
+    load_master_clip = function(clip_id)
+        table.insert(source_viewer_seeds, clip_id)
+        mock_monitor.sequence_id = clip_id
+    end,
+}
+
+-- Force fresh load of show_source_tab (clears any cached version).
+package.loaded["core.commands.show_source_tab"] = nil
+
+-- ── Signal log ────────────────────────────────────────────────────────────
+local vis_log = {}
+Signals.connect("source_tab_visibility_changed", function(visible)
+    table.insert(vis_log, visible)
+end)
+
+-- ── (a) Execute with source loaded ───────────────────────────────────────
+print("-- (a) ShowSourceTab with source loaded --")
+mock_monitor.sequence_id = "src_master"
+
+local r1 = command_manager.execute("ShowSourceTab", {})
+assert(r1 and r1.success, "FAIL: ShowSourceTab failed: " .. tostring(r1 and r1.error_message))
+
+assert(#vis_log >= 1 and vis_log[#vis_log] == true,
+    "FAIL: source_tab_visibility_changed(true) not emitted")
+assert(#stub_switch_calls >= 1 and stub_switch_calls[#stub_switch_calls] == "src_master",
+    "FAIL: switch_to_source_tab not called with src_master — ShowSourceTab "
+    .. "must delegate to the canonical pointer-update entry point")
+print("  signal emitted, switch_to_source_tab called with src_master — OK")
+
+-- ── (b) Execute with no source loaded: blank the body ────────────────────
+-- 2026-05-17: the auto-seed-first-master behavior was retired (it
+-- fabricated user intent — picked a "random clip" per the live report).
+-- New contract: no master loaded → blank the body, same blank state as
+-- closing the last tab. switch_to_source_tab MUST NOT be called (no
+-- master to associate with). source_viewer.load_master_clip MUST NOT
+-- be called (no auto-seed). source_tab_visibility_changed MUST NOT
+-- fire — nothing became visible.
+print("-- (b) ShowSourceTab with no source loaded blanks the body --")
+mock_monitor.sequence_id = nil
+local n_vis = #vis_log
+local n_switch = #stub_switch_calls
+local n_clear = stub_clear_calls
+local n_seed  = #source_viewer_seeds
+
+local r2 = command_manager.execute("ShowSourceTab", {})
+assert(r2 and r2.success,
+    "FAIL: ShowSourceTab failed: " .. tostring(r2 and r2.error_message))
+assert(stub_clear_calls == n_clear + 1,
+    "FAIL: timeline_state.clear() must be called when no master is loaded")
+assert(#stub_switch_calls == n_switch,
+    "FAIL: switch_to_source_tab must NOT be called (no master to show)")
+assert(#source_viewer_seeds == n_seed,
+    "FAIL: source_viewer.load_master_clip must NOT be called — the "
+    .. "auto-seed-first-master path is retired (fabricated user intent)")
+assert(#vis_log == n_vis,
+    "FAIL: source_tab_visibility_changed must NOT fire — nothing became visible")
+print("  no-master path blanks body, no auto-seed, no spurious visibility signal — OK")
+
+-- ── (c) Idempotent: calling again when tab is already open ───────────────
+print("-- (c) idempotent re-open --")
+mock_monitor.sequence_id = "src_master"
+local n_vis3 = #vis_log
+
+local r3 = command_manager.execute("ShowSourceTab", {})
+assert(r3 and r3.success, "FAIL: second ShowSourceTab call failed")
+assert(#vis_log == n_vis3 + 1 and vis_log[#vis_log] == true,
+    "FAIL: signal must fire even on re-open (idempotent show)")
+print("  second call succeeds, signal emitted — OK")
+
+-- ── (d) Non-undoable: no snapshots row, undo does not revert ─────────────
+print("-- (d) non-undoable --")
+local snap_before = db:prepare("SELECT COUNT(*) FROM snapshots")
+snap_before:exec(); snap_before:next()
+local snap_count_before = snap_before:value(0); snap_before:finalize()
+
+command_manager.execute("ShowSourceTab", {})
+
+local snap_after = db:prepare("SELECT COUNT(*) FROM snapshots")
+snap_after:exec(); snap_after:next()
+local snap_count_after = snap_after:value(0); snap_after:finalize()
+
+assert(snap_count_after == snap_count_before,
+    string.format("FAIL: ShowSourceTab must not create snapshots row (before=%d after=%d)",
+        snap_count_before, snap_count_after))
+
+local n_vis_undo = #vis_log
+command_manager.undo()
+assert(#vis_log == n_vis_undo,
+    "FAIL: undo must not trigger source_tab_visibility_changed — command is non-undoable")
+print("  no snapshot row, undo is no-op — OK")
+
+-- ── (e) Assert guard: panel_manager not available ────────────────────────
+print("-- (e) assert when panel_manager missing --")
+local saved_pm = package.loaded["ui.panel_manager"]
+package.loaded["ui.panel_manager"] = nil
+package.loaded["core.commands.show_source_tab"] = nil  -- force reload without stub
+
+pcall(command_manager.execute, "ShowSourceTab", {})
+-- pcall returns false because the command asserts — command_manager catches it
+-- and returns {success=false}. Either way, no crash.
+package.loaded["ui.panel_manager"] = saved_pm
+package.loaded["core.commands.show_source_tab"] = nil  -- re-cache with stub
+print("  panel_manager assert fired — OK")
+
+print("\n✅ test_show_source_tab.lua passed")

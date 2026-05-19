@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=1)
 -- T058 / CT-C14 (013): SetMasterChannelState.
 --
 -- Per FR-006 / FR-007 / commands.md §SetMasterChannelState:
@@ -26,16 +27,16 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
                ('e-a1', 'e', 'A1', 'AUDIO', 1);
@@ -45,22 +46,23 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 4, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000,
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr', 'p1', 'm', 'm-a1', 'med', 0, 48000, 0, 48000, 48000,
                 1, 1.0, 0, 0, 0);
         -- Two clips: one without override, one with override on channel 1.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('tracking', 'p1', 'e', 'e-a1', 'm', 'tracking',
-                0, 48000, 0, 48000, NULL, 'resample',
+                0, 48000, 0, 48000, 0, 0, NULL, 'resample',
                 1, 1.0, 0, 0, 0),
                ('overridden', 'p1', 'e', 'e-a1', 'm', 'overridden',
-                100000, 48000, 0, 48000, NULL, 'resample',
+                100000, 48000, 0, 48000, 0, 0, NULL, 'resample',
                 1, 1.0, 0, 0, 0);
         INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
         VALUES ('overridden', 1, 1, 0.0);

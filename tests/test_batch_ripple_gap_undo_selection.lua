@@ -49,8 +49,8 @@ local layout = ripple_layout.create({
     },
     clips = {
         v1_left = {duration = 900, fps_numerator = 30, fps_denominator = 1},
-        v1_right = {timeline_start = 1500, duration = 900, fps_numerator = 30, fps_denominator = 1},
-        v2 = {timeline_start = 900, duration = 900, fps_numerator = 30, fps_denominator = 1}
+        v1_right = {sequence_start = 1500, duration = 900, fps_numerator = 30, fps_denominator = 1},
+        v2 = {sequence_start = 900, duration = 900, fps_numerator = 30, fps_denominator = 1}
     }
 })
 local _ = layout.db  -- luacheck: ignore 211

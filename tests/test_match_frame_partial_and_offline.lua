@@ -36,6 +36,9 @@ local stub_source_monitor = {
         self.sequence_id = sequence_id
         table.insert(load_calls, sequence_id)
     end,
+    get_loaded_master_seq_id = function(self)
+        return self.sequence_id
+    end,
 }
 package.loaded["ui.panel_manager"] = {
     get_active_sequence_monitor = function() return nil end,
@@ -98,15 +101,15 @@ assert(not fs_utils_test.file_exists(MISSING_PATH), string.format(
     MISSING_PATH))
 
 db:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('p', 'Project', 'resample', %d, %d);
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('p', 'Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height,
     view_start_frame, view_duration_frames, playhead_frame,
     selected_clip_ids, selected_edge_infos, selected_gap_infos,
     current_sequence_number, created_at, modified_at, start_timecode_frame)
-VALUES ('seq', 'p', 'Edit', 'nested', 30, 1, 48000, 1920, 1080,
+VALUES ('seq', 'p', 'Edit', 'sequence', 30, 1, 48000, 1920, 1080,
     0, 1000, 0, '[]', '[]', '[]', 0, %d, %d, 0);
 
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
@@ -129,39 +132,39 @@ VALUES ('m_missing', 'p', 'missing.mov', '%s', 500, 30, 1, 1920, 1080, 0,
 -- media_ref duration_frames=100 → master valid range [50, 150).
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_partial', 'p', 'Master Partial', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_partial', 'p', 'Master Partial', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 50);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)
 VALUES ('mp_v', 'master_partial', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mp_v' WHERE id = 'master_partial';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-    source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_partial', 'p', 'master_partial', 'mp_v', 'm_partial',
-    50, 150, 0, 100, 1, 1.0, 0, 0, 0);
+    50, 150, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
 -- Master for the missing-file media — full range, but file_path won't exist.
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_missing', 'p', 'Master Missing', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_missing', 'p', 'Master Missing', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)
 VALUES ('mm_v', 'master_missing', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'mm_v' WHERE id = 'master_missing';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-    source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_missing', 'p', 'master_missing', 'mm_v', 'm_missing',
-    0, 500, 0, 500, 1, 1.0, 0, 0, 0);
+    0, 500, 0, 500, 48000, 1, 1.0, 0, 0, 0);
 
 -- Timeline clips.
 --   c_partial: source_in=10 → 40f BEFORE master valid range start (50).
 --              source_out=210 → 60f past master valid range end (150).
 --   c_missing: any range; the file just isn't there.
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id,
-    owner_sequence_id, timeline_start_frame, duration_frames,
+INSERT INTO clips (id, project_id, name, track_id, sequence_id,
+    owner_sequence_id, sequence_start_frame, duration_frames,
     source_in_frame, source_out_frame, enabled, created_at, modified_at,
     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
     volume, playhead_frame)
@@ -252,20 +255,20 @@ VALUES ('m_stale_volume', 'p', 'stale.mov', '%s', 500, 30, 1, 1920, 1080, 0,
 
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, created_at, modified_at, start_timecode_frame)
-VALUES ('master_stale', 'p', 'Master Stale', 'master', 30, 1, 48000, 1920, 1080,
+VALUES ('master_stale', 'p', 'Master Stale', 'master', 30, 1, NULL, 1920, 1080,
     %d, %d, 50);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
     enabled, locked, muted, soloed, volume, pan)
 VALUES ('ms_v', 'master_stale', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'ms_v' WHERE id = 'master_stale';
 INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-    source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
-    enabled, volume, playhead_frame, created_at, modified_at)
+    source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+    audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_stale', 'p', 'master_stale', 'ms_v', 'm_stale_volume',
-    50, 150, 0, 100, 1, 1.0, 0, 0, 0);
+    50, 150, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id,
-    owner_sequence_id, timeline_start_frame, duration_frames,
+INSERT INTO clips (id, project_id, name, track_id, sequence_id,
+    owner_sequence_id, sequence_start_frame, duration_frames,
     source_in_frame, source_out_frame, enabled, created_at, modified_at,
     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
     volume, playhead_frame)

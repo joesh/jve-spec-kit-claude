@@ -43,7 +43,7 @@ project:save()
 
 local seq = Sequence.create("Test Seq", project.id,
     {  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000 })
+    { kind = "sequence", audio_sample_rate = 48000 })
 seq:save()
 
 Track.create_video("V1", seq.id, { index = 1 }):save()
@@ -69,8 +69,8 @@ print("Test 1: Undo group stamps playhead_value_post on last command")
 local result = command_manager.execute("Insert", {
     project_id = project.id,
     sequence_id = seq.id,
-    nested_sequence_id = mc_id,
-    timeline_start_frame = timeline_state.get_playhead_position(),
+    source_sequence_id = mc_id,
+    sequence_start_frame = timeline_state.get_playhead_position(),
     advance_playhead = true,
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))

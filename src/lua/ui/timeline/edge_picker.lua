@@ -24,13 +24,13 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
     local valid_clips = {}
     local target_idx = nil
     for _, clip in ipairs(track_clips) do
-        local start_val = clip.timeline_start or clip.start_value
+        local start_val = clip.sequence_start or clip.start_value
         local dur_val = clip.duration or clip.duration_value
         if type(start_val) == "number" and type(dur_val) == "number" and dur_val > 0 then
             local entry = {
                 id = clip.id,
                 track_id = clip.track_id,
-                timeline_start = start_val,
+                sequence_start = start_val,
                 duration = dur_val
             }
             table.insert(valid_clips, entry)
@@ -38,10 +38,10 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
     end
 
     table.sort(valid_clips, function(a, b)
-        if a.timeline_start == b.timeline_start then
+        if a.sequence_start == b.sequence_start then
             return (a.id or "") < (b.id or "")
         end
-        return a.timeline_start < b.timeline_start
+        return a.sequence_start < b.sequence_start
     end)
 
     -- Find target clip in sorted list
@@ -65,7 +65,7 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
 
     if side == "downstream" then
         -- Boundary at clip's end (out edge)
-        boundary_time = clip.timeline_start + clip.duration
+        boundary_time = clip.sequence_start + clip.duration
 
         -- Left side of boundary: this clip's out edge
         local left_edge = {
@@ -78,7 +78,7 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
         -- With gap-as-clip, gap clips are in the track list. The next clip
         -- at this boundary is always found — it's either a media clip or a gap clip.
         local right_edge
-        if next_clip and next_clip.timeline_start == boundary_time then
+        if next_clip and next_clip.sequence_start == boundary_time then
             right_edge = {
                 clip_id = next_clip.id,
                 edge_type = "in",
@@ -100,7 +100,7 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
 
     else -- side == "upstream"
         -- Boundary at clip's start (in edge)
-        boundary_time = clip.timeline_start
+        boundary_time = clip.sequence_start
 
         -- Right side of boundary: this clip's in edge
         local right_edge = {
@@ -112,7 +112,7 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
         -- Left side of boundary: prev clip's out edge (gap or media)
         -- With gap-as-clip, the previous clip is always found if one exists.
         local left_edge
-        if prev_clip and (prev_clip.timeline_start + prev_clip.duration) == boundary_time then
+        if prev_clip and (prev_clip.sequence_start + prev_clip.duration) == boundary_time then
             left_edge = {
                 clip_id = prev_clip.id,
                 edge_type = "out",
@@ -139,7 +139,7 @@ end
 -- Validate clip has integer bounds
 local function validate_bounds(clip)
     if not clip then return nil end
-    local start_val = clip.timeline_start or clip.start_value
+    local start_val = clip.sequence_start or clip.start_value
     local dur_val = clip.duration or clip.duration_value
     if type(start_val) ~= "number" or type(dur_val) ~= "number" or dur_val <= 0 then
         return nil
@@ -157,22 +157,22 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
     for _, clip in ipairs(track_clips) do
         local start_val, dur_val = validate_bounds(clip)
         if start_val and dur_val then
-            clip.timeline_start = start_val
+            clip.sequence_start = start_val
             clip.duration = dur_val
             table.insert(valid_clips, clip)
         end
     end
 
     table.sort(valid_clips, function(a, b)
-        local af = a.timeline_start
-        local bf = b.timeline_start
+        local af = a.sequence_start
+        local bf = b.sequence_start
         if af == bf then return (a.id or "") < (b.id or "") end
         return af < bf
     end)
 
     local boundaries = {}
     for idx, clip in ipairs(valid_clips) do
-        local start_frames = clip.timeline_start
+        local start_frames = clip.sequence_start
         local duration = clip.duration
 
         local prev = valid_clips[idx - 1]
@@ -186,7 +186,7 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
         -- With gap-as-clip, all boundaries are clip:out / clip:in pairs.
         -- Gap clips appear in the sorted list like any other clip.
         local start_boundary = boundaries[start_frames] or {time = start_frames, px = start_px}
-        if prev and (prev.timeline_start + prev.duration) == start_frames then
+        if prev and (prev.sequence_start + prev.duration) == start_frames then
             start_boundary.left = {clip = prev, clip_id = prev.id, edge_type = "out"}
         end
         start_boundary.right = {clip = clip, clip_id = clip.id, edge_type = "in"}
@@ -194,7 +194,7 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
 
         local end_boundary = boundaries[end_frames] or {time = end_frames, px = end_px}
         end_boundary.left = {clip = clip, clip_id = clip.id, edge_type = "out"}
-        if next_clip and (clip.timeline_start + clip.duration) == next_clip.timeline_start then
+        if next_clip and (clip.sequence_start + clip.duration) == next_clip.sequence_start then
             end_boundary.right = {clip = next_clip, clip_id = next_clip.id, edge_type = "in"}
         end
         boundaries[end_frames] = end_boundary
@@ -259,9 +259,9 @@ function M.pick_edges(track_clips, cursor_x, viewport_width, opts)
 
         -- All edges use the clip's pixel width (gap clips included)
         local c = entry.clip
-        if c and c.timeline_start and c.duration then
-            local start_px = time_to_pixel(c.timeline_start, viewport_width)
-            local end_px = time_to_pixel(c.timeline_start + c.duration, viewport_width)
+        if c and c.sequence_start and c.duration then
+            local start_px = time_to_pixel(c.sequence_start, viewport_width)
+            local end_px = time_to_pixel(c.sequence_start + c.duration, viewport_width)
             return end_px - start_px
         end
         return nil

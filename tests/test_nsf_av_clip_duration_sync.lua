@@ -27,13 +27,13 @@ db:exec(require("import_schema"))
 local project_id = "test_project"
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('%s', 'Test Project', 'resample', %d, %d)
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('%s', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d)
 ]], project_id, now, now))
 
 -- Create timeline sequence at 30fps
 local timeline = Sequence.create("Timeline", project_id, { fps_numerator = 30, fps_denominator = 1}, 1920, 1080,
-    {kind = "nested", audio_sample_rate = 48000 })
+    {kind = "sequence", audio_sample_rate = 48000 })
 assert(timeline:save(), "Failed to save timeline")
 
 local video_track = Track.create_video("V1", timeline.id, {index = 1})
@@ -107,58 +107,13 @@ local function test_stream_clip_durations()
     print("  ✓ Stream clips have correct durations")
 end
 
--- Test: frame_to_samples conversion
-local function test_frame_to_samples()
-    local reloaded_mc = Sequence.load(masterclip.id)
-
-    -- 240 frames at 24fps -> samples at 48000
-    -- samples = frames * sample_rate / fps = 240 * 48000 / 24 = 480000
-    local expected_samples = 480000
-    local actual_samples = reloaded_mc:frame_to_samples(video_duration_frames)
-
-    assert(actual_samples == expected_samples,
-        string.format("frame_to_samples mismatch: expected %d, got %d",
-            expected_samples, actual_samples or -1))
-
-    print("  ✓ frame_to_samples conversion correct")
-end
-
--- Test: AddClipsToSequence creates synced A/V clips
-local function test_add_clips_creates_synced_durations()
-    local clip_edit_helper = require("core.clip_edit_helper")
-
-    local reloaded_mc = Sequence.load(masterclip.id)
-
-    -- Resolve timing (no overrides = use full stream duration)
-    local video_timing = clip_edit_helper.resolve_video_stream_timing(reloaded_mc, {})
-    local audio_timing = clip_edit_helper.resolve_audio_stream_timing(reloaded_mc, {})
-
-    assert(video_timing, "Failed to resolve video timing")
-    assert(audio_timing, "Failed to resolve audio timing")
-
-    -- Video duration in frames
-    assert(video_timing.duration == video_duration_frames,
-        string.format("Video timing duration mismatch: expected %d, got %d",
-            video_duration_frames, video_timing.duration))
-
-    -- Audio duration in samples
-    assert(audio_timing.duration == audio_duration_samples,
-        string.format("Audio timing duration mismatch: expected %d, got %d",
-            audio_duration_samples, audio_timing.duration))
-
-    -- They must represent the same time
-    local video_fps = video_timing.fps_numerator / video_timing.fps_denominator
-    local audio_fps = audio_timing.fps_numerator / audio_timing.fps_denominator  -- sample rate
-
-    local video_seconds = video_timing.duration / video_fps
-    local audio_seconds = audio_timing.duration / audio_fps
-
-    assert(math.abs(video_seconds - audio_seconds) < 0.001,
-        string.format("Timing duration time mismatch: video=%.3fs, audio=%.3fs",
-            video_seconds, audio_seconds))
-
-    print("  ✓ resolve_*_stream_timing returns synced durations")
-end
+-- 018 (FR-016, FR-017): test_frame_to_samples and
+-- test_add_clips_creates_synced_durations removed. They exercised the legacy
+-- dual-unit accessors (Sequence:frame_to_samples,
+-- clip_edit_helper.resolve_*_stream_timing) deleted in Phase 3.7. The same
+-- "video and audio represent the same time" invariant is now covered by
+-- test_timeline_clips_visual_sync below (timeline-level) and by
+-- test_resolver_subframe (resolver-level, FR-008).
 
 -- Test: Timeline clips have matching visual durations
 local function test_timeline_clips_visual_sync()
@@ -167,14 +122,14 @@ local function test_timeline_clips_visual_sync()
         project_id = project_id,
         sequence_id = timeline.id,
         target_video_track_id = video_track.id,
-        nested_sequence_id = masterclip.id,
-        timeline_start_frame = 0,
+        source_sequence_id = masterclip.id,
+        sequence_start_frame = 0,
     })
     assert(result and result.success, "Insert failed: " .. tostring(result and result.error_message))
 
     -- Query video clip from timeline
     local video_stmt = db:prepare([[
-        SELECT duration_frames, timeline_start_frame
+        SELECT duration_frames, sequence_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     video_stmt:bind_value(1, video_track.id)
@@ -187,7 +142,7 @@ local function test_timeline_clips_visual_sync()
 
     -- Query audio clip from timeline
     local audio_stmt = db:prepare([[
-        SELECT duration_frames, timeline_start_frame
+        SELECT duration_frames, sequence_start_frame
         FROM clips WHERE track_id = ? AND owner_sequence_id = ?
     ]])
     audio_stmt:bind_value(1, audio_track.id)
@@ -198,9 +153,9 @@ local function test_timeline_clips_visual_sync()
     local ac_start = audio_stmt:value(1)
     audio_stmt:finalize()
 
-    -- Both should have same timeline_start
+    -- Both should have same sequence_start
     assert(vc_start == ac_start,
-        string.format("timeline_start mismatch: video=%d, audio=%d", vc_start, ac_start))
+        string.format("sequence_start mismatch: video=%d, audio=%d", vc_start, ac_start))
 
     -- clip.duration is now in TIMELINE frames (30fps), not source units
     -- Both video and audio should have the same timeline duration
@@ -222,8 +177,6 @@ local function test_timeline_clips_visual_sync()
 end
 
 test_stream_clip_durations()
-test_frame_to_samples()
-test_add_clips_creates_synced_durations()
 test_timeline_clips_visual_sync()
 
 print("✅ test_nsf_av_clip_duration_sync.lua passed")

@@ -109,30 +109,18 @@ end
 
 --- Get audio TC origin in samples from metadata.
 -- If TC not in metadata and file exists on disk, extracts from file via EMP.
+-- Post-normalization: start_tc_audio_samples is the only source of truth for
+-- audio TC. The old start_tc_value*sr/fps derive path is gone — that path
+-- silently bridged the dual-unit "audio TC stored in start_tc_value with
+-- rate==sr" overload that caused 4-second-late playback on DRP-imported
+-- audio-only files (TSO 2026-05-16). Importers and the relink probe now
+-- write start_tc_audio_samples directly whenever a file has audio.
 -- @return number|nil samples, number|nil sample_rate
 function M:get_audio_start_tc()
     self:_ensure_tc_extracted()
     local meta = self:_parsed_metadata()
     if meta and meta.start_tc_audio_samples ~= nil then
         return meta.start_tc_audio_samples, meta.start_tc_audio_rate
-    end
-    -- Derive from video TC if audio TC not stored separately
-    if meta and meta.start_tc_value ~= nil and self.audio_sample_rate then
-        local sr = self.audio_sample_rate
-        local fps = meta.start_tc_rate
-        assert(fps and fps > 0, string.format(
-            "Media:get_audio_start_tc: start_tc_rate must be positive, got %s (media_id=%s)",
-            tostring(fps), tostring(self.id)))
-        local audio_tc = math.floor(meta.start_tc_value * sr / fps)
-        -- Output bounds: audio TC can't be negative, can't exceed 24h at sample rate
-        assert(audio_tc >= 0, string.format(
-            "Media:get_audio_start_tc: derived audio_tc=%d is negative (video_tc=%d sr=%d fps=%d media_id=%s)",
-            audio_tc, meta.start_tc_value, sr, fps, tostring(self.id)))
-        local max_samples = 24 * 3600 * sr  -- 24 hours
-        assert(audio_tc <= max_samples, string.format(
-            "Media:get_audio_start_tc: derived audio_tc=%d exceeds 24h (%d samples) media_id=%s",
-            audio_tc, max_samples, tostring(self.id)))
-        return audio_tc, sr
     end
     return nil, nil
 end
@@ -202,17 +190,39 @@ function M:extract_tc_from_file()
         sample_rate = self.audio_sample_rate
     end
 
+    -- Gate per-medium writes on EMP's presence flags. Post-normalization
+    -- (2026-05-16) V fields stay nil when the file has no video stream
+    -- with an authoritative TC origin (retires the audio-only overload).
+    local has_v = info.has_video and info.has_video_tc_origin
+    local has_a = info.has_audio and info.has_audio_tc_origin
+    assert(has_v or has_a, string.format(
+        "Media:extract_tc_from_file: EMP reports no TC origin for %s "
+        .. "(has_video=%s has_video_tc=%s has_audio=%s has_audio_tc=%s)",
+        path, tostring(info.has_video), tostring(info.has_video_tc_origin),
+        tostring(info.has_audio), tostring(info.has_audio_tc_origin)))
+
     local json = require("dkjson")
     local meta = self:_parsed_metadata() or {}
-    meta.start_tc_value = info.first_frame_tc
-    meta.start_tc_rate = fps_num
-    meta.start_tc_audio_samples = info.first_sample_tc
-    meta.start_tc_audio_rate = (sample_rate and sample_rate > 0) and sample_rate or nil
+    if has_v then
+        meta.start_tc_value = info.first_frame_tc
+        meta.start_tc_rate = fps_num
+    else
+        meta.start_tc_value = nil
+        meta.start_tc_rate = nil
+    end
+    if has_a then
+        meta.start_tc_audio_samples = info.first_sample_tc
+        meta.start_tc_audio_rate = sample_rate
+    else
+        meta.start_tc_audio_samples = nil
+        meta.start_tc_audio_rate = nil
+    end
 
     self.metadata = json.encode(meta)
 
-    log.event("Media:extract_tc_from_file: %s → video_tc=%d audio_tc=%d",
-        tostring(self.id):sub(1, 8), meta.start_tc_value, meta.start_tc_audio_samples)
+    log.event("Media:extract_tc_from_file: %s → video_tc=%s audio_tc=%s",
+        tostring(self.id):sub(1, 8),
+        tostring(meta.start_tc_value), tostring(meta.start_tc_audio_samples))
 end
 
 --- Extract TC origin from media file via EMP if not already in metadata.
@@ -221,9 +231,12 @@ end
 -- Does NOT fabricate TC=0 when file is missing — that would hide real TC values.
 -- Callers (ensure_masterclip) assert TC is known; import paths must provide it.
 function M:_ensure_tc_extracted()
-    -- Already have TC? (check ~= nil because 0 is valid)
+    -- Already extracted? Either V or A pair present is enough — audio-
+    -- only files won't have start_tc_value post-normalization, so the
+    -- skip-check must accept that shape (else we'd re-probe every call).
     local meta = self:_parsed_metadata()
-    if meta and meta.start_tc_value ~= nil then
+    if meta and (meta.start_tc_value ~= nil
+                 or meta.start_tc_audio_samples ~= nil) then
         return
     end
 
@@ -260,29 +273,48 @@ function M:_ensure_tc_extracted()
     if not fps_num or fps_num <= 0 then
         fps_num = self.frame_rate and self.frame_rate.fps_numerator
     end
-    -- fps_num can be 0/nil for audio-only files — that's valid
-    -- (audio TC is in samples, doesn't need video fps)
-    if not fps_num or fps_num <= 0 then fps_num = 0 end
 
     local sample_rate = info.audio_sample_rate
     if not sample_rate or sample_rate <= 0 then
         sample_rate = self.audio_sample_rate
     end
 
-    -- Merge into existing metadata
+    -- Gate per-medium writes on EMP presence flags (matches the
+    -- normalization convention — see extract_tc_from_file).
+    local has_v = info.has_video and info.has_video_tc_origin
+        and fps_num and fps_num > 0
+    local has_a = info.has_audio and info.has_audio_tc_origin
+        and sample_rate and sample_rate > 0
+    if not (has_v or has_a) then
+        -- File has neither V TC nor A TC origin (plain MP3, non-BWF WAV,
+        -- video without tmcd). Leave metadata blank — callers that need
+        -- a TC will fail loudly via their own has_audio/has_video gates.
+        return
+    end
+
     local json = require("dkjson")
     meta = meta or {}
-    meta.start_tc_value = info.first_frame_tc
-    meta.start_tc_rate = fps_num
-    meta.start_tc_audio_samples = info.first_sample_tc
-    meta.start_tc_audio_rate = (sample_rate and sample_rate > 0) and sample_rate or nil
+    if has_v then
+        meta.start_tc_value = info.first_frame_tc
+        meta.start_tc_rate = fps_num
+    else
+        meta.start_tc_value = nil
+        meta.start_tc_rate = nil
+    end
+    if has_a then
+        meta.start_tc_audio_samples = info.first_sample_tc
+        meta.start_tc_audio_rate = sample_rate
+    else
+        meta.start_tc_audio_samples = nil
+        meta.start_tc_audio_rate = nil
+    end
 
-    -- Update in-memory + persist to DB
     self.metadata = json.encode(meta)
     self:_save_metadata()
 
-    log.event("Media:_ensure_tc_extracted: %s → video_tc=%d audio_tc=%d",
-        tostring(self.id):sub(1, 8), info.first_frame_tc, info.first_sample_tc)
+    log.event("Media:_ensure_tc_extracted: %s → video_tc=%s audio_tc=%s",
+        tostring(self.id):sub(1, 8),
+        tostring(meta.start_tc_value), tostring(meta.start_tc_audio_samples))
 end
 
 --- Persist only the metadata column to DB (minimal write for TC extraction).
@@ -315,17 +347,35 @@ end
 
 --- Merge a probed_tc record into an existing metadata JSON string, returning
 --- a new JSON string. probed_tc has the shape produced by
---- media_relinker.probed_tc_for_metadata: {start_tc_value, start_tc_rate,
+--- media_relinker.probed_tc_for_metadata: {start_tc_value?, start_tc_rate?,
 --- start_tc_audio_samples?, start_tc_audio_rate?}. Preserves unrelated
 --- metadata fields (e.g. file_original_timecode) unchanged.
---- When probed_tc lacks audio fields (e.g. video-only file, or file without
---- any audio stream), existing audio TC fields are cleared — they referred
---- to a different file and would be wrong for the newly-linked one.
+---
+--- Post-normalization (2026-05-16): start_tc_value is V-only (set iff the
+--- file has a video stream with an authoritative TC origin), and
+--- start_tc_audio_samples is A-only (set iff the file has audio with TC).
+--- Audio-only files leave start_tc_value nil — that retires the dual-unit
+--- overload where audio TC was stored under start_tc_value with rate==sr.
+--- Probed_tc must carry at least one pair; nil fields clear stale values
+--- from the previously-linked file (they referred to a different file).
 function M.merge_probed_tc_into_metadata(existing_metadata_json, probed_tc)
     assert(type(probed_tc) == "table",
         "Media.merge_probed_tc_into_metadata: probed_tc table required")
-    assert(probed_tc.start_tc_value and probed_tc.start_tc_rate,
-        "Media.merge_probed_tc_into_metadata: probed_tc must have start_tc_value and start_tc_rate")
+    local has_v = probed_tc.start_tc_value ~= nil and probed_tc.start_tc_rate ~= nil
+    local has_a = probed_tc.start_tc_audio_samples ~= nil and probed_tc.start_tc_audio_rate ~= nil
+    assert(has_v or has_a, "Media.merge_probed_tc_into_metadata: "
+        .. "probed_tc must carry V pair (start_tc_value+rate) or A pair "
+        .. "(start_tc_audio_samples+rate). probed_tc_for_metadata only "
+        .. "returns when the probe found at least one — a nil here means "
+        .. "the caller passed a no-TC probe through, which is a bug.")
+    -- Partial probes must be consistent: a lone _value without _rate (or
+    -- vice versa) is malformed and would write a stranded field.
+    assert((probed_tc.start_tc_value == nil) == (probed_tc.start_tc_rate == nil),
+        "Media.merge_probed_tc_into_metadata: start_tc_value and "
+        .. "start_tc_rate must be set together")
+    assert((probed_tc.start_tc_audio_samples == nil) == (probed_tc.start_tc_audio_rate == nil),
+        "Media.merge_probed_tc_into_metadata: start_tc_audio_samples and "
+        .. "start_tc_audio_rate must be set together")
 
     local json = require("dkjson")
     local meta
@@ -339,9 +389,12 @@ function M.merge_probed_tc_into_metadata(existing_metadata_json, probed_tc)
             existing_metadata_json))
     end
 
+    -- Each pair is written independently; nil clears the field so the
+    -- newly-linked audio-only file no longer carries V TC from the
+    -- previously-linked V+A file (and vice versa).
     meta.start_tc_value = probed_tc.start_tc_value
     meta.start_tc_rate = probed_tc.start_tc_rate
-    meta.start_tc_audio_samples = probed_tc.start_tc_audio_samples  -- nil clears
+    meta.start_tc_audio_samples = probed_tc.start_tc_audio_samples
     meta.start_tc_audio_rate = probed_tc.start_tc_audio_rate
 
     return json.encode(meta)
@@ -647,6 +700,9 @@ end
 --- normalized to a common rate. Each clip's source_in/source_out is in its own native
 --- units (video frames at clip fps, audio samples at sample rate). This function converts
 --- every clip to target_rate before computing min/max.
+--- NOTE: 018 subframe precision (clip.source_*_subframe) is DISCARDED — extent is
+--- frame-aligned at target_rate. Callers needing sample-exact extents must read
+--- subframes separately. Tracked: memory/todo_subframe_precision_in_media_selects.md.
 --- @param target_rate number Rate to normalize to (typically media_start_tc_rate)
 --- @return number|nil min_source_in, number|nil max_source_out (both in target_rate units)
 function M:get_source_extent(target_rate)
@@ -656,7 +712,7 @@ function M:get_source_extent(target_rate)
     local database = require("core.database")
     local db = assert(database.get_connection(),
         string.format("Media:get_source_extent: no database connection (media_id=%s)", tostring(self.id)))
-    -- V13: clip.source_in/out are in the NESTED sequence's timebase. Walk
+    -- V13: clip.source_in/out are in the source sequence's timebase. Walk
     -- clips → nested → master.media_refs to find clips referencing this
     -- media. fps_numerator/denominator come from the nested sequence (the
     -- clip's source-side timebase).
@@ -664,8 +720,8 @@ function M:get_source_extent(target_rate)
         SELECT c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator
         FROM clips c
-        JOIN sequences nested ON nested.id = c.nested_sequence_id
-        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         WHERE mr.media_id = ?
     ]]), "Media:get_source_extent: failed to prepare query")
     stmt:bind_value(1, self.id)
@@ -868,6 +924,389 @@ function M.batch_restore_file_state(old_state)
     upd:finalize()
 end
 
+--- Atomically update each Media row's duration_frames AND every
+--- media_ref's duration_frames + TC anchor over that media. The relinker
+--- probes the candidate file's actual extent AND TC origin; both are the
+--- source of truth for the linked file's position in the master sequence's
+--- timebase. Without this sync, the source viewer, ruler, edit math, and
+--- the resolver's containment checks run off pre-relink coordinates —
+--- a stale TC origin produces phantom gaps for clips whose source range
+--- is fully covered by the new file but past the OLD media_ref window
+--- (TSO 2026-05-15 12:20:21: A035_C016.mov lost the last 39 frames of a
+--- 100-frame clip even though the file holds them).
+---
+--- Per-column semantics (post unification):
+---   media.duration_frames — video frames @ media.fps if video present,
+---                           else audio samples (matches Media.create).
+---   media_refs.duration_frames / sequence_start_frame — master.fps
+---     frames for both V and A. For dual-medium masters that's video.fps;
+---     for audio-only it's the audio sample_rate (so samples == frames).
+---     V anchor = start_tc_value. A anchor takes start_tc_value when the
+---     file has video (master.fps == video.fps) else start_tc_audio_samples
+---     (audio-only file, master.fps == sr).
+---   media_refs.source_in_frame / source_out_frame — file-natural units:
+---     V uses video frames @ media.fps (== start_tc_value),
+---     A uses audio samples @ media.audio_sample_rate (== start_tc_audio_samples).
+---     C++ TMB subtracts first_sample_tc / first_frame_tc against these
+---     to land on file-relative position; sub-frame BWF precision lives
+---     entirely on the media row, recovered at the decode boundary.
+---   (TIMECODE-IS-TRUTH invariant: media_refs sit at file_tc_origin
+---    spanning [tc_origin, tc_origin + file_duration). Doctrine pinned
+---    in CLAUDE.md.)
+---
+--- @param duration_changes table {[media_id] = {duration_frames=N,
+---                                              audio_duration_samples=N}}
+--- @param tc_updates       table|nil {[media_id] = {start_tc_value=N,
+---                                                  start_tc_audio_samples=N}}
+---                         When supplied for a media_id, the media_refs over
+---                         that media are rebased to the new TC origin. When
+---                         nil for a media_id, media_refs keep their current
+---                         source_in / sequence_start but DO get
+---                         source_out_frame updated to remain consistent
+---                         with the new duration_frames (the row's
+---                         in-place duration shift).
+--- @return table  old_state for undo:
+---                  {[media_id] = { media_duration_frames = N,
+---                                  media_refs = {[mref_id] = {
+---                                    duration_frames, sequence_start_frame,
+---                                    source_in_frame, source_out_frame }} }}
+-- (DURATION_FIELDS map removed — V and A media_refs use distinct write
+-- shapes after the master-audio-MR unit unification. See apply_one_media.)
+
+-- Validate caller-supplied duration_changes shape (rule 1.14: fail
+-- fast on bad inputs at the boundary).
+local function validate_duration_changes(duration_changes)
+    for mid, entry in pairs(duration_changes) do
+        assert(type(entry) == "table", string.format(
+            "Media.batch_set_durations: entry for %s must be a table",
+            tostring(mid)))
+        local has_v = entry.duration_frames ~= nil
+        local has_a = entry.audio_duration_samples ~= nil
+        assert(has_v or has_a, string.format(
+            "Media.batch_set_durations: entry for %s has neither "
+            .. "duration_frames nor audio_duration_samples", tostring(mid)))
+        if has_v then
+            assert(type(entry.duration_frames) == "number"
+                and entry.duration_frames > 0
+                and entry.duration_frames == math.floor(entry.duration_frames),
+                string.format("Media.batch_set_durations: %s.duration_frames "
+                    .. "must be a positive integer, got %s",
+                    tostring(mid), tostring(entry.duration_frames)))
+        end
+        if has_a then
+            assert(type(entry.audio_duration_samples) == "number"
+                and entry.audio_duration_samples > 0
+                and entry.audio_duration_samples == math.floor(entry.audio_duration_samples),
+                string.format("Media.batch_set_durations: "
+                    .. "%s.audio_duration_samples must be a positive integer, got %s",
+                    tostring(mid), tostring(entry.audio_duration_samples)))
+        end
+    end
+end
+
+-- Validate caller-supplied tc_updates. Two halves:
+--   (1) keys are a subset of duration_changes keys — a TC shift without
+--       a matching duration update would leave source_out inconsistent
+--       (new_origin + old_duration), and the relinker always knows both
+--       extents when it knows the new TC, so an orphan is a planner bug.
+--   (2) each entry's start_tc_value / start_tc_audio_samples (when
+--       present) is a non-negative integer. These values land directly
+--       in media_refs columns the resolver uses for coverage; SQL has
+--       no CHECK on origin, so a bad value here silently produces wrong
+--       clip resolution (TSO 2026-05-15: stale origin → phantom gaps,
+--       same damage class).
+local function assert_tc_field(mid, key, val)
+    assert(type(val) == "number"
+        and val >= 0
+        and val == math.floor(val), string.format(
+        "Media.batch_set_durations: tc_updates[%s].%s must be a "
+        .. "non-negative integer, got %s",
+        tostring(mid), key, tostring(val)))
+end
+
+local function validate_tc_updates(tc_updates, duration_changes)
+    if not tc_updates then return end
+    for mid, entry in pairs(tc_updates) do
+        assert(duration_changes[mid] ~= nil, string.format(
+            "Media.batch_set_durations: tc_updates contains %s but "
+            .. "duration_changes does not — TC rebase would be orphaned",
+            tostring(mid)))
+        assert(type(entry) == "table", string.format(
+            "Media.batch_set_durations: tc_updates[%s] must be a table, "
+            .. "got %s", tostring(mid), type(entry)))
+        if entry.start_tc_value ~= nil then
+            assert_tc_field(mid, "start_tc_value", entry.start_tc_value)
+        end
+        if entry.start_tc_audio_samples ~= nil then
+            assert_tc_field(mid, "start_tc_audio_samples", entry.start_tc_audio_samples)
+        end
+    end
+end
+
+-- Snapshot media.duration_frames + per-mref state (duration + TC
+-- coordinates) so undo can restore the full row. Shape:
+--   { [mid] = { media_duration_frames = N,
+--               mref_types = {[mref_id] = "VIDEO"|"AUDIO"},
+--               media_refs = {[mref_id] = {duration_frames,
+--                                          sequence_start_frame,
+--                                          source_in_frame,
+--                                          source_out_frame}} } }
+local function snapshot_pre_update_state(db, duration_changes)
+    local read_media = assert(
+        db:prepare("SELECT duration_frames FROM media WHERE id = ?"),
+        "Media.batch_set_durations: prepare read_media failed")
+    local read_mrefs = assert(
+        db:prepare([[
+            SELECT mr.id, t.track_type, mr.duration_frames,
+                   mr.sequence_start_frame, mr.source_in_frame,
+                   mr.source_out_frame
+              FROM media_refs mr
+              JOIN tracks t ON t.id = mr.track_id
+             WHERE mr.media_id = ?
+        ]]),
+        "Media.batch_set_durations: prepare read_mrefs failed")
+
+    local out = {}
+    for mid in pairs(duration_changes) do
+        read_media:bind_value(1, mid)
+        assert(read_media:exec(),
+            "Media.batch_set_durations: read_media exec failed")
+        assert(read_media:next(), string.format(
+            "Media.batch_set_durations: media %s not found", tostring(mid)))
+        local rec = { media_duration_frames = read_media:value(0),
+                       media_refs = {}, mref_types = {} }
+        read_media:reset()
+
+        read_mrefs:bind_value(1, mid)
+        assert(read_mrefs:exec(),
+            "Media.batch_set_durations: read_mrefs exec failed")
+        while read_mrefs:next() do
+            local mref_id = read_mrefs:value(0)
+            rec.mref_types[mref_id] = read_mrefs:value(1)
+            rec.media_refs[mref_id] = {
+                duration_frames      = read_mrefs:value(2),
+                sequence_start_frame = read_mrefs:value(3),
+                source_in_frame      = read_mrefs:value(4),
+                source_out_frame     = read_mrefs:value(5),
+            }
+        end
+        read_mrefs:reset()
+        out[mid] = rec
+    end
+    read_media:finalize()
+    read_mrefs:finalize()
+    return out
+end
+
+-- Resolve a media_ref's post-update (timeline_start, duration, source_in,
+-- source_out) given the caller's entry and tc_entry, plus the row's pre-
+-- update snapshot. Returns nil for any of the four fields when the
+-- caller didn't supply an extent for this row's medium (caller wants the
+-- row left alone). All four are returned together so the SQL UPDATE is
+-- atomic; nil means "skip this row".
+--
+-- VIDEO MR: timeline_start = source_in = start_tc_value (master.fps
+--   frames). duration_frames in master.fps frames. source_out = source_in
+--   + duration.
+-- AUDIO MR: source_in / source_out in file-natural samples
+--   (start_tc_audio_samples). sequence_start_frame + duration_frames in
+--   master.fps frames — taken from the video pair when the file has
+--   video (master.fps == video.fps), or from the audio pair when audio-
+--   only (master.fps == sample_rate, so samples already ARE frames at
+--   master.fps). The split keeps the C++ TMB's `source_in -
+--   first_sample_tc` arithmetic intact while making placement units
+--   uniform with video MRs in the same master.
+local function resolve_audio_mref_writes(entry, tc_entry, old_mref)
+    local a_dur_samples = entry.audio_duration_samples
+    if a_dur_samples == nil then return nil end
+    local new_source_in
+    if tc_entry and tc_entry.start_tc_audio_samples ~= nil then
+        new_source_in = tc_entry.start_tc_audio_samples
+    else
+        new_source_in = old_mref.source_in_frame
+    end
+    local new_source_out = new_source_in + a_dur_samples
+
+    -- Pick the master.fps placement anchor by whether the newly-linked
+    -- file has video. Post-normalization (2026-05-16) tc_entry only
+    -- carries start_tc_value when the file has a V stream with an
+    -- authoritative TC origin; audio-only files leave it nil. So:
+    --   V present  → master.fps == video.fps, anchor at video TC frames
+    --   V absent   → master.fps == sample_rate, samples ARE master.fps
+    --                 frames, anchor = source_in (sample TC)
+    local v_anchor = tc_entry and tc_entry.start_tc_value
+    local v_dur    = entry.duration_frames
+    local new_seq_start, new_dur
+    if v_anchor ~= nil and v_dur ~= nil then
+        new_seq_start = v_anchor
+        new_dur            = v_dur
+    elseif v_anchor ~= nil then
+        -- V TC update without V duration: caller passed TC but no extent
+        -- refresh. Keep old extent in its existing unit (master.fps
+        -- frames = video frames for V+A).
+        new_seq_start = v_anchor
+        new_dur            = old_mref.duration_frames
+    else
+        -- Audio-only file. master.fps == sr, so timeline_start (in
+        -- master.fps frames) equals source_in (in samples). This is
+        -- the invariant that retires the 4-second-late bug: ts and
+        -- source_in MUST encode the same TC moment for audio-only,
+        -- and the decoder's file_pos = source_in − first_sample_tc
+        -- lands on 0 when both come from the same probe.
+        new_seq_start = new_source_in
+        new_dur            = a_dur_samples
+    end
+    return new_seq_start, new_dur, new_source_in, new_source_out
+end
+
+local function resolve_video_mref_writes(entry, tc_entry, old_mref)
+    local new_dur = entry.duration_frames
+    if new_dur == nil then return nil end
+    local new_source_in
+    if tc_entry and tc_entry.start_tc_value ~= nil then
+        new_source_in = tc_entry.start_tc_value
+    else
+        new_source_in = old_mref.source_in_frame
+    end
+    return new_source_in, new_dur, new_source_in, new_source_in + new_dur
+end
+
+-- Apply media.duration_frames + media_refs.{duration_frames,
+-- sequence_start_frame, source_in_frame, source_out_frame} for one
+-- media_id. media.duration_frames mirrors Media.create: V extent if
+-- supplied, else A. Per-track-type write shape differs (see resolvers
+-- above) to honor the unified master.fps placement convention.
+local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
+    local media_dur
+    if entry.duration_frames ~= nil then
+        media_dur = entry.duration_frames
+    else
+        media_dur = entry.audio_duration_samples
+    end
+    upd_media:bind_value(1, media_dur)
+    upd_media:bind_value(2, mid)
+    assert(upd_media:exec(), string.format(
+        "Media.batch_set_durations: upd_media exec failed for %s",
+        tostring(mid)))
+    upd_media:reset()
+
+    for mref_id, track_type in pairs(rec.mref_types) do
+        local old_mref = rec.media_refs[mref_id]
+        local new_seq_start, new_dur, new_source_in, new_source_out
+        if track_type == "VIDEO" then
+            new_seq_start, new_dur, new_source_in, new_source_out =
+                resolve_video_mref_writes(entry, tc_entry, old_mref)
+        elseif track_type == "AUDIO" then
+            new_seq_start, new_dur, new_source_in, new_source_out =
+                resolve_audio_mref_writes(entry, tc_entry, old_mref)
+        else
+            assert(false, string.format(
+                "Media.batch_set_durations: unknown track_type '%s' on "
+                .. "media_ref %s", tostring(track_type), tostring(mref_id)))
+        end
+        if new_dur ~= nil then
+            upd_mref:bind_value(1, new_dur)
+            upd_mref:bind_value(2, new_seq_start)   -- sequence_start_frame
+            upd_mref:bind_value(3, new_source_in)        -- source_in_frame
+            upd_mref:bind_value(4, new_source_out)       -- source_out_frame
+            upd_mref:bind_value(5, mref_id)
+            assert(upd_mref:exec(), string.format(
+                "Media.batch_set_durations: upd_mref exec failed for %s",
+                tostring(mref_id)))
+            upd_mref:reset()
+        end
+    end
+end
+
+function M.batch_set_durations(duration_changes, tc_updates)
+    assert(type(duration_changes) == "table",
+        "Media.batch_set_durations: duration_changes table required")
+    assert(tc_updates == nil or type(tc_updates) == "table",
+        "Media.batch_set_durations: tc_updates must be table or nil")
+    validate_tc_updates(tc_updates, duration_changes)
+    validate_duration_changes(duration_changes)
+
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_set_durations: no database connection")
+
+    local old_state = snapshot_pre_update_state(db, duration_changes)
+
+    local upd_media = assert(
+        db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_set_durations: prepare upd_media failed")
+    local upd_mref = assert(
+        db:prepare([[
+            UPDATE media_refs
+               SET duration_frames = ?, sequence_start_frame = ?,
+                   source_in_frame = ?, source_out_frame = ?
+             WHERE id = ?
+        ]]),
+        "Media.batch_set_durations: prepare upd_mref failed")
+    for mid, entry in pairs(duration_changes) do
+        local tc_entry
+        if tc_updates ~= nil then tc_entry = tc_updates[mid] end
+        apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, old_state[mid])
+        mark_dirty(mid)
+    end
+    upd_media:finalize()
+    upd_mref:finalize()
+
+    return old_state
+end
+
+--- Undo counterpart: restore media.duration_frames and per-mref
+--- duration_frames from a table previously returned by batch_set_durations.
+function M.batch_restore_durations(old_state)
+    assert(type(old_state) == "table",
+        "Media.batch_restore_durations: old_state table required")
+    local database = require("core.database")
+    local db = assert(database.get_connection(),
+        "Media.batch_restore_durations: no database connection")
+
+    local upd_media = assert(
+        db:prepare("UPDATE media SET duration_frames = ? WHERE id = ?"),
+        "Media.batch_restore_durations: prepare upd_media failed")
+    local upd_mref = assert(
+        db:prepare([[
+            UPDATE media_refs
+               SET duration_frames = ?, sequence_start_frame = ?,
+                   source_in_frame = ?, source_out_frame = ?
+             WHERE id = ?
+        ]]),
+        "Media.batch_restore_durations: prepare upd_mref failed")
+    for mid, rec in pairs(old_state) do
+        upd_media:bind_value(1, rec.media_duration_frames)
+        upd_media:bind_value(2, mid)
+        assert(upd_media:exec(), string.format(
+            "Media.batch_restore_durations: upd_media exec failed for %s",
+            tostring(mid)))
+        upd_media:reset()
+        for mref_id, old_mref in pairs(rec.media_refs) do
+            -- old_mref is the full pre-update snapshot (duration + TC
+            -- anchor). Pre-2026-05-15 callers wrote it as a bare integer
+            -- duration; reject those — they'd silently leave TC anchors
+            -- stale on undo.
+            assert(type(old_mref) == "table",
+                "Media.batch_restore_durations: old_state media_refs "
+                .. "entries must be {duration_frames, sequence_start_frame, "
+                .. "source_in_frame, source_out_frame} tables")
+            upd_mref:bind_value(1, old_mref.duration_frames)
+            upd_mref:bind_value(2, old_mref.sequence_start_frame)
+            upd_mref:bind_value(3, old_mref.source_in_frame)
+            upd_mref:bind_value(4, old_mref.source_out_frame)
+            upd_mref:bind_value(5, mref_id)
+            assert(upd_mref:exec(), string.format(
+                "Media.batch_restore_durations: upd_mref exec failed for %s",
+                tostring(mref_id)))
+            upd_mref:reset()
+        end
+        mark_dirty(mid)
+    end
+    upd_media:finalize()
+    upd_mref:finalize()
+end
+
 --- Batch-assign offline_note for a set of media rows. Same shape as
 --- batch_set_file_paths: pass {[media_id] = json_string_or_nil}. Values
 --- of nil clear the note (relink succeeded, no diagnostic to display).
@@ -1007,8 +1446,7 @@ local function include_extent_row(stmt, media_rates, result)
     local src_out          = stmt:value(2)
     local fps_num          = stmt:value(3)
     local fps_den          = stmt:value(4)
-    local audio_sample_rate = stmt:value(5)
-    local track_type       = stmt:value(6)
+    local track_type       = stmt:value(5)
     assert(src_in, string.format(
         "batch_get_source_extents: clip on media %s has NULL source_in_frame",
         tostring(mid)))
@@ -1034,17 +1472,17 @@ local function include_extent_row(stmt, media_rates, result)
         result[mid].video = bucket
         include_in_extent(bucket, src_in, src_out)
     elseif track_type == "AUDIO" and rates.audio_sample_rate then
-        assert(audio_sample_rate and audio_sample_rate > 0, string.format(
-            "batch_get_source_extents: nested sequence for media %s has no "
-            .. "audio_sample_rate; cannot scale audio clip extent", tostring(mid)))
+        -- 018: clip.source_*_frame is in master.fps frames for AUDIO too.
+        -- Convert (frame) → samples using the file's audio rate. Under
+        -- FR-004: the master row's audio_sample_rate is NULL — rates.audio_sample_rate
+        -- carries the file-native rate provided by the caller.
         local target = rates.audio_sample_rate
-        if math.abs(audio_sample_rate - target) > 0.01 then
-            src_in  = math.floor(src_in  * target / audio_sample_rate + 0.5)
-            src_out = math.floor(src_out * target / audio_sample_rate + 0.5)
-        end
+        local samples_per_frame = target * fps_den / fps_num
+        local src_in_samples  = math.floor(src_in  * samples_per_frame + 0.5)
+        local src_out_samples = math.floor(src_out * samples_per_frame + 0.5)
         local bucket = result[mid].audio or { rate = target }
         result[mid].audio = bucket
-        include_in_extent(bucket, src_in, src_out)
+        include_in_extent(bucket, src_in_samples, src_out_samples)
     end
 end
 
@@ -1060,10 +1498,10 @@ local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rat
     local sql = string.format([[
         SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator,
-               nested.audio_sample_rate, t.track_type
+               t.track_type
         FROM clips c
-        JOIN sequences nested ON nested.id = c.nested_sequence_id
-        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         JOIN tracks t ON t.id = c.track_id
         WHERE mr.media_id IN (%s)
     ]], table.concat(phs, ","))
@@ -1238,12 +1676,12 @@ function M:delete()
     assert(self.id and self.id ~= "", "Media:delete: id required")
 
     -- V13: clips don't carry media_id directly. The reachable clips are
-    -- those whose nested_sequence_id points at a master sequence that has
+    -- those whose sequence_id points at a master sequence that has
     -- a media_ref to this media. Find them via media_refs.
     -- properties table has no FK cascade — must clean up explicitly.
     local clip_ids_stmt = db:prepare([[
         SELECT c.id FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
          WHERE mr.media_id = ?
     ]])
     if clip_ids_stmt then

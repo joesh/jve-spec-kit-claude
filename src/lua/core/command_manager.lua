@@ -37,6 +37,49 @@ local command_event_depth = 0
 -- Depth > 0 = nested execution (record to DB but skip transaction/UI refresh)
 local execution_depth = 0
 
+-- Post-commit signal-emit queue.
+--
+-- Some signals (notably `sequence_list_changed`) drive UI consumers that
+-- re-pull from the DB. Emitting from inside a command executor would let
+-- those consumers see in-progress transaction state — and worse, would
+-- leave them with a stale view if the command later rolls back. The queue
+-- defers emits until the transaction (or undo group) commits; rollback
+-- discards them.
+--
+-- Use M.queue_post_commit_emit(signal, ...) from within an executor. The
+-- flush points are wired to the per-command commit (no undo group) and to
+-- end_undo_group's outermost commit; discard points are the rollback paths.
+local _post_commit_emits = {}
+
+local function flush_post_commit_emits()
+    if #_post_commit_emits == 0 then return end
+    local pending = _post_commit_emits
+    _post_commit_emits = {}
+    for _, entry in ipairs(pending) do
+        Signals.emit(unpack(entry))
+    end
+end
+
+local function discard_post_commit_emits()
+    _post_commit_emits = {}
+end
+
+--- Queue a signal emit to fire after the surrounding command's
+--- transaction commits. Argument list mirrors Signals.emit.
+---
+--- Safe to call from any context: when no command is executing
+--- (execution_depth == 0, e.g. initial project open's importer pass),
+--- there's no commit to defer to, so the emit fires immediately.
+function M.queue_post_commit_emit(signal_name, ...)
+    assert(type(signal_name) == "string" and signal_name ~= "",
+        "queue_post_commit_emit: signal_name required")
+    if execution_depth == 0 then
+        Signals.emit(signal_name, ...)
+        return
+    end
+    _post_commit_emits[#_post_commit_emits + 1] = { signal_name, ... }
+end
+
 -- Root command tracking for automatic undo grouping
 -- When a command executes nested commands, they all share the root's sequence_number as undo_group_id
 -- Nested commands also inherit the root's playhead and pre-selection context (same user action)
@@ -348,6 +391,12 @@ end
 --   UI caller having to do it themselves.
 -- - If active context is missing, we error (this is a bug, not a case to
 --   "defensively" hide).
+-- - Return value: the executor's result table on a successful dispatch, or
+--   `nil` when the dispatch was aborted because `effective_source` produced
+--   a user-facing problem (no source loaded, non-insertable selection,
+--   cycle). The popup is shown before this function returns; callers may
+--   treat `nil` as "user has been told what went wrong, no further action
+--   needed".
 function M.execute_interactive(command_name, params)
     params = params or {}
 
@@ -378,6 +427,36 @@ function M.execute_interactive(command_name, params)
     local ts = require("ui.timeline.timeline_state")
     local playhead_pre = ts.get_playhead_position()
 
+    -- 015 F2: resolve source_sequence_id for commands that declare it
+    -- (Insert, Overwrite). The resolver is destination-aware — passing
+    -- active_sequence_id lets it detect self/transitive cycles upfront
+    -- and surface a user-facing popup instead of bubbling a Lua
+    -- stacktrace warning out of _place_shared.pick_endpoints.
+    -- Commands that don't declare source_sequence_id in their arg spec
+    -- skip this entirely — the field is irrelevant to them.
+    --
+    -- Object-form dispatch (Command object instead of a name string) is
+    -- used by callers that build their own param table (e.g. inspectable
+    -- setters); those carry source_sequence_id themselves when needed and
+    -- don't benefit from auto-injection.
+    if type(command_name) == "string" and params.source_sequence_id == nil then
+        local spec = registry.get_spec(command_name)
+        if spec and spec.args and spec.args.source_sequence_id then
+            assert(active_sequence_id and active_sequence_id ~= "", string.format(
+                "execute_interactive: command %s requires source_sequence_id "
+                .. "resolution but no active sequence is set", command_name))
+            local effective_source = require("core.effective_source")
+            local seq, problem = effective_source.resolve_for_edit(
+                active_sequence_id, command_name)
+            if problem ~= nil then
+                require("ui.edit_source_popup").show(problem)
+                if wrapped_ui then M.end_command_event() end
+                return nil
+            end
+            params.source_sequence_id = seq
+        end
+    end
+
     local result = nil
     local executed_command = nil
     local status, exec_err = xpcall(function()
@@ -385,26 +464,6 @@ function M.execute_interactive(command_name, params)
             local pid, pid_err = ensure_active_project_id()
             assert(pid, pid_err)
             params.project_id = pid
-        end
-        -- Focus-aware routing: resolve sequence_id and playhead from active monitor.
-        -- This ensures mark/playhead commands target the focused viewer (source or timeline),
-        -- matching FCP7/Resolve behavior where I/O keys target the active viewer.
-        local ok_pm, pm = pcall(require, "ui.panel_manager")
-        local active_monitor = nil
-        if ok_pm and pm and pm.get_active_sequence_monitor then
-            active_monitor = pm.get_active_sequence_monitor()
-        end
-        if params.sequence_id == nil then
-            if active_monitor and active_monitor.sequence_id then
-                params.sequence_id = active_monitor.sequence_id
-            elseif active_sequence_id ~= nil and active_sequence_id ~= "" then
-                params.sequence_id = active_sequence_id
-            end
-        end
-        if params.playhead == nil then
-            if active_monitor and active_monitor.engine and active_monitor.engine.get_position then
-                params.playhead = active_monitor.engine:get_position()
-            end
         end
         result, executed_command = M.execute(command_name, params)
     end, debug.traceback)
@@ -451,8 +510,13 @@ local function rollback_mutations()
 end
 
 -- Rollback an undo group: DB savepoint, cursor, in-memory mutations, abort flag.
+-- The savepoint rollback unwinds any cursor write performed during the failed
+-- command, so `history.invalidate_cas_baseline()` must run before save_undo_position
+-- — otherwise the next CAS compares against a baseline reflecting a write that
+-- no longer exists in the DB and the assertion fires spuriously.
 local function rollback_undo_group(group_id)
     db_module.rollback_to_savepoint("undo_group_" .. group_id)
+    history.invalidate_cas_baseline()
     local cursor_on_entry = history.get_undo_group_cursor_on_entry()
     history.set_current_sequence_number(cursor_on_entry)
     history.save_undo_position()
@@ -462,6 +526,8 @@ end
 
 -- SAVEPOINT-aware rollback: undo group → rollback to savepoint; standalone → full rollback.
 -- Both paths restore in-memory clip state from the mutation transaction snapshot.
+-- Also drops any queued post-commit signal emits: a command that rolled back
+-- must not notify listeners about state that's no longer in the DB.
 local function rollback_transaction()
     assert(db_module.has_connection(), "rollback_transaction: no database connection")
     local group_id = history.get_current_undo_group_id()
@@ -469,8 +535,12 @@ local function rollback_transaction()
         rollback_undo_group(group_id)
     else
         db_module.rollback()
+        -- Standalone rollback also unwinds any in-progress cursor write; the
+        -- CAS baseline must be re-seeded from DB on the next save.
+        history.invalidate_cas_baseline()
         rollback_mutations()
     end
+    discard_post_commit_emits()
 end
 
 local function normalize_command(command_or_name, params)
@@ -875,6 +945,22 @@ function M.init(sequence_id, project_id)
     -- Per-Sequence Undo: activate the initial sequence's timeline stack
     M.activate_timeline_stack(sequence_id)
 
+    -- 017: bootstrap the role-bound playback transport for this project so
+    -- TogglePlay / MovePlayhead / shuttle dispatch correctly. Idempotent
+    -- (transport.init asserts if already initialized) — guard so tests that
+    -- call command_manager.init repeatedly don't trip the assert. Wrapped
+    -- in pcall because transport.init → PlaybackEngine.new pulls in
+    -- qt_constants which legacy headless tests cannot satisfy; tests
+    -- exercising the new transport path bootstrap qt_constants themselves
+    -- before calling command_manager.init.
+    pcall(function()
+        local transport = require("core.playback.transport")
+        if transport.bound_project_id() ~= project_id then
+            if transport.is_bootstrapped() then transport.shutdown() end
+            transport.init(project_id)
+        end
+    end)
+
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
     local Sequence = require("models.sequence")
     local seq = Sequence.load(sequence_id)
@@ -1212,7 +1298,23 @@ local function execute_nested_command(command, exec_scope)
         local saved = save_command_with_collision_retry(command, db)
         sequence_number = command.sequence_number  -- retry may have reallocated
         if saved then
-            history.set_current_sequence_number(sequence_number)
+            -- Advance, never regress: a parent nested command (e.g. BatchRippleEdit
+            -- at seq=N) that spawned its own deeper-nested child (e.g. SplitClip
+            -- at seq=N+k) must NOT pull the cursor back to N. The cursor is the
+            -- undo head; if it sits below the deepest child, find_group_members
+            -- (which clamps with sequence_number <= cursor) silently drops the
+            -- deeper child from the undo walk and its undoer never runs.
+            local current = history.get_current_sequence_number()
+            if not current or current < sequence_number then
+                history.set_current_sequence_number(sequence_number)
+                -- Advance the tip alongside the cursor on the stack the
+                -- nested command lands on (matches column, not active stack
+                -- — see the top-level commit comment for why).
+                local tip_stack = command.sequence_id
+                    and history.stack_id_for_sequence(command.sequence_id)
+                    or history.GLOBAL_STACK_ID
+                history.set_branch_tip_on_stack(tip_stack, sequence_number)
+            end
             log.event("Nested command %s (seq=%d) saved, group=%s",
                 command.type, sequence_number, tostring(root_command_sequence_number))
             apply_command_mutations(command)
@@ -1246,7 +1348,70 @@ local function execute_nested_command(command, exec_scope)
 end
 
 -- Main execute function
+-- 017 FR-005/020/021a: sequence_id + playhead auto-injection.
+--
+-- Single rule, driven by the schema arg's `required` flag:
+--   args.sequence_id = { required = true }   → ACTIVE-RECORD routing.
+--     Edit-class commands (Insert, Overwrite, Blade, Trim, Nudge,
+--     SelectClips, AddTrack, etc.) always land on the active record
+--     regardless of what the user is parked on — you can't edit the
+--     master from the source tab.
+--   args.sequence_id = {}  (not required)     → DISPLAYED-SIDE routing.
+--     Movement-class (MovePlayhead, GoToStart/End, SetMark, etc.) acts
+--     on whatever the user is parked on (source tab/viewer or record
+--     timeline) per transport.engine_for_target().
+--
+-- Overrides:
+--   SPEC.targets_rec_sequence = true   force ACTIVE-RECORD (rarely needed
+--     since the required-flag rule covers most cases; provided for
+--     commands that don't declare sequence_id in args).
+--   SPEC.caller_supplied_sequence_id = true   no injection at all. Used
+--     by sequence-management commands (DeleteSequence, RenameSequence)
+--     and metadata setters where the caller (menu, dialog, tree click)
+--     always supplies an explicit id.
+local function inject_sequence_context(command_or_name, params)
+    if type(command_or_name) ~= "string" then return end
+    if params.sequence_id ~= nil then return end
+
+    local spec = registry.get_spec(command_or_name)
+    if spec == nil then return end
+    local seq_arg = spec.args and spec.args.sequence_id
+    if seq_arg == nil then return end
+
+    if spec.caller_supplied_sequence_id == true then return end
+
+    if spec.targets_rec_sequence == true or seq_arg.required == true then
+        if active_sequence_id ~= nil and active_sequence_id ~= "" then
+            params.sequence_id = active_sequence_id
+        end
+        return
+    end
+
+    -- Movement-class routing — single source: transport.engine_for_target().
+    -- Pre-bootstrap (no transport, e.g. tests that command_manager.init
+    -- without opening a project): use active_sequence_id. That's the same
+    -- value transport.engine_for_target() would resolve to once bootstrapped
+    -- under the default target ('record' per FR-008a), so it's not a
+    -- competing source — it's the same source, observed earlier.
+    local transport = require("core.playback.transport")
+    if transport.is_bootstrapped() then
+        local te = transport.engine_for_target()
+        if te ~= nil and te.loaded_sequence_id ~= nil then
+            params.sequence_id = te.loaded_sequence_id
+            if params.playhead == nil then
+                params.playhead = te:get_position()
+            end
+            return
+        end
+    end
+    if active_sequence_id ~= nil and active_sequence_id ~= "" then
+        params.sequence_id = active_sequence_id
+    end
+end
+
 function M.execute(command_or_name, params)
+    params = params or {}
+    inject_sequence_context(command_or_name, params)
     -- Auto-wrap in command event if none active (avoids requiring every call site to wrap)
     local auto_wrapped = false
     if not command_event_origin or command_event_depth == 0 then
@@ -1634,16 +1799,31 @@ function M._execute_body(command_or_name, params)
             result.result_data = command:serialize()
 
             -- Move HEAD - but only if nested commands haven't already advanced past us
-            -- (nested commands chain their parent_sequence_number through the cursor)
+            -- (nested commands chain their parent_sequence_number through the cursor).
+            -- New commits advance BOTH cursor and tip: tip = leaf of the user's
+            -- current branch, which is exactly the just-committed command. If the
+            -- user had undone before committing, the prior subtree is orphaned
+            -- (still in the commands table, but unreachable via Cmd+Shift+Z because
+            -- the tip no longer points there). Tip MUST be set on the stack where
+            -- the command actually lands (command.sequence_id column), NOT the
+            -- active stack — SetClipProperty has sequence_id in its spec so active
+            -- stack is per-seq, but the column ends up NULL and the command lands
+            -- on GLOBAL; tip on per-seq would be a no-op for that command's redo.
+            local current_cursor = history.get_current_sequence_number()
+            local should_advance = not current_cursor or current_cursor < sequence_number
             if command.sequence_id then
-                -- Sequence-scoped: advance the sequence's cursor
-                local current_cursor = history.get_current_sequence_number()
-                if not current_cursor or current_cursor < sequence_number then
+                if should_advance then
                     history.set_current_sequence_number(sequence_number)
+                    history.set_branch_tip_on_stack(
+                        history.stack_id_for_sequence(command.sequence_id),
+                        sequence_number)
                 end
                 history.save_undo_position()
             else
-                -- Project-level: advance the global cursor
+                if should_advance then
+                    history.set_branch_tip_on_stack(
+                        history.GLOBAL_STACK_ID, sequence_number)
+                end
                 history.set_global_cursor(sequence_number)
             end
 
@@ -1718,6 +1898,10 @@ function M._execute_body(command_or_name, params)
                     clip_state.commit_mutation_transaction()
                     snapshot_taken = false
                 end
+                -- Transaction is committed. Any post-commit emits queued by
+                -- the executor (e.g. CreateSequence's sequence_list_changed)
+                -- can now fire — DB state is authoritative.
+                flush_post_commit_emits()
             end
             perf.log("db_commit")
             perf.reset()
@@ -2748,6 +2932,10 @@ function M.end_undo_group()
     -- Commit + notify once the outermost group closes
     if not history.get_current_undo_group_id() then
         db_module.commit()
+        -- Outermost group is now committed. Flush queued post-commit emits
+        -- accumulated by member commands. Discard happens via rollback paths
+        -- when the group was aborted.
+        flush_post_commit_emits()
         -- Notify listeners (edit history, etc.). Nested commands don't fire
         -- notify_command_event, and the non-undoable wrapper (e.g. DeleteSelection)
         -- goes through execute_non_recording which doesn't notify either.

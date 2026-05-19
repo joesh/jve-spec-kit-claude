@@ -56,7 +56,7 @@ local db = database.get_connection()
 
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('proj1', 'Test', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)",
     now, now))
 
 --------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ check("masterclip created", mc_id ~= nil)
 
 -- Query the video stream clip's source_in
 local stmt = assert(db:prepare([[
-    SELECT c.source_in_frame, c.source_out_frame, c.timeline_start_frame
+    SELECT c.source_in_frame, c.source_out_frame, c.sequence_start_frame
     FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
     WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
@@ -193,15 +193,15 @@ stmt:bind_value(1, mc_id)
 assert(stmt:exec() and stmt:next())
 local source_in = stmt:value(0)
 local source_out = stmt:value(1)
-local timeline_start = stmt:value(2)
+local sequence_start = stmt:value(2)
 stmt:finalize()
 
 check("video source_in = TC origin (1148001)", source_in == 1148001,
     string.format("expected 1148001, got %s", tostring(source_in)))
 check("video source_out = TC + duration", source_out == 1148001 + 250,
     string.format("expected %d, got %s", 1148001 + 250, tostring(source_out)))
-check("video timeline_start = TC origin", timeline_start == 1148001,
-    string.format("expected 1148001, got %s", tostring(timeline_start)))
+check("video sequence_start = TC origin", sequence_start == 1148001,
+    string.format("expected 1148001, got %s", tostring(sequence_start)))
 
 -- Query audio stream clip's source_in
 local astmt = assert(db:prepare([[
@@ -235,7 +235,7 @@ local mc_id_0 = Sequence.ensure_master("m_tc0", "proj1")
 check("TC=0 masterclip created", mc_id_0 ~= nil)
 
 local stmt0 = assert(db:prepare([[
-    SELECT c.source_in_frame, c.timeline_start_frame
+    SELECT c.source_in_frame, c.sequence_start_frame
     FROM media_refs c
     JOIN tracks t ON c.track_id = t.id
     WHERE c.owner_sequence_id = ? AND t.track_type = 'VIDEO' AND 1=1
@@ -247,40 +247,51 @@ local ts0 = stmt0:value(1)
 stmt0:finalize()
 
 check("TC=0 video source_in = 0", si0 == 0, "got: " .. tostring(si0))
-check("TC=0 video timeline_start = 0", ts0 == 0, "got: " .. tostring(ts0))
+check("TC=0 video sequence_start = 0", ts0 == 0, "got: " .. tostring(ts0))
 
 --------------------------------------------------------------------------------
--- Half 2: Output bounds — get_audio_start_tc derivation
+-- Half 2: get_audio_start_tc reads start_tc_audio_samples directly
 --------------------------------------------------------------------------------
+-- Post-normalization (2026-05-16) get_audio_start_tc no longer derives from
+-- start_tc_value * sr / fps. That derive path bridged the dual-unit overload
+-- (audio TC stored under start_tc_value with rate==sr for audio-only files),
+-- which caused 4-second-late playback when metadata drifted from the file's
+-- BWF TC. Audio TC now lives exclusively in start_tc_audio_samples; missing
+-- → returns nil, callers fail via their own has_audio gates.
 
-print("\n--- Audio TC derivation bounds ---")
+print("\n--- get_audio_start_tc reads start_tc_audio_samples directly ---")
 
--- Normal derivation: video_tc=1000 @ 25fps → audio = 1000 * 48000 / 25 = 1920000
-local m_derive = Media.create({
-    id = "m_derive", project_id = "proj1", name = "derive.mov",
-    file_path = "/nonexistent/derive.mov",
+-- Direct read: metadata carries explicit audio samples; no derivation.
+local m_direct = Media.create({
+    id = "m_direct", project_id = "proj1", name = "direct.mov",
+    file_path = "/nonexistent/direct.mov",
     duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
     audio_channels = 1, audio_sample_rate = 48000,
+    metadata = json.encode({
+        start_tc_value = 1000, start_tc_rate = 25,
+        start_tc_audio_samples = 1920000, start_tc_audio_rate = 48000,
+    }),
+})
+m_direct:save(db)
+local direct_atc, direct_sr = m_direct:get_audio_start_tc()
+check("direct audio TC = 1920000", direct_atc == 1920000,
+    string.format("expected 1920000, got %s", tostring(direct_atc)))
+check("direct sample rate = 48000", direct_sr == 48000)
+
+-- V-only metadata (no start_tc_audio_samples): get_audio_start_tc returns nil
+-- rather than deriving. Callers must gate on has_audio.
+local m_v_only = Media.create({
+    id = "m_v_only", project_id = "proj1", name = "vonly.mov",
+    file_path = "/nonexistent/vonly.mov",
+    duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
+    audio_channels = 0,
     metadata = json.encode({start_tc_value = 1000, start_tc_rate = 25}),
 })
-m_derive:save(db)
-local derived_atc, derived_sr = m_derive:get_audio_start_tc()
-check("derived audio TC = 1920000", derived_atc == 1920000,
-    string.format("expected 1920000, got %s", tostring(derived_atc)))
-check("derived sample rate = 48000", derived_sr == 48000)
-
--- Invalid derivation: start_tc_rate = 0 should assert
-local m_bad_rate = Media.create({
-    id = "m_bad_rate", project_id = "proj1", name = "bad.mov",
-    file_path = "/nonexistent/bad.mov",
-    duration_frames = 100, fps_numerator = 25, fps_denominator = 1,
-    audio_channels = 1, audio_sample_rate = 48000,
-    metadata = json.encode({start_tc_value = 100, start_tc_rate = 0}),
-})
-m_bad_rate:save(db)
-expect_error("audio TC derivation asserts on fps=0", function()
-    m_bad_rate:get_audio_start_tc()
-end, "start_tc_rate must be positive")
+m_v_only:save(db)
+local v_only_atc, v_only_sr = m_v_only:get_audio_start_tc()
+check("V-only file: audio TC = nil (no derive from V)", v_only_atc == nil,
+    string.format("expected nil, got %s", tostring(v_only_atc)))
+check("V-only file: sample rate = nil", v_only_sr == nil)
 
 --------------------------------------------------------------------------------
 -- Summary

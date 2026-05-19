@@ -4,7 +4,7 @@
 -- nested edit sequence, the clips table has exactly 2 new rows (one V, one A —
 -- NOT per-channel — channels live in media_refs_channel_state / clip_channel_
 -- override and are resolved at playback, per FR-003 and resolver.md §CT-R5).
--- Both clips reference the master via nested_sequence_id; master_layer_track_id
+-- Both clips reference the master via source_sequence_id; master_layer_track_id
 -- is NULL (tracks master default); fps_mismatch_policy is non-NULL (frozen at
 -- Insert per data-model.md §Decisions). One clip_links.link_group_id groups
 -- them.
@@ -37,22 +37,22 @@ end
 local function build_fixture(project_fps_mismatch_policy)
     local db = fresh_db()
     assert(db:exec(string.format(
-        [[INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-          VALUES ('p1', 'p', '%s', 0, 0)]], project_fps_mismatch_policy)))
+        [[INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+          VALUES ('p1', 'p', '%s', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0)]], project_fps_mismatch_policy)))
 
     -- Master at 25/1, stereo 48k audio, 1920x1080.
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('m', 'p1', 'master', 'master', 25, 1, NULL, 1920, 1080, 0, 0)
     ]]))
     -- Edit sequence (nested) at 24/1.
     assert(db:exec([[
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))
 
     -- Tracks.
@@ -90,17 +90,20 @@ local function build_fixture(project_fps_mismatch_policy)
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100,
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 100, 0, 100, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
+    -- Source range in file-natural samples (192000 = 4s @ 48k). Placement
+    -- (sequence_start_frame, duration_frames) in master.fps frames at master
+    -- 25fps: 4s = 100 frames.
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 192000, 0, 192000,
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'med-a', 0, 192000, 0, 100, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
 
@@ -124,9 +127,9 @@ end
 
 local function load_clip_row(db, clip_id)
     local stmt = db:prepare([[
-        SELECT id, owner_sequence_id, track_id, nested_sequence_id,
+        SELECT id, owner_sequence_id, track_id, sequence_id,
                source_in_frame, source_out_frame,
-               timeline_start_frame, duration_frames,
+               sequence_start_frame, duration_frames,
                master_layer_track_id, fps_mismatch_policy,
                name, enabled, volume, playhead_frame
         FROM clips WHERE id = ?
@@ -138,10 +141,10 @@ local function load_clip_row(db, clip_id)
         id                     = stmt:value(0),
         owner_sequence_id      = stmt:value(1),
         track_id               = stmt:value(2),
-        nested_sequence_id     = stmt:value(3),
+        source_sequence_id     = stmt:value(3),
         source_in_frame        = stmt:value(4),
         source_out_frame       = stmt:value(5),
-        timeline_start_frame   = stmt:value(6),
+        sequence_start_frame   = stmt:value(6),
         duration_frames        = stmt:value(7),
         master_layer_track_id  = stmt:value(8),
         fps_mismatch_policy    = stmt:value(9),
@@ -166,7 +169,7 @@ end
 
 local function clips_on_track(db, track_id)
     local stmt = db:prepare(
-        "SELECT id FROM clips WHERE track_id = ? ORDER BY timeline_start_frame")
+        "SELECT id FROM clips WHERE track_id = ? ORDER BY sequence_start_frame")
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "clips_on_track: exec failed")
     local ids = {}
@@ -186,8 +189,8 @@ local function run_case(label, project_policy, explicit_arg_policy,
 
     local result = insert_mod.execute({
         sequence_id = ids.edit_id,
-        nested_sequence_id = ids.master_id,
-        timeline_start_frame = 0,
+        source_sequence_id = ids.master_id,
+        sequence_start_frame = 0,
         target_video_track_id = ids.edit_v1,
         target_audio_track_id = ids.edit_a1,
         fps_mismatch_policy = explicit_arg_policy,  -- nil = inherit
@@ -220,15 +223,15 @@ local function run_case(label, project_policy, explicit_arg_policy,
     local ac = load_clip_row(db, a_clips[1])
 
     -- Fields shared by both V and A: owner/nested, layer override NULL,
-    -- policy frozen, source_in 0, timeline_start 0, owner-timebase duration,
+    -- policy frozen, source_in 0, sequence_start 0, owner-timebase duration,
     -- enabled, name.
     for _, c in ipairs({ vc, ac }) do
         assert(c.owner_sequence_id == ids.edit_id, string.format(
             "clip %s owner_sequence_id=%s expected=%s",
             c.id, c.owner_sequence_id, ids.edit_id))
-        assert(c.nested_sequence_id == ids.master_id, string.format(
-            "clip %s nested_sequence_id=%s expected=%s",
-            c.id, c.nested_sequence_id, ids.master_id))
+        assert(c.source_sequence_id == ids.master_id, string.format(
+            "clip %s source_sequence_id=%s expected=%s",
+            c.id, c.source_sequence_id, ids.master_id))
         assert(c.master_layer_track_id == nil,
             string.format("clip %s master_layer_track_id must be NULL (inherit master default); got %s",
                 c.id, tostring(c.master_layer_track_id)))
@@ -237,9 +240,9 @@ local function run_case(label, project_policy, explicit_arg_policy,
             c.id, tostring(c.fps_mismatch_policy), expected_policy))
         assert(c.source_in_frame == 0, string.format(
             "clip %s source_in_frame=%d expected 0", c.id, c.source_in_frame))
-        assert(c.timeline_start_frame == 0, string.format(
-            "clip %s timeline_start_frame=%d expected 0",
-            c.id, c.timeline_start_frame))
+        assert(c.sequence_start_frame == 0, string.format(
+            "clip %s sequence_start_frame=%d expected 0",
+            c.id, c.sequence_start_frame))
         assert(c.duration_frames == expected_duration_frames, string.format(
             "clip %s duration_frames=%d expected %d (%s)",
             c.id, c.duration_frames, expected_duration_frames, expected_policy))
@@ -248,15 +251,15 @@ local function run_case(label, project_policy, explicit_arg_policy,
             "clip name must be non-empty string (schema NOT NULL)")
     end
 
-    -- Per-medium source_out: different units on purpose. Video clip's
-    -- source range is in master video frames (100 at 25fps); audio clip's
-    -- is in master audio samples (192000 at 48kHz) — both four wall-clock
-    -- seconds, different unit systems.
+    -- 018 FR-008: BOTH video AND audio clip source ranges are now in
+    -- master.fps frames (with sample residual in source_*_subframe). 4
+    -- seconds at 25fps + 48 kHz is exactly 100 frames with subframe=0;
+    -- the legacy "audio = 192000 samples" expectation was the FR-025 bug.
     assert(vc.source_out_frame == 100, string.format(
         "video clip source_out_frame=%d expected 100 (master video frames)",
         vc.source_out_frame))
-    assert(ac.source_out_frame == 192000, string.format(
-        "audio clip source_out_frame=%d expected 192000 (master audio samples)",
+    assert(ac.source_out_frame == 100, string.format(
+        "audio clip source_out_frame=%d expected 100 (master.fps frames per 018 FR-008)",
         ac.source_out_frame))
 
     -- Link group: one id shared between the V and A clips.

@@ -21,13 +21,13 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- Create a masterclip sequence to prove marks work on masterclips too
 local seq = Sequence.create("Test MC", "project",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    {id = "mc_1", kind = "master", audio_sample_rate = 48000})
+    {id = "mc_1", kind = "master"})  -- 018 INV-7
 assert(seq:save(), "setup: failed to save sequence")
 
 -- Load set_marks module and register executors directly

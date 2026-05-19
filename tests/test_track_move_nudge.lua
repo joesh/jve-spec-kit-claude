@@ -33,13 +33,13 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested',
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 240, 0,
         '[]', '[]', '[]', 0, %d, %d);
 
@@ -74,38 +74,38 @@ db:exec(string.format([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for media_dest
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_dest', 'default_project', 'media_dest_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_dest', 'default_project', 'media_dest_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_dest', 'master_media_dest', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_dest' WHERE id = 'master_media_dest';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_dest', 'default_project', 'master_media_dest', 'master_v_media_dest', 'media_dest', 0, 2500, 0, 2500, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_dest', 'default_project', 'master_media_dest', 'master_v_media_dest', 'media_dest', 0, 2500, 0, 2500, 48000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_keep
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_keep', 'default_project', 'media_keep_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_keep', 'default_project', 'media_keep_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_keep', 'master_media_keep', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_keep' WHERE id = 'master_media_keep';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_keep', 'default_project', 'master_media_keep', 'master_v_media_keep', 'media_keep', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_keep', 'default_project', 'master_media_keep', 'master_v_media_keep', 'media_keep', 0, 2000, 0, 2000, 48000, 1, 1.0, 0, 0, 0);
 
 -- V13 master sequence + track + media_ref for media_move
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_move', 'default_project', 'media_move_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_move', 'default_project', 'media_move_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_move', 'master_media_move', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_move' WHERE id = 'master_media_move';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_move', 'default_project', 'master_media_move', 'master_v_media_move', 'media_move', 0, %d, 0, %d, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_move', 'default_project', 'master_media_move', 'master_v_media_move', 'media_move', 0, %d, 0, %d, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_dest', 'default_project', 'Clip Dest', 'track_v2', 'master_media_dest', 'default_sequence', 500, 2500, 0, 2500, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_keep', 'default_project', 'Clip Keep', 'track_v1', 'master_media_keep', 'default_sequence', 0, 2000, 0, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip_move', 'default_project', 'Clip Move', 'track_v1', 'master_media_move', 'default_sequence', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], clip_move_duration, clip_move_duration, now, now, now, now, clip_move_start, clip_move_duration, clip_move_duration, now, now))
@@ -115,7 +115,7 @@ command_manager.init('default_sequence', 'default_project')
 print("=== MoveClipToTrack + Nudge Regression ===\n")
 
 local function fetch_clip(id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     assert(stmt, "failed to prepare clip fetch statement")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)

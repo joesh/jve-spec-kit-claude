@@ -23,19 +23,19 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 2000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 2000, duration = 1000, source_in = 500 },
         }
     })
 
     -- A1 has a gap [1000..2000]
     local a1_clips = {
-        { id = "clip_a1_left", track_id = "track_a1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
-        { id = "clip_a1_right", track_id = "track_a1", timeline_start = 2000, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+        { id = "clip_a1_left", track_id = "track_a1", sequence_start = 0, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
+        { id = "clip_a1_right", track_id = "track_a1", sequence_start = 2000, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local a1_gaps = gap_lifecycle.compute_gaps_for_track("track_a1", a1_clips, SEQ_FPS)
     assert(#a1_gaps == 1, "A1 should have 1 gap")
@@ -59,9 +59,9 @@ do
     local a1_right = Clip.load("clip_a1_right")
 
     assert(v1_left.duration == 800, string.format("v1_left duration=%d, expected 800", v1_left.duration))
-    assert(v1_right.timeline_start == 800, string.format("v1_right start=%d, expected 800", v1_right.timeline_start))
+    assert(v1_right.sequence_start == 800, string.format("v1_right start=%d, expected 800", v1_right.sequence_start))
     -- A1 right clip should shift left by 200 (gap absorbs)
-    assert(a1_right.timeline_start == 1800, string.format("a1_right start=%d, expected 1800", a1_right.timeline_start))
+    assert(a1_right.sequence_start == 1800, string.format("a1_right start=%d, expected 1800", a1_right.sequence_start))
 
     layout:cleanup()
 end
@@ -76,15 +76,16 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 1000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 1000, duration = 1000, source_in = 500 },
         }
     })
 
-    -- A1 clips are adjacent (no gap) — ripple should be blocked
-    -- Dry run to check if blocked (clamped to 0)
+    -- A1 clips are perfectly co-located with V1 clips (same start 0-1000, same
+    -- downstream start 1000). 015 co-trim fires: a1_left co-trims alongside
+    -- v1_left, opening upstream room for a1_right. Delta -200 applies fully.
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)
     cmd:set_parameter("edge_infos", {
@@ -96,9 +97,9 @@ do
     local executor = command_manager.get_executor("BatchRippleEdit")
     local ok, payload = executor(cmd)
     assert(ok, "Dry run should succeed")
-    -- The clamped delta should be 0 (blocked by adjacent clips on A1)
-    assert(payload.clamped_delta_frames == 0,
-        string.format("should be blocked (clamped to 0), got clamped_delta_frames=%s",
+    -- 015: co-trim removes the upstream constraint; full delta applies.
+    assert(payload.clamped_delta_frames == -200,
+        string.format("co-trim should allow full delta, got clamped_delta_frames=%s",
             tostring(payload.clamped_delta_frames)))
 
     layout:cleanup()
@@ -114,10 +115,10 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "a1_left", "a1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1000, duration = 1000, source_in = 500 },
-            a1_left = { id = "clip_a1_left", track_key = "a1", timeline_start = 0, duration = 1000, source_in = 500 },
-            a1_right = { id = "clip_a1_right", track_key = "a1", timeline_start = 1000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1000, duration = 1000, source_in = 500 },
+            a1_left = { id = "clip_a1_left", track_key = "a1", sequence_start = 0, duration = 1000, source_in = 500 },
+            a1_right = { id = "clip_a1_right", track_key = "a1", sequence_start = 1000, duration = 1000, source_in = 500 },
         }
     })
 
@@ -139,9 +140,9 @@ do
     local a1_right = Clip.load("clip_a1_right")
 
     assert(v1_left.duration == 1200, string.format("v1_left duration=%d, expected 1200", v1_left.duration))
-    assert(v1_right.timeline_start == 1200, string.format("v1_right start=%d, expected 1200", v1_right.timeline_start))
+    assert(v1_right.sequence_start == 1200, string.format("v1_right start=%d, expected 1200", v1_right.sequence_start))
     -- A1 right should shift right by 200
-    assert(a1_right.timeline_start == 1200, string.format("a1_right start=%d, expected 1200", a1_right.timeline_start))
+    assert(a1_right.sequence_start == 1200, string.format("a1_right start=%d, expected 1200", a1_right.sequence_start))
 
     layout:cleanup()
 end

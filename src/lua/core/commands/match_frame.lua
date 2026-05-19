@@ -58,10 +58,10 @@ local SPEC = {
     }
 }
 
-local function extract_nested_sequence_id(clip)
+local function extract_sequence_id(clip)
     if type(clip) ~= "table" then return nil end
-    if clip.nested_sequence_id and clip.nested_sequence_id ~= "" then
-        return clip.nested_sequence_id
+    if clip.sequence_id and clip.sequence_id ~= "" then
+        return clip.sequence_id
     end
     return nil
 end
@@ -77,7 +77,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local target_clip = command_helper.pick_best_clip(target_clips)
 
-        local target_master_id = extract_nested_sequence_id(target_clip)
+        local target_master_id = extract_sequence_id(target_clip)
         if not target_master_id then
             set_last_error("MatchFrame: Clip has no nested sequence")
             return false
@@ -100,7 +100,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local master_seq = Sequence.load(target_master_id)
         if master_seq then
             local raw_play = target_clip.source_in
-                + (playhead - target_clip.timeline_start)
+                + (playhead - target_clip.sequence_start)
             local in_c, out_c, play_c, sf = clamp_to_master_range(
                 master_seq, target_clip.source_in, target_clip.source_out, raw_play)
             if sf then
@@ -121,11 +121,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 tostring(target_master_id))
         end
 
-        local ok, err = pcall(source_viewer.load_master_clip, target_master_id)
-        if not ok then
-            set_last_error("MatchFrame: " .. tostring(err))
-            return false
-        end
+        -- No pcall: source_viewer.load_master_clip uses fail-fast asserts
+        -- (rule 1.14). A missing audio bus rate, missing source monitor, or
+        -- engine config error is a bug to surface — wrapping in pcall and
+        -- routing through set_last_error is silent failure (rule 2.32).
+        source_viewer.load_master_clip(target_master_id)
 
         return true
     end

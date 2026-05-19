@@ -4,14 +4,14 @@
 -- Domain: in NLE convention, the clip starting at frame N owns boundary N
 -- (its first frame). The clip ending at N+duration does NOT own that
 -- boundary — the next clip (or empty space) does. So:
---   * playhead == clip.timeline_start            → clip is at playhead (IN edge inclusive)
---   * clip.timeline_start < playhead < clip_end  → clip is at playhead (interior)
+--   * playhead == clip.sequence_start            → clip is at playhead (IN edge inclusive)
+--   * clip.sequence_start < playhead < clip_end  → clip is at playhead (interior)
 --   * playhead == clip_end                       → clip is NOT at playhead (next owns it)
 --
 -- The previous strict-open `>`/`<` interval excluded BOTH boundaries,
 -- silently dropping the first frame of every clip — caught downstream as
 -- "MatchFrame on the first frame of a clip doesn't work, audio sneaks in
--- because its sub-frame-rounded timeline_start lands one frame earlier."
+-- because its sub-frame-rounded sequence_start lands one frame earlier."
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -26,7 +26,7 @@ local function reset_with_clip(opts)
         {
             id = opts.id or "c1",
             track_id = opts.track_id or "v1",
-            timeline_start = opts.timeline_start,
+            sequence_start = opts.sequence_start,
             duration = opts.duration,
             enabled = true,
         },
@@ -48,7 +48,7 @@ local DURATION = 10
 local LAST_FRAME = START + DURATION - 1   -- 109
 local NEXT_BOUNDARY = START + DURATION    -- 110
 
-reset_with_clip({ timeline_start = START, duration = DURATION })
+reset_with_clip({ sequence_start = START, duration = DURATION })
 
 -- IN edge: clip MUST be at playhead.
 local at_start = ids_at(START)
@@ -84,8 +84,8 @@ assert(#at_before == 0, "clip must not be present before its IN edge")
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
 data.state.clips = {
-    { id = "a", track_id = "v1", timeline_start = 50,  duration = 10, enabled = true },
-    { id = "b", track_id = "v1", timeline_start = 60,  duration = 10, enabled = true },
+    { id = "a", track_id = "v1", sequence_start = 50,  duration = 10, enabled = true },
+    { id = "b", track_id = "v1", sequence_start = 60,  duration = 10, enabled = true },
 }
 clip_state.invalidate_indexes()
 
@@ -102,8 +102,8 @@ assert(#at_60 == 1 and at_60[1] == "b",
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
 data.state.clips = {
-    { id = "video", track_id = "v1", timeline_start = 200, duration = 24, enabled = true },
-    { id = "audio", track_id = "a1", timeline_start = 199, duration = 26, enabled = true },
+    { id = "video", track_id = "v1", sequence_start = 200, duration = 24, enabled = true },
+    { id = "audio", track_id = "a1", sequence_start = 199, duration = 26, enabled = true },
 }
 clip_state.invalidate_indexes()
 

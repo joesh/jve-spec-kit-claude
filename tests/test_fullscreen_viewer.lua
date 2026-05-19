@@ -191,8 +191,18 @@ local function reset_engine_mirror_calls()
 end
 
 package.loaded["core.playback.playback_engine"] = {
-    new = function(config)
+    -- 017: transport's project_changed handler walks {source, record}
+    -- and calls teardown_engine per engine + shutdown_audio_session.
+    -- Stub both as no-ops; the test doesn't exercise teardown semantics.
+    teardown_engine = function() end,
+    shutdown_audio_session = function() end,
+    new = function(role_or_config, maybe_config)
+        -- 017 ctor signature: new(role, config). Legacy single-arg form
+        -- still accepted by tests not yet migrated.
+        local config = maybe_config
+        if type(role_or_config) == "table" then config = role_or_config end
         return {
+            role = type(role_or_config) == "string" and role_or_config or "record",
             _config = config,
             load_sequence = function() end,
             stop = function() end,
@@ -200,10 +210,16 @@ package.loaded["core.playback.playback_engine"] = {
             destroy = function() end,
             is_playing = function() return false end,
             on_model_changed = function(self, playhead)
-                -- Simulate: engine re-pulls frame → calls on_show_frame callback
-                if self._config and self._config.on_show_frame then
-                    self._config.on_show_frame("frame_at_" .. tostring(playhead), {})
-                end
+                -- Simulate: engine re-pulls frame → calls on_show_frame
+                -- callback. 017: views install callbacks via engine._on_X
+                -- fields after binding via transport.engine_for_role
+                -- (orphan-fallback removed). The stub mirrors the real
+                -- engine: read _on_show_frame, no legacy fallback path.
+                assert(self._on_show_frame,
+                    "test stub on_model_changed: _on_show_frame not "
+                    .. "installed — SequenceMonitor.new must bind the "
+                    .. "view's callback before any model-change tick")
+                self._on_show_frame("frame_at_" .. tostring(playhead), {})
             end,
             set_surface = function() end,
             notify_content_changed = function() end,
@@ -227,6 +243,28 @@ package.loaded["core.playback.playback_engine"] = {
 }
 
 --------------------------------------------------------------------------------
+-- 017: stub transport so SequenceMonitor.new resolves a (stubbed) engine
+-- on construction. Pretends transport is bootstrapped and routes
+-- engine_for_role(role) to a fresh instance of the playback_engine stub
+-- above. This replaces the pre-017 orphan-local-engine fallback in
+-- SequenceMonitor.new — that fallback is gone (anti-pattern #5).
+--------------------------------------------------------------------------------
+do
+    local stub_engines_by_role = {}
+    package.loaded["core.playback.transport"] = {
+        is_bootstrapped = function() return true end,
+        bound_project_id = function() return "stub_proj" end,
+        engine_for_role = function(role)
+            if not stub_engines_by_role[role] then
+                stub_engines_by_role[role] =
+                    package.loaded["core.playback.playback_engine"].new(role, {})
+            end
+            return stub_engines_by_role[role]
+        end,
+    }
+end
+
+--------------------------------------------------------------------------------
 -- Mock database + Sequence (needed by SequenceMonitor constructor)
 --------------------------------------------------------------------------------
 
@@ -235,10 +273,12 @@ package.loaded["core.database"] = {
 }
 
 package.loaded["models.sequence"] = {
-    load = function()
+    load = function(seq_id)
         return {
+            id = seq_id,
             name = "test",
-            kind = "nested",
+            kind = "sequence",
+            audio_sample_rate = 48000,  -- record/nested seqs carry the bus rate
             playhead_position = 0,
             mark_in = nil,
             mark_out = nil,
@@ -248,6 +288,11 @@ package.loaded["models.sequence"] = {
             save = function() end,
         }
     end,
+    -- 018 FR-005: audio_bus_rate.resolve_for_monitor needs this injector;
+    -- in this mocked test the sequence already carries audio_sample_rate so
+    -- the case-3 fall-back path isn't exercised, but the injector must be
+    -- callable.
+    find_first_record_audio_rate = function() return 48000 end,
 }
 
 --------------------------------------------------------------------------------

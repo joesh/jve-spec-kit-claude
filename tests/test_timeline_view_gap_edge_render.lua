@@ -31,7 +31,7 @@ local state = {
 local prev_clip = {
     id = "clip_anchor",
     track_id = "track_v1",
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 1000
 }
 
@@ -39,7 +39,7 @@ local prev_clip = {
 local gap_clip = {
     id = "gap_track_v1_1000",
     track_id = "track_v1",
-    timeline_start = 1000,
+    sequence_start = 1000,
     duration = 1000,
     clip_kind = "gap"
 }
@@ -47,7 +47,7 @@ local gap_clip = {
 local next_clip = {
     id = "clip_gap_target",
     track_id = "track_v1",
-    timeline_start = 2000,
+    sequence_start = 2000,
     duration = 1000
 }
 
@@ -57,8 +57,11 @@ function state.debug_record_clip_layout() end
 function state.get_viewport_start_time() return 0 end
 function state.get_viewport_duration() return 5000 end
 function state.get_playhead_position() return 0 end
-function state.get_mark_in() return nil end
-function state.get_mark_out() return nil end
+function state.get_mark_in()          return nil end
+function state.get_mark_out()         return nil end
+function state.get_display_mark_in()  return nil end
+function state.get_display_mark_out() return nil end
+function state.get_ghost_mark()       return nil end
 function state.get_sequence_id() return "default_sequence" end
 function state.get_project_id() return "default_project" end
 function state.get_sequence_frame_rate() return {fps_numerator = 1000, fps_denominator = 1} end
@@ -152,14 +155,14 @@ end
 
 -- Verify in-edge handle is near the gap's left boundary
 local width = 800
-local gap_in_boundary = state.time_to_pixel(gap_clip.timeline_start, width)
+local gap_in_boundary = state.time_to_pixel(gap_clip.sequence_start, width)
 local in_min, _ = get_handle_bounds(gap_in_rects)
 assert(math.abs(in_min - gap_in_boundary) < 20,
     string.format("gap in-edge handle should be near gap start (boundary=%d, handle_min=%d)",
         gap_in_boundary, in_min))
 
 -- Verify out-edge handle is near the gap's right boundary
-local gap_out_boundary = state.time_to_pixel(gap_clip.timeline_start + gap_clip.duration, width)
+local gap_out_boundary = state.time_to_pixel(gap_clip.sequence_start + gap_clip.duration, width)
 local _, out_max = get_handle_bounds(gap_out_rects)
 assert(math.abs(out_max - gap_out_boundary) < 20,
     string.format("gap out-edge handle should be near gap end (boundary=%d, handle_max=%d)",

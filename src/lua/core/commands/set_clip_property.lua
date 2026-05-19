@@ -2,7 +2,7 @@
 --- undoable, per-sequence-scoped command.
 ---
 --- Two storage paths converge here:
----   * Clip-row columns (name, enabled, timeline_start, duration,
+---   * Clip-row columns (name, enabled, sequence_start, duration,
 ---     source_in/out, mark_in/out, volume, playhead_frame): written
 ---     via Clip:save. Undo captures the column's pre-mutation value.
 ---   * Generic properties (arbitrary string/number/bool metadata):
@@ -30,7 +30,7 @@ local log = require("core.logger").for_area("commands")
 local MUTATION_KEY = {
     name           = "name",
     enabled        = "enabled",
-    timeline_start = "start_value",
+    sequence_start = "start_value",
     duration       = "duration_value",
     source_in      = "source_in_value",
     source_out     = "source_out_value",
@@ -47,7 +47,7 @@ local MUTATION_KEY = {
 -- the undo stack stays usable.
 local NOT_NULL_CLIP_COLUMN = {
     name           = true,
-    timeline_start = true,
+    sequence_start = true,
     duration       = true,
     source_in      = true,
     source_out     = true,
@@ -196,7 +196,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Capture the clip's current column value BEFORE mutating. For
         -- Inspector edits that target real clip columns (name, duration,
-        -- timeline_start, source_in/out, enabled, volume, mark_in/out)
+        -- sequence_start, source_in/out, enabled, volume, mark_in/out)
         -- this is the true previous value — far more reliable than
         -- reading the `properties` table row, which may not exist at all
         -- (it never does on the first Inspector edit to a column). When

@@ -18,9 +18,9 @@ db:exec(require('import_schema'))
 
 db:exec([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('test_project', 'Test Project', 'resample', 0, 0, '{"resolution": "1080p"}');
+    VALUES ('test_project', 'Test Project', 'resample', 0, 0, '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1},"resolution": "1080p"}');
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, width, height)
-    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'nested', 30, 1, 1920, 1080);
+    VALUES ('test_sequence', 'test_project', 'Test Sequence', 'sequence', 30, 1, 1920, 1080);
 ]])
 
 command_manager.init('test_sequence', 'test_project')

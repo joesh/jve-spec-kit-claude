@@ -60,7 +60,7 @@ print("\n--- 1: Different source_in → different audio ---")
 
 -- Clip A: source_in=0 (start of file)
 -- Clip B: source_in=250 (10 seconds in at 25fps)
--- Both at timeline_start=0 but on different TMBs to isolate
+-- Both at sequence_start=0 but on different TMBs to isolate
 local SOURCE_IN_A = 0
 local SOURCE_IN_B = 250  -- 10 seconds into 30-second file
 
@@ -72,7 +72,7 @@ local function decode_audio_at(source_in, label)
     local clip = {
         clip_id = "clip-" .. label,
         media_path = media_path,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,       -- 4 seconds of timeline
         source_in = source_in,
         rate_num = FPS_NUM,
@@ -172,7 +172,7 @@ local function decode_audio_speed(source_in, speed, label)
     local clip = {
         clip_id = "clip-speed-" .. label,
         media_path = media_path,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 200,
         source_in = source_in,
         rate_num = FPS_NUM,
@@ -217,10 +217,10 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb, SR, CHANNELS)
 -- Clip at timeline 200-300 from source 50 (same source region!)
 local clips = {
     { clip_id = "pos-A", media_path = media_path,
-      timeline_start = 0, duration = 100, source_in = 50,
+      sequence_start = 0, duration = 100, source_in = 50,
       rate_num = FPS_NUM, rate_den = FPS_DEN, speed_ratio = 1.0 },
     { clip_id = "pos-B", media_path = media_path,
-      timeline_start = 200, duration = 100, source_in = 50,
+      sequence_start = 200, duration = 100, source_in = 50,
       rate_num = FPS_NUM, rate_den = FPS_DEN, speed_ratio = 1.0 },
 }
 EMP.TMB_SET_TRACK_CLIPS(tmb, "audio", 1, clips)

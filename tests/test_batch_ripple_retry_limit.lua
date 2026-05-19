@@ -15,10 +15,10 @@ do
         db_path = "/tmp/jve/test_batch_ripple_retry_normal.db",
         clips = {
             order = {"v1_left", "v1_middle", "v1_right", "v1_blocker"},
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_middle = {timeline_start = 1500, duration = 500},      -- ends at 2000
-            v1_right = {timeline_start = 2100, duration = 1000},      -- ends at 3100, 100 frame gap before
-            v1_blocker = {timeline_start = 3200, duration = 1000}     -- 100 frame gap after v1_right
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_middle = {sequence_start = 1500, duration = 500},      -- ends at 2000
+            v1_right = {sequence_start = 2100, duration = 1000},      -- ends at 3100, 100 frame gap before
+            v1_blocker = {sequence_start = 3200, duration = 1000}     -- 100 frame gap after v1_right
         }
     })
 
@@ -38,10 +38,10 @@ do
 
     assert(after_middle.duration == 1000,
         string.format("Should extend by full delta (500 frames), got duration=%d", after_middle.duration))
-    assert(after_right.timeline_start == 2600,
-        string.format("Downstream clip should shift by ripple delta; expected start=2600, got %d", after_right.timeline_start))
-    assert(after_blocker.timeline_start == 3700,
-        string.format("Further downstream clip should shift by ripple delta; expected start=3700, got %d", after_blocker.timeline_start))
+    assert(after_right.sequence_start == 2600,
+        string.format("Downstream clip should shift by ripple delta; expected start=2600, got %d", after_right.sequence_start))
+    assert(after_blocker.sequence_start == 3700,
+        string.format("Further downstream clip should shift by ripple delta; expected start=3700, got %d", after_blocker.sequence_start))
 
     layout:cleanup()
 end
@@ -51,8 +51,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_retry_forced.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -69,8 +69,8 @@ do
 
     local after_right = require("models.clip").load(layout.clips.v1_right.id, layout.db)
     -- Should use forced retry delta (400 frames)
-    assert(after_right.timeline_start == 2400,
-        string.format("Should shift by forced retry delta (400), got start=%d", after_right.timeline_start))
+    assert(after_right.sequence_start == 2400,
+        string.format("Should shift by forced retry delta (400), got start=%d", after_right.sequence_start))
 
     layout:cleanup()
 end

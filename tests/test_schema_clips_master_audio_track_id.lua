@@ -4,9 +4,9 @@
 --   * The column exists as TEXT, nullable, FK to tracks(id) with
 --     ON DELETE SET NULL.
 --   * NULL = composite (today's behavior — clip plays all audio tracks
---     of nested_sequence_id mixed).
+--     of source_sequence_id mixed).
 --   * Non-NULL = "single audio track" — clip exposes one specific A
---     track of nested_sequence_id (symmetric to master_layer_track_id
+--     track of source_sequence_id (symmetric to master_layer_track_id
 --     for video).
 --   * On track delete, the column resets to NULL (the override is an
 --     optional interpretation; if its target disappears, fall back to
@@ -29,16 +29,16 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
                ('m-a2', 'm', 'A2', 'AUDIO', 2),
@@ -62,13 +62,13 @@ do
     -- Clip with master_audio_track_id NULL (composite — today's behavior).
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-comp', 'p1', 'e', 'e-a1', 'm', 'composite',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, NULL, 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]), "INSERT with master_audio_track_id=NULL must succeed (composite)")
@@ -82,13 +82,13 @@ do
     local db = build_fixture()
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-exp', 'p1', 'e', 'e-a1', 'm', 'expanded-A2',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]), "INSERT with master_audio_track_id='m-a2' must succeed")
@@ -102,13 +102,13 @@ do
     local db = build_fixture()
     local stmt = db:prepare([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-bad', 'p1', 'e', 'e-a1', 'm', 'bad',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'no-such-track', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]])
@@ -128,13 +128,13 @@ do
     local db = build_fixture()
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
+            source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c-pin', 'p1', 'e', 'e-a1', 'm', 'pinned-A2',
-                0, 100, 0, 100,
+                0, 100, 0, 100, 0, 0,
                 NULL, 'm-a2', 'passthrough',
                 1, 1.0, 0, 0, 0)
     ]]))

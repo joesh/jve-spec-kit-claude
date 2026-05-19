@@ -15,7 +15,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_min_duration_in.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 10}  -- 10 frames = tiny clip
+            v1_left = {sequence_start = 0, duration = 10}  -- 10 frames = tiny clip
         }
     })
 
@@ -35,8 +35,8 @@ do
     assert(after == nil, "Clip trimmed beyond its duration should be DELETED")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == before_right.timeline_start - 10,
-        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", after_right.timeline_start))
+    assert(after_right.sequence_start == before_right.sequence_start - 10,
+        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -46,7 +46,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_min_duration_out.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 10}
+            v1_left = {sequence_start = 0, duration = 10}
         }
     })
 
@@ -66,8 +66,8 @@ do
     assert(after == nil, "Clip trimmed beyond its duration should be DELETED")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == before_right.timeline_start - 10,
-        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", after_right.timeline_start))
+    assert(after_right.sequence_start == before_right.sequence_start - 10,
+        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -77,7 +77,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_single_frame.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1}  -- Already 1 frame
+            v1_left = {sequence_start = 0, duration = 1}  -- Already 1 frame
         }
     })
 
@@ -105,8 +105,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_zero_duration.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}  -- 1000 frame gap
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}  -- 1000 frame gap
         }
     })
 
@@ -124,9 +124,9 @@ do
     assert(result.success, "Gap closure should succeed")
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == 1000,
+    assert(after_right.sequence_start == 1000,
         string.format("Right clip should butt against left clip (gap=0), got start=%d",
-            after_right.timeline_start))
+            after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -136,8 +136,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_overclose.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 1500, duration = 1000}  -- 500 frame gap
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 1500, duration = 1000}  -- 500 frame gap
         }
     })
 
@@ -156,9 +156,9 @@ do
 
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     -- Should clamp to gap size (500 frames) max closure
-    assert(after_right.timeline_start == 1000,
+    assert(after_right.sequence_start == 1000,
         string.format("Should clamp to butt against left clip, got start=%d",
-            after_right.timeline_start))
+            after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -168,8 +168,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_roll_delete.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 5},  -- 5 frames
-            v1_right = {timeline_start = 5, duration = 1000, source_in = 100}  -- Has headroom to extend left
+            v1_left = {sequence_start = 0, duration = 5},  -- 5 frames
+            v1_right = {sequence_start = 5, duration = 1000, source_in = 100}  -- Has headroom to extend left
         }
     })
 
@@ -190,8 +190,8 @@ do
     assert(after_left == nil, "Left clip rolled to zero should be DELETED")
     assert(after_right.duration == 1005,
         string.format("Right clip should extend by 5 frames, got %d", after_right.duration))
-    assert(after_right.timeline_start == 0,
-        string.format("Right clip should roll to start at 0, got %d", after_right.timeline_start))
+    assert(after_right.sequence_start == 0,
+        string.format("Right clip should roll to start at 0, got %d", after_right.sequence_start))
 
     layout:cleanup()
 end

@@ -15,6 +15,10 @@ local restore_sequence_from_payload
 
 local SPEC = {
     mutates_clips = false,  -- mutates sequences table, not clips
+    -- Destructive: caller (menu / tree click) must supply explicit
+    -- sequence_id. Falling back to active_sequence_id here would silently
+    -- delete the user's currently-open timeline.
+    caller_supplied_sequence_id = true,
     args = {
         delete_sequence_snapshot = {},
         project_id = { required = true },
@@ -30,17 +34,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Returns the sequence row on success; false on refusal (with
     -- set_last_error already invoked).
     local function validate_target(sequence_id)
-        if sequence_id == "default_sequence" then
-            set_error(set_last_error,
-                "DeleteSequence: Cannot delete default sequence")
-            return false
-        end
         local row = fetch_sequence_record(db, sequence_id)
         if not row then
             set_error(set_last_error, "DeleteSequence: Sequence not found")
             return false
         end
-        if row.kind and row.kind ~= "nested" then
+        if row.kind ~= "sequence" then
             set_error(set_last_error,
                 "DeleteSequence: Only nested (edit timeline) sequences can be deleted")
             return false
@@ -171,13 +170,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         log.event("Deleted sequence %s (%d track(s), %d clip(s))",
             sequence_row.name or sequence_id, #tracks, #clips)
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", sequence_row.project_id)
         return true
     end
 
     command_undoers["DeleteSequence"] = function(command)
         local args = command:get_all_parameters()
 
-        return restore_sequence_from_payload(db, set_last_error, args.delete_sequence_snapshot)
+        local snapshot = args.delete_sequence_snapshot
+        assert(type(snapshot) == "table" and type(snapshot.sequence) == "table"
+            and type(snapshot.sequence.project_id) == "string"
+            and snapshot.sequence.project_id ~= "",
+            "UndoDeleteSequence: delete_sequence_snapshot.sequence.project_id missing — "
+            .. "execute path must have captured it; sequence_list_changed needs the project id")
+        local ok = restore_sequence_from_payload(db, set_last_error, snapshot)
+        if ok then
+            require("core.command_manager").queue_post_commit_emit(
+                "sequence_list_changed", snapshot.sequence.project_id)
+        end
+        return ok
     end
 
     command_executors["UndoDeleteSequence"] = command_undoers["DeleteSequence"]
@@ -288,13 +300,22 @@ fetch_sequence_record = function(db, sequence_id)
             selected_clip_ids = stmt:value(14),
             selected_edge_infos = stmt:value(15),
             selected_gap_infos = stmt:value(16),
+            -- current_sequence_number permits NULL (DEFAULT 0) per schema.
             current_sequence_number = stmt:value(17) and tonumber(stmt:value(17)) or nil,
-            created_at = stmt:value(18) and tonumber(stmt:value(18)) or os.time(),
-            modified_at = stmt:value(19) and tonumber(stmt:value(19)) or os.time(),
-            start_timecode_frame = stmt:value(20) and tonumber(stmt:value(20)) or 0,
-            video_scroll_offset = stmt:value(21) and tonumber(stmt:value(21)) or 0,
-            audio_scroll_offset = stmt:value(22) and tonumber(stmt:value(22)) or 0,
-            video_audio_split_ratio = stmt:value(23) and tonumber(stmt:value(23)) or 0.5
+            -- created_at / modified_at and the view-state columns below are
+            -- all schema NOT NULL — assert presence rather than fabricate.
+            created_at = assert(tonumber(stmt:value(18)),
+                "fetch_sequence_record: NULL created_at for sequence " .. tostring(sequence_id)),
+            modified_at = assert(tonumber(stmt:value(19)),
+                "fetch_sequence_record: NULL modified_at for sequence " .. tostring(sequence_id)),
+            start_timecode_frame = assert(tonumber(stmt:value(20)),
+                "fetch_sequence_record: NULL start_timecode_frame for sequence " .. tostring(sequence_id)),
+            video_scroll_offset = assert(tonumber(stmt:value(21)),
+                "fetch_sequence_record: NULL video_scroll_offset for sequence " .. tostring(sequence_id)),
+            audio_scroll_offset = assert(tonumber(stmt:value(22)),
+                "fetch_sequence_record: NULL audio_scroll_offset for sequence " .. tostring(sequence_id)),
+            video_audio_split_ratio = assert(tonumber(stmt:value(23)),
+                "fetch_sequence_record: NULL video_audio_split_ratio for sequence " .. tostring(sequence_id)),
         }
     end
     stmt:finalize()
@@ -321,13 +342,18 @@ fetch_sequence_tracks = function(db, sequence_id)
                 sequence_id = stmt:value(1),
                 name = stmt:value(2),
                 track_type = stmt:value(3),
-                track_index = tonumber(stmt:value(4)) or 0,
+                -- tracks.track_index/volume/pan are all NOT NULL per schema;
+                -- a missing value is a corruption bug, not a default to invent.
+                track_index = assert(tonumber(stmt:value(4)),
+                    "fetch_sequence_tracks: NULL track_index in sequence " .. tostring(sequence_id)),
                 enabled = stmt:value(5) == 1 or stmt:value(5) == true,
                 locked = stmt:value(6) == 1 or stmt:value(6) == true,
                 muted = stmt:value(7) == 1 or stmt:value(7) == true,
                 soloed = stmt:value(8) == 1 or stmt:value(8) == true,
-                volume = tonumber(stmt:value(9)) or 1.0, -- NSF-OK: unity gain default
-                pan = tonumber(stmt:value(10)) or 0.0 -- NSF-OK: center pan default
+                volume = assert(tonumber(stmt:value(9)),
+                    "fetch_sequence_tracks: NULL volume in sequence " .. tostring(sequence_id)),
+                pan = assert(tonumber(stmt:value(10)),
+                    "fetch_sequence_tracks: NULL pan in sequence " .. tostring(sequence_id)),
             })
         end
     end
@@ -370,24 +396,25 @@ fetch_sequence_clips = function(db, sequence_id)
     -- V13 columns: clips no longer carry clip_kind / media_id /
     -- fps_numerator / fps_denominator / offline (those moved to the
     -- nested sequence + media_refs + media chain). master_clip_id
-    -- renamed to nested_sequence_id; new columns master_layer_track_id /
+    -- renamed to sequence_id; new columns master_layer_track_id /
     -- master_audio_track_id / fps_mismatch_policy.
     local clip_stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.nested_sequence_id, c.owner_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.sequence_id, c.owner_sequence_id,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
                c.volume, c.mark_in_frame, c.mark_out_frame, c.playhead_frame,
-               t.track_type
+               t.track_type,
+               c.source_in_subframe, c.source_out_subframe
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         WHERE c.track_id IN (
             SELECT id FROM tracks WHERE sequence_id = ?
         )
-        ORDER BY c.track_id, c.timeline_start_frame
+        ORDER BY c.track_id, c.sequence_start_frame
     ]])
     if not clip_stmt then
         return clips, properties, clip_links
@@ -402,7 +429,7 @@ fetch_sequence_clips = function(db, sequence_id)
                 project_id = clip_stmt:value(1),
                 name = clip_stmt:value(2),
                 track_id = clip_stmt:value(3),
-                nested_sequence_id = clip_stmt:value(4),
+                sequence_id = clip_stmt:value(4),
                 owner_sequence_id = clip_stmt:value(5),
                 start_value = assert(tonumber(clip_stmt:value(6)), "DeleteSequence.fetch_sequence_clips: missing start_value for clip " .. tostring(clip_id)),
                 duration_value = assert(tonumber(clip_stmt:value(7)), "DeleteSequence.fetch_sequence_clips: missing duration_value for clip " .. tostring(clip_id)),
@@ -412,13 +439,21 @@ fetch_sequence_clips = function(db, sequence_id)
                 master_audio_track_id = clip_stmt:value(11),
                 fps_mismatch_policy = clip_stmt:value(12),
                 enabled = clip_stmt:value(13) == 1 or clip_stmt:value(13) == true,
-                created_at = clip_stmt:value(14) and tonumber(clip_stmt:value(14)) or nil,
-                modified_at = clip_stmt:value(15) and tonumber(clip_stmt:value(15)) or nil,
-                volume = clip_stmt:value(16) and tonumber(clip_stmt:value(16)) or nil,
+                -- clips.created_at/modified_at/volume/playhead_frame are all
+                -- NOT NULL per schema; mark_in/mark_out are NULL-allowed.
+                created_at = assert(tonumber(clip_stmt:value(14)),
+                    "fetch_sequence_clips: NULL created_at for clip " .. tostring(clip_id)),
+                modified_at = assert(tonumber(clip_stmt:value(15)),
+                    "fetch_sequence_clips: NULL modified_at for clip " .. tostring(clip_id)),
+                volume = assert(tonumber(clip_stmt:value(16)),
+                    "fetch_sequence_clips: NULL volume for clip " .. tostring(clip_id)),
                 mark_in_value = clip_stmt:value(17) and tonumber(clip_stmt:value(17)) or nil,
                 mark_out_value = clip_stmt:value(18) and tonumber(clip_stmt:value(18)) or nil,
-                playhead_value = clip_stmt:value(19) and tonumber(clip_stmt:value(19)) or nil,
+                playhead_value = assert(tonumber(clip_stmt:value(19)),
+                    "fetch_sequence_clips: NULL playhead_frame for clip " .. tostring(clip_id)),
                 track_type = clip_stmt:value(20),
+                source_in_subframe  = clip_stmt:value(21),
+                source_out_subframe = clip_stmt:value(22),
             }
 
             -- Fetch properties for this clip
@@ -451,7 +486,9 @@ fetch_sequence_clips = function(db, sequence_id)
                     link_group_id = links_stmt:value(0),
                     clip_id = links_stmt:value(1),
                     role = links_stmt:value(2),
-                    time_offset = links_stmt:value(3) and tonumber(links_stmt:value(3)) or 0,
+                    -- clip_links.time_offset is NOT NULL DEFAULT 0; presence is required.
+                    time_offset = assert(tonumber(links_stmt:value(3)),
+                        "fetch_sequence_clips/links: NULL time_offset"),
                     enabled = links_stmt:value(4) == 1 or links_stmt:value(4) == true
                 })
             end
@@ -481,9 +518,12 @@ fetch_sequence_snapshot = function(db, sequence_id)
         snapshot = {
             id = stmt:value(0),
             sequence_id = stmt:value(1),
-            sequence_number = tonumber(stmt:value(2)) or 0,
+            -- snapshots.sequence_number / created_at are both schema NOT NULL.
+            sequence_number = assert(tonumber(stmt:value(2)),
+                "fetch_sequence_snapshot: NULL sequence_number"),
             clips_state = stmt:value(3),
-            created_at = tonumber(stmt:value(4)) or os.time()
+            created_at = assert(tonumber(stmt:value(4)),
+                "fetch_sequence_snapshot: NULL created_at"),
         }
     end
     stmt:finalize()
@@ -491,10 +531,10 @@ fetch_sequence_snapshot = function(db, sequence_id)
 end
 
 count_sequence_references = function(db, sequence_id)
-    -- V13: clips reference other sequences via nested_sequence_id.
+    -- V13: clips reference other sequences via sequence_id.
     local stmt = db:prepare([[
         SELECT COUNT(*) FROM clips
-        WHERE nested_sequence_id = ?
+        WHERE sequence_id = ?
           AND (owner_sequence_id IS NULL OR owner_sequence_id <> ?)
     ]])
     if not stmt then
@@ -590,7 +630,12 @@ local function restore_sequence_row(db, sequence_row)
     stmt:bind_value(1, sequence_row.id)
     stmt:bind_value(2, sequence_row.project_id)
     stmt:bind_value(3, sequence_row.name)
-    stmt:bind_value(4, sequence_row.kind or "timeline")
+    assert(sequence_row.kind == "master" or sequence_row.kind == "sequence",
+        string.format(
+            "UndoDeleteSequence: snapshot kind must be 'master' or 'sequence' "
+            .. "(schema CHECK); got %q for sequence %s",
+            tostring(sequence_row.kind), tostring(sequence_row.id)))
+    stmt:bind_value(4, sequence_row.kind)
     stmt:bind_value(5, sequence_row.fps_numerator)
     stmt:bind_value(6, sequence_row.fps_denominator)
     bind_nullable(stmt, 7, sequence_row.audio_sample_rate)
@@ -601,16 +646,28 @@ local function restore_sequence_row(db, sequence_row)
     stmt:bind_value(12, sequence_row.playhead_value)
     stmt:bind_value(13, sequence_row.mark_in_value)
     stmt:bind_value(14, sequence_row.mark_out_value)
-    stmt:bind_value(15, sequence_row.selected_clip_ids or '[]')
-    stmt:bind_value(16, sequence_row.selected_edge_infos or '[]')
-    stmt:bind_value(17, sequence_row.selected_gap_infos or '[]')
+    -- selected_*_infos are TEXT NOT NULL with no schema default; if the
+    -- snapshot is missing them it's a corrupt capture, not a default to
+    -- fabricate. Same for the timestamp + view-state columns below.
+    stmt:bind_value(15, assert(sequence_row.selected_clip_ids,
+        "UndoDeleteSequence: snapshot missing selected_clip_ids"))
+    stmt:bind_value(16, assert(sequence_row.selected_edge_infos,
+        "UndoDeleteSequence: snapshot missing selected_edge_infos"))
+    stmt:bind_value(17, assert(sequence_row.selected_gap_infos,
+        "UndoDeleteSequence: snapshot missing selected_gap_infos"))
     stmt:bind_value(18, sequence_row.current_sequence_number)
-    stmt:bind_value(19, sequence_row.created_at or os.time())
-    stmt:bind_value(20, sequence_row.modified_at or os.time())
-    stmt:bind_value(21, sequence_row.start_timecode_frame or 0)
-    stmt:bind_value(22, sequence_row.video_scroll_offset or 0)
-    stmt:bind_value(23, sequence_row.audio_scroll_offset or 0)
-    stmt:bind_value(24, sequence_row.video_audio_split_ratio or 0.5)
+    stmt:bind_value(19, assert(sequence_row.created_at,
+        "UndoDeleteSequence: snapshot missing created_at"))
+    stmt:bind_value(20, assert(sequence_row.modified_at,
+        "UndoDeleteSequence: snapshot missing modified_at"))
+    stmt:bind_value(21, assert(sequence_row.start_timecode_frame,
+        "UndoDeleteSequence: snapshot missing start_timecode_frame"))
+    stmt:bind_value(22, assert(sequence_row.video_scroll_offset,
+        "UndoDeleteSequence: snapshot missing video_scroll_offset"))
+    stmt:bind_value(23, assert(sequence_row.audio_scroll_offset,
+        "UndoDeleteSequence: snapshot missing audio_scroll_offset"))
+    stmt:bind_value(24, assert(sequence_row.video_audio_split_ratio,
+        "UndoDeleteSequence: snapshot missing video_audio_split_ratio"))
 
     if not stmt:exec() then
         stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore sequence row"
@@ -640,8 +697,10 @@ local function restore_tracks(db, tracks, fallback_sequence_id)
         stmt:bind_value(7, track.locked and 1 or 0)
         stmt:bind_value(8, track.muted and 1 or 0)
         stmt:bind_value(9, track.soloed and 1 or 0)
-        stmt:bind_value(10, track.volume or 1.0) -- NSF-OK: unity gain default
-        stmt:bind_value(11, track.pan or 0.0)    -- NSF-OK: center pan default
+        stmt:bind_value(10, assert(track.volume,
+            "UndoDeleteSequence: track snapshot missing volume"))
+        stmt:bind_value(11, assert(track.pan,
+            "UndoDeleteSequence: track snapshot missing pan"))
         if not stmt:exec() then
             stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore track"
         end
@@ -660,21 +719,22 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            nested_sequence_id, owner_sequence_id,
-            timeline_start_frame, duration_frames,
+            sequence_id, owner_sequence_id,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,
             enabled, created_at, modified_at,
             volume, mark_in_frame, mark_out_frame, playhead_frame
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     if not stmt then return false, "UndoDeleteSequence: Failed to prepare clip insert" end
 
     for _, clip in ipairs(clips) do
-        if not clip.nested_sequence_id or clip.nested_sequence_id == "" then
+        if not clip.sequence_id or clip.sequence_id == "" then
             stmt:finalize()
-            return false, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing nested_sequence_id"
+            return false, "UndoDeleteSequence: clip " .. tostring(clip.id) .. " missing sequence_id"
         end
         assert(clip.name and clip.fps_mismatch_policy
             and clip.created_at and clip.modified_at
@@ -687,22 +747,24 @@ local function restore_clips(db, clips, owner_sequence_id, payload_properties)
         stmt:bind_value(2, clip.project_id)
         stmt:bind_value(3, clip.name)
         stmt:bind_value(4, clip.track_id)
-        stmt:bind_value(5, clip.nested_sequence_id)
+        stmt:bind_value(5, clip.sequence_id)
         stmt:bind_value(6, clip.owner_sequence_id)
         stmt:bind_value(7, clip.start_value)
         stmt:bind_value(8, clip.duration_value)
         stmt:bind_value(9, clip.source_in_value)
         stmt:bind_value(10, clip.source_out_value)
-        stmt:bind_value(11, clip.master_layer_track_id)
-        stmt:bind_value(12, clip.master_audio_track_id)
-        stmt:bind_value(13, clip.fps_mismatch_policy)
-        stmt:bind_value(14, clip.enabled and 1 or 0)
-        stmt:bind_value(15, clip.created_at)
-        stmt:bind_value(16, clip.modified_at)
-        stmt:bind_value(17, clip.volume)
-        if clip.mark_in_value  then stmt:bind_value(18, clip.mark_in_value)  end
-        if clip.mark_out_value then stmt:bind_value(19, clip.mark_out_value) end
-        stmt:bind_value(20, clip.playhead_value)
+        stmt:bind_value(11, clip.source_in_subframe)   -- nullable for VIDEO
+        stmt:bind_value(12, clip.source_out_subframe)  -- nullable for VIDEO
+        stmt:bind_value(13, clip.master_layer_track_id)
+        stmt:bind_value(14, clip.master_audio_track_id)
+        stmt:bind_value(15, clip.fps_mismatch_policy)
+        stmt:bind_value(16, clip.enabled and 1 or 0)
+        stmt:bind_value(17, clip.created_at)
+        stmt:bind_value(18, clip.modified_at)
+        stmt:bind_value(19, clip.volume)
+        if clip.mark_in_value  then stmt:bind_value(20, clip.mark_in_value)  end
+        if clip.mark_out_value then stmt:bind_value(21, clip.mark_out_value) end
+        stmt:bind_value(22, clip.playhead_value)
         if not stmt:exec() then
             stmt:finalize(); return false, "UndoDeleteSequence: Failed to restore clip"
         end
@@ -729,7 +791,8 @@ local function restore_clip_links(db, clip_links)
         stmt:bind_value(1, link.link_group_id)
         stmt:bind_value(2, link.clip_id)
         stmt:bind_value(3, link.role)
-        stmt:bind_value(4, link.time_offset or 0)
+        stmt:bind_value(4, assert(link.time_offset,
+            "UndoDeleteSequence: clip_links snapshot missing time_offset"))
         stmt:bind_value(5, link.enabled and 1 or 0)
         assert(stmt:exec(),
             "UndoDeleteSequence: clip_links INSERT failed for clip " .. tostring(link.clip_id))
@@ -747,10 +810,13 @@ local function restore_snapshot(db, snapshot, fallback_sequence_id)
         VALUES (?, ?, ?, ?, ?)
     ]]), "UndoDeleteSequence: failed to prepare snapshots INSERT")
     stmt:bind_value(1, snapshot.id)
-    stmt:bind_value(2, snapshot.sequence_id or fallback_sequence_id)
-    stmt:bind_value(3, snapshot.sequence_number or 0)
+    stmt:bind_value(2, assert(snapshot.sequence_id or fallback_sequence_id,
+        "UndoDeleteSequence: snapshot missing sequence_id and no fallback"))
+    stmt:bind_value(3, assert(snapshot.sequence_number,
+        "UndoDeleteSequence: snapshot missing sequence_number"))
     stmt:bind_value(4, snapshot.clips_state)
-    stmt:bind_value(5, snapshot.created_at or os.time())
+    stmt:bind_value(5, assert(snapshot.created_at,
+        "UndoDeleteSequence: snapshot missing created_at"))
     assert(stmt:exec(), "UndoDeleteSequence: snapshots INSERT failed")
     stmt:finalize()
 end

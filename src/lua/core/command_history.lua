@@ -65,6 +65,7 @@ function M.reset()
     undo_stack_states = {
         [GLOBAL_STACK_ID] = {
             current_sequence_number = nil,
+            current_branch_tip = nil,
             current_branch_path = {},
             sequence_id = nil,
             position_initialized = false,
@@ -81,10 +82,26 @@ function M.ensure_stack_state(stack_id)
     local state = undo_stack_states[stack_id]
     if not state then
         state = {
+            -- `current_sequence_number` is where the user sits on the
+            -- branch (HEAD). `current_branch_tip` is the leaf of the
+            -- user's current branch. Redo walks from cursor toward tip
+            -- following parent_sequence_number. A new commit at non-tip
+            -- position advances BOTH cursor and tip, orphaning the prior
+            -- subtree (preserved in the commands table for future
+            -- branch-picker UI, unreachable via Cmd+Shift+Z).
             current_sequence_number = nil,
+            current_branch_tip = nil,
             current_branch_path = {},
             sequence_id = nil,
             position_initialized = false,
+            -- Optimistic-CAS baselines: the cursor values we last
+            -- *confirmed* in the DB. Writes compare against these and
+            -- assert on mismatch (sibling-session safety). Two fields
+            -- because GLOBAL_STACK_ID's state carries both the
+            -- project's global_undo_cursor AND the active-sequence's
+            -- current_sequence_number via save_undo_position.
+            persisted_seq_cursor = nil,
+            persisted_global_cursor = nil,
         }
         undo_stack_states[stack_id] = state
     end
@@ -114,6 +131,25 @@ function M.set_current_sequence_number(value)
     local state = M.ensure_stack_state(active_stack_id)
     state.current_sequence_number = value
     state.position_initialized = true
+end
+
+-- Set the leaf of the user's current branch on a SPECIFIC stack. Commit
+-- paths call this with the new command's sequence_number (which also
+-- becomes the cursor). The stack must be passed explicitly because the
+-- *active* stack at commit time can differ from the stack the command
+-- actually lands on — e.g. SetClipProperty has sequence_id in its spec
+-- so the active stack is per-sequence, but the executor never sets the
+-- sequence_id parameter so the command's stored sequence_id column is
+-- NULL and the command lands on GLOBAL. Tip must go onto GLOBAL there,
+-- not the active per-seq stack.
+function M.set_branch_tip_on_stack(stack_id, value)
+    local state = M.ensure_stack_state(stack_id or GLOBAL_STACK_ID)
+    state.current_branch_tip = value
+end
+
+function M.get_current_branch_tip()
+    local state = M.ensure_stack_state(active_stack_id)
+    return state.current_branch_tip
 end
 
 function M.get_current_sequence_number()
@@ -216,11 +252,11 @@ end
 function M.load_sequence_undo_position(sequence_id)
     assert(db, "load_sequence_undo_position: no database connection")
     if not sequence_id or sequence_id == "" then
-        return nil, false
+        return nil, nil, false
     end
 
     local query = db:prepare([[
-        SELECT current_sequence_number
+        SELECT current_sequence_number, current_undo_tip
         FROM sequences
         WHERE id = ?
     ]])
@@ -228,13 +264,14 @@ function M.load_sequence_undo_position(sequence_id)
 
     query:bind_value(1, sequence_id)
     local has_row = false
-    local value = nil
+    local cursor_value, tip_value = nil, nil
     if query:exec() and query:next() then
         has_row = true
-        value = query:value(0)
+        cursor_value = query:value(0)
+        tip_value = query:value(1)
     end
     query:finalize()
-    return value, has_row
+    return cursor_value, tip_value, has_row
 end
 
 function M.initialize_stack_position_from_db(stack_id, sequence_id)
@@ -242,8 +279,20 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
         return
     end
 
-    local saved_value, has_row = M.load_sequence_undo_position(sequence_id)
+    local saved_value, saved_tip, has_row = M.load_sequence_undo_position(sequence_id)
     local state = M.ensure_stack_state(stack_id)
+    -- Seed CAS baseline from the raw DB column. Subsequent save_undo_position
+    -- calls will use this as the expected-prev value. Captured BEFORE the
+    -- orphan-repair path below so a stale row gets caught next save.
+    state.persisted_seq_cursor = has_row and saved_value or nil
+    -- Seed the in-memory tip from DB. nil/0 is "no branch tip recorded" —
+    -- equivalent to "user is at the leaf (or no history)". Real tip values
+    -- only appear after a commit (which sets cursor=tip=new_seq_number).
+    if has_row and saved_tip and saved_tip > 0 then
+        state.current_branch_tip = saved_tip
+    else
+        state.current_branch_tip = nil
+    end
 
     -- NSF: Validate that saved cursor points to an existing command
     -- If orphaned (e.g., commands table was cleared), reset to actual last command
@@ -257,14 +306,35 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
             log.warn("Orphaned undo cursor: sequence %s has current_sequence_number=%d but command doesn't exist. Resetting to %s.",
                 sequence_id, saved_value, last_sequence_number > 0 and tostring(last_sequence_number) or "nil")
             saved_value = last_sequence_number > 0 and last_sequence_number or nil
-            -- Persist the fix
-            local fix = db:prepare("UPDATE sequences SET current_sequence_number = ? WHERE id = ?")
-            assert(fix, "initialize_stack_position_from_db: failed to prepare orphan fix query")
+            -- Persist the orphan-repair. CAS against the stale value we
+            -- just read (state.persisted_seq_cursor) — load_sequence_undo_position
+            -- always seeded it above when has_row is true, which it must
+            -- be here (we observed saved_value > 0). If the row was
+            -- moved by a sibling writer between the read and now, fail
+            -- loudly rather than silently overwrite.
+            assert(state.persisted_seq_cursor ~= nil, string.format(
+                "initialize_stack_position_from_db: orphan-repair entered with "
+                .. "no CAS baseline for sequence %s (load_sequence_undo_position "
+                .. "should have seeded persisted_seq_cursor; row existence is "
+                .. "implied by saved_value=%s > 0)", sequence_id, tostring(saved_value)))
+            local fix = assert(db:prepare(
+                "UPDATE sequences SET current_sequence_number = ? WHERE id = ? AND current_sequence_number = ?"),
+                "initialize_stack_position_from_db: failed to prepare orphan fix query")
             fix:bind_value(1, saved_value or 0)
             fix:bind_value(2, sequence_id)
+            fix:bind_value(3, state.persisted_seq_cursor)
             local ok = fix:exec()
             fix:finalize()
-            assert(ok, string.format("initialize_stack_position_from_db: failed to persist orphan fix for sequence %s", sequence_id))
+            assert(ok, string.format(
+                "initialize_stack_position_from_db: failed to persist orphan fix for sequence %s",
+                sequence_id))
+            assert(db:changes() == 1, string.format(
+                "initialize_stack_position_from_db: orphan-repair UPDATE for sequence %s "
+                .. "found cursor changed by another writer "
+                .. "(expected_prev=%s new=%s). Re-init required.",
+                sequence_id, tostring(state.persisted_seq_cursor),
+                tostring(saved_value or 0)))
+            state.persisted_seq_cursor = saved_value or 0
         end
         M.set_current_sequence_number(saved_value)
     elseif saved_value == 0 then
@@ -282,7 +352,27 @@ function M.initialize_stack_position_from_db(stack_id, sequence_id)
     state.position_initialized = true
 end
 
--- Save current undo position to database (persists across sessions)
+-- Invalidate the optimistic-CAS baselines so the next write is a
+-- first-touch (unguarded, baseline-seeding) write. Call this from paths
+-- that just rolled the DB back to a savepoint — the rollback unwinds
+-- any in-progress cursor write but `persisted_*_cursor` is pure in-memory
+-- state that the savepoint can't touch, so the next CAS would compare
+-- against a stale "we wrote X" value and assert.
+function M.invalidate_cas_baseline()
+    for _, state in pairs(undo_stack_states) do
+        state.persisted_seq_cursor = nil
+        state.persisted_global_cursor = nil
+    end
+end
+
+-- Save current undo position to database (persists across sessions).
+--
+-- Uses optimistic CAS: the UPDATE's WHERE clause pins the expected previous
+-- column value to `state.persisted_seq_cursor`. If a sibling session (or
+-- direct DB poke) moved the cursor since we last read/wrote, db:changes()
+-- returns 0 and we assert with context so the caller can re-read and
+-- recover. Silent last-write-wins would let two sessions desync the
+-- cursor and resurface stale-redo bugs.
 function M.save_undo_position()
     assert(db, "CommandHistory.save_undo_position: no database connection")
 
@@ -290,25 +380,48 @@ function M.save_undo_position()
     assert(sequence_id and sequence_id ~= "",
         "CommandHistory.save_undo_position: no active sequence_id")
 
-    local update = db:prepare([[
-        UPDATE sequences
-        SET current_sequence_number = ?
-        WHERE id = ?
-    ]])
-    assert(update, "CommandHistory.save_undo_position: failed to prepare update")
+    local state = M.ensure_stack_state(active_stack_id)
+    local expected_prev = state.persisted_seq_cursor
+    local new_cursor = current_sequence_number or 0
+    -- Persist tip atomically with cursor in the same UPDATE. nil tip
+    -- means "no branch leaf recorded" → write 0 (column DEFAULT). Commit
+    -- paths set state.current_branch_tip before this call; undo/redo
+    -- paths leave it alone (tip stays at the last commit's leaf).
+    local new_tip = state.current_branch_tip or 0
 
-    local stored_position = current_sequence_number
-    if stored_position == nil then
-        stored_position = 0
+    -- First-touch (no baseline): unguarded write + seed baseline. We accept
+    -- a tiny first-write race in exchange for not forcing every caller to
+    -- load first. From the second write onward CAS protects against
+    -- sibling-session drift, which is the case that actually bites.
+    local sql, has_prev =
+        "UPDATE sequences SET current_sequence_number = ?, current_undo_tip = ? WHERE id = ?",
+        false
+    if expected_prev ~= nil then
+        sql = "UPDATE sequences SET current_sequence_number = ?, current_undo_tip = ? "
+            .. "WHERE id = ? AND current_sequence_number = ?"
+        has_prev = true
     end
-    update:bind_value(1, stored_position)
-    update:bind_value(2, sequence_id)
-    local success = update:exec()
+
+    local update = assert(db:prepare(sql),
+        "CommandHistory.save_undo_position: failed to prepare update")
+    update:bind_value(1, new_cursor)
+    update:bind_value(2, new_tip)
+    update:bind_value(3, sequence_id)
+    if has_prev then update:bind_value(4, expected_prev) end
+    local exec_ok = update:exec()
     update:finalize()
+    assert(exec_ok, string.format(
+        "CommandHistory.save_undo_position: UPDATE failed for sequence %s",
+        tostring(sequence_id)))
 
-    assert(success, string.format(
-        "CommandHistory.save_undo_position: UPDATE failed for sequence %s", tostring(sequence_id)))
+    if has_prev then
+        assert(db:changes() == 1, string.format(
+            "CommandHistory.save_undo_position: cursor moved by another writer "
+            .. "(sequence=%s expected_prev=%s new=%d). Re-read DB and retry.",
+            tostring(sequence_id), tostring(expected_prev), new_cursor))
+    end
 
+    state.persisted_seq_cursor = new_cursor
     return true
 end
 
@@ -480,40 +593,92 @@ function M.get_global_cursor()
 end
 
 --- Set the global cursor (in-memory + DB persistence).
+--
+-- Uses optimistic CAS against `global_state.persisted_global_cursor`: a sibling
+-- session (or external write) that moved the cursor since our last
+-- confirmed value causes db:changes()=0 and we assert. Silent overwrite
+-- would let two sessions stomp each other's global cursor.
 function M.set_global_cursor(value)
     assert(db, "set_global_cursor: no database connection")
     assert(_active_project_id and _active_project_id ~= "",
         "set_global_cursor: no active project_id")
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
+    local expected_prev = global_state.persisted_global_cursor
+    local new_cursor = value or 0
+    -- Persist tip atomically with cursor (single UPDATE). Commit paths
+    -- set state.current_branch_tip on GLOBAL_STACK_ID before this call;
+    -- undo/redo paths leave it alone so the tip stays at the last
+    -- commit's leaf and remains redoable.
+    local new_tip = global_state.current_branch_tip or 0
+
+    -- First-touch (no baseline) = unguarded write that seeds the baseline;
+    -- from the second write onward CAS guards against sibling-session
+    -- drift. projects.global_undo_cursor is NOT NULL DEFAULT 0, so once
+    -- load_global_cursor has run, expected_prev is a real number.
+    local sql, has_prev =
+        "UPDATE projects SET global_undo_cursor = ?, global_undo_tip = ? WHERE id = ?",
+        false
+    if expected_prev ~= nil then
+        sql = "UPDATE projects SET global_undo_cursor = ?, global_undo_tip = ? "
+            .. "WHERE id = ? AND global_undo_cursor = ?"
+        has_prev = true
+    end
+
+    local update = assert(db:prepare(sql),
+        "set_global_cursor: failed to prepare UPDATE")
+    update:bind_value(1, new_cursor)
+    update:bind_value(2, new_tip)
+    update:bind_value(3, _active_project_id)
+    if has_prev then update:bind_value(4, expected_prev) end
+    local exec_ok = update:exec()
+    update:finalize()
+    assert(exec_ok, string.format(
+        "set_global_cursor: UPDATE failed for project %s", _active_project_id))
+
+    if has_prev then
+        assert(db:changes() == 1, string.format(
+            "set_global_cursor: cursor moved by another writer "
+            .. "(project=%s expected_prev=%s new=%d). Re-read DB and retry.",
+            _active_project_id, tostring(expected_prev), new_cursor))
+    end
+
     global_state.current_sequence_number = value
     global_state.position_initialized = true
-    local update = db:prepare("UPDATE projects SET global_undo_cursor = ? WHERE id = ?")
-    assert(update, "set_global_cursor: failed to prepare UPDATE")
-    update:bind_value(1, value or 0)
-    update:bind_value(2, _active_project_id)
-    assert(update:exec(), string.format(
-        "set_global_cursor: UPDATE failed for project %s", _active_project_id))
-    update:finalize()
+    global_state.persisted_global_cursor = new_cursor
 end
 
 --- Load the global cursor from the projects table on init.
+--
+-- Seeds `persisted_global_cursor` from the DB column verbatim — that is the
+-- value against which the next set_global_cursor will CAS. Note that
+-- in-memory `current_sequence_number` uses nil-for-zero semantics ("no
+-- commands undone yet"), but `persisted_global_cursor` mirrors the raw column
+-- so the CAS matches whatever is actually on disk.
 function M.load_global_cursor()
     assert(db, "load_global_cursor: no database connection")
     assert(_active_project_id and _active_project_id ~= "",
         "load_global_cursor: no active project_id")
-    local query = db:prepare("SELECT global_undo_cursor FROM projects WHERE id = ?")
+    local query = db:prepare(
+        "SELECT global_undo_cursor, global_undo_tip FROM projects WHERE id = ?")
     assert(query, "load_global_cursor: failed to prepare SELECT")
     query:bind_value(1, _active_project_id)
     assert(query:exec(), "load_global_cursor: SELECT failed")
     local global_state = M.ensure_stack_state(GLOBAL_STACK_ID)
     assert(query:next(), string.format(
         "load_global_cursor: no project row for id=%s", _active_project_id))
-    local value = query:value(0)
-    if value and value > 0 then
-        global_state.current_sequence_number = value
+    local cursor_val = query:value(0)
+    local tip_val = query:value(1)
+    if cursor_val and cursor_val > 0 then
+        global_state.current_sequence_number = cursor_val
     else
         global_state.current_sequence_number = nil
     end
+    if tip_val and tip_val > 0 then
+        global_state.current_branch_tip = tip_val
+    else
+        global_state.current_branch_tip = nil
+    end
+    global_state.persisted_global_cursor = cursor_val or 0
     global_state.position_initialized = true
     query:finalize()
 end
@@ -615,78 +780,121 @@ function M.find_merged_undo_target(active_seq_id)
 end
 
 --- Find the next command to redo in the merged view.
--- Returns the command with the lowest timestamp among the children of each cursor.
+--
+-- The redo target on each scope (per-sequence, global) is the immediate
+-- child of `cursor` on the path toward `tip`. Walking the parent chain
+-- from tip toward cursor and returning the node whose parent == cursor
+-- gives that child deterministically — branches that the user moved
+-- away from (orphans) are NOT reachable because they aren't on the
+-- cursor→tip path.
+--
 -- @param active_seq_id string: active sequence ID
 -- @return table|nil: {sequence_number, command_type, sequence_id, timestamp, undo_group_id}
 function M.find_merged_redo_target(active_seq_id)
     if not db then return nil end
 
-    local seq_cursor = M.get_sequence_cursor(active_seq_id)
-    local global_cursor = M.get_global_cursor()
+    -- Compute (cursor, tip) for both scopes.
+    local seq_cursor = M.get_sequence_cursor(active_seq_id) or 0
+    local global_cursor = M.get_global_cursor() or 0
 
-    local seq_child
-    local global_child
+    local seq_state = active_seq_id and undo_stack_states[M.stack_id_for_sequence(active_seq_id)]
+    local seq_tip = seq_state and seq_state.current_branch_tip or 0
+    local global_tip = undo_stack_states[GLOBAL_STACK_ID]
+        and undo_stack_states[GLOBAL_STACK_ID].current_branch_tip or 0
 
-    -- Helper: parse a redo child from a query result
-    local function parse_redo_child(q)
-        if not q:exec() or not q:next() then
-            q:finalize()
-            return nil
+    -- Walk the parent chain from `tip` upward, collecting only rows that
+    -- match this scope (per-seq sequence_id OR global sequence_id IS NULL).
+    -- Cross-scope ancestors are walked THROUGH but not collected — a
+    -- per-sequence chain often roots at a global command (Import,
+    -- RelinkClips, etc.); the per-seq scope's "branch" is the subsequence
+    -- of scope-matching commands within the parent chain.
+    --
+    -- Once the walk completes (root reached), the redo target is:
+    --   * cursor == 0: the deepest scope-matching command (last in collected
+    --                  list; closest to root) — nothing applied yet on this
+    --                  scope, redo the first.
+    --   * cursor == N: the scope-matching command immediately above N in the
+    --                  collected list (closer to tip). If N isn't in the
+    --                  list, the cursor sits on a stale path — return nil
+    --                  (no valid redo).
+    local function fetch_command_row(seq_num)
+        local q = assert(db:prepare([[
+            SELECT sequence_number, parent_sequence_number, command_type,
+                   sequence_id, timestamp, undo_group_id
+            FROM commands WHERE sequence_number = ?
+        ]]), "find_merged_redo_target: failed to prepare row fetch")
+        q:bind_value(1, seq_num)
+        local row = nil
+        if q:exec() and q:next() then
+            row = {
+                sequence_number = q:value(0),
+                parent          = q:value(1),
+                command_type    = q:value(2),
+                sequence_id     = q:value(3),
+                timestamp       = q:value(4),
+                undo_group_id   = q:value(5),
+            }
         end
-        local ts = q:value(3)
-        assert(ts, string.format(
-            "find_merged_redo_target: redo child at seq=%s has NULL timestamp",
-            tostring(q:value(0))))
-        local child = {
-            sequence_number = q:value(0),
-            command_type = q:value(1),
-            sequence_id = q:value(2),
-            timestamp = ts,
-            undo_group_id = q:value(4),
-        }
         q:finalize()
-        return child
+        return row
     end
 
-    -- Find redo child for active sequence
-    if active_seq_id then
-        local parent = seq_cursor or 0
-        local q = db:prepare([[
-            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
-            FROM commands
-            WHERE (parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0))
-              AND sequence_id = ?
-              AND command_type NOT LIKE 'Undo%'
-            ORDER BY sequence_number DESC LIMIT 1
-        ]])
-        assert(q, "find_merged_redo_target: failed to prepare seq query")
-        q:bind_value(1, parent)
-        q:bind_value(2, parent)
-        q:bind_value(3, active_seq_id)
-        seq_child = parse_redo_child(q)
+    local function pack(row)
+        return {
+            sequence_number = row.sequence_number,
+            command_type    = row.command_type,
+            sequence_id     = row.sequence_id,
+            timestamp       = assert(row.timestamp, string.format(
+                "find_merged_redo_target: row at seq=%d has NULL timestamp",
+                row.sequence_number)),
+            undo_group_id   = row.undo_group_id,
+        }
     end
 
-    -- Find redo child for global
-    do
-        local parent = global_cursor or 0
-        local q = db:prepare([[
-            SELECT sequence_number, command_type, sequence_id, timestamp, undo_group_id
-            FROM commands
-            WHERE (parent_sequence_number IS ? OR (parent_sequence_number IS NULL AND ? = 0))
-              AND sequence_id IS NULL
-              AND command_type NOT LIKE 'Undo%'
-            ORDER BY sequence_number DESC LIMIT 1
-        ]])
-        assert(q, "find_merged_redo_target: failed to prepare global query")
-        q:bind_value(1, parent)
-        q:bind_value(2, parent)
-        global_child = parse_redo_child(q)
+    -- Walk tip→root collecting scope-matching rows in tip-first order.
+    -- The redo target is the scope-matching row whose
+    -- `parent_sequence_number == cursor`. The cursor can validly point at
+    -- a row on a DIFFERENT scope (because parent_sequence_number forms a
+    -- single tree across scopes — the global cursor often lands on a
+    -- per-sequence command after undoing a global command whose parent
+    -- was on the sequence stack, and vice versa). So we match by parent
+    -- equality, not by position-in-collected.
+    --
+    -- cursor==0 case: any row whose parent_sequence_number IS NULL or 0
+    -- counts (root of the tree). Among multiple such candidates on the
+    -- path (rare; would require multiple scope-matching rows that all
+    -- root the tree), prefer the one closest to tip — that's the user's
+    -- current branch.
+    local function find_child_toward_tip(cursor, tip, scope_matches)
+        if tip == 0 or tip <= cursor then return nil end
+        local seq = tip
+        while seq and seq > 0 do
+            local row = fetch_command_row(seq)
+            if not row then break end
+            local parent = row.parent or 0
+            if scope_matches(row)
+                and not row.command_type:match("^Undo")
+                and parent == cursor then
+                return pack(row)
+            end
+            seq = row.parent  -- nil when row.parent is NULL → loop exits
+        end
+        return nil
     end
 
-    -- Pick the one with the lower sequence_number (earliest undone).
-    -- Sequence numbers are monotonically assigned, so lower = earlier.
-    -- Timestamps have only second resolution, so same-second commands
-    -- would tie-break wrong if compared by timestamp alone.
+    local function seq_scope(row) return row.sequence_id == active_seq_id end
+    local function global_scope(row) return row.sequence_id == nil end
+
+    local seq_child = active_seq_id
+        and find_child_toward_tip(seq_cursor, seq_tip, seq_scope)
+        or nil
+    local global_child = find_child_toward_tip(global_cursor, global_tip, global_scope)
+
+    -- Merge tie-break: both candidates are now legitimate on-branch
+    -- redos (the orphan-resurrection class is gone). Picking the lower
+    -- sequence_number matches the pre-tip behavior and is the small
+    -- ergonomic question we deferred — fix later if the asymmetry with
+    -- find_merged_undo_target bites in practice.
     if seq_child and global_child then
         if global_child.sequence_number < seq_child.sequence_number then
             return global_child

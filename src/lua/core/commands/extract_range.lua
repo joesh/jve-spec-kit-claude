@@ -30,12 +30,12 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_insert_mutation(command, sequence_id, {
                 id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
                 name = mut.name,
-                nested_sequence_id = mut.nested_sequence_id,
+                sequence_id = mut.sequence_id,
                 master_layer_track_id = mut.master_layer_track_id,
                 master_audio_track_id = mut.master_audio_track_id,
                 fps_mismatch_policy = mut.fps_mismatch_policy,
@@ -49,7 +49,7 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_update_mutation(command, sequence_id, {
                 clip_id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
@@ -82,7 +82,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, track in ipairs(tracks) do
             local ok, err, mutations = clip_mutator.resolve_occlusions(db, {
                 track_id = track.id,
-                timeline_start = mark_in,
+                sequence_start = mark_in,
                 duration = range_duration,
             })
             if not ok then

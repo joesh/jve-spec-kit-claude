@@ -50,7 +50,7 @@ end
 local REQUIRED_COLUMNS = {
     "project_id", "owner_sequence_id", "track_id", "media_id",
     "source_in_frame", "source_out_frame",
-    "timeline_start_frame", "duration_frames",
+    "sequence_start_frame", "duration_frames",
     "enabled", "volume", "playhead_frame",
 }
 
@@ -71,6 +71,27 @@ local function to_int_bool(v)
     error("MediaRef: boolean must be true/false or 1/0; got " .. tostring(v))
 end
 
+-- 018 V3 / FR-008: AUDIO media_refs MUST carry audio_sample_rate; the
+-- resolver depends on it for sample math. Pull track_type and assert
+-- explicitly — no silent default (rule 2.13).
+local function assert_audio_rate_for_kind(db, fields, id)
+    local stmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(stmt, "MediaRef.create: prepare track_type query failed")
+    stmt:bind_value(1, fields.track_id)
+    assert(stmt:exec(), "MediaRef.create: track_type query failed")
+    assert(stmt:next(), string.format(
+        "MediaRef.create: track not found for track_id=%s (media_ref=%s)",
+        tostring(fields.track_id), tostring(id)))
+    local tt = stmt:value(0)
+    stmt:finalize()
+    if tt == "AUDIO" then
+        assert(fields.audio_sample_rate ~= nil, string.format(
+            "MediaRef.create: AUDIO media_ref %s missing audio_sample_rate "
+            .. "(track_id=%s; rule 2.13 — no silent default; FR-008 requires it)",
+            tostring(id), tostring(fields.track_id)))
+    end
+end
+
 --- Create a media_ref row. Returns its id.
 --- Enforces "media_refs must be owned by a kind='master' sequence" at write time.
 function M.create(fields)
@@ -80,15 +101,25 @@ function M.create(fields)
     local db = database.get_connection()
     local id = fields.id or uuid.generate()
     M.assert_owning_is_master(db, id, fields.owner_sequence_id)
+    assert_audio_rate_for_kind(db, fields, id)
 
     local now = fields.created_at or os.time()
+    -- 018 (V11): audio_sample_rate denormalized from media for resolver hot path.
+    -- Required when the underlying media has audio (FR-008 needs it for sample math).
+    -- NULL only for video-only media_refs.
+    if fields.audio_sample_rate ~= nil then
+        assert(type(fields.audio_sample_rate) == "number" and fields.audio_sample_rate > 0,
+            string.format("MediaRef.create: audio_sample_rate must be positive integer when provided; got %s",
+                tostring(fields.audio_sample_rate)))
+    end
     local stmt = db:prepare([[
         INSERT INTO media_refs (
             id, project_id, owner_sequence_id, track_id, media_id,
-            source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+            source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+            audio_sample_rate,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "MediaRef.create: failed to prepare INSERT")
     stmt:bind_value(1, id)
@@ -98,15 +129,16 @@ function M.create(fields)
     stmt:bind_value(5, fields.media_id)
     stmt:bind_value(6, fields.source_in_frame)
     stmt:bind_value(7, fields.source_out_frame)
-    stmt:bind_value(8, fields.timeline_start_frame)
+    stmt:bind_value(8, fields.sequence_start_frame)
     stmt:bind_value(9, fields.duration_frames)
-    stmt:bind_value(10, to_int_bool(fields.enabled))
-    stmt:bind_value(11, fields.volume)
-    stmt:bind_value(12, fields.mark_in_frame)   -- nullable
-    stmt:bind_value(13, fields.mark_out_frame)  -- nullable
-    stmt:bind_value(14, fields.playhead_frame)
-    stmt:bind_value(15, now)
-    stmt:bind_value(16, fields.modified_at or now)
+    stmt:bind_value(10, fields.audio_sample_rate)  -- nullable per V11
+    stmt:bind_value(11, to_int_bool(fields.enabled))
+    stmt:bind_value(12, fields.volume)
+    stmt:bind_value(13, fields.mark_in_frame)   -- nullable
+    stmt:bind_value(14, fields.mark_out_frame)  -- nullable
+    stmt:bind_value(15, fields.playhead_frame)
+    stmt:bind_value(16, now)
+    stmt:bind_value(17, fields.modified_at or now)
 
     local ok = stmt:exec()
     stmt:finalize()
@@ -121,7 +153,8 @@ function M.find(id)
     local db = database.get_connection()
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, media_id,
-               source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
+               source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+               audio_sample_rate,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
                created_at, modified_at
         FROM media_refs WHERE id = ?
@@ -139,15 +172,16 @@ function M.find(id)
             media_id = stmt:value(4),
             source_in_frame = stmt:value(5),
             source_out_frame = stmt:value(6),
-            timeline_start_frame = stmt:value(7),
+            sequence_start_frame = stmt:value(7),
             duration_frames = stmt:value(8),
-            enabled = stmt:value(9) == 1,
-            volume = stmt:value(10),
-            mark_in_frame = stmt:value(11),
-            mark_out_frame = stmt:value(12),
-            playhead_frame = stmt:value(13),
-            created_at = stmt:value(14),
-            modified_at = stmt:value(15),
+            audio_sample_rate = stmt:value(9),
+            enabled = stmt:value(10) == 1,
+            volume = stmt:value(11),
+            mark_in_frame = stmt:value(12),
+            mark_out_frame = stmt:value(13),
+            playhead_frame = stmt:value(14),
+            created_at = stmt:value(15),
+            modified_at = stmt:value(16),
         }
     end
     stmt:finalize()
@@ -159,7 +193,7 @@ end
 -- media_ref between masters/tracks is a higher-level operation, not a bare UPDATE.
 local UPDATABLE_COLUMNS = {
     source_in_frame = true, source_out_frame = true,
-    timeline_start_frame = true, duration_frames = true,
+    sequence_start_frame = true, duration_frames = true,
     enabled = true, volume = true,
     mark_in_frame = true, mark_out_frame = true,
     playhead_frame = true,

@@ -30,10 +30,9 @@ local function determine_next_index(sequence_id, track_type, provided_index)
     stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, track_type)
 
-    local max_index = 0
-    if stmt:exec() and stmt:next() then
-        max_index = stmt:value(0) or 0
-    end
+    assert(stmt:exec(), "Track.determine_next_index: exec failed")
+    assert(stmt:next(), "Track.determine_next_index: aggregate returned no row")
+    local max_index = stmt:value(0)
     stmt:finalize()
 
     return max_index + 1
@@ -56,6 +55,12 @@ local function build_track(track_type, name, sequence_id, opts)
         soloed = opts.soloed == true,
         volume = opts.volume or 1.0, -- NSF-OK: 1.0 = unity gain (domain default for new tracks)
         pan = opts.pan or 0.0, -- NSF-OK: 0.0 = center pan (domain default for new tracks)
+        -- NSF-OK: 'ripple' is the domain default (spec §3, matches schema DEFAULT).
+        sync_mode = opts.sync_mode or "ripple",
+        -- NSF-OK: autoselect ON is the domain default (spec §3 FR-038,
+        -- matches schema DEFAULT 1). New track participates in selection-
+        -- driven ops until the user opts out via the rec-patch-id click.
+        autoselect = opts.autoselect ~= false,
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -85,7 +90,7 @@ function Track.load(id)
 
     local stmt = conn:prepare([[
         SELECT id, sequence_id, name, track_type, track_index,
-               enabled, locked, muted, soloed, volume, pan
+               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect
         FROM tracks WHERE id = ?
     ]])
 
@@ -99,6 +104,12 @@ function Track.load(id)
         return nil
     end
 
+    local sync_mode_val = stmt:value(11)
+    assert(sync_mode_val and sync_mode_val ~= "", string.format(
+        "Track.load: track %s has NULL sync_mode — project DB is older than "
+        .. "schema_version=10; re-import the project from source (no in-place "
+        .. "migration path per rule 2.15)",
+        tostring(id)))
     local track = {
         id = stmt:value(0),
         sequence_id = stmt:value(1),
@@ -111,6 +122,8 @@ function Track.load(id)
         soloed = stmt:value(8) == 1,
         volume = stmt:value(9),
         pan = stmt:value(10),
+        sync_mode = sync_mode_val,
+        autoselect = stmt:value(12) == 1,
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -127,7 +140,7 @@ function Track.find_by_sequence(sequence_id, track_type)
 
     local sql = [[
         SELECT id, sequence_id, name, track_type, track_index,
-               enabled, locked, muted, soloed, volume, pan
+               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect
         FROM tracks
         WHERE sequence_id = ?
     ]]
@@ -157,8 +170,15 @@ function Track.find_by_sequence(sequence_id, track_type)
     ))
 
     while stmt:next() do
+        local track_id = stmt:value(0)
+        local sync_mode_val = stmt:value(11)
+        assert(sync_mode_val and sync_mode_val ~= "", string.format(
+            "Track.find_by_sequence: track %s has NULL sync_mode — project DB "
+            .. "is older than schema_version=10; re-import the project from "
+            .. "source (no in-place migration path per rule 2.15)",
+            tostring(track_id)))
         local track = {
-            id = stmt:value(0),
+            id = track_id,
             sequence_id = stmt:value(1),
             name = stmt:value(2),
             track_type = stmt:value(3),
@@ -169,6 +189,8 @@ function Track.find_by_sequence(sequence_id, track_type)
             soloed = stmt:value(8) == 1,
             volume = stmt:value(9),
             pan = stmt:value(10),
+            sync_mode = sync_mode_val,
+            autoselect = stmt:value(12) == 1,
             created_at = os.time(),
             modified_at = os.time()
         }
@@ -251,10 +273,13 @@ function Track:save()
 
     -- CRITICAL: Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE
     -- INSERT OR REPLACE triggers DELETE first, which cascades to delete clips via foreign keys!
+    assert(self.sync_mode and self.sync_mode ~= "",
+        string.format("Track.save: sync_mode is required for track %s", tostring(self.id)))
+
     local stmt = conn:prepare([[
         INSERT INTO tracks
-        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             sequence_id = excluded.sequence_id,
             name = excluded.name,
@@ -265,7 +290,9 @@ function Track:save()
             muted = excluded.muted,
             soloed = excluded.soloed,
             volume = excluded.volume,
-            pan = excluded.pan
+            pan = excluded.pan,
+            sync_mode = excluded.sync_mode,
+            autoselect = excluded.autoselect
     ]])
 
     assert(stmt, "Track.save: failed to prepare insert statement")
@@ -281,6 +308,8 @@ function Track:save()
     stmt:bind_value(9, self.soloed and 1 or 0)
     stmt:bind_value(10, self.volume)
     stmt:bind_value(11, self.pan)
+    stmt:bind_value(12, self.sync_mode)
+    stmt:bind_value(13, self.autoselect and 1 or 0)
 
     local ok = stmt:exec()
     if not ok then
@@ -407,7 +436,7 @@ function Track.delete(track_id)
             -- No other V track. If any clip anywhere references this sequence
             -- (acyclic DAG + last video track: we'd orphan the clip's visual content), refuse.
             local ref = db:prepare(
-                "SELECT 1 FROM clips WHERE nested_sequence_id = ? LIMIT 1")
+                "SELECT 1 FROM clips WHERE sequence_id = ? LIMIT 1")
             assert(ref, "Track.delete: ref prepare failed")
             ref:bind_value(1, seq_id)
             assert(ref:exec(), "Track.delete: ref exec failed")

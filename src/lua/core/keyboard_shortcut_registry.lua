@@ -155,24 +155,34 @@ function M.format_shortcut(key, modifiers)
         if bit.band(modifiers, MOD.Shift) ~= 0 then table.insert(parts, "Shift") end
     end
 
-    -- Add key name
+    -- For display, if the canonical form is (unshifted_key + Shift) and
+    -- the unshifted key has a shifted glyph (e.g. 2 → @, ` → ~), show
+    -- the glyph and drop "Shift" from the modifier list — the glyph
+    -- already encodes Shift. Keeps display consistent with what's
+    -- printed on the keycap (US QWERTY).
+    local display_key = key
+    if bit.band(modifiers, MOD.Shift) ~= 0
+        and kb_constants.UNSHIFTED_TO_SHIFTED[key] then
+        display_key = kb_constants.UNSHIFTED_TO_SHIFTED[key]
+        for i = #parts, 1, -1 do
+            if parts[i] == "Shift" then table.remove(parts, i); break end
+        end
+    end
+
     local KEY = kb_constants.KEY
     local key_name = nil
-
-    -- Reverse lookup in KEY table
     for name, code in pairs(KEY) do
-        if code == key then
+        if code == display_key then
             key_name = name
             break
         end
     end
 
     if not key_name then
-        -- Try character
-        if key >= 32 and key < 127 then
-            key_name = string.char(key)
+        if display_key >= 32 and display_key < 127 then
+            key_name = string.char(display_key)
         else
-            key_name = string.format("Key%d", key)
+            key_name = string.format("Key%d", display_key)
         end
     end
 
@@ -243,6 +253,7 @@ function M.assign_shortcut(command_id, shortcut_string, options)
     }}
 
     M.rebuild_qt_shortcuts()
+    M.persist_user_change()
     return true
 end
 
@@ -263,7 +274,7 @@ function M.find_conflict(key, modifiers)
     return bindings[1].command_name
 end
 
--- Remove a shortcut from a command
+-- Remove a shortcut from a command.
 function M.remove_shortcut(command_id, shortcut_string)
     local command = M.commands[command_id]
     if not command then
@@ -298,6 +309,7 @@ function M.remove_shortcut(command_id, shortcut_string)
     end
 
     M.rebuild_qt_shortcuts()
+    M.persist_user_change()
     return true
 end
 
@@ -406,12 +418,57 @@ end
 
 -- ---- Disk-backed presets (write through user_keymap_store) ---------------
 
+-- Per-base autosave: edits to "keys1" are staged to "__autosave__keys1",
+-- edits to Default to "__autosave__Default", etc. The autosave slot is
+-- hidden from the preset list and never displaces the user's named
+-- preset (so a previously-saved "User" preset is no longer clobbered).
+-- Slot is discarded on explicit Save (folding edits back into the base
+-- or a new name) or explicit Load (user asked for the pristine snapshot).
+M.AUTOSAVE_PREFIX = "__autosave__"
+
+local function autosave_slot(base)
+    assert(type(base) == "string" and base ~= "",
+        "autosave_slot: base preset name required")
+    return M.AUTOSAVE_PREFIX .. base
+end
+
+local function is_autosave_slot(name)
+    return name:sub(1, #M.AUTOSAVE_PREFIX) == M.AUTOSAVE_PREFIX
+end
+
+-- Persist current keybindings to the autosave slot for whatever named
+-- preset is currently loaded. current_preset is NOT touched — the user
+-- is still "editing keys1", we've just staged a crash-safe copy.
+function M.persist_user_change()
+    assert(M.current_preset and M.current_preset ~= "",
+        "persist_user_change: current_preset unset")
+    store.write(autosave_slot(M.current_preset), M.serialize_to_toml())
+end
+
+function M.has_autosave(base)
+    if base == nil or base == "" then return false end
+    return store.exists(autosave_slot(base))
+end
+
+function M.discard_autosave(base)
+    if base == nil or base == "" then return end
+    if store.exists(autosave_slot(base)) then
+        store.delete(autosave_slot(base))
+    end
+end
+
 function M.save_preset(preset_name)
     assert(type(preset_name) == "string" and preset_name ~= "",
         "save_preset: preset_name required")
     assert(preset_name ~= M.DEFAULT_PRESET,
         "save_preset: cannot overwrite the bundled Default preset; use Save As")
+    assert(not is_autosave_slot(preset_name),
+        "save_preset: '" .. preset_name .. "' collides with reserved autosave prefix")
     store.write(preset_name, M.serialize_to_toml())
+    -- Explicit Save folds the staged edits back into a named preset —
+    -- drop the autosave slot for the base we were editing. Both same-base
+    -- (Save) and new-name (Save As) flows want this.
+    M.discard_autosave(M.current_preset)
     M.current_preset = preset_name
     return true
 end
@@ -442,6 +499,10 @@ function M.load_preset(preset_name)
     os.remove(tmp)
     M.loaded_toml_path = saved_default
 
+    -- Explicit Load = "give me this preset clean". Any staged autosave
+    -- for it is abandoned. Autosaves for OTHER bases are untouched.
+    M.discard_autosave(preset_name)
+
     M.current_preset = preset_name
     M.rebuild_qt_shortcuts()
     return true
@@ -450,16 +511,22 @@ end
 function M.delete_preset(preset_name)
     assert(preset_name ~= M.DEFAULT_PRESET,
         "delete_preset: cannot delete bundled Default preset")
+    assert(not is_autosave_slot(preset_name),
+        "delete_preset: '" .. preset_name .. "' is an autosave slot; use discard_autosave")
     store.delete(preset_name)
+    M.discard_autosave(preset_name)
     if store.get_active() == preset_name then
         store.set_active(nil)
     end
 end
 
+-- Hide autosave slots from the user-visible preset list.
 function M.list_presets()
     local presets = { M.DEFAULT_PRESET }
     for _, name in ipairs(store.list()) do
-        presets[#presets + 1] = name
+        if not is_autosave_slot(name) then
+            presets[#presets + 1] = name
+        end
     end
     return presets
 end
@@ -478,26 +545,86 @@ function M.set_active_preset(preset_name)
     store.set_active(preset_name)
 end
 
--- Convenience: load the active preset if any, otherwise the bundled default.
--- Caller (keyboard_shortcuts.init) hands us the bundled-default path.
+-- Quarantine a malformed user TOML by renaming it in place to
+-- "<slot>.jvekeys.broken". Keeps the bad file next to the good ones for
+-- forensic access while making it invisible to the preset UI (list()
+-- filters on .jvekeys$, not .broken). The next load_active_or_default
+-- sees a clean slate at the canonical path.
+local function quarantine_slot(slot_name, reason)
+    local dst = store.quarantine_to_broken(slot_name)
+    log.error("keymap '%s' quarantined to %s (%s)",
+        slot_name, tostring(dst), reason)
+end
+
+-- Try to apply `content` (TOML string) via load_keybindings. Returns
+-- success boolean + error message. Never throws — caller decides whether
+-- to quarantine the source slot and continue with the bundled Default.
+local function try_load_from_content(content, file_label)
+    local tmp = string.format("/tmp/jve_load_%s_%d.jvekeys",
+        file_label:gsub("[^%w]", "_"), os.time())
+    local fout, oerr = io.open(tmp, "w")
+    if not fout then return false, "tmp write failed: " .. tostring(oerr) end
+    fout:write(content); fout:close()
+    local ok, err = pcall(M.load_keybindings, tmp)
+    os.remove(tmp)
+    if not ok then return false, tostring(err) end
+    return true
+end
+
+-- Load the user's chosen base preset (named active, or bundled Default).
+-- A malformed preset must NEVER prevent JVE from launching: if parse
+-- fails we quarantine the bad file and fall back to the bundled Default.
 function M.load_active_or_default(default_path)
     assert(type(default_path) == "string", "load_active_or_default: default_path required")
-    -- Always set loaded_toml_path to the bundled default so reset_to_defaults works,
-    -- even when an active preset is loaded.
+    -- Step 1: load the user's chosen base preset (named active, or
+    -- bundled Default if none). loaded_toml_path stays at the bundled
+    -- default so reset_to_defaults works either way.
+    local base
     local active = store.get_active()
+    local loaded_active = false
     if active and store.exists(active) then
-        local content = store.read(active)
-        local tmp = string.format("/tmp/jve_active_preset_%d.jvekeys", os.time())
-        local f = assert(io.open(tmp, "w"))
-        f:write(content); f:close()
-        M.load_keybindings(tmp)
-        os.remove(tmp)
-        M.loaded_toml_path = default_path
-        M.current_preset = active
-    else
-        M.load_keybindings(default_path)
-        M.current_preset = M.DEFAULT_PRESET
+        local ok, err = try_load_from_content(store.read(active), active)
+        if ok then
+            M.loaded_toml_path = default_path
+            base = active
+            loaded_active = true
+        else
+            quarantine_slot(active, err)
+            store.set_active(nil)
+        end
     end
+    if not loaded_active then
+        M.load_keybindings(default_path)
+        base = M.DEFAULT_PRESET
+    end
+
+    -- Step 2: if the base has a staged autosave from a prior session,
+    -- overlay it. Same quarantine policy — a bad autosave must not brick
+    -- the editor. current_preset stays at the base ("editing keys1 with
+    -- unsaved changes"), so the close-prompt provenance is right.
+    if M.has_autosave(base) then
+        local slot = autosave_slot(base)
+        local saved_keybindings = M.keybindings
+        local saved_shortcuts = {}
+        for cid, cmd in pairs(M.commands) do
+            saved_shortcuts[cid] = cmd.current_shortcuts
+        end
+        M.keybindings = {}
+        for _, command in pairs(M.commands) do command.current_shortcuts = {} end
+
+        local ok, err = try_load_from_content(store.read(slot), slot)
+        if ok then
+            M.loaded_toml_path = default_path
+        else
+            quarantine_slot(slot, err)
+            -- Roll back to the clean base load.
+            M.keybindings = saved_keybindings
+            for cid, sc in pairs(saved_shortcuts) do
+                if M.commands[cid] then M.commands[cid].current_shortcuts = sc end
+            end
+        end
+    end
+    M.current_preset = base
 end
 
 -- Reset to defaults: re-load the bundled default TOML, clear active-preset
@@ -511,6 +638,9 @@ function M.reset_to_defaults()
     M.keybindings = {}
 
     M.load_keybindings(M.loaded_toml_path)
+    -- Explicit reset = "give me Default clean". Drop any staged
+    -- autosave for Default; named-preset autosaves are untouched.
+    M.discard_autosave(M.DEFAULT_PRESET)
     M.current_preset = M.DEFAULT_PRESET
     store.set_active(nil)
     M.rebuild_qt_shortcuts()

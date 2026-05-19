@@ -86,10 +86,10 @@ local now = os.time()
 db:exec(string.format(
     "INSERT INTO sequences (id, project_id, name, kind, created_at, modified_at, "
     .. "fps_numerator, fps_denominator, audio_sample_rate, width, height) "
-    .. "VALUES ('seq1', '%s', 'Seq', 'nested', %d, %d, 25, 1, 48000, 1920, 1080)",
+    .. "VALUES ('seq1', '%s', 'Seq', 'sequence', %d, %d, 25, 1, 48000, 1920, 1080)",
     project.id, now, now))
 
--- V13: each clip's nested_sequence_id ('mc_<media_id>') references a
+-- V13: each clip's source_sequence_id ('mc_<media_id>') references a
 -- master sequence wrapping the media. Create those masters via
 -- ensure_master with a stable id, plus add audio_sample_rate metadata
 -- that ensure_master requires.
@@ -130,17 +130,22 @@ db:exec(
 --- Make a clip on a named track at a specific timeline start so we
 --- don't trip the VIDEO_OVERLAP trigger.
 local function make_clip(params)
+    -- 018 INV-3: subframes per track kind (0 for AUDIO, NULL for VIDEO).
+    local sub_in, sub_out = Clip.subframe_defaults_for(
+        require("core.database").get_connection(), params.track_id)
     local c = Clip.create({
         name = "Clip " .. params.id,
         id = params.id,
         project_id = project.id,
         track_id = params.track_id,
-        nested_sequence_id = "mc_" .. params.media_id,
+        sequence_id = "mc_" .. params.media_id,
         owner_sequence_id = "seq1",
-        timeline_start_frame = params.timeline_start,
+        sequence_start_frame = params.sequence_start,
         duration_frames = params.source_out - params.source_in,
         source_in_frame = params.source_in,
         source_out_frame = params.source_out,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -154,15 +159,15 @@ end
 -- Source ranges [100, 300] and [500, 700] at 25fps — extent math
 -- should pick up [100, 700].
 make_clip({ id="clip_a1", media_id="media_a", track_id="track_v1",
-    timeline_start=0,   source_in=100, source_out=300, fps_num=25, fps_den=1 })
+    sequence_start=0,   source_in=100, source_out=300, fps_num=25, fps_den=1 })
 make_clip({ id="clip_a2", media_id="media_a", track_id="track_v1",
-    timeline_start=200, source_in=500, source_out=700, fps_num=25, fps_den=1 })
+    sequence_start=200, source_in=500, source_out=700, fps_num=25, fps_den=1 })
 -- media_b: one clip on track_v1 (after media_a clips). Source [600, 900] at 24fps.
 make_clip({ id="clip_b1", media_id="media_b", track_id="track_v1",
-    timeline_start=400, source_in=600, source_out=900, fps_num=24, fps_den=1 })
+    sequence_start=400, source_in=600, source_out=900, fps_num=24, fps_den=1 })
 -- media_c: audio clip on track_a1 (audio track). Source [1000, 4000] at 48kHz.
 make_clip({ id="clip_c1", media_id="media_c", track_id="track_a1",
-    timeline_start=0,   source_in=1000, source_out=4000, fps_num=48000, fps_den=1 })
+    sequence_start=0,   source_in=1000, source_out=4000, fps_num=48000, fps_den=1 })
 
 -- V13: 'master clips' are master Sequences (already created above),
 -- not timeline clip rows. The legacy V8 fixture inserted an extra

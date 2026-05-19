@@ -32,25 +32,25 @@ database.init(db_path)
 local now = os.time()
 local db = database.get_connection()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
-    -- V13 placeholder master sequence (test references nested_sequence_id='mc_seq' literally)
+    -- V13 placeholder master sequence (test references source_sequence_id='mc_seq' literally)
     db:exec(string.format([[INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('mc_seq_media', 'proj1', 'placeholder', '_placeholder', 10000, 30, 1, 1920, 1080, 0, 'raw', 0, 0)]]))
     db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('mc_seq', 'proj1', 'mc_seq', 'master', 30, 1, 48000, 1920, 1080, 0, 0)]]))
+VALUES ('mc_seq', 'proj1', 'mc_seq', 'master', 30, 1, NULL, 1920, 1080, 0, 0)]]))
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_seq_v1', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v1' WHERE id = 'mc_seq']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mc_seq_mr', 'proj1', 'mc_seq', 'mc_seq_v1', 'mc_seq_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mc_seq_mr', 'proj1', 'mc_seq', 'mc_seq_v1', 'mc_seq_media', 0, 10000, 0, 10000, 48000, 1, 1.0, 0, 0, 0)]]))
 
 -- Timeline sequence
 local seq = Sequence.create("Timeline", "proj1",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested",id = "seq1", audio_sample_rate = 48000})
+    { kind = "sequence",id = "seq1", audio_sample_rate = 48000})
 assert(seq:save(), "setup: save sequence")
 
 db:exec([[
@@ -83,14 +83,14 @@ db:exec([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for media1
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media1', 'proj1', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media1', 'proj1', 'media1_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media1', 'proj1', 'master_media1', 'master_v_media1', 'media1', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'proj1', 'master_media1', 'master_v_media1', 'media1', 0, 10000, 0, 10000, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     
     ('mc_clip', 'proj1', 'Source', 'mc_v1', 'master_media1', 'mc_seq', 0, 10000, 0, 10000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
@@ -98,7 +98,7 @@ VALUES
 
 -- Existing timeline clip with volume=0.3 (quiet clip that will be partially overwritten)
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, volume, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, playhead_frame)
 VALUES
     
     ('existing', 'proj1', 'Quiet', 'v1', 'master_media1', 'seq1', 0, 200, 0, 200, 1, 0.3, %d, %d, NULL, NULL, 'resample', 0);
@@ -111,17 +111,17 @@ local function execute_cmd(name, params)
     params.project_id = params.project_id or "proj1"
     -- V13: Insert/Overwrite take their source range from marks on the
     -- nested_sequence; convert legacy source_in/source_out into marks.
-    if (name == "Insert" or name == "Overwrite") and params.nested_sequence_id then
+    if (name == "Insert" or name == "Overwrite") and params.source_sequence_id then
         if params.source_in and params.source_out then
-            local mc = Sequence.load(params.nested_sequence_id)
+            local mc = Sequence.load(params.source_sequence_id)
             mc:set_in(params.source_in)
             mc:set_out(params.source_out)
             params.source_in = nil
             params.source_out = nil
             params.duration = nil
         end
-        if params.playhead and not params.timeline_start_frame then
-            params.timeline_start_frame = params.playhead
+        if params.playhead and not params.sequence_start_frame then
+            params.sequence_start_frame = params.playhead
             params.playhead = nil
         end
     end
@@ -156,7 +156,7 @@ check("existing clip dur=200", get_clip_field("existing", "duration_frames") == 
 print("\n--- Overwrite ---")
 execute_cmd("Overwrite", {
     sequence_id = "seq1",
-    nested_sequence_id = "mc_seq",
+    source_sequence_id = "mc_seq",
     source_in = 0,
     source_out = 50,
     playhead = 50,
@@ -177,7 +177,7 @@ undo()
 check("undo: existing clip exists", get_clip_field("existing", "id") == "existing")
 check("undo: volume=0.3", math.abs((get_clip_field("existing", "volume") or 0) - 0.3) < 0.001)
 check("undo: duration=200", get_clip_field("existing", "duration_frames") == 200)
-check("undo: timeline_start=0", get_clip_field("existing", "timeline_start_frame") == 0)
+check("undo: sequence_start=0", get_clip_field("existing", "sequence_start_frame") == 0)
 
 -- Summary
 print(string.format("\n%d passed, %d failed", pass_count, fail_count))

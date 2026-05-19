@@ -20,18 +20,18 @@ local layout = ripple_layout.create({
     clips = {
         order = {"v1_left", "v1_middle", "v1_right"},
         v1_left = {
-            timeline_start = 0,
+            sequence_start = 0,
             duration = 1000,
             source_in = 500,
         },
         v1_middle = {
             id = "clip_v1_middle",
-            timeline_start = 1000,
+            sequence_start = 1000,
             duration = 100,  -- Small clip
             source_in = 500,
         },
         v1_right = {
-            timeline_start = 1100,
+            sequence_start = 1100,
             duration = 1000,
             source_in = 500,
         },
@@ -53,7 +53,7 @@ timeline_state.set_edge_selection(edge_infos)
 print("Before edit:")
 local middle = Clip.load(clips.v1_middle.id, layout.db)
 print(string.format("  middle clip: [%d..%d) duration=%d",
-    middle.timeline_start, middle.timeline_start + middle.duration, middle.duration))
+    middle.sequence_start, middle.sequence_start + middle.duration, middle.duration))
 
 print("  selection:")
 for i, edge in ipairs(timeline_state.get_selected_edges()) do
@@ -73,7 +73,7 @@ print("\nAfter edit:")
 middle = Clip.load_optional(clips.v1_middle.id, layout.db)
 if middle then
     print(string.format("  middle clip: [%d..%d) duration=%d",
-        middle.timeline_start, middle.timeline_start + middle.duration, middle.duration))
+        middle.sequence_start, middle.sequence_start + middle.duration, middle.duration))
 else
     print("  middle clip: DELETED or not found")
 end

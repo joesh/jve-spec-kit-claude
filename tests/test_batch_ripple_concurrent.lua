@@ -16,8 +16,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_sequential.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -50,8 +50,8 @@ do
 
     -- Verify downstream clip shifted twice
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(after_right.timeline_start == 2500,
-        string.format("Right clip should shift by total (500 frames), got start=%d", after_right.timeline_start))
+    assert(after_right.sequence_start == 2500,
+        string.format("Right clip should shift by total (500 frames), got start=%d", after_right.sequence_start))
 
     layout:cleanup()
 end
@@ -62,10 +62,10 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_multi_track.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000},
-            v2 = {timeline_start = 0, duration = 1500},
-            v2_right = {timeline_start = 2500, duration = 800}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000},
+            v2 = {sequence_start = 0, duration = 1500},
+            v2_right = {sequence_start = 2500, duration = 800}
         }
     })
 
@@ -98,10 +98,10 @@ do
     -- V1 command shifted all downstream clips by 400, then V2 command shifted all by 300
     -- v1_right: 2000 + 400 + 300 = 2700
     -- v2_right: 2500 + 400 + 300 = 3200
-    assert(v1_after.timeline_start == 2700,
-        string.format("V1 right should shift by both ripples (400+300=700), got %d", v1_after.timeline_start))
-    assert(v2_after.timeline_start == 3200,
-        string.format("V2 right should shift by both ripples (400+300=700), got %d", v2_after.timeline_start))
+    assert(v1_after.sequence_start == 2700,
+        string.format("V1 right should shift by both ripples (400+300=700), got %d", v1_after.sequence_start))
+    assert(v2_after.sequence_start == 3200,
+        string.format("V2 right should shift by both ripples (400+300=700), got %d", v2_after.sequence_start))
 
     layout:cleanup()
 end
@@ -111,7 +111,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_rollback.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 10}  -- Tiny clip
+            v1_left = {sequence_start = 0, duration = 10}  -- Tiny clip
         }
     })
 
@@ -133,8 +133,8 @@ do
     assert(after == nil, "Clip trimmed beyond duration should be DELETED")
 
     local right_after = Clip.load(layout.clips.v1_right.id, layout.db)
-    assert(right_after.timeline_start == before_right.timeline_start - 10,
-        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", right_after.timeline_start))
+    assert(right_after.sequence_start == before_right.sequence_start - 10,
+        string.format("Downstream clip should ripple left by 10 frames (full clip), got %d", right_after.sequence_start))
 
     layout:cleanup()
 end
@@ -144,8 +144,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_undo_isolation.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -183,9 +183,9 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_integrity.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_middle = {timeline_start = 1500, duration = 500},
-            v1_right = {timeline_start = 2500, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_middle = {sequence_start = 1500, duration = 500},
+            v1_right = {sequence_start = 2500, duration = 1000}
         }
     })
 
@@ -207,15 +207,15 @@ do
     local middle = Clip.load(layout.clips.v1_middle.id, layout.db)
     local right = Clip.load(layout.clips.v1_right.id, layout.db)
 
-    local left_end = left.timeline_start + left.duration
-    local middle_end = middle.timeline_start + middle.duration
+    local left_end = left.sequence_start + left.duration
+    local middle_end = middle.sequence_start + middle.duration
 
-    assert(middle.timeline_start >= left_end,
+    assert(middle.sequence_start >= left_end,
         string.format("Middle clip should not overlap left (left ends at %d, middle starts at %d)",
-            left_end, middle.timeline_start))
-    assert(right.timeline_start >= middle_end,
+            left_end, middle.sequence_start))
+    assert(right.sequence_start >= middle_end,
         string.format("Right clip should not overlap middle (middle ends at %d, right starts at %d)",
-            middle_end, right.timeline_start))
+            middle_end, right.sequence_start))
 
     -- Middle should have grown by 5*50=250 frames
     assert(middle.duration == 750,

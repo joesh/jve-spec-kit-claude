@@ -31,12 +31,12 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             fps_mismatch_policy, created_at, modified_at)
-        VALUES ('s', 'p1', 's', 'nested', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
+        VALUES ('s', 'p1', 's', 'sequence', 24, 1, 48000, 1920, 1080, NULL, 0, 0);
     ]]))
     return db
 end

@@ -17,16 +17,16 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 local db = database.get_connection()
 
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('e-v1', 'e', 'V1', 'VIDEO', 1)"))
@@ -34,7 +34,7 @@ assert(db:exec(
 -- (1) NULL track_id is rejected.
 local stmt = db:prepare([[
     INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-        nested_sequence_id, name, timeline_start_frame, duration_frames,
+        sequence_id, name, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES (?, 'p1', 'e', NULL, 'm', 'c', 0, 10, 0, 10, 'passthrough',
@@ -53,7 +53,7 @@ assert(null_err and null_err:lower():find("not null"),
 -- (2) Real track_id succeeds (regression guard).
 local stmt2 = db:prepare([[
     INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-        nested_sequence_id, name, timeline_start_frame, duration_frames,
+        sequence_id, name, sequence_start_frame, duration_frames,
         source_in_frame, source_out_frame, fps_mismatch_policy,
         enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('c-real', 'p1', 'e', 'e-v1', 'm', 'c', 0, 10, 0, 10,

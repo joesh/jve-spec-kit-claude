@@ -112,6 +112,12 @@ package.loaded["core.logger"] = {
 
 local mock_renderer_info = {}
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function(seq_id)
         if mock_renderer_info[seq_id] then return mock_renderer_info[seq_id] end
         return { fps_num = 24, fps_den = 1, kind = "master",
@@ -157,17 +163,30 @@ db:exec(require("import_schema"))
 -- Create a project + media + masterclip sequence
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO media (id, project_id, file_path, name, duration_frames,
-        fps_numerator, fps_denominator, width, height, created_at, modified_at)
+        fps_numerator, fps_denominator, width, height,
+        audio_channels, audio_sample_rate, created_at, modified_at)
     VALUES ('media1', 'proj1', '/test/clip.mov', 'TestClip', 300, 24, 1,
-        1920, 1080, %d, %d);
+        1920, 1080, 2, 48000, %d, %d);
 ]], now, now, now, now))
 
 local mc_id = test_env.create_test_masterclip_sequence(
     "proj1", "TestClip", 24, 1, 300, "media1")
+
+-- 018 FR-005: a project must have at least one record sequence so the audio
+-- bus rate resolver (audio_bus_rate.resolve_for_monitor case 3) can pick it
+-- up without an active sequence having been set yet. No timeline_state
+-- wiring needed — production fall-back handles this.
+assert(db:exec(string.format([[
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
+        playhead_frame, created_at, modified_at)
+    VALUES ('rec1', 'proj1', 'Rec', 'sequence', 24, 1, 48000, 1920, 1080,
+        0, 300, 0, %d, %d)
+]], now, now)))
 
 mock_renderer_info[mc_id] = {
     fps_num = 24, fps_den = 1,
@@ -178,6 +197,13 @@ mock_renderer_info[mc_id] = {
 --------------------------------------------------------------------------------
 -- Load SequenceMonitor
 --------------------------------------------------------------------------------
+
+-- 017: SequenceMonitor.new no longer constructs a local fallback engine
+-- when transport is not bootstrapped (anti-pattern #5 eliminated). Boot
+-- transport for this project so monitors observe the canonical role-bound
+-- engines. Without this self.engine stays nil and the first load_sequence
+-- call fails.
+require("core.playback.transport").init("proj1")
 
 local SequenceMonitor = require("ui.sequence_monitor")
 

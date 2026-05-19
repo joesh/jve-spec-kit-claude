@@ -156,13 +156,19 @@ package.loaded["core.logger"] = {
 -- Mock Renderer (returns info from DB-loaded sequence)
 local mock_renderer_info = {}
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function(seq_id)
         if mock_renderer_info[seq_id] then
             return mock_renderer_info[seq_id]
         end
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test",
+            kind = "sequence", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -239,7 +245,7 @@ assert(db:exec([[
                      fps_numerator, fps_denominator, width, height,
                      audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
     VALUES('media1', 'proj', '/test/clip.mov', 'TestClip', 100, 24, 1,
-           1920, 1080, 2, 48000, 'h264', 0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
+           1920, 1080, 2, 48000, 'h264', 0, 0, '{"start_tc_value":0,"start_tc_rate":24,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}')
 ]]))
 
 -- Create masterclip sequence with stream clip
@@ -259,7 +265,7 @@ assert(db:exec([[
     INSERT INTO sequences(id, project_id, name, kind, fps_numerator, fps_denominator,
                          audio_sample_rate, width, height, view_start_frame, view_duration_frames,
                          playhead_frame, created_at, modified_at)
-    VALUES('timeline1', 'proj', 'MyTimeline', 'nested', 24, 1, 48000, 1920, 1080,
+    VALUES('timeline1', 'proj', 'MyTimeline', 'sequence', 24, 1, 48000, 1920, 1080,
            0, 2000, 0, 0, 0)
 ]]))
 
@@ -272,25 +278,32 @@ assert(db:exec([[
 assert(db:exec([[
     -- V13 master sequence for media1
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('tclip1', 'proj', 'Clip1', 'tv1', 'timeline1', 'master_media1', 0, 50, 0, 50, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
 
 mock_renderer_info["timeline1"] = {
     fps_num = 24, fps_den = 1,
-    kind = "nested", name = "MyTimeline",
+    kind = "sequence", name = "MyTimeline",
     audio_sample_rate = 48000,
 }
 
 --------------------------------------------------------------------------------
 -- Load SequenceMonitor
 --------------------------------------------------------------------------------
+-- 017: bootstrap transport so SequenceMonitor.new resolves the canonical
+-- role-bound engines. The orphan local-engine fallback (anti-pattern #5)
+-- is gone; without transport.init self.engine stays nil and any deref
+-- crashes. Production startup path inits transport at project open; this
+-- test mirrors that.
+require("core.playback.transport").init("proj")
+
 local SequenceMonitor = require("ui.sequence_monitor")
 
 --------------------------------------------------------------------------------

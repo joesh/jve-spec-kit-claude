@@ -11,10 +11,12 @@ function M.run(ctx, db, ops)
         return false, "Invalid delta"
     end
 
+    prepare.load_track_sync_modes(ctx, db)
     prepare.snapshot_edge_infos(ctx)
 
     ops.build_clip_cache(ctx)
     ops.prime_neighbor_bounds_cache(ctx)
+    ops.apply_sync_mode_dispatch(ctx)
     ops.inject_implicit_gap_edges(ctx)
     ops.assign_edge_tracks(ctx)
     ops.determine_lead_edge(ctx)

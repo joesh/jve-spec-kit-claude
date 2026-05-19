@@ -35,8 +35,9 @@ assert(cols["fps_mismatch_policy"].notnull == 1,
 
 local function insert_project(id, policy)
     return db:exec(string.format(
-        "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-        .. "VALUES ('%s', 'n', '%s', 0, 0)", id, policy))
+        "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+        .. "VALUES ('%s', 'n', '%s', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)",
+        id, policy))
 end
 
 assert(insert_project("p-res", "resample"), "policy='resample' must be accepted")

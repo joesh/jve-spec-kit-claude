@@ -9,7 +9,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 9
+M.SCHEMA_VERSION = 11
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -252,28 +252,30 @@ end
 --   2: c.name
 --   3: c.track_id
 --   4: c.owner_sequence_id
---   5: c.nested_sequence_id
---   6: c.timeline_start_frame
+--   5: c.sequence_id
+--   6: c.sequence_start_frame
 --   7: c.duration_frames
 --   8: c.source_in_frame
 --   9: c.source_out_frame
---   10: c.master_layer_track_id
---   11: c.master_audio_track_id
---   12: c.fps_mismatch_policy
---   13: c.enabled
---   14: c.created_at
---   15: c.modified_at
---   16: t.sequence_id            (track's owning sequence — must match owner_sequence_id)
---   17: t.track_type             ('VIDEO' or 'AUDIO')
---   18: owner_seq.fps_numerator  (owner sequence timebase)
---   19: owner_seq.fps_denominator
---   20: nested_seq.kind          ('master' or 'nested')
---   21: nested_seq.fps_numerator (clip-side / source-side timebase = nested seq's rate)
---   22: nested_seq.fps_denominator
---   23: mr.media_id              (NULL when nested is itself nested, or master has no media_ref)
---   24: m.name                   (NULL when no media join)
---   25: m.file_path              (NULL when no media join)
---   26: m.offline_note           (NULL when no media join)
+--   10: c.source_in_subframe    (018; NULL for video, INTEGER for audio)
+--   11: c.source_out_subframe   (018; NULL for video, INTEGER for audio)
+--   12: c.master_layer_track_id
+--   13: c.master_audio_track_id
+--   14: c.fps_mismatch_policy
+--   15: c.enabled
+--   16: c.created_at
+--   17: c.modified_at
+--   18: t.sequence_id            (track's owning sequence — must match owner_sequence_id)
+--   19: t.track_type             ('VIDEO' or 'AUDIO')
+--   20: owner_seq.fps_numerator  (owner sequence timebase)
+--   21: owner_seq.fps_denominator
+--   22: nested_seq.kind          ('master' or 'sequence')
+--   23: nested_seq.fps_numerator (clip-side / source-side timebase = nested seq's rate)
+--   24: nested_seq.fps_denominator
+--   25: mr.media_id              (NULL when nested is itself nested, or master has no media_ref)
+--   26: m.name                   (NULL when no media join)
+--   27: m.file_path              (NULL when no media join)
+--   28: m.offline_note           (NULL when no media join)
 local function build_clip_from_query_row(query, requested_sequence_id)
     if not query then
         return nil
@@ -290,7 +292,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
     end
 
     local owner_sequence_id = query:value(4)
-    local track_sequence_id = query:value(16)
+    local track_sequence_id = query:value(18)
     if not owner_sequence_id then
         error(string.format(
             "FATAL: load_clips: clip %s missing owner_sequence_id",
@@ -304,26 +306,26 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local nested_sequence_id = query:value(5)
-    if not nested_sequence_id then
+    local sequence_id = query:value(5)
+    if not sequence_id then
         error(string.format(
-            "FATAL: load_clips: clip %s missing nested_sequence_id",
+            "FATAL: load_clips: clip %s missing sequence_id",
             tostring(clip_id)
         ))
     end
 
-    local nested_kind = query:value(20)
-    local nested_fps_num = query:value(21)
-    local nested_fps_den = query:value(22)
+    local source_kind = query:value(22)
+    local nested_fps_num = query:value(23)
+    local nested_fps_den = query:value(24)
     if not nested_fps_num or not nested_fps_den then
         error(string.format(
             "FATAL: load_clips: missing nested-sequence fps for clip %s (nested=%s)",
-            tostring(clip_id), tostring(nested_sequence_id)
+            tostring(clip_id), tostring(sequence_id)
         ))
     end
 
-    local owner_fps_num = query:value(18)
-    local owner_fps_den = query:value(19)
+    local owner_fps_num = query:value(20)
+    local owner_fps_den = query:value(21)
     if not owner_fps_num or not owner_fps_den then
         error(string.format(
             "FATAL: load_clips: missing owner-sequence fps for clip %s (owner=%s)",
@@ -331,12 +333,12 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         ))
     end
 
-    local media_id = query:value(23)
-    local media_name = query:value(24)
-    local media_path = query:value(25)
-    local offline_note = query:value(26)
+    local media_id = query:value(25)
+    local media_name = query:value(26)
+    local media_path = query:value(27)
+    local offline_note = query:value(28)
 
-    local track_type = query:value(17)
+    local track_type = query:value(19)
 
     local clip = {
         id = clip_id,
@@ -345,30 +347,65 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         track_id = query:value(3),
         owner_sequence_id = owner_sequence_id,
         track_sequence_id = owner_sequence_id,
-        nested_sequence_id = nested_sequence_id,
-        nested_sequence_kind = nested_kind,
-        master_layer_track_id = query:value(10),
-        master_audio_track_id = query:value(11),
-        fps_mismatch_policy = query:value(12),
+        sequence_id = sequence_id,
+        source_sequence_kind = source_kind,
+        master_layer_track_id = query:value(12),
+        master_audio_track_id = query:value(13),
+        fps_mismatch_policy = query:value(14),
 
-        timeline_start = assert(query:value(6), string.format("load_clips: clip %s missing timeline_start", clip_id)),
+        sequence_start = assert(query:value(6), string.format("load_clips: clip %s missing sequence_start", clip_id)),
         duration = assert(query:value(7), string.format("load_clips: clip %s missing duration", clip_id)),
         source_in = assert(query:value(8), string.format("load_clips: clip %s missing source_in", clip_id)),
         source_out = assert(query:value(9), string.format("load_clips: clip %s missing source_out", clip_id)),
 
-        -- The clip's source_in/out are in the NESTED sequence's timebase.
+        -- 018: subframe round-trips through load (NULL for video, INTEGER for audio).
+        source_in_subframe = query:value(10),
+        source_out_subframe = query:value(11),
+        -- T018 tripwire (defense-in-depth mirror of FR-013 subframe-by-kind): if a row reaches
+        -- the load path with a kind/subframe-presence mismatch, the schema
+        -- triggers should have already blocked the write — but a raw SQL
+        -- bypass or a partial migration would surface here at read time
+        -- rather than silently producing wrong audio math at the resolver.
+        -- Asserts are below after track_type is computed.
+
+        -- The clip's source_in/out are in the source sequence's timebase.
         frame_rate = {
             fps_numerator = nested_fps_num,
             fps_denominator = nested_fps_den,
         },
 
-        enabled = query:value(13) == 1,
-        created_at = query:value(14),
-        modified_at = query:value(15),
+        enabled = query:value(15) == 1,
+        created_at = query:value(16),
+        modified_at = query:value(17),
 
         track_type = track_type,
 
     }
+
+    -- T018 / 018 tripwire (defense-in-depth mirror of FR-013 subframe-by-kind): a clip's
+    -- subframe presence must match its track_type. Schema triggers enforce
+    -- this on writes; this load-side assert catches any raw-SQL bypass and
+    -- dies loudly with the offending clip + track_type + subframe values
+    -- (rule 1.14) rather than letting wrong audio math flow downstream.
+    if track_type == "AUDIO" then
+        assert(clip.source_in_subframe ~= nil
+            and clip.source_out_subframe ~= nil,
+            string.format(
+            "load_clips (INV-3 tripwire): AUDIO clip %s has NULL "
+            .. "source_*_subframe (sub_in=%s, sub_out=%s)",
+            tostring(clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
+    elseif track_type == "VIDEO" then
+        assert(clip.source_in_subframe == nil
+            and clip.source_out_subframe == nil,
+            string.format(
+            "load_clips (INV-3 tripwire): VIDEO clip %s has non-NULL "
+            .. "source_*_subframe (sub_in=%s, sub_out=%s)",
+            tostring(clip_id),
+            tostring(clip.source_in_subframe),
+            tostring(clip.source_out_subframe)))
+    end
     -- V13-resolved chain leaf: nested→master→media_ref→media. Substructure
     -- so consumers see clearly that these are denormalized join results,
     -- not direct columns on `clips`. NULL when the nested sequence is itself
@@ -902,7 +939,7 @@ function M.load_tracks(sequence_id)
     end
 
     local query = db_connection:prepare([[
-        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked
+        SELECT id, name, track_type, track_index, enabled, muted, soloed, locked, sync_mode, autoselect
         FROM tracks
         WHERE sequence_id = ?
         ORDER BY track_type DESC, track_index ASC
@@ -918,6 +955,10 @@ function M.load_tracks(sequence_id)
     local tracks = {}
     if query:exec() then
         while query:next() do
+            local sync_mode = query:value(8)
+            assert(sync_mode and sync_mode ~= "", string.format(
+                "load_tracks: track %s has NULL sync_mode — project DB is older than 015",
+                tostring(query:value(0))))
             table.insert(tracks, {
                 id = query:value(0),
                 name = query:value(1),
@@ -927,6 +968,8 @@ function M.load_tracks(sequence_id)
                 muted = query:value(5) == 1,
                 soloed = query:value(6) == 1,
                 locked = query:value(7) == 1,
+                sync_mode = sync_mode,
+                autoselect = query:value(9) == 1,
             })
         end
     end
@@ -952,9 +995,10 @@ function M.load_clips(sequence_id)
     -- only, otherwise the LEFT JOIN multiplies clips by media_ref count.
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.owner_sequence_id, c.sequence_id,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
+               c.source_in_subframe, c.source_out_subframe,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
@@ -965,8 +1009,8 @@ function M.load_clips(sequence_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
                                 AND EXISTS (
                                     SELECT 1 FROM tracks mt
@@ -976,7 +1020,7 @@ function M.load_clips(sequence_id)
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.owner_sequence_id = ?
         GROUP BY c.id
-        ORDER BY c.timeline_start_frame ASC
+        ORDER BY c.sequence_start_frame ASC
     ]])
 
     if not query then
@@ -1003,6 +1047,116 @@ function M.load_clips(sequence_id)
     return clips
 end
 
+--- Load master sequence content as virtual clip-shaped rows.
+-- Master sequences hold no `clips` rows — their playable content lives in
+-- `media_refs` (each row is one continuous span of a media file pinned at
+-- the file's TC origin on a master track). The timeline view renders
+-- from `data.state.clips`, so to show a master in the timeline view we
+-- synthesize one clip-shaped row per media_ref. FR-007 is the consumer.
+--
+-- The synthesized rows are NOT persisted, NOT mutable through any clip
+-- command path, and carry id="mref:<media_ref_id>" so they're trivially
+-- distinguishable from real clips. Gap-recompute treats them as media
+-- clips (is_gap = nil/false), so gaps fill any unused span on the track.
+function M.load_master_virtual_clips(master_seq_id)
+    assert(master_seq_id and master_seq_id ~= "",
+        "load_master_virtual_clips: master_seq_id required")
+    assert(db_connection, "load_master_virtual_clips: no db connection")
+
+    -- 018 (V11): audio_sample_rate is now per-media_ref (denormalized from
+    -- media at insert), not per-sequence. Masters have NULL
+    -- sequences.audio_sample_rate per FR-004. Every AUDIO media_ref carries
+    -- mr.audio_sample_rate at insert; VIDEO rows leave it NULL.
+    local query = db_connection:prepare([[
+        SELECT mr.id, mr.project_id, mr.track_id,
+               mr.sequence_start_frame, mr.duration_frames,
+               mr.source_in_frame, mr.source_out_frame,
+               mr.enabled,
+               t.track_type, t.name AS track_name,
+               s.fps_numerator, s.fps_denominator,
+               m.id, m.name, m.file_path, m.offline_note
+        FROM media_refs mr
+        JOIN tracks t ON t.id = mr.track_id
+        JOIN sequences s ON s.id = mr.owner_sequence_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE mr.owner_sequence_id = ?
+        ORDER BY mr.sequence_start_frame ASC
+    ]])
+    assert(query, "load_master_virtual_clips: failed to prepare query")
+    query:bind_value(1, master_seq_id)
+
+    local clips = {}
+    if query:exec() then
+        while query:next() do
+            local mref_id    = query:value(0)
+            local proj_id    = query:value(1)
+            local track_id   = query:value(2)
+            local seq_start   = query:value(3)
+            local duration   = query:value(4)
+            local src_in     = query:value(5)
+            local src_out    = query:value(6)
+            local enabled    = query:value(7) == 1
+            local track_type = query:value(8)
+            local fps_num    = query:value(10)
+            local fps_den    = query:value(11)
+            local media_id   = query:value(12)
+            local media_name = query:value(13)
+            local media_path = query:value(14)
+            local offline_note = query:value(15)
+
+            assert(seq_start, "load_master_virtual_clips: media_ref missing sequence_start_frame")
+            assert(duration, "load_master_virtual_clips: media_ref missing duration_frames")
+            assert(src_in and src_out, "load_master_virtual_clips: media_ref missing source range")
+
+            -- Post placement-unit unification (2026-05-16): every media_ref's
+            -- sequence_start_frame and duration_frames live in master.fps
+            -- frames regardless of track_type. For dual-medium masters that's
+            -- video fps; for audio-only masters master.fps == sample_rate so
+            -- "frames at master.fps" === samples. No per-track-type conversion
+            -- needed here — the old samples→frames divide produced ~2000×
+            -- under-sized audio virtual clips that vanished off-screen
+            -- (TSO 2026-05-16: src tab on V+A master showed empty A1/A2).
+
+            local clip = {
+                id = "mref:" .. mref_id,
+                project_id = proj_id,
+                name = media_name or "",
+                track_id = track_id,
+                owner_sequence_id = master_seq_id,
+                track_sequence_id = master_seq_id,
+                sequence_id = master_seq_id,
+                source_sequence_kind = "master",
+                sequence_start = seq_start,
+                duration = duration,
+                source_in = src_in,    -- source-media units (samples for audio, frames for video)
+                source_out = src_out,
+                frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },
+                enabled = enabled,
+                track_type = track_type,
+                is_master_virtual = true,  -- mark for any consumer that needs to special-case
+            }
+            if media_id then
+                clip.resolved_media = {
+                    id = media_id,
+                    name = media_name,
+                    path = media_path,
+                    offline_note = offline_note,
+                }
+                clip.media_path = media_path
+                clip.offline = (offline_note ~= nil)
+            else
+                clip.offline = false
+            end
+            clip.label = media_name and media_name ~= "" and media_name
+                or (media_path and extract_filename(media_path))
+                or ("Media " .. tostring(mref_id):sub(1, 8))
+
+            table.insert(clips, clip)
+        end
+    end
+    return clips
+end
+
 function M.load_clip_entry(clip_id)
     if not clip_id or clip_id == "" then
         return nil
@@ -1014,9 +1168,10 @@ function M.load_clip_entry(clip_id)
 
     local query = db_connection:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.owner_sequence_id, c.sequence_id,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
+               c.source_in_subframe, c.source_out_subframe,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
                c.enabled, c.created_at, c.modified_at,
@@ -1027,8 +1182,8 @@ function M.load_clip_entry(clip_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
         LEFT JOIN media m ON m.id = mr.media_id
         WHERE c.id = ?
@@ -1043,7 +1198,7 @@ function M.load_clip_entry(clip_id)
 
     local clip = nil
     if query:exec() and query:next() then
-        clip = build_clip_from_query_row(query, query:value(16))
+        clip = build_clip_from_query_row(query, query:value(18))  -- 018: t.sequence_id shifted from 16 → 18 after subframe cols at 10,11
     end
 
     query:finalize()
@@ -1223,7 +1378,7 @@ local function build_master_clip_entry(q)
         media_id       = media_id,
 
         -- Listing-level defaults (browsers display the whole master).
-        timeline_start = 0,
+        sequence_start = 0,
         duration       = media_duration or 0,
         source_in      = 0,
         source_out     = media_duration or 0,
@@ -1309,7 +1464,7 @@ function M.load_sequences(project_id)
         SELECT id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                playhead_frame, view_start_frame, view_duration_frames
         FROM sequences
-        WHERE project_id = ? AND kind = 'nested'
+        WHERE project_id = ? AND kind = 'sequence'
         ORDER BY name
     ]])
     if not query then
@@ -1342,8 +1497,8 @@ function M.load_sequences(project_id)
         local clips = M.load_clips(sequence.id)
         local max_end = 0  -- integer frames
         for _, clip in ipairs(clips) do
-            if clip.timeline_start and clip.duration then
-                local clip_end = clip.timeline_start + clip.duration
+            if clip.sequence_start and clip.duration then
+                local clip_end = clip.sequence_start + clip.duration
                 if clip_end > max_end then
                     max_end = clip_end
                 end

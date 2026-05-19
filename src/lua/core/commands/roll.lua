@@ -7,12 +7,12 @@
 -- so resample and passthrough clips can sit across a roll.
 --
 -- Effect:
---   A.timeline_start_frame  unchanged
+--   A.sequence_start_frame  unchanged
 --   A.duration_frames       += N
 --   A.source_in_frame       unchanged
 --   A.source_out_frame      += owner_delta_to_source(A.policy, N, ...)
 --
---   B.timeline_start_frame  += N
+--   B.sequence_start_frame  += N
 --   B.duration_frames       -= N
 --   B.source_in_frame       += owner_delta_to_source(B.policy, N, ...)
 --   B.source_out_frame      unchanged
@@ -20,7 +20,7 @@
 -- Pre-conditions (all loud-fail, DB unchanged on refusal):
 --   - delta_timeline_frames != 0
 --   - A and B both on this sequence
---   - B.timeline_start == A.timeline_start + A.duration (truly adjacent)
+--   - B.sequence_start == A.sequence_start + A.duration (truly adjacent)
 --   - A.duration + N > 0 AND B.duration - N > 0 (neither collapses)
 --   - source window is non-empty with lower bound >= 0 on both sides post-write (checked via Clip.update)
 --
@@ -69,10 +69,10 @@ function M.execute(args)
         "Roll: clips must be on the same track (outgoing=%s, incoming=%s)",
         a.track_id, b.track_id))
 
-    local a_end = a.timeline_start_frame + a.duration_frames
-    assert(b.timeline_start_frame == a_end, string.format(
+    local a_end = a.sequence_start_frame + a.duration_frames
+    assert(b.sequence_start_frame == a_end, string.format(
         "Roll: clips not adjacent — outgoing ends at %d but incoming starts at %d",
-        a_end, b.timeline_start_frame))
+        a_end, b.sequence_start_frame))
 
     local new_a_duration = a.duration_frames + N
     local new_b_duration = b.duration_frames - N
@@ -85,8 +85,8 @@ function M.execute(args)
 
     local owner = Sequence.find(args.sequence_id)
     assert(owner, "Roll: owner sequence not found")
-    local a_nested = Sequence.find(a.nested_sequence_id)
-    local b_nested = Sequence.find(b.nested_sequence_id)
+    local a_nested = Sequence.find(a.sequence_id)
+    local b_nested = Sequence.find(b.sequence_id)
     assert(a_nested and b_nested,
         "Roll: outgoing or incoming nested sequence not found")
 
@@ -100,11 +100,11 @@ function M.execute(args)
         b_nested.fps_numerator, b_nested.fps_denominator)
 
     local new_a_source_out   = a.source_out_frame + a_source_delta
-    local new_b_timeline     = b.timeline_start_frame + N
+    local new_b_timeline     = b.sequence_start_frame + N
     local new_b_source_in    = b.source_in_frame + b_source_delta
 
     if N > 0 then
-        Clip.assert_within_master_coverage(a.nested_sequence_id, new_a_source_out,
+        Clip.assert_within_master_coverage(a.sequence_id, new_a_source_out,
             "Roll outgoing=" .. args.outgoing_clip_id)
     end
 
@@ -117,7 +117,7 @@ function M.execute(args)
     -- pcall unwinds to ROLLBACK TO SAVEPOINT, leaving DB untouched.
     local function update_a()
         Clip.update_bounds(args.outgoing_clip_id,
-            a.timeline_start_frame, new_a_duration,
+            a.sequence_start_frame, new_a_duration,
             a.source_in_frame, new_a_source_out)
     end
     local function update_b()
@@ -147,13 +147,13 @@ function M.execute(args)
         delta            = N,
         prior = {
             outgoing = {
-                timeline_start_frame = a.timeline_start_frame,
+                sequence_start_frame = a.sequence_start_frame,
                 duration_frames      = a.duration_frames,
                 source_in_frame      = a.source_in_frame,
                 source_out_frame     = a.source_out_frame,
             },
             incoming = {
-                timeline_start_frame = b.timeline_start_frame,
+                sequence_start_frame = b.sequence_start_frame,
                 duration_frames      = b.duration_frames,
                 source_in_frame      = b.source_in_frame,
                 source_out_frame     = b.source_out_frame,
@@ -183,14 +183,14 @@ local function emit_mutations(command, args)
         updates = {
             {
                 clip_id          = args.outgoing_clip_id,
-                start_value      = a.timeline_start_frame,
+                start_value      = a.sequence_start_frame,
                 duration_value   = a.duration_frames,
                 source_in_value  = a.source_in_frame,
                 source_out_value = a.source_out_frame,
             },
             {
                 clip_id          = args.incoming_clip_id,
-                start_value      = b.timeline_start_frame,
+                start_value      = b.sequence_start_frame,
                 duration_value   = b.duration_frames,
                 source_in_value  = b.source_in_frame,
                 source_out_value = b.source_out_frame,
@@ -226,12 +226,12 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local cur_a = Clip.load_v13_row(args.outgoing_clip_id)
         local restore_a = function()
             Clip.update_bounds(args.outgoing_clip_id,
-                prior.outgoing.timeline_start_frame, prior.outgoing.duration_frames,
+                prior.outgoing.sequence_start_frame, prior.outgoing.duration_frames,
                 prior.outgoing.source_in_frame, prior.outgoing.source_out_frame)
         end
         local restore_b = function()
             Clip.update_bounds(args.incoming_clip_id,
-                prior.incoming.timeline_start_frame, prior.incoming.duration_frames,
+                prior.incoming.sequence_start_frame, prior.incoming.duration_frames,
                 prior.incoming.source_in_frame, prior.incoming.source_out_frame)
         end
         assert(database.savepoint(SAVEPOINT), "Undo Roll: savepoint failed")

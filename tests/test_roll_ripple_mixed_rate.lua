@@ -84,19 +84,19 @@ run("roll audio: source_in changes in samples", function()
         order = {"left", "right", "downstream"},
         left = {
             id = "clip_left", name = "Left", track_key = "a1", media_key = "main",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             source_in = 96000,  -- 2 seconds in samples
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
         right = {
             id = "clip_right", name = "Right", track_key = "a1", media_key = "main",
-            timeline_start = 100, duration = 100,
+            sequence_start = 100, duration = 100,
             source_in = 288000,  -- 6 seconds
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
         downstream = {
             id = "clip_ds", name = "Downstream", track_key = "a1", media_key = "main",
-            timeline_start = 200, duration = 50,
+            sequence_start = 200, duration = 50,
             source_in = 480000,  -- 10 seconds
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
@@ -136,7 +136,7 @@ run("roll audio: source_in changes in samples", function()
 
     -- Downstream should NOT shift (roll)
     local ds = Clip.load("clip_ds")
-    assert(ds.timeline_start == 200, "Downstream shifted — roll acted as ripple!")
+    assert(ds.sequence_start == 200, "Downstream shifted — roll acted as ripple!")
 
     command_manager.undo()
     layout:cleanup()
@@ -151,13 +151,13 @@ run("ripple audio: source_in in samples, downstream shifts", function()
         order = {"clip_a", "clip_b"},
         clip_a = {
             id = "clip_a", name = "A", track_key = "a1", media_key = "main",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             source_in = 48000,
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
         clip_b = {
             id = "clip_b", name = "B", track_key = "a1", media_key = "main",
-            timeline_start = 100, duration = 100,
+            sequence_start = 100, duration = 100,
             source_in = 240000,
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
@@ -188,7 +188,7 @@ run("ripple audio: source_in in samples, downstream shifts", function()
 
     -- B should shift right by 20 frames
     local b = Clip.load("clip_b")
-    assert(b.timeline_start == 120, "B should shift to 120")
+    assert(b.sequence_start == 120, "B should shift to 120")
 
     command_manager.undo()
     layout:cleanup()
@@ -204,19 +204,19 @@ run("audio: roll vs ripple produce different downstream results", function()
             order = {"x", "y", "z"},
             x = {
                 id = "clip_x", name = "X", track_key = "a1", media_key = "main",
-                timeline_start = 0, duration = 100,
+                sequence_start = 0, duration = 100,
                 source_in = 96000,
                 fps_numerator = AUDIO_RATE, fps_denominator = 1,
             },
             y = {
                 id = "clip_y", name = "Y", track_key = "a1", media_key = "main",
-                timeline_start = 100, duration = 200,
+                sequence_start = 100, duration = 200,
                 source_in = 288000,
                 fps_numerator = AUDIO_RATE, fps_denominator = 1,
             },
             z = {
                 id = "clip_z", name = "Z", track_key = "a1", media_key = "main",
-                timeline_start = 300, duration = 100,
+                sequence_start = 300, duration = 100,
                 source_in = 672000,
                 fps_numerator = AUDIO_RATE, fps_denominator = 1,
             },
@@ -237,7 +237,7 @@ run("audio: roll vs ripple produce different downstream results", function()
     })
     roll_cmd:set_parameter("delta_frames", 15)
     command_manager.execute(roll_cmd)
-    local z_after_roll = Clip.load("clip_z").timeline_start
+    local z_after_roll = Clip.load("clip_z").sequence_start
     command_manager.undo()
     l1:cleanup()
 
@@ -250,7 +250,7 @@ run("audio: roll vs ripple produce different downstream results", function()
     })
     rip_cmd:set_parameter("delta_frames", 15)
     command_manager.execute(rip_cmd)
-    local z_after_ripple = Clip.load("clip_z").timeline_start
+    local z_after_ripple = Clip.load("clip_z").sequence_start
     command_manager.undo()
     l2:cleanup()
 

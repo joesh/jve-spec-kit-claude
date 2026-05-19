@@ -6,7 +6,7 @@
 -- Forward path:
 --   1. Validate the target is a kind='master' sequence.
 --   2. Find timeline clips that reference this master via
---      clips.nested_sequence_id (these are the "in-use" sites).
+--      clips.sequence_id (these are the "in-use" sites).
 --   3. If any references exist and force≠true, refuse with an in-use
 --      report — the UI confirms with the user before retrying force=true.
 --   4. With force=true: delete referencing clips first (capturing them
@@ -80,8 +80,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local snapshots = {}
         local stmt = db:prepare([[
             SELECT c.id, c.project_id, c.name, c.track_id,
-                   c.nested_sequence_id, c.owner_sequence_id,
-                   c.timeline_start_frame, c.duration_frames,
+                   c.sequence_id, c.owner_sequence_id,
+                   c.sequence_start_frame, c.duration_frames,
                    c.source_in_frame, c.source_out_frame,
                    c.master_layer_track_id, c.master_audio_track_id,
                    c.fps_mismatch_policy,
@@ -90,7 +90,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                    t.track_type
             FROM clips c
             JOIN tracks t ON c.track_id = t.id
-            WHERE c.nested_sequence_id = ?
+            WHERE c.sequence_id = ?
         ]])
         if not stmt then return nil end
         stmt:bind_value(1, seq_id)
@@ -99,9 +99,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 snapshots[#snapshots + 1] = {
                     id = stmt:value(0), project_id = stmt:value(1),
                     name = stmt:value(2), track_id = stmt:value(3),
-                    nested_sequence_id = stmt:value(4),
+                    sequence_id = stmt:value(4),
                     owner_sequence_id = stmt:value(5),
-                    timeline_start = stmt:value(6),
+                    sequence_start = stmt:value(6),
                     duration = stmt:value(7),
                     source_in = stmt:value(8), source_out = stmt:value(9),
                     master_layer_track_id = stmt:value(10),
@@ -115,7 +115,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     mark_out = stmt:value(18),
                     playhead_frame = stmt:value(19),
                     track_type = stmt:value(20),
-                    sequence_id = stmt:value(5),  -- alias for cache invalidation
                 }
             end
         end
@@ -211,8 +210,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Re-INSERT one previously-deleted timeline clip from the snapshot.
     -- Asserts the snapshot fields the schema requires (NOT NULL columns).
     local function restore_timeline_clip(stmt, snap)
-        assert(snap.nested_sequence_id and snap.nested_sequence_id ~= "",
-            "UndoDeleteMasterClip: snap " .. tostring(snap.id) .. " missing nested_sequence_id")
+        assert(snap.sequence_id and snap.sequence_id ~= "",
+            "UndoDeleteMasterClip: snap " .. tostring(snap.id) .. " missing sequence_id")
         assert(snap.name and snap.fps_mismatch_policy
             and type(snap.created_at) == "number"
             and type(snap.modified_at) == "number"
@@ -224,9 +223,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         stmt:bind_value(2, snap.project_id)
         stmt:bind_value(3, snap.name)
         stmt:bind_value(4, snap.track_id)
-        stmt:bind_value(5, snap.nested_sequence_id)
+        stmt:bind_value(5, snap.sequence_id)
         stmt:bind_value(6, snap.owner_sequence_id)
-        stmt:bind_value(7, snap.timeline_start)
+        stmt:bind_value(7, snap.sequence_start)
         stmt:bind_value(8, snap.duration)
         stmt:bind_value(9, snap.source_in)
         stmt:bind_value(10, snap.source_out)
@@ -252,13 +251,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command_helper.add_insert_mutation(command, snap.owner_sequence_id, {
             id                    = snap.id,
             track_id              = snap.track_id,
-            start_value           = snap.timeline_start,
+            start_value           = snap.sequence_start,
             duration_value        = snap.duration,
             source_in_value       = snap.source_in,
             source_out_value      = snap.source_out,
             enabled               = snap.enabled,
             name                  = snap.name,
-            nested_sequence_id    = snap.nested_sequence_id,
+            sequence_id    = snap.sequence_id,
             master_layer_track_id = snap.master_layer_track_id,
             master_audio_track_id = snap.master_audio_track_id,
             fps_mismatch_policy   = snap.fps_mismatch_policy,
@@ -274,8 +273,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local stmt = assert(db:prepare([[
             INSERT INTO clips (
                 id, project_id, name, track_id,
-                nested_sequence_id, owner_sequence_id,
-                timeline_start_frame, duration_frames,
+                sequence_id, owner_sequence_id,
+                sequence_start_frame, duration_frames,
                 source_in_frame, source_out_frame,
                 master_layer_track_id, master_audio_track_id,
                 fps_mismatch_policy,

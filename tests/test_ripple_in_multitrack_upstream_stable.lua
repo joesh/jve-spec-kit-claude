@@ -68,18 +68,19 @@ local tests = {
 },
 
 {
-    name = "in-edge V1 only: blocked by adjacent audio (Do red)",
-    -- Trim B's head right. F can't shift left past D's out-edge.
-    -- D out-edge is the blocker (shown red in UI).
-    -- Whole operation blocked: nothing moves.
+    name = "in-edge V1 only: co-located audio co-trims (Do ripple)",
+    -- 015 'ripple' semantics: B and D are co-located (same start 200, same end 500).
+    -- When V1.B's in-edge shrinks by +40, A1.D (co-located) is co-trimmed too.
+    -- In-edge ripple: sequence_start stays fixed (200), end moves left by 40.
+    -- Both B and D become 200-460 (duration 260); downstream E and F shift to 460.
     before = [[
         V1: [A 0-200][B 200-500][E 500-700]
         A1: [C 0-200][D 200-500][F 500-700]
     ]],
     drag = "B in 40",
     after = [[
-        V1: [A 0-200][B 200-500][E 500-700]
-        A1: [C 0-200][D 200-500][F 500-700]
+        V1: [A 0-200][B 200-460][E 460-660]
+        A1: [C 0-200][D 200-460][F 460-660]
     ]],
 },
 
@@ -97,15 +98,54 @@ local tests = {
 },
 
 {
-    name = "in-edge extend left V1 only: downstream shifts right",
+    name = "in-edge extend V1: spanning leading gap doesn't drag boundary to 0",
+    -- A3 has only a content clip starting at frame 1500 — a LEADING
+    -- gap [0, 1500) spans the V1 in-edge boundary 100. Before the
+    -- fix, inject_implicit_gap_edges injected a synthetic "in" edge
+    -- for that spanning gap; compute_ripple_point returned the gap's
+    -- sequence_start = 0, collapsing earliest_ripple_time to 0 and
+    -- sweeping the entire timeline into the GLOBAL shift block.
+    -- Result: every clip on every other track (including A2.Upstream
+    -- at frame 30) would shift +50 (Joe's "long stereo mix moves
+    -- with a V4 trim" bug). A3.LateClip should still ripple +50
+    -- because it IS downstream of the boundary.
     before = [[
         V1: [A 100-400][B 400-600]
-        A1: [C 100-400][D 400-600]
+        A2: [Upstream 30-90]
+        A3: [LateClip 1500-2000]
     ]],
     drag = "A in -50",
     after = [[
         V1: [A 100-450][B 450-650]
-        A1: [C 100-400][D 450-650]
+        A2: [Upstream 30-90]
+        A3: [LateClip 1550-2050]
+    ]],
+},
+
+{
+    name = "in-edge extend V1: A1 clip at the boundary ripples too",
+    -- A's in-edge dragged upstream by 50. Everything at-or-past the OLD
+    -- in-edge boundary (frame 100) on ripple tracks shifts +50. That
+    -- includes A1.C which starts exactly at the boundary — the existing
+    -- ripple-boundary code computed the boundary as the clip's OUT edge
+    -- regardless of edge_type, which excluded boundary-coincident clips
+    -- from the shift (Joe's V4-extends-but-V1-clip-doesn't-ripple bug).
+    --
+    -- A2.LongMix SPANS the boundary (starts at 0, ends at 700) — this
+    -- is the long stereo-mix pattern in real projects. Its timeline
+    -- start is upstream of the boundary, so the ripple shift must NOT
+    -- move it. Without this case the test would pass even if the impl
+    -- erroneously dragged the spanning clip along with the shift.
+    before = [[
+        V1: [A 100-400][B 400-600]
+        A1: [C 100-400][D 400-600]
+        A2: [LongMix 0-700]
+    ]],
+    drag = "A in -50",
+    after = [[
+        V1: [A 100-450][B 450-650]
+        A1: [C 150-450][D 450-650]
+        A2: [LongMix 0-700]
     ]],
 },
 
@@ -114,17 +154,18 @@ local tests = {
 -- ─────────────────────────────────────────────────────────────────────────────
 
 {
-    name = "boundary adjacency: blocked by adjacent audio (Co red)",
-    -- D starts at 500 = A's right edge. C ends at 500. Zero gap.
-    -- D can't shift left past C's out-edge. Whole operation blocked.
+    name = "boundary adjacency: co-located audio co-trims (Co ripple)",
+    -- 015 'ripple' semantics: A and C are co-located (same start 0, same end 500).
+    -- When V1.A's out-edge shrinks by -100, A1.C (co-located) is co-trimmed too.
+    -- Both A and C become 0-400; downstream B and D shift left to 400.
     before = [[
         V1: [A 0-500][B 500-800]
         A1: [C 0-500][D 500-800]
     ]],
     drag = "A out -100",
     after = [[
-        V1: [A 0-500][B 500-800]
-        A1: [C 0-500][D 500-800]
+        V1: [A 0-400][B 400-700]
+        A1: [C 0-400][D 400-700]
     ]],
 },
 
@@ -483,13 +524,13 @@ do
         clips = {
             order = {"v1_a", "v1_b", "a1_c", "a1_d"},
             v1_a = {id = "clip_A", name = "A", track_key = "v1", media_key = "main",
-                     timeline_start = 0, duration = 300, source_in = 0},
+                     sequence_start = 0, duration = 300, source_in = 0},
             v1_b = {id = "clip_B", name = "B", track_key = "v1", media_key = "main",
-                     timeline_start = 300, duration = 200, source_in = 400},
+                     sequence_start = 300, duration = 200, source_in = 400},
             a1_c = {id = "clip_C", name = "C", track_key = "a1", media_key = "main",
-                     timeline_start = 0, duration = 300, source_in = 0},
+                     sequence_start = 0, duration = 300, source_in = 0},
             a1_d = {id = "clip_D", name = "D", track_key = "a1", media_key = "main",
-                     timeline_start = 300, duration = 200, source_in = 400},
+                     sequence_start = 300, duration = 200, source_in = 400},
         },
     })
 
@@ -506,7 +547,7 @@ do
 
     -- Verify change happened
     local b = Clip.load("clip_B")
-    assert(b.timeline_start == 250, "undo test: B should be at 250 after trim")
+    assert(b.sequence_start == 250, "undo test: B should be at 250 after trim")
 
     -- Undo
     local undo_result = command_manager.undo()
@@ -515,9 +556,9 @@ do
     -- All clips restored
     local function check(id, exp_start, exp_dur)
         local c = Clip.load(id)
-        assert(c.timeline_start == exp_start and c.duration == exp_dur,
+        assert(c.sequence_start == exp_start and c.duration == exp_dur,
             string.format("undo: %s expected %d-%d, got %d-%d",
-                id, exp_start, exp_start + exp_dur, c.timeline_start, c.timeline_start + c.duration))
+                id, exp_start, exp_start + exp_dur, c.sequence_start, c.sequence_start + c.duration))
     end
     check("clip_A", 0, 300)
     check("clip_B", 300, 200)

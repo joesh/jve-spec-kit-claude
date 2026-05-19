@@ -7,7 +7,7 @@
 --- Domain rules pinned here:
 ---
 ---   * After a clip write, content-length is the max of every clip's
----     (timeline_start + duration). Empty clips → 0.
+---     (sequence_start + duration). Empty clips → 0.
 ---
 ---   * Viewport-math reads (`get_timeline_extent`, `set_viewport_start_time`,
 ---     etc.) read the cached value WITHOUT re-scanning clips. The scan
@@ -50,16 +50,16 @@ end
 -- Set up a clip list and refresh the cache once.
 -- ----------------------------------------------------------------------
 data.state.clips = {
-    { timeline_start = 0,    duration = 100, track_id = "t1" },
-    { timeline_start = 200,  duration = 50,  track_id = "t1" },
-    { timeline_start = 1000, duration = 250, track_id = "t2" },
+    { sequence_start = 0,    duration = 100, track_id = "t1" },
+    { sequence_start = 200,  duration = 50,  track_id = "t1" },
+    { sequence_start = 1000, duration = 250, track_id = "t2" },
 }
 data.update_content_length()
 local baseline_recomputes = recompute_calls
 
 -- max(0+100, 200+50, 1000+250) = 1250
 assert(data.state.content_length == 1250, string.format(
-    "content_length must equal max(timeline_start + duration) over all clips; "
+    "content_length must equal max(sequence_start + duration) over all clips; "
     .. "expected 1250, got %s", tostring(data.state.content_length)))
 
 -- ----------------------------------------------------------------------
@@ -80,7 +80,7 @@ assert(type(data.set_clips) == "function",
     "timeline_state_data.set_clips must exist (the canonical setter that "
     .. "keeps content_length in sync with the clip list)")
 data.set_clips({
-    { timeline_start = 0, duration = 50, track_id = "t1" },
+    { sequence_start = 0, duration = 50, track_id = "t1" },
 })
 assert(data.state.content_length == 50, string.format(
     "set_clips must refresh content_length to the new max immediately; got %s",

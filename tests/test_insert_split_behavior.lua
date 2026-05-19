@@ -29,11 +29,11 @@ db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 -- Insert Project/Sequence (24fps)
 local now = os.time()
 db:exec(string.format([[ 
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[ 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[ 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -76,7 +76,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
 
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Media 1 Master", 24, 1, 1000, "media_1")
 
 -- Create Clip A (0-100 frames)
@@ -85,8 +85,8 @@ local clip_a = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -103,8 +103,8 @@ local clip_c = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 200,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 200,
         source_out_frame = 300,
@@ -128,17 +128,17 @@ print("Created Clip A (0-100) and Clip C (200-300)")
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(20)
 mc_seq:save()
 
 local cmd = Command.create("Insert", "project")
-cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+cmd:set_parameter("source_sequence_id", source_sequence_id)
 cmd:set_parameter("target_video_track_id", "track_v1")
 cmd:set_parameter("sequence_id", "sequence")
-cmd:set_parameter("timeline_start_frame", 50)
+cmd:set_parameter("sequence_start_frame", 50)
 cmd:set_parameter("clip_name", "Clip B")
 
 -- Register Insert Command
@@ -163,7 +163,7 @@ print("✅ Insert succeeded")
 -- Parse result to get output parameters (reference to cmd might not update if copied)
 local executed_cmd = _G.qt_json_decode(result.result_data)
 -- local b_id = executed_cmd.parameters and executed_cmd.parameters.clip_id
-local stmt = db:prepare("SELECT id FROM clips WHERE timeline_start_frame = 50 AND track_id = 'track_v1' AND duration_frames = 20")
+local stmt = db:prepare("SELECT id FROM clips WHERE sequence_start_frame = 50 AND track_id = 'track_v1' AND duration_frames = 20")
 stmt:exec()
 stmt:next()
 local b_id = stmt:value(0)
@@ -218,10 +218,10 @@ else
 end
 
 -- Clip B (Inserted)
-if b_after.timeline_start == 50 then
+if b_after.sequence_start == 50 then
     print("✅ Clip B start is 50 (Correct)")
 else
-    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.timeline_start))
+    print(string.format("❌ Clip B start mismatch: expected 50, got %d", b_after.sequence_start))
     os.exit(1)
 end
 if b_after.duration == 20 then
@@ -233,10 +233,10 @@ end
 
 -- Clip A (Right)
 -- Should start at 50 + 20 = 70.
-if a_right_after.timeline_start == 70 then
+if a_right_after.sequence_start == 70 then
     print("✅ Clip A (Right) start is 70 (Correct)")
 else
-    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.timeline_start))
+    print(string.format("❌ Clip A (Right) start mismatch: expected 70, got %d", a_right_after.sequence_start))
     os.exit(1)
 end
 -- Duration should be 100 - 50 = 50.
@@ -249,10 +249,10 @@ end
 
 -- Clip C (Rippled)
 -- Should start at 200 + 20 = 220.
-if c_after.timeline_start == 220 then
+if c_after.sequence_start == 220 then
     print("✅ Clip C start is 220 (Correct)")
 else
-    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.timeline_start))
+    print(string.format("❌ Clip C start mismatch: expected 220, got %d", c_after.sequence_start))
     os.exit(1)
 end
 

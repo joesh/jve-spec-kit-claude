@@ -67,14 +67,14 @@ function M.calculate_state_hash(project_id, sequence_id)
         ]], {sequence_id}, 5, "tracks")
 
         append_query([[
-            SELECT c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
+            SELECT c.track_id, c.id, c.sequence_start_frame, c.duration_frames,
                    c.enabled, c.source_in_frame, c.source_out_frame,
-                   c.nested_sequence_id, c.master_layer_track_id,
+                   c.sequence_id, c.master_layer_track_id,
                    c.master_audio_track_id, c.fps_mismatch_policy
             FROM clips c
             JOIN tracks t ON c.track_id = t.id
             WHERE t.sequence_id = ?
-            ORDER BY t.track_index, c.timeline_start_frame, c.id
+            ORDER BY t.track_index, c.sequence_start_frame, c.id
         ]], {sequence_id}, 11, "clips")
     else
         -- Full project mode (legacy, unused in hot path)
@@ -101,15 +101,15 @@ function M.calculate_state_hash(project_id, sequence_id)
         ]], {project_id}, 5, "tracks")
 
         append_query([[
-            SELECT t.sequence_id, c.track_id, c.id, c.timeline_start_frame, c.duration_frames,
+            SELECT t.sequence_id, c.track_id, c.id, c.sequence_start_frame, c.duration_frames,
                    c.enabled, c.source_in_frame, c.source_out_frame,
-                   c.nested_sequence_id, c.master_layer_track_id,
+                   c.sequence_id, c.master_layer_track_id,
                    c.master_audio_track_id, c.fps_mismatch_policy
             FROM clips c
             JOIN tracks t ON c.track_id = t.id
             JOIN sequences s ON t.sequence_id = s.id
             WHERE s.project_id = ?
-            ORDER BY t.sequence_id, t.track_index, c.timeline_start_frame, c.id
+            ORDER BY t.sequence_id, t.track_index, c.sequence_start_frame, c.id
         ]], {project_id}, 12, "clips")
 
         append_query([[

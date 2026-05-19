@@ -47,7 +47,7 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'seq', 'proj', 'Sequence', 'nested',
+        'seq', 'proj', 'Sequence', 'sequence',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -60,19 +60,19 @@ assert(db:exec([[
 
     -- V13 master sequence + track + media_ref for media1
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+VALUES ('master_media1', 'proj', 'media1_master', 'master', 30, 1, NULL, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media1', 'master_media1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media1' WHERE id = 'master_media1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000, 0, 1000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media1', 'proj', 'master_media1', 'master_v_media1', 'media1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     
     ('clipA', 'proj', 'Clip A', 'v1', 'master_media1', 'seq', 0, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     
     ('clipB', 'proj', 'Clip B', 'v1', 'master_media1', 'seq', 100, 200, 100, 300, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
@@ -159,14 +159,14 @@ assert(db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'mc_seq', 'proj', 'MC Seq', 'nested',
+        'mc_seq', 'proj', 'MC Seq', 'sequence',
         24, 1, 48000,
         1920, 1080,
         0, 240, 0,
         '[]', '[]', '[]',
         0, 0, 0
     );
-    -- V13: clip references a master sequence via nested_sequence_id.
+    -- V13: clip references a master sequence via sequence_id.
     INSERT INTO sequences (
         id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -176,7 +176,7 @@ assert(db:exec([[
     )
     VALUES (
         'mc_master', 'proj', 'MC Master', 'master',
-        24, 1, 48000,
+        24, 1, NULL,
         1920, 1080,
         0, 240, 0,
         0, 0
@@ -188,10 +188,10 @@ assert(db:exec([[
     VALUES ('mc_master_v', 'mc_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     UPDATE sequences SET default_video_layer_track_id = 'mc_master_v' WHERE id = 'mc_master';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_mc_master', 'proj', 'mc_master', 'mc_master_v', 'media1',
-        0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]]))
 
 local Clip = require("models.clip")
@@ -200,8 +200,8 @@ Clip.create({
         id = "clip7",
         project_id = "proj",
         track_id = "mc_v1",
-        owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-        timeline_start_frame = 0,
+        owner_sequence_id = "mc_seq", sequence_id = "mc_master",
+        sequence_start_frame = 0,
         duration_frames = 500,
         source_in_frame = 0,
         source_out_frame = 500,
@@ -235,8 +235,8 @@ Clip.create({
         id = "clip8",
         project_id = "proj",
         track_id = "mc_v1",
-        owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-        timeline_start_frame = 500,
+        owner_sequence_id = "mc_seq", sequence_id = "mc_master",
+        sequence_start_frame = 500,
         duration_frames = 500,
         source_in_frame = 0,
         source_out_frame = 500,
@@ -279,8 +279,8 @@ local ok10 = pcall(Clip.create, {
     id = "clip_bad_mark",
     project_id = "proj",
     track_id = "mc_v1",
-    owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-    timeline_start_frame = 1000,
+    owner_sequence_id = "mc_seq", source_sequence_id = "mc_master",
+    sequence_start_frame = 1000,
     duration = 100,
     source_in = 0,
     source_out = 100,
@@ -308,8 +308,8 @@ local ok11 = pcall(Clip.create, {
     id = "clip_bad_mark2",
     project_id = "proj",
     track_id = "mc_v1",
-    owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-    timeline_start_frame = 1100,
+    owner_sequence_id = "mc_seq", source_sequence_id = "mc_master",
+    sequence_start_frame = 1100,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,
@@ -330,8 +330,8 @@ local ok12 = pcall(Clip.create, {
     id = "clip_bad_ph",
     project_id = "proj",
     track_id = "mc_v1",
-    owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-    timeline_start_frame = 1200,
+    owner_sequence_id = "mc_seq", source_sequence_id = "mc_master",
+    sequence_start_frame = 1200,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,
@@ -371,8 +371,8 @@ local ok15 = pcall(Clip.create, {
     id = "clip_bad_ph2",
     project_id = "proj",
     track_id = "mc_v1",
-    owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-    timeline_start_frame = 1300,
+    owner_sequence_id = "mc_seq", source_sequence_id = "mc_master",
+    sequence_start_frame = 1300,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,
@@ -393,8 +393,8 @@ local clip16 = Clip.create({
         id = "clip16",
         project_id = "proj",
         track_id = "mc_v1",
-        owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-        timeline_start_frame = 1400,
+        owner_sequence_id = "mc_seq", sequence_id = "mc_master",
+        sequence_start_frame = 1400,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -423,8 +423,8 @@ print("Test 17: save rejects nil playhead_frame...")
 local clip17 = Clip.create({
         name = "Corrupt PH", id = "clip17",
         project_id = "proj", track_id = "mc_v1",
-        owner_sequence_id = "mc_seq", nested_sequence_id = "mc_master",
-        timeline_start_frame = 1500, duration_frames = 100,
+        owner_sequence_id = "mc_seq", sequence_id = "mc_master",
+        sequence_start_frame = 1500, duration_frames = 100,
         source_in_frame = 0, source_out_frame = 100,
         fps_mismatch_policy = "resample", volume = 1.0,
         playhead_frame = 0, enabled = 1,

@@ -39,20 +39,20 @@ db:exec([[
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('p1', 'TL Sync Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('p1', 'TL Sync Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'p1', 'Seq1', 'nested', 24000, 1001, 48000, 1920, 1080,
+    VALUES ('seq1', 'p1', 'Seq1', 'sequence', 24000, 1001, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', %d, %d);
 
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
     VALUES ('t1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-    -- V13 placeholder master sequence for clip's nested_sequence_id FK.
+    -- V13 placeholder master sequence for clip's sequence_id FK.
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, width, height, audio_channels, codec,
         created_at, modified_at)
@@ -60,16 +60,16 @@ db:exec(string.format([[
         1920, 1080, 0, 'raw', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('mc_seq', 'p1', 'MC', 'master', 24000, 1001, 48000, 1920, 1080, %d, %d);
+    VALUES ('mc_seq', 'p1', 'MC', 'master', 24000, 1001, NULL, 1920, 1080, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
     VALUES ('mc_seq_v', 'mc_seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     UPDATE sequences SET default_video_layer_track_id = 'mc_seq_v' WHERE id = 'mc_seq';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id,
-        source_in_frame, source_out_frame, timeline_start_frame, duration_frames,
-        enabled, volume, playhead_frame, created_at, modified_at)
+        source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
+        audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mc_seq_mr', 'p1', 'mc_seq', 'mc_seq_v', 'mc_media',
-        0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
+        0, 1000, 0, 1000, 48000, 1, 1.0, 0, %d, %d);
 ]], now, now, now, now, now, now, now, now, now, now))
 
 -- Clip insert via prepared statement. The `db:exec` multi-statement path
@@ -77,9 +77,9 @@ db:exec(string.format([[
 -- CHECK violations as loud failures.
 do
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, nested_sequence_id,
+        INSERT INTO clips (id, project_id, owner_sequence_id, sequence_id,
             track_id, name,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+            sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, 'resample', ?, ?, ?, ?, ?)

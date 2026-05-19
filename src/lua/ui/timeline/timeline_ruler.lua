@@ -79,8 +79,13 @@ function M.create(widget, state_module)
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
         timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
 
-        local mark_in_frame = state_module.get_mark_in and state_module.get_mark_in()
-        local mark_out_frame = state_module.get_mark_out and state_module.get_mark_out()
+        -- Use display-aware marks (FR-038): source marks when Source tab, record marks when Record tab.
+        assert(state_module.get_display_mark_in,
+            "timeline_ruler: state_module missing get_display_mark_in — timeline_state required")
+        assert(state_module.get_display_mark_out,
+            "timeline_ruler: state_module missing get_display_mark_out — timeline_state required")
+        local mark_in_frame  = state_module.get_display_mark_in()
+        local mark_out_frame = state_module.get_display_mark_out()
 
         local function draw_mark_region()
             if not mark_in_frame and not mark_out_frame then return end
@@ -118,7 +123,31 @@ function M.create(widget, state_module)
             draw_handle(mark_out_frame)
         end
 
+        -- Ghost mark (FR-036/FR-037): computed 4th mark when 3 of 4 are set.
+        -- Rendered as a dashed vertical bar with a "(computed)" text label.
+        local function draw_ghost_mark()
+            assert(state_module.get_ghost_mark,
+                "timeline_ruler: state_module missing get_ghost_mark — timeline_state required")
+            local ghost = state_module.get_ghost_mark()
+            if not ghost then return end
+            local gf = ghost.frame
+            if gf < viewport_start_frames or gf > viewport_end_frames then return end
+
+            local gx = state_module.time_to_pixel(gf, width)
+            local DASH = 4
+            local GAP  = 4
+            local GHOST_COLOR = "#aaaaaa"
+            local y = 0
+            while y < M.RULER_HEIGHT do
+                local dash_h = math.min(DASH, M.RULER_HEIGHT - y)
+                timeline.add_rect(ruler.widget, gx, y, 2, dash_h, GHOST_COLOR)
+                y = y + DASH + GAP
+            end
+            timeline.add_text(ruler.widget, gx + 4, 2, "(computed)", GHOST_COLOR)
+        end
+
         draw_mark_region()
+        draw_ghost_mark()
 
         -- Get sequence frame rate
         local frame_rate = get_frame_rate()
@@ -308,7 +337,7 @@ function M.create(widget, state_module)
                 state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
-                    sequence_id = state_module.get_sequence_id(),
+                    sequence_id = state_module.get_movement_target_sequence_id(),
                     playhead_position = snapped_frame,
                 })
                 state_module.set_dragging_playhead(true)
@@ -330,7 +359,7 @@ function M.create(widget, state_module)
                 state_module.set_playhead_position(snapped_frame)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
-                    sequence_id = state_module.get_sequence_id(),
+                    sequence_id = state_module.get_movement_target_sequence_id(),
                     playhead_position = snapped_frame,
                 })
             end
@@ -395,6 +424,16 @@ function M.create(widget, state_module)
         end
     end
     timeline.set_mouse_event_handler(widget, handler_name)
+
+    -- Re-render on widget resize. Without this, the ruler retains its
+    -- previous frame of pixels when the headers-column width drag shrinks
+    -- or grows the ruler's width: time_to_pixel(playhead, width) depends on
+    -- the widget's current width, so a stale render leaves the playhead at
+    -- its old x while the timeline view (which already listens for resize)
+    -- redraws at the new x — yielding two visible playhead lines.
+    local resize_name = "ruler_resize_" .. tostring(widget):gsub("[^%w]", "_")
+    _G[resize_name] = function() render() end
+    timeline.set_resize_event_handler(widget, resize_name)
 
     -- Listen to state changes
     state_module.add_listener(profile_scope.wrap("timeline_ruler.render", render))

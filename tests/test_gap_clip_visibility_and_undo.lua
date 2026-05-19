@@ -18,9 +18,9 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         order = {"v1_left", "v1_mid", "v1_right"},
-        v1_left = { timeline_start = 0, duration = 500, source_in = 100 },
-        v1_mid = { id = "clip_v1_mid", timeline_start = 700, duration = 300, source_in = 100 },
-        v1_right = { timeline_start = 1200, duration = 500, source_in = 100 },
+        v1_left = { sequence_start = 0, duration = 500, source_in = 100 },
+        v1_mid = { id = "clip_v1_mid", sequence_start = 700, duration = 300, source_in = 100 },
+        v1_right = { sequence_start = 1200, duration = 500, source_in = 100 },
     }
 })
 local ts = layout:init_timeline_state()
@@ -98,7 +98,7 @@ assert(track_clip_index, "track clip index should exist")
 -- Verify gap clip IS in the raw index (this is expected — gap clips live in the list)
 local gap_in_index = false
 for _, clip in ipairs(track_clip_index) do
-    if clip.is_gap == true and clip.timeline_start == 500 then
+    if clip.is_gap == true and clip.sequence_start == 500 then
         gap_in_index = true
         break
     end
@@ -115,7 +115,7 @@ local search_idx = #track_clip_index + 1
 while lo_idx <= hi_idx do
     local mid_idx = math.floor((lo_idx + hi_idx) / 2)
     local c = track_clip_index[mid_idx]
-    if type(c.timeline_start) == "number" and c.timeline_start >= target_frame then
+    if type(c.sequence_start) == "number" and c.sequence_start >= target_frame then
         search_idx = mid_idx
         hi_idx = mid_idx - 1
     else
@@ -127,11 +127,11 @@ if search_idx > 1 then search_idx = search_idx - 1 end
 local cursor_hit = nil
 for i = search_idx, #track_clip_index do
     local c = track_clip_index[i]
-    if type(c.timeline_start) ~= "number" or type(c.duration) ~= "number" then
+    if type(c.sequence_start) ~= "number" or type(c.duration) ~= "number" then
         goto skip
     end
-    if c.timeline_start > target_frame then break end
-    if target_frame >= c.timeline_start and target_frame <= c.timeline_start + c.duration then
+    if c.sequence_start > target_frame then break end
+    if target_frame >= c.sequence_start and target_frame <= c.sequence_start + c.duration then
         cursor_hit = c
         break
     end
@@ -149,8 +149,8 @@ assert(cursor_hit ~= nil and cursor_hit.is_gap == true,
 local track_clips_for_v1 = ts.get_clips_for_track(tracks.v1.id)
 local gap_spans_600 = false
 for _, c in ipairs(track_clips_for_v1) do
-    if c.is_gap == true and c.timeline_start <= 600
-        and (c.timeline_start + c.duration) > 600 then
+    if c.is_gap == true and c.sequence_start <= 600
+        and (c.sequence_start + c.duration) > 600 then
         gap_spans_600 = true
         break
     end
@@ -184,15 +184,15 @@ local gap_found_old_way = nil
 do
     local previous_end = 0
     for _, clip in ipairs(track_clip_index) do
-        if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
+        if type(clip.sequence_start) == "number" and type(clip.duration) == "number" then
             local gap_start = previous_end
-            local gap_end = clip.timeline_start
+            local gap_end = clip.sequence_start
             local gap_duration = gap_end - gap_start
             if gap_duration > 0 and 600 >= gap_start and 600 < gap_end then
                 gap_found_old_way = { start = gap_start, duration = gap_duration }
                 break
             end
-            previous_end = clip.timeline_start + clip.duration
+            previous_end = clip.sequence_start + clip.duration
         end
     end
 end
@@ -208,19 +208,19 @@ print("  ✓ Confirmed: old gap-scanning logic broken by gap clips in list")
 local gap_found_new_way = nil
 for _, clip in ipairs(track_clip_index) do
     if clip.is_gap == true
-        and type(clip.timeline_start) == "number"
+        and type(clip.sequence_start) == "number"
         and type(clip.duration) == "number"
         and clip.duration > 0
-        and 600 >= clip.timeline_start
-        and 600 < clip.timeline_start + clip.duration then
+        and 600 >= clip.sequence_start
+        and 600 < clip.sequence_start + clip.duration then
         gap_found_new_way = clip
         break
     end
 end
 assert(gap_found_new_way ~= nil,
     "New gap-finding logic should find gap clip at position 600")
-assert(gap_found_new_way.timeline_start == 500,
-    string.format("Gap should start at 500, got %d", gap_found_new_way.timeline_start))
+assert(gap_found_new_way.sequence_start == 500,
+    string.format("Gap should start at 500, got %d", gap_found_new_way.sequence_start))
 assert(gap_found_new_way.duration == 200,
     string.format("Gap should be 200 frames, got %d", gap_found_new_way.duration))
 print("  ✓ New gap-finding logic works correctly")

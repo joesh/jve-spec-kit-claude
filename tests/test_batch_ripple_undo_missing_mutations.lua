@@ -9,7 +9,7 @@ local database = require("core.database")
 local dkjson = require("dkjson")
 
 local TEST_DB = "/tmp/jve/test_batch_ripple_undo_missing_mutations.db"
-local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {sequence_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 

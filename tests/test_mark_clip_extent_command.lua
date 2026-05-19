@@ -30,13 +30,13 @@ database.init(db_path)
 local now = os.time()
 local db = database.get_connection()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 local seq = Sequence.create("Timeline", "proj1",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested",id = "seq1", audio_sample_rate = 48000})
+    { kind = "sequence",id = "seq1", audio_sample_rate = 48000})
 assert(seq:save(), "setup: save sequence")
 
 db:exec([[
@@ -91,7 +91,7 @@ test_tracks["a1"] = {track_type = "AUDIO", track_index = 1}
 -- ── Test 1: Single video clip under playhead ──
 print("\n--- Single video clip ---")
 test_clips = {
-    {id = "clip1", track_id = "v1", timeline_start = 20, duration = 80},
+    {id = "clip1", track_id = "v1", sequence_start = 20, duration = 80},
 }
 test_playhead = 50
 
@@ -111,7 +111,7 @@ s = reload_seq()
 check("marks cleared", s.mark_in == nil and s.mark_out == nil)
 
 test_clips = {
-    {id = "clip1", track_id = "v1", timeline_start = 200, duration = 50},
+    {id = "clip1", track_id = "v1", sequence_start = 200, duration = 50},
 }
 test_playhead = 10  -- before clip
 
@@ -123,8 +123,8 @@ check("no clip under playhead: marks unchanged", s.mark_in == nil and s.mark_out
 -- ── Test 3: Video clip wins over audio clip at same position ──
 print("\n--- Video prioritized over audio ---")
 test_clips = {
-    {id = "audio_clip", track_id = "a1", timeline_start = 0, duration = 200},
-    {id = "video_clip", track_id = "v1", timeline_start = 100, duration = 50},
+    {id = "audio_clip", track_id = "a1", sequence_start = 0, duration = 200},
+    {id = "video_clip", track_id = "v1", sequence_start = 100, duration = 50},
 }
 test_playhead = 120
 
@@ -137,7 +137,7 @@ check("video wins: mark_out = 150", s.mark_out == 150)  -- 100+50-1=149, stored 
 print("\n--- Playhead at clip end boundary ---")
 execute_cmd("ClearMarks", {sequence_id = "seq1"})
 test_clips = {
-    {id = "clip1", track_id = "v1", timeline_start = 0, duration = 100},
+    {id = "clip1", track_id = "v1", sequence_start = 0, duration = 100},
 }
 test_playhead = 100  -- clip_end = 0+100 = 100, condition is playhead <= clip_end
 
@@ -150,7 +150,7 @@ check("boundary: mark_out = 100", s.mark_out == 100)  -- last_frame=99, stored 1
 print("\n--- DRP-scale values ---")
 execute_cmd("ClearMarks", {sequence_id = "seq1"})
 test_clips = {
-    {id = "drp_clip", track_id = "v1", timeline_start = 89849, duration = 12345},
+    {id = "drp_clip", track_id = "v1", sequence_start = 89849, duration = 12345},
 }
 test_playhead = 90000
 

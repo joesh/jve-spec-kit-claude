@@ -53,7 +53,7 @@ local now = os.time()
 db:exec(string.format(
     "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)", now, now))
 local seq = Sequence.create("Timeline", "proj1", {fps_numerator = FPS, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000, id = "seq1" })
+    { kind = "sequence", audio_sample_rate = 48000, id = "seq1" })
 assert(seq:save())
 
 -- Create track
@@ -104,9 +104,9 @@ local clip = Clip.create({
         id = "clip1",
         project_id = "proj1",
         track_id = "track_v1",
-        nested_sequence_id = MC_TEST,
+        sequence_id = MC_TEST,
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = CLIP_SOURCE_IN,
         source_out_frame = CLIP_SOURCE_OUT,

@@ -16,8 +16,8 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         order = {"v1_left", "v1_right"},
-        v1_left = { timeline_start = 0, duration = 500, source_in = 200 },
-        v1_right = { timeline_start = 1000, duration = 500, source_in = 200 },
+        v1_left = { sequence_start = 0, duration = 500, source_in = 200 },
+        v1_right = { sequence_start = 1000, duration = 500, source_in = 200 },
     }
 })
 local ts = layout:init_timeline_state()

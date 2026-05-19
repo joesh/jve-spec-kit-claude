@@ -35,17 +35,23 @@ end
 
 
 function M.execute(args)
-    -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
+    -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
     -- See insert.lua for rationale (rule 2.13 — no silent default-to-0).
-    if args.timeline_start_frame == nil then
+    if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
             "Overwrite: sequence %s not found (cannot resolve playhead fallback)",
             tostring(args.sequence_id)))
         assert(type(owner.playhead_position) == "number", string.format(
-            "Overwrite: timeline_start_frame omitted and sequence %s has no "
+            "Overwrite: sequence_start_frame omitted and sequence %s has no "
             .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.timeline_start_frame = owner.playhead_position
+        args.sequence_start_frame = owner.playhead_position
     end
+
+    -- 015 F2: ensure identity patches exist for every source track in the
+    -- nested sequence. Same rationale as Insert.execute — patches are the
+    -- sole routing mechanism; pre-patch identity behavior is preserved.
+    require("models.patch").ensure_identity_for_source(
+        args.sequence_id, args.source_sequence_id)
 
     local plan = place_shared.plan_placement(args)
     -- Carry preset_ids through redo so created_clip_ids stays stable.
@@ -53,10 +59,12 @@ function M.execute(args)
     local n_start = plan.start_frame
     local n_end   = plan.start_frame + plan.owner_duration
 
-    -- Occlude BEFORE inserting the new rows so their INSERT doesn't collide
-    -- with the clip we're about to trim/remove.
+    -- Occlude every target track (VIDEO + each audio destination) BEFORE
+    -- the new clip rows land, so the INSERTs don't collide with what's
+    -- being trimmed/removed. iter_target_track_ids de-dupes — keyed map
+    -- below is incidental.
     local occluded = {}
-    for _, track_id in pairs(plan.targets) do
+    for _, track_id in ipairs(place_shared.iter_target_track_ids(plan)) do
         occluded[track_id] = occlude_track(
             track_id, plan.owner, n_start, n_end)
     end
@@ -86,9 +94,9 @@ end
 local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
-        nested_sequence_id    = { required = true,  kind = "string" },
-        -- timeline_start_frame omitted ⇒ resolve from sequence.playhead_position.
-        timeline_start_frame  = { kind = "number" },
+        source_sequence_id    = { required = true,  kind = "string" },
+        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
         target_audio_track_id = { kind = "string" },
         fps_mismatch_policy   = { kind = "string" },
@@ -143,9 +151,9 @@ local function build_insert_mutation_entry(clip_id)
         owner_sequence_id     = clip.owner_sequence_id,
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
-        nested_sequence_id    = clip.nested_sequence_id,
-        start_value           = clip.timeline_start,
-        timeline_start        = clip.timeline_start,
+        sequence_id    = clip.sequence_id,
+        start_value           = clip.sequence_start,
+        sequence_start        = clip.sequence_start,
         duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
@@ -191,7 +199,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 bucket.deletes[#bucket.deletes + 1] = {
                     clip_id        = prev.id,
                     track_id       = prev.track_id,
-                    timeline_start = prev.timeline_start_frame,
+                    sequence_start = prev.sequence_start_frame,
                     duration       = prev.duration_frames,
                 }
             end
@@ -199,7 +207,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 local fresh = Clip.load_v13_row(tr.id)
                 bucket.updates[#bucket.updates + 1] = {
                     clip_id          = tr.id,
-                    start_value      = fresh.timeline_start_frame,
+                    start_value      = fresh.sequence_start_frame,
                     duration_value   = fresh.duration_frames,
                     source_in_value  = fresh.source_in_frame,
                     source_out_value = fresh.source_out_frame,
@@ -250,7 +258,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, cap in pairs(occluded) do
             for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
-                    tr.prior.timeline_start_frame,
+                    tr.prior.sequence_start_frame,
                     tr.prior.duration_frames,
                     tr.prior.source_in_frame,
                     tr.prior.source_out_frame)
@@ -263,17 +271,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- already cascade — re-link is a future enhancement if needed).
         for _, cap in pairs(occluded) do
             for _, d in ipairs(cap.deleted) do
+                -- 018 FR-015: restore round-trips subframe from captured row.
                 Clip.create({
                     id                    = d.id,
                     project_id            = d.project_id,
                     owner_sequence_id     = d.owner_sequence_id,
                     track_id              = d.track_id,
-                    nested_sequence_id    = d.nested_sequence_id,
+                    sequence_id    = d.sequence_id,
                     name                  = d.name,
-                    timeline_start_frame  = d.timeline_start_frame,
+                    sequence_start_frame  = d.sequence_start_frame,
                     duration_frames       = d.duration_frames,
                     source_in_frame       = d.source_in_frame,
                     source_out_frame      = d.source_out_frame,
+                    source_in_subframe    = d.source_in_subframe,
+                    source_out_subframe   = d.source_out_subframe,
                     master_layer_track_id = d.master_layer_track_id,
                     fps_mismatch_policy   = d.fps_mismatch_policy,
                     enabled               = d.enabled,
@@ -310,9 +321,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                             owner_sequence_id   = row.owner_sequence_id,
                             track_sequence_id   = row.owner_sequence_id,
                             track_id            = row.track_id,
-                            nested_sequence_id  = row.nested_sequence_id,
-                            start_value         = row.timeline_start_frame,
-                            timeline_start      = row.timeline_start_frame,
+                            sequence_id  = row.sequence_id,
+                            start_value         = row.sequence_start_frame,
+                            sequence_start      = row.sequence_start_frame,
                             duration_value      = row.duration_frames,
                             duration            = row.duration_frames,
                             source_in           = row.source_in_frame,

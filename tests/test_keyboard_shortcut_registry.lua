@@ -4,6 +4,11 @@
 
 package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua"
 
+-- test_env sandboxes the user_keymap_store away from the developer's real
+-- ~/.jve dir, so persist_user_change writes in remove_shortcut don't
+-- pollute the dev environment with invalid autosave files.
+require("test_env")
+
 local registry = require("core.keyboard_shortcut_registry")
 
 local function fail(label, message)

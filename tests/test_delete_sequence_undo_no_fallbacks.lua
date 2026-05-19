@@ -21,8 +21,8 @@ local now = os.time()
 
 -- Insert project
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- Insert sequence with NON-DEFAULT values (not 1920x1080, not 48000, not 24fps)
@@ -36,7 +36,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         created_at, modified_at
     ) VALUES (
-        'seq_custom', 'proj1', 'Custom Seq', 'nested',
+        'seq_custom', 'proj1', 'Custom Seq', 'sequence',
         25, 1, 44100,
         3840, 2160,
         50, 500, 120,
@@ -125,7 +125,7 @@ cmd2:set_parameters({
             id = "seq_corrupt",
             project_id = "proj1",
             name = "Corrupt",
-            kind = "nested",
+            kind = "sequence",
             fps_numerator = 24,
             fps_denominator = 1,
             audio_sample_rate = 48000,

@@ -14,8 +14,8 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 
 -- Two nested sequences A and B. We create A→B and B→A cycles directly via SQL,
 -- bypassing the model layer's would_create_cycle check.
@@ -23,7 +23,7 @@ for _, id in ipairs({"A", "B"}) do
     assert(db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
         .. "audio_sample_rate, width, height, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', '%s', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
+        .. "VALUES ('%s', 'p1', '%s', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
     assert(db:exec(string.format(
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('%s-v1', '%s', 'V1', 'VIDEO', 1)", id, id)))
@@ -31,8 +31,8 @@ end
 
 local function raw_clip(id, owner, track, nested)
     return db:exec(string.format(
-        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
-        .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
+        .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
         .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', '%s', '%s', '%s', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)",
         id, owner, track, nested))

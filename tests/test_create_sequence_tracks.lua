@@ -54,8 +54,8 @@ local _SCHEMA_SQL = [[
 ]]
 
 local DATA_SQL = [[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -65,7 +65,7 @@ local DATA_SQL = [[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     )
-    VALUES ('default_sequence', 'default_project', 'Bootstrap Sequence', 'nested',
+    VALUES ('default_sequence', 'default_project', 'Bootstrap Sequence', 'sequence',
             30, 1, 48000,
             1920, 1080,
             0, 240, 0,

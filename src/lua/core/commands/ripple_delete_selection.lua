@@ -130,13 +130,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, clip_id in ipairs(clip_ids) do
             local clip = Clip.load_optional(clip_id)
             if clip then
-                assert(type(clip.timeline_start) == "number",
-                    "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
+                assert(type(clip.sequence_start) == "number",
+                    "FATAL: RippleDeleteSelection: clip.sequence_start must be integer")
                 assert(type(clip.duration) == "number",
                     "FATAL: RippleDeleteSelection: clip.duration must be integer")
                 clips[#clips + 1] = clip
-                local clip_end = clip.timeline_start + clip.duration
-                window_start = window_start and math.min(window_start, clip.timeline_start) or clip.timeline_start
+                local clip_end = clip.sequence_start + clip.duration
+                window_start = window_start and math.min(window_start, clip.sequence_start) or clip.sequence_start
                 window_end   = window_end   and math.max(window_end,   clip_end)             or clip_end
                 clip_ids_for_delete[#clip_ids_for_delete + 1] = clip.id
             else
@@ -191,9 +191,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return clip.duration
     end
     local function clip_start_frames(clip)
-        assert(type(clip.timeline_start) == "number",
-            "FATAL: RippleDeleteSelection: clip.timeline_start must be integer")
-        return clip.timeline_start
+        assert(type(clip.sequence_start) == "number",
+            "FATAL: RippleDeleteSelection: clip.sequence_start must be integer")
+        return clip.sequence_start
     end
 
     command_executors["RippleDeleteSelection"] = function(command)
@@ -335,7 +335,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                                 return false, string.format("ERROR: RippleDeleteSelection: computed negative new_start for %s", tostring(shifted_id))
                             end
 
-                            shift_clip.timeline_start = new_start_frames
+                            shift_clip.sequence_start = new_start_frames
                             if shift_clip:save({skip_occlusion = true}) then
                                 table.insert(shifted_clips, {
                                     clip_id = shifted_id,
@@ -361,9 +361,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         processed = true
                         for _, entry in ipairs(track_clips) do
                             if not deleted_lookup[entry.id] then
-                                local original_start = entry.timeline_start
+                                local original_start = entry.sequence_start
                                 assert(type(original_start) == "number",
-                                    string.format("FATAL: RippleDeleteSelection: clip %s missing timeline_start in track cache", tostring(entry.id)))
+                                    string.format("FATAL: RippleDeleteSelection: clip %s missing sequence_start in track cache", tostring(entry.id)))
                                 local status, err = process_shift_candidate(entry.id, original_start)
                                 if status == false then
                                     log.error("%s", tostring(err))
@@ -375,7 +375,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 end
 
                 if not processed then
-                    local shift_query = db:prepare([[SELECT id, timeline_start_frame FROM clips WHERE track_id = ? ORDER BY timeline_start_frame ASC]])
+                    local shift_query = db:prepare([[SELECT id, sequence_start_frame FROM clips WHERE track_id = ? ORDER BY sequence_start_frame ASC]])
                     if not shift_query then
                         log.error("Failed to prepare per-track shift query")
                         return false
@@ -388,7 +388,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             local original_start = tonumber(shift_query:value(1))
                             if original_start == nil then
                                 shift_query:finalize()
-                                error("FATAL: RippleDeleteSelection: shift query returned nil timeline_start_frame")
+                                error("FATAL: RippleDeleteSelection: shift query returned nil sequence_start_frame")
                             end
                             local status, err = process_shift_candidate(shifted_id, original_start)
                             if status == false then
@@ -461,7 +461,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, info in ipairs(shifted_clips) do
             local clip = Clip.load_optional(info.clip_id)
             if clip and info.original_start then
-                clip.timeline_start = info.original_start
+                clip.sequence_start = info.original_start
                 if not clip:save({skip_occlusion = true}) then
                     log.warn("Undo: Failed to restore shifted clip %s", tostring(info.clip_id))
                     failed = true
@@ -479,7 +479,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local restored = command_helper.restore_clip_state(state)
             if restored then
                 -- All coords must be integers
-                assert(type(restored.timeline_start) == "number", "FATAL: UndoRippleDeleteSelection: restored.timeline_start must be integer")
+                assert(type(restored.sequence_start) == "number", "FATAL: UndoRippleDeleteSelection: restored.sequence_start must be integer")
                 assert(type(restored.duration) == "number", "FATAL: UndoRippleDeleteSelection: restored.duration must be integer")
                 assert(type(restored.source_in) == "number", "FATAL: UndoRippleDeleteSelection: restored.source_in must be integer")
                 assert(type(restored.source_out) == "number", "FATAL: UndoRippleDeleteSelection: restored.source_out must be integer")

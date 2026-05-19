@@ -195,10 +195,17 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
             case DrawCommand::WAVEFORM: {
                 if (cmd.peak_count <= 0 || cmd.width <= 0) break;
                 if (static_cast<int>(cmd.peak_data.size()) < cmd.peak_count * 2) break;
-                painter.setPen(QPen(cmd.color, 1));
                 float center_y = cmd.y + cmd.height * 0.5f;
                 float half_h = cmd.height * 0.5f;
                 float px_step = static_cast<float>(cmd.width) / cmd.peak_count;
+                // Each peak fills a vertical band [px_start, px_end) so when
+                // peak_count < width (the common case — mipmaps return one
+                // peak per N source samples, often fewer than the visible
+                // pixel column count) adjacent bands tile without leaving
+                // 1-pixel "comb teeth" gaps. Pre-fix used drawLine(px,y0,px,y1)
+                // which only painted the line's anchor column.
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(cmd.color);
                 for (int i = 0; i < cmd.peak_count; ++i) {
                     // Reverse clips: peak[0] is still the earliest source sample
                     // but the leftmost pixel should show the LATEST source sample,
@@ -206,12 +213,27 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                     int pi = cmd.reversed ? (cmd.peak_count - 1 - i) : i;
                     float mn = cmd.peak_data[pi * 2];
                     float mx = cmd.peak_data[pi * 2 + 1];
-                    int px = cmd.x + static_cast<int>(i * px_step);
+                    if (mn >= mx) continue;   // true silence: nothing to draw
                     int y0 = static_cast<int>(center_y - mx * half_h);
                     int y1 = static_cast<int>(center_y - mn * half_h);
-                    if (y1 > y0) {
-                        painter.drawLine(px, y0, px, y1);
-                    }
+                    // At small wave_heights, low-amplitude peaks have
+                    // (mx - mn) * half_h < 1, so y0 and y1 round to the same
+                    // int and y1 - y0 == 0. Without clamping to 1 here, the
+                    // whole waveform disappears at small track heights — the
+                    // pre-rectangle drawLine fix had the same behavior. NLE
+                    // convention is to compress (not hide) low-amp peaks.
+                    int band_h = y1 - y0;
+                    if (band_h < 1) band_h = 1;
+                    int px_start = cmd.x + static_cast<int>(i * px_step);
+                    int px_end = cmd.x + static_cast<int>((i + 1) * px_step);
+                    // band_w == 0 happens when px_step < 1 (peak_count > width,
+                    // i.e. extreme zoom-out). Clamp to 1 so the peak is still
+                    // visible — overlapping peaks then paint over each other,
+                    // which is the right semantic for "too zoomed out to see
+                    // each peak". Not a fallback hiding a bug.
+                    int band_w = px_end - px_start;
+                    if (band_w < 1) band_w = 1;
+                    painter.drawRect(px_start, y0, band_w, band_h);
                 }
                 break;
             }

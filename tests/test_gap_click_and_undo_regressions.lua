@@ -17,8 +17,8 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         order = {"v1_left", "v1_right"},
-        v1_left = { timeline_start = 0, duration = 500, source_in = 200 },
-        v1_right = { timeline_start = 1000, duration = 500, source_in = 200 },
+        v1_left = { sequence_start = 0, duration = 500, source_in = 200 },
+        v1_right = { sequence_start = 1000, duration = 500, source_in = 200 },
     }
 })
 local ts = layout:init_timeline_state()
@@ -124,8 +124,8 @@ assert(exec_result.success, "BatchRippleEdit roll should succeed: " .. tostring(
 
 -- Verify the roll worked
 local right_after = Clip.load(layout.clips.v1_right.id)
-assert(right_after.timeline_start == 1050,
-    string.format("Right clip should be at 1050 after roll, got %d", right_after.timeline_start))
+assert(right_after.sequence_start == 1050,
+    string.format("Right clip should be at 1050 after roll, got %d", right_after.sequence_start))
 
 -- Undo must succeed — this is where the assert fires if original_states is empty
 local undo_result = command_manager.undo()
@@ -134,8 +134,8 @@ assert(undo_result.success,
 
 -- Verify undo restored the clip
 local right_undone = Clip.load(layout.clips.v1_right.id)
-assert(right_undone.timeline_start == 1000,
-    string.format("Right clip should be at 1000 after undo, got %d", right_undone.timeline_start))
+assert(right_undone.sequence_start == 1000,
+    string.format("Right clip should be at 1000 after undo, got %d", right_undone.sequence_start))
 
 print("  ✓ Undo after gap-clip roll succeeds")
 
@@ -157,10 +157,10 @@ do
         },
         clips = {
             order = {"v1_left", "v1_right", "v2_left", "v2_right"},
-            v1_left = { timeline_start = 0, duration = 500, source_in = 200 },
-            v1_right = { timeline_start = 1000, duration = 500, source_in = 200 },
-            v2_left = { id = "clip_v2_left", track_key = "v2", timeline_start = 0, duration = 1000, source_in = 200 },
-            v2_right = { id = "clip_v2_right", track_key = "v2", timeline_start = 1000, duration = 500, source_in = 200 },
+            v1_left = { sequence_start = 0, duration = 500, source_in = 200 },
+            v1_right = { sequence_start = 1000, duration = 500, source_in = 200 },
+            v2_left = { id = "clip_v2_left", track_key = "v2", sequence_start = 0, duration = 1000, source_in = 200 },
+            v2_right = { id = "clip_v2_right", track_key = "v2", sequence_start = 1000, duration = 500, source_in = 200 },
         }
     })
 

@@ -112,7 +112,7 @@ package.loaded["core.logger"] = {
 -- because renderer.lua does `require("models.sequence")` at load time.
 local mock_clip_entry = {
     clip = {
-        id = "clip1", timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
+        id = "clip1", sequence_start = 0, duration = 100, source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },
@@ -122,7 +122,7 @@ local mock_clip_entry = {
 
 local offline_clip_entry = {
     clip = {
-        id = "clip_offline", timeline_start = 100, duration = 100, source_in = 0, source_out = 100,
+        id = "clip_offline", sequence_start = 100, duration = 100, source_in = 0, source_out = 100,
         frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },
@@ -134,8 +134,9 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq1",
+            start_timecode_frame = 0,
             name = "Test",
-            kind = "nested",
+            kind = "sequence",
             width = 1920, height = 1080,
             frame_rate = { fps_numerator = 24, fps_denominator = 1 },
             audio_sample_rate = 48000,
@@ -154,6 +155,20 @@ package.loaded["models.sequence"] = {
             get_audio_in_range = function() return {} end,
             get_track_indices = function() return { 0 } end,
         }
+    end,
+}
+
+-- Track model: stub find_by_sequence so _refresh_video_track_states doesn't hit DB.
+-- Returns one VIDEO track matching the mock clip entry (track_index=0, unmuted/unsoloed).
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id)
+        return { track_index = 0, muted = false, soloed = false, sequence_id = "seq1" }
     end,
 }
 
@@ -199,7 +214,7 @@ PlaybackEngine.init_audio(mock_audio)
 local function make_engine()
     local surface = make_surface()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(fh, _meta)
             qt_constants_mock.EMP.SURFACE_SET_FRAME(surface, fh)
         end,
@@ -234,7 +249,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)
 
     assert(surface._frame == "frame_50", string.format(
@@ -260,7 +275,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(surface._frame ~= nil, "offline seek: surface must not be nil")
@@ -281,7 +296,7 @@ do
     tmb_responses[250] = nil
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(250)
 
     assert(surface._frame == BLACK_FRAME, string.format(
@@ -307,7 +322,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     -- Seek to frame 50 first (online, sets initial display)
     engine:seek(50)
     local online_frame = surface._frame
@@ -338,7 +353,7 @@ end
 print("\n--- 5. playback: clip transition to online (no Lua display) ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)
     local count_before = surface._frame_count
 
@@ -369,7 +384,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     -- Verify the offline frame was composed (offline_frame_cache handles error_msg)
@@ -407,7 +422,7 @@ do
     }
 
     local engine, surface = make_engine()  -- luacheck: no unused
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
@@ -450,7 +465,7 @@ do
     }
 
     local engine = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     assert(captured_lines, "COMPOSE_OFFLINE_FRAME must have been called")
@@ -467,7 +482,7 @@ end
 print("\n--- 9. NSF: negative frame asserts ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
 
     local ok, err = pcall(function()
         stored_clip_transition_cb("clipX", 0, 1, 1, false, "/test.mov", -1)
@@ -506,7 +521,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(50)  -- online first
 
     -- Now simulate playback clip transition to offline
@@ -554,7 +569,7 @@ do
     }
 
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 300)
+    engine:load_sequence("seq1", 300, 48000)
     engine:seek(150)
 
     -- Must produce a frame (not nil, not black)

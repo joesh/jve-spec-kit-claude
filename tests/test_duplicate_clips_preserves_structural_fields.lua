@@ -33,7 +33,7 @@ db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_
 db:exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_sample_rate,width,height,
         view_start_frame,view_duration_frames,playhead_frame,
         selected_clip_ids,selected_edge_infos,selected_gap_infos,current_sequence_number,created_at,modified_at)
-        VALUES('seq','proj','Sequence','nested',30,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,0,0)
+        VALUES('seq','proj','Sequence','sequence',30,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,0,0)
     ]])
 db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES
         ('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0),
@@ -82,8 +82,8 @@ local t1 = Clip.create({
         project_id = "proj",
         track_id = "v1",
         owner_sequence_id = "seq",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 5,
         source_out_frame = 105,

@@ -27,7 +27,7 @@ local function fresh_state()
         -- Data
         tracks = {},
         clips = {},
-        -- Cached max(timeline_start + duration) across `clips`. Refreshed
+        -- Cached max(sequence_start + duration) across `clips`. Refreshed
         -- by update_content_length(), which writers call after mutating
         -- clips. Read by viewport math (clamp, extent, scrollbar thumb)
         -- in O(1); pre-cache the read path scanned every clip on every
@@ -35,6 +35,14 @@ local function fresh_state()
         content_length = 0,
         project_id = nil,
         sequence_id = nil,
+
+        -- Tab/sequence pointers (FR-005 / data-model.md §3)
+        -- active_sequence_id is the Record sequence targeted by edits; backed
+        -- by sequence_id (kept as the canonical internal name to avoid touching
+        -- every internal call site). The displayed tab id is NOT carried in
+        -- data.state — it lives exclusively on the TimelineTabStrip (015 #6).
+        -- Use timeline_state.get_displayed_tab_id() (or strip_holder for
+        -- modules that can't import timeline_state directly).
 
         -- Rate
         sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
@@ -89,6 +97,8 @@ M.dimensions = {
 function M.reset()
     M.state = fresh_state()
     M.sequence = nil
+    -- Strip-authoritative (015 #6): data.source_sequence cache removed;
+    -- readers pull via tab_strip:get_source_tab() then Sequence.load.
     listeners = {}
     notify_timer = nil
 end
@@ -101,6 +111,8 @@ end
 function M.reset_state_preserve_listeners()
     M.state = fresh_state()
     M.sequence = nil
+    -- Strip-authoritative (015 #6): data.source_sequence cache removed;
+    -- readers pull via tab_strip:get_source_tab() then Sequence.load.
     notify_timer = nil
 end
 
@@ -132,8 +144,8 @@ end
 function M.update_content_length()
     local max_end = 0
     for _, clip in ipairs(M.state.clips) do
-        if type(clip.timeline_start) == "number" and type(clip.duration) == "number" then
-            local clip_end = clip.timeline_start + clip.duration
+        if type(clip.sequence_start) == "number" and type(clip.duration) == "number" then
+            local clip_end = clip.sequence_start + clip.duration
             if clip_end > max_end then
                 max_end = clip_end
             end

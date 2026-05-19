@@ -30,14 +30,14 @@ local function setup_db(path)
 
     local now = os.time()
     assert(conn:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('proj', 'Test', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate,
             width, height, playhead_frame,
             view_start_frame, view_duration_frames,
             created_at, modified_at)
-        VALUES ('seq', 'proj', 'Timeline', 'nested',
+        VALUES ('seq', 'proj', 'Timeline', 'sequence',
             24, 1, 48000, 1920, 1080, 0, 0, 10000, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
@@ -77,8 +77,8 @@ local function insert_clip(conn, id, track_id, start_frames, dur_frames, media_i
     assert(conn:exec(string.format([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id,
-            timeline_start_frame, duration_frames,
+            owner_sequence_id, sequence_id,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame,
@@ -162,7 +162,7 @@ assert(clip_exists(conn, "c3"), "c3 should be restored")
 
 -- Verify positions restored correctly
 local function clip_start(cid)
-    local q = conn:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local q = conn:prepare("SELECT sequence_start_frame FROM clips WHERE id = ?")
     q:bind_value(1, cid)
     assert(q:exec() and q:next(), "clip not found: " .. cid)
     local v = q:value(0)

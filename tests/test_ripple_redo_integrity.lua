@@ -18,9 +18,9 @@ local function setup_db(path)
     conn:exec(require('import_schema'))
 
     assert(conn:exec([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', 0, 0);
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame, created_at, modified_at)
-VALUES ('default_sequence', 'default_project', 'Default Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 10000, 0, 0, 0);
+VALUES ('default_sequence', 'default_project', 'Default Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 10000, 0, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('track_default_v1', 'default_sequence', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     ]]))
@@ -77,7 +77,7 @@ local media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 -- Create masterclip sequence for the media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function exec(cmd)
@@ -105,11 +105,11 @@ local function set_mc_marks(mc_id, src_in, src_out)
     mc_seq:save()
 end
 
-set_mc_marks(nested_sequence_id, 0, 4543560)
+set_mc_marks(source_sequence_id, 0, 4543560)
 local insert_cmd = Command.create("Insert", "default_project")
-insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("target_video_track_id", "track_default_v1")
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 insert_cmd:set_parameter("sequence_id", "default_sequence")
 exec(insert_cmd)
 
@@ -128,10 +128,10 @@ exec(ripple_cmd)
 
 local function snapshot_clips()
     local snap_stmt = db:prepare([[
-        SELECT id, track_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame
+        SELECT id, track_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame
         FROM clips
         WHERE owner_sequence_id = 'default_sequence'
-        ORDER BY track_id, timeline_start_frame
+        ORDER BY track_id, sequence_start_frame
     ]])
     assert(snap_stmt:exec(), "Failed to fetch clips for snapshot")
 
@@ -200,25 +200,25 @@ media_result = command_manager.execute(media_cmd)
 assert(media_result.success, media_result.error_message or "TestCreateMedia failed")
 
 -- Create masterclip sequence for the media (required for Insert)
-nested_sequence_id = test_env.create_test_masterclip_sequence(
+source_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Media Src Master', 30, 1, 10000000, 'media_src')
 
 local function insert_clip(start_value, duration, source_in)
-    set_mc_marks(nested_sequence_id, source_in or 0, (source_in or 0) + duration)
+    set_mc_marks(source_sequence_id, source_in or 0, (source_in or 0) + duration)
     local cmd = Command.create("Insert", "default_project")
-    cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+    cmd:set_parameter("source_sequence_id", source_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_default_v1")
-    cmd:set_parameter("timeline_start_frame", start_value)
+    cmd:set_parameter("sequence_start_frame", start_value)
     cmd:set_parameter("sequence_id", "default_sequence")
     exec(cmd)
 end
 
 local function fetch_clips_ordered()
     local order_stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames
+        SELECT id, sequence_start_frame, duration_frames
         FROM clips
         WHERE owner_sequence_id = 'default_sequence'
-        ORDER BY timeline_start_frame
+        ORDER BY sequence_start_frame
     ]])
     assert(order_stmt:exec(), "Failed to fetch clip ordering")
     local ordered_clips = {}

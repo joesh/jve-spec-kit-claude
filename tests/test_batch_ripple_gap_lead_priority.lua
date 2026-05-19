@@ -10,9 +10,9 @@ local function build_layout()
     return ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_gap_lead_priority.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000},
-            v2 = {timeline_start = 1200, duration = 1200, source_in = 600}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000},
+            v2 = {sequence_start = 1200, duration = 1200, source_in = 600}
         }
     })
 end

@@ -1,4 +1,4 @@
--- T010 (013): clips must be owned by a kind='nested' sequence.
+-- T010 (013): clips must be owned by a kind='sequence' sequence.
 -- Model layer must refuse with a loud assert naming the clip's owner_sequence_id
 -- and its actual kind (rule 1.14).
 -- Expected to FAIL until T015 (clip.lua narrow) lands.
@@ -12,18 +12,18 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
--- A master (NOT a nested). Clips must be owned by a kind='nested' sequence — clips can't live here.
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
+-- A master (NOT a nested). Clips must be owned by a kind='sequence' sequence — clips can't live here.
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 -- A proper nested edit sequence (good control).
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-edit', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-edit', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-master-v1', 'seq-master', 'V1', 'VIDEO', 1)"))
@@ -38,7 +38,7 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'm', '/tmp/m.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'seq-master', 'trk-master-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 
@@ -49,9 +49,9 @@ local good_id = Clip.create({
     project_id = "p1",
     owner_sequence_id = "seq-edit",
     track_id = "trk-edit-v1",
-    nested_sequence_id = "seq-master",
+    sequence_id = "seq-master",
     name = "c1",
-    timeline_start_frame = 0,
+    sequence_start_frame = 0,
     duration_frames = 100,
     source_in_frame = 0,
     source_out_frame = 100,
@@ -63,15 +63,15 @@ local good_id = Clip.create({
 assert(type(good_id) == "string" and good_id ~= "",
     "Clip.create on nested sequence should return the new id")
 
--- Bad: owner_sequence_id points at a master. Must refuse with context (clips must be kind='nested').
+-- Bad: owner_sequence_id points at a master. Must refuse with context (clips must be kind='sequence').
 local ok, err = pcall(function()
     Clip.create({
         project_id = "p1",
-        owner_sequence_id = "seq-master",  -- kind='master' — violates "clips must be kind='nested'"
+        owner_sequence_id = "seq-master",  -- kind='master' — violates "clips must be kind='sequence'"
         track_id = "trk-master-v1",
-        nested_sequence_id = "seq-edit",
+        sequence_id = "seq-edit",
         name = "bad",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -81,7 +81,7 @@ local ok, err = pcall(function()
         playhead_frame = 0,
     })
 end)
-assert(not ok, "Clip.create on a master sequence must refuse (clips must be kind='nested')")
+assert(not ok, "Clip.create on a master sequence must refuse (clips must be kind='sequence')")
 assert(tostring(err):find("INV%-2"),
     "Clip.create error must name INV-2; got: " .. tostring(err))
 assert(tostring(err):find("seq%-master"),
@@ -95,9 +95,9 @@ local ok_nopol = pcall(function()
         project_id = "p1",
         owner_sequence_id = "seq-edit",
         track_id = "trk-edit-v1",
-        nested_sequence_id = "seq-master",
+        sequence_id = "seq-master",
         name = "no-policy",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,

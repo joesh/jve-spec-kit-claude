@@ -10,7 +10,7 @@ local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
 local TEST_DB = "/tmp/jve/test_gap_item_parity.db"
-local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {sequence_start = 2000, duration = 1000} }})
 local db = layout.db
 local clips = layout.clips
 local tracks = layout.tracks
@@ -73,7 +73,7 @@ local clip_state = {
 
 for _, clip in ipairs(clip_state) do
     assert(clip, "clip should exist after parity scenarios")
-    assert(type(clip.timeline_start) == "number", "clip timeline start should be numeric")
+    assert(type(clip.sequence_start) == "number", "clip timeline start should be numeric")
 end
 
 layout:cleanup()

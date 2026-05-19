@@ -9,12 +9,12 @@ local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
--- Test 1: Clip at timeline_start=0 cannot trim in-point leftward
+-- Test 1: Clip at sequence_start=0 cannot trim in-point leftward
 do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_t0.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000, source_in = 500}  -- Has handle room
+            v1_left = {sequence_start = 0, duration = 1000, source_in = 500}  -- Has handle room
         }
     })
 
@@ -29,7 +29,7 @@ do
     assert(result.success, "In-point trim at t=0 should clamp to available handle")
 
     local after = Clip.load(layout.clips.v1_left.id, layout.db)
-    assert(after.timeline_start == 0,
+    assert(after.sequence_start == 0,
         "Clip at t=0 should stay anchored")
     assert(after.source_in >= 0,
         string.format("source_in should not go negative, got %d", after.source_in))
@@ -50,7 +50,7 @@ do
             main = {duration_frames = 2000}  -- Limited media
         },
         clips = {
-            v1_left = {timeline_start = 0, duration = 1500, source_in = 0}  -- 500 frames of handle left
+            v1_left = {sequence_start = 0, duration = 1500, source_in = 0}  -- 500 frames of handle left
         }
     })
 
@@ -79,8 +79,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_huge_positive.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -98,7 +98,7 @@ do
         local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
 
         -- Clip should expand only until it touches right clip
-        assert(after_left.timeline_start + after_left.duration <= after_right.timeline_start,
+        assert(after_left.sequence_start + after_left.duration <= after_right.sequence_start,
             "Huge delta should clamp to prevent overlap")
     else
         -- Failure is acceptable for absurd values
@@ -115,8 +115,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_huge_negative.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 3000, duration = 1000}  -- 2000 frame gap
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 3000, duration = 1000}  -- 2000 frame gap
         }
     })
 
@@ -136,7 +136,7 @@ do
     local after_right = Clip.load(layout.clips.v1_right.id, layout.db)
     -- Current behavior: Constraint system doesn't limit gap operations properly
     -- Delta applied in full, creating unrealistic timeline positions
-    assert(after_right.timeline_start ~= 1000,
+    assert(after_right.sequence_start ~= 1000,
         "Current behavior: huge deltas NOT clamped to gap size (known issue)")
 
     layout:cleanup()
@@ -147,8 +147,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_multi_t0.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000, source_in = 200},
-            v2 = {timeline_start = 0, duration = 800, source_in = 300}  -- Both start at t=0
+            v1_left = {sequence_start = 0, duration = 1000, source_in = 200},
+            v2 = {sequence_start = 0, duration = 800, source_in = 300}  -- Both start at t=0
         }
     })
 
@@ -167,8 +167,8 @@ do
     local after_v2 = Clip.load(layout.clips.v2.id, layout.db)
 
     -- Both should stay at t=0 and extend by available handle
-    assert(after_v1.timeline_start == 0, "V1 should stay at t=0")
-    assert(after_v2.timeline_start == 0, "V2 should stay at t=0")
+    assert(after_v1.sequence_start == 0, "V1 should stay at t=0")
+    assert(after_v2.sequence_start == 0, "V2 should stay at t=0")
     assert(after_v1.source_in >= 0, "V1 source_in should not go negative")
     assert(after_v2.source_in >= 0, "V2 source_in should not go negative")
 
@@ -180,7 +180,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_no_media.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}  -- No media_id set
+            v1_left = {sequence_start = 0, duration = 1000}  -- No media_id set
         }
     })
 

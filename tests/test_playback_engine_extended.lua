@@ -105,10 +105,16 @@ package.loaded["core.logger"] = {
 
 -- Mock Renderer
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test Seq",
+            kind = "sequence", name = "Test Seq",
             audio_sample_rate = 48000,
         }
     end,
@@ -135,6 +141,7 @@ local audio_at_map = nil  -- nil = use default
 local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return mock_content_end end,
     get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
@@ -153,7 +160,7 @@ local mock_sequence = {
                 clip = {
                     id = "aclip1",
                     frame_rate = { fps_numerator = 24, fps_denominator = 1 },
-                    timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
+                    sequence_start = 0, duration = 100, source_in = 0, source_out = 100,
                 },
                 track = { id = "track_a1", track_index = 1, muted = false, soloed = false, volume = 1.0 },
                 media_fps_num = 24, media_fps_den = 1,
@@ -254,7 +261,7 @@ local function make_engine()
 
     reset_playback()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -295,7 +302,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     -- transport_mode starts "none"
@@ -328,7 +335,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     engine:shuttle(1)  -- forward shuttle
 
@@ -361,7 +368,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Cycle 1: forward to end, unlatch backward
     engine:shuttle(1)
@@ -396,7 +403,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:activate_audio()
 
     engine:play()
@@ -428,7 +435,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -454,7 +461,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     playback_calls = {}
     engine:seek(30)
@@ -498,7 +505,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -532,7 +539,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
     mock_audio._calls = {}
 
@@ -569,7 +576,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     engine:play()
@@ -594,7 +601,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     -- NOT calling activate_audio()
     mock_audio._calls = {}
 
@@ -619,12 +626,12 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine_a, _ = make_engine()
-    engine_a:load_sequence("seq1", 100)
+    engine_a:load_sequence("seq1", 100, 48000)
     local a_max = engine_a.max_media_time_us
     assert(a_max > 0, "Engine A max_media_time_us should be positive")
 
     local engine_b, _ = make_engine()
-    engine_b:load_sequence("seq1", 500)
+    engine_b:load_sequence("seq1", 500, 48000)
     local b_max = engine_b.max_media_time_us
     assert(b_max > a_max, "Engine B max should be > engine A max")
 
@@ -669,7 +676,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine_a, _ = make_engine()
-    engine_a:load_sequence("seq1", 100)
+    engine_a:load_sequence("seq1", 100, 48000)
 
     -- First activation → should apply_mix
     engine_a:activate_audio()
@@ -711,18 +718,16 @@ do
     assert(PlaybackEngine.get_audio().session_initialized,
         "audio session must be initialized before project_changed")
 
-    -- Verify project_changed handler is registered
-    assert(signal_handlers["project_changed"],
-        "PlaybackEngine must register a project_changed signal handler")
-    local found_handler = false
-    for _, entry in ipairs(signal_handlers["project_changed"]) do
-        if type(entry.handler) == "function" then
-            found_handler = true
-            entry.handler("new_project_id")
-        end
-    end
-    assert(found_handler,
-        "project_changed must have a function handler from playback_engine")
+    -- 017 module-responsibility split: project_changed → engine cleanup
+    -- flows via transport (the resource orchestrator) walking the two
+    -- role-bound engines and calling per-engine teardown + audio session
+    -- shutdown. The engine module exposes the building blocks; transport
+    -- composes them. This test exercises the engine-side contract: a
+    -- direct shutdown_audio_session call must de-init the audio session.
+    -- Per-engine teardown is covered by transport's own tests.
+    assert(type(PlaybackEngine.shutdown_audio_session) == "function",
+        "PlaybackEngine must expose shutdown_audio_session")
+    PlaybackEngine.shutdown_audio_session()
 
     -- Module ref preserved (allows re-init on next play) but session shut down
     assert(PlaybackEngine.get_audio() ~= nil,
@@ -746,7 +751,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- nil volume on track → must assert
     local ok, err = pcall(function()
@@ -800,7 +805,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     local ok, err = pcall(function()
         engine:_compute_audio_speed_ratio({
@@ -852,7 +857,7 @@ do
     PlaybackEngine.init_audio(mock_audio)
 
     local engine, _ = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:activate_audio()
 
     -- _try_audio with function that errors → must rethrow
@@ -879,7 +884,7 @@ do
     -- _try_audio when not audio owner → no-op (no error)
     -- WHITE-BOX: NSF test — verifying defensive guard on private method.
     -- No public API to test "not audio owner" path without another engine.
-    engine._audio_owner = false  -- luacheck: ignore
+    mock_audio._owning_engine = nil  -- luacheck: ignore
     ok = pcall(function()
         engine:_try_audio(function()
             error("should not reach")

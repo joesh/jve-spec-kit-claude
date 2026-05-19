@@ -41,7 +41,7 @@ function M.resolve_media_id_from_ui(media_id, command)
     return media_id
 end
 
---- Resolve nested_sequence_id from browser selection.
+--- Resolve sequence_id from browser selection.
 --- Resolve sequence_id from args, track_id, or timeline_state
 -- @param args table Command arguments
 -- @param track_id string|nil Track ID to resolve from
@@ -147,57 +147,12 @@ function M.resolve_edit_time(edit_time, command, param_name)
     return edit_time
 end
 
---- Resolve timing for video stream from source (masterclip sequence)
--- Uses sequence accessors that handle marks vs clip boundaries.
--- @param source table Masterclip sequence with :get_effective_video_in/out()
--- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
--- @return string|nil Error message if failed
-function M.resolve_video_stream_timing(source)
-    local video = source:video_stream()
-    if not video then
-        return nil, "No video stream in source"
-    end
-
-    local source_in = source:get_effective_video_in()
-    local source_out = source:get_effective_video_out()
-    local duration = source_out - source_in
-
-    return {
-        source_in = source_in,
-        source_out = source_out,
-        duration = duration,
-        fps_numerator = video.frame_rate.fps_numerator,
-        fps_denominator = video.frame_rate.fps_denominator,
-    }, nil
-end
-
---- Resolve timing for audio stream from source (masterclip sequence)
--- Uses sequence accessors that handle coordinate-aware mark→sample conversion.
--- @param source table Masterclip sequence with :get_effective_audio_in/out()
--- @return table {source_in, source_out, duration, fps_numerator, fps_denominator}
--- @return string|nil Error message if failed
-function M.resolve_audio_stream_timing(source)
-    local audio_streams = source:audio_streams()
-    if #audio_streams == 0 then
-        return nil, "No audio streams in source"
-    end
-
-    local audio = audio_streams[1]
-    local source_in = source:get_effective_audio_in()
-    local source_out = source:get_effective_audio_out()
-    local duration = source_out - source_in
-
-    return {
-        source_in = source_in,
-        source_out = source_out,
-        duration = duration,
-        -- Audio source units are samples; expose the sample rate as the
-        -- "fps" pair so downstream rational math (frames-or-samples per
-        -- second over 1) keeps a single shape across video/audio.
-        fps_numerator = audio.sample_rate,
-        fps_denominator = 1,
-    }, nil
-end
+-- 018 (FR-016, FR-017): clip_edit_helper.resolve_video_stream_timing and
+-- resolve_audio_stream_timing deleted. They wrapped the legacy dual-unit
+-- Sequence:get_effective_*_in/out accessors. Per FR-001, clip source
+-- positions are now uniformly in master.fps frames (+ sub-frame for audio);
+-- no per-medium unit conversion at the source layer is needed. Both helpers
+-- were dead in production (only the deleted legacy tests called them).
 
 --- Resolve all timing parameters (duration, source_in, source_out) as integers
 -- @param params table Parameters containing duration/source values (integers)
@@ -290,7 +245,7 @@ function M.resolve_clip_name_for_sequence(args, source_sequence, media)
 end
 
 --- Create a selected_clip object with video and audio support
--- @param params table {media_id, nested_sequence_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
+-- @param params table {media_id, sequence_id, project_id, duration, source_in, source_out, clip_name, clip_id, audio_channels}
 -- @return table selected_clip object with has_video, has_audio, audio_channel_count, audio methods
 function M.create_selected_clip(params)
     local audio_channels = params.audio_channels or 0
@@ -298,7 +253,7 @@ function M.create_selected_clip(params)
     local clip_payload = {
         role = "video",
         media_id = params.media_id,
-        nested_sequence_id = params.nested_sequence_id,
+        sequence_id = params.sequence_id,
         project_id = params.project_id,
         duration = params.duration,
         source_in = params.source_in,
@@ -328,7 +283,7 @@ function M.create_selected_clip(params)
         return {
             role = "audio",
             media_id = params.media_id,
-            nested_sequence_id = params.nested_sequence_id,
+            sequence_id = params.sequence_id,
             project_id = params.project_id,
             duration = params.duration,
             source_in = params.source_in,

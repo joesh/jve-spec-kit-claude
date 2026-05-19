@@ -8,10 +8,25 @@ require('test_env')
 -- together correctly.
 
 local viewport_policy = require("ui.timeline.viewport_policy")
-local data = require("ui.timeline.state.timeline_state_data")
+local data            = require("ui.timeline.state.timeline_state_data")
+-- Pre-require timeline_state so its module-load `strip_holder.set(...)`
+-- with a fresh empty strip happens BEFORE we install the stub. Otherwise
+-- viewport_policy's internal `require("ui.timeline.timeline_state")` at
+-- apply_post_command time would clobber the stub.
+require("ui.timeline.timeline_state")
+local strip_holder    = require("ui.timeline.state.strip_holder")
+
+-- Stub strip: persist machinery reads displayed_sequence_id() — supply a
+-- minimal table that satisfies it. Avoids dragging in full Sequence.load
+-- plumbing for a viewport-policy unit test.
+local function install_stub_strip(seq_id)
+    strip_holder.set({
+        get_displayed = function() return { sequence_id = seq_id } end,
+    })
+end
 
 local function reset_viewport(viewport_start, viewport_duration, playhead, content_end)
-    data.state.clips = { { timeline_start = 0, duration = content_end or 10000 } }
+    data.state.clips = { { sequence_start = 0, duration = content_end or 10000 } }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration
@@ -20,6 +35,7 @@ local function reset_viewport(viewport_start, viewport_duration, playhead, conte
     data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
     data.state.sequence_id = "test_seq"
     data.state.project_id = "test_proj"
+    install_stub_strip("test_seq")
 end
 
 local function make_cmd(mutations)
@@ -66,9 +82,9 @@ do
         updates = {
             {
                 track_id = "v1",
-                timeline_start_frame = 5100,
+                sequence_start_frame = 5100,
                 duration_frames = 300,
-                previous = { track_id = "v1", timeline_start = 5000, duration = 300 },
+                previous = { track_id = "v1", sequence_start = 5000, duration = 300 },
             },
         },
         deletes = {},
@@ -90,7 +106,7 @@ do
     local cmd = make_cmd({
         sequence_id = "seq1",
         inserts = {
-            { track_id = "v1", timeline_start_frame = 5000, duration_frames = 400 },
+            { track_id = "v1", sequence_start_frame = 5000, duration_frames = 400 },
         },
         updates = {},
         deletes = {},
@@ -124,7 +140,7 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { previous = { track_id = "v1", timeline_start = 5000, duration = 400 } },
+            { previous = { track_id = "v1", sequence_start = 5000, duration = 400 } },
         },
     })
     viewport_policy.apply_post_command("redo", cmd)

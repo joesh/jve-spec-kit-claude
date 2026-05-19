@@ -18,7 +18,6 @@
 
 local log = require("core.logger").for_area("video")
 local qt_constants = require("core.qt_constants")
-local PlaybackEngine = require("core.playback.playback_engine")
 local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
@@ -37,9 +36,49 @@ local DEBOUNCE_MS = 200
 -- Constructor
 --------------------------------------------------------------------------------
 
+-- 017: map of view_id → role for monitors that don't explicitly carry one.
+-- source-side widgets (top-left viewer + the timeline-panel source tab)
+-- observe the source engine; everything else observes the record engine.
+local VIEW_ID_TO_ROLE = {
+    source_monitor   = "source",
+    source_tab       = "source",
+    timeline_monitor = "record",
+    timeline         = "record",
+}
+
+--- Attach this view to `engine`: install the view's callback table onto the
+--- engine's _on_* fields so engine ticks render here, and wire the surface
+--- if one has been created. Used by the constructor (when transport is
+--- already bootstrapped) AND by the transport_ready listener (the first-
+--- time bind, when monitors were constructed before transport.init ran).
+--- Requires self._cb_table to be set first.
+local function bind_to_engine(self, engine)
+    assert(engine ~= nil, "SequenceMonitor:bind_to_engine: engine is nil")
+    assert(self._cb_table, "SequenceMonitor:bind_to_engine: _cb_table must be "
+        .. "built before binding (constructor populates it)")
+    assert(type(engine.set_surface) == "function", string.format(
+        "SequenceMonitor:bind_to_engine: engine %s lacks set_surface method "
+        .. "— real PlaybackEngine and test stubs must implement it",
+        tostring(engine)))
+    self.engine = engine
+    engine._on_show_frame       = self._cb_table.on_show_frame
+    engine._on_show_gap         = self._cb_table.on_show_gap
+    engine._on_set_rotation     = self._cb_table.on_set_rotation
+    engine._on_set_par          = self._cb_table.on_set_par
+    engine._on_position_changed = self._cb_table.on_position_changed
+    -- Surface may not exist yet on the bootstrapped-constructor path
+    -- (widget creation runs after the constructor's engine bind);
+    -- _create_widgets re-attaches once the surface is built. On the
+    -- transport_ready path widgets exist already so this branch fires.
+    if self._video_surface then
+        engine:set_surface(self._video_surface)
+    end
+end
+
 --- Create a new SequenceMonitor instance.
 -- @param config table:
 --   view_id  string  unique identifier (e.g. "source_monitor", "timeline_monitor")
+--   role     string|nil  "source"|"record" (017). When nil, derived from view_id.
 function SequenceMonitor.new(config)
     assert(type(config) == "table",
         "SequenceMonitor.new: config table required")
@@ -49,6 +88,24 @@ function SequenceMonitor.new(config)
     local self = setmetatable({}, SequenceMonitor)
 
     self.view_id = config.view_id
+
+    -- 017: role binds this view to a specific engine. Explicit config.role
+    -- wins; otherwise derive from view_id via VIEW_ID_TO_ROLE. Unknown
+    -- view_ids (legacy unit tests using ad-hoc names) default to "record"
+    -- so their construction doesn't break; production code paths always
+    -- pass a recognized view_id or an explicit role.
+    if config.role ~= nil then
+        assert(config.role == "source" or config.role == "record", string.format(
+            "SequenceMonitor.new: role must be 'source'|'record', got %s",
+            tostring(config.role)))
+        self.role = config.role
+    else
+        self.role = VIEW_ID_TO_ROLE[config.view_id] or "record"
+    end
+
+    -- 017: per-view frame cache, keyed by sequence_id, for FR-016 view-glass
+    -- behavior. cleared on widget destroy.
+    self._cached_frames = {}
 
     -- Sequence state
     self.sequence_id = nil
@@ -73,27 +130,44 @@ function SequenceMonitor.new(config)
     -- Frame mirror: secondary GPUVideoSurface that receives the same frames
     self._frame_mirror = nil
 
-    -- Create PlaybackEngine
-    self.engine = PlaybackEngine.new({
-        on_show_frame = function(fh, meta)
-            self:_on_show_frame(fh, meta)
-        end,
-        on_show_gap = function()
-            self:_on_show_gap()
-        end,
-        on_set_rotation = function(deg)
-            self:_on_set_rotation(deg)
-        end,
-        on_set_par = function(num, den)
-            self:_on_set_par(num, den)
-        end,
-        on_position_changed = function(frame)
-            self:_on_position_changed(frame)
-        end,
-    })
+    -- 017 resource model: engines are role-bound singletons owned by
+    -- core.playback.transport. Views are pure glass — they observe whichever
+    -- canonical engine matches their role. The local-engine fallback that
+    -- used to live here at startup (when layout.lua constructs monitors
+    -- before transport.init runs) was anti-pattern #5 in spec.md:
+    -- the orphan engine spent its life being discarded a few signals later,
+    -- and the rebind dance mutated the canonical engine's _on_* fields
+    -- from external code.
+    --
+    -- New shape: self.engine is nil until transport_ready (or until the
+    -- canonical engine already exists at construction time). All engine
+    -- derefs in this module guard with `if self.engine then`; widget
+    -- setup that needs the engine (set_surface) defers to the
+    -- transport_ready handler. Tests that need a working engine bootstrap
+    -- transport first OR stub package.loaded["core.playback.transport"]
+    -- with a fake that exposes is_bootstrapped()/engine_for_role().
+    local transport = require("core.playback.transport")
+    self._cb_table = {
+        on_show_frame       = function(fh, meta) self:_on_show_frame(fh, meta) end,
+        on_show_gap         = function()         self:_on_show_gap() end,
+        on_set_rotation     = function(deg)      self:_on_set_rotation(deg) end,
+        on_set_par          = function(num, den) self:_on_set_par(num, den) end,
+        on_position_changed = function(frame)    self:_on_position_changed(frame) end,
+    }
+    if transport.is_bootstrapped() then
+        bind_to_engine(self, transport.engine_for_role(self.role))
+    else
+        -- Pre-transport: engine stays nil. transport_ready listener binds
+        -- the canonical role engine when transport.init runs.
+        self.engine = nil
+    end
 
-    -- Create widgets
-    self:_create_widgets()
+    -- Create widgets. config.headless = true skips Qt widget construction
+    -- for unit tests that exercise the view-state surface (bound_engine,
+    -- cached_frame_for, etc.) without bootstrapping the full editor UI.
+    if config.headless ~= true then
+        self:_create_widgets()
+    end
 
     -- Re-read marks from model when mark commands execute
     self._marks_changed_id = Signals.connect("marks_changed", function(sequence_id)
@@ -151,6 +225,19 @@ function SequenceMonitor.new(config)
         end
     end, 50)
 
+    -- Bind to the role-bound transport engine once transport.init has
+    -- constructed the singletons. layout.lua creates monitor widgets at
+    -- app launch, before any project is open; at that point self.engine
+    -- is nil and views render the empty-state placeholder. When the user
+    -- opens a project, transport.init fires transport_ready and we bind
+    -- here. Idempotent: if we're already on the canonical engine
+    -- (constructor took the bootstrapped branch), no-op.
+    self._transport_ready_id = Signals.connect("transport_ready", function()
+        local canonical = require("core.playback.transport").engine_for_role(self.role)
+        if canonical == self.engine then return end
+        bind_to_engine(self, canonical)
+    end, 60)
+
     -- Media file bytes changed (in-place rewrite) OR status flipped
     -- (e.g. file came back online). PlaybackEngine already purged TMB
     -- caches via its own subscribers; what the monitor still owns is
@@ -175,6 +262,51 @@ end
 --- refreshes — bg probe can fire hundreds of flips per second at
 --- startup, but only flips that touch the displayed frame need a
 --- re-pull.
+--------------------------------------------------------------------------------
+-- 017: Public view-glass surface (FR-015, FR-016).
+--
+-- bound_engine()           → the engine this view observes (role-bound).
+-- cached_frame_for(seq_id) → the last frame this view received for seq_id,
+--                            preserved across engine rebind so a parked
+--                            view continues to show its content.
+-- should_show_placeholder(seq_id) → true when no cached frame exists yet
+--                            for seq_id on this view (case c).
+-- _accept_frame / _on_engine_rebind are private hooks the engine layer
+--   invokes to update the cache.
+--------------------------------------------------------------------------------
+
+function SequenceMonitor:bound_engine()
+    return self.engine
+end
+
+function SequenceMonitor:cached_frame_for(sequence_id)
+    if self._cached_frames == nil then return nil end
+    local entry = self._cached_frames[sequence_id]
+    if entry == nil then return nil end
+    return entry.frame_handle
+end
+
+function SequenceMonitor:should_show_placeholder(sequence_id)
+    return self:cached_frame_for(sequence_id) == nil
+end
+
+function SequenceMonitor:_accept_frame(frame_handle, metadata, sequence_id)
+    assert(frame_handle ~= nil, "SequenceMonitor:_accept_frame: frame_handle required")
+    assert(type(metadata) == "table", "SequenceMonitor:_accept_frame: metadata table required")
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "SequenceMonitor:_accept_frame: sequence_id required")
+    if self._cached_frames == nil then self._cached_frames = {} end
+    self._cached_frames[sequence_id] = {
+        frame_handle = frame_handle,
+        metadata = metadata,
+    }
+end
+
+function SequenceMonitor:_on_engine_rebind(_new_sequence_id)
+    -- Cache survives rebind by design (FR-016 case b). The new sequence's
+    -- frame, when delivered, lands under its own key in _cached_frames.
+end
+
 function SequenceMonitor:_path_affects_current_frame(media_path)
     assert(type(media_path) == "string" and media_path ~= "", string.format(
         "SequenceMonitor:_path_affects_current_frame: media_path must be non-empty string, got %s",
@@ -280,8 +412,13 @@ function SequenceMonitor:_create_widgets()
             content_layout, self._video_surface, 1)
     end
 
-    -- Wire video surface to PlaybackEngine for C++ CVDisplayLink playback
-    if self.engine.set_surface then
+    -- Wire video surface to PlaybackEngine for C++ CVDisplayLink playback.
+    -- 017: self.engine is nil during the pre-transport window (layout.lua
+    -- constructs monitors at app launch, before transport.init runs).
+    -- The transport_ready listener below re-runs set_surface on the
+    -- canonical engine once it exists; the surface stays on
+    -- self._video_surface in the meantime.
+    if self.engine and self.engine.set_surface then
         self.engine:set_surface(self._video_surface)
     end
 
@@ -347,6 +484,21 @@ end
 -- Sequence Loading
 --------------------------------------------------------------------------------
 
+--- Resolve the audio bus output rate to thread into PlaybackEngine for `seq`.
+--
+-- Delegates the actual resolution to `core.audio_bus_rate.resolve_for_monitor`
+-- (pure model-layer helper, fully unit-tested). This wrapper only injects
+-- the timeline_state's active sequence id and the DB connection.
+local audio_bus_rate = require("core.audio_bus_rate")
+local function resolve_output_audio_rate(seq)
+    local timeline_state = require("ui.timeline.timeline_state")
+    return audio_bus_rate.resolve_for_monitor(
+        seq,
+        timeline_state.get_active_sequence_id(),
+        Sequence.load,
+        Sequence.find_first_record_audio_rate)
+end
+
 --- Load a sequence (any kind: masterclip or timeline).
 -- @param sequence_id string
 -- @param opts table optional: { total_frames = number }
@@ -375,8 +527,12 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.sequence = seq
     self._project_gen = project_gen.current()
 
+    -- Resolve the audio bus rate THIS monitor will output at. Engine no longer
+    -- infers from the sequence — it requires an explicit positive rate.
+    local output_audio_rate = resolve_output_audio_rate(seq)
+
     -- Load engine (sets fps, total_frames, resets position)
-    self.engine:load_sequence(sequence_id, opts.total_frames)
+    self.engine:load_sequence(sequence_id, opts.total_frames, output_audio_rate)
 
     -- Sync state from engine
     self.start_frame = self.engine.start_frame or 0
@@ -486,6 +642,12 @@ end
 --------------------------------------------------------------------------------
 
 --- Get container widget for layout embedding.
+--- Return the sequence_id currently loaded in this monitor, or nil if none.
+-- For the source_monitor, this is the master sequence id of the loaded clip.
+function SequenceMonitor:get_loaded_master_seq_id()
+    return self.sequence_id
+end
+
 function SequenceMonitor:get_widget()
     return self._container
 end
@@ -694,8 +856,13 @@ function SequenceMonitor:save_playhead_to_db()
             self.playhead = self.start_frame
         end
     end
+    -- Surgical UPDATE — touches only playhead_frame. Full Sequence:save()
+    -- would re-bind every column on the cached sequence object, which
+    -- triggers spurious FK failures if any of those cached fields are
+    -- stale (e.g., project_id from a prior project). The playhead persist
+    -- must not be coupled to the validity of unrelated fields.
     self.sequence.playhead_position = self.playhead
-    self.sequence:save()
+    Sequence.update_playhead(self.sequence.id, self.playhead)
 end
 
 function SequenceMonitor:_schedule_persist()
@@ -895,6 +1062,10 @@ function SequenceMonitor:destroy()
     if self._content_changed_id then
         Signals.disconnect(self._content_changed_id)
         self._content_changed_id = nil
+    end
+    if self._transport_ready_id then
+        Signals.disconnect(self._transport_ready_id)
+        self._transport_ready_id = nil
     end
     if self._project_changed_id then
         Signals.disconnect(self._project_changed_id)

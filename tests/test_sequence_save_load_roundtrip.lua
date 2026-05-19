@@ -31,8 +31,8 @@ database.init(db_path)
 local db = database.get_connection()
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 -- Insert a sequence with specific created_at (in the past)
@@ -49,7 +49,7 @@ db:exec(string.format([[
         video_audio_split_ratio,
         created_at, modified_at
     ) VALUES (
-        'seq1', 'proj1', 'Timeline', 'nested', 24, 1,
+        'seq1', 'proj1', 'Timeline', 'sequence', 24, 1,
         48000, 1920, 1080,
         100, 50, 500,
         10, 200,
@@ -68,7 +68,7 @@ check("load succeeds", seq ~= nil)
 check("id", seq.id == "seq1")
 check("project_id", seq.project_id == "proj1")
 check("name", seq.name == "Timeline")
-check("kind", seq.kind == "nested")
+check("kind", seq.kind == "sequence")
 check("fps_numerator", seq.frame_rate.fps_numerator == 24)
 check("fps_denominator", seq.frame_rate.fps_denominator == 1)
 check("width", seq.width == 1920)

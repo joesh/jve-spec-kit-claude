@@ -17,7 +17,7 @@ local Renderer = require("ui.timeline.edge_drag_renderer")
 
 -- Test 1: compute_preview_geometry with clip that has non-integer coords returns nil
 local clip_bad = {
-    timeline_start = { frames = 0 },   -- plain table, not an integer
+    sequence_start = { frames = 0 },   -- plain table, not an integer
     duration = { frames = 100 },        -- plain table, not an integer
 }
 local s1, d1 = Renderer.compute_preview_geometry(clip_bad, "out", 5)
@@ -25,7 +25,7 @@ check("compute_preview_geometry returns nil for non-integer coords", s1 == nil a
 
 -- Test 2: compute_preview_geometry with proper integer clip works
 local clip_ok = {
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 100,
 }
 local new_start, new_dur = Renderer.compute_preview_geometry(clip_ok, "out", 5)

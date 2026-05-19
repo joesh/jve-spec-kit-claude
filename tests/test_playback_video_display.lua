@@ -109,11 +109,27 @@ package.loaded["core.logger"] = {
     for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id) return nil end,
+}
+
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test",
+            kind = "sequence", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -134,7 +150,7 @@ package.loaded["core.renderer"] = {
 
 local mock_clip_entry = {
     clip = {
-        id = "clip1", timeline_start = 0, duration = 200, source_in = 0, source_out = 200,
+        id = "clip1", sequence_start = 0, duration = 200, source_in = 0, source_out = 200,
         frame_rate = { fps_numerator = 24, fps_denominator = 1 },
     },
     track = { id = "track_0", track_index = 0, volume = 1.0, muted = false, soloed = false },
@@ -145,6 +161,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq1",
+            start_timecode_frame = 0,
             compute_content_end = function() return 200 end,
             get_video_at = function(_, frame)
                 if frame >= 0 and frame < 200 then return { mock_clip_entry } end
@@ -201,7 +218,7 @@ PlaybackEngine.init_audio(mock_audio)
 local function make_engine()
     local surface = make_surface()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(fh, _meta)
             -- Mirrors SequenceMonitor:_on_show_frame exactly
             qt_constants_mock.EMP.SURFACE_SET_FRAME(surface, fh)
@@ -230,7 +247,7 @@ print("=== test_playback_video_display.lua ===")
 print("\n--- 1. seek after load_sequence: surface has non-black frame ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:seek(0)  -- caller's responsibility
 
     assert(surface._frame ~= nil,
@@ -246,7 +263,7 @@ end
 print("\n--- 2. seek: surface frame changes ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
     engine:seek(0)  -- initial park
     local parked_frame = surface._frame
 
@@ -273,7 +290,7 @@ end
 print("\n--- 3. seek into gap: surface shows black ---")
 do
     local engine, surface = make_engine()
-    engine:load_sequence("seq1", 200)
+    engine:load_sequence("seq1", 200, 48000)
 
     engine:seek(250)  -- gap frame
 

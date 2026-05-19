@@ -21,7 +21,7 @@ local function sign(value)
 end
 
 local TEST_DB = "/tmp/jve/test_timeline_implied_edge_preview.db"
-local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {sequence_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 
@@ -61,13 +61,13 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local v2_gap_id = layout:gap_id("v2", 0)  -- gap before V2 starts at 0 (no preceding clip)
 local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "ripple"}
 
 local function build_shift_payload(shift_frames, clamp_map)
-    local new_start = v2_clip.timeline_start + shift_frames
+    local new_start = v2_clip.sequence_start + shift_frames
     local lead_bracket = edge_utils.to_bracket(gap_edge.edge_type)
     local global_sign = sign(-200)
     local shift_sign = sign(shift_frames)

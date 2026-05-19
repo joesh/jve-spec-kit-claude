@@ -34,12 +34,12 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('p1', 'Callback Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('p1', 'Callback Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'p1', 'Seq1', 'nested', 24000, 1001, 48000, 1920, 1080,
+    VALUES ('seq1', 'p1', 'Seq1', 'sequence', 24000, 1001, 48000, 1920, 1080,
         0, 240, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -51,18 +51,18 @@ db:exec([[
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'p1', 'placeholder', '_placeholder', 1000, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('_v13_placeholder_master', 'p1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('_v13_placeholder_master', 'p1', 'placeholder_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('_v13_placeholder_mr', 'p1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'p1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]])
 
 -- Two clips to select between.
 for i, cid in ipairs({"c1", "c2"}) do
     local stmt = db:prepare([[
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     (?, 'p1', 'seq1', 't1', '_v13_placeholder_master', ?, ?, 120, 0, 120, 1, ?, ?, NULL, NULL, 'resample', 1.0, 0);
     ]])
     stmt:bind_value(1, cid)

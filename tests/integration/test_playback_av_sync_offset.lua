@@ -78,16 +78,16 @@ end
 
 local v1_clips = {
     { clip_id = "v1-offset-c002", media_path = MEDIA_DIR .. "/A012_C002.mov",
-      timeline_start = TL_START,       duration = 30,  source_in = tc_origin(MEDIA_DIR .. "/A012_C002.mov") + 10,
+      sequence_start = TL_START,       duration = 30,  source_in = tc_origin(MEDIA_DIR .. "/A012_C002.mov") + 10,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c008", media_path = MEDIA_DIR .. "/A012_C008.mov",
-      timeline_start = TL_START + 30,  duration = 25,  source_in = tc_origin(MEDIA_DIR .. "/A012_C008.mov") + 15,
+      sequence_start = TL_START + 30,  duration = 25,  source_in = tc_origin(MEDIA_DIR .. "/A012_C008.mov") + 15,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c005", media_path = MEDIA_DIR .. "/A012_C005.mov",
-      timeline_start = TL_START + 55,  duration = 80,  source_in = tc_origin(MEDIA_DIR .. "/A012_C005.mov") + 5,
+      sequence_start = TL_START + 55,  duration = 80,  source_in = tc_origin(MEDIA_DIR .. "/A012_C005.mov") + 5,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
     { clip_id = "v1-offset-c010", media_path = MEDIA_DIR .. "/A012_C010.mov",
-      timeline_start = TL_START + 135, duration = 50,  source_in = tc_origin(MEDIA_DIR .. "/A012_C010.mov") + 20,
+      sequence_start = TL_START + 135, duration = 50,  source_in = tc_origin(MEDIA_DIR .. "/A012_C010.mov") + 20,
       rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
@@ -107,7 +107,7 @@ for i, vc in ipairs(v1_clips) do
     a1_clips[i] = {
         clip_id = "a1-offset-" .. vc.clip_id:sub(4),
         media_path = vc.media_path,
-        timeline_start = vc.timeline_start,
+        sequence_start = vc.sequence_start,
         duration = vc.duration,
         source_in = audio_tc_origin(vc.media_path) + offset_samples,
         rate_num = 48000,

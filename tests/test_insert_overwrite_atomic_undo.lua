@@ -27,16 +27,16 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
@@ -54,12 +54,12 @@ local function build_fixture()
                ('a3', 'p1', 'a3.wav', '/tmp/a3.wav', 200000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-v',  'p1', 'm', 'm-v1', 'vid', 0, 100,    0, 100,    1, 1.0, 0, 0, 0),
-               ('mr-a1', 'p1', 'm', 'm-a1', 'a1',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
-               ('mr-a2', 'p1', 'm', 'm-a2', 'a2',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0),
-               ('mr-a3', 'p1', 'm', 'm-a3', 'a3',  0, 200000, 0, 200000, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-v',  'p1', 'm', 'm-v1', 'vid', 0, 100,    0, 100, 48000,    1, 1.0, 0, 0, 0),
+               ('mr-a1', 'p1', 'm', 'm-a1', 'a1',  0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-a2', 'p1', 'm', 'm-a2', 'a2',  0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-a3', 'p1', 'm', 'm-a3', 'a3',  0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
     return db
@@ -96,8 +96,12 @@ do
     -- bucket via set_parameter.
     local args = {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
-        timeline_start_frame = 0,
+        source_sequence_id   = "m",
+        sequence_start_frame = 0,
+        -- Pin composite explicitly. Default is now 'expanded' (spec §F2 —
+        -- patches drive routing); this test exercises the V+A composite
+        -- atomic-undo path so it asks for that mode by name.
+        audio_drop_mode      = "composite",
     }
     local cmd = {
         params = args,
@@ -135,8 +139,8 @@ do
     -- Owner has only A1 → 2 tracks auto-created in plan (A2, A3).
     local args = {
         sequence_id          = "e",
-        nested_sequence_id   = "m",
-        timeline_start_frame = 0,
+        source_sequence_id   = "m",
+        sequence_start_frame = 0,
         audio_drop_mode      = "expanded",
     }
     local cmd = {

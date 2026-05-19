@@ -16,9 +16,9 @@ local function setup_db(path)
 
     local now = os.time()
     db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, playhead_frame, view_start_frame, view_duration_frames, created_at, modified_at)
-        VALUES ('default_sequence', 'default_project', 'Sequence', 'nested', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
+        VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0, 240, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled) VALUES ('track_v2', 'default_sequence', 'Track', 'VIDEO', 2, 1);
     ]], now, now, now, now))
@@ -59,12 +59,12 @@ local function create_clip(id, track_id, start_frame, duration_frame)
     })
 
     local now = os.time()
-    -- V13 INSERT: nested_sequence_id replaces media_id; placeholder master is
+    -- V13 INSERT: source_sequence_id replaces media_id; placeholder master is
     -- created at file scope.
     local clip_stmt = conn:prepare([[
         INSERT INTO clips (id, project_id, name, track_id,
-                            owner_sequence_id, nested_sequence_id,
-                            timeline_start_frame, duration_frames,
+                            owner_sequence_id, sequence_id,
+                            sequence_start_frame, duration_frames,
                             source_in_frame, source_out_frame,
                             master_layer_track_id, master_audio_track_id,
                             fps_mismatch_policy,
@@ -86,7 +86,7 @@ local function create_clip(id, track_id, start_frame, duration_frame)
 end
 
 local function fetch_clip(id)
-    local stmt = database.get_connection():prepare([[SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?]])
+    local stmt = database.get_connection():prepare([[SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. tostring(id))
     local start_val = stmt:value(0)
@@ -110,7 +110,7 @@ local function clip_exists_at(track_id, start_ms)
     -- Convert MS to frames for query
     local start_frame = math.floor(start_ms * 30.0 / 1000.0 + 0.5)
     local stmt = database.get_connection():prepare([[
-        SELECT 1 FROM clips WHERE track_id = ? AND timeline_start_frame = ? LIMIT 1
+        SELECT 1 FROM clips WHERE track_id = ? AND sequence_start_frame = ? LIMIT 1
     ]])
     assert(stmt, "failed to prepare clip lookup")
     assert(stmt:bind_value(1, track_id))
@@ -177,7 +177,7 @@ timeline_state.get_clips_at_time = function(time_ms, allowed)
     local results = {}
     -- Check DB directly
     local conn = database.get_connection()
-    local q = conn:prepare("SELECT id, timeline_start_frame, duration_frames FROM clips")
+    local q = conn:prepare("SELECT id, sequence_start_frame, duration_frames FROM clips")
     if q:exec() then
         while q:next() do
             local start = q:value(1) * 1000.0 / 30.0

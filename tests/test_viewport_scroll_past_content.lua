@@ -32,7 +32,7 @@ end
 reset({
     start = 500,
     duration = 300,
-    clips = { { id = "c1", track_id = "t1", timeline_start = 0, duration = 100 } },
+    clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
 })
 
 -- =============================================================================
@@ -60,7 +60,7 @@ print("  PASS: leftward scroll applies full delta")
 reset({
     start = 500,
     duration = 300,
-    clips = { { id = "c1", track_id = "t1", timeline_start = 0, duration = 100 } },
+    clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
 })
 data.state.sequence_timecode_start_frame = 0
 viewport_state.set_viewport_start_time(-1000)
@@ -75,7 +75,7 @@ print("  PASS: floor clamp still enforced")
 reset({
     start = 1000,
     duration = 300,
-    clips = { { id = "c1", track_id = "t1", timeline_start = 500, duration = 100 } },
+    clips = { { id = "c1", track_id = "t1", sequence_start = 500, duration = 100 } },
 })
 data.state.sequence_timecode_start_frame = 500
 viewport_state.set_viewport_start_time(100)
@@ -95,7 +95,7 @@ print("  PASS: non-zero tc floor enforced")
 reset({
     start = 10000,
     duration = 300,
-    clips = { { id = "c1", track_id = "t1", timeline_start = 0, duration = 100 } },
+    clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
 })
 viewport_state.set_viewport_start_time(0)
 assert(data.state.viewport_start_time == 0, string.format(
@@ -112,7 +112,7 @@ print("  PASS: scroll to frame 0 applies (no Lua-truthiness trap)")
 reset({
     start = 500,
     duration = 300,
-    clips = { { id = "c1", track_id = "t1", timeline_start = 0, duration = 100 } },
+    clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
 })
 local extent = viewport_state.get_timeline_extent()
 assert(type(extent) == "number" and extent > 0,

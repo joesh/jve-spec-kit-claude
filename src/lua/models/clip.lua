@@ -36,8 +36,8 @@ end
 -- media_ref → media when nested is a master.
 local CLIP_LOAD_SQL = [[
     SELECT c.id, c.project_id, c.name, c.track_id,
-           c.owner_sequence_id, c.nested_sequence_id,
-           c.timeline_start_frame, c.duration_frames,
+           c.owner_sequence_id, c.sequence_id,
+           c.sequence_start_frame, c.duration_frames,
            c.source_in_frame, c.source_out_frame,
            c.master_layer_track_id, c.master_audio_track_id,
            c.fps_mismatch_policy,
@@ -46,12 +46,15 @@ local CLIP_LOAD_SQL = [[
            t.track_type,
            owner_seq.fps_numerator, owner_seq.fps_denominator,
            nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-           mr.media_id, m.name, m.file_path, m.offline_note
+           mr.media_id, m.name, m.file_path, m.offline_note,
+           -- 018: subframes appended at end to avoid shifting older column
+           -- indices. NULL on video clips, 0 or more on audio clips (FR-013).
+           c.source_in_subframe, c.source_out_subframe
     FROM clips c
     JOIN tracks t ON c.track_id = t.id
     JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-    JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-    LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+    JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+    LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                             AND nested_seq.kind = 'master'
     LEFT JOIN media m ON m.id = mr.media_id
     WHERE c.id = ?
@@ -87,9 +90,9 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         name                  = query:value(2),
         track_id              = query:value(3),
         owner_sequence_id     = query:value(4),
-        nested_sequence_id    = query:value(5),
+        sequence_id    = query:value(5),
 
-        timeline_start = assert(query:value(6),  "Clip.load: timeline_start_frame is NULL"),
+        sequence_start = assert(query:value(6),  "Clip.load: sequence_start_frame is NULL"),
         duration       = assert(query:value(7),  "Clip.load: duration_frames is NULL"),
         source_in      = assert(query:value(8),  "Clip.load: source_in_frame is NULL"),
         source_out     = assert(query:value(9),  "Clip.load: source_out_frame is NULL"),
@@ -115,7 +118,7 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         modified_at = query:value(19),
 
         track_type           = query:value(20),
-        nested_sequence_kind = query:value(23),
+        source_sequence_kind = query:value(23),
     }
 
     -- V13-resolved chain leaf: media chain leaks through the LEFT JOIN
@@ -131,6 +134,13 @@ local function build_clip_from_load_row(query, clip_id, nested_fps_num, nested_f
         }
         clip.media_path = query:value(28)
     end
+
+    -- 018: source-side subframe (master-clock ticks). NULL on video clips,
+    -- 0 or more on audio clips (FR-013). Consumers that re-create the clip
+    -- via Clip.create must thread these through or the schema trigger fires.
+    clip.source_in_subframe  = query:value(30)
+    clip.source_out_subframe = query:value(31)
+
     return clip
 end
 
@@ -182,18 +192,18 @@ end
 
 --- Create a clip row. Args: a single table with the V13 fields:
 --- id (optional), project_id, owner_sequence_id, track_id,
---- nested_sequence_id, name, timeline_start_frame, duration_frames,
+--- sequence_id, name, sequence_start_frame, duration_frames,
 --- source_in_frame, source_out_frame, master_layer_track_id (nullable),
 --- fps_mismatch_policy ('resample'|'passthrough'), enabled, volume,
 --- mark_in_frame (nullable), mark_out_frame (nullable), playhead_frame.
---- Returns the clip id (string). Owner must be kind='nested' and source window
+--- Returns the clip id (string). Owner must be kind='sequence' and source window
 --- must be non-empty with lower bound >= 0 — enforced via the model helpers + DB triggers. To create a master sequence from a media file,
 --- call Sequence.ensure_master (writes media_refs, not clips).
 function M.create(fields)
     assert(type(fields) == "table",
         "Clip.create: fields table required")
-    assert(fields.nested_sequence_id ~= nil,
-        "Clip.create: 'nested_sequence_id' is required")
+    assert(fields.sequence_id ~= nil,
+        "Clip.create: 'sequence_id' is required")
     return M._create_v13_row(fields)
 end
 
@@ -285,10 +295,10 @@ local function ensure_project_context(self, db)
     end
 
     -- Fallback: derive from nested sequence if present
-    if not self.project_id and self.nested_sequence_id then
+    if not self.project_id and self.sequence_id then
         local seq_query = db:prepare("SELECT project_id FROM sequences WHERE id = ?")
         if seq_query then
-            seq_query:bind_value(1, self.nested_sequence_id)
+            seq_query:bind_value(1, self.sequence_id)
             if seq_query:exec() and seq_query:next() then
                 self.project_id = seq_query:value(0)
             end
@@ -297,8 +307,8 @@ local function ensure_project_context(self, db)
     end
 
     assert(self.project_id, string.format(
-        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, nested_sequence_id=%s)",
-        tostring(self.id), tostring(self.track_id), tostring(self.nested_sequence_id)))
+        "ensure_project_context: could not derive project_id for clip %s (track_id=%s, sequence_id=%s)",
+        tostring(self.id), tostring(self.track_id), tostring(self.sequence_id)))
 end
 
 -- Save clip to database (INSERT or UPDATE)
@@ -311,8 +321,8 @@ end
 -- rule 2.13: NOT NULL columns + invariant fields fail loud at write time.
 local function assert_clip_save_invariants(self)
     assert(self.id and self.id ~= "", "Clip.save: clip id is required")
-    assert(type(self.timeline_start) == "number",
-        "Clip.save: timeline_start must be integer (got " .. type(self.timeline_start) .. ")")
+    assert(type(self.sequence_start) == "number",
+        "Clip.save: sequence_start must be integer (got " .. type(self.sequence_start) .. ")")
     assert(type(self.duration) == "number",
         "Clip.save: duration must be integer (got " .. type(self.duration) .. ")")
     assert(type(self.source_in) == "number",
@@ -361,8 +371,8 @@ local function prepare_clip_save_stmt(db, exists)
         return db:prepare([[
             UPDATE clips
             SET project_id = ?, name = ?, track_id = ?,
-                owner_sequence_id = ?, nested_sequence_id = ?,
-                timeline_start_frame = ?, duration_frames = ?,
+                owner_sequence_id = ?, sequence_id = ?,
+                sequence_start_frame = ?, duration_frames = ?,
                 source_in_frame = ?, source_out_frame = ?,
                 master_layer_track_id = ?, master_audio_track_id = ?,
                 fps_mismatch_policy = ?,
@@ -375,8 +385,8 @@ local function prepare_clip_save_stmt(db, exists)
     return db:prepare([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id,
-            timeline_start_frame, duration_frames,
+            owner_sequence_id, sequence_id,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,
@@ -408,7 +418,7 @@ local function bind_clip_writable_columns(query, base, self, nested_id)
     query:bind_value(base + 2, self.track_id)
     query:bind_value(base + 3, self.owner_sequence_id)
     query:bind_value(base + 4, nested_id)
-    query:bind_value(base + 5, self.timeline_start)
+    query:bind_value(base + 5, self.sequence_start)
     query:bind_value(base + 6, self.duration)
     query:bind_value(base + 7, self.source_in)
     query:bind_value(base + 8, self.source_out)
@@ -428,11 +438,12 @@ local function save_internal(self, _opts)
     assert(db, "Clip.save: No database connection available")
 
     assert_clip_save_invariants(self)
+    require("core.track_lock_guard").assert_writable(db, { self.track_id })
 
     ensure_project_context(self, db)
-    local nested_id = self.nested_sequence_id
+    local nested_id = self.sequence_id
     assert(nested_id and nested_id ~= "",
-        "Clip.save: nested_sequence_id required for clip " .. tostring(self.id))
+        "Clip.save: sequence_id required for clip " .. tostring(self.id))
     self.name = derive_display_name(self.id, self.name)
 
     local krono_enabled = krono_ok and krono and krono.is_enabled and krono.is_enabled()
@@ -488,6 +499,7 @@ function M:delete()
     local database = require("core.database")
     local db = database.get_connection()
     assert(db, "Clip.delete: No database connection available")
+    require("core.track_lock_guard").assert_writable(db, { self.track_id })
 
     -- Clean up properties and clip_links (no FK cascade on these tables)
     local prop_stmt = db:prepare("DELETE FROM properties WHERE clip_id = ?")
@@ -528,7 +540,7 @@ function M:set_property(property_name, value)
 end
 
 --- Find a clip on a track that contains a given timeline time
--- A clip contains time T if: timeline_start <= T < timeline_start + duration
+-- A clip contains time T if: sequence_start <= T < sequence_start + duration
 -- @param track_id string: Track ID to search
 -- @param time_frames number: Timeline frame position to check
 -- @return Clip or nil: First enabled clip containing the time, or nil
@@ -546,8 +558,8 @@ function M.find_at_time(track_id, time_frames)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame <= ?
-          AND (timeline_start_frame + duration_frames) > ?
+          AND sequence_start_frame <= ?
+          AND (sequence_start_frame + duration_frames) > ?
           AND enabled = 1
         LIMIT 1
     ]])
@@ -594,8 +606,8 @@ function M.get_master_sequence_usage(master_sequence_id)
         SELECT s.id, s.name, COUNT(c.id) as clip_count
         FROM clips c
         JOIN sequences s ON c.owner_sequence_id = s.id
-        WHERE c.nested_sequence_id = ?
-          AND s.kind = 'nested'
+        WHERE c.sequence_id = ?
+          AND s.kind = 'sequence'
         GROUP BY s.id, s.name
         ORDER BY s.name
     ]])
@@ -642,9 +654,9 @@ function M.find_next_on_track(track_id, after_frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame >= ?
+          AND sequence_start_frame >= ?
           AND enabled = 1
-        ORDER BY timeline_start_frame ASC
+        ORDER BY sequence_start_frame ASC
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_next_on_track: failed to prepare query")
@@ -663,7 +675,7 @@ function M.find_next_on_track(track_id, after_frame)
 end
 
 --- Find the previous enabled clip on a track ending at or before a given frame.
--- "Ending at" means (timeline_start + duration) <= before_frame.
+-- "Ending at" means (sequence_start + duration) <= before_frame.
 -- @param track_id string: Track ID to search
 -- @param before_frame number: Timeline frame position (inclusive upper bound for clip end)
 -- @return Clip or nil
@@ -678,9 +690,9 @@ function M.find_prev_on_track(track_id, before_frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND (timeline_start_frame + duration_frames) <= ?
+          AND (sequence_start_frame + duration_frames) <= ?
           AND enabled = 1
-        ORDER BY timeline_start_frame DESC
+        ORDER BY sequence_start_frame DESC
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_prev_on_track: failed to prepare query")
@@ -719,7 +731,7 @@ function M:set_out(pos)
 end
 
 --- Find all clips referencing a given media (V13: walks
---- clip.nested_sequence_id → master.media_refs → media). Returns the
+--- clip.sequence_id → master.media_refs → media). Returns the
 --- list of timeline clips whose underlying chain terminates at a
 --- media_ref pointing at this media. (V8 had clip.media_id direct;
 --- under V13 the relationship is transitive.)
@@ -733,7 +745,7 @@ function M.find_clips_for_media(media_id)
 
     local stmt = assert(db:prepare([[
         SELECT DISTINCT c.id FROM clips c
-        JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         WHERE mr.media_id = ?
     ]]), "Clip.find_clips_for_media: failed to prepare query")
 
@@ -762,7 +774,7 @@ end
 
 --- Read lightweight source state for multiple clips. V13: clip.media_id
 --  has been removed; the leaf media is reached through the clip's
---  nested_sequence_id master and its (single) media_ref. Returns the
+--  sequence_id master and its (single) media_ref. Returns the
 --  same shape as the legacy V8 helper so relink_clips can keep using
 --  it as an opaque 'before' snapshot.
 -- @param clip_ids table Array or set of clip IDs
@@ -774,7 +786,7 @@ function M.batch_read_source(clip_ids)
     local stmt = assert(db:prepare([[
         SELECT mr.media_id, c.source_in_frame, c.source_out_frame
           FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
          WHERE c.id = ?
     ]]), "Clip.batch_read_source: failed to prepare query")
 
@@ -800,7 +812,7 @@ end
 --- Batch update source range (and, when changed, retarget the clip's
 --  master sequence so it points at a different media). V13: clips
 --  themselves no longer hold media_id; rebinding to a different media
---  means switching the clip's nested_sequence_id to that media's master
+--  means switching the clip's sequence_id to that media's master
 --  (created on demand via Sequence.ensure_master).
 -- @param updates table {clip_id → {media_id, source_in, source_out}}
 function M.batch_update_source(updates)
@@ -816,14 +828,14 @@ function M.batch_update_source(updates)
     -- Master swap: only fire when the clip's current master no longer
     -- matches the desired media.
     local current_stmt = assert(db:prepare([[
-        SELECT c.nested_sequence_id, mr.media_id
+        SELECT c.sequence_id, mr.media_id
           FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
          WHERE c.id = ?
     ]]), "Clip.batch_update_source: failed to prepare current-master query")
 
     local rebind_stmt = assert(db:prepare([[
-        UPDATE clips SET nested_sequence_id = ?,
+        UPDATE clips SET sequence_id = ?,
             modified_at = strftime('%s','now') WHERE id = ?
     ]]), "Clip.batch_update_source: failed to prepare rebind update")
 
@@ -875,15 +887,15 @@ end
 -- Feature 013: V9 clips row shape
 -- ===========================================================================
 -- Rows in the V9 `clips` table hold references to other sequences via
--- `nested_sequence_id`. Clips must be owned by a kind='nested' sequence
+-- `sequence_id`. Clips must be owned by a kind='sequence' sequence
 -- (enforced by the schema trigger). The clip source window must be non-empty
 -- with a lower bound >= 0 (enforced at model layer).
 
 local V13_REQUIRED = {
-    "project_id", "owner_sequence_id", "nested_sequence_id",
+    "project_id", "owner_sequence_id", "sequence_id",
     "track_id",
     "name",
-    "timeline_start_frame", "duration_frames",
+    "sequence_start_frame", "duration_frames",
     "source_in_frame", "source_out_frame",
     "fps_mismatch_policy",
     "enabled", "volume", "playhead_frame",
@@ -915,7 +927,7 @@ local function to_int_bool(v)
 end
 
 -- Model-layer pre-flight: fetch the owner_sequence_id's kind and raise a
--- clear error (rule 1.14) if it isn't 'nested' (clips must be owned by a kind='nested' sequence).
+-- clear error (rule 1.14) if it isn't 'sequence' (clips must be owned by a kind='sequence' sequence).
 -- This fires BEFORE the schema trigger's generic RAISE(ABORT, ...) which cannot embed the offending value.
 local function assert_owner_is_nested(db, clip_id, owner_seq_id)
     local stmt = db:prepare("SELECT kind FROM sequences WHERE id = ?")
@@ -931,9 +943,83 @@ local function assert_owner_is_nested(db, clip_id, owner_seq_id)
     assert(found, string.format(
         "Clip: owner_sequence_id=%s not found (clip=%s)",
         tostring(owner_seq_id), tostring(clip_id)))
-    assert(kind == "nested", string.format(
-        "INV-2 (clips must be owned by a kind='nested' sequence) violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'nested')",
+    assert(kind == "sequence", string.format(
+        "INV-2 (clips must be owned by a kind='sequence' sequence) violation in Clip.create: clip=%s owner_sequence_id=%s kind='%s' (expected 'sequence')",
         tostring(clip_id), tostring(owner_seq_id), tostring(kind)))
+end
+
+-- 018 (V11 / FR-013): explicit accessor for "frame-aligned" clip
+-- creation. Caller invokes by name to acknowledge FR-013's "marks UX is
+-- frame-aligned today; subframe = 0 for new audio clips" contract. This is
+-- NOT a silent fallback (rule 2.13): the call site's choice of this
+-- function over the strict path IS the value-declaration.
+--
+-- Returns (sub_in, sub_out) tuple to splat into the fields table at the
+-- audio-creating call site:
+--   local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
+--   Clip.create({ ..., source_in_subframe = sub_in, source_out_subframe = sub_out })
+-- Pure kind-dispatch variant for callers that already hold a track row.
+-- Commands MUST use this (SQL isolation; rule 1.10).
+function M.subframe_defaults_for_track_type(track_type)
+    assert(track_type == "VIDEO" or track_type == "AUDIO", string.format(
+        "Clip.subframe_defaults_for_track_type: track_type must be "
+        .. "'VIDEO' or 'AUDIO', got %s", tostring(track_type)))
+    if track_type == "AUDIO" then return 0, 0 end
+    return nil, nil
+end
+
+-- DB-bound variant for callers that hold only a track_id (importer paths,
+-- model-layer helpers). Looks up the track_type and delegates.
+function M.subframe_defaults_for(db, track_id)
+    assert(db, "Clip.subframe_defaults_for: db connection required")
+    assert(track_id and track_id ~= "",
+        "Clip.subframe_defaults_for: track_id required")
+    local stmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(stmt, "Clip.subframe_defaults_for: prepare failed")
+    stmt:bind_value(1, track_id)
+    assert(stmt:exec(), "Clip.subframe_defaults_for: exec failed")
+    assert(stmt:next(), string.format(
+        "Clip.subframe_defaults_for: track not found for id=%s", tostring(track_id)))
+    local tt = stmt:value(0)
+    stmt:finalize()
+    return M.subframe_defaults_for_track_type(tt)
+end
+
+-- (Internal) Same as above but called from _create_v13_row's audit path.
+-- 018 (V11 / FR-013): subframe columns presence is driven by the
+-- clip's track_type. AUDIO requires both source_*_subframe non-NULL; VIDEO
+-- requires both NULL. Caller passes both explicitly — no silent default
+-- (rule 2.13).
+local function fetch_track_type(db, clip_id, track_id)
+    local tstmt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    assert(tstmt, "Clip._create_v13_row: prepare track_type query failed")
+    tstmt:bind_value(1, track_id)
+    assert(tstmt:exec(), "Clip._create_v13_row: track_type query failed")
+    assert(tstmt:next(), string.format(
+        "Clip._create_v13_row: track not found for id=%s (clip=%s)",
+        tostring(track_id), tostring(clip_id)))
+    local tt = tstmt:value(0)
+    tstmt:finalize()
+    return tt
+end
+
+local function resolve_subframe_for_kind(db, clip_id, fields)
+    local tt = fetch_track_type(db, clip_id, fields.track_id)
+    if tt == "AUDIO" then
+        assert(fields.source_in_subframe ~= nil, string.format(
+            "Clip._create_v13_row: AUDIO clip %s missing source_in_subframe "
+            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            tostring(clip_id)))
+        assert(fields.source_out_subframe ~= nil, string.format(
+            "Clip._create_v13_row: AUDIO clip %s missing source_out_subframe "
+            .. "(INV-3 requires non-NULL on audio; rule 2.13 — no silent default)",
+            tostring(clip_id)))
+        return fields.source_in_subframe, fields.source_out_subframe
+    end
+    assert(fields.source_in_subframe == nil and fields.source_out_subframe == nil,
+        string.format("Clip._create_v13_row: video clip %s must have NULL subframes (INV-3)",
+            tostring(clip_id)))
+    return nil, nil
 end
 
 function M._create_v13_row(fields)
@@ -945,55 +1031,61 @@ function M._create_v13_row(fields)
     local db = require("core.database").get_connection()
     local id = fields.id or uuid.generate()
 
+    require("core.track_lock_guard").assert_writable(db, { fields.track_id })
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
     assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
+
+    local sub_in, sub_out = resolve_subframe_for_kind(db, id, fields)
 
     local now = fields.created_at or os.time()
     local stmt = db:prepare([[
         INSERT INTO clips (
-            id, project_id, owner_sequence_id, track_id, nested_sequence_id,
-            name, timeline_start_frame, duration_frames,
+            id, project_id, owner_sequence_id, track_id, sequence_id,
+            name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "Clip._create_v13_row: prepare failed")
     stmt:bind_value(1, id)
     stmt:bind_value(2, fields.project_id)
     stmt:bind_value(3, fields.owner_sequence_id)
     stmt:bind_value(4, fields.track_id)
-    stmt:bind_value(5, fields.nested_sequence_id)
+    stmt:bind_value(5, fields.sequence_id)
     stmt:bind_value(6, fields.name)
-    stmt:bind_value(7, fields.timeline_start_frame)
+    stmt:bind_value(7, fields.sequence_start_frame)
     stmt:bind_value(8, fields.duration_frames)
     stmt:bind_value(9, fields.source_in_frame)
     stmt:bind_value(10, fields.source_out_frame)
-    stmt:bind_value(11, fields.master_layer_track_id)  -- nullable
-    stmt:bind_value(12, fields.master_audio_track_id)  -- nullable (Expand/Collapse)
-    stmt:bind_value(13, fields.fps_mismatch_policy)
-    stmt:bind_value(14, to_int_bool(fields.enabled))
-    stmt:bind_value(15, fields.volume)
-    stmt:bind_value(16, fields.mark_in_frame)    -- nullable
-    stmt:bind_value(17, fields.mark_out_frame)   -- nullable
-    stmt:bind_value(18, fields.playhead_frame)
-    stmt:bind_value(19, now)
-    stmt:bind_value(20, fields.modified_at or now)
+    stmt:bind_value(11, sub_in)                          -- nullable on video, set on audio (FR-013)
+    stmt:bind_value(12, sub_out)                         -- nullable on video, set on audio (FR-013)
+    stmt:bind_value(13, fields.master_layer_track_id)    -- nullable
+    stmt:bind_value(14, fields.master_audio_track_id)    -- nullable (Expand/Collapse)
+    stmt:bind_value(15, fields.fps_mismatch_policy)
+    stmt:bind_value(16, to_int_bool(fields.enabled))
+    stmt:bind_value(17, fields.volume)
+    stmt:bind_value(18, fields.mark_in_frame)            -- nullable
+    stmt:bind_value(19, fields.mark_out_frame)           -- nullable
+    stmt:bind_value(20, fields.playhead_frame)
+    stmt:bind_value(21, now)
+    stmt:bind_value(22, fields.modified_at or now)
 
     local ok = stmt:exec()
     local err
     if not ok then err = stmt:last_error() end
     stmt:finalize()
     assert(ok, string.format(
-        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely trigger: clips must be owned by a kind='nested' sequence, or FK)",
+        "Clip._create_v13_row: INSERT failed for id=%s: %s (likely trigger: clips must be owned by a kind='sequence' sequence, or FK)",
         id, tostring(err)))
     return id
 end
 
 local CLIP_UPDATABLE_V13 = {
     name = true, track_id = true,
-    timeline_start_frame = true, duration_frames = true,
+    sequence_start_frame = true, duration_frames = true,
     source_in_frame = true, source_out_frame = true,
     master_layer_track_id = true, fps_mismatch_policy = true,
     enabled = true, volume = true,
@@ -1007,14 +1099,25 @@ function M.update(id, fields)
     local db = require("core.database").get_connection()
 
     local fetch = db:prepare(
-        "SELECT source_in_frame, source_out_frame FROM clips WHERE id = ?")
+        "SELECT source_in_frame, source_out_frame, track_id FROM clips WHERE id = ?")
     assert(fetch, "Clip.update: fetch prepare failed")
     fetch:bind_value(1, id)
     assert(fetch:exec(), "Clip.update: fetch exec failed")
     assert(fetch:next(), string.format("Clip.update: clip %s not found", tostring(id)))
     local cur_in = fetch:value(0)
     local cur_out = fetch:value(1)
+    local cur_track = fetch:value(2)
     fetch:finalize()
+
+    -- Lock gate: refuse if the clip's current track is locked, and if the
+    -- update targets a new (locked) track. Both endpoints must be writable
+    -- for a cross-track move.
+    local guard = require("core.track_lock_guard")
+    local guard_tracks = { cur_track }
+    if fields.track_id and fields.track_id ~= cur_track then
+        guard_tracks[#guard_tracks + 1] = fields.track_id
+    end
+    guard.assert_writable(db, guard_tracks)
 
     local new_in  = fields.source_in_frame  ~= nil and fields.source_in_frame  or cur_in
     local new_out = fields.source_out_frame ~= nil and fields.source_out_frame or cur_out
@@ -1050,7 +1153,7 @@ end
 
 -- ===========================================================================
 -- Feature 013 (T041): source<->timeline frame conversion under a clip's
--- policy. A single clip stores timeline_start/duration in owner-timebase
+-- policy. A single clip stores sequence_start/duration in owner-timebase
 -- frames AND source_in/out in nested-timebase frames; to trim by N owner
 -- frames you have to shift source bounds by the policy-appropriate ratio.
 -- ===========================================================================
@@ -1084,7 +1187,7 @@ function M.owner_delta_to_source(policy, owner_delta,
 end
 
 --- Return every clip on `track_id` that overlaps the owner-timebase range
---- [window_start, window_end), ordered by timeline_start_frame. Each row is
+--- [window_start, window_end), ordered by sequence_start_frame. Each row is
 --- a plain table carrying the fields needed to plan an occlusion mutation.
 --- Used by Overwrite to compute its remove/trim/split plan.
 function M.find_overlapping_on_track(track_id, window_start, window_end)
@@ -1097,16 +1200,17 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
 
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
-        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
-               name, timeline_start_frame, duration_frames,
+        SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+               source_in_subframe, source_out_subframe
         FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame < ?
-          AND (timeline_start_frame + duration_frames) > ?
-        ORDER BY timeline_start_frame ASC
+          AND sequence_start_frame < ?
+          AND (sequence_start_frame + duration_frames) > ?
+        ORDER BY sequence_start_frame ASC
     ]])
     assert(stmt, "Clip.find_overlapping_on_track: prepare failed")
     stmt:bind_value(1, track_id)
@@ -1121,9 +1225,9 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
             project_id            = stmt:value(1),
             owner_sequence_id     = stmt:value(2),
             track_id              = stmt:value(3),
-            nested_sequence_id    = stmt:value(4),
+            sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1134,6 +1238,8 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
             mark_in_frame         = stmt:value(14),
             mark_out_frame        = stmt:value(15),
             playhead_frame        = stmt:value(16),
+            source_in_subframe    = stmt:value(17),
+            source_out_subframe   = stmt:value(18),
         }
     end
     stmt:finalize()
@@ -1142,10 +1248,10 @@ end
 
 --- Low-level UPDATE: set timeline + duration + source bounds on one clip.
 --- Source-window invariant (non-empty, lower bound >= 0) is re-checked by Clip.update which we delegate to.
-function M.update_bounds(id, timeline_start_frame, duration_frames,
+function M.update_bounds(id, sequence_start_frame, duration_frames,
                         source_in_frame, source_out_frame)
     return M.update(id, {
-        timeline_start_frame = timeline_start_frame,
+        sequence_start_frame = sequence_start_frame,
         duration_frames      = duration_frames,
         source_in_frame      = source_in_frame,
         source_out_frame     = source_out_frame,
@@ -1156,9 +1262,9 @@ end
 --- coverage. No-op when master has no media_refs (coverage_max is nil).
 --- Called by editing commands (Slip, Roll) to enforce the command-layer
 --- upper bound; model layer only checks lower-bound + non-empty.
-function M.assert_within_master_coverage(nested_sequence_id, new_source_out, label)
-    assert(nested_sequence_id and nested_sequence_id ~= "",
-        "Clip.assert_within_master_coverage: nested_sequence_id required")
+function M.assert_within_master_coverage(sequence_id, new_source_out, label)
+    assert(sequence_id and sequence_id ~= "",
+        "Clip.assert_within_master_coverage: sequence_id required")
     assert(type(new_source_out) == "number",
         string.format("Clip.assert_within_master_coverage: new_source_out must be a number, got %s (%s)",
             type(new_source_out), tostring(label)))
@@ -1166,7 +1272,7 @@ function M.assert_within_master_coverage(nested_sequence_id, new_source_out, lab
     local stmt = db:prepare(
         "SELECT MAX(source_out_frame) FROM media_refs WHERE owner_sequence_id = ?")
     assert(stmt, "Clip.assert_within_master_coverage: prepare failed")
-    stmt:bind_value(1, nested_sequence_id)
+    stmt:bind_value(1, sequence_id)
     assert(stmt:exec(), "Clip.assert_within_master_coverage: exec failed")
     local coverage_max = stmt:next() and stmt:value(0)
     stmt:finalize()
@@ -1176,24 +1282,25 @@ function M.assert_within_master_coverage(nested_sequence_id, new_source_out, lab
     end
 end
 
---- List every clip whose nested_sequence_id == the given sequence,
+--- List every clip whose sequence_id == the given sequence,
 --- across all owner sequences. Used by GrowMasterMedium to find every
 --- clip referencing a master so each can gain a companion clip.
-function M.find_referencing_nested(nested_sequence_id)
-    assert(nested_sequence_id and nested_sequence_id ~= "",
-        "Clip.find_referencing_nested: nested_sequence_id required")
+function M.find_referencing_nested(sequence_id)
+    assert(sequence_id and sequence_id ~= "",
+        "Clip.find_referencing_nested: sequence_id required")
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
-        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
-               name, timeline_start_frame, duration_frames,
+        SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, playhead_frame
-        FROM clips WHERE nested_sequence_id = ?
-        ORDER BY owner_sequence_id, track_id, timeline_start_frame, id
+               enabled, volume, playhead_frame,
+               source_in_subframe, source_out_subframe
+        FROM clips WHERE sequence_id = ?
+        ORDER BY owner_sequence_id, track_id, sequence_start_frame, id
     ]])
     assert(stmt, "Clip.find_referencing_nested: prepare failed")
-    stmt:bind_value(1, nested_sequence_id)
+    stmt:bind_value(1, sequence_id)
     assert(stmt:exec(), "Clip.find_referencing_nested: exec failed")
     local rows = {}
     while stmt:next() do
@@ -1202,9 +1309,9 @@ function M.find_referencing_nested(nested_sequence_id)
             project_id            = stmt:value(1),
             owner_sequence_id     = stmt:value(2),
             track_id              = stmt:value(3),
-            nested_sequence_id    = stmt:value(4),
+            sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1213,6 +1320,8 @@ function M.find_referencing_nested(nested_sequence_id)
             enabled               = stmt:value(12) == 1,
             volume                = stmt:value(13),
             playhead_frame        = stmt:value(14),
+            source_in_subframe    = stmt:value(15),
+            source_out_subframe   = stmt:value(16),
         }
     end
     stmt:finalize()
@@ -1226,13 +1335,14 @@ function M.list_in_sequence(owner_sequence_id)
         "Clip.list_in_sequence: owner_sequence_id required")
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
-        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
-               name, timeline_start_frame, duration_frames,
+        SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
+               enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+               source_in_subframe, source_out_subframe
         FROM clips WHERE owner_sequence_id = ?
-        ORDER BY timeline_start_frame ASC, id ASC
+        ORDER BY sequence_start_frame ASC, id ASC
     ]])
     assert(stmt, "Clip.list_in_sequence: prepare failed")
     stmt:bind_value(1, owner_sequence_id)
@@ -1244,9 +1354,9 @@ function M.list_in_sequence(owner_sequence_id)
             project_id            = stmt:value(1),
             owner_sequence_id     = stmt:value(2),
             track_id              = stmt:value(3),
-            nested_sequence_id    = stmt:value(4),
+            sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
@@ -1257,42 +1367,45 @@ function M.list_in_sequence(owner_sequence_id)
             mark_in_frame         = stmt:value(14),
             mark_out_frame        = stmt:value(15),
             playhead_frame        = stmt:value(16),
+            source_in_subframe    = stmt:value(17),
+            source_out_subframe   = stmt:value(18),
         }
     end
     stmt:finalize()
     return rows
 end
 
---- Count clips that reference `nested_sequence_id`, excluding one
+--- Count clips that reference `sequence_id`, excluding one
 --- (used by Unnest's orphan-cleanup decision).
-function M.count_referencing_nested(nested_sequence_id, exclude_clip_id)
-    assert(nested_sequence_id and nested_sequence_id ~= "",
-        "Clip.count_referencing_nested: nested_sequence_id required")
+function M.count_referencing_nested(sequence_id, exclude_clip_id)
+    assert(sequence_id and sequence_id ~= "",
+        "Clip.count_referencing_nested: sequence_id required")
     local db = require("core.database").get_connection()
     local stmt = db:prepare(
-        "SELECT COUNT(*) FROM clips WHERE nested_sequence_id = ? AND id != ?")
+        "SELECT COUNT(*) FROM clips WHERE sequence_id = ? AND id != ?")
     assert(stmt, "Clip.count_referencing_nested: prepare failed")
-    stmt:bind_value(1, nested_sequence_id)
+    stmt:bind_value(1, sequence_id)
     stmt:bind_value(2, exclude_clip_id or "")
     assert(stmt:exec(), "Clip.count_referencing_nested: exec failed")
     assert(stmt:next())
-    local n = stmt:value(0) or 0
+    local n = stmt:value(0)
     stmt:finalize()
     return n
 end
 
 --- Move a clip to a different owner sequence (Nest / Unnest). Distinct
 --- from M.update because owner_sequence_id is not in the structural-
---- protected updatable set there. Re-checks "clips must be owned by a kind='nested' sequence" via the SQLite
+--- protected updatable set there. Re-checks "clips must be owned by a kind='sequence' sequence" via the SQLite
 --- trigger after the UPDATE.
 ---
 --- @param id string
---- @param new_owner_sequence_id string  must reference a kind='nested' seq
+--- @param new_owner_sequence_id string  must reference a kind='sequence' seq
 function M.transfer_owner(id, new_owner_sequence_id)
     assert(id and id ~= "", "Clip.transfer_owner: id required")
     assert(new_owner_sequence_id and new_owner_sequence_id ~= "",
         "Clip.transfer_owner: new_owner_sequence_id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, id)
     local stmt = db:prepare(
         "UPDATE clips SET owner_sequence_id = ?, modified_at = ? WHERE id = ?")
     assert(stmt, "Clip.transfer_owner: prepare failed")
@@ -1304,7 +1417,7 @@ function M.transfer_owner(id, new_owner_sequence_id)
     stmt:finalize()
     assert(ok, string.format(
         "Clip.transfer_owner: exec failed for id=%s: %s "
-        .. "(trigger: clips must be owned by a kind='nested' sequence — new owner must be kind='nested')",
+        .. "(trigger: clips must be owned by a kind='sequence' sequence — new owner must be kind='sequence')",
         id, tostring(err)))
 end
 
@@ -1319,6 +1432,7 @@ end
 function M.set_master_layer_track_id(id, track_id)
     assert(id and id ~= "", "Clip.set_master_layer_track_id: id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, id)
     local stmt = db:prepare(
         "UPDATE clips SET master_layer_track_id = ?, modified_at = ? WHERE id = ?")
     assert(stmt, "Clip.set_master_layer_track_id: prepare failed")
@@ -1336,7 +1450,7 @@ end
 -- Feature 013 (T040): ripple + batch operations for Insert's write path.
 -- ===========================================================================
 
---- Shift every clip on `track_id` whose `timeline_start_frame >= from_frame`
+--- Shift every clip on `track_id` whose `sequence_start_frame >= from_frame`
 --- forward by `shift` frames. Returns the list of clip ids actually shifted
 --- (for undo capture). `shift` must be non-zero (rule 2.13).
 function M.ripple_track_forward(track_id, from_frame, shift)
@@ -1348,6 +1462,7 @@ function M.ripple_track_forward(track_id, from_frame, shift)
         "Clip.ripple_track_forward: shift must be non-zero integer")
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_writable(db, { track_id })
     -- Order matters for the video-overlap trigger:
     --   negative shift: process clips in ASC order (lowest-start first
     --     moves left into now-empty space), no transient overlap.
@@ -1360,8 +1475,8 @@ function M.ripple_track_forward(track_id, from_frame, shift)
     local order = (shift > 0) and "DESC" or "ASC"
     local sel = db:prepare(string.format([[
         SELECT id FROM clips
-        WHERE track_id = ? AND timeline_start_frame >= ?
-        ORDER BY timeline_start_frame %s
+        WHERE track_id = ? AND sequence_start_frame >= ?
+        ORDER BY sequence_start_frame %s
     ]], order))
     assert(sel, "Clip.ripple_track_forward: select prepare failed")
     sel:bind_value(1, track_id)
@@ -1375,7 +1490,7 @@ function M.ripple_track_forward(track_id, from_frame, shift)
 
     local upd = db:prepare([[
         UPDATE clips
-        SET timeline_start_frame = timeline_start_frame + ?,
+        SET sequence_start_frame = sequence_start_frame + ?,
             modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
@@ -1401,9 +1516,10 @@ function M.shift_many_by(clip_ids, delta)
     if #clip_ids == 0 then return end
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
     local upd = db:prepare([[
         UPDATE clips
-        SET timeline_start_frame = timeline_start_frame + ?,
+        SET sequence_start_frame = sequence_start_frame + ?,
             modified_at = strftime('%s','now')
         WHERE id = ?
     ]])
@@ -1427,6 +1543,7 @@ function M.delete_by_ids(clip_ids)
     if #clip_ids == 0 then return end
 
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
     local del_props = db:prepare("DELETE FROM properties WHERE clip_id = ?")
     local del_clips = db:prepare("DELETE FROM clips WHERE id = ?")
     assert(del_props and del_clips, "Clip.delete_by_ids: prepare failed")
@@ -1444,7 +1561,7 @@ function M.delete_by_ids(clip_ids)
 end
 
 --- Return the id of the clip on `track_id` whose timeline range
---- STRICTLY contains `frame` (i.e. timeline_start < frame < timeline_end).
+--- STRICTLY contains `frame` (i.e. sequence_start < frame < sequence_end).
 --- Used by Blade (T045a) — boundary-touching clips must NOT match because
 --- splitting AT a boundary is a no-op refused by SplitClip.
 --- Returns nil if no such clip exists.
@@ -1457,8 +1574,8 @@ function M.find_strictly_spanning(track_id, frame)
     local stmt = db:prepare([[
         SELECT id FROM clips
         WHERE track_id = ?
-          AND timeline_start_frame < ?
-          AND (timeline_start_frame + duration_frames) > ?
+          AND sequence_start_frame < ?
+          AND (sequence_start_frame + duration_frames) > ?
         LIMIT 1
     ]])
     assert(stmt, "Clip.find_strictly_spanning: prepare failed")
@@ -1524,6 +1641,7 @@ end
 function M.delete_one(clip_id)
     assert(clip_id and clip_id ~= "", "Clip.delete_one: clip_id required")
     local db = require("core.database").get_connection()
+    require("core.track_lock_guard").assert_clip_writable(db, clip_id)
     local stmt = db:prepare("DELETE FROM clips WHERE id = ?")
     assert(stmt, "Clip.delete_one: prepare failed")
     stmt:bind_value(1, clip_id)
@@ -1539,9 +1657,10 @@ function M.load_v13_row(id)
     assert(id and id ~= "", "Clip.load_v13_row: id required")
     local db = require("core.database").get_connection()
     local stmt = db:prepare([[
-        SELECT id, project_id, owner_sequence_id, track_id, nested_sequence_id,
-               name, timeline_start_frame, duration_frames,
+        SELECT id, project_id, owner_sequence_id, track_id, sequence_id,
+               name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
+               source_in_subframe, source_out_subframe,
                master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame
         FROM clips WHERE id = ?
@@ -1556,20 +1675,22 @@ function M.load_v13_row(id)
             project_id            = stmt:value(1),
             owner_sequence_id     = stmt:value(2),
             track_id              = stmt:value(3),
-            nested_sequence_id    = stmt:value(4),
+            sequence_id    = stmt:value(4),
             name                  = stmt:value(5),
-            timeline_start_frame  = stmt:value(6),
+            sequence_start_frame  = stmt:value(6),
             duration_frames       = stmt:value(7),
             source_in_frame       = stmt:value(8),
             source_out_frame      = stmt:value(9),
-            master_layer_track_id = stmt:value(10),
-            master_audio_track_id = stmt:value(11),
-            fps_mismatch_policy   = stmt:value(12),
-            enabled               = stmt:value(13) == 1,
-            volume                = stmt:value(14),
-            mark_in_frame         = stmt:value(15),
-            mark_out_frame        = stmt:value(16),
-            playhead_frame        = stmt:value(17),
+            source_in_subframe    = stmt:value(10),
+            source_out_subframe   = stmt:value(11),
+            master_layer_track_id = stmt:value(12),
+            master_audio_track_id = stmt:value(13),
+            fps_mismatch_policy   = stmt:value(14),
+            enabled               = stmt:value(15) == 1,
+            volume                = stmt:value(16),
+            mark_in_frame         = stmt:value(17),
+            mark_out_frame        = stmt:value(18),
+            playhead_frame        = stmt:value(19),
         }
     end
     stmt:finalize()
@@ -1652,12 +1773,14 @@ function M.restore_v13_state(state)
         project_id            = r.project_id,
         owner_sequence_id     = r.owner_sequence_id,
         track_id              = r.track_id,
-        nested_sequence_id    = r.nested_sequence_id,
+        sequence_id    = r.sequence_id,
         name                  = r.name,
-        timeline_start_frame  = r.timeline_start_frame,
+        sequence_start_frame  = r.sequence_start_frame,
         duration_frames       = r.duration_frames,
         source_in_frame       = r.source_in_frame,
         source_out_frame      = r.source_out_frame,
+        source_in_subframe    = r.source_in_subframe,
+        source_out_subframe   = r.source_out_subframe,
         master_layer_track_id = r.master_layer_track_id,
         master_audio_track_id = r.master_audio_track_id,
         fps_mismatch_policy   = r.fps_mismatch_policy,

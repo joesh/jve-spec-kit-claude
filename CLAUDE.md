@@ -22,6 +22,12 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files. Schema change is substantial but unconstrained by back-compat requirements (FR-018). (013-timeline-placements-as)
 - Lua (LuaJIT 2.1) + C++17 (Qt 6.x) + `core/signals.lua` (broadcast pub/sub), `core/database.lua` (SQLite connection + project-settings JSON I/O), Qt6 (single-shot timers via `qt_create_single_shot_timer`), background-worker thread for media probe (014-two-phase-project)
 - SQLite `.jvp` project files; project settings live in `projects.settings` JSON column (014-two-phase-project)
+- Lua (LuaJIT 2.1) for UI/command/data layers; C++17 (Qt 6.x) for performance-critical timeline/render layers (no C++ changes anticipated by this feature). + existing `core/command_manager`, `core/signals`, `core/ripple/batch/pipeline`, `core/clip_mutator`, `models/track`, `ui/timeline/timeline_panel`, `ui/source_viewer`, `ui/panel_manager`. SQLite (lsqlite3) for project persistence. JSON in `~/.jve/` for per-user app preferences. (015-source-in-timeline)
+- SQLite `.jvp` project files. Forward-only migration: add `tracks.sync_mode` column; create `patches` table. Per-user preference `source_routing_view` persists as JSON in `~/.jve/` alongside existing prefs (`recent_projects.json`, `file_browser_paths.json`, etc.). (015-source-in-timeline)
+- Lua (LuaJIT 2.1) for UI/commands/transport; C++17 (Qt 6.x) for `PlaybackController` (CVDisplayLink driven), TMB, audio device. + existing `core.playback.playback_engine`, `core.media.audio_playback`, `ui.panel_manager`, `ui.focus_manager`, `ui.timeline.timeline_state`, `models.sequence`, `core.signals`, `core.command_manager`. C++ side: `src/playback_controller.mm`, EMP (`TMB_*`, `MEDIA_*`), AOP/SSE. (017-refactor-playback-engine)
+- SQLite `.jvp` project files. New per-project setting: `transport_target` in `projects.settings` JSON column. Sequence `playhead_frame` already persisted. (017-refactor-playback-engine)
+- Lua (LuaJIT 2.1) for the model, command, importer, and edit-command layers; C++17 (Qt 6.x) for any binding-layer touches (none expected — this feature lives entirely above the C++/Qt boundary). (018-uniform-clip-source)
+- SQLite `.jvp` project files. Schema bumps from V10 → V11 in this feature. (018-uniform-clip-source)
 
 READ ENGINEERING.md
 
@@ -226,7 +232,22 @@ Format:
 
 **Remember**: Your efficiency comes from leveraging the robust systems already built, not from avoiding their "overhead".
 
+## **Key Patterns — 015-source-in-timeline**
+
+- **Non-undoable commands**: set `SPEC.undoable = false` — track booleans (muted/soloed/locked/enabled via `ToggleTrackPreference`), patch routing (`SetPatch`), sync-mode (`SetSyncMode`) are NOT on the undo stack; `SetTrackMixValue` (volume/pan) IS undoable.
+- **Dual timeline pointers**: `displayed_tab_id` (which tab is rendered) ≠ `active_sequence_id` (which sequence receives edits). Clicking Source tab changes only `displayed_tab_id`; edits always target `active_sequence_id`. Never conflate them.
+- **Display-aware marks**: ruler and renderer must call `state.get_display_mark_in/out()` — returns source or record marks based on the visible tab. Never call `get_mark_in/out()` directly in rendering code.
+
 **REMEMBER**: The planning module always writes plans in ~/.claude/plans. The names are meaningless so just sort by modification time to find the latest plans. DONT proceed from a handoff if you can't find the plan for it! Ask Joe if you need help.
+
+## **🪶 CONTEXT DISCIPLINE**
+
+Main session context grows fast and slows everything down. Two rules:
+
+1. **Batch reads.** One `Read` of 200 lines beats six `Read offset=N limit=20`. One `rg` with a wide pattern beats five narrow ones. If you're about to do a third small read of the same file, read the whole region instead.
+2. **Delegate multi-step investigation to subagents.** If a question needs >2 grep/Read calls to answer ("where is X used and which callsite needs the fix"), spawn an `Explore` subagent with `model: "haiku"`. The subagent burns its own context, you get back a summary. Spot-checks (one grep, one read) stay inline — subagent spawn overhead isn't worth it for those.
+
+Cozempic guard auto-prunes at 200K/350K tokens, but don't rely on it — keep the context lean by default.
 
 ## **⚠️ REFACTOR SAFEGUARD**
 

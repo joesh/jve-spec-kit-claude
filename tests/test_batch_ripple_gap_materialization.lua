@@ -21,8 +21,8 @@ assert(db:exec(import_schema))
 local function seed_sequence()
     local now = os.time()
     local sql = string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('proj', 'Default', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('proj', 'Default', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
         INSERT INTO sequences (
             id, project_id, name, kind,
@@ -30,7 +30,7 @@ local function seed_sequence()
             width, height, view_start_frame, view_duration_frames, playhead_frame,
             created_at, modified_at
         )
-        VALUES ('seq', 'proj', 'Seq', 'nested',
+        VALUES ('seq', 'proj', 'Seq', 'sequence',
                 24, 1, 48000, 1920, 1080, 0, 10000, 0, %d, %d);
 
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -40,14 +40,14 @@ local function seed_sequence()
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'proj', 'placeholder', '_placeholder', 240, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 240, 0, 240, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 240, 0, 240, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('clip_left', 'proj', 'Left', 'v1', '_v13_placeholder_master', 'seq', 0, 240, 0, 240, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
     ('clip_right', 'proj', 'Right', 'v1', '_v13_placeholder_master', 'seq', 720, 240, 0, 240, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
     ]], now, now, now, now, now, now, now, now)
@@ -112,14 +112,14 @@ assert(left ~= nil, "Left clip missing after ripple")
 assert(right ~= nil, "Right clip missing after ripple")
 
 -- Left clip stays anchored — gap ripple doesn't affect upstream media.
-assert(left.timeline_start == 0, string.format("Left clip moved to %d", left.timeline_start))
+assert(left.sequence_start == 0, string.format("Left clip moved to %d", left.sequence_start))
 assert(left.source_in == 0, "Left clip source_in should remain anchored")
 assert(left.source_out == 240, "Left clip duration should not change when closing downstream gap")
 assert(left.duration == 240, "Closing downstream gap must not trim the upstream clip media")
 
 -- Downstream clip shifts upstream by delta but keeps its media range.
-assert(right.timeline_start == 600,
-    string.format("Right clip should shift upstream to 600, got %d", right.timeline_start))
+assert(right.sequence_start == 600,
+    string.format("Right clip should shift upstream to 600, got %d", right.sequence_start))
 assert(right.source_in == 0 and right.source_out == 240,
     "Right clip media bounds should stay fixed while the gap closes")
 
@@ -138,9 +138,9 @@ assert(ok_grow, "BatchRippleEdit gap-out ripple failed to execute")
 
 local left_after = Clip.load("clip_left", db)
 local right_after = Clip.load("clip_right", db)
-assert(left_after.timeline_start == 0, "Left clip should remain anchored when dragging gap out edge")
-assert(right_after.timeline_start == 600,
-    string.format("Dragging gap out-edge left should close the gap; expected right clip at 600, got %d", right_after.timeline_start))
+assert(left_after.sequence_start == 0, "Left clip should remain anchored when dragging gap out edge")
+assert(right_after.sequence_start == 600,
+    string.format("Dragging gap out-edge left should close the gap; expected right clip at 600, got %d", right_after.sequence_start))
 
 os.remove(DB)
 print("✅ BatchRippleEdit handles gap clips and keeps upstream media untouched")

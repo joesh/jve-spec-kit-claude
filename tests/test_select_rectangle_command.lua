@@ -13,12 +13,12 @@ db:exec(require("import_schema"))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24000, 1001, 48000,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24000, 1001, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now, now, now))
 
@@ -26,10 +26,10 @@ command_manager.init("seq1", "proj1")
 
 -- Mock clips
 local mock_clips = {
-    { id = "clip_a", track_id = "trk_v1", timeline_start = 0, duration = 100 },
-    { id = "clip_b", track_id = "trk_v1", timeline_start = 150, duration = 100 },
-    { id = "clip_c", track_id = "trk_v2", timeline_start = 50, duration = 100 },
-    { id = "clip_d", track_id = "trk_a1", timeline_start = 0, duration = 200 },
+    { id = "clip_a", track_id = "trk_v1", sequence_start = 0, duration = 100 },
+    { id = "clip_b", track_id = "trk_v1", sequence_start = 150, duration = 100 },
+    { id = "clip_c", track_id = "trk_v2", sequence_start = 50, duration = 100 },
+    { id = "clip_d", track_id = "trk_a1", sequence_start = 0, duration = 200 },
 }
 
 local mock_selection = {}

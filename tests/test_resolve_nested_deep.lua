@@ -12,13 +12,13 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 for _, id in ipairs({"outer", "mid"}) do
     assert(db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
         .. "audio_sample_rate, width, height, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', '%s', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
+        .. "VALUES ('%s', 'p1', '%s', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
     assert(db:exec(string.format(
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('%s-v1', '%s', 'V1', 'VIDEO', 1)", id, id)))
@@ -26,7 +26,7 @@ end
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1)"))
@@ -36,18 +36,18 @@ assert(db:exec(
     .. "VALUES ('med', 'p1', 'x', '/tmp/v.mov', 100, 24, 1, 0, 0)"))
 assert(db:exec(
     "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"))
 -- outer → mid → m
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-mid-in-m', 'p1', 'mid', 'mid-v1', 'm', 'x', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 assert(db:exec(
-    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
-    .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+    "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
+    .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
     .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('c-outer-in-mid', 'p1', 'outer', 'outer-v1', 'mid', 'x', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)"))
 

@@ -42,15 +42,15 @@ local db = database.get_connection()
 -- Seed: project + sequence + track + media + clips
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq1', 'nested', 24, 1, 48000,
+    VALUES ('seq1', 'proj1', 'Seq1', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -72,21 +72,21 @@ db:exec(string.format([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for med1
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_med1', 'proj1', 'med1_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip1', 'proj1', 'My Clip', 'trk1', 'master_med1', 'seq1', 0, 100, 0, 100, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- clip2: clip with empty name → should generate default
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('clip2', 'proj1', '', 'trk1', 'master_med1', 'seq1', 100, 50, 0, 50, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
@@ -101,12 +101,12 @@ db:exec([[
 -- clip3: clip whose master sequence has NO media_ref (V13 "no media" shape)
 db:exec(string.format([[
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_nomedia', 'proj1', 'nomedia_master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_nomedia', 'proj1', 'nomedia_master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_a_nomedia', 'master_nomedia', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('clip3', 'proj1', '', 'trk_a1', 'master_nomedia', 'seq1', 0, 200, 0, 200, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+    ('clip3', 'proj1', '', 'trk_a1', 'master_nomedia', 'seq1', 0, 200, 0, 200, 0, 0, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Empty sequence for zero-clip tests
@@ -114,7 +114,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq_empty', 'proj1', 'Empty Seq', 'nested', 30, 1, 48000,
+    VALUES ('seq_empty', 'proj1', 'Empty Seq', 'sequence', 30, 1, 48000,
         1920, 1080, 0, 300, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -148,8 +148,8 @@ check("clip1.enabled", c1.enabled == true)
 check("clip1.offline", c1.offline == false)
 
 -- Integer coordinate fields
-check("clip1.timeline_start is integer", type(c1.timeline_start) == "number")
-check("clip1.timeline_start == 0", c1.timeline_start == 0)
+check("clip1.sequence_start is integer", type(c1.sequence_start) == "number")
+check("clip1.sequence_start == 0", c1.sequence_start == 0)
 check("clip1.duration == 100", c1.duration == 100)
 check("clip1.source_in == 0", c1.source_in == 0)
 check("clip1.source_out == 100", c1.source_out == 100)
@@ -220,7 +220,7 @@ check("seq1.audio_sample_rate", seq1.audio_sample_rate == 48000)
 check("seq1.width", seq1.width == 1920)
 check("seq1.height", seq1.height == 1080)
 
--- Duration = max(clip_end). All timeline_start/duration stored in sequence fps (24/1):
+-- Duration = max(clip_end). All sequence_start/duration stored in sequence fps (24/1):
 -- clip1: 0+100=100, clip2: 100+50=150, clip3: 0+200=200. Max = 200.
 check("seq1.duration is integer", type(seq1.duration) == "number")
 check("seq1.duration = 200 frames (max clip end)", seq1.duration == 200)

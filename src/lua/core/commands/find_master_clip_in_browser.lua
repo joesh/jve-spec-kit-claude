@@ -2,7 +2,7 @@
 -- in the project browser.
 --
 -- From timeline: resolves the clip under the playhead (same logic as
---   MatchFrame), gets its nested_sequence_id (V13 master ref), and
+--   MatchFrame), gets its sequence_id (V13 master ref), and
 --   selects it in the browser.
 -- From source viewer: uses the currently-loaded master sequence.
 --
@@ -22,16 +22,16 @@ local SPEC = {
     }
 }
 
---- From timeline: find clip under playhead, return its nested_sequence_id.
+--- From timeline: find clip under playhead, return its sequence_id.
 local function resolve_from_timeline()
     local target_clips = command_helper.resolve_clips_at_playhead()
     if #target_clips == 0 then return nil, "No clips under playhead" end
 
     local best = command_helper.pick_best_clip(target_clips)
-    if not best or not best.nested_sequence_id or best.nested_sequence_id == "" then
+    if not best or not best.sequence_id or best.sequence_id == "" then
         return nil, "Clip has no nested sequence"
     end
-    return best.nested_sequence_id
+    return best.sequence_id
 end
 
 --- From source viewer: get the currently-loaded master clip sequence ID.

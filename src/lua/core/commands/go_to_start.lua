@@ -1,51 +1,46 @@
---- GoToStart: move playhead to frame 0 in the active monitor
---
--- Respects focus: operates on whichever SequenceMonitor (source or timeline)
--- is currently active via panel_manager.
---
--- @file go_to_start.lua
+--- GoToStart: park the playhead at the sequence's start TC. Movement-class
+--- (FR-020): sequence_id is auto-injected from the displayed-side engine.
+---
+--- @file go_to_start.lua
 local M = {}
 
 local SPEC = {
     undoable = false,
+    mutates_clips = false,
     args = {
         dry_run = { kind = "boolean" },
         project_id = { required = true },
+        sequence_id = {},
     }
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["GoToStart"] = function(command)
         local args = command:get_all_parameters()
+        assert(args.sequence_id and args.sequence_id ~= "",
+            "GoToStart: sequence_id is required (auto-injected)")
 
-        local pm = require('ui.panel_manager')
-        local sv = pm.get_active_sequence_monitor()
-        assert(sv and sv.sequence_id, "GoToStart: no sequence loaded in active view")
+        local Sequence = require("models.sequence")
+        local sequence = Sequence.load(args.sequence_id)
+        assert(sequence, "GoToStart: sequence not found: " .. tostring(args.sequence_id))
 
-        -- Each sequence knows its own start TC (0 for master clips, DRP value for timelines)
-        local start_frame = 0
-        if sv.sequence then
-            start_frame = sv.sequence.start_timecode_frame or 0
-        end
+        -- Each sequence knows its own start TC (0 for master clips, DRP value for timelines).
+        local start_frame = sequence.start_timecode_frame
+        assert(type(start_frame) == "number",
+            "GoToStart: sequence missing start_timecode_frame")
 
         if args.dry_run then
             return true, { start_frame = start_frame }
         end
 
-        if sv.engine:is_playing() then
-            sv.engine:stop()
-        end
-
-        -- Update model — playhead_changed signal drives view (seek + viewport scroll)
-        local Sequence = require("models.sequence")
-        local sequence = Sequence.load(sv.sequence_id)
-        assert(sequence, "GoToStart: sequence not found: " .. tostring(sv.sequence_id))
         sequence.playhead_position = start_frame
         sequence:save()
         local Signals = require("core.signals")
-        Signals.emit("playhead_changed", sv.sequence_id, start_frame)
+        Signals.emit("playhead_changed", args.sequence_id, start_frame)
 
-        -- Scroll timeline viewport to keep playhead visible
+        require("core.playback.transport").seek_target_if_loaded(
+            args.sequence_id, start_frame)
+
         local timeline_state = require("ui.timeline.timeline_state")
         timeline_state.surface_playhead()
         return true

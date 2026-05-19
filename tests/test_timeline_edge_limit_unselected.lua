@@ -13,9 +13,9 @@ local TEST_DB = "/tmp/jve/test_timeline_edge_limit_unselected.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_left = {timeline_start = 0, duration = 1000},
-        v1_right = {timeline_start = 3000, duration = 500},
-        v2 = {timeline_start = 1500, duration = 800}
+        v1_left = {sequence_start = 0, duration = 1000},
+        v1_right = {sequence_start = 3000, duration = 500},
+        v2 = {sequence_start = 1500, duration = 800}
     }
 })
 

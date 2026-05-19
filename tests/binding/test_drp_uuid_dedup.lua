@@ -74,8 +74,8 @@ assert(dup_uuid == 0, string.format("%d duplicate file_uuid values", dup_uuid))
 local no_fps = scalar("SELECT COUNT(*) FROM media WHERE fps_numerator IS NULL OR fps_numerator <= 0")
 assert(no_fps == 0, string.format("%d media missing frame_rate", no_fps))
 
--- Schema version (V13 / "Timeline Placements" — see src/lua/schema.sql)
+-- Schema version (V11 / "Uniform Clip Source Timebase" — see src/lua/schema.sql)
 local version = scalar("SELECT MAX(version) FROM schema_version")
-assert(version == 9, string.format("Expected schema V9, got %d", version))
+assert(version == 11, string.format("Expected schema V11, got %d", version))
 
 print("\n✅ test_drp_uuid_dedup.lua passed")

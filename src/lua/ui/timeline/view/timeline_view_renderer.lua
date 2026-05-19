@@ -17,6 +17,7 @@ local log = require("core.logger").for_area("timeline")
 local perf_log = require("core.logger").for_area("ui.scroll_perf")
 local waveform_color = require("core.media.waveform_color")
 local waveform_utils = require("core.media.waveform_utils")
+local waveform_layout = require("ui.timeline.view.waveform_layout")
 local track_state = require("ui.timeline.state.track_state")
 local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
@@ -105,7 +106,7 @@ end
 local function normalize_preview_entries(entries)
     local normalized = {}
     for _, entry in ipairs(coerce_clip_entries(entries) or {}) do
-        local start_value = entry.new_start_value or entry.timeline_start or entry.start_value
+        local start_value = entry.new_start_value or entry.sequence_start or entry.start_value
         local duration_value = entry.new_duration or entry.duration
         assert(type(start_value) == "number", "normalize_preview_entries: start_value must be integer")
         assert(type(duration_value) == "number", "normalize_preview_entries: duration_value must be integer")
@@ -130,6 +131,7 @@ local function build_preview_from_payload(payload)
         affected_clips = {},
         shifted_clips = normalize_preview_entries(payload.shifted_clips) or {},
         shift_blocks = payload.shift_blocks or {},
+        off_tracks = payload.off_tracks or {},
         clamped_edges = payload.clamped_edges or {},
         edge_preview = payload.edge_preview
     }
@@ -231,7 +233,7 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
         if not entry.is_gap then
             local clip = get_preview_clip(state_module, preview_clip_cache, entry)
             if clip then
-                local start_value = entry.new_start_value or clip.timeline_start
+                local start_value = entry.new_start_value or clip.sequence_start
                 local duration_value = entry.new_duration or clip.duration
                 draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
             end
@@ -241,7 +243,7 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
     for _, shift in ipairs(preview_data.shifted_clips or {}) do
         local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = shift.clip_id})
         if clip and shift.new_start_value then
-            local existing_start = clip.timeline_start
+            local existing_start = clip.sequence_start
             local new_start = shift.new_start_value
             -- All coords are now integers, simple comparison
             if new_start ~= existing_start then
@@ -261,7 +263,7 @@ local function lower_bound_start_frames(clips, start_frames)
         local mid = math.floor((lo + hi) / 2)
         local clip = clips[mid]
         -- All coords are integer frames now
-        local clip_start = clip and clip.timeline_start
+        local clip_start = clip and clip.sequence_start
         if type(clip_start) ~= "number" then
             -- Defensive: if the index contains malformed entries, fall back to
             -- scanning from the front rather than risking an infinite loop.
@@ -292,10 +294,10 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
 
     for i = start_index, #track_clips do
         local clip = track_clips[i]
-        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
             goto continue_bounds
         end
-        if clip.timeline_start < block_start then
+        if clip.sequence_start < block_start then
             goto continue_bounds
         end
         if clip.is_gap then
@@ -305,7 +307,7 @@ local function compute_shift_block_bounds(track_clips, block_start, delta_frames
             goto continue_bounds
         end
 
-        local shifted_start = clip.timeline_start + delta_frames
+        local shifted_start = clip.sequence_start + delta_frames
         if shifted_start < 0 then shifted_start = 0 end
         local shifted_end = shifted_start + clip.duration
 
@@ -362,10 +364,11 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
     local max_track_bottom = -math.huge
     local found_any = false
 
+    local off_tracks = preview_data.off_tracks or {}
     local visible_tracks = view.filtered_tracks or {}
     for _, track in ipairs(visible_tracks) do
         local track_id = track and track.id
-        if track_id then
+        if track_id and not off_tracks[track_id] then
             local block = per_track[track_id] or global_block
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
                 local track_clips = state_module.get_track_clip_index(track_id) or {}
@@ -673,8 +676,12 @@ function M.render(view)
     local viewport_duration = state_module.get_viewport_duration()
     local viewport_end = viewport_start + viewport_duration
     local playhead_position = state_module.get_playhead_position()
-    local mark_in = state_module.get_mark_in and state_module.get_mark_in()
-    local mark_out = state_module.get_mark_out and state_module.get_mark_out()
+    assert(state_module.get_display_mark_in,
+        "timeline_view_renderer: state_module missing get_display_mark_in — timeline_state required")
+    assert(state_module.get_display_mark_out,
+        "timeline_view_renderer: state_module missing get_display_mark_out — timeline_state required")
+    local mark_in  = state_module.get_display_mark_in()
+    local mark_out = state_module.get_display_mark_out()
 
     -- Compute layout
     view.update_layout_cache(height) -- Call layout logic on view object
@@ -780,9 +787,12 @@ function M.render(view)
         if not outline_only then
             timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
 
-            -- Layout: label at bottom (16px), waveform in remaining upper area
-            local LABEL_RESERVE = 16
+            -- waveform_layout.compute() decides label vs full-body waveform
+            -- based on clip height (LABEL_RESERVE + MIN_WAVE_HEIGHT live in
+            -- that module). Without this the wave gets squashed against the
+            -- top of small audio clips.
             local has_waveform = false
+            local label_visible = true
 
             -- Waveform display (audio clips only, when enabled and peaks available).
             -- Required-data invariants (source_in/source_out presence, non-zero range)
@@ -818,8 +828,11 @@ function M.render(view)
                         peak_start, peak_end, actual_start, actual_end, max_drift)
 
                     local wave_col = waveform_color.derive(body_color)
-                    local wave_height = math.max(4, clip_height - LABEL_RESERVE)
-                    timeline.add_waveform(view.widget, visible_x, y, draw_width, wave_height, peaks, count, wave_col, reversed)
+                    local wave_y_offset, wave_height, lbl_vis =
+                        waveform_layout.compute(clip_height)
+                    label_visible = lbl_vis
+                    timeline.add_waveform(view.widget, visible_x, y + wave_y_offset,
+                        draw_width, wave_height, peaks, count, wave_col, reversed)
                     has_waveform = true
                 end
             end
@@ -855,7 +868,7 @@ function M.render(view)
                 local display_label = truncate_label(
                     label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
                     max_label_width)
-                if display_label ~= "" then
+                if display_label ~= "" and label_visible then
                     local label_baseline
                     if has_waveform then
                         label_baseline = y + clip_height - 4
@@ -911,14 +924,14 @@ function M.render(view)
                     end
                     for i = start_index, #track_clips do
                         local clip = track_clips[i]
-                        if not clip or type(clip.timeline_start) ~= "number" or type(clip.duration) ~= "number" then
+                        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
                             goto continue_clip
                         end
                         -- Gap clips are invisible (empty space) — don't render
                         if clip.is_gap then
                             goto continue_clip
                         end
-                        local clip_start = clip.timeline_start
+                        local clip_start = clip.sequence_start
                         if clip_start >= viewport_end then
                             break
                         end
@@ -927,7 +940,7 @@ function M.render(view)
                             goto continue_clip
                         end
 
-                        draw_clip_instance(clip, track_id, clip.timeline_start, clip.duration, false)
+                        draw_clip_instance(clip, track_id, clip.sequence_start, clip.duration, false)
                         ::continue_clip::
                     end
                 end
@@ -1027,7 +1040,7 @@ function M.render(view)
                     render_track_id = preview_target_id
                 end
 
-                local start_value = clip.timeline_start + delta_frames
+                local start_value = clip.sequence_start + delta_frames
                 draw_clip_instance(clip, render_track_id, start_value, clip.duration, true)
             end
         end
@@ -1154,6 +1167,37 @@ function M.render(view)
             end
         end
     end
+
+    -- Locked-track hash overlay (Premiere-style). Diagonal stripes
+    -- across each locked track row so the read-only state is visible
+    -- regardless of clip content. Drawn over clips (so it's never
+    -- obscured) but before mark/playhead so transport overlays still
+    -- read clearly.
+    local function draw_lock_overlay()
+        local LOCK_HASH_COLOR = 0x55ccaa00   -- ARGB-style; same hue as lock btn
+        local LOCK_HASH_SPACING = 12         -- px between diagonals
+        for i, track in ipairs(view.filtered_tracks) do
+            if track.locked then
+                local entry = layout_by_index[i]
+                if entry and entry.y + entry.height > 0 and entry.y < height then
+                    local row_y = entry.y
+                    local row_h = entry.height
+                    -- 45° lines: each diagonal is (row_h × row_h). Start x
+                    -- offset so the pattern tiles cleanly across the row.
+                    local start_x = -row_h
+                    local x = start_x
+                    while x < width do
+                        timeline.add_line(view.widget,
+                            x, row_y + row_h,
+                            x + row_h, row_y,
+                            LOCK_HASH_COLOR, 1)
+                        x = x + LOCK_HASH_SPACING
+                    end
+                end
+            end
+        end
+    end
+    draw_lock_overlay()
 
     -- Mark In/Out highlight (on top of clips, behind playhead)
     local function draw_mark_overlay()

@@ -5,7 +5,7 @@
 -- clip sits on the timeline moves.
 --
 -- Effect on the clip row:
---   timeline_start_frame  += delta_timeline_frames
+--   sequence_start_frame  += delta_timeline_frames
 --   duration_frames       unchanged
 --   source_in_frame       unchanged
 --   source_out_frame      unchanged
@@ -17,7 +17,7 @@
 -- What Slide here guarantees is the core mutation on the clip itself: the
 -- window stays put in media-space; the clip moves in edit-space.
 --
--- Refuses: delta == 0, or a slide that drags timeline_start below 0.
+-- Refuses: delta == 0, or a slide that drags sequence_start below 0.
 -- Refusal is loud; DB unchanged.
 --
 -- SQL isolation: all DB access via models.
@@ -46,13 +46,13 @@ function M.execute(args)
         "Slide: clip %s owner_sequence_id=%s != args.sequence_id=%s",
         args.clip_id, clip.owner_sequence_id, args.sequence_id))
 
-    local new_timeline_start = clip.timeline_start_frame + delta
-    assert(new_timeline_start >= 0, string.format(
-        "Slide: new timeline_start_frame=%d < 0 (delta=%d, was=%d)",
-        new_timeline_start, delta, clip.timeline_start_frame))
+    local new_sequence_start = clip.sequence_start_frame + delta
+    assert(new_sequence_start >= 0, string.format(
+        "Slide: new sequence_start_frame=%d < 0 (delta=%d, was=%d)",
+        new_sequence_start, delta, clip.sequence_start_frame))
 
     Clip.update_bounds(args.clip_id,
-        new_timeline_start, clip.duration_frames,
+        new_sequence_start, clip.duration_frames,
         clip.source_in_frame, clip.source_out_frame)
 
     log.event("Slide clip=%s delta=%d", args.clip_id, delta)
@@ -61,7 +61,7 @@ function M.execute(args)
         clip_id = args.clip_id,
         delta   = delta,
         prior   = {
-            timeline_start_frame = clip.timeline_start_frame,
+            sequence_start_frame = clip.sequence_start_frame,
             duration_frames      = clip.duration_frames,
             source_in_frame      = clip.source_in_frame,
             source_out_frame     = clip.source_out_frame,
@@ -95,7 +95,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             inserts = {}, deletes = {},
             updates = { {
                 clip_id          = args.clip_id,
-                start_value      = fresh.timeline_start_frame,
+                start_value      = fresh.sequence_start_frame,
                 duration_value   = fresh.duration_frames,
                 source_in_value  = fresh.source_in_frame,
                 source_out_value = fresh.source_out_frame,
@@ -111,7 +111,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local prior = args.prior_state
         assert(prior, "Undo Slide: prior_state missing")
         Clip.update_bounds(args.clip_id,
-            prior.timeline_start_frame, prior.duration_frames,
+            prior.sequence_start_frame, prior.duration_frames,
             prior.source_in_frame, prior.source_out_frame)
         local Signals = require("core.signals")
         Signals.emit("sequence_content_changed", args.sequence_id)

@@ -42,7 +42,7 @@ local layout = ripple_layout.create({
         order = {"existing"},
         existing = {
             id = "clip_existing", name = "Existing", track_key = "a1", media_key = "main",
-            timeline_start = 0, duration = EXISTING_DURATION,
+            sequence_start = 0, duration = EXISTING_DURATION,
             source_in = EXISTING_SOURCE_IN,
             fps_numerator = AUDIO_RATE, fps_denominator = 1,
         },
@@ -59,7 +59,7 @@ fix:finalize()
 
 -- Verify setup
 local before = Clip.load("clip_existing")
-assert(before.timeline_start == 0)
+assert(before.sequence_start == 0)
 assert(before.duration == EXISTING_DURATION)
 assert(before.source_in == EXISTING_SOURCE_IN)
 assert(before.source_out == EXISTING_SOURCE_OUT,
@@ -80,7 +80,7 @@ local clip_mutator = require("core.clip_mutator")
 
 local ok, err, actions = clip_mutator.resolve_occlusions(db, {
     track_id = "track_a1",
-    timeline_start = 0,
+    sequence_start = 0,
     duration = OVERWRITE_END,
     exclude_clip_id = "clip_overwrite",
 })
@@ -100,9 +100,9 @@ end
 
 assert(update_action, "No update action found for clip_existing")
 
-assert(update_action.timeline_start_frame == OVERWRITE_END,
+assert(update_action.sequence_start_frame == OVERWRITE_END,
     string.format("Trimmed start: expected %d, got %d",
-        OVERWRITE_END, update_action.timeline_start_frame))
+        OVERWRITE_END, update_action.sequence_start_frame))
 assert(update_action.duration_frames == EXISTING_DURATION - OVERWRITE_END,
     string.format("Trimmed duration: expected %d, got %d",
         EXISTING_DURATION - OVERWRITE_END, update_action.duration_frames))
@@ -135,7 +135,7 @@ local TAIL_START = 150
 
 local ok2, err2, actions2 = clip_mutator.resolve_occlusions(db, {
     track_id = "track_a1",
-    timeline_start = TAIL_START,
+    sequence_start = TAIL_START,
     duration = EXISTING_DURATION - TAIL_START,
     exclude_clip_id = "clip_overwrite2",
 })

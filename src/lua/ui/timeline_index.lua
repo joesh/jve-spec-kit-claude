@@ -80,8 +80,8 @@ local function populate_tree(tree, clips, filter_column, filter_operator, filter
                 clip.track_id or "",
                 tostring(clip.source_in_frame or 0),
                 tostring(clip.source_out_frame or 0),
-                tostring(clip.timeline_start_frame or 0),
-                tostring((clip.timeline_start_frame or 0) + (clip.duration_frames or 0)),
+                tostring(clip.sequence_start_frame or 0),
+                tostring((clip.sequence_start_frame or 0) + (clip.duration_frames or 0)),
                 tostring(clip.duration_frames or 0),
             })
             displayed[idx] = clip
@@ -95,7 +95,7 @@ end
 -- ============================================================================
 
 --- Show the timeline index dialog (blocking).
--- @param opts table {clips=array_of_clip_data, on_navigate=fn(clip_id, timeline_start_frame)}
+-- @param opts table {clips=array_of_clip_data, on_navigate=fn(clip_id, sequence_start_frame)}
 -- @return nil
 function M.show(opts)
     assert(opts, "timeline_index.show: opts required")
@@ -159,7 +159,7 @@ function M.show(opts)
     _G[select_name] = function(row_index)
         if opts.on_navigate and displayed[row_index] then
             local clip = displayed[row_index]
-            opts.on_navigate(clip.id, clip.timeline_start_frame)
+            opts.on_navigate(clip.id, clip.sequence_start_frame)
         end
     end
     qt.CONTROL.SET_TREE_SELECTION_HANDLER(tree, select_name)

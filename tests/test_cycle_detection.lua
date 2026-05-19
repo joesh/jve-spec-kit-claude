@@ -1,5 +1,5 @@
 -- T011 (013): would_create_cycle DFS per research §3.
--- Every command that writes a clip's nested_sequence_id must run this check first;
+-- Every command that writes a clip's source_sequence_id must run this check first;
 -- refusing a cycle at mutation time is FR-010 (containment DAG must be acyclic).
 -- Expected to FAIL until T016 (cycle.lua) lands.
 
@@ -12,15 +12,15 @@ assert(database.init(DB_PATH), "schema.sql failed to execute")
 
 local db = database.get_connection()
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 
 -- Build four non-master sequences A, B, C, D + one master M.
 for _, id in ipairs({"A", "B", "C", "D"}) do
     assert(db:exec(string.format(
         "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
         .. "audio_sample_rate, width, height, created_at, modified_at) "
-        .. "VALUES ('%s', 'p1', '%s', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
+        .. "VALUES ('%s', 'p1', '%s', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)", id, id)))
     assert(db:exec(string.format(
         "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
         .. "VALUES ('trk-%s-v1', '%s', 'V1', 'VIDEO', 1)", id, id)))
@@ -28,13 +28,13 @@ end
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('M', 'p1', 'M', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('M', 'p1', 'M', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 
 -- Insert a chain A → B → C (via clips). D is isolated; M is a master leaf.
 local function insert_clip(id, owner, nested, track)
     assert(db:exec(string.format(
-        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, "
-        .. "name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, "
+        "INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, "
+        .. "name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, "
         .. "fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', '%s', '%s', '%s', 'c', 0, 100, 0, 100, 'passthrough', 1, 1.0, 0, 0, 0)",
         id, owner, track, nested)))

@@ -23,11 +23,11 @@ db:exec(require('import_schema'))
 -- Insert Project/Sequence (24fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -73,13 +73,13 @@ print("Test: AddClipsToSequence execute → undo → redo cycle")
 -- Build groups with Rational durations
 local groups = {
     {
-        nested_sequence_id = master_1,  -- variable, not string
+        sequence_id = master_1,  -- variable, not string
         duration = 50,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                nested_sequence_id = master_1,  -- variable, not string
+                sequence_id = master_1,  -- variable, not string
                 project_id = "project",
                 name = "Clip 1",
                 source_in = 0,
@@ -92,13 +92,13 @@ local groups = {
         }
     },
     {
-        nested_sequence_id = master_2,  -- variable, not string
+        sequence_id = master_2,  -- variable, not string
         duration = 75,
         clips = {
             {
                 role = "video",
                 media_id = "media_1",
-                nested_sequence_id = master_2,  -- variable, not string
+                sequence_id = master_2,  -- variable, not string
                 project_id = "project",
                 name = "Clip 2",
                 source_in = 0,

@@ -56,8 +56,8 @@ print("\n--- 1. Per-sequence master clip bins ---")
 
 -- Get all timeline sequences
 local seq_names = {}
--- V13: edit timelines are kind='nested' (master is the per-media row).
-local seq_stmt = db:prepare("SELECT name FROM sequences WHERE kind = 'nested'")
+-- V13: edit timelines are kind='sequence' (master is the per-media row).
+local seq_stmt = db:prepare("SELECT name FROM sequences WHERE kind = 'sequence'")
 assert(seq_stmt:exec())
 while seq_stmt:next() do
     table.insert(seq_names, seq_stmt:value(0))

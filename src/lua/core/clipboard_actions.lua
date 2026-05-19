@@ -25,7 +25,7 @@ local function load_clip_properties(clip_id)
 end
 
 local function resolve_clip_entry(entry)
-    if type(entry) == "table" and entry.timeline_start and entry.track_id then
+    if type(entry) == "table" and entry.sequence_start and entry.track_id then
         return entry
     end
     if type(entry) == "table" and entry.id and timeline_state.get_clip_by_id then
@@ -68,7 +68,7 @@ local function copy_mark_range()
         -- Skip gap clips — they have no media to copy
         if clip.is_gap then goto continue end
 
-        local clip_start = clip.timeline_start
+        local clip_start = clip.sequence_start
         local clip_end = clip_start + clip.duration
         -- Skip clips entirely outside mark range
         if clip_end <= mark_in or clip_start >= mark_out then goto continue end
@@ -98,13 +98,13 @@ local function copy_mark_range()
             original_id = clip.id,
             track_id = clip.track_id,
             frame_rate = clip.frame_rate,
-            nested_sequence_id = clip.nested_sequence_id,
+            sequence_id = clip.sequence_id,
             master_layer_track_id = clip.master_layer_track_id,
             master_audio_track_id = clip.master_audio_track_id,
             fps_mismatch_policy = clip.fps_mismatch_policy,
             owner_sequence_id = clip.owner_sequence_id,
             track_type = clip.track_type,
-            timeline_start = eff_start,
+            sequence_start = eff_start,
             duration = eff_duration,
             source_in = source_in,
             source_out = source_out,
@@ -120,7 +120,7 @@ local function copy_mark_range()
 
     -- Offsets relative to mark_in
     for _, entry in ipairs(clip_payloads) do
-        entry.offset_frames = entry.timeline_start - mark_in
+        entry.offset_frames = entry.sequence_start - mark_in
         log.event("  clipboard entry: track=%s name=%s offset=%d dur=%d src_in=%d src_out=%d",
             tostring(entry.track_id), tostring(entry.name),
             entry.offset_frames, entry.duration, entry.source_in, entry.source_out)
@@ -157,11 +157,11 @@ local function copy_timeline_selection()
 
     for _, raw in ipairs(selected) do
         local clip = resolve_clip_entry(raw)
-        if clip and clip.id and clip.track_id and clip.timeline_start then
-            assert(type(clip.timeline_start) == "number", "clipboard_actions: clip.timeline_start must be integer")
-            local start_frame = clip.timeline_start
+        if clip and clip.id and clip.track_id and clip.sequence_start then
+            assert(type(clip.sequence_start) == "number", "clipboard_actions: clip.sequence_start must be integer")
+            local start_frame = clip.sequence_start
 
-            if clip.nested_sequence_id == nil then
+            if clip.sequence_id == nil then
                 goto continue
             end
 
@@ -176,7 +176,7 @@ local function copy_timeline_selection()
                 original_id = clip.id,
                 track_id = clip.track_id,
                 frame_rate = clip.frame_rate,
-                nested_sequence_id = clip.nested_sequence_id,
+                sequence_id = clip.sequence_id,
                 master_layer_track_id = clip.master_layer_track_id,
                 master_audio_track_id = clip.master_audio_track_id,
                 fps_mismatch_policy = clip.fps_mismatch_policy,
@@ -184,7 +184,7 @@ local function copy_timeline_selection()
                 track_type = clip.track_type,
 
                 -- All coords are integers
-                timeline_start = clip.timeline_start,
+                sequence_start = clip.sequence_start,
                 duration = clip.duration,
                 source_in = clip.source_in,
                 source_out = clip.source_out,
@@ -201,15 +201,15 @@ local function copy_timeline_selection()
     end
 
     if earliest_start_frame == math.huge then
-        assert(type(clip_payloads[1].timeline_start) == "number",
-            "clipboard_actions: first clip timeline_start must be integer")
-        earliest_start_frame = clip_payloads[1].timeline_start
+        assert(type(clip_payloads[1].sequence_start) == "number",
+            "clipboard_actions: first clip sequence_start must be integer")
+        earliest_start_frame = clip_payloads[1].sequence_start
     end
 
     for _, entry in ipairs(clip_payloads) do
-        assert(type(entry.timeline_start) == "number",
-            "clipboard_actions: clip timeline_start must be integer for offset calculation")
-        entry.offset_frames = entry.timeline_start - earliest_start_frame
+        assert(type(entry.sequence_start) == "number",
+            "clipboard_actions: clip sequence_start must be integer for offset calculation")
+        entry.offset_frames = entry.sequence_start - earliest_start_frame
     end
 
     local payload = {
@@ -297,7 +297,7 @@ local function copy_browser_selection()
                             duration = leaf_source_out,
                             source_in = 0,
                             source_out = leaf_source_out,
-                            timeline_start = 0,
+                            sequence_start = 0,
                             project_id = project_id,
                         },
                         copied_properties = load_clip_properties(entry.clip_id),

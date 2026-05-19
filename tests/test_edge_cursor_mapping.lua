@@ -67,7 +67,7 @@ local function make_clip(id, start_frames, dur_frames)
     return {
         id = id,
         track_id = "v1",
-        timeline_start = start_frames,
+        sequence_start = start_frames,
         duration = dur_frames
     }
 end

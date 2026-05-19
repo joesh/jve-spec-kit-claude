@@ -1,7 +1,15 @@
--- JVE Database Schema V9
--- Feature 013: Timeline placements as nested sequence references.
--- Three-table model (sequences, media_refs, clips) + sparse override tables.
--- No backward compatibility with V8 or earlier (FR-018).
+-- JVE Database Schema V11
+-- Feature 018: Uniform Clip Source Timebase + Canonical-Clock Sub-Frame Primitives.
+--   - clips.source_in_subframe / source_out_subframe (INTEGER, NULL for video, NOT NULL for audio)
+--   - media_refs.audio_sample_rate (INTEGER, denormalized from media row)
+--   - sequences.audio_sample_rate MUST be NULL on kind='master' (per-media_ref rate)
+--   - projects.settings carries default_fps {num,den} and master_clock_hz (canonical 705600000 — flicks; immutable post-create)
+--   - Triggers enforce: clip subframe presence by kind (NULL on video, non-NULL on audio),
+--     subframe in-bounds (0 ≤ subframe < ticks_per_frame), sequences.fps single-writer
+--     (ConformSequence only), projects.settings.master_clock_hz immutable post-create,
+--     master.audio_sample_rate NULL, AUDIO media_refs carry non-NULL audio_sample_rate.
+-- Feature 015: Source-in-Timeline — adds tracks.sync_mode column and patches table.
+-- No backward compatibility with V10 or earlier (rule 2.15: re-import on schema change).
 
 PRAGMA foreign_keys = ON;
 PRAGMA journal_mode = WAL;
@@ -15,7 +23,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (9);
+INSERT OR IGNORE INTO schema_version (version) VALUES (11);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -24,8 +32,17 @@ CREATE TABLE IF NOT EXISTS projects (
     modified_at INTEGER NOT NULL,
     settings TEXT DEFAULT '{}',
 
-    -- Per-Sequence Undo: global cursor for project-level commands
+    -- Per-Sequence Undo: global cursor for project-level commands.
+    -- `global_undo_tip` is the sequence_number of the LEAF of the user's
+    -- current branch on the global stack. Redo walks from cursor toward
+    -- tip (descends through `parent_sequence_number`). When the user
+    -- commits after undoing, both cursor and tip advance to the new
+    -- command, orphaning the prior leaf — its branch remains in the DB
+    -- (preserved for the future branch-picker UI) but is unreachable via
+    -- Cmd+Shift+Z. Without this, an old undone DeleteSequence could
+    -- resurface as a redo target on the user's current branch.
     global_undo_cursor INTEGER DEFAULT 0,
+    global_undo_tip INTEGER DEFAULT 0,
     global_branch_path TEXT DEFAULT '',
 
     -- FR-015: project-level default for how the resolver treats a clip whose
@@ -81,9 +98,9 @@ CREATE TABLE IF NOT EXISTS sequences (
 
     -- Structural kind. Exactly two values after 013:
     --   'master' — sequence's tracks hold media_refs (direct file references).
-    --   'nested' — sequence's tracks hold clips (references to other sequences).
+    --   'sequence' — sequence's tracks hold clips (references to other sequences).
     -- Old values ('timeline','masterclip','compound','multicam') collapse into these.
-    kind TEXT NOT NULL CHECK(kind IN ('master', 'nested')),
+    kind TEXT NOT NULL CHECK(kind IN ('master', 'sequence')),
 
     -- Sequence Video Timebase (The Master Clock)
     fps_numerator INTEGER NOT NULL CHECK(fps_numerator > 0),
@@ -125,8 +142,13 @@ CREATE TABLE IF NOT EXISTS sequences (
     selected_edge_infos TEXT DEFAULT '[]',
     selected_gap_infos TEXT DEFAULT '[]',
 
-    -- Undo/Redo State
+    -- Undo/Redo State. `current_undo_tip` is the leaf of the user's
+    -- current branch on this sequence's stack. Redo walks from
+    -- current_sequence_number toward this tip via parent_sequence_number.
+    -- New commits at non-tip positions orphan the prior leaf (still
+    -- preserved in the commands tree, just unreachable via Cmd+Shift+Z).
     current_sequence_number INTEGER DEFAULT 0,
+    current_undo_tip INTEGER DEFAULT 0,
     current_branch_path TEXT DEFAULT '',
 
     -- Mutation Generation (one bump per user-visible action; see pre-013 docs).
@@ -165,6 +187,21 @@ CREATE TABLE IF NOT EXISTS tracks (
     volume REAL NOT NULL DEFAULT 1.0,
     pan REAL NOT NULL DEFAULT 0.0,
 
+    -- 015: per-track ripple sync mode. DB DEFAULT 'ripple' matches spec §3 domain default.
+    -- Pre-015 tracks get 'ripple' from the schema.sql; migration T025 uses ALTER TABLE
+    -- which also defaults to 'ripple' for any rows that predate the column.
+    sync_mode TEXT NOT NULL DEFAULT 'ripple'
+        CHECK (sync_mode IN ('off','ripple','cut')),
+
+    -- 015 FR-038: record-track auto-select (Avid "track auto-select" /
+    -- Premiere "track targeting"). Distinct from `enabled` (mix output)
+    -- and from patch.enabled (per-channel routing). AND-gated with
+    -- patch.enabled at edit time: a source channel participates in an
+    -- edit iff (no patch row OR patch.enabled=1) AND record_track.autoselect=1.
+    -- Domain default: on (1).
+    autoselect INTEGER NOT NULL DEFAULT 1
+        CHECK (autoselect IN (0,1)),
+
     UNIQUE(sequence_id, track_type, track_index)
 );
 
@@ -186,8 +223,13 @@ CREATE TABLE IF NOT EXISTS media_refs (
     source_out_frame INTEGER NOT NULL,
 
     -- Where on the master's track this portion sits.
-    timeline_start_frame INTEGER NOT NULL,
+    sequence_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
+
+    -- 018 (V11): audio sample rate denormalized from media.audio_sample_rate at insert time.
+    -- NULL allowed for video-only media_refs. Read by resolver (FR-008) per-emit; denorm
+    -- avoids a media join in the hot path.
+    audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate > 0),
 
     -- Source timebase is the referenced media's (media.fps_numerator/denominator);
     -- not carried on this row to avoid denormalization.
@@ -221,18 +263,25 @@ CREATE TABLE IF NOT EXISTS clips (
 
     -- What sequence this clip references (any kind). Replaces the pre-013
     -- master_clip_id column with clearer semantics.
-    nested_sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    sequence_id TEXT NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
 
-    -- Window into the nested sequence's timebase.
+    -- Window into the source sequence's timebase.
+    -- source_*_frame: integer frames in source sequence's fps.
+    -- source_*_subframe (018, V11): integer ticks at project.master_clock_hz, in [0, ticks_per_frame).
+    --   NULL on video clips; NOT NULL on audio clips, with each subframe in
+    --   [0, ticks_per_frame). Enforced by clips_subframe_kind_* /
+    --   clips_subframe_bound_* triggers below.
     source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
+    source_in_subframe INTEGER,
+    source_out_subframe INTEGER,
 
-    -- Where on this sequence's track the clip sits. timeline_start_frame and
+    -- Where on this sequence's track the clip sits. sequence_start_frame and
     -- duration_frames are in the OWNER sequence's timebase; source_in/out are
-    -- in the NESTED sequence's timebase. The ratio between them is set by
+    -- in the source sequence's timebase. The ratio between them is set by
     -- fps_mismatch_policy below. Neither timebase is carried on this row —
-    -- callers dereference owner_sequence_id / nested_sequence_id as needed.
-    timeline_start_frame INTEGER NOT NULL,
+    -- callers dereference owner_sequence_id / sequence_id as needed.
+    sequence_start_frame INTEGER NOT NULL,
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
 
     -- Per-clip video-layer override. Non-NULL = this clip exposes the named
@@ -245,7 +294,7 @@ CREATE TABLE IF NOT EXISTS clips (
     -- of the nested sequence's audio tracks (FR-023/FR-024 — Expand/Collapse).
     -- Symmetric to master_layer_track_id but for audio. Non-NULL only
     -- on clips whose owner-side track is itself an audio track, and the
-    -- referenced track must belong to nested_sequence_id and have kind='audio'
+    -- referenced track must belong to sequence_id and have kind='audio'
     -- (model-layer asserts; FK takes care of dangling-on-delete).
     master_audio_track_id TEXT REFERENCES tracks(id) ON DELETE SET NULL,
 
@@ -271,8 +320,8 @@ CREATE TABLE IF NOT EXISTS clips (
 
 CREATE INDEX IF NOT EXISTS idx_clips_owner_sequence ON clips(owner_sequence_id);
 CREATE INDEX IF NOT EXISTS idx_clips_track ON clips(track_id);
-CREATE INDEX IF NOT EXISTS idx_clips_nested_sequence ON clips(nested_sequence_id);
-CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, timeline_start_frame);
+CREATE INDEX IF NOT EXISTS idx_clips_sequence ON clips(sequence_id);
+CREATE INDEX IF NOT EXISTS idx_clips_track_start ON clips(track_id, sequence_start_frame);
 
 -- ============================================================================
 -- CLIP LINKS (V+A sync — scope narrowed to clips only, media_refs don't link)
@@ -289,6 +338,28 @@ CREATE TABLE IF NOT EXISTS clip_links (
 
 CREATE INDEX IF NOT EXISTS idx_clip_links_group ON clip_links(link_group_id);
 CREATE INDEX IF NOT EXISTS idx_clip_links_clip ON clip_links(clip_id);
+
+-- ============================================================================
+-- PATCHES (015 — per-sequence source-track → record-track routing)
+-- ============================================================================
+
+-- Patch routing is keyed by source_shape so different-shape sources (e.g. a
+-- 2-ch stereo boom vs a 4-ch surround) on the same record sequence maintain
+-- independent remembered maps. See specs/015-source-in-timeline/spec.md F2.
+CREATE TABLE IF NOT EXISTS patches (
+    id                  TEXT    PRIMARY KEY,
+    sequence_id         TEXT    NOT NULL REFERENCES sequences(id) ON DELETE CASCADE,
+    track_type          TEXT    NOT NULL CHECK (track_type IN ('VIDEO','AUDIO')),
+    source_shape        INTEGER NOT NULL CHECK (source_shape > 0),
+    source_track_index  INTEGER NOT NULL CHECK (source_track_index >= 0),
+    record_track_index  INTEGER NOT NULL CHECK (record_track_index >= 0),
+    enabled             INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+    created_at          INTEGER NOT NULL DEFAULT 0,
+    UNIQUE (sequence_id, track_type, source_shape, source_track_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_patches_sequence_id
+    ON patches(sequence_id, track_type, source_shape);
 
 -- ============================================================================
 -- OVERRIDE STATE (sparse — row exists only when explicitly set)
@@ -459,17 +530,17 @@ END;
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_insert;
 CREATE TRIGGER trg_clips_owner_kind_insert
 BEFORE INSERT ON clips
-WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 DROP TRIGGER IF EXISTS trg_clips_owner_kind_update;
 CREATE TRIGGER trg_clips_owner_kind_update
 BEFORE UPDATE ON clips
-WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'nested'
+WHEN (SELECT kind FROM sequences WHERE id = NEW.owner_sequence_id) != 'sequence'
 BEGIN
-    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=nested sequence');
+    SELECT RAISE(ABORT, 'INV-2: clips.owner_sequence_id must reference a kind=''sequence'' sequence');
 END;
 
 -- ============================================================================
@@ -486,19 +557,19 @@ WHEN EXISTS (
 BEGIN
     SELECT CASE
     WHEN coalesce((
-        SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
+        SELECT (c.sequence_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame < NEW.timeline_start_frame
-        ORDER BY c.timeline_start_frame DESC LIMIT 1
-    ), NEW.timeline_start_frame) > NEW.timeline_start_frame
+          AND c.sequence_start_frame < NEW.sequence_start_frame
+        ORDER BY c.sequence_start_frame DESC LIMIT 1
+    ), NEW.sequence_start_frame) > NEW.sequence_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame >= NEW.timeline_start_frame
-          AND c.timeline_start_frame < (NEW.timeline_start_frame + NEW.duration_frames)
+          AND c.sequence_start_frame >= NEW.sequence_start_frame
+          AND c.sequence_start_frame < (NEW.sequence_start_frame + NEW.duration_frames)
         LIMIT 1
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;
@@ -513,20 +584,225 @@ WHEN EXISTS (
 BEGIN
     SELECT CASE
     WHEN coalesce((
-        SELECT (c.timeline_start_frame + c.duration_frames) FROM clips c
+        SELECT (c.sequence_start_frame + c.duration_frames) FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame < NEW.timeline_start_frame
-        ORDER BY c.timeline_start_frame DESC LIMIT 1
-    ), NEW.timeline_start_frame) > NEW.timeline_start_frame
+          AND c.sequence_start_frame < NEW.sequence_start_frame
+        ORDER BY c.sequence_start_frame DESC LIMIT 1
+    ), NEW.sequence_start_frame) > NEW.sequence_start_frame
         THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     WHEN EXISTS (
         SELECT 1 FROM clips c
         WHERE c.track_id = NEW.track_id
           AND c.id != NEW.id
-          AND c.timeline_start_frame >= NEW.timeline_start_frame
-          AND c.timeline_start_frame < (NEW.timeline_start_frame + NEW.duration_frames)
+          AND c.sequence_start_frame >= NEW.sequence_start_frame
+          AND c.sequence_start_frame < (NEW.sequence_start_frame + NEW.duration_frames)
         LIMIT 1
     ) THEN RAISE(ABORT, 'VIDEO_OVERLAP: Clips cannot overlap on a video track')
     END;
+END;
+
+-- ============================================================================
+-- 018 INVARIANT TRIGGERS — sub-frame primitives + fps/clock single-writer
+-- ============================================================================
+-- Subframe presence by clip kind (FR-001):
+--   VIDEO clips MUST have NULL source_*_subframe.
+--   AUDIO clips MUST have non-NULL source_*_subframe.
+-- Subframe bound (FR-002):
+--   0 <= source_*_subframe < master_clock_hz * source_seq.fps_den / source_seq.fps_num.
+-- sequences.fps_num/den single-writer (FR-031):
+--   UPDATE rejected unless db_session_flags has '_conform_sequence_in_progress' row.
+-- projects.settings.master_clock_hz immutable post-create (FR-028):
+--   UPDATE OF settings that changes master_clock_hz is unconditionally
+--   rejected. The canonical clock (705,600,000 — flicks) exactly
+--   represents every supported audio rate and frame rate, so no command
+--   has any reason to change it. INSERT (project create) sets the
+--   canonical value once and never again.
+-- master.audio_sample_rate must be NULL (FR-004):
+--   sequences with kind='master' carry NULL audio_sample_rate (rate is
+--   per-media_ref, since a master can hold heterogeneous-rate audio).
+-- AUDIO media_refs carry non-NULL audio_sample_rate (FR-008):
+--   denormalized from media for resolver hot path.
+--
+-- Session-flag pattern: SQLite non-TEMP triggers cannot reference temp.*,
+-- so the flag table is a permanent table (db_session_flags). Commands INSERT
+-- the flag row inside their transaction and DELETE before COMMIT. On rollback
+-- the flag row goes with the transaction — defense-in-depth.
+
+CREATE TABLE IF NOT EXISTS db_session_flags (
+    name TEXT PRIMARY KEY
+);
+
+-- ---------- subframe presence by clip kind ----------
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_kind_insert;
+CREATE TRIGGER trg_clips_subframe_kind_insert
+BEFORE INSERT ON clips
+BEGIN
+    SELECT CASE
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
+             AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
+        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+             AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
+        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+    END;
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_kind_update;
+CREATE TRIGGER trg_clips_subframe_kind_update
+BEFORE UPDATE OF source_in_subframe, source_out_subframe, track_id ON clips
+BEGIN
+    SELECT CASE
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'VIDEO'
+             AND (NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL)
+        THEN RAISE(ABORT, 'INV-3: video clip must have NULL source_in_subframe and source_out_subframe')
+        WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+             AND (NEW.source_in_subframe IS NULL OR NEW.source_out_subframe IS NULL)
+        THEN RAISE(ABORT, 'INV-3: audio clip must have non-NULL source_in_subframe and source_out_subframe')
+    END;
+END;
+
+-- ---------- subframe bound ----------
+-- ticks_per_frame = master_clock_hz * source_seq.fps_den / source_seq.fps_num.
+-- master_clock_hz pulled from projects.settings JSON via json_extract.
+-- SQLite JSON1 is compiled into the lsqlite3 build used by JVE.
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_bound_insert;
+CREATE TRIGGER trg_clips_subframe_bound_insert
+BEFORE INSERT ON clips
+WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
+BEGIN
+    SELECT CASE
+        WHEN NEW.source_in_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        WHEN NEW.source_out_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        WHEN NEW.source_in_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        WHEN NEW.source_out_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+    END;
+END;
+
+DROP TRIGGER IF EXISTS trg_clips_subframe_bound_update;
+CREATE TRIGGER trg_clips_subframe_bound_update
+BEFORE UPDATE OF source_in_subframe, source_out_subframe, sequence_id ON clips
+WHEN NEW.source_in_subframe IS NOT NULL OR NEW.source_out_subframe IS NOT NULL
+BEGIN
+    SELECT CASE
+        WHEN NEW.source_in_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe must be >= 0')
+        WHEN NEW.source_out_subframe < 0
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe must be >= 0')
+        WHEN NEW.source_in_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_in_subframe >= ticks_per_frame')
+        WHEN NEW.source_out_subframe >= (
+            (SELECT json_extract(p.settings, '$.master_clock_hz')
+               FROM projects p WHERE p.id = NEW.project_id) *
+            (SELECT s.fps_denominator FROM sequences s WHERE s.id = NEW.sequence_id) /
+            (SELECT s.fps_numerator   FROM sequences s WHERE s.id = NEW.sequence_id)
+        )
+        THEN RAISE(ABORT, 'INV-4: source_out_subframe >= ticks_per_frame')
+    END;
+END;
+
+-- ---------- sequences.fps_num/den single-writer ----------
+-- Allowed only when temp table _conform_sequence_in_progress exists
+-- (ConformSequence creates it inside its transaction).
+
+DROP TRIGGER IF EXISTS trg_sequences_fps_guard;
+-- The fps-guard trigger fires only on ACTUAL change. SQLite's BEFORE UPDATE OF col
+-- fires whenever the column appears in the SET clause regardless of value,
+-- so callers writing a row-image with unchanged fps would trigger spurious
+-- aborts. Comparing NEW vs OLD makes the trigger value-driven, matching the
+-- intent (FR-031 forbids *mutation*, not *no-op rewrite*).
+CREATE TRIGGER trg_sequences_fps_guard
+BEFORE UPDATE OF fps_numerator, fps_denominator ON sequences
+WHEN NOT EXISTS (SELECT 1 FROM db_session_flags
+                  WHERE name = '_conform_sequence_in_progress')
+  AND (NEW.fps_numerator IS NOT OLD.fps_numerator
+       OR NEW.fps_denominator IS NOT OLD.fps_denominator)
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-5: sequences.fps_num/den mutable only via ConformSequence');
+END;
+
+-- ---------- projects.settings.master_clock_hz immutable post-create ----------
+-- The canonical master clock (705,600,000 — flicks) exactly represents
+-- every supported audio rate and frame rate, so no user-facing reason to
+-- change it exists. The previous SetProjectMasterClock command is gone;
+-- the trigger now unconditionally rejects any UPDATE that changes the
+-- master_clock_hz value within settings. Other settings keys may still be
+-- UPDATEd freely. INSERT (project create) is not blocked — it sets the
+-- canonical value once and never again.
+
+DROP TRIGGER IF EXISTS trg_projects_master_clock_guard;
+CREATE TRIGGER trg_projects_master_clock_guard
+BEFORE UPDATE OF settings ON projects
+WHEN json_extract(NEW.settings, '$.master_clock_hz')
+     IS NOT json_extract(OLD.settings, '$.master_clock_hz')
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-6: projects.settings.master_clock_hz is immutable post-create (canonical value is 705600000 flicks)');
+END;
+
+-- ---------- master.audio_sample_rate must be NULL on kind=master ----------
+
+-- ---------- AUDIO media_refs MUST carry non-NULL audio_sample_rate ----------
+-- 018 V5: schema-layer enforcement of FR-008 prerequisite. The resolver
+-- reads media_refs.audio_sample_rate per-emit; NULL on an AUDIO row is a
+-- writer bug that must be caught at insert time, not silently coerced.
+
+DROP TRIGGER IF EXISTS trg_media_refs_audio_rate_required_insert;
+CREATE TRIGGER trg_media_refs_audio_rate_required_insert
+BEFORE INSERT ON media_refs
+WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+     AND NEW.audio_sample_rate IS NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+END;
+
+DROP TRIGGER IF EXISTS trg_media_refs_audio_rate_required_update;
+CREATE TRIGGER trg_media_refs_audio_rate_required_update
+BEFORE UPDATE OF audio_sample_rate, track_id ON media_refs
+WHEN (SELECT track_type FROM tracks WHERE id = NEW.track_id) = 'AUDIO'
+     AND NEW.audio_sample_rate IS NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-8: AUDIO media_ref must have non-NULL audio_sample_rate');
+END;
+
+DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_insert;
+CREATE TRIGGER trg_sequences_master_audio_rate_null_insert
+BEFORE INSERT ON sequences
+WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
+END;
+
+DROP TRIGGER IF EXISTS trg_sequences_master_audio_rate_null_update;
+CREATE TRIGGER trg_sequences_master_audio_rate_null_update
+BEFORE UPDATE OF kind, audio_sample_rate ON sequences
+WHEN NEW.kind = 'master' AND NEW.audio_sample_rate IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT,
+        'INV-7: sequences.audio_sample_rate must be NULL for kind=''master''');
 END;

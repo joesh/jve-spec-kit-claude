@@ -49,12 +49,12 @@ do
     -- Cycle check fires before any duration / media inspection in
     -- _place_shared, so the fixture only needs the sequence + a track.
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('e-v1', 'e', 'V1', 'VIDEO', 1);
     ]]))
@@ -63,8 +63,8 @@ do
     local before_links = link_count(db)
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e",
-        nested_sequence_id    = "e",     -- same as owner — direct cycle
-        timeline_start_frame  = 0,
+        source_sequence_id    = "e",     -- same as owner — direct cycle
+        sequence_start_frame  = 0,
         target_video_track_id = "e-v1",
     })
     assert(not ok, "direct cycle (E in E) must refuse")
@@ -89,14 +89,14 @@ do
     -- referencing E2. Now E2 is reachable from E1 — Insert E1 into E2
     -- would close the loop.
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m',  'p1', 'm',  'master', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e1', 'p1', 'e1', 'nested', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e2', 'p1', 'e2', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m',  'p1', 'm',  'master', 24, 1, NULL, 1920, 1080, 0, 0),
+               ('e1', 'p1', 'e1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0),
+               ('e2', 'p1', 'e2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1',  'm',  'V1', 'VIDEO', 1),
                ('e1-v1', 'e1', 'V1', 'VIDEO', 1),
@@ -107,23 +107,23 @@ do
         VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+        VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
         -- E2 contains a clip referencing master M (non-zero effective duration).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('c-e2-uses-m', 'p1', 'e2', 'e2-v1', 'm', 'c2',
             0, 50, 0, 50, 'passthrough', 1, 1.0, 0, 0, 0);
-        -- E1 contains a clip whose nested_sequence_id is E2 — closes the
+        -- E1 contains a clip whose sequence_id is E2 — closes the
         -- reachability E1 -> E2.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -135,8 +135,8 @@ do
     local before_links = link_count(db)
     local ok, err = pcall(Insert.execute, {
         sequence_id           = "e2",
-        nested_sequence_id    = "e1",    -- e1 already references e2
-        timeline_start_frame  = 0,
+        source_sequence_id    = "e1",    -- e1 already references e2
+        sequence_start_frame  = 0,
         target_video_track_id = "e2-v1",
     })
     assert(not ok, "transitive cycle (E1 into E2 where E1 references E2) must refuse")

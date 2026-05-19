@@ -18,9 +18,9 @@ local layout = ripple_layout.create({
         }
     },
     clips = {
-        v1_left = {timeline_start = 0, duration = 800, source_in = 0},
-        v1_right = {timeline_start = 4000, duration = 400},
-        v2 = {timeline_start = 2000, duration = 1000}
+        v1_left = {sequence_start = 0, duration = 800, source_in = 0},
+        v1_right = {sequence_start = 4000, duration = 400},
+        v2 = {sequence_start = 2000, duration = 1000}
     }
 })
 local tracks = layout.tracks
@@ -78,7 +78,7 @@ timeline = {
 
 local limit_color = timeline_state.colors.edge_selected_limit or "#ff0000"
 local avail_color = timeline_state.colors.edge_selected_available or "#00ff00"
-local gap_start_frames = clips.v1_left.timeline_start + clips.v1_left.duration
+local gap_start_frames = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", gap_start_frames)
 local gap_edge_key = string.format("%s:%s", v1_gap_id, "in")
 local v2_edge_key = string.format("%s:%s", clips.v2.id, "out")

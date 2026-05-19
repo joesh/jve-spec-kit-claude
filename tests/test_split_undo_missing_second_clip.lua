@@ -27,10 +27,10 @@ package.loaded["models.clip"] = {
         table.insert(deleted_clips, id)
         return true
     end,
-    update_bounds = function(id, timeline_start, duration, source_in, source_out)
+    update_bounds = function(id, sequence_start, duration, source_in, source_out)
         local c = clip_store[id]
         if c then
-            c.timeline_start_frame = timeline_start
+            c.sequence_start_frame = sequence_start
             c.duration_frames = duration
             c.source_in_frame = source_in
             c.source_out_frame = source_out
@@ -43,8 +43,8 @@ package.loaded["models.clip"] = {
             id = id,
             owner_sequence_id = c.owner_sequence_id or "seq1",
             track_id = c.track_id or "trk1",
-            nested_sequence_id = c.nested_sequence_id or "master_x",
-            timeline_start_frame = c.timeline_start_frame,
+            source_sequence_id = c.source_sequence_id or "master_x",
+            sequence_start_frame = c.sequence_start_frame,
             duration_frames = c.duration_frames,
             source_in_frame = c.source_in_frame,
             source_out_frame = c.source_out_frame,
@@ -71,7 +71,7 @@ split_clip.register(executors, undoers, nil, function() end)
 -- Set up: original clip exists with post-split state; second clip is missing.
 clip_store["clip_orig"] = {
     id = "clip_orig",
-    timeline_start_frame = 10,
+    sequence_start_frame = 10,
     duration_frames = 20,
     source_in_frame = 0,
     source_out_frame = 20,
@@ -84,7 +84,7 @@ cmd:set_parameters({
     second_clip_id = "clip_second",
     sequence_id = "seq1",
     prior_state = {
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames      = 50,
         source_in_frame      = 0,
         source_out_frame     = 50,
@@ -100,8 +100,8 @@ assert(restored, "Original clip should still exist")
 assert(restored.duration_frames == 50,
     string.format("Original duration should be 50, got %s",
         tostring(restored.duration_frames)))
-assert(restored.timeline_start_frame == 0,
-    string.format("Original timeline_start should be 0, got %s",
-        tostring(restored.timeline_start_frame)))
+assert(restored.sequence_start_frame == 0,
+    string.format("Original sequence_start should be 0, got %s",
+        tostring(restored.sequence_start_frame)))
 
 print("✅ test_split_undo_missing_second_clip.lua passed")

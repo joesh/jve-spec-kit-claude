@@ -92,7 +92,7 @@ local clips = {
     {
         clip_id = "countdown",
         media_path = COUNTDOWN,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 250,
         source_in = tc_origin(COUNTDOWN) + 47,
         rate_num = RATE_NUM,
@@ -102,7 +102,7 @@ local clips = {
     {
         clip_id = "seagull-anim",
         media_path = SEAGULL_ANIM,
-        timeline_start = 275,
+        sequence_start = 275,
         duration = 100,
         source_in = tc_origin(SEAGULL_ANIM),
         rate_num = RATE_NUM,
@@ -112,7 +112,7 @@ local clips = {
     {
         clip_id = "40-393-3",
         media_path = CLIP_40_393,
-        timeline_start = 450,
+        sequence_start = 450,
         duration = 251,
         source_in = tc_origin(CLIP_40_393) + 3513,
         rate_num = RATE_NUM,

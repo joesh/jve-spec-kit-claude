@@ -11,9 +11,9 @@ local TEST_DB = "/tmp/jve/test_timeline_roll_preview_no_downstream.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_left = {timeline_start = 0, duration = 1000},
-        v1_right = {timeline_start = 2000, duration = 1000},
-        v1_downstream = {timeline_start = 3600, duration = 800}
+        v1_left = {sequence_start = 0, duration = 1000},
+        v1_right = {sequence_start = 2000, duration = 1000},
+        v1_downstream = {sequence_start = 3600, duration = 800}
     }
 })
 
@@ -49,7 +49,7 @@ function view.get_track_y_by_id(track_id)
     return entry and entry.y or -1
 end
 
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local gap_edge = {clip_id = v1_gap_id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"}
 local clip_edge = {clip_id = clips.v1_right.id, edge_type = "in", track_id = tracks.v1.id, trim_type = "roll"}
@@ -89,7 +89,7 @@ layout:cleanup()
 assert(ok, "timeline renderer errored: " .. tostring(err))
 
 local downstream_start_px = timeline_state.time_to_pixel(
-    clips.v1_downstream.timeline_start,
+    clips.v1_downstream.sequence_start,
     viewport_width
 )
 local downstream_highlight = false

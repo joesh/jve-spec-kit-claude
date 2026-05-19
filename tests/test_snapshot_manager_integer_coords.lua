@@ -25,15 +25,15 @@ print("=== Snapshot Manager Integer Coords Tests ===")
 -- Setup
 --------------------------------------------------------------------------------
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Timeline 1', 'nested', 24, 1, 48000,
+    VALUES ('seq1', 'proj1', 'Timeline 1', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 10, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -52,7 +52,7 @@ db:exec(string.format([[
 ]], now, now))
 
 -- V13 master sequence + track + media_ref for med1 (clip references it
--- via nested_sequence_id). The 'master_seq_for_med1' literal id matches
+-- via sequence_id). The 'master_seq_for_med1' literal id matches
 -- the clip fixture below.
 db:exec([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator,
@@ -66,10 +66,10 @@ db:exec([[
     UPDATE sequences SET default_video_layer_track_id = 'master_v_med1'
         WHERE id = 'master_seq_for_med1';
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-        media_id, source_in_frame, source_out_frame, timeline_start_frame,
-        duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+        media_id, source_in_frame, source_out_frame, sequence_start_frame,
+        duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('mr_med1', 'proj1', 'master_seq_for_med1', 'master_v_med1',
-        'med1', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        'med1', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
 ]])
 
 --------------------------------------------------------------------------------
@@ -85,12 +85,12 @@ local clips = {
         project_id = "proj1",
         track_id = "trk1",
         owner_sequence_id = "seq1",
-        nested_sequence_id = "master_seq_for_med1",
+        sequence_id = "master_seq_for_med1",
         master_layer_track_id = nil,
         master_audio_track_id = nil,
         fps_mismatch_policy = "resample",
         -- INTEGER coordinates (post-refactor)
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -114,9 +114,9 @@ assert(snap ~= nil, "load_snapshot should not return nil")
 assert(#snap.clips == 1, "should have 1 clip")
 
 local c = snap.clips[1]
-assert_type(c.timeline_start, "number", "clip.timeline_start")
-assert(c.timeline_start == 0, "timeline_start should be 0, got " .. tostring(c.timeline_start))
-print("  ✓ timeline_start is integer 0")
+assert_type(c.sequence_start, "number", "clip.sequence_start")
+assert(c.sequence_start == 0, "sequence_start should be 0, got " .. tostring(c.sequence_start))
+print("  ✓ sequence_start is integer 0")
 
 assert_type(c.duration, "number", "clip.duration")
 assert(c.duration == 100, "duration should be 100, got " .. tostring(c.duration))
@@ -147,14 +147,14 @@ print("  ✓ rate metadata preserved")
 -- ERROR PATH: Missing required integer fields
 --------------------------------------------------------------------------------
 
-print("Test 5: deserialize asserts on missing timeline_start_frame")
+print("Test 5: deserialize asserts on missing sequence_start_frame")
 -- Delete the valid snapshot first so corrupt one is loaded
 db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 
 -- Create corrupt snapshot payload with missing field
 local bad_payload = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
+        id = "seq1", project_id = "proj1", name = "T", kind = "sequence",
         fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -164,9 +164,9 @@ local bad_payload = json.encode({
         {
             id = "clip_bad", track_type = "VIDEO", name = "Bad",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            nested_sequence_id = "master_seq_for_med1",
+            sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
-            -- Missing timeline_start_frame!
+            -- Missing sequence_start_frame!
             duration_frames = 100,
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,
@@ -182,8 +182,8 @@ raw_sql(db, "INSERT OR REPLACE INTO snapshots (id, sequence_id, sequence_number,
 
 expect_error(function()
     snapshot_manager.load_snapshot(db, "seq1")
-end, "timeline_start_frame")
-print("  ✓ deserialize asserts on missing timeline_start_frame")
+end, "sequence_start_frame")
+print("  ✓ deserialize asserts on missing sequence_start_frame")
 
 print("Test 6: deserialize asserts on missing duration_frames")
 -- Clean slate for this test
@@ -191,7 +191,7 @@ db:exec("DELETE FROM snapshots WHERE sequence_id = 'seq1'")
 
 local bad_payload2 = json.encode({
     sequence = {
-        id = "seq1", project_id = "proj1", name = "T", kind = "nested",
+        id = "seq1", project_id = "proj1", name = "T", kind = "sequence",
         fps_numerator = 24, fps_denominator = 1, audio_sample_rate = 48000,
         width = 1920, height = 1080,
         view_start_frame = 0, view_duration_frames = 240, playhead_frame = 0,
@@ -201,9 +201,9 @@ local bad_payload2 = json.encode({
         {
             id = "clip_no_dur", track_type = "VIDEO", name = "No Duration",
             project_id = "proj1", track_id = "trk1", owner_sequence_id = "seq1",
-            nested_sequence_id = "master_seq_for_med1",
+            sequence_id = "master_seq_for_med1",
             fps_mismatch_policy = "resample",
-            timeline_start_frame = 0,
+            sequence_start_frame = 0,
             -- Missing duration_frames!
             source_in_frame = 0, source_out_frame = 100,
             fps_numerator = 24, fps_denominator = 1,

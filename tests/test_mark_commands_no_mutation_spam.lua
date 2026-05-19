@@ -52,12 +52,12 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 local seq = Sequence.create("Test Timeline", "project",
     { fps_numerator = 24, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested",id = "seq_1", audio_sample_rate = 48000})
+    { kind = "sequence",id = "seq_1", audio_sample_rate = 48000})
 assert(seq:save(), "setup: failed to save sequence")
 
 command_manager.init('seq_1', 'project')

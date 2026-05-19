@@ -9,7 +9,7 @@
 -- Effect (per clip in the delete unit):
 --   - the clip is deleted (clip_links and clip_channel_override rows
 --     cascade via FK ON DELETE)
---   - clips on the same track with timeline_start >= deleted_clip.end
+--   - clips on the same track with sequence_start >= deleted_clip.end
 --     shift upstream by deleted_clip.duration
 --
 -- Link groups on *neighboring* (not-deleted) clips remain intact: their
@@ -74,7 +74,7 @@ function M.execute(args)
         local r = captured.row
         ripple_plan[#ripple_plan + 1] = {
             track_id   = r.track_id,
-            from_frame = r.timeline_start_frame + r.duration_frames,
+            from_frame = r.sequence_start_frame + r.duration_frames,
             shift      = -r.duration_frames,
         }
     end
@@ -150,7 +150,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         --   2. Re-INSERT the deleted clips into that empty range.
         -- For the un-ripple, replay each plan entry with the OPPOSITE
         -- shift; the from_frame is where the ripple originally started
-        -- (i.e. timeline_end of the deleted clip), and the new positions
+        -- (i.e. sequence_end of the deleted clip), and the new positions
         -- are at from_frame + shift (a leftward shift). To undo we
         -- shift everything at >= (from_frame + shift) by -shift.
         assert(database.savepoint(SAVEPOINT), "Undo RippleDelete: savepoint failed")

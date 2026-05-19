@@ -30,7 +30,7 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "clip1", track_id = "v1", timeline_start = 0, duration = 24}
+            {id = "clip1", track_id = "v1", sequence_start = 0, duration = 24}
         }
     end
 }

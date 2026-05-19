@@ -6,7 +6,7 @@
 --   * V2 → NULL: clip override clears; undo restores V2.
 --   * sequence_id arg required (rule 2.29 regression): an args table that
 --     omits sequence_id is refused.
---   * track_id must belong to clip.nested_sequence_id (rule 1.14): a
+--   * track_id must belong to clip.source_sequence_id (rule 1.14): a
 --     track on a DIFFERENT sequence is refused with a loud message.
 --
 -- Black-box DB-state assertions; bypasses command_manager for unit
@@ -27,20 +27,20 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'multicam', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'multicam', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('other', 'p1', 'unrelated', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('other', 'p1', 'unrelated', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-v2', 'm', 'V2', 'VIDEO', 2),
@@ -50,8 +50,8 @@ local function build_fixture()
         UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
         UPDATE sequences SET default_video_layer_track_id = 'other-v1' WHERE id = 'other';
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -129,7 +129,7 @@ do
     print("  ok")
 end
 
-print("-- track_id must belong to clip.nested_sequence_id --")
+print("-- track_id must belong to clip.source_sequence_id --")
 do
     build_fixture()
     local ok, err = pcall(SetClipLayer.execute, {
@@ -139,7 +139,7 @@ do
     })
     assert(not ok,
         "track_id from a different sequence must be refused (G-R5 / INV-?)")
-    assert(tostring(err):find("nested_sequence_id")
+    assert(tostring(err):find("source_sequence_id")
         or tostring(err):find("track")
         or tostring(err):find("layer"),
         "error must name the bad track or the constraint; got " .. tostring(err))

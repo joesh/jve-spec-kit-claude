@@ -38,12 +38,12 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -55,10 +55,10 @@ command_manager.init('sequence', 'project')
 -- --------------------------------------------------------------------------
 -- Phase 1: Execute one command normally, seq advances to 1
 -- --------------------------------------------------------------------------
-local r1 = command_manager.execute("SetTrackProperty", {
+local r1 = command_manager.execute("SetTrackMixValue", {
     track_id = 'track_v1',
-    property = 'muted',
-    value = true,
+    property = 'volume',
+    value = 0.8,
     project_id = 'project',
 })
 assert(r1.success,
@@ -104,10 +104,10 @@ print("  phase 2: allocator still at 1 — stale, as expected")
 --          hit UNIQUE constraint, decrement to 1, and return failure.
 --          After the fix, it should refresh from DB MAX=5 and allocate 6.
 -- --------------------------------------------------------------------------
-local r2 = command_manager.execute("SetTrackProperty", {
+local r2 = command_manager.execute("SetTrackMixValue", {
     track_id = 'track_v1',
-    property = 'soloed',
-    value = true,
+    property = 'pan',
+    value = 0.3,
     project_id = 'project',
 })
 assert(r2.success,
@@ -132,8 +132,8 @@ our_q:bind_value(1, max_seq_after_2)
 our_q:exec(); our_q:next()
 local our_type = our_q:value(0)
 our_q:finalize()
-assert(our_type == 'SetTrackProperty',
-    string.format("Phase 3: expected SetTrackProperty at seq=%d, got %s",
+assert(our_type == 'SetTrackMixValue',
+    string.format("Phase 3: expected SetTrackMixValue at seq=%d, got %s",
         max_seq_after_2, tostring(our_type)))
 
 -- Verify allocator now reflects the true DB state

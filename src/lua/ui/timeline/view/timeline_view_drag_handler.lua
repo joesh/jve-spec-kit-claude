@@ -124,7 +124,7 @@ function M.handle_release(view, drag_state, modifiers)
             local pending_clips = {}
             for _, c in ipairs(current_clips) do
                 pending_clips[c.id] = {
-                    timeline_start = c.timeline_start,
+                    sequence_start = c.sequence_start,
                     duration = c.duration,
                 }
             end
@@ -145,13 +145,13 @@ function M.handle_release(view, drag_state, modifiers)
                                 pending_clips = pending_clips
                             }
                             if delta_frames ~= 0 then
-                                local pending_start = clip.timeline_start + delta_frames
+                                local pending_start = clip.sequence_start + delta_frames
                                 params.pending_new_start = pending_start
                                 params.pending_duration = clip.duration
                                 params.sequence_id = active_seq
                                 -- Update pending_clips for this clip to the new start to keep occlusion consistent.
                                 if pending_clips[clip.id] then
-                                    pending_clips[clip.id].timeline_start = pending_start
+                                    pending_clips[clip.id].sequence_start = pending_start
                                 end
                             end
                             table.insert(command_specs, {

@@ -34,12 +34,12 @@ local PROJ_A = "prj-A"
 local SEQ_A  = "seq-A"
 
 assert(conn:exec(string.format([[
-INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-VALUES ('%s', 'Project A', 'resample', strftime('%%s','now'), strftime('%%s','now'));
+INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+VALUES ('%s', 'Project A', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
     audio_sample_rate, width, height, view_start_frame, view_duration_frames, playhead_frame,
     created_at, modified_at)
-VALUES ('%s', '%s', 'Seq A', 'nested', 24, 1, 48000, 1920, 1080, 0, 240, 0,
+VALUES ('%s', '%s', 'Seq A', 'sequence', 24, 1, 48000, 1920, 1080, 0, 240, 0,
     strftime('%%s','now'), strftime('%%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('tr-A', '%s', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -53,8 +53,8 @@ assert(#data.state.tracks > 0, "precondition: expected tracks loaded from Projec
 
 -- Simulate in-flight user state that ought to be gone after a project change.
 data.state.clips = {
-    { id = "c1", track_id = "tr-A", timeline_start = 0, duration = 100, clip_kind = "media" },
-    { id = "c2", track_id = "tr-A", timeline_start = 200, duration = 50, clip_kind = "media" },
+    { id = "c1", track_id = "tr-A", sequence_start = 0, duration = 100, clip_kind = "media" },
+    { id = "c2", track_id = "tr-A", sequence_start = 200, duration = 50, clip_kind = "media" },
 }
 data.state.selected_clips = { data.state.clips[1] }
 data.state.selected_edges = { { clip_id = "c1", edge_type = "out" } }

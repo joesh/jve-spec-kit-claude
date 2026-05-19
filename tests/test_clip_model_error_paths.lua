@@ -42,14 +42,14 @@ local db = database.get_connection()
 local now = os.time()
 
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
                            audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Test Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('seq1', 'proj1', 'Test Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 db:exec([[
@@ -78,7 +78,7 @@ print("\n--- create: required fps fields ---")
 -- the clip's source-side timebase is read from its nested sequence; media
 -- comes via the master sequence's media_ref. The pre-013 "missing fps"
 -- and "missing media_id auto-resolve master_clip_id" error paths are
--- therefore no longer applicable. Coverage moved to nested_sequence_id +
+-- therefore no longer applicable. Coverage moved to source_sequence_id +
 -- ownership + source-window model assertions.
 
 -- ============================================================================
@@ -91,9 +91,9 @@ expect_error("timeline clip missing track_id", function()
     Clip.create({
         name = "TestClip",
         project_id = "proj1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -109,8 +109,8 @@ expect_error("timeline clip missing owner_sequence_id", function()
         name = "TestClip",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
-        timeline_start_frame = 0,
+        sequence_id = "mc1",
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -136,9 +136,9 @@ local valid_id = Clip.create({
         id = "valid_clip_1",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -149,8 +149,8 @@ local valid_id = Clip.create({
     })
 local clip = Clip.load(valid_id)
 check("create with integers succeeds", clip ~= nil)
-check("timeline_start is integer", type(clip.timeline_start) == "number")
-check("timeline_start value is 0", clip.timeline_start == 0)
+check("sequence_start is integer", type(clip.sequence_start) == "number")
+check("sequence_start value is 0", clip.sequence_start == 0)
 check("duration is integer", type(clip.duration) == "number")
 check("duration value is 100", clip.duration == 100)
 
@@ -165,9 +165,9 @@ local bad_clip_id = Clip.create({
         id = "bad_clip_1",
         project_id = "proj1",
         track_id = "track1",
-        nested_sequence_id = "mc1",
+        sequence_id = "mc1",
         owner_sequence_id = "seq1",
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -180,13 +180,13 @@ local bad_clip_id = Clip.create({
 local bad_clip = Clip.load(bad_clip_id)
 
 -- Corrupt the clip by setting a table value
-bad_clip.timeline_start = { frames = 50 }
-expect_error("save with table timeline_start asserts", function()
+bad_clip.sequence_start = { frames = 50 }
+expect_error("save with table sequence_start asserts", function()
     bad_clip:save(db)
 end, "must be integer")
 
 -- Fix it and try again
-bad_clip.timeline_start = 50
+bad_clip.sequence_start = 50
 bad_clip.duration = { frames = 100 }
 expect_error("save with table duration asserts", function()
     bad_clip:save(db)
@@ -200,8 +200,8 @@ print("\n--- load: returns integers ---")
 
 -- First save a valid clip via raw SQL (mc1 master sequence already exists from earlier ensure_master)
 db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, nested_sequence_id,
-                    timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id,
+                    sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
                     enabled, created_at, modified_at,
                     master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
                     volume, playhead_frame)
@@ -212,8 +212,8 @@ VALUES
 
 local loaded = Clip.load("load_test_1", db)
 check("load returns clip", loaded ~= nil)
-check("loaded timeline_start is integer", type(loaded.timeline_start) == "number")
-check("loaded timeline_start value", loaded.timeline_start == 500)
+check("loaded sequence_start is integer", type(loaded.sequence_start) == "number")
+check("loaded sequence_start value", loaded.sequence_start == 500)
 check("loaded duration is integer", type(loaded.duration) == "number")
 check("loaded duration value", loaded.duration == 50)
 check("loaded source_in is integer", type(loaded.source_in) == "number")

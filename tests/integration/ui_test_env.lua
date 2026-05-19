@@ -95,7 +95,7 @@ function M.create_test_project(opts)
         local seq = Sequence.create(name, project.id,
             { fps_numerator = 24, fps_denominator = 1 },
             1920, 1080,
-            { kind = "nested", audio_sample_rate = 48000 })
+            { kind = "sequence", audio_sample_rate = 48000 })
         seq:save()
 
         -- Each sequence needs at least one video track for timeline_panel

@@ -146,6 +146,17 @@ static void push_media_file_info_table(lua_State* L, const emp::MediaFileInfo& i
     lua_setfield(L, -2, "duration_us");
     lua_pushboolean(L, info.has_duration);
     lua_setfield(L, -2, "has_duration");
+    // Authoritative counts when the demuxer exposes them directly.
+    // -1 sentinel surfaces as nil so Lua callers can distinguish
+    // "container reported N" from "container didn't report".
+    if (info.video_frame_count >= 0) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.video_frame_count));
+        lua_setfield(L, -2, "video_frame_count");
+    }
+    if (info.audio_sample_count >= 0) {
+        lua_pushinteger(L, static_cast<lua_Integer>(info.audio_sample_count));
+        lua_setfield(L, -2, "audio_sample_count");
+    }
     lua_pushboolean(L, info.is_vfr);
     lua_setfield(L, -2, "is_vfr");
 
@@ -723,7 +734,7 @@ static int lua_emp_tmb_set_audio_format(lua_State* L) {
 }
 
 // EMP.TMB_SET_TRACK_CLIPS(tmb, type_string, track_index, clips_table)
-// clips_table = array of { clip_id, media_path, timeline_start, duration, source_in, rate_num, rate_den, speed_ratio }
+// clips_table = array of { clip_id, media_path, sequence_start, duration, source_in, rate_num, rate_den, speed_ratio }
 static int lua_emp_tmb_set_track_clips(lua_State* L) {
     auto tmb = get_tmb(L, 1);
     auto track_type = parse_track_type(L, 2);
@@ -757,11 +768,11 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.media_path = lua_tostring(L, -1);
         lua_pop(L, 1);
 
-        lua_getfield(L, -1, "timeline_start");
+        lua_getfield(L, -1, "sequence_start");
         if (!lua_isnumber(L, -1)) {
-            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing timeline_start", i);
+            return luaL_error(L, "TMB_SET_TRACK_CLIPS: element %d missing sequence_start", i);
         }
-        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        ci.sequence_start = static_cast<int64_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, -1, "duration");
@@ -858,11 +869,11 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
         ci.media_path = lua_tostring(L, -1);
         lua_pop(L, 1);
 
-        lua_getfield(L, -1, "timeline_start");
+        lua_getfield(L, -1, "sequence_start");
         if (!lua_isnumber(L, -1)) {
-            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing timeline_start", i);
+            return luaL_error(L, "TMB_ADD_CLIPS: element %d missing sequence_start", i);
         }
-        ci.timeline_start = static_cast<int64_t>(lua_tointeger(L, -1));
+        ci.sequence_start = static_cast<int64_t>(lua_tointeger(L, -1));
         lua_pop(L, 1);
 
         lua_getfield(L, -1, "duration");
@@ -1842,6 +1853,21 @@ static int lua_playback_deactivate_audio(lua_State* L) {
     return 0;
 }
 
+// 017 / FR-022: PLAYBACK.SET_LOG_TAG(controller, tag)
+// Pure FFI wrapper — parameter validation only. The C++ controller stores
+// the string and prefixes every JVE_LOG_*(Ticks, ...) line it emits, so
+// log streams from source-engine and record-engine are disambiguable.
+static int lua_playback_set_log_tag(lua_State* L) {
+    auto* controller = get_playback_controller(L, 1);
+    if (!lua_isstring(L, 2)) {
+        return luaL_error(L, "PLAYBACK.SET_LOG_TAG: tag must be a string");
+    }
+    size_t len = 0;
+    const char* tag = lua_tolstring(L, 2, &len);
+    controller->SetLogTag(std::string(tag, len));
+    return 0;
+}
+
 // PLAYBACK.SET_SPEED(controller, signed_speed)
 static int lua_playback_set_speed(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
@@ -2500,6 +2526,9 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "ACTIVATE_AUDIO");
     lua_pushcfunction(L, lua_playback_deactivate_audio);
     lua_setfield(L, -2, "DEACTIVATE_AUDIO");
+    // 017 / FR-022: per-engine log tag plumbing for [ticks] disambiguation.
+    lua_pushcfunction(L, lua_playback_set_log_tag);
+    lua_setfield(L, -2, "SET_LOG_TAG");
     lua_pushcfunction(L, lua_playback_set_speed);
     lua_setfield(L, -2, "SET_SPEED");
     lua_pushcfunction(L, lua_playback_play_burst);

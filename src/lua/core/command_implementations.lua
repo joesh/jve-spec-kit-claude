@@ -9,7 +9,8 @@ local M = {}
 
 -- The list of per-command modules under core.commands.
 local command_modules = {
-    "add_clips_to_sequence", "add_track", "batch_ripple_edit",
+    "add_clip_to_track", "add_clips_to_sequence", "add_track", "batch_ripple_edit",
+    "conform_sequence",
     "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
     "delete_master_clip", "delete_sequence", "deselect_all", "duplicate_master_clip",
     "edit_history", "extend_edit", "go_to_end", "go_to_next_edit", "go_to_prev_edit", "go_to_start",
@@ -17,12 +18,17 @@ local command_modules = {
     "link_clips", "load_project", "match_frame",
     "move_clip_to_track", "move_to_bin", "new_bin", "nudge", "nudge_selection", "overwrite",
     "relink_clips", "rename_item", "ripple_delete", "ripple_delete_selection",
-    "show_keyboard_customization", "show_relink_dialog",
-    "select_all", "select_browser_items", "select_clips", "set_clip_property", "set_project_setting",
-    "set_sequence_metadata", "set_track_heights", "set_track_property", "setup_project", "split_clip", "step_frame", "toggle_clip_enabled",
-    "toggle_fullscreen_view", "toggle_maximize_panel", "toggle_timecode_focus",
+    "show_keyboard_customization", "show_relink_dialog", "show_source_tab",
+    "select_all", "select_browser_items", "select_clips", "set_clip_property",
+    "set_project_default_fps", "set_project_setting",
+    "set_patch", "set_sequence_metadata", "set_sync_mode", "set_track_heights", "set_track_mix_value",
+    "setup_project", "show_source_tab", "split_clip", "step_frame",
+    "toggle_clip_enabled", "toggle_fullscreen_view", "toggle_maximize_panel",
+    "toggle_source_record_tab",
+    "toggle_timecode_focus", "toggle_track_preference", "toggle_track_waveform_display",
     "trim_head", "trim_tail",
 }
+M.command_modules = command_modules
 
 local function register_new_entries(executors, undoers, before_keys)
     for command_type, executor in pairs(executors) do

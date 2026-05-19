@@ -8,25 +8,22 @@ print("=== Test JKL Requires Valid Media ===")
 -- Track playback calls
 local shuttle_called
 
--- Mock engine
-local mock_engine = {}
+-- Mock engine (017: target engine comes from transport.engine_for_target)
+local mock_engine = { loaded_sequence_id = nil }
 function mock_engine:is_playing() return false end
 function mock_engine:play() end
 function mock_engine:stop() end
 function mock_engine:shuttle(dir) shuttle_called = true end
 function mock_engine:slow_play(dir) end
 
--- Mock SequenceMonitor — starts with no sequence
-local mock_sv = {
-    sequence_id = nil,
-    total_frames = 0,
-    engine = mock_engine,
-}
-
--- Mock panel_manager
-package.loaded["ui.panel_manager"] = {
-    get_active_sequence_monitor = function() return mock_sv end,
-    get_sequence_monitor = function() return mock_sv end,
+-- Mock transport — singletons-style surface used by command executors.
+-- _project_id non-nil means transport is bootstrapped; loaded_sequence_id
+-- nil on the engine means "no sequence loaded yet".
+package.loaded["core.playback.transport"] = {
+    _project_id = "p",
+    is_bootstrapped = function() return true end,
+    bound_project_id = function() return "p" end,
+    engine_for_target = function() return mock_engine end,
 }
 
 -- Load playback command module and register executors
@@ -53,8 +50,7 @@ assert(not shuttle_called, "shuttle should not have been called")
 print("  ✓ Silently returns when no sequence loaded")
 
 print("\nTest 2: L with sequence loaded should call shuttle")
-mock_sv.sequence_id = "test_seq"
-mock_sv.total_frames = 100
+mock_engine.loaded_sequence_id = "test_seq"
 shuttle_called = false
 
 ok, err = pcall(shuttle_fwd, mock_command)

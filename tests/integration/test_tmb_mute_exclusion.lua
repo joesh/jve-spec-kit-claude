@@ -56,7 +56,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb1, SR, CHANNELS)
 local enabled_clip = {
     clip_id = "enabled-001",
     media_path = media_path,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 100,
     source_in = 50,  -- non-zero!
     rate_num = FPS_NUM,
@@ -86,7 +86,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb2, SR, CHANNELS)
 local far_clip = {
     clip_id = "far-001",
     media_path = media_path,
-    timeline_start = 200,
+    sequence_start = 200,
     duration = 100,
     source_in = 0,
     rate_num = FPS_NUM,
@@ -127,13 +127,13 @@ assert(db:exec(import_schema))
 local project_id = uuid.generate()
 local now = os.time()
 assert(db:exec(string.format(
-    "INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at) VALUES('%s', 'MuteTest', 'passthrough', %d, %d)",
+    "INSERT INTO projects(id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES('%s', 'MuteTest', 'passthrough', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)",
     project_id, now, now)))
 
 -- Create sequence + audio track
 local seq = Sequence.create("MuteTestSeq", project_id,
     {fps_numerator = 25, fps_denominator = 1}, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000 })
+    { kind = "sequence", audio_sample_rate = 48000 })
 assert(seq:save())
 
 local track = Track.create_audio("A1", seq.id, {index = 1})
@@ -158,12 +158,14 @@ Clip.create({
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
-        timeline_start_frame = 0,
+        sequence_start_frame = 0,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
         enabled = true,
-        nested_sequence_id = mc_seq_id,
+        sequence_id = mc_seq_id,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
@@ -175,11 +177,13 @@ Clip.create({
         project_id = project_id,
         owner_sequence_id = seq.id,
         track_id = track.id,
-        timeline_start_frame = 200,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
-        nested_sequence_id = mc_seq_id,
+        source_in_subframe = 0,
+        source_out_subframe = 0,
+        sequence_id = mc_seq_id,
         enabled = false,
         fps_mismatch_policy = "resample",
         volume = 1.0,

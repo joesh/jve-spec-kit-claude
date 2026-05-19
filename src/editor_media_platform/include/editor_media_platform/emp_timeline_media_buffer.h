@@ -67,7 +67,7 @@ struct TcOverride {
 struct ClipInfo {
     std::string clip_id;
     std::string media_path;
-    int64_t timeline_start;       // timeline frames
+    int64_t sequence_start;       // timeline frames
     int64_t duration;             // timeline frames
     int64_t source_in;            // source frames (absolute TC space)
     int32_t rate_num, rate_den;   // clip rate (for frame→us conversion)
@@ -75,7 +75,7 @@ struct ClipInfo {
     bool offline = false;         // true = media file not found, generate beep
     float volume = 1.0f;         // clip gain (linear): applied before track fader
 
-    int64_t timeline_end() const { return timeline_start + duration; }
+    int64_t sequence_end() const { return sequence_start + duration; }
     Rate rate() const {
         assert(rate_num > 0 && "ClipInfo::rate: rate_num must be positive");
         assert(rate_den > 0 && "ClipInfo::rate: rate_den must be positive");
@@ -94,7 +94,7 @@ struct ClipInfo {
     bool has_same_decode_inputs(const ClipInfo& other) const {
         return clip_id       == other.clip_id
             && media_path    == other.media_path
-            && timeline_start == other.timeline_start
+            && sequence_start == other.sequence_start
             && duration      == other.duration
             && source_in     == other.source_in
             && rate_num      == other.rate_num
@@ -163,7 +163,7 @@ public:
     // Lua passes current clip + next 1-3 clips per track.
     void SetTrackClips(TrackId track, const std::vector<ClipInfo>& clips);
 
-    // Append clips to a track. Dedup by clip_id, re-sort by timeline_start.
+    // Append clips to a track. Dedup by clip_id, re-sort by sequence_start.
     // Does NOT invalidate existing readers (unlike SetTrackClips which replaces all).
     // Pre-warms readers for genuinely new clips only.
     void AddClips(TrackId track, std::vector<ClipInfo> clips);

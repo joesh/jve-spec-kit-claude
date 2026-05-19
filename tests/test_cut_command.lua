@@ -30,12 +30,12 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
                            playhead_frame, view_start_frame, view_duration_frames,
                            selected_clip_ids, selected_edge_infos, selected_gap_infos,
                            current_sequence_number, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Sequence', 'nested', 30, 1, 48000, 1920, 1080,
+    VALUES ('default_sequence', 'default_project', 'Sequence', 'sequence', 30, 1, 48000, 1920, 1080,
             0, 0, 240, '[]', '[]', '[]', 0, %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('track_v1', 'default_sequence', 'Track', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
@@ -73,7 +73,7 @@ local function create_clip_via_insert(spec)
     assert(media:save(db), "failed to save media for clip " .. tostring(spec.id))
 
     -- Create masterclip sequence for this media
-    local nested_sequence_id = test_env.create_test_masterclip_sequence(
+    local source_sequence_id = test_env.create_test_masterclip_sequence(
         'default_project', spec.id .. ' Master', 30, 1, spec.duration, media_id)
 
     -- V13: bypass Insert (which generates a uuid) and create directly so
@@ -85,8 +85,8 @@ local function create_clip_via_insert(spec)
         name                 = spec.id,
         track_id             = spec.track,
         owner_sequence_id    = "default_sequence",
-        nested_sequence_id   = nested_sequence_id,
-        timeline_start_frame = spec.start,
+        sequence_id   = source_sequence_id,
+        sequence_start_frame = spec.start,
         duration_frames      = spec.duration,
         source_in_frame      = 0,
         source_out_frame     = spec.duration,

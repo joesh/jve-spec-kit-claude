@@ -63,8 +63,8 @@ do
         inserts = {},
         updates = {},
         deletes = {
-            { clip_id = "clip_x", track_id = "v1", timeline_start = 0, duration = 100 },
-            { clip_id = "clip_y", track_id = "v1", timeline_start = 100, duration = 50 },
+            { clip_id = "clip_x", track_id = "v1", sequence_start = 0, duration = 100 },
+            { clip_id = "clip_y", track_id = "v1", sequence_start = 100, duration = 50 },
         },
     }))
     assert(set["clip_x"] and set["clip_y"] and count(set) == 2,
@@ -85,7 +85,7 @@ do
         seqB = {
             sequence_id = "seqB",
             inserts = {}, updates = {},
-            deletes = { { clip_id = "rich_B", track_id = "a1", timeline_start = 0, duration = 10 } },
+            deletes = { { clip_id = "rich_B", track_id = "a1", sequence_start = 0, duration = 10 } },
         },
     }))
     assert(set["legacy_string_A"] and set["rich_B"] and count(set) == 2,
@@ -99,9 +99,9 @@ end
 do
     local set = command_helper.collect_deleted_clip_ids(make_command({
         sequence_id = "seq1",
-        inserts = { { track_id = "v1", timeline_start_frame = 0, duration_frames = 10 } },
-        updates = { { clip_id = "upd", track_id = "v1", timeline_start_frame = 0, duration_frames = 10,
-                      previous = { track_id = "v1", timeline_start = 0, duration = 10 } } },
+        inserts = { { track_id = "v1", sequence_start_frame = 0, duration_frames = 10 } },
+        updates = { { clip_id = "upd", track_id = "v1", sequence_start_frame = 0, duration_frames = 10,
+                      previous = { track_id = "v1", sequence_start = 0, duration = 10 } } },
         deletes = {},
     }))
     assert(count(set) == 0, "no deletes → empty set regardless of inserts/updates")

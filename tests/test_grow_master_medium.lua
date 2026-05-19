@@ -1,3 +1,4 @@
+-- 018 INV-3 inline subframe migration applied (count=3)
 -- T060a / T064a (013): GrowMasterMedium — owning command for FR-007 /
 -- Acceptance Scenario 7.
 --
@@ -30,16 +31,16 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'master', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('e-v1', 'e', 'V1', 'VIDEO', 1),
@@ -54,22 +55,23 @@ local function build_fixture()
                ('aud', 'p1', 'a.wav', '/tmp/a.wav', 2000000, 48000, 1, 1, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'vid', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'vid', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
         -- Three video clips on edit, each 100 frames at different positions.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1', 'p1', 'e', 'e-v1', 'm', 'c1',
-                0, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+                0, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c2', 'p1', 'e', 'e-v1', 'm', 'c2',
-                200, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
+                200, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0),
                ('c3', 'p1', 'e', 'e-v1', 'm', 'c3',
-                400, 100, 0, 100, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                400, 100, 0, 100, NULL, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
     ]]))
     require("test_env").touch_media_fixtures()
     return db
@@ -77,10 +79,10 @@ end
 
 local function clips_on_track(db, owner, track_id)
     local stmt = db:prepare([[
-        SELECT id, timeline_start_frame, duration_frames,
+        SELECT id, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame, fps_mismatch_policy
         FROM clips WHERE owner_sequence_id = ? AND track_id = ?
-        ORDER BY timeline_start_frame ASC
+        ORDER BY sequence_start_frame ASC
     ]])
     stmt:bind_value(1, owner)
     stmt:bind_value(2, track_id)
@@ -89,7 +91,7 @@ local function clips_on_track(db, owner, track_id)
     while stmt:next() do
         rows[#rows + 1] = {
             id = stmt:value(0),
-            timeline_start = stmt:value(1),
+            sequence_start = stmt:value(1),
             duration = stmt:value(2),
             source_in = stmt:value(3),
             source_out = stmt:value(4),
@@ -131,14 +133,14 @@ do
         #result.companions))
 
     -- Each existing video clip now has a linked audio clip on e-a1
-    -- with same timeline_start + duration.
+    -- with same sequence_start + duration.
     local v_clips = clips_on_track(db, "e", "e-v1")
     local a_clips = clips_on_track(db, "e", "e-a1")
     assert(#v_clips == 3 and #a_clips == 3,
         "edit timeline has 3 V clips and 3 new A clips")
 
     for i = 1, 3 do
-        assert(v_clips[i].timeline_start == a_clips[i].timeline_start,
+        assert(v_clips[i].sequence_start == a_clips[i].sequence_start,
             string.format("V[%d] and A[%d] timelines align", i, i))
         assert(v_clips[i].duration == a_clips[i].duration,
             string.format("V[%d] and A[%d] durations align", i, i))
@@ -179,13 +181,14 @@ do
     -- for c1's link group, only for c2 and c3.
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1-a', 'p1', 'e', 'e-a1', 'm', 'c1-a',
-                0, 100, 0, 200000, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg-c1', 'c1', 'video', 0, 1),
                ('lg-c1', 'c1-a', 'audio', 0, 1);
@@ -298,13 +301,14 @@ do
     -- link group.
     assert(db:exec([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('c1-a', 'p1', 'e', 'e-a1', 'm', 'c1-a',
-                0, 100, 0, 200000, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
+                0, 100, 0, 200000, 0, 0, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
         INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
         VALUES ('lg-c1', 'c1', 'video', 0, 1),
                ('lg-c1', 'c1-a', 'audio', 0, 1);

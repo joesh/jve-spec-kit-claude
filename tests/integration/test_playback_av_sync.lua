@@ -173,10 +173,10 @@ local function tc_origin(path)
 end
 
 local v1_clips = {
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002, timeline_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008, timeline_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005, timeline_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010, timeline_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-097-002", media_path = media.day4_c002, sequence_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-001", media_path = media.day4_c008, sequence_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-098-003", media_path = media.day4_c005, sequence_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
+    { clip_id = "v1-18-100-003", media_path = media.day4_c010, sequence_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
 }
 
 -- Audio track: same clips, same layout (AAC 48kHz stereo in all Anamnesis MOVs)
@@ -192,7 +192,7 @@ for i, vc in ipairs(v1_clips) do
     a1_clips[i] = {
         clip_id = "a1-" .. vc.clip_id:sub(4),
         media_path = vc.media_path,
-        timeline_start = vc.timeline_start,
+        sequence_start = vc.sequence_start,
         duration = vc.duration,
         source_in = audio_tc_origin(vc.media_path),
         rate_num = 48000,

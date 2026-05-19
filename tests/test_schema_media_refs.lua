@@ -13,12 +13,12 @@ local db = database.get_connection()
 
 -- Scaffold: project + master sequence + track + media.
 assert(db:exec(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) "
-    .. "VALUES ('p1', 'p', 'resample', 0, 0)"))
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) "
+    .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 assert(db:exec(
     "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, "
     .. "audio_sample_rate, width, height, created_at, modified_at) "
-    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0)"))
+    .. "VALUES ('seq-master', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('trk-v1', 'seq-master', 'V1', 'VIDEO', 1)"))
@@ -53,7 +53,7 @@ assert(cols["fps_denominator"] == nil,
 
 -- Good: full INSERT succeeds.
 local ok_sql = "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr1', 'p1', 'seq-master', 'trk-v1', 'med1', 0, 100, 0, 100, 1, 1.0, 0, 0, 0)"
 assert(db:exec(ok_sql), "full INSERT into media_refs failed; table or columns missing")
@@ -66,7 +66,7 @@ local function build_insert_with_null(id, null_col)
         media_id              = "'med1'",
         source_in_frame       = "0",
         source_out_frame      = "100",
-        timeline_start_frame  = "0",
+        sequence_start_frame  = "0",
         duration_frames       = "100",
         enabled               = "1",
         volume                = "1.0",
@@ -75,19 +75,19 @@ local function build_insert_with_null(id, null_col)
     fields[null_col] = "NULL"
     return string.format(
         "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-        .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+        .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
         .. "enabled, volume, playhead_frame, created_at, modified_at) "
         .. "VALUES ('%s', 'p1', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0)",
         id,
         fields.owner_sequence_id, fields.track_id, fields.media_id,
         fields.source_in_frame, fields.source_out_frame,
-        fields.timeline_start_frame, fields.duration_frames,
+        fields.sequence_start_frame, fields.duration_frames,
         fields.enabled, fields.volume, fields.playhead_frame)
 end
 
 local required = {
     "owner_sequence_id", "track_id", "media_id", "source_in_frame", "source_out_frame",
-    "timeline_start_frame", "duration_frames", "enabled", "volume", "playhead_frame",
+    "sequence_start_frame", "duration_frames", "enabled", "volume", "playhead_frame",
 }
 for i, col in ipairs(required) do
     local stmt = build_insert_with_null("mr-null-" .. i, col)
@@ -98,7 +98,7 @@ end
 
 -- Bad: duration_frames <= 0 must fail (CHECK from data-model.md).
 local dur_zero = "INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, "
-    .. "source_in_frame, source_out_frame, timeline_start_frame, duration_frames, "
+    .. "source_in_frame, source_out_frame, sequence_start_frame, duration_frames, "
     .. "enabled, volume, playhead_frame, created_at, modified_at) "
     .. "VALUES ('mr-dur0', 'p1', 'seq-master', 'trk-v1', 'med1', 0, 0, 0, 0, 1, 1.0, 0, 0, 0)"
 local ok = db:exec(dur_zero)

@@ -41,12 +41,12 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_insert_mutation(command, sequence_id, {
                 id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
                 name = mut.name,
-                nested_sequence_id = mut.nested_sequence_id,
+                sequence_id = mut.sequence_id,
                 master_layer_track_id = mut.master_layer_track_id,
                 master_audio_track_id = mut.master_audio_track_id,
                 fps_mismatch_policy = mut.fps_mismatch_policy,
@@ -58,7 +58,7 @@ local function populate_timeline_mutations(command, sequence_id, mutations)
             command_helper.add_update_mutation(command, sequence_id, {
                 clip_id = mut.clip_id,
                 track_id = mut.track_id,
-                start_value = mut.timeline_start_frame,
+                start_value = mut.sequence_start_frame,
                 duration_value = mut.duration_frames,
                 source_in_value = mut.source_in_frame,
                 source_out_value = mut.source_out_frame,
@@ -124,7 +124,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local placements = {}  -- {track_id, paste_start, clip_data}
         for _, clip_data in ipairs(clip_entries) do
             assert(clip_data.track_id, "Paste: clipboard clip missing track_id")
-            -- V13 Paste resolves through clip_data.nested_sequence_id; the
+            -- V13 Paste resolves through clip_data.sequence_id; the
             -- V8 media_id direct-link is no longer required at paste time.
             assert(track_lookup[clip_data.track_id],
                 "Paste: target track " .. tostring(clip_data.track_id) .. " not found in sequence")
@@ -183,23 +183,23 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 clip_id = uuid.generate()
             end
 
-            -- V13: Clip.create takes a single fields table; nested_sequence_id
+            -- V13: Clip.create takes a single fields table; sequence_id
             -- is required. cd is a clipboard payload built by
             -- clipboard_actions on the V13 shape.
-            assert(cd.nested_sequence_id and cd.nested_sequence_id ~= "",
-                "Paste: clipboard entry missing nested_sequence_id")
+            assert(cd.sequence_id and cd.sequence_id ~= "",
+                "Paste: clipboard entry missing sequence_id")
             local now = os.time()
             local clip_row = {
                 id = clip_id,
                 project_id = project_id,
                 track_id = p.track_id,
                 owner_sequence_id = sequence_id,
-                nested_sequence_id = cd.nested_sequence_id,
+                sequence_id = cd.sequence_id,
                 master_layer_track_id = cd.master_layer_track_id,
                 master_audio_track_id = cd.master_audio_track_id,
                 fps_mismatch_policy = cd.fps_mismatch_policy or "resample",
                 name = cd.name or "Pasted Clip",
-                timeline_start = p.paste_start,
+                sequence_start = p.paste_start,
                 start_value = p.paste_start,
                 duration = cd.duration,
                 source_in = cd.source_in,
@@ -217,7 +217,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local role = (track.track_type == "VIDEO") and "video" or "audio"
             table.insert(created_clips, {
                 clip_id = clip_id,
-                nested_sequence_id = cd.nested_sequence_id,
+                sequence_id = cd.sequence_id,
                 role = role,
                 copied_properties = cd.copied_properties,
             })
@@ -246,7 +246,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- (e.g. V + A pair from one master).
         local clips_by_nested = {}
         for _, created in ipairs(created_clips) do
-            local ns = created.nested_sequence_id
+            local ns = created.sequence_id
             if not ns then goto next_link end
             clips_by_nested[ns] = clips_by_nested[ns] or {}
             table.insert(clips_by_nested[ns], {

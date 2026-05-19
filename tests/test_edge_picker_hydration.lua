@@ -1,5 +1,5 @@
 #!/usr/bin/env luajit
--- Regression: edge_picker must hydrate clip bounds to Rational and not crash when timeline_start/duration are plain tables.
+-- Regression: edge_picker must hydrate clip bounds to Rational and not crash when sequence_start/duration are plain tables.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -9,7 +9,7 @@ local edge_picker = require("ui.timeline.edge_picker")
 local clip = {
     id = "c1",
     track_id = "v1",
-    timeline_start = {frames = 0, fps_numerator = 24, fps_denominator = 1},
+    sequence_start = {frames = 0, fps_numerator = 24, fps_denominator = 1},
     duration = {frames = 24, fps_numerator = 24, fps_denominator = 1},
 }
 
@@ -29,4 +29,4 @@ end)
 
 assert(ok, "edge_picker.pick_edges errored: " .. tostring(result))
 assert(result and type(result.selection) == "table", "edge_picker.pick_edges returned invalid result")
-print("✅ edge_picker hydrates clip bounds and avoids crashes with table timeline_start/duration")
+print("✅ edge_picker hydrates clip bounds and avoids crashes with table sequence_start/duration")

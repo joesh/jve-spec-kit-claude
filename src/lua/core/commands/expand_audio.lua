@@ -11,7 +11,7 @@
 ---     * clip.master_audio_track_id IS NULL (already-expanded refuses).
 ---     * Nested sequence has >= 2 audio tracks ("nothing to expand").
 ---     * No collision: every owner A target track empty across the
----       source clip's [timeline_start, timeline_start + duration).
+---       source clip's [sequence_start, sequence_start + duration).
 ---
 ---   Mutation:
 ---     1. For each A track of the nested sequence (sorted by index):
@@ -78,11 +78,11 @@ end
 -- owner_track_id yet) cannot collide. Returns plan[] (entries get
 -- owner_track_id filled in here when one already exists).
 local function build_placement_plan(clip, clip_id, sequence_id)
-    local nested_a = Track.find_by_sequence(clip.nested_sequence_id, "AUDIO")
+    local nested_a = Track.find_by_sequence(clip.sequence_id, "AUDIO")
     assert(#nested_a >= 2, string.format(
         "ExpandAudio: nested sequence %s has %d audio track(s); ExpandAudio "
         .. "requires >= 2 (nothing to expand).",
-        clip.nested_sequence_id, #nested_a))
+        clip.sequence_id, #nested_a))
     local owner_a_by_index = {}
     for _, t in ipairs(Track.find_by_sequence(sequence_id, "AUDIO")) do
         owner_a_by_index[t.track_index] = t.id
@@ -97,7 +97,7 @@ local function build_placement_plan(clip, clip_id, sequence_id)
         }
     end
 
-    local outer_lo = clip.timeline_start_frame
+    local outer_lo = clip.sequence_start_frame
     local outer_hi = outer_lo + clip.duration_frames
     for _, p in ipairs(plan) do
         if p.owner_track_id and p.owner_track_id ~= clip.track_id then
@@ -140,20 +140,24 @@ end
 -- and expanded_by_index[track_index → clip_id].
 local function insert_expanded_clips(plan, clip, sequence_id)
     local expanded_ids, by_index = {}, {}
-    local outer_lo = clip.timeline_start_frame
+    local outer_lo = clip.sequence_start_frame
     for _, p in ipairs(plan) do
         local new_id = uuid.generate()
+        -- 018 FR-014: ExpandAudio creates AUDIO clips; preserve any
+        -- subframe from the source clip (frame-aligned input = 0,0).
         Clip.create({
             id                    = new_id,
             project_id            = clip.project_id,
             owner_sequence_id     = sequence_id,
             track_id              = p.owner_track_id,
-            nested_sequence_id    = clip.nested_sequence_id,
+            sequence_id    = clip.sequence_id,
             name                  = clip.name,
-            timeline_start_frame  = outer_lo,
+            sequence_start_frame  = outer_lo,
             duration_frames       = clip.duration_frames,
             source_in_frame       = clip.source_in_frame,
             source_out_frame      = clip.source_out_frame,
+            source_in_subframe    = clip.source_in_subframe,
+            source_out_subframe   = clip.source_out_subframe,
             master_layer_track_id = nil,
             master_audio_track_id = p.nested_track_id,
             fps_mismatch_policy   = clip.fps_mismatch_policy,

@@ -59,15 +59,15 @@ local db = database.get_connection()
 -- Seed: project + sequence + tracks + media
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq1', 'nested', 24, 1, 48000,
+    VALUES ('seq1', 'proj1', 'Seq1', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -96,7 +96,7 @@ db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq_empty', 'proj1', 'Empty', 'nested', 24, 1, 48000,
+    VALUES ('seq_empty', 'proj1', 'Empty', 'sequence', 24, 1, 48000,
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now))
 
@@ -205,27 +205,27 @@ check("empty string → resolves", track_id3 == "trk_v1" and err == nil)
 print("\n--- 4. resolve_edit_time ---")
 
 -- 4a. Explicit value → pass through (including 0)
-result = clip_edit_helper.resolve_edit_time(0, nil, "timeline_start_frame")
+result = clip_edit_helper.resolve_edit_time(0, nil, "sequence_start_frame")
 check("edit_time=0 → 0 (not nil)", result == 0)
 
-result = clip_edit_helper.resolve_edit_time(42, nil, "timeline_start_frame")
+result = clip_edit_helper.resolve_edit_time(42, nil, "sequence_start_frame")
 check("edit_time=42 → 42", result == 42)
 
 -- 4b. Integer value → pass through
 local int_val = 10
-result = clip_edit_helper.resolve_edit_time(int_val, nil, "timeline_start_frame")
+result = clip_edit_helper.resolve_edit_time(int_val, nil, "sequence_start_frame")
 check("edit_time integer → pass through", result == int_val)
 
 -- 4c. nil → fallback to timeline_state playhead
 mock_timeline_state.get_playhead_position = function() return 100 end
 cmd = mock_command()
-result = clip_edit_helper.resolve_edit_time(nil, cmd, "timeline_start_frame")
+result = clip_edit_helper.resolve_edit_time(nil, cmd, "sequence_start_frame")
 check("nil → playhead from timeline_state", result == 100)
-check("param set on command", cmd.params.timeline_start_frame == 100)
+check("param set on command", cmd.params.sequence_start_frame == 100)
 
 -- 4d. nil with no timeline_state → nil
 mock_timeline_state.get_playhead_position = nil
-result = clip_edit_helper.resolve_edit_time(nil, nil, "timeline_start_frame")
+result = clip_edit_helper.resolve_edit_time(nil, nil, "sequence_start_frame")
 check("nil no timeline → nil", result == nil)
 
 
@@ -337,7 +337,7 @@ local so = 100
 
 -- 7a. Video-only (0 audio channels)
 local sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 0,
 })
@@ -351,7 +351,7 @@ check("video.duration", sc.video.duration == dur)
 
 -- 7b. With audio channels
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "MyClip", audio_channels = 2,
 })
@@ -380,7 +380,7 @@ end, "invalid audio channel")
 
 -- 7f. Default audio_channels = 0 when nil
 sc = clip_edit_helper.create_selected_clip({
-    media_id = "med1", nested_sequence_id = "mc1", project_id = "proj1",
+    media_id = "med1", source_sequence_id = "mc1", project_id = "proj1",
     duration = dur, source_in = si, source_out = so,
     clip_name = "Test",
 })

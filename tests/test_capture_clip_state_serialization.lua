@@ -20,12 +20,12 @@ db:exec(require("import_schema"))
 -- Seed project/sequence/track (24fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('project', 'CaptureTest', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('project', 'CaptureTest', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -72,8 +72,8 @@ local clip = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 0,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 0,
         duration_frames = 48,
         source_in_frame = 0,
         source_out_frame = 48,
@@ -115,9 +115,9 @@ if not deserialized.frame_rate or deserialized.frame_rate.fps_numerator ~= 24 th
     os.exit(1)
 end
 
--- timeline_start is now an integer (not Rational), verify it survives JSON
-if type(deserialized.timeline_start) ~= "number" then
-    print("❌ timeline_start should be integer, got: " .. type(deserialized.timeline_start))
+-- sequence_start is now an integer (not Rational), verify it survives JSON
+if type(deserialized.sequence_start) ~= "number" then
+    print("❌ sequence_start should be integer, got: " .. type(deserialized.sequence_start))
     os.exit(1)
 end
 
@@ -125,14 +125,14 @@ print("✅ JSON round-trip preserves fps fields and integer coordinates")
 
 print("\n=== Test 3: Undo helper can access integer coords from deserialized state ===")
 -- All coordinates are now plain integers
-local timeline_start = deserialized.timeline_start
-if type(timeline_start) ~= "number" then
-    print("❌ timeline_start should be number, got: " .. type(timeline_start))
+local sequence_start = deserialized.sequence_start
+if type(sequence_start) ~= "number" then
+    print("❌ sequence_start should be number, got: " .. type(sequence_start))
     os.exit(1)
 end
 
-if timeline_start ~= 0 then
-    print(string.format("❌ Wrong timeline_start: expected 0, got %s", tostring(timeline_start)))
+if sequence_start ~= 0 then
+    print(string.format("❌ Wrong sequence_start: expected 0, got %s", tostring(sequence_start)))
     os.exit(1)
 end
 

@@ -34,13 +34,13 @@ local clip_id_1 = uuid.generate()
 local clip_id_2 = uuid.generate()
 
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('test_project', 'Move To Bin Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('test_project', 'Move To Bin Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
         view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
         selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('test_seq', 'test_project', 'Test Seq', 'nested',
+    VALUES ('test_seq', 'test_project', 'Test Seq', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 240, 0, '[]', '[]', '[]', 0, %d, %d);
 
     INSERT OR IGNORE INTO tag_namespaces (id, display_name) VALUES ('bin', 'Bins');

@@ -24,13 +24,13 @@ local layout = ripple_layout.create({
     clips = {
         order = {"A", "B", "D", "E"},
         A = {id = "clip_A", name = "A", track_key = "v1", media_key = "main",
-             timeline_start = 0, duration = 35, source_in = 100},
+             sequence_start = 0, duration = 35, source_in = 100},
         B = {id = "clip_B", name = "B", track_key = "v1", media_key = "main",
-             timeline_start = 35, duration = 31, source_in = 700},
+             sequence_start = 35, duration = 31, source_in = 700},
         D = {id = "clip_D", name = "D", track_key = "a1", media_key = "main",
-             timeline_start = 0, duration = 28, source_in = 100},
+             sequence_start = 0, duration = 28, source_in = 100},
         E = {id = "clip_E", name = "E", track_key = "a1", media_key = "main",
-             timeline_start = 35, duration = 24, source_in = 700},
+             sequence_start = 35, duration = 24, source_in = 700},
     },
 })
 

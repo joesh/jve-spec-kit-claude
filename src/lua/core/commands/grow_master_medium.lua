@@ -12,7 +12,7 @@
 ---   2. For every clips row that already references this master AND
 ---      lacks a companion in its link group on the new medium: INSERT
 ---      a companion clip on the appropriate track of the parent's
----      sequence, mirroring timeline_start/duration, link the pair via
+---      sequence, mirroring sequence_start/duration, link the pair via
 ---      clip_links (creating a link group if neither side had one).
 ---   3. Emit sequence_content_changed on the master AND on every
 ---      parent sequence touched.
@@ -34,8 +34,10 @@ local Clip      = require("models.clip")
 local ClipLink  = require("models.clip_link")
 local Media     = require("models.media")
 local MediaRef  = require("models.media_ref")
+local Project   = require("models.project")
 local Sequence  = require("models.sequence")
 local Track     = require("models.track")
+local subframe_math = require("core.subframe_math")
 local uuid      = require("uuid")
 local log       = require("core.logger").for_area("commands")
 
@@ -125,18 +127,37 @@ local function add_master_audio_stream(master, media_id, media, sample_rate, opt
 
     local new_media_ref_id = opts.new_media_ref_id or uuid.generate()
     local now = os.time()
-    -- For audio media, media.duration is in samples (native unit).
+    -- For audio media, media.duration is in samples (importer convention:
+    -- audio-only files set frame_rate = sample_rate, so duration_frames
+    -- IS sample count).
     local duration_samples = media.duration
+
+    -- Master is video-bearing (first-landing scope: add A to a master that
+    -- already has video; the medium='video' branch is deferred). So
+    -- master.fps == video.fps. The new audio MR's placement columns live
+    -- in master.fps frames (video frames here), per the unification
+    -- convention — pre-fix wrote duration_samples for duration_frames,
+    -- which makes the src-tab audio lane render 2000× off-screen.
+    local fps_num = master.fps_numerator
+    local fps_den = master.fps_denominator
+    assert(type(fps_num) == "number" and fps_num > 0
+        and type(fps_den) == "number" and fps_den > 0, string.format(
+        "GrowMasterMedium: master %s has invalid frame_rate %s/%s",
+        master.id, tostring(fps_num), tostring(fps_den)))
+    local duration_master_frames = math.floor(
+        duration_samples * fps_num / (fps_den * sample_rate) + 0.5)
+
     MediaRef.create({
         id                   = new_media_ref_id,
         project_id           = master.project_id,
         owner_sequence_id    = master.id,
         track_id             = new_track_id,
         media_id             = media_id,
-        source_in_frame      = 0,
-        source_out_frame     = duration_samples,
-        timeline_start_frame = 0,
-        duration_frames      = duration_samples,
+        source_in_frame      = 0,                       -- file-natural samples
+        source_out_frame     = duration_samples,        -- file-natural samples
+        sequence_start_frame = 0,                       -- master.fps frames
+        duration_frames      = duration_master_frames,  -- master.fps frames
+        audio_sample_rate    = sample_rate,
         enabled              = true,
         volume               = 1.0,
         playhead_frame       = 0,
@@ -144,8 +165,9 @@ local function add_master_audio_stream(master, media_id, media, sample_rate, opt
         modified_at          = now,
     })
     log.event("GrowMasterMedium: master=%s gained A track=%s "
-        .. "(media=%s sample_rate=%d duration_samples=%d)",
-        master.id, new_track_id, media_id, sample_rate, duration_samples)
+        .. "(media=%s sample_rate=%d duration_samples=%d duration_frames=%d)",
+        master.id, new_track_id, media_id, sample_rate,
+        duration_samples, duration_master_frames)
     return new_track_id, new_media_ref_id
 end
 
@@ -170,18 +192,29 @@ local function build_companion_for_video_clip(c, master, sample_rate)
     local dur_samples = audio_samples_for_video_duration(
         c.duration_frames,
         master.fps_numerator, master.fps_denominator, sample_rate)
+    -- 018 FR-008: clip.source_*_frame is in master.fps frames, with sample
+    -- residual in source_*_subframe. Convert the [0, dur_samples] window.
+    local proj = Project.load(c.project_id)
+    assert(proj, "GrowMasterMedium: project " .. tostring(c.project_id) .. " missing")
+    local mch = proj:get_master_clock_hz()
+    local tpf = subframe_math.ticks_per_frame(mch,
+        master.fps_numerator, master.fps_denominator)
+    local out_ticks = subframe_math.samples_to_ticks(dur_samples, sample_rate, mch)
+    local out_frame, out_sub = subframe_math.unpack(out_ticks, tpf)
     local companion_id = uuid.generate()
     Clip.create({
         id                    = companion_id,
         project_id            = c.project_id,
         owner_sequence_id     = c.owner_sequence_id,
         track_id              = dst_a_track_id,
-        nested_sequence_id    = master.id,
+        sequence_id           = master.id,
         name                  = (c.name or "Clip") .. " (audio)",
-        timeline_start_frame  = c.timeline_start_frame,
+        sequence_start_frame  = c.sequence_start_frame,
         duration_frames       = c.duration_frames,
         source_in_frame       = 0,
-        source_out_frame      = dur_samples,
+        source_in_subframe    = 0,
+        source_out_frame      = out_frame,
+        source_out_subframe   = out_sub,
         master_layer_track_id = nil,
         fps_mismatch_policy   = c.fps_mismatch_policy,
         enabled               = true,

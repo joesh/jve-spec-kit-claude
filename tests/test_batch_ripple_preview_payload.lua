@@ -7,7 +7,7 @@ local Command = require("command")
 local ripple_layout = require("tests.helpers.ripple_layout")
 
 local TEST_DB = "/tmp/jve/test_batch_ripple_preview_payload.db"
-local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {timeline_start = 2000, duration = 1000} }})
+local layout = ripple_layout.create({db_path = TEST_DB, clips = { v2 = {sequence_start = 2000, duration = 1000} }})
 local clips = layout.clips
 local tracks = layout.tracks
 
@@ -33,7 +33,7 @@ local function assert_entries(entries, label)
     assert(type(entries) == "table" and #entries > 0, label .. " should contain entries")
     for _, entry in ipairs(entries) do
         assert(entry.clip_id, label .. " entry missing clip_id")
-        assert(entry.new_start_value or entry.timeline_start or entry.start_value,
+        assert(entry.new_start_value or entry.sequence_start or entry.start_value,
             label .. " entry missing start value")
     end
 end

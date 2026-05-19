@@ -13,7 +13,7 @@
 --
 -- Per task T042: clip rows reference sequences only; no media_id /
 -- clip_kind / master_clip_id / offline columns are read or written.
--- Each clip_desc carries a nested_sequence_id that the new clip row
+-- Each clip_desc carries a sequence_id that the new clip row
 -- references; per-clip overrides ride on the clip row directly
 -- (master_layer_track_id, fps_mismatch_policy).
 --
@@ -50,6 +50,12 @@ local log          = require("core.logger").for_area("commands")
 local SAVEPOINT = "add_clips_to_sequence_atomic"
 
 local SPEC = {
+    -- Called from import flows (DRP, FCP7, ResolveDB) where the caller
+    -- already knows which sequence is the target. No keyboard dispatch
+    -- path; auto-injecting active_sequence_id would silently land clips
+    -- in the wrong sequence when an import runs while a different
+    -- timeline is open.
+    caller_supplied_sequence_id = true,
     args = {
         sequence_id = { required = true },
         project_id  = { required = true },
@@ -171,7 +177,7 @@ local function carve_space(edit_type, sequence_id, owner_seq,
 end
 
 -- Phase 3: place the new clip rows. Each clip_desc must carry a V13
--- nested_sequence_id, source_in/out, duration, fps_mismatch_policy.
+-- sequence_id, source_in/out, duration, fps_mismatch_policy.
 -- Optional: master_layer_track_id, name, role.
 local function place_clips(track_map, project_id, sequence_id)
     -- Flatten + deterministic order so failure messages are reproducible.
@@ -193,8 +199,8 @@ local function place_clips(track_map, project_id, sequence_id)
         local interval = p.interval
         local d = interval.clip_desc
 
-        assert(d.nested_sequence_id and d.nested_sequence_id ~= "",
-            "AddClipsToSequence: clip_desc.nested_sequence_id required (rule 2.13 — V13 row shape)")
+        assert(d.sequence_id and d.sequence_id ~= "",
+            "AddClipsToSequence: clip_desc.sequence_id required (rule 2.13 — V13 row shape)")
         assert(type(d.source_in) == "number"
            and type(d.source_out) == "number",
             "AddClipsToSequence: clip_desc.source_in / source_out must be integers")
@@ -204,17 +210,26 @@ local function place_clips(track_map, project_id, sequence_id)
             "AddClipsToSequence: clip_desc.duration must be a positive integer")
 
         local clip_id = d.clip_id or uuid.generate()
+        -- 018 FR-013: AUDIO clips carry source subframes (integer, default 0);
+        -- VIDEO clips must have NULL subframes. Default from d.role; allow
+        -- callers to override via d.source_in_subframe / d.source_out_subframe.
+        local role_track_type = (d.role == "audio") and "AUDIO" or "VIDEO"
+        local def_sub_in, def_sub_out = Clip.subframe_defaults_for_track_type(role_track_type)
+        local sub_in  = d.source_in_subframe  ~= nil and d.source_in_subframe  or def_sub_in
+        local sub_out = d.source_out_subframe ~= nil and d.source_out_subframe or def_sub_out
         Clip._create_v13_row({
             id                    = clip_id,
             project_id            = project_id,
             owner_sequence_id     = sequence_id,
             track_id              = p.track_id,
-            nested_sequence_id    = d.nested_sequence_id,
+            sequence_id           = d.sequence_id,
             name                  = d.name or "Timeline Clip",
-            timeline_start_frame  = interval.start_frame,
+            sequence_start_frame  = interval.start_frame,
             duration_frames       = d.duration,
             source_in_frame       = d.source_in,
             source_out_frame      = d.source_out,
+            source_in_subframe    = sub_in,
+            source_out_subframe   = sub_out,
             master_layer_track_id = d.master_layer_track_id,  -- nullable
             fps_mismatch_policy   = d.fps_mismatch_policy,
             enabled               = (d.enabled ~= false),
@@ -280,8 +295,8 @@ function M.execute(args)
     local owner_seq = Sequence.find(args.sequence_id)
     assert(owner_seq, string.format(
         "AddClipsToSequence: sequence %s not found", args.sequence_id))
-    assert(owner_seq.kind == "nested", string.format(
-        "AddClipsToSequence: sequence %s has kind='%s' (expected 'nested') — clips must be owned by a kind='nested' sequence",
+    assert(owner_seq.kind == "sequence", string.format(
+        "AddClipsToSequence: sequence %s has kind='%s' (expected 'sequence') — clips must be owned by a kind='sequence' sequence",
         args.sequence_id, tostring(owner_seq.kind)))
 
     local total_duration, track_map =
@@ -347,9 +362,9 @@ local function build_executor_mutation_bucket(sequence_id, result)
                 owner_sequence_id     = clip.owner_sequence_id,
                 track_sequence_id     = clip.owner_sequence_id,
                 track_id              = clip.track_id,
-                nested_sequence_id    = clip.nested_sequence_id,
-                start_value           = clip.timeline_start,
-                timeline_start        = clip.timeline_start,
+                sequence_id    = clip.sequence_id,
+                start_value           = clip.sequence_start,
+                sequence_start        = clip.sequence_start,
                 duration_value        = clip.duration,
                 duration              = clip.duration,
                 source_in             = clip.source_in,
@@ -439,7 +454,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         for _, cap in pairs(occluded) do
             for _, tr in ipairs(cap.trimmed) do
                 Clip.update_bounds(tr.id,
-                    tr.prior.timeline_start_frame,
+                    tr.prior.sequence_start_frame,
                     tr.prior.duration_frames,
                     tr.prior.source_in_frame,
                     tr.prior.source_out_frame)
@@ -447,17 +462,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         for _, cap in pairs(occluded) do
             for _, d in ipairs(cap.deleted) do
+                -- 018 FR-015: restore round-trips subframe from captured row.
                 Clip.create({
                     id                    = d.id,
                     project_id            = d.project_id,
                     owner_sequence_id     = d.owner_sequence_id,
                     track_id              = d.track_id,
-                    nested_sequence_id    = d.nested_sequence_id,
+                    sequence_id    = d.sequence_id,
                     name                  = d.name,
-                    timeline_start_frame  = d.timeline_start_frame,
+                    sequence_start_frame  = d.sequence_start_frame,
                     duration_frames       = d.duration_frames,
                     source_in_frame       = d.source_in_frame,
                     source_out_frame      = d.source_out_frame,
+                    source_in_subframe    = d.source_in_subframe,
+                    source_out_subframe   = d.source_out_subframe,
                     master_layer_track_id = d.master_layer_track_id,
                     fps_mismatch_policy   = d.fps_mismatch_policy,
                     enabled               = d.enabled,

@@ -13,9 +13,9 @@ local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
         order = {"v1_left", "v2_blocker", "v2_shift", "v1_right"},
-        v1_right = {timeline_start = 4200, duration = 1200},
-        v2_blocker = {id = "clip_v2_blocker", track_key = "v2", timeline_start = 3600, duration = 400},
-        v2_shift = {id = "clip_v2_shift", track_key = "v2", timeline_start = 4400, duration = 800}
+        v1_right = {sequence_start = 4200, duration = 1200},
+        v2_blocker = {id = "clip_v2_blocker", track_key = "v2", sequence_start = 3600, duration = 400},
+        v2_shift = {id = "clip_v2_shift", track_key = "v2", sequence_start = 4400, duration = 800}
     }
 })
 
@@ -69,7 +69,7 @@ timeline = {
 }
 
 -- Gap before v1_right: v1_left ends at 1500, v1_right starts at 4200 → gap starts at 1500
-local v1_gap_start = clips.v1_left.timeline_start + clips.v1_left.duration
+local v1_gap_start = clips.v1_left.sequence_start + clips.v1_left.duration
 local v1_gap_id = layout:gap_id("v1", v1_gap_start)
 local gap_edge = {
     clip_id = v1_gap_id,
@@ -107,7 +107,7 @@ local implied_dim_factor = 0.55
 local implied_limit_color = color_utils.dim_hex(limit_color, implied_dim_factor)
 
 -- Gap before v2_shift: v2_blocker ends at 4000, v2_shift starts at 4400 → gap starts at 4000
-local v2_gap_start = clips.v2_blocker.timeline_start + clips.v2_blocker.duration
+local v2_gap_start = clips.v2_blocker.sequence_start + clips.v2_blocker.duration
 local v2_gap_id = layout:gap_id("v2", v2_gap_start)
 assert((view.drag_state.clamped_edges or {})[string.format("%s:%s", v2_gap_id, "in")],
     "Dry run should attribute clamp to the implied downstream gap edge")

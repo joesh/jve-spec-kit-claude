@@ -102,6 +102,25 @@ function M.delete(name)
     os.remove(preset_path(name))
 end
 
+-- Rename a preset file in-place to "<name>.jvekeys.broken" so the user
+-- can recover/diff it. The .broken suffix is NOT picked up by list()
+-- (it filters on .jvekeys$), so a quarantined file is invisible to the
+-- preset UI but stays in the keymaps/ dir for forensic access.
+-- Returns the destination path on success, or nil if the source didn't exist.
+function M.quarantine_to_broken(name)
+    validate_name(name)
+    local src = preset_path(name)
+    if not file_exists(src) then return nil end
+    local dst = src .. ".broken"
+    -- If a prior quarantine left a .broken file, overwrite it: keeping
+    -- stacked .broken.broken.broken serves nobody.
+    os.remove(dst)
+    local ok, err = os.rename(src, dst)
+    assert(ok, string.format("user_keymap_store.quarantine_to_broken: "
+        .. "rename %s -> %s failed: %s", src, dst, tostring(err)))
+    return dst
+end
+
 function M.list()
     local dir = keymaps_dir()
     local names = {}

@@ -11,9 +11,9 @@ local TEST_DB = "/tmp/jve/test_timeline_single_gap_preview_clamp.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_left = {timeline_start = 0, duration = 500},
-        v1_right = {timeline_start = 1500, duration = 500},
-        v2 = {timeline_start = 2000, duration = 500}
+        v1_left = {sequence_start = 0, duration = 500},
+        v1_right = {sequence_start = 1500, duration = 500},
+        v2 = {sequence_start = 2000, duration = 500}
     }
 })
 local clips = layout.clips

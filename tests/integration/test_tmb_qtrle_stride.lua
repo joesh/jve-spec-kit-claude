@@ -65,7 +65,7 @@ EMP.TMB_SET_AUDIO_FORMAT(tmb, 48000, 2)
 EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, {{
     clip_id = "qtrle-stride-001",
     media_path = QTRLE_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 50,
     source_in = 0,
     rate_num = info.fps_num,

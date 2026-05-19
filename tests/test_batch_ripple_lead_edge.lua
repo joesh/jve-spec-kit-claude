@@ -11,8 +11,8 @@ local TEST_DB = "/tmp/jve/test_batch_ripple_lead_edge.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_right = {timeline_start = 2600},
-        v2 = {timeline_start = 1800, duration = 800}
+        v1_right = {sequence_start = 2600},
+        v2 = {sequence_start = 1800, duration = 800}
     }
 })
 local db = layout.db

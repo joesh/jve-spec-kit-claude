@@ -183,7 +183,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 if edge_info.edge_type == "in" then
                     -- Nudge 'in' edge: source_in moves, source_out stays
-                    local new_timeline_start = clip.timeline_start + nudge_frames
+                    local new_sequence_start = clip.sequence_start + nudge_frames
                     local new_duration = clip.duration - nudge_frames
                     local source_delta = frame_utils.timeline_to_source(
                         nudge_frames, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
@@ -191,7 +191,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     -- Clamp duration to minimum 1 frame
                     if new_duration < 1 then new_duration = 1 end
 
-                    clip.timeline_start = new_timeline_start
+                    clip.sequence_start = new_sequence_start
                     clip.duration = new_duration
                     clip.source_in = clip.source_in + source_delta
                     -- source_out unchanged
@@ -210,15 +210,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     -- source_in unchanged
                 end
 
-                -- Clamp timeline_start to 0 or greater
-                if clip.timeline_start < 0 then
-                    clip.timeline_start = 0
+                -- Clamp sequence_start to 0 or greater
+                if clip.sequence_start < 0 then
+                    clip.sequence_start = 0
                 end
 
                 if args.dry_run then
                     table.insert(preview_clips, {
                         clip_id = clip.id,
-                        new_start_value = clip.timeline_start,
+                        new_start_value = clip.sequence_start,
                         new_duration = clip.duration,
                         edge_type = edge_info.edge_type
                     })
@@ -265,14 +265,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 register_original_state(clip)
                 
                 -- Nudge clip
-                local new_start = clip.timeline_start + nudge_frames
+                local new_start = clip.sequence_start + nudge_frames
 
                 -- Clamp to 0
                 if new_start < 0 then
                     new_start = 0
                 end
 
-                if new_start ~= clip.timeline_start then
+                if new_start ~= clip.sequence_start then
                     any_change = true
                 end
                 clip.__new_start = new_start
@@ -301,17 +301,17 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     track_groups[track_id] = group
                 end
 
-                local clip_end = clip.timeline_start + clip.duration
+                local clip_end = clip.sequence_start + clip.duration
                 local new_end = new_start + clip.duration
 
-                if not group.before_min or clip.timeline_start < group.before_min then group.before_min = clip.timeline_start end
+                if not group.before_min or clip.sequence_start < group.before_min then group.before_min = clip.sequence_start end
                 if not group.before_max or clip_end > group.before_max then group.before_max = clip_end end
 
                 if not group.after_min or new_start < group.after_min then group.after_min = new_start end
                 if not group.after_max or new_end > group.after_max then group.after_max = new_end end
 
                 group.pending[clip.id] = {
-                    timeline_start = new_start,
+                    sequence_start = new_start,
                     duration = clip.duration
                 }
 
@@ -336,7 +336,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         
                         local ok, err, actions = clip_mutator.resolve_occlusions(db, {
                             track_id = track_id,
-                            timeline_start = group.after_min,
+                            sequence_start = group.after_min,
                             duration = block_duration,
                             pending_clips = group.pending
                         })
@@ -358,15 +358,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 -- Apply moved clips in an order that avoids transient overlaps.
                 table.sort(move_targets, function(a, b)
                     if nudge_frames >= 0 then
-                        return a.timeline_start > b.timeline_start -- move right: update rightmost first
+                        return a.sequence_start > b.sequence_start -- move right: update rightmost first
                     else
-                        return a.timeline_start < b.timeline_start -- move left: update leftmost first
+                        return a.sequence_start < b.sequence_start -- move left: update leftmost first
                     end
                 end)
 
                 -- Collect updates for nudged clips
                 for _, clip in ipairs(move_targets) do
-                    clip.timeline_start = clip.__new_start or clip.timeline_start
+                    clip.sequence_start = clip.__new_start or clip.sequence_start
                     table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
                     register_update(clip)
                 end

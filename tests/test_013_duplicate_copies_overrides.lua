@@ -5,7 +5,7 @@
 --   - master_layer_track_id, fps_mismatch_policy, source_in/out, duration,
 --     enabled, volume, etc. are copied verbatim
 --   - all clip_channel_override rows are cloned to the new clip_id
---   - timeline_start_frame = original.timeline_start_frame + delta_frames
+--   - sequence_start_frame = original.sequence_start_frame + delta_frames
 --
 -- Black-box DB-state assertions.
 
@@ -23,16 +23,16 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-v2', 'm', 'V2', 'VIDEO', 2),
@@ -44,9 +44,9 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 1, 1.0, 0, 0, 0);
+        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
     return db
 end
@@ -55,8 +55,8 @@ local function seed_clip(db, clip_id, master_layer)
     local master_val = master_layer and ("'" .. master_layer .. "'") or "NULL"
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -76,16 +76,16 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
                master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, track_id, owner_sequence_id, nested_sequence_id
+               enabled, volume, track_id, owner_sequence_id, sequence_id
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         source_in      = stmt:value(2),
         source_out     = stmt:value(3),
@@ -153,16 +153,16 @@ do
     local new  = load_clip(db, new_id)
 
     -- Original untouched.
-    assert(orig.timeline_start == 100 and orig.duration == 50
+    assert(orig.sequence_start == 100 and orig.duration == 50
            and orig.source_in == 200 and orig.source_out == 250,
         "original clip must not be modified by Duplicate")
     assert(orig.master_layer == "m-v2" and orig.policy == "resample",
         "original structural fields must not be modified")
 
     -- New clip: shifted by +200 on the target track.
-    assert(new.timeline_start == 300 and new.duration == 50,
+    assert(new.sequence_start == 300 and new.duration == 50,
         string.format("expected duplicate at [300,350); got [%d,%d)",
-            new.timeline_start, new.timeline_start + new.duration))
+            new.sequence_start, new.sequence_start + new.duration))
     assert(new.track_id == "e-v2", "duplicate must land on target_track_id")
     assert(new.owner_seq_id == "e" and new.nested_seq_id == "m",
         "duplicate must preserve owner+nested sequences")
@@ -194,7 +194,7 @@ end
 
 -- -------------------------------------------------------------------------
 -- Duplicate at delta=0 onto the SAME track must refuse: it would create
--- two clips with the same [timeline_start, duration), tripping the video
+-- two clips with the same [sequence_start, duration), tripping the video
 -- overlap trigger. Refusal is loud; DB unchanged.
 -- -------------------------------------------------------------------------
 print("-- Duplicate at delta=0 on same track refuses --")
@@ -233,7 +233,7 @@ do
     local new_ovs = load_overrides(db, result.new_clip_id)
     assert(#new_ovs == 0, "no overrides on either side")
     local new = load_clip(db, result.new_clip_id)
-    assert(new.timeline_start == 200 and new.duration == 50,
+    assert(new.sequence_start == 200 and new.duration == 50,
         "duplicate at +100 lands at [200,250)")
     print("  ok")
 end

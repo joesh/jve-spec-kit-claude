@@ -11,7 +11,7 @@ local edge_picker = require("ui.timeline.edge_picker")
 local gap_clip = {
     id = "gap_track_v1_0",
     track_id = "track_v1",
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 2000,
     clip_kind = "gap"
 }
@@ -20,9 +20,9 @@ local media_clip = {
     id = "clip_gap_right",
     name = "Right Clip",
     track_id = "track_v1",
-    timeline_start = 2000,
+    sequence_start = 2000,
     duration = 600,
-    clip_kind = "nested"
+    clip_kind = "sequence"
 }
 
 local track_clips = {gap_clip, media_clip}
@@ -32,7 +32,7 @@ local function time_to_pixel(time)
     return time
 end
 
-local boundary_px = media_clip.timeline_start
+local boundary_px = media_clip.sequence_start
 local result = edge_picker.pick_edges(track_clips, boundary_px, viewport_width, {
     edge_zone = 20,
     roll_zone = 20,

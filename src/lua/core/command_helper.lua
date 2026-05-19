@@ -157,7 +157,7 @@ function M.clip_update_payload(source, fallback_sequence_id)
             tostring(source.id)))
 
     -- All coords must be integers (no Rational backward-compat)
-    assert(type(source.timeline_start) == "number", string.format("clip_update_payload: timeline_start must be integer for clip %s", tostring(source.id)))
+    assert(type(source.sequence_start) == "number", string.format("clip_update_payload: sequence_start must be integer for clip %s", tostring(source.id)))
     assert(type(source.duration) == "number", string.format("clip_update_payload: duration must be integer for clip %s", tostring(source.id)))
     assert(type(source.source_in) == "number", string.format("clip_update_payload: source_in must be integer for clip %s", tostring(source.id)))
     assert(type(source.source_out) == "number", string.format("clip_update_payload: source_out must be integer for clip %s", tostring(source.id)))
@@ -167,7 +167,7 @@ function M.clip_update_payload(source, fallback_sequence_id)
         clip_id = source.id,
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
-        start_value = source.timeline_start,
+        start_value = source.sequence_start,
         duration_value = source.duration,
         source_in_value = source.source_in,
         source_out_value = source.source_out,
@@ -206,12 +206,12 @@ function M.clip_insert_payload(source, fallback_sequence_id)
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
         owner_sequence_id = source.owner_sequence_id or track_sequence_id,
-        nested_sequence_id = source.nested_sequence_id,
+        sequence_id = source.sequence_id,
         master_layer_track_id = source.master_layer_track_id,
         master_audio_track_id = source.master_audio_track_id,
         fps_mismatch_policy = source.fps_mismatch_policy,
 
-        timeline_start = source.timeline_start,
+        sequence_start = source.sequence_start,
         duration = source.duration,
         source_in = source.source_in,
         source_out = source.source_out,
@@ -291,7 +291,7 @@ end
 
 -- Append delete mutation(s). Each entry may be:
 --   - a clip_id string (minimal, legacy shape), or
---   - a record {clip_id, track_id, timeline_start, duration} which lets
+--   - a record {clip_id, track_id, sequence_start, duration} which lets
 --     the viewport policy derive the change region without needing to
 --     reconstruct the deleted clip's position from elsewhere.
 -- Callers with the full clip state available SHOULD pass records so
@@ -299,7 +299,7 @@ end
 -- Walk a command's __timeline_mutations payload (single-bucket or
 -- multi-bucket shape) and return a set of clip_ids the command marks
 -- for deletion. Handles both rich-record entries
--- ({clip_id, track_id, timeline_start, duration}) and legacy string
+-- ({clip_id, track_id, sequence_start, duration}) and legacy string
 -- entries — this is the read-side dual of add_delete_mutation, so it
 -- has to recognize the same shapes the writer produces.
 function M.collect_deleted_clip_ids(command)
@@ -443,9 +443,9 @@ function M.restore_clip_state(state)
         -- V13: Clip.create takes a single fields table. State carries V13
         -- names only (no master_clip_id alias). capture_clip_state asserts
         -- the same fields non-nil at write — read straight here too.
-        local nested_id = state.nested_sequence_id
+        local nested_id = state.sequence_id
         assert(nested_id and nested_id ~= "",
-            "restore_clip_state: state missing nested_sequence_id")
+            "restore_clip_state: state missing sequence_id")
         assert(type(state.name) == "string" and state.name ~= "",
             "restore_clip_state: state.name required")
         assert(type(state.fps_mismatch_policy) == "string"
@@ -457,17 +457,21 @@ function M.restore_clip_state(state)
             "restore_clip_state: state.volume required")
         assert(type(state.playhead) == "number",
             "restore_clip_state: state.playhead required")
+        -- 018 V1 (FR-013): thread captured subframes through restore.
+        -- Captures preserve audio (0,0) and video (nil,nil).
         local new_id = Clip.create({
             id = state.id,
             project_id = state.project_id,
             name = state.name,
             track_id = state.track_id,
             owner_sequence_id = state.owner_sequence_id or state.track_sequence_id,
-            nested_sequence_id = nested_id,
-            timeline_start_frame = state.timeline_start,
+            sequence_id = nested_id,
+            sequence_start_frame = state.sequence_start,
             duration_frames = state.duration,
             source_in_frame = state.source_in,
             source_out_frame = state.source_out,
+            source_in_subframe = state.source_in_subframe,
+            source_out_subframe = state.source_out_subframe,
             master_layer_track_id = state.master_layer_track_id,
             master_audio_track_id = state.master_audio_track_id,
             fps_mismatch_policy = state.fps_mismatch_policy,
@@ -484,7 +488,7 @@ function M.restore_clip_state(state)
     else
         -- Update existing
         clip.track_id = state.track_id or clip.track_id
-        clip.timeline_start = state.timeline_start
+        clip.sequence_start = state.sequence_start
         clip.duration = state.duration
         clip.source_in = state.source_in
         clip.source_out = state.source_out
@@ -527,15 +531,19 @@ function M.capture_clip_state(clip)
         is_gap = is_gap or nil,
         owner_sequence_id = clip.owner_sequence_id or clip.track_sequence_id,
         track_sequence_id = clip.track_sequence_id or clip.owner_sequence_id,
-        nested_sequence_id = clip.nested_sequence_id,
+        sequence_id = clip.sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
         fps_mismatch_policy = clip.fps_mismatch_policy,
         track_id = clip.track_id,
-        timeline_start = clip.timeline_start,
+        sequence_start = clip.sequence_start,
         duration = clip.duration,
         source_in = clip.source_in,
         source_out = clip.source_out,
+        -- 018 V11 (FR-005, FR-013): subframe round-trips through capture.
+        -- Audio clips carry non-NULL (0..tpf-1); video carries NULL.
+        source_in_subframe = clip.source_in_subframe,
+        source_out_subframe = clip.source_out_subframe,
         name = clip.name,
         enabled = clip.enabled,
         frame_rate = rate,
@@ -638,6 +646,24 @@ function M.apply_mutations(db, mutations)
         return true
     end
 
+    -- Locked-track gate. Refuses if any mutation targets a tracks.locked=1
+    -- row; undo/redo bypass so a track locked AFTER an edit can still be
+    -- reverted. Implemented in core.track_lock_guard.
+    local guard = require("core.track_lock_guard")
+    local track_ids = {}
+    local seen = {}
+    local function add(tid)
+        if type(tid) == "string" and tid ~= "" and not seen[tid] then
+            seen[tid] = true; track_ids[#track_ids + 1] = tid
+        end
+    end
+    for _, m in ipairs(mutations) do
+        add(m.track_id)
+        if m.previous then add(m.previous.track_id) end
+    end
+    local ok_lock, lock_err = guard.check_writable(db, track_ids)
+    if not ok_lock then return false, lock_err end
+
     local now = os.time()
     local update_stmt = nil
     local delete_stmt = nil
@@ -676,7 +702,7 @@ function M.apply_mutations(db, mutations)
         end
         update_stmt = db:prepare([[
             UPDATE clips
-            SET track_id = ?, timeline_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
+            SET track_id = ?, sequence_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
             WHERE id = ?
         ]])
         if not update_stmt then
@@ -703,8 +729,8 @@ function M.apply_mutations(db, mutations)
         insert_stmt = db:prepare([[
             INSERT INTO clips (
                 id, project_id, name, track_id,
-                owner_sequence_id, nested_sequence_id,
-                timeline_start_frame, duration_frames,
+                owner_sequence_id, sequence_id,
+                sequence_start_frame, duration_frames,
                 source_in_frame, source_out_frame,
                 master_layer_track_id, master_audio_track_id,
                 fps_mismatch_policy,
@@ -723,7 +749,7 @@ function M.apply_mutations(db, mutations)
         if bulk_shift_by_id_stmt then
             return bulk_shift_by_id_stmt
         end
-        bulk_shift_by_id_stmt = db:prepare("UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+        bulk_shift_by_id_stmt = db:prepare("UPDATE clips SET sequence_start_frame = sequence_start_frame + ?, modified_at = ? WHERE id = ?")
         if not bulk_shift_by_id_stmt then
             return nil, "Failed to prepare bulk shift per-clip UPDATE statement: " .. tostring(db:last_error() or "unknown")
         end
@@ -737,8 +763,8 @@ function M.apply_mutations(db, mutations)
 	            end
 	            bulk_shift_select_desc_stmt = db:prepare([[
 	                SELECT id FROM clips
-	                WHERE track_id = ? AND timeline_start_frame >= ?
-	                ORDER BY timeline_start_frame DESC
+	                WHERE track_id = ? AND sequence_start_frame >= ?
+	                ORDER BY sequence_start_frame DESC
 	            ]])
 	            if not bulk_shift_select_desc_stmt then
 	                return nil, "Failed to prepare bulk shift SELECT statement: " .. tostring(db:last_error() or "unknown")
@@ -751,8 +777,8 @@ function M.apply_mutations(db, mutations)
 	        end
 	        bulk_shift_select_asc_stmt = db:prepare([[
 	            SELECT id FROM clips
-	            WHERE track_id = ? AND timeline_start_frame >= ?
-	            ORDER BY timeline_start_frame ASC
+	            WHERE track_id = ? AND sequence_start_frame >= ?
+	            ORDER BY sequence_start_frame ASC
 	        ]])
 	        if not bulk_shift_select_asc_stmt then
 	            return nil, "Failed to prepare bulk shift SELECT statement: " .. tostring(db:last_error() or "unknown")
@@ -767,9 +793,9 @@ function M.apply_mutations(db, mutations)
                 finalize_all_stmts()
                 return false, "Mutation missing clip_id for UPDATE operation"
             end
-            if not mut.timeline_start_frame then
+            if not mut.sequence_start_frame then
                 finalize_all_stmts()
-                return false, string.format("Mutation for clip %s missing timeline_start_frame", mut.clip_id)
+                return false, string.format("Mutation for clip %s missing sequence_start_frame", mut.clip_id)
             end
             if not mut.duration_frames or mut.duration_frames <= 0 then
                 finalize_all_stmts()
@@ -783,7 +809,7 @@ function M.apply_mutations(db, mutations)
                 return false, stmt_err
             end
             stmt:bind_value(1, mut.track_id)
-            stmt:bind_value(2, mut.timeline_start_frame)
+            stmt:bind_value(2, mut.sequence_start_frame)
             stmt:bind_value(3, mut.duration_frames)
             stmt:bind_value(4, mut.source_in_frame)
             stmt:bind_value(5, mut.source_out_frame)
@@ -817,12 +843,12 @@ function M.apply_mutations(db, mutations)
                 finalize_all_stmts()
                 return false, stmt_err
             end
-            -- V13 INSERT: callers must provide nested_sequence_id (the
+            -- V13 INSERT: callers must provide sequence_id (the
             -- referenced sequence) and fps_mismatch_policy. No V8 alias.
-            local nested_id = mut.nested_sequence_id
+            local nested_id = mut.sequence_id
             if not nested_id or nested_id == "" then
                 finalize_all_stmts()
-                return false, "INSERT mutation missing nested_sequence_id for clip " .. tostring(mut.clip_id)
+                return false, "INSERT mutation missing sequence_id for clip " .. tostring(mut.clip_id)
             end
             local policy = mut.fps_mismatch_policy or "resample"
             if mut.created_at == nil or mut.modified_at == nil then
@@ -835,7 +861,7 @@ function M.apply_mutations(db, mutations)
             stmt:bind_value(4, mut.track_id)
             stmt:bind_value(5, mut.owner_sequence_id)
             stmt:bind_value(6, nested_id)
-            stmt:bind_value(7, mut.timeline_start_frame)
+            stmt:bind_value(7, mut.sequence_start_frame)
             stmt:bind_value(8, mut.duration_frames)
             stmt:bind_value(9, mut.source_in_frame)
             stmt:bind_value(10, mut.source_out_frame)
@@ -862,7 +888,7 @@ function M.apply_mutations(db, mutations)
             end
         elseif mut.type == "bulk_shift" then
             -- Canonical shape: { type, track_id, shift_frames, start_frame }.
-            -- Every clip on `track_id` with timeline_start_frame >= start_frame
+            -- Every clip on `track_id` with sequence_start_frame >= start_frame
             -- gets shifted by shift_frames. Order matters on video tracks to
             -- avoid transient VIDEO_OVERLAP trigger fires: positive shift
             -- processes DESC (highest first), negative shift ASC.
@@ -948,7 +974,7 @@ function M.apply_mutations(db, mutations)
 	end
 
 -- Revert a forward `bulk_shift` mutation. The forward shift moved every
--- clip on `track_id` with timeline_start_frame >= start_frame by
+-- clip on `track_id` with sequence_start_frame >= start_frame by
 -- +shift_frames; we enumerate from the post-shift position and shift each
 -- clip back by -shift_frames. Ordering matters on video tracks (mirrors
 -- the forward path in apply_mutations): positive undo delta → DESC,
@@ -972,8 +998,8 @@ local function revert_bulk_shift_mutation(db, mut)
     local post_shift_start = mut.start_frame + mut.shift_frames
     local order_desc = undo_delta > 0
     local select_sql = order_desc
-        and "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame DESC"
-        or  "SELECT id FROM clips WHERE track_id = ? AND timeline_start_frame >= ? ORDER BY timeline_start_frame ASC"
+        and "SELECT id FROM clips WHERE track_id = ? AND sequence_start_frame >= ? ORDER BY sequence_start_frame DESC"
+        or  "SELECT id FROM clips WHERE track_id = ? AND sequence_start_frame >= ? ORDER BY sequence_start_frame ASC"
     local select_stmt = db:prepare(select_sql)
     if not select_stmt then
         return false, "bulk_shift undo: failed to prepare clip enumeration: "
@@ -1008,7 +1034,7 @@ local function revert_bulk_shift_mutation(db, mut)
     end
 
     local update_stmt = db:prepare(
-        "UPDATE clips SET timeline_start_frame = timeline_start_frame + ?, modified_at = ? WHERE id = ?")
+        "UPDATE clips SET sequence_start_frame = sequence_start_frame + ?, modified_at = ? WHERE id = ?")
     if not update_stmt then
         return false, "bulk_shift undo: failed to prepare clip update: "
             .. tostring(db:last_error())
@@ -1058,14 +1084,14 @@ local function apply_update_revert(db, mut, command, sequence_id)
     local prev = mut.previous
     if not prev then return false, "Cannot undo update: missing previous state" end
     local cmd_type = command and command.type or nil
-    local ts = require_int_frame(prev.timeline_start or prev.start_value, "timeline_start", cmd_type)
+    local ts = require_int_frame(prev.sequence_start or prev.start_value, "sequence_start", cmd_type)
     local dur = require_int_frame(prev.duration, "duration", cmd_type)
     local src_in = require_int_frame(prev.source_in, "source_in", cmd_type)
     local src_out = require_int_frame(prev.source_out, "source_out", cmd_type)
 
     local stmt = db:prepare([[
         UPDATE clips
-        SET track_id = ?, timeline_start_frame = ?, duration_frames = ?,
+        SET track_id = ?, sequence_start_frame = ?, duration_frames = ?,
             source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
         WHERE id = ?
     ]])
@@ -1114,12 +1140,12 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     if prev.created_at == nil or prev.modified_at == nil then
         return false, "undo delete: missing created_at/modified_at for clip " .. tostring(prev.id)
     end
-    local nested_id = prev.nested_sequence_id
+    local nested_id = prev.sequence_id
     if not nested_id or nested_id == "" then
-        return false, "undo delete: missing nested_sequence_id for clip " .. tostring(prev.id)
+        return false, "undo delete: missing sequence_id for clip " .. tostring(prev.id)
     end
     local cmd_type = command and command.type or nil
-    local ts = require_int_frame(prev.timeline_start or prev.start_value, "timeline_start", cmd_type)
+    local ts = require_int_frame(prev.sequence_start or prev.start_value, "sequence_start", cmd_type)
     local dur = require_int_frame(prev.duration, "duration", cmd_type)
     local src_in = require_int_frame(prev.source_in, "source_in", cmd_type)
     local src_out = require_int_frame(prev.source_out, "source_out", cmd_type)
@@ -1128,8 +1154,8 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     local stmt = db:prepare([[
         INSERT INTO clips (
             id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id,
-            timeline_start_frame, duration_frames,
+            owner_sequence_id, sequence_id,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy,
@@ -1177,7 +1203,7 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
         M.add_insert_mutation(command, sequence_id, {
             id                 = prev.id,
             track_id           = prev.track_id,
-            nested_sequence_id = nested_id,
+            sequence_id = nested_id,
             start_value        = ts,
             duration_value     = dur,
             source_in_value    = src_in,
@@ -1257,8 +1283,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             local function start_frames(mut)
                 local prev = mut.previous
                 if not prev then return 0 end
-                local ts = prev.timeline_start or prev.start_value
-                assert(ts == nil or type(ts) == "number", string.format("undo AddClipsToSequence: timeline_start must be integer for clip %s", tostring(prev.id)))
+                local ts = prev.sequence_start or prev.start_value
+                assert(ts == nil or type(ts) == "number", string.format("undo AddClipsToSequence: sequence_start must be integer for clip %s", tostring(prev.id)))
                 return ts or 0
             end
             table.sort(updates, function(a, b)
@@ -1271,8 +1297,8 @@ function M.revert_mutations(db, mutations, command, sequence_id)
             local function start_frames(mut)
                 local prev = mut.previous
                 assert(prev, "undo Nudge: mutation missing 'previous' state")
-                local ts = prev.timeline_start or prev.start_value
-                assert(type(ts) == "number", string.format("undo Nudge: timeline_start must be integer for clip %s", tostring(prev.id)))
+                local ts = prev.sequence_start or prev.start_value
+                assert(type(ts) == "number", string.format("undo Nudge: sequence_start must be integer for clip %s", tostring(prev.id)))
                 return ts
             end
             table.sort(updates, function(a, b)

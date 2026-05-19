@@ -22,8 +22,8 @@ local TEST_DB = "/tmp/jve/test_edge_preview_filtering.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_right = {timeline_start = 2500},
-        v2 = {timeline_start = 1800, duration = 800}
+        v1_right = {sequence_start = 2500},
+        v2 = {sequence_start = 1800, duration = 800}
     }
 })
 

@@ -271,6 +271,13 @@ public:
     void PlayBurst(int64_t frame_idx, int direction, int duration_ms);
     bool HasAudio() const;
 
+    // 017 / FR-022: per-engine log tag. Lua engine pushes "<role>:<8-of-seq-id>"
+    // on every load(); JVE_LOG_*(Ticks, ...) call sites inside
+    // playback_controller.mm can prefix messages with this tag so source /
+    // record streams are distinguishable in mixed logs.
+    void SetLogTag(const std::string& tag) { m_log_tag = tag; }
+    const std::string& LogTag() const { return m_log_tag; }
+
     // Shuttle mode
     void SetShuttleMode(bool enabled);
     bool HitBoundary() const;
@@ -429,6 +436,9 @@ private:
     int32_t m_audio_sample_rate{48000};
     int32_t m_audio_channels{2};
 
+    // 017 / FR-022: per-engine log tag set via Lua engine:load().
+    std::string m_log_tag;
+
     // ---- Playback diagnostics ring buffers ----
     DiagRing<TickMetric, DIAG_VIDEO_RING_SIZE> m_video_diag;
     DiagRing<PumpMetric, DIAG_AUDIO_RING_SIZE> m_audio_diag;
@@ -486,6 +496,9 @@ public:
     void SetSpeed(float) {}
     void PlayBurst(int64_t, int, int) {}
     bool HasAudio() const { return false; }
+    // 017: per-engine log tag — stub variant carries the string for parity.
+    void SetLogTag(const std::string&) {}
+    const std::string& LogTag() const { static const std::string e; return e; }
     void SetShuttleMode(bool) {}
     bool HitBoundary() const { return false; }
 

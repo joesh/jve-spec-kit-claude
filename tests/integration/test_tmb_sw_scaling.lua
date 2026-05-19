@@ -38,7 +38,7 @@ print(string.format("  source: %dx%d @ %d/%d fps",
 local clip_def = {
     clip_id = "scale-test-001",
     media_path = QTRLE_PATH,
-    timeline_start = 0,
+    sequence_start = 0,
     duration = 10,
     source_in = 0,
     rate_num = info.fps_num,

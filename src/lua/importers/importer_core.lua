@@ -27,6 +27,10 @@ local Track = require("models.track")
 local Clip = require("models.clip")
 local Property = require("models.property")
 local clip_link = require("models.clip_link")
+-- 018: sub-frame math primitive for audio clip source position conversion
+-- (file samples → master.fps frame + master_clock_hz tick subframe). Pure
+-- numeric helper; no DB coupling.
+local subframe_math = require("core.subframe_math")
 
 -- ---------------------------------------------------------------------------
 -- Helper: Frame rate to rational
@@ -250,14 +254,31 @@ local function build_media_metadata(media_item, native_rate)
     end
     local json = require("dkjson")
     local mst = media_item.media_start_time
-    local start_tc_value = math.floor(mst * native_rate + 0.5)
-    local meta = {
-        start_tc_value = start_tc_value,
-        start_tc_rate  = native_rate,
-    }
-
     local audio_sr = media_item.audio_sample_rate
-    if audio_sr and audio_sr > 0 then
+    local has_video = media_item.has_video and true or false
+    local has_audio = audio_sr and audio_sr > 0
+
+    local meta = {}
+    if not (has_video or has_audio) then
+        -- Bad / malformed media item with neither V nor A characteristics.
+        -- Leave metadata empty; downstream consumers gate on has_video /
+        -- has_audio and won't attempt to read TC. ensure_master will
+        -- refuse to build a master for this row.
+        return json.encode(meta)
+    end
+    -- V pair written ONLY for files that actually have a video stream.
+    -- Pre-normalization (≤ 2026-05-16) wrote start_tc_value for audio-
+    -- only files too (using native_rate==sr), which was the 4-second-
+    -- late overload — retired by feedback_timecode_is_truth's unified
+    -- model. Audio-only files now carry their TC exclusively in the
+    -- start_tc_audio_* pair.
+    local start_tc_value
+    if has_video then
+        start_tc_value = math.floor(mst * native_rate + 0.5)
+        meta.start_tc_value = start_tc_value
+        meta.start_tc_rate  = native_rate
+    end
+    if has_audio then
         meta.start_tc_audio_samples = math.floor(mst * audio_sr + 0.5)
         meta.start_tc_audio_rate    = audio_sr
     end
@@ -266,15 +287,19 @@ local function build_media_metadata(media_item, native_rate)
     -- decodable TracksBA, unmatched PMC enrichment). No override detection
     -- in that case — pre-feature behavior (file_original_timecode absent).
     if media_item.file_tc_seconds then
-        local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
-        if file_tc_video ~= start_tc_value then
-            meta.file_original_timecode = file_tc_video
-            if audio_sr and audio_sr > 0 then
-                meta.file_original_timecode_audio =
-                    math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+        if has_video then
+            local file_tc_video = math.floor(media_item.file_tc_seconds * native_rate + 0.5)
+            if file_tc_video ~= start_tc_value then
+                meta.file_original_timecode = file_tc_video
+                log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
+                    start_tc_value, file_tc_video, start_tc_value - file_tc_video)
             end
-            log.event("  Set Timecode override: start_tc=%d file_tc=%d (delta=%d frames)",
-                start_tc_value, file_tc_video, start_tc_value - file_tc_video)
+        end
+        if has_audio then
+            local file_tc_audio = math.floor(media_item.file_tc_seconds * audio_sr + 0.5)
+            if file_tc_audio ~= meta.start_tc_audio_samples then
+                meta.file_original_timecode_audio = file_tc_audio
+            end
         end
     end
 
@@ -344,7 +369,7 @@ end
 -- Compute the start_timecode_frame for the new sequence. start_tc_seconds
 -- is the source format's timeline-start; convert to native frames at the
 -- sequence's fps.
-local function compute_timeline_start_tc(timeline_data, fps_num, fps_den)
+local function compute_sequence_start_tc(timeline_data, fps_num, fps_den)
     if not (timeline_data.start_tc_seconds and timeline_data.start_tc_seconds > 0) then
         return 0
     end
@@ -490,6 +515,29 @@ local function resolve_clip_source_range(clip_data)
     return clip_data.source_in, source_out
 end
 
+-- 018 (FR-022 / FR-008): convert an audio clip's file-natural sample
+-- position to the (frame, subframe) representation in the master sequence's
+-- timebase + project master_clock_hz tick space. Composes subframe_math
+-- primitives — pure numerics, no DB coupling. Every invalid input asserts
+-- (delegated to subframe_math which names the offending parameter).
+--
+--   samples         : file-natural sample position (>= 0 integer)
+--   file_rate       : audio file's native sample rate (Hz, > 0 integer)
+--   master_fps_num  : master sequence fps numerator (> 0 integer)
+--   master_fps_den  : master sequence fps denominator (> 0 integer)
+--   master_clock_hz : project master clock rate (Hz, > 0 integer)
+--
+-- Returns (frame, subframe) canonical: 0 <= subframe < ticks_per_frame.
+function M.compute_audio_clip_source(samples, file_rate,
+                                     master_fps_num, master_fps_den,
+                                     master_clock_hz)
+    local total_ticks = subframe_math.samples_to_ticks(
+        samples, file_rate, master_clock_hz)
+    local tpf = subframe_math.ticks_per_frame(
+        master_clock_hz, master_fps_num, master_fps_den)
+    return subframe_math.unpack(total_ticks, tpf)
+end
+
 -- Resolve the bin a master sequence belongs in. Try, in order: pool-by-uuid
 -- → pool-by-name (via media_by_uuid/path lookup) → pool-by-basename →
 -- "Unorganized" fallback. Returns the bin id (always non-nil when an
@@ -520,7 +568,7 @@ local function resolve_master_bin(clip_data, media_by_uuid, media_by_path,
     return unorganized_bin_id
 end
 
--- Build and persist a kind='nested' sequence row for one parsed timeline.
+-- Build and persist a kind='sequence' sequence row for one parsed timeline.
 -- Asserts the save (rule 2.13). Returns the saved Sequence instance.
 local function create_imported_sequence(project_id, timeline_data, fps_num, fps_den,
                                         seq_width, seq_height, seq_audio_rate,
@@ -533,7 +581,7 @@ local function create_imported_sequence(project_id, timeline_data, fps_num, fps_
         seq_width,
         seq_height,
         {
-            kind                 = "nested",
+            kind                 = "sequence",
             audio_sample_rate    = seq_audio_rate,
             start_timecode_frame = start_timecode_frame,
             view_start_frame     = view_start,
@@ -638,6 +686,17 @@ function M.import_into_project(project_id, parse_result, opts)
     local project_settings = opts.project_settings or parse_result.project.settings
     local sub_report = opts.progress_cb or function() end
 
+    -- 018 (FR-028): project_settings.master_clock_hz drives every per-clip
+    -- audio sample → (frame, subframe) conversion below. Asserted once here
+    -- so we fail loud at the entry of the import rather than per-clip
+    -- (rule 1.14). DRP / prproj importers populate this at parse time.
+    local master_clock_hz = project_settings and project_settings.master_clock_hz
+    assert(master_clock_hz and master_clock_hz > 0, string.format(
+        "importer_core.import_into_project: project_settings.master_clock_hz "
+        .. "required (FR-028); got %s. The format-specific parser must populate "
+        .. "this in parse_result.project.settings before calling import_into_project.",
+        tostring(master_clock_hz)))
+
     local tag_service = require("core.tag_service")
     local uuid = require("uuid")
 
@@ -689,12 +748,12 @@ function M.import_into_project(project_id, parse_result, opts)
         local fps_num, fps_den =
             resolve_timeline_frame_rate(timeline_data, min_start_frame, project_settings)
         local start_timecode_frame =
-            compute_timeline_start_tc(timeline_data, fps_num, fps_den)
+            compute_sequence_start_tc(timeline_data, fps_num, fps_den)
         local view_start, view_duration, playhead_frame =
             compute_viewport(timeline_data, fps_num, fps_den, start_timecode_frame,
                              min_start_frame, max_end_frame)
 
-        -- 013: edit timelines created by import are kind='nested' (they
+        -- 013: edit timelines created by import are kind='sequence' (they
         -- hold clips referencing master sequences). Master sequences for
         -- source media are created separately via Sequence.ensure_master.
         local seq_width, seq_height = resolve_sequence_dimensions(timeline_data, project_settings)
@@ -739,7 +798,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     -- in native units, set by the parser (parse_resolve_tracks):
                     -- file_tc_origin + file-relative offset. Frames for video,
                     -- samples for audio. The master sequence's timebase IS TC
-                    -- space (its media_refs sit at timeline_start = file_tc_origin),
+                    -- space (its media_refs sit at sequence_start = file_tc_origin),
                     -- so parser values pass through unchanged.
                     assert(clip_data.native_rate, string.format(
                         "import_into_project: clip '%s' missing native_rate (media_id=%s)",
@@ -770,16 +829,49 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     local now = os.time()
+                    -- 018 (FR-001 / FR-008 / FR-022): clip.source_in_frame /
+                    -- source_out_frame are uniformly in the master sequence's
+                    -- fps timebase across both mediums. Audio sub-sample
+                    -- residual lives in source_*_subframe (master_clock_hz
+                    -- ticks). The parser delivers source_in/out in
+                    -- file-natural units (samples for audio, frames for
+                    -- video); the audio path converts here. FR-013 requires
+                    -- subframe NULL on video, non-NULL on audio.
+                    local src_in_frame, sub_in
+                    local src_out_frame, sub_out
+                    if track.track_type == "AUDIO" then
+                        local master_seq = Sequence.find(master_seq_id)
+                        assert(master_seq, string.format(
+                            "importer_core: master %s not loadable after ensure_master",
+                            tostring(master_seq_id)))
+                        src_in_frame, sub_in = M.compute_audio_clip_source(
+                            source_in_final, clip_data.native_rate,
+                            master_seq.fps_numerator, master_seq.fps_denominator,
+                            master_clock_hz)
+                        src_out_frame, sub_out = M.compute_audio_clip_source(
+                            source_out_final, clip_data.native_rate,
+                            master_seq.fps_numerator, master_seq.fps_denominator,
+                            master_clock_hz)
+                    else
+                        -- VIDEO: source_in/out from parser are already in
+                        -- master.fps frames; subframe NULL on video (FR-013).
+                        local defaults_in, defaults_out =
+                            Clip.subframe_defaults_for_track_type(track.track_type)
+                        src_in_frame, sub_in   = source_in_final,  defaults_in
+                        src_out_frame, sub_out = source_out_final, defaults_out
+                    end
                     local clip_id = Clip.create({
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
                         track_id              = track.id,
-                        nested_sequence_id    = master_seq_id,
+                        sequence_id    = master_seq_id,
                         name                  = clip_data.name or "Untitled Clip",
-                        timeline_start_frame  = clip_data.start_value,
+                        sequence_start_frame  = clip_data.start_value,
                         duration_frames       = clip_data.duration,
-                        source_in_frame       = source_in_final,
-                        source_out_frame      = source_out_final,
+                        source_in_frame       = src_in_frame,
+                        source_out_frame      = src_out_frame,
+                        source_in_subframe    = sub_in,
+                        source_out_subframe   = sub_out,
                         master_layer_track_id = nil,
                         master_audio_track_id = nil,
                         fps_mismatch_policy   = "resample",
@@ -807,7 +899,7 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
 
                     -- Assign the master sequence to its folder bin (V13:
-                    -- clip.nested_sequence_id is the master ref).
+                    -- clip.sequence_id is the master ref).
                     local bin = resolve_master_bin(clip_data, media_by_uuid, media_by_path,
                         pool_uuid_to_bin, pool_name_to_bin, unorganized_bin_id)
                     if bin then
@@ -885,6 +977,17 @@ function M.import_into_project(project_id, parse_result, opts)
 
     log.event("Import complete: %d media, %d sequences, %d tracks, %d clips",
         #result.media_ids, #result.sequence_ids, #result.track_ids, #result.clip_ids)
+
+    -- Sequences (master + timeline) were inserted in bulk above. Emit once
+    -- at the end so the project browser rebuilds its tree to include the
+    -- new rows. Per-row emits would cause N rebuilds for an N-sequence DRP.
+    -- queue_post_commit_emit defers to the surrounding command's commit
+    -- when invoked from the Import command; emits immediately for the
+    -- Open-path importer pass (no transaction to defer to).
+    if #result.sequence_ids > 0 then
+        require("core.command_manager").queue_post_commit_emit(
+            "sequence_list_changed", project_id)
+    end
 
     -- Return lookup tables for format-specific post-import steps
     result.media_by_uuid = media_by_uuid

@@ -173,8 +173,8 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
         file_id = nil,
         media_key = nil,
         track_id = track_id,
-        timeline_start = nil,
-        timeline_end = nil,
+        sequence_start = nil,
+        sequence_end = nil,
         start_value = nil,
         duration = 0,      -- integer frames
         source_in = 0,     -- integer frames
@@ -243,9 +243,9 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
                 clip_info.raw_duration = raw_duration
             end
         elseif name == "start" then
-            clip_info.timeline_start = parse_time_frames(child.text, clip_info.frame_rate)
+            clip_info.sequence_start = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "end" then
-            clip_info.timeline_end = parse_time_frames(child.text, clip_info.frame_rate)
+            clip_info.sequence_end = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "in" then
             clip_info.source_in = parse_time_frames(child.text, clip_info.frame_rate)
         elseif name == "out" then
@@ -262,8 +262,8 @@ local function parse_clipitem(clipitem_node, frame_rate, track_id, sequence_info
     if clip_info.duration <= 0 and clip_info.raw_duration and clip_info.raw_duration > 0 then
         clip_info.duration = clip_info.raw_duration
     end
-    if clip_info.duration <= 0 and clip_info.timeline_start and clip_info.timeline_end and clip_info.timeline_end > clip_info.timeline_start then
-        clip_info.duration = clip_info.timeline_end - clip_info.timeline_start
+    if clip_info.duration <= 0 and clip_info.sequence_start and clip_info.sequence_end and clip_info.sequence_end > clip_info.sequence_start then
+        clip_info.duration = clip_info.sequence_end - clip_info.sequence_start
     end
 
     return clip_info
@@ -285,12 +285,12 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
 
     local function finalize_clip_timing(clip_info)
         -- All values are integer frames
-        local start = clip_info.timeline_start
+        local start = clip_info.sequence_start
         if start and start < 0 then
             start = nil
         end
 
-        local finish = clip_info.timeline_end
+        local finish = clip_info.sequence_end
         if finish and finish < 0 then
             finish = nil
         end
@@ -336,8 +336,8 @@ local function parse_track(track_node, frame_rate, track_type, track_index, sequ
             ))
         end
 
-        clip_info.timeline_start = start
-        clip_info.timeline_end = finish
+        clip_info.sequence_start = start
+        clip_info.sequence_end = finish
         clip_info.start_value = start
         clip_info.duration = duration
         prev_end_time = finish
@@ -723,8 +723,8 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 remember_master_mapping(key, existing_id)
             end
             -- V13: clip_info points the FCP7 import bridge at the master
-            -- sequence id under nested_sequence_id (replaces master_clip_id).
-            clip_info.nested_sequence_id = existing_id
+            -- sequence id under sequence_id (replaces master_clip_id).
+            clip_info.sequence_id = existing_id
             return existing_id
         end
 
@@ -741,7 +741,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             return nil
         end
 
-        clip_info.nested_sequence_id = master_seq_id
+        clip_info.sequence_id = master_seq_id
         if key then
             master_lookup[key] = master_seq_id
         end
@@ -887,7 +887,18 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             log.detail("FCP7 import: media '%s' no <samplecharacteristics><samplerate>; "
                 .. "using spec-implied default 48000 Hz", tostring(media_info.name or key))
         end
-        local meta = { start_tc_value = 0, start_tc_rate = fps_num }
+        -- Post-normalization: V pair only when file has a video stream,
+        -- A pair only when it has audio. FCP7 XML carries no per-file TC,
+        -- so origins seed at 0 — runtime probe refines via
+        -- media:_ensure_tc_extracted when the file is reachable. Malformed
+        -- entries with neither V nor A characteristics get empty metadata;
+        -- ensure_master will refuse to build a master for them downstream.
+        local has_video = width and width > 0
+        local meta = {}
+        if has_video then
+            meta.start_tc_value = 0
+            meta.start_tc_rate  = fps_num
+        end
         if audio_ch > 0 then
             meta.start_tc_audio_samples = 0
             meta.start_tc_audio_rate    = audio_sr
@@ -926,7 +937,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             string.format("create_clip: ensure_media returned nil for clip '%s' (key=%s)",
                 tostring(clip_info.name or clip_info.original_id), tostring(clip_key)))
 
-        -- V13: nested_sequence_id is the master sequence id.
+        -- V13: sequence_id is the master sequence id.
         local nested_seq_id = ensure_master_clip(clip_info, clip_key, media_id)
         assert(nested_seq_id and nested_seq_id ~= "",
             string.format("create_clip: ensure_master_clip returned nil for clip '%s' (media_id=%s, key=%s)",
@@ -980,20 +991,26 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
             reuse_id = clip_info.original_id
         end
 
-        -- V13 Clip.create: single-table form. nested_sequence_id required.
+        -- V13 Clip.create: single-table form. sequence_id required.
         -- Returns the new clip id (string) — INSERT happens inside.
         local now = os.time()
+        -- 018 FR-011 / FR-013: FCP7 imports are frame-aligned; subframe = 0
+        -- on AUDIO clips, NULL on VIDEO. Pure track_type dispatch — no DB
+        -- handle (rule 1.10: importers go through models, not raw connections).
+        local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track_type)
         local clip_id = Clip.create({
             id = reuse_id,
             project_id = project_id,
             track_id = track_id,
             owner_sequence_id = clip_info.owner_sequence_id,
-            nested_sequence_id = nested_seq_id,
+            sequence_id = nested_seq_id,
             name = clip_info.name or "Clip",
-            timeline_start_frame = start_value,
+            sequence_start_frame = start_value,
             duration_frames = duration,
             source_in_frame = source_in,
             source_out_frame = source_out,
+            source_in_subframe = sub_in,
+            source_out_subframe = sub_out,
             master_layer_track_id = nil,
             master_audio_track_id = nil,
             fps_mismatch_policy = "resample",
@@ -1160,7 +1177,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
         for seq_index, seq_info in ipairs(parsed_result.sequences or {}) do
             local sequence_key = seq_info.original_id or ("sequence_" .. tostring(seq_index))
             local reuse_id = resolve_reuse_id('sequences', sequence_key)
-            -- 013: edit timelines from FCP7 XML are kind='nested'.
+            -- 013: edit timelines from FCP7 XML are kind='sequence'.
             -- <samplecharacteristics> is OPTIONAL per FCP7 spec; 48000 Hz is the
             -- FCP7-documented implied default when absent.
             local seq_audio_rate = seq_info.audio_sample_rate
@@ -1178,7 +1195,7 @@ function M.create_entities(parsed_result, db, project_id, replay_context)
                 seq_info.height,
                 {
                     id = reuse_id or seq_info.original_id,
-                    kind = "nested",
+                    kind = "sequence",
                     audio_sample_rate = seq_audio_rate,
                 }
             )

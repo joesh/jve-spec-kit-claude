@@ -46,7 +46,7 @@ local clip_store = {}
 local function make_clip(id, start, dur, src_in, src_out, track_id)
     return {
         id = id,
-        timeline_start = start,
+        sequence_start = start,
         duration = dur,
         source_in = src_in,
         source_out = src_out,
@@ -62,7 +62,7 @@ package.loaded["models.clip"] = {
         if c.clip_kind == "gap" then
             return c
         end
-        return make_clip(c.id, c.timeline_start, c.duration, c.source_in, c.source_out, c.track_id)
+        return make_clip(c.id, c.sequence_start, c.duration, c.source_in, c.source_out, c.track_id)
     end,
     load_optional = function(id)
         local c = clip_store[id]
@@ -70,7 +70,7 @@ package.loaded["models.clip"] = {
         if c.clip_kind == "gap" then
             return c
         end
-        return make_clip(c.id, c.timeline_start, c.duration, c.source_in, c.source_out, c.track_id)
+        return make_clip(c.id, c.sequence_start, c.duration, c.source_in, c.source_out, c.track_id)
     end,
 }
 
@@ -94,7 +94,7 @@ do
     -- Expected delta = 150 - 100 = +50
     clip_store["c1"] = {
         id = "c1",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -137,7 +137,7 @@ do
     -- Expected delta = 50 - 100 = -50 (move in-point left)
     clip_store["c2"] = {
         id = "c2",
-        timeline_start = 100,
+        sequence_start = 100,
         duration = 100,
         source_in = 20,
         source_out = 120,
@@ -176,7 +176,7 @@ do
     ripple_calls = {}
     clip_store["c3"] = {
         id = "c3",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -215,7 +215,7 @@ do
     ripple_calls = {}
     clip_store["c4"] = {
         id = "c4",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -248,7 +248,7 @@ do
     ripple_calls = {}
     clip_store["c5"] = {
         id = "c5",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -256,7 +256,7 @@ do
     }
     clip_store["c6"] = {
         id = "c6",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,
@@ -296,7 +296,7 @@ do
     -- delta = 80 - 100 = -20 (shrink gap from the right)
     clip_store["gap_t1_50"] = {
         id = "gap_t1_50",
-        timeline_start = 50,
+        sequence_start = 50,
         duration = 50,
         clip_kind = "gap",
         track_id = "t1",
@@ -343,7 +343,7 @@ do
     ripple_calls = {}
     clip_store["c_sel"] = {
         id = "c_sel",
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 100,
         source_in = 0,
         source_out = 100,

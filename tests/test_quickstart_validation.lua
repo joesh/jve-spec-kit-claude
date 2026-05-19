@@ -33,7 +33,7 @@ local db = database.get_connection()
 
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('proj1', 'Quickstart', 'resample', %d, %d)",
+    "INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('proj1', 'Quickstart', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', %d, %d)",
     now, now))
 
 -- ============================================================================
@@ -176,15 +176,15 @@ sift_commands.clear_sift("proj1")
 -- ============================================================================
 print("=== Category 4: Timeline Find ===")
 
--- Sort by timeline_start for timeline context
+-- Sort by sequence_start for timeline context
 local tl_clips = {
-    {id="t1", name="INT_Shot1",  timeline_start_frame=0,   duration_frames=100, codec="ProRes", fps=24, enabled=true, properties={}},
-    {id="t2", name="EXT_Shot2",  timeline_start_frame=100, duration_frames=150, codec="ProRes", fps=24, enabled=true, properties={}},
-    {id="t3", name="INT_Shot3",  timeline_start_frame=250, duration_frames=200, codec="DNxHD",  fps=25, enabled=true, properties={}},
-    {id="t4", name="Interview_A",timeline_start_frame=300, duration_frames=100, codec="DNxHD",  fps=25, enabled=true, properties={}},
-    {id="t5", name="INT_Shot5",  timeline_start_frame=450, duration_frames=50,  codec="ProRes", fps=24, enabled=true, properties={}},
+    {id="t1", name="INT_Shot1",  sequence_start_frame=0,   duration_frames=100, codec="ProRes", fps=24, enabled=true, properties={}},
+    {id="t2", name="EXT_Shot2",  sequence_start_frame=100, duration_frames=150, codec="ProRes", fps=24, enabled=true, properties={}},
+    {id="t3", name="INT_Shot3",  sequence_start_frame=250, duration_frames=200, codec="DNxHD",  fps=25, enabled=true, properties={}},
+    {id="t4", name="Interview_A",sequence_start_frame=300, duration_frames=100, codec="DNxHD",  fps=25, enabled=true, properties={}},
+    {id="t5", name="INT_Shot5",  sequence_start_frame=450, duration_frames=50,  codec="ProRes", fps=24, enabled=true, properties={}},
 }
-table.sort(tl_clips, function(a, b) return a.timeline_start_frame < b.timeline_start_frame end)
+table.sort(tl_clips, function(a, b) return a.sequence_start_frame < b.sequence_start_frame end)
 
 find_state.execute(tl_clips, {column="name", operator="contains", value="INT"})
 -- INT_Shot1, INT_Shot3, Interview_A, INT_Shot5 = 4 (Interview contains INT)
@@ -242,7 +242,7 @@ print("=== Category 6: Find & Replace ===")
 
 -- Insert test clips into DB for replace tests
 local seq_stmt = db:prepare(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)",
     now, now))
 seq_stmt:exec()
 seq_stmt:finalize()
@@ -256,19 +256,19 @@ db:exec([[
     INSERT OR IGNORE INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
     VALUES ('_v13_placeholder_media', 'proj1', 'placeholder', '_placeholder', 100, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
     INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+    VALUES ('_v13_placeholder_master', 'proj1', 'placeholder_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
     INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
     VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
     UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-    INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+    INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
     VALUES ('_v13_placeholder_mr', 'proj1', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
 ]])
 
 for i, name in ipairs({"Scene01_v1", "Scene02_v1", "Scene03_v2"}) do
     local cid = string.format("rc%d", i)
     local stmt = db:prepare([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name,
-            timeline_start_frame, duration_frames, source_in_frame, source_out_frame,
+        INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name,
+            sequence_start_frame, duration_frames, source_in_frame, source_out_frame,
             enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id,
             fps_mismatch_policy, volume, playhead_frame)
         VALUES (?, 'proj1', 'seq1', 'trk1', '_v13_placeholder_master', ?, ?, 100, 0, 100, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0)

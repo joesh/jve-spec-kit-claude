@@ -33,26 +33,26 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'resample', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
 
         -- Multicam master with V1, V2, V3 (each its own media file) +
         -- one A track. Default layer = V1.
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'multicam', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'multicam', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
 
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
 
         -- An "other" sequence to test cross-sequence refusal.
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('other', 'p1', 'other', 'master', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('other', 'p1', 'other', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
 
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
@@ -74,16 +74,16 @@ local function build_fixture()
 
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v1', 'p1', 'm', 'm-v1', 'mv1', 0, 100, 0, 100, 1, 1.0, 0, 0, 0),
-               ('mr-v2', 'p1', 'm', 'm-v2', 'mv2', 0, 100, 0, 100, 1, 1.0, 0, 0, 0),
-               ('mr-v3', 'p1', 'm', 'm-v3', 'mv3', 0, 100, 0, 100, 1, 1.0, 0, 0, 0);
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v1', 'p1', 'm', 'm-v1', 'mv1', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-v2', 'p1', 'm', 'm-v2', 'mv2', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0),
+               ('mr-v3', 'p1', 'm', 'm-v3', 'mv3', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
 
         -- Clip 'tracking' with master_layer_track_id NULL (inherits master default).
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)
@@ -93,8 +93,8 @@ local function build_fixture()
 
         -- Clip 'overridden' with explicit V3.
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

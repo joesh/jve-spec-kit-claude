@@ -35,8 +35,8 @@ db:exec(SCHEMA_SQL)
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
     INSERT INTO sequences (
         id, project_id, name, kind,
@@ -46,7 +46,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'seq1', 'default_project', 'Sequence', 'nested',
+        'seq1', 'default_project', 'Sequence', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 300, 0,
         '[]', '[]', '[]', 0, %d, %d
     );
@@ -61,7 +61,7 @@ db:exec(string.format([[
 command_manager.init("seq1", "default_project")
 
 -- Create masterclip sequence for the media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Media Master', 30, 1, 3000, 'media1')
 
 print("=== Redo Playhead Position Regression Test ===")
@@ -71,7 +71,7 @@ assert(timeline_state.get_playhead_position() == 0, "Precondition: playhead at 0
 
 -- Set marks on masterclip sequence — Insert reads timing from these
 local Sequence = require("models.sequence")
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(100)
@@ -81,8 +81,8 @@ mc_seq:save()
 local insert_cmd = Command.create("Insert", "default_project")
 insert_cmd:set_parameter("sequence_id", "seq1")
 insert_cmd:set_parameter("target_video_track_id", "v1")
-insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 insert_cmd:set_parameter("advance_playhead", true)
 
 print("Step 1: Execute Insert (100 frames at 0, advance_playhead=true)")

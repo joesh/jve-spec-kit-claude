@@ -102,10 +102,16 @@ package.loaded["core.logger"] = {
 }
 
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 25, fps_den = 1,
-            kind = "nested", name = "Test Seq",
+            kind = "sequence", name = "Test Seq",
             audio_sample_rate = 48000,
         }
     end,
@@ -142,6 +148,7 @@ local mock_clips = {}
 
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return 100 end,
     get_video_at = function() return {} end,
     get_next_video = function() return {} end,
@@ -170,7 +177,7 @@ local function make_engine()
     reset_playback()
     tmb_clips = {}
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,
@@ -191,7 +198,7 @@ print("=== test_reverse_clip_playback.lua ===")
 print("\n--- _compute_video_speed_ratio: reverse clip →  negative ratio ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     -- Domain: 50 source frames forward over 50 timeline frames = real-time (1.0x)
     local entry_fwd = {
@@ -234,11 +241,12 @@ end
 print("\n--- _build_tmb_clip: accepts negative speed_ratio ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
 
     local entry = {
         clip_id = "rev1",
-        timeline_start = 0, duration = 50,
+        media_kind = "video",
+        sequence_start = 0, duration = 50,
         source_in = 50, source_out = 0,
         fps_numerator = 25, fps_denominator = 1,
         media_path = "/test.mov",
@@ -263,7 +271,8 @@ do
     mock_clips = {
         {
             clip_id = "rev1",
-            timeline_start = 0, duration = 50,
+            media_kind = "video",
+            sequence_start = 0, duration = 50,
             source_in = 50, source_out = 0,
             fps_numerator = 25, fps_denominator = 1,
             media_path = "/test.mov",
@@ -272,7 +281,7 @@ do
         },
     }
 
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:_provide_clips(0, 100, "video")
 
     assert(#tmb_clips == 1, "expected 1 TMB clip, got " .. #tmb_clips)
@@ -292,10 +301,18 @@ do
     mock_clips = {
         {
             clip_id = "rev_audio1",
-            timeline_start = 0, duration = 50,
-            source_in = 2400000,   -- 50s * 48000
+            media_kind = "audio",
+            sequence_start = 0, duration = 50,
+            source_in = 2400000,   -- 50s * 48000 file-natural samples
             source_out = 0,
-            fps_numerator = 25, fps_denominator = 1,  -- media's video rate (audio path uses this)
+            -- 018: AUDIO entries carry audio_sample_rate (denormalized from
+            -- the mref column); _build_tmb_clip uses it as the TMB rate so
+            -- the decoder interprets source_in correctly as samples.
+            -- fps_numerator/denominator stay set to the media's video fps
+            -- because _compute_audio_speed_ratio needs them for the
+            -- seq-fps/media-fps conform ratio.
+            audio_sample_rate = 48000,
+            fps_numerator = 25, fps_denominator = 1,
             media_path = "/test.wav",
             track_index = 0,
             volume = 1.0,
@@ -304,7 +321,7 @@ do
 
     mock_sequence.get_audio_in_range = function() return mock_clips end
 
-    engine:load_sequence("seq1", 100)
+    engine:load_sequence("seq1", 100, 48000)
     engine:_provide_clips(0, 100, "audio")
 
     assert(#tmb_clips == 1, "expected 1 TMB clip, got " .. #tmb_clips)

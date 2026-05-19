@@ -33,11 +33,11 @@ db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 -- Insert Project/Sequence (30fps)
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 db:exec([[
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
@@ -105,7 +105,7 @@ local _Sequence_for_master = require("models.sequence")
 local MC_TEST = _Sequence_for_master.ensure_master("media_video", "project")
 
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     "project", "Video Master", 30, 1, 100, "media_video")
 
 -- Create downstream clip at [200, 300) to test ripple behavior
@@ -115,8 +115,8 @@ local downstream_clip = Clip.create({
         project_id = "project",
         track_id = "track_v1",
         owner_sequence_id = "sequence",
-        nested_sequence_id = MC_TEST,
-        timeline_start_frame = 200,
+        sequence_id = MC_TEST,
+        sequence_start_frame = 200,
         duration_frames = 100,
         source_in_frame = 0,
         source_out_frame = 100,
@@ -144,7 +144,7 @@ end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT timeline_start_frame, duration_frames FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
     stmt:bind_value(1, clip_id)
     stmt:exec()
     if stmt:next() then
@@ -170,12 +170,12 @@ end
 -- TEST 1: Basic insertion at specific position
 -- =============================================================================
 print("Test 1: Basic insertion at frame 0")
-set_masterclip_marks(nested_sequence_id, 0, 50)
+set_masterclip_marks(source_sequence_id, 0, 50)
 local insert_cmd = Command.create("Insert", "project")
-insert_cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("target_video_track_id", "track_v1")
 insert_cmd:set_parameter("sequence_id", "sequence")
-insert_cmd:set_parameter("timeline_start_frame", 0)
+insert_cmd:set_parameter("sequence_start_frame", 0)
 
 local result = execute_cmd(insert_cmd)
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -191,12 +191,12 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- TEST 2: Insert ripples downstream clips
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
-set_masterclip_marks(nested_sequence_id, 0, 30)
+set_masterclip_marks(source_sequence_id, 0, 30)
 local insert_cmd2 = Command.create("Insert", "project")
-insert_cmd2:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd2:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", "track_v1")
 insert_cmd2:set_parameter("sequence_id", "sequence")
-insert_cmd2:set_parameter("timeline_start_frame", 0)
+insert_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(insert_cmd2)
 assert(result.success, "Second insert should succeed")
@@ -242,22 +242,22 @@ assert(downstream_start == 280, string.format("Downstream should ripple to 280 a
 print("Test 5: Insert uses media duration when unspecified")
 -- Clean up first
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Clear marks — no marks = use full clip range
-set_masterclip_marks(nested_sequence_id, nil, nil)
+set_masterclip_marks(source_sequence_id, nil, nil)
 local insert_cmd3 = Command.create("Insert", "project")
-insert_cmd3:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd3:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd3:set_parameter("target_video_track_id", "track_v1")
 insert_cmd3:set_parameter("sequence_id", "sequence")
-insert_cmd3:set_parameter("timeline_start_frame", 0)
+insert_cmd3:set_parameter("sequence_start_frame", 0)
 -- No marks set — should use full media duration (100 frames)
 
 result = execute_cmd(insert_cmd3)
 assert(result.success, "Insert without duration should succeed: " .. tostring(result.error_message))
 
 -- Verify clip was created with media duration
-local stmt = db:prepare("SELECT duration_frames FROM clips WHERE track_id = 'track_v1' AND timeline_start_frame = 0")
+local stmt = db:prepare("SELECT duration_frames FROM clips WHERE track_id = 'track_v1' AND sequence_start_frame = 0")
 stmt:exec()
 assert(stmt:next(), "Should find inserted clip")
 local inserted_duration = stmt:value(0)
@@ -270,14 +270,14 @@ assert(inserted_duration == 100, string.format("Clip should have media duration 
 print("Test 6: Insert at exact clip start boundary")
 -- Reset: put downstream back at 200
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
-set_masterclip_marks(nested_sequence_id, 0, 50)
+set_masterclip_marks(source_sequence_id, 0, 50)
 local insert_cmd4 = Command.create("Insert", "project")
-insert_cmd4:set_parameter("nested_sequence_id", nested_sequence_id)
+insert_cmd4:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd4:set_parameter("target_video_track_id", "track_v1")
 insert_cmd4:set_parameter("sequence_id", "sequence")
-insert_cmd4:set_parameter("timeline_start_frame", 200)  -- Exactly at downstream start
+insert_cmd4:set_parameter("sequence_start_frame", 200)  -- Exactly at downstream start
 
 result = execute_cmd(insert_cmd4)
 assert(result.success, "Insert at boundary should succeed")
@@ -295,27 +295,27 @@ asserts._set_enabled_for_tests(false)
 local bad_cmd = Command.create("Insert", "project")
 bad_cmd:set_parameter("target_video_track_id", "track_v1")
 bad_cmd:set_parameter("sequence_id", "sequence")
-bad_cmd:set_parameter("timeline_start_frame", 0)
--- No nested_sequence_id
+bad_cmd:set_parameter("sequence_start_frame", 0)
+-- No source_sequence_id
 
 result = execute_cmd(bad_cmd)
 asserts._set_enabled_for_tests(true)
 assert(not result.success, "Insert without media_id should fail")
 
 -- =============================================================================
--- TEST 8: Error case - nonexistent nested_sequence_id
+-- TEST 8: Error case - nonexistent source_sequence_id
 -- =============================================================================
-print("Test 8: Nonexistent nested_sequence_id fails")
+print("Test 8: Nonexistent source_sequence_id fails")
 asserts._set_enabled_for_tests(false)
 local bad_cmd2 = Command.create("Insert", "project")
-bad_cmd2:set_parameter("nested_sequence_id", "nonexistent_master")
+bad_cmd2:set_parameter("source_sequence_id", "nonexistent_master")
 bad_cmd2:set_parameter("target_video_track_id", "track_v1")
 bad_cmd2:set_parameter("sequence_id", "sequence")
-bad_cmd2:set_parameter("timeline_start_frame", 0)
+bad_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(bad_cmd2)
 asserts._set_enabled_for_tests(true)
-assert(not result.success, "Insert with nonexistent nested_sequence_id should fail")
+assert(not result.success, "Insert with nonexistent source_sequence_id should fail")
 
 -- =============================================================================
 -- TEST 9: Multiple undo/redo cycle maintains integrity
@@ -323,16 +323,16 @@ assert(not result.success, "Insert with nonexistent nested_sequence_id should fa
 print("Test 9: Multiple undo/redo cycle")
 -- Reset state
 db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_clip'")
-db:exec("UPDATE clips SET timeline_start_frame = 200 WHERE id = 'downstream_clip'")
+db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 -- Insert 3 clips
-set_masterclip_marks(nested_sequence_id, 0, 30)
+set_masterclip_marks(source_sequence_id, 0, 30)
 for i = 1, 3 do
     local cmd = Command.create("Insert", "project")
-    cmd:set_parameter("nested_sequence_id", nested_sequence_id)
+    cmd:set_parameter("source_sequence_id", source_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_v1")
     cmd:set_parameter("sequence_id", "sequence")
-    cmd:set_parameter("timeline_start_frame", 0)
+    cmd:set_parameter("sequence_start_frame", 0)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))
 end

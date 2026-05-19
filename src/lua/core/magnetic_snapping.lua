@@ -49,7 +49,7 @@ function M.find_snap_points(state, excluded_clip_ids, excluded_edge_specs, opts)
     -- Add all clip edges as snap points (excluding dragged clips/edges)
     for _, clip in ipairs(get_candidate_clips(state, opts)) do
         if not excluded_clips_lookup[clip.id] then
-            local ts = clip.timeline_start
+            local ts = clip.sequence_start
             local dur = clip.duration
             if type(ts) ~= "number" or type(dur) ~= "number" or dur <= 0 then
                 log.detail("Skipping clip %s with invalid time bounds", tostring(clip.id))

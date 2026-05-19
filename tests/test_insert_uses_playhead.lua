@@ -1,7 +1,7 @@
 #!/usr/bin/env luajit
 
--- Regression test: Insert command should use playhead position when timeline_start_frame not specified.
--- Bug: timeline_start_frame had default=0 in SPEC, so it was never nil, and playhead was never consulted.
+-- Regression test: Insert command should use playhead position when sequence_start_frame not specified.
+-- Bug: sequence_start_frame had default=0 in SPEC, so it was never nil, and playhead was never consulted.
 --
 -- Uses REAL timeline_state (not mocked) — exercises the actual playhead state management.
 
@@ -44,7 +44,7 @@ project:save()
 
 local seq = Sequence.create("Test Sequence", project.id,
     {  fps_numerator = 30, fps_denominator = 1 }, 1920, 1080,
-    { kind = "nested", audio_sample_rate = 48000 })
+    { kind = "sequence", audio_sample_rate = 48000 })
 seq:save()
 
 Track.create_video("V1", seq.id, { index = 1 }):save()
@@ -65,14 +65,14 @@ local media = Media.create({
 })
 media:save(db)
 -- Create masterclip sequence for this media (required for Insert)
-local nested_sequence_id = test_env.create_test_masterclip_sequence(
+local source_sequence_id = test_env.create_test_masterclip_sequence(
     project.id, "Video Master", 30, 1, 100, "media_video")
 
 -- Init command system + real timeline_state
 command_manager.init(seq.id, project.id)
 
 -- Set playhead to frame 150. Per CLAUDE.md MVC, the model owns playhead;
--- the UI viewport is a derived view. Insert pulls timeline_start_frame
+-- the UI viewport is a derived view. Insert pulls sequence_start_frame
 -- from the model when the arg is omitted, so the test must persist
 -- playhead at the model layer (not just the in-memory viewport).
 do
@@ -93,12 +93,12 @@ end
 assert(video_track_id, "Should have a VIDEO track")
 
 -- =============================================================================
--- TEST: Insert without timeline_start_frame should use playhead position (frame 150)
+-- TEST: Insert without sequence_start_frame should use playhead position (frame 150)
 -- =============================================================================
-print("Test: Insert without timeline_start_frame uses playhead position")
+print("Test: Insert without sequence_start_frame uses playhead position")
 
 -- Set marks on masterclip sequence — Insert reads timing from these
-local mc_seq = Sequence.load(nested_sequence_id)
+local mc_seq = Sequence.load(source_sequence_id)
 assert(mc_seq, "Failed to load masterclip sequence")
 mc_seq:set_in(0)
 mc_seq:set_out(50)
@@ -106,7 +106,7 @@ mc_seq:save()
 
 command_manager.begin_command_event("script")
 local result = command_manager.execute("Insert", {
-    nested_sequence_id = nested_sequence_id,
+    source_sequence_id = source_sequence_id,
     target_video_track_id = video_track_id,
     sequence_id = seq.id,
     project_id = project.id,
@@ -124,8 +124,8 @@ for _, c in ipairs(all_clips) do
 end
 
 assert(#timeline_clips == 1, string.format("Expected 1 clip, got %d", #timeline_clips))
-assert(timeline_clips[1].timeline_start == 150,
-    string.format("Clip should start at 150, got %s", tostring(timeline_clips[1].timeline_start)))
+assert(timeline_clips[1].sequence_start == 150,
+    string.format("Clip should start at 150, got %s", tostring(timeline_clips[1].sequence_start)))
 assert(timeline_clips[1].duration == 50,
     string.format("Clip should have duration 50, got %s", tostring(timeline_clips[1].duration)))
 

@@ -112,7 +112,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
         table.insert(clips, {
             role = "video",
             media_id = master_clip.media_id or media.id,
-            nested_sequence_id = master_clip.clip_id or master_clip.id,
+            sequence_id = master_clip.clip_id or master_clip.id,
             project_id = master_clip.project_id,
             name = master_clip.name or media.name,
             source_in = source_in,
@@ -132,7 +132,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
             role = "audio",
             channel = ch,
             media_id = master_clip.media_id or media.id,
-            nested_sequence_id = master_clip.clip_id or master_clip.id,
+            sequence_id = master_clip.clip_id or master_clip.id,
             project_id = master_clip.project_id,
             name = (master_clip.name or media.name) .. " (Audio)",
             source_in = source_in,
@@ -150,7 +150,7 @@ local function build_group_from_master_clip(master_clip, media, timeline_state, 
     return {
         clips = clips,
         duration = duration,
-        nested_sequence_id = master_clip.clip_id or master_clip.id,
+        sequence_id = master_clip.clip_id or master_clip.id,
     }
 end
 

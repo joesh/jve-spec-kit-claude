@@ -8,9 +8,9 @@ local Command = require("command")
 local Clip = require("models.clip")
 
 local BASE_CLIPS = {
-    v1_left = {timeline_start = 0, duration = 1200},
-    v1_right = {timeline_start = 2400, duration = 1200},
-    v2 = {timeline_start = 1800, duration = 800}
+    v1_left = {sequence_start = 0, duration = 1200},
+    v1_right = {sequence_start = 2400, duration = 1200},
+    v2 = {sequence_start = 1800, duration = 800}
 }
 
 local function run_case(delta_frames, expect)
@@ -46,14 +46,14 @@ local function run_case(delta_frames, expect)
     local v1_right = Clip.load(clips.v1_right.id, db)
     local v2 = Clip.load(clips.v2.id, db)
 
-    local gap_size = v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration)
+    local gap_size = v1_right.sequence_start - (v1_left.sequence_start + v1_left.duration)
 
     assert(gap_size == expect.gap_duration,
         string.format("Gap duration mismatch for delta %d: expected %d, got %d",
             delta_frames, expect.gap_duration, gap_size))
-    assert(v1_right.timeline_start == expect.v1_right_start,
+    assert(v1_right.sequence_start == expect.v1_right_start,
         string.format("V1 right start mismatch for delta %d: expected %d, got %d",
-            delta_frames, expect.v1_right_start, v1_right.timeline_start))
+            delta_frames, expect.v1_right_start, v1_right.sequence_start))
     assert(v2.duration == expect.v2_duration,
         string.format("V2 duration mismatch for delta %d: expected %d, got %d",
             delta_frames, expect.v2_duration, v2.duration))

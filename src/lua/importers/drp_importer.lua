@@ -20,9 +20,54 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
+local subframe_math = require("core.subframe_math")
 local drp_binary = require("importers.drp_binary")
 local fs_utils = require("core.fs_utils")
 local shell_capture = fs_utils.shell_capture
+
+-- 018 Helen drift fix: DRP MediaStartTime arrives as a decimal-seconds
+-- float64. Multiplying by native_rate to land on a TC-origin integer can
+-- yield two distinct cases:
+--   (a) Camera / frame-aligned TC: the true value IS an integer, but
+--       float64 representation of the decimal MST string produces noise
+--       like 1856918.9999… instead of 1856919. Resolve treats these as
+--       integer-aligned; snap-to-nearest is correct.
+--   (b) BWF sub-frame TC (Helen): the true value is genuinely fractional
+--       (e.g. 2731.84 frames — BWF time_reference is sample-precise and
+--       can land between video frames). Resolve EDL takes the floor;
+--       snap-to-nearest produces the wrong frame.
+--
+-- Discriminator: if (mst*rate) lands within float64-roundoff (epsilon
+-- below) of an integer, treat as case (a) and round-to-nearest. Else
+-- treat as case (b) and floor. The epsilon must be small enough to
+-- never false-flag a genuine sub-frame TC as float64 noise, and large
+-- enough to absorb the noise from a 5-digit-decimal MST times a 5-digit
+-- native_rate. 1e-4 is conservative: float64 ULP at 10^9 is ~10^-7,
+-- well below 10^-4; no real audio/video sub-frame TC lands within 1/10000
+-- of a frame boundary by accident.
+local MST_FLOAT_EPSILON = 1e-4
+
+function M.mst_to_tc_origin(mst_seconds, native_rate)
+    assert(type(mst_seconds) == "number" and mst_seconds >= 0, string.format(
+        "drp_importer.mst_to_tc_origin: mst_seconds must be non-negative number; got %s",
+        tostring(mst_seconds)))
+    assert(type(native_rate) == "number" and native_rate > 0, string.format(
+        "drp_importer.mst_to_tc_origin: native_rate must be positive number; got %s",
+        tostring(native_rate)))
+    local product = mst_seconds * native_rate
+    local floor_val = math.floor(product)
+    local frac = product - floor_val
+    if frac < MST_FLOAT_EPSILON then
+        return floor_val
+    end
+    if frac > 1 - MST_FLOAT_EPSILON then
+        return floor_val + 1
+    end
+    -- Genuinely sub-integer TC origin (e.g. Helen BWF). Floor matches
+    -- Resolve EDL semantics; the sub-integer residual is recovered
+    -- downstream via the source_in/clip-subframe machinery.
+    return floor_val
+end
 
 --- Read all data from a local file handle (io.open), asserting on failure.
 -- @param handle file: open file handle from io.open
@@ -169,6 +214,20 @@ end
 local function get_text(elem)
     if not elem then return "" end
     return elem.text:match("^%s*(.-)%s*$")  -- Trim whitespace
+end
+
+-- Read a numeric XML element's text. nil element → 0 (missing is a valid
+-- "absent" signal). Element present but text non-numeric → assert (rule
+-- 2.13: missing data fails loud, doesn't silently become 0). `label` is
+-- surfaced in the error message so a bad fixture is diagnosable.
+local function get_number_or_assert(elem, label)
+    if not elem then return 0 end
+    local txt = get_text(elem)
+    local n = tonumber(txt)
+    assert(n, string.format(
+        "DRP: <%s> text is not numeric: %q (parser bug or malformed input)",
+        tostring(label), tostring(txt)))
+    return n
 end
 
 -- Local aliases for frequently-used drp_binary functions
@@ -451,7 +510,10 @@ end
 local function parse_project_metadata(project_elem)
     local project = {
         name = "Untitled Project",
-        settings = {}
+        settings = {
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
+            default_fps = { num = 24, den = 1 },
+        }
     }
 
     if not project_elem then
@@ -621,7 +683,7 @@ local function parse_media_pool(media_pool_elem)
         local media_item = {
             name = name_elem and get_text(name_elem) or "Untitled",
             file_path = file_elem and get_text(file_elem) or "",
-            duration = duration_elem and tonumber(get_text(duration_elem)) or 0
+            duration = get_number_or_assert(duration_elem, "Duration"),
         }
 
         -- Extract media ID if present
@@ -1372,9 +1434,14 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             local in_offset  -- <In> converted to native units (file-relative)
             local source_duration
 
-            -- Compute media TC origin from <MediaStartTime> (seconds since midnight).
+            -- Compute media TC origin from <MediaStartTime> (seconds since
+            -- midnight). 018 Helen fix: discriminator-aware conversion
+            -- (camera files with float64-noise around an integer snap to
+            -- nearest; BWF files with genuine sub-frame TC floor to match
+            -- Resolve EDL). Pre-fix `math.floor(mst*rate + 0.5)` worked for
+            -- camera but produced a 1-frame off-by-one for Helen-style BWF.
             if media_start_time and media_start_time > 0 then
-                media_tc_origin = math.floor(media_start_time * native_rate + 0.5)
+                media_tc_origin = M.mst_to_tc_origin(media_start_time, native_rate)
             end
 
             -- <In> is in playback timeline frames at sequence rate (the X axis
@@ -1459,7 +1526,7 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
             -- source_in is ABSOLUTE TC in native units = file_tc_origin
             -- (media_tc_origin) + file-relative offset. Frames for video,
             -- samples for audio. The master sequence's timebase IS TC space:
-            -- its media_refs sit at timeline_start = file_tc_origin spanning
+            -- its media_refs sit at sequence_start = file_tc_origin spanning
             -- [tc_origin, tc_origin + file_duration]. Clips reference absolute
             -- TC into that timebase. C++ decode does file_pos = source_in -
             -- file_tc_origin to recover the file-relative position.
@@ -1612,7 +1679,7 @@ local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_re
 
     local timeline = {
         name = name_elem and get_text(name_elem) or "Untitled Timeline",
-        duration = duration_elem and tonumber(get_text(duration_elem)) or 0,
+        duration = get_number_or_assert(duration_elem, "Duration"),
         tracks = {}
     }
 
@@ -2478,11 +2545,16 @@ local function init_project_database(jvp_path, parse_result, picked_audio_rate)
     end
 
     local json = require("dkjson")
+    -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
+    -- on every project; populated here to the spec'd defaults. DRPs don't
+    -- carry a master-clock concept of their own.
     local settings = {
         frame_rate        = parse_result.project.settings.frame_rate,
         width             = parse_result.project.settings.width,
         height            = parse_result.project.settings.height,
         audio_sample_rate = picked_audio_rate,
+        master_clock_hz   = subframe_math.MASTER_CLOCK_HZ,
+        default_fps       = { num = 24, den = 1 },
     }
     local project = Project.create(parse_result.project.name, {
         settings            = json.encode(settings),

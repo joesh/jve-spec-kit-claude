@@ -80,11 +80,27 @@ package.loaded["core.logger"] = {
     for_area = function() return { event = function() end, detail = function() end, warn = function() end, error = function() end } end,
 }
 
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id) return nil end,
+}
+
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 24, fps_den = 1,
-            kind = "nested", name = "Test",
+            kind = "sequence", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -123,7 +139,7 @@ package.loaded["core.signals"] = {
 }
 
 local mock_clip = {
-    id = "clip1", timeline_start = 0, duration = 100, source_in = 0, source_out = 100,
+    id = "clip1", sequence_start = 0, duration = 100, source_in = 0, source_out = 100,
     frame_rate = { fps_numerator = 24, fps_denominator = 1 },
 }
 local mock_track = {
@@ -140,6 +156,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq_test",
+            start_timecode_frame = 0,
             compute_content_end = function() return 100 end,
             get_video_at = function() return { mock_entry } end,
             get_next_video = function() return {} end,
@@ -174,7 +191,7 @@ PlaybackEngine.init_audio(mock_audio)
 local Signals = package.loaded["core.signals"]
 
 local function make_engine()
-    return PlaybackEngine.new({
+    return PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,
@@ -191,7 +208,7 @@ print("=== test_playback_edit_invalidation.lua ===")
 print("\n--- 1. content_changed for our sequence → reload ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     -- Verify controller is operational by checking seek works
     engine:seek(0)
     assert(find_call("PARK"), "controller must be operational (PARK callable)")
@@ -216,7 +233,7 @@ end
 print("\n--- 2. content_changed for different sequence → no reload ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     -- Verify controller is operational by checking seek works
     engine:seek(0)
     assert(find_call("PARK"), "controller must be operational (PARK callable)")
@@ -241,7 +258,7 @@ end
 print("\n--- 3. multiple edits → multiple reloads ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
 
     reset_playback_calls()
 
@@ -265,7 +282,7 @@ end
 print("\n--- 4. destroy() disconnects content_changed signal ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
     engine:destroy()
 
     reset_playback_calls()
@@ -285,7 +302,7 @@ end
 print("\n--- 5. no controller → content_changed is safe no-op ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100)
+    engine:load_sequence("seq_test", 100, 48000)
 
     -- WHITE-BOX: Simulate no controller (test environment) — need to nil private
     -- field because there's no public API to remove the controller

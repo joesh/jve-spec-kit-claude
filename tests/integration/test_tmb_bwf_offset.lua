@@ -102,7 +102,7 @@ local function decode_with_source_in(source_in_samples, label)
     local clip = {
         clip_id = "bwf-" .. label,
         media_path = BWF_WAV,
-        timeline_start = 0,
+        sequence_start = 0,
         duration = 200,
         source_in = source_in_samples,
         rate_num = SR,    -- audio clip rate = sample rate

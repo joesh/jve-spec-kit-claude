@@ -18,12 +18,12 @@ db:exec(require("import_schema"))
 local now = os.time()
 
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Seq', 'nested', 25, 1, 48000,
+    VALUES ('seq', 'proj', 'Seq', 'sequence', 25, 1, 48000,
         1920, 1080, 0, 8000, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -40,11 +40,11 @@ command_manager.init("seq", "proj")
 
 -- Mock clips across 2 video tracks and 1 audio track
 local mock_clips = {
-    { id = "v1_a", track_id = "v1", timeline_start = 0,   duration = 100 },
-    { id = "v1_b", track_id = "v1", timeline_start = 200, duration = 100 },
-    { id = "v2_a", track_id = "v2", timeline_start = 50,  duration = 150 },
-    { id = "v2_b", track_id = "v2", timeline_start = 300, duration = 100 },
-    { id = "a1_a", track_id = "a1", timeline_start = 0,   duration = 200 },
+    { id = "v1_a", track_id = "v1", sequence_start = 0,   duration = 100 },
+    { id = "v1_b", track_id = "v1", sequence_start = 200, duration = 100 },
+    { id = "v2_a", track_id = "v2", sequence_start = 50,  duration = 150 },
+    { id = "v2_b", track_id = "v2", sequence_start = 300, duration = 100 },
+    { id = "a1_a", track_id = "a1", sequence_start = 0,   duration = 200 },
 }
 
 local mock_tracks = {
@@ -133,7 +133,7 @@ print("\n--- Test 3: Shift+Click without anchor = normal select ---")
 -- that clicking with shift when anchor has no position data still works)
 mock_selection = {}
 
--- Click a clip with no timeline_start to clear anchor, then shift+click
+-- Click a clip with no sequence_start to clear anchor, then shift+click
 local clip_no_pos = { id = "phantom", track_id = "v1" }
 table.insert(mock_clips, clip_no_pos)
 assert(command_manager.execute("SelectClips", {

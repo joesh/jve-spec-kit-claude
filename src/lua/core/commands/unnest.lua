@@ -3,7 +3,7 @@
 --- Per FR-010 / contracts/commands.md §Unnest:
 ---   Args: { sequence_id, clip_id }. sequence_id is the clip's
 ---     owner_sequence_id (rule 2.29).
----   Pre: clip exists; clip.nested_sequence_id.kind == 'nested'.
+---   Pre: clip exists; clip.sequence_id.kind == 'sequence'.
 ---     Refused on masters (their tracks hold media_refs which can't
 ---     live in a non-master sequence).
 ---
@@ -11,8 +11,8 @@
 ---   1. For each clip C inside the unnested sequence: UPDATE
 ---      owner_sequence_id ← parent; track_id ← parent's matching
 ---      track (same track_type+track_index — refused if absent);
----      timeline_start_frame ← C.timeline_start_frame +
----      (clip.timeline_start_frame - clip.source_in_frame).
+---      sequence_start_frame ← C.sequence_start_frame +
+---      (clip.sequence_start_frame - clip.source_in_frame).
 ---   2. DELETE the unnested clip row.
 ---   3. If the unnested sequence has no remaining references in any
 ---      `clips` row, DELETE it (orphan cleanup).
@@ -49,11 +49,11 @@ local function load_clip_and_nested(sequence_id, clip_id)
     assert(clip.owner_sequence_id == sequence_id, string.format(
         "Unnest: sequence_id mismatch — clip %s owner=%s args=%s (rule 2.29)",
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
-    local nested_id = clip.nested_sequence_id
+    local nested_id = clip.sequence_id
     local nested    = Sequence.find(nested_id)
     assert(nested, string.format(
         "Unnest: nested sequence %s not found", tostring(nested_id)))
-    assert(nested.kind == "nested", string.format(
+    assert(nested.kind == "sequence", string.format(
         "Unnest: clip %s references kind='%s' sequence %s; only nested "
         .. "sequences can be unnested. Masters hold media_refs and cannot "
         .. "be expanded inline (CT-C19).",
@@ -94,11 +94,11 @@ local function move_inner_clips_to_parent(inner, dst_track_ids,
             clip_id              = ic.id,
             prior_owner_id       = nested_id,
             prior_track_id       = ic.track_id,
-            prior_timeline_start = ic.timeline_start_frame,
+            prior_sequence_start = ic.sequence_start_frame,
         }
         Clip.update(ic.id, {
             track_id             = dst_track_ids[ic.id],
-            timeline_start_frame = ic.timeline_start_frame + delta,
+            sequence_start_frame = ic.sequence_start_frame + delta,
         })
         Clip.transfer_owner(ic.id, parent_seq_id)
     end
@@ -128,7 +128,7 @@ function M.execute(args)
     local inner           = Clip.list_in_sequence(nested_id)
     local dst_track_ids   = resolve_destination_tracks(sequence_id, inner)
     -- outer_pos = inner_start + (clip.ts - clip.source_in)
-    local delta           = clip.timeline_start_frame - clip.source_in_frame
+    local delta           = clip.sequence_start_frame - clip.source_in_frame
 
     -- Capture wrapper state for undo BEFORE deleting it.
     local clip_capture = Clip.capture_v13_state(clip_id)
@@ -173,13 +173,13 @@ function M.undo(capture)
     end
 
     -- (b) Move each inner clip back to the nested sequence at its prior
-    --     track + timeline_start. Order: update track+start (trigger
+    --     track + sequence_start. Order: update track+start (trigger
     --     sees nested track empty post-resurrection), then transfer
-    --     owner (trigger checks the new owner is kind='nested').
+    --     owner (trigger checks the new owner is kind='sequence').
     for _, m in ipairs(capture.moved) do
         Clip.update(m.clip_id, {
             track_id             = m.prior_track_id,
-            timeline_start_frame = m.prior_timeline_start,
+            sequence_start_frame = m.prior_sequence_start,
         })
         Clip.transfer_owner(m.clip_id, m.prior_owner_id)
     end

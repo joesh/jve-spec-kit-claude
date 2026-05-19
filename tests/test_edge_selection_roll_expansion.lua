@@ -21,12 +21,12 @@ local now = os.time()
 
 -- Setup: project, sequence, tracks
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
         playhead_frame, selected_clip_ids, selected_edge_infos, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq', 'nested', 24000, 1001, 48000,
+    VALUES ('seq1', 'proj1', 'Seq', 'sequence', 24000, 1001, 48000,
         1920, 1080, 0, 3000, 0, '[]', '[]', %d, %d);
     INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
         enabled, locked, muted, soloed, volume, pan)
@@ -47,34 +47,30 @@ db:exec(string.format([[
 db:exec(string.format([[
     -- V13 master sequence + track + media_ref for med1
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_med1', 'proj1', 'med1_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_med1', 'master_med1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_med1' WHERE id = 'master_med1';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 3000, 0, 3000, 1, 1.0, 0, 0, 0);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_med1', 'proj1', 'master_med1', 'master_v_med1', 'med1', 0, 3000, 0, 3000, 48000, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
-VALUES
-    ('clip_v1_left', 'proj1', 'V Left', 'trk_v', 'master_med1', 'seq1', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES ('clip_v1_left', 'proj1', 'V Left', 'trk_v', 'master_med1', 'seq1', 0, 1000, 0, 1000, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
-VALUES
-    ('clip_v1_right', 'proj1', 'V Right', 'trk_v', 'master_med1', 'seq1', 1000, 1000, 1000, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES ('clip_v1_right', 'proj1', 'V Right', 'trk_v', 'master_med1', 'seq1', 1000, 1000, 1000, 2000, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
-VALUES
-    ('clip_a1_left', 'proj1', 'A Left', 'trk_a', 'master_med1', 'seq1', 0, 1000, 0, 1000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES ('clip_a1_left', 'proj1', 'A Left', 'trk_a', 'master_med1', 'seq1', 0, 1000, 0, 1000, 0, 0, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
-VALUES
-    ('clip_a1_right', 'proj1', 'A Right', 'trk_a', 'master_med1', 'seq1', 1000, 1000, 1000, 2000, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES ('clip_a1_right', 'proj1', 'A Right', 'trk_a', 'master_med1', 'seq1', 1000, 1000, 1000, 2000, 0, 0, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now))
 
 -- Link left clips together, right clips together
@@ -94,10 +90,10 @@ command_manager.init("seq1", "proj1")
 -- Mock timeline_state for testing
 local mock_edges = {}
 local mock_clips = {
-    { id = "clip_v1_left", track_id = "trk_v", timeline_start = 0, duration = 1000 },
-    { id = "clip_v1_right", track_id = "trk_v", timeline_start = 1000, duration = 1000 },
-    { id = "clip_a1_left", track_id = "trk_a", timeline_start = 0, duration = 1000 },
-    { id = "clip_a1_right", track_id = "trk_a", timeline_start = 1000, duration = 1000 },
+    { id = "clip_v1_left", track_id = "trk_v", sequence_start = 0, duration = 1000 },
+    { id = "clip_v1_right", track_id = "trk_v", sequence_start = 1000, duration = 1000 },
+    { id = "clip_a1_left", track_id = "trk_a", sequence_start = 0, duration = 1000 },
+    { id = "clip_a1_right", track_id = "trk_a", sequence_start = 1000, duration = 1000 },
 }
 
 timeline_state.get_selected_edges = function()
@@ -258,8 +254,8 @@ db:exec([[DELETE FROM clips WHERE id = 'clip_a1_right']])
 -- there are no gap clips either since there's nothing after the left clips
 -- (gap_lifecycle only creates gaps between clips, not trailing gaps)
 mock_clips = {
-    { id = "clip_v1_left", track_id = "trk_v", timeline_start = 0, duration = 1000 },
-    { id = "clip_a1_left", track_id = "trk_a", timeline_start = 0, duration = 1000 },
+    { id = "clip_v1_left", track_id = "trk_v", sequence_start = 0, duration = 1000 },
+    { id = "clip_a1_left", track_id = "trk_a", sequence_start = 0, duration = 1000 },
 }
 
 mock_edges = {}

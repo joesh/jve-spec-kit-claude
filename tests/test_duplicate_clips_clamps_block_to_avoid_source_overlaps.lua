@@ -30,20 +30,20 @@ db:exec(import_schema)
 
 db:exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at,settings) VALUES('proj','Test','resample',0,0,'{}')]])
 
-    -- V13 placeholder master sequence (test references nested_sequence_id='mc_test' literally)
+    -- V13 placeholder master sequence (test references source_sequence_id='mc_test' literally)
     db:exec(string.format([[INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('mc_test_media', 'proj', 'placeholder', '_placeholder', 10000, 30, 1, 1920, 1080, 0, 'raw', 0, 0)]]))
     db:exec(string.format([[INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('mc_test', 'proj', 'mc_test', 'master', 30, 1, 48000, 1920, 1080, 0, 0)]]))
+VALUES ('mc_test', 'proj', 'mc_test', 'master', 30, 1, NULL, 1920, 1080, 0, 0)]]))
     db:exec(string.format([[INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('mc_test_v1', 'mc_test', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0)]]))
     db:exec(string.format([[UPDATE sequences SET default_video_layer_track_id = 'mc_test_v1' WHERE id = 'mc_test']]))
-    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mc_test_mr', 'proj', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 1, 1.0, 0, 0, 0)]]))
+    db:exec(string.format([[INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mc_test_mr', 'proj', 'mc_test', 'mc_test_v1', 'mc_test_media', 0, 10000, 0, 10000, 48000, 1, 1.0, 0, 0, 0)]]))
 db:exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_sample_rate,width,height,
         view_start_frame,view_duration_frames,playhead_frame,
         selected_clip_ids,selected_edge_infos,selected_gap_infos,current_sequence_number,created_at,modified_at)
-        VALUES('seq','proj','Sequence','nested',30,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,0,0)
+        VALUES('seq','proj','Sequence','sequence',30,1,48000,1920,1080,0,8000,0,'[]','[]','[]',0,0,0)
     ]])
 db:exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan) VALUES
         ('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0)
@@ -61,8 +61,8 @@ local c1 = Clip.create({
         project_id = "proj",
         track_id = "v1",
         owner_sequence_id = "seq",
-        nested_sequence_id = "mc_test",
-        timeline_start_frame = 0,
+        sequence_id = "mc_test",
+        sequence_start_frame = 0,
         duration_frames = 10,
         source_in_frame = 0,
         source_out_frame = 10,
@@ -78,8 +78,8 @@ local c2 = Clip.create({
         project_id = "proj",
         track_id = "v1",
         owner_sequence_id = "seq",
-        nested_sequence_id = "mc_test",
-        timeline_start_frame = 12,
+        sequence_id = "mc_test",
+        sequence_start_frame = 12,
         duration_frames = 10,
         source_in_frame = 0,
         source_out_frame = 10,
@@ -106,7 +106,7 @@ local clips = database.load_clips("seq")
 local by_start = {}
 for _, clip in ipairs(clips) do
     if clip.track_id == "v1" then
-        by_start[clip.timeline_start] = (by_start[clip.timeline_start] or 0) + 1
+        by_start[clip.sequence_start] = (by_start[clip.sequence_start] or 0) + 1
     end
 end
 

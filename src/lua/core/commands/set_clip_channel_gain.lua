@@ -12,7 +12,7 @@
 ---   Undo: prior gain_db (or row-absence sentinel).
 ---   Signal: sequence_content_changed(sequence_id).
 ---
---- First-landing scope: clip.nested_sequence_id must be kind='master'
+--- First-landing scope: clip.sequence_id must be kind='master'
 --- (matches ToggleClipChannel — multi-level inheritance deferred).
 ---
 --- @file set_clip_channel_gain.lua
@@ -53,21 +53,21 @@ function M.execute(args)
         .. "(rule 2.29)",
         clip_id, tostring(clip.owner_sequence_id), tostring(sequence_id)))
 
-    local nested = Sequence.find(clip.nested_sequence_id)
+    local nested = Sequence.find(clip.sequence_id)
     assert(nested, string.format(
         "SetClipChannelGain: clip %s nested sequence %s not found",
-        clip_id, tostring(clip.nested_sequence_id)))
+        clip_id, tostring(clip.sequence_id)))
     assert(nested.kind == "master", string.format(
         "SetClipChannelGain: clip %s references kind='%s' sequence; "
         .. "first-landing supports per-clip channel overrides only when "
         .. "the clip directly references a master.",
         clip_id, tostring(nested.kind)))
 
-    local channel_count = Sequence.count_master_audio_channels(clip.nested_sequence_id)
+    local channel_count = Sequence.count_master_audio_channels(clip.sequence_id)
     assert(channel_index < channel_count, string.format(
         "SetClipChannelGain: channel_index %d out of bounds for master %s "
         .. "(has %d audio channels) — channel_index must be < master's audio channel count.",
-        channel_index, clip.nested_sequence_id, channel_count))
+        channel_index, clip.sequence_id, channel_count))
 
     local existing = Override.find(clip_id, channel_index)
     local capture = {
@@ -91,7 +91,7 @@ function M.execute(args)
             tostring(existing.gain_db), tostring(gain_db))
     else
         local inh_enabled = Sequence.get_master_channel_state(
-            clip.nested_sequence_id, channel_index)
+            clip.sequence_id, channel_index)
         capture.prior_existed = false
         Override.insert({
             clip_id       = clip_id,

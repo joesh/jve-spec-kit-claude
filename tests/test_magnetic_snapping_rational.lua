@@ -32,8 +32,8 @@ local state = {
     end,
     get_clips = function()
         return {
-            {id = "clip_a", timeline_start = 24, duration = 12},  -- 1s start, ~0.5s duration
-            {id = "clip_b", timeline_start = 60, duration = 12},  -- 2.5s start
+            {id = "clip_a", sequence_start = 24, duration = 12},  -- 1s start, ~0.5s duration
+            {id = "clip_b", sequence_start = 60, duration = 12},  -- 2.5s start
         }
     end
 }
@@ -69,7 +69,7 @@ local state_without_get_clips = {
 
 local snapshot = {
     clips = {
-        {id = "clip_c", timeline_start = 100, duration = 10}
+        {id = "clip_c", sequence_start = 100, duration = 10}
     }
 }
 

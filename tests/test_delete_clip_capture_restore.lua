@@ -20,8 +20,8 @@ local db = database.get_connection()
 db:exec(require("import_schema"))
 
 db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('default_project', 'Default Project', 'resample', 0, 0);
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('default_project', 'Default Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
         fps_numerator, fps_denominator, width, height, created_at, modified_at)
     VALUES ('media_test', 'default_project', 'Test Media', 'synthetic://test',
@@ -35,7 +35,7 @@ db:exec([[
         current_sequence_number, created_at, modified_at
     )
     VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'nested',
+        'default_sequence', 'default_project', 'Default Sequence', 'sequence',
         30, 1, 48000,
         1920, 1080,
         0, 300, 0,
@@ -52,7 +52,7 @@ db:exec([[
     )
     VALUES (
         'mc_seq', 'default_project', 'Test Master', 'master',
-        30, 1, 48000,
+        30, 1, NULL,
         1920, 1080,
         0, 300, 0,
         '[]', '[]', '[]',
@@ -68,17 +68,15 @@ db:exec([[
     );
     -- V13 master sequence + track + media_ref for media_test
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_test', 'default_project', 'media_test_master', 'master', 30, 1, 48000, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
+VALUES ('master_media_test', 'default_project', 'media_test_master', 'master', 30, 1, NULL, 1920, 1080, strftime('%s','now'), strftime('%s','now'));
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_test', 'master_media_test', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_test' WHERE id = 'master_media_test';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_test', 'default_project', 'master_media_test', 'master_v_media_test', 'media_test', 0, 1000, 0, 1000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('mr_media_test', 'default_project', 'master_media_test', 'master_v_media_test', 'media_test', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, strftime('%s','now'), strftime('%s','now'));
 
-INSERT INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
-VALUES
-    
-    ('clip_state_test', 'default_project', 'default_sequence', 'track_v1', 'master_media_test', 'Test Clip', 0, 30, 0, 30, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
+INSERT INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+VALUES ('clip_state_test', 'default_project', 'default_sequence', 'track_v1', 'master_media_test', 'Test Clip', 0, 30, 0, 30, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]])
 
 local clip = Clip.load_optional("clip_state_test", db)

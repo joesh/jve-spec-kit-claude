@@ -43,7 +43,7 @@ db:exec(string.format([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default', 'nested',
+        'default_sequence', 'default_project', 'Default', 'sequence',
         30, 1, 48000, 1920, 1080, 0, 400, 0,
         '[]', '[]', '[]', 0, %d, %d
     );

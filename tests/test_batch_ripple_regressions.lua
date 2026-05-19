@@ -10,7 +10,7 @@ local database = require("core.database")
 local SCHEMA_SQL = require("import_schema")
 
 local function compute_gap_frames(left_clip, right_clip)
-    return right_clip.timeline_start - (left_clip.timeline_start + left_clip.duration)
+    return right_clip.sequence_start - (left_clip.sequence_start + left_clip.duration)
 end
 
 local function find_shifted_clip(payload, clip_id)
@@ -33,13 +33,13 @@ local function build_manual_timeline(config)
     assert(db:exec(SCHEMA_SQL))
     local now = os.time()
     assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('default_project', 'Default', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('default_project', 'Default', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
 
         INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
                                width, height, view_start_frame, view_duration_frames, playhead_frame,
                                created_at, modified_at)
-        VALUES ('default_sequence', 'default_project', 'Timeline', 'nested',
+        VALUES ('default_sequence', 'default_project', 'Timeline', 'sequence',
                 1000, 1, 48000, 1920, 1080, 0, 6000, 0, %d, %d);
 
         INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
@@ -56,20 +56,20 @@ local function build_manual_timeline(config)
     -- V13 master sequence + track + media_ref (created once per setup).
     db:exec([[
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_main', 'default_project', 'media_main_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('master_media_main', 'default_project', 'media_main_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('master_v_media_main', 'master_media_main', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = 'master_v_media_main' WHERE id = 'master_media_main';
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('mr_media_main', 'default_project', 'master_media_main', 'master_v_media_main', 'media_main', 0, 24000, 0, 24000, 1, 1.0, 0, 0, 0);
 ]])
 
     for _, clip in ipairs(config.clips or {}) do
         assert(db:exec(string.format([[
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame)
 VALUES
     ('%s', 'default_project', '%s', '%s', 'master_media_main', 'default_sequence', %d, %d, 0, %d, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);]],
-            clip.id, clip.name, clip.track_id, clip.timeline_start, clip.duration, clip.source_out or clip.duration,
+            clip.id, clip.name, clip.track_id, clip.sequence_start, clip.duration, clip.source_out or clip.duration,
             now, now)))
     end
 
@@ -82,9 +82,9 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 3200, duration = 800},
-            v2 = {timeline_start = 1800, duration = 900}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 3200, duration = 800},
+            v2 = {sequence_start = 1800, duration = 900}
         }
     })
     local clips = layout.clips
@@ -111,9 +111,9 @@ do
     local right_after = Clip.load(clips.v1_right.id, layout.db)
     local gap_frames_after = compute_gap_frames(left_after, right_after)
 
-    assert(right_after.timeline_start == right_before.timeline_start - 400,
+    assert(right_after.sequence_start == right_before.sequence_start - 400,
         string.format("gap out-edge trim should move right clip left; expected %d, got %d",
-            right_before.timeline_start - 400, right_after.timeline_start))
+            right_before.sequence_start - 400, right_after.sequence_start))
     assert(gap_frames_after == gap_frames_before - 400,
         string.format("Gap should shrink by 400 frames; expected %d, got %d",
             gap_frames_before - 400, gap_frames_after))
@@ -127,8 +127,8 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2500, duration = 800}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2500, duration = 800}
         }
     })
     local clips = layout.clips
@@ -159,8 +159,8 @@ do
     assert(result.success, result.error_message or "Gap roll execute failed")
 
     local right_after = Clip.load(clips.v1_right.id, layout.db)
-    assert(right_after.timeline_start == clips.v1_right.timeline_start + 200,
-        string.format("Gap roll should push the trailing clip right by 200, got %d", right_after.timeline_start))
+    assert(right_after.sequence_start == clips.v1_right.sequence_start + 200,
+        string.format("Gap roll should push the trailing clip right by 200, got %d", right_after.sequence_start))
 
     layout:cleanup()
 end
@@ -171,8 +171,8 @@ do
     local layout = ripple_layout.create({
         db_path = TEST_DB,
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 900}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 900}
         }
     })
     local clips = layout.clips
@@ -195,7 +195,7 @@ do
 
     assert(left_after.duration == clips.v1_left.duration,
         "Conflicting roll constraints should leave the first clip unchanged")
-    assert(right_after.timeline_start == clips.v1_right.timeline_start,
+    assert(right_after.sequence_start == clips.v1_right.sequence_start,
         "Conflicting roll constraints should leave the second clip unchanged")
 
     local clamped = cmd:get_parameter("clamped_delta_ms")
@@ -213,9 +213,9 @@ do
             {id = "track_v1", name = "Video 1", index = 1}
         },
         clips = {
-            {id = "clip_left", name = "Left", track_id = "track_v1", timeline_start = 0, duration = 1000},
-            {id = "clip_gap", name = "GapClip", track_id = "track_v1", timeline_start = 2200, duration = 600},
-            {id = "clip_downstream", name = "Downstream", track_id = "track_v1", timeline_start = 3200, duration = 500}
+            {id = "clip_left", name = "Left", track_id = "track_v1", sequence_start = 0, duration = 1000},
+            {id = "clip_gap", name = "GapClip", track_id = "track_v1", sequence_start = 2200, duration = 600},
+            {id = "clip_downstream", name = "Downstream", track_id = "track_v1", sequence_start = 3200, duration = 500}
         }
     })
 
@@ -234,7 +234,7 @@ do
     assert(result.success, result.error_message or "Gap partner roll execute failed")
 
     local downstream = Clip.load("clip_downstream", layout.db)
-    assert(downstream.timeline_start == 3200,
+    assert(downstream.sequence_start == 3200,
         "Gap roll with partner clip should not shift downstream clips")
 
     os.remove(TEST_DB)
@@ -249,10 +249,10 @@ do
             {id = "track_v1", name = "Video 1", index = 1}
         },
         clips = {
-            {id = "clip_left", name = "Left", track_id = "track_v1", timeline_start = 0, duration = 1000},
-            {id = "clip_right", name = "Right", track_id = "track_v1", timeline_start = 1800, duration = 700},
-            {id = "clip_blocker", name = "Blocker", track_id = "track_v1", timeline_start = 2600, duration = 600},
-            {id = "clip_tail", name = "Tail", track_id = "track_v1", timeline_start = 3400, duration = 400}
+            {id = "clip_left", name = "Left", track_id = "track_v1", sequence_start = 0, duration = 1000},
+            {id = "clip_right", name = "Right", track_id = "track_v1", sequence_start = 1800, duration = 700},
+            {id = "clip_blocker", name = "Blocker", track_id = "track_v1", sequence_start = 2600, duration = 600},
+            {id = "clip_tail", name = "Tail", track_id = "track_v1", sequence_start = 3400, duration = 400}
         }
     })
 
@@ -268,7 +268,7 @@ do
     assert(result.success, result.error_message or "Retry scenario execute failed")
 
     local blocker_after = Clip.load("clip_blocker", layout.db)
-    assert(blocker_after.timeline_start == 2800,
+    assert(blocker_after.sequence_start == 2800,
         "Downstream clip should shift only by the clamped amount")
 
     os.remove(TEST_DB)
@@ -284,10 +284,10 @@ do
             {id = "track_v2", name = "Video 2", index = 2}
         },
         clips = {
-            {id = "clip_v1_left", name = "V1 Left", track_id = "track_v1", timeline_start = 0, duration = 1000},
-            {id = "clip_v1_right", name = "V1 Right", track_id = "track_v1", timeline_start = 2600, duration = 600},
-            {id = "clip_v2_left", name = "V2 Left", track_id = "track_v2", timeline_start = 0, duration = 1000},
-            {id = "clip_v2_right", name = "V2 Right", track_id = "track_v2", timeline_start = 2600, duration = 600}
+            {id = "clip_v1_left", name = "V1 Left", track_id = "track_v1", sequence_start = 0, duration = 1000},
+            {id = "clip_v1_right", name = "V1 Right", track_id = "track_v1", sequence_start = 2600, duration = 600},
+            {id = "clip_v2_left", name = "V2 Left", track_id = "track_v2", sequence_start = 0, duration = 1000},
+            {id = "clip_v2_right", name = "V2 Right", track_id = "track_v2", sequence_start = 2600, duration = 600}
         }
     })
 
@@ -330,11 +330,11 @@ do
         db_path = TEST_DB,
         clips = {
             order = {"v1_left", "v1_right", "v2_left", "v2_right"},
-            v1_left = {track_key = "v1", timeline_start = 0, duration = 1000},
-            v1_right = {track_key = "v1", timeline_start = 4000, duration = 800},
+            v1_left = {track_key = "v1", sequence_start = 0, duration = 1000},
+            v1_right = {track_key = "v1", sequence_start = 4000, duration = 800},
             -- Track V2 has two clips that touch; dragging V1's gap handle should still be able to add space.
-            v2_left = {track_key = "v2", timeline_start = 0, duration = 1000},
-            v2_right = {track_key = "v2", timeline_start = 1000, duration = 800}
+            v2_left = {track_key = "v2", sequence_start = 0, duration = 1000},
+            v2_right = {track_key = "v2", sequence_start = 1000, duration = 800}
         }
     })
 
@@ -373,10 +373,10 @@ do
         db_path = TEST_DB,
         clips = {
             order = {"v1_left", "v1_right", "v2_upstream", "v2_mid"},
-            v1_left = {track_key = "v1", timeline_start = 0, duration = 1000},
-            v1_right = {track_key = "v1", timeline_start = 2600, duration = 800},
-            v2_upstream = {track_key = "v2", timeline_start = 0, duration = 2400},
-            v2_mid = {track_key = "v2", timeline_start = 2600, duration = 800},
+            v1_left = {track_key = "v1", sequence_start = 0, duration = 1000},
+            v1_right = {track_key = "v1", sequence_start = 2600, duration = 800},
+            v2_upstream = {track_key = "v2", sequence_start = 0, duration = 2400},
+            v2_mid = {track_key = "v2", sequence_start = 2600, duration = 800},
         }
     })
 
@@ -421,14 +421,14 @@ do
             {id = "track_v1", name = "Video 1", index = 1}
         },
         clips = {
-            {id = "clip_left", name = "Left", track_id = "track_v1", timeline_start = 0, duration = 1000},
-            {id = "clip_mid", name = "Mid", track_id = "track_v1", timeline_start = 2600, duration = 800},
-            {id = "clip_downstream", name = "Downstream", track_id = "track_v1", timeline_start = 4200, duration = 600}
+            {id = "clip_left", name = "Left", track_id = "track_v1", sequence_start = 0, duration = 1000},
+            {id = "clip_mid", name = "Mid", track_id = "track_v1", sequence_start = 2600, duration = 800},
+            {id = "clip_downstream", name = "Downstream", track_id = "track_v1", sequence_start = 4200, duration = 600}
         }
     })
 
     local downstream_before = Clip.load("clip_downstream", layout.db)
-    local downstream_start = downstream_before.timeline_start
+    local downstream_start = downstream_before.sequence_start
 
     -- Gap between clip_left (end=1000) and clip_mid (start=2600): gap_track_v1_1000
     local gap_id = string.format("gap_track_v1_%d", 1000)
@@ -456,7 +456,7 @@ do
     assert(result.success, result.error_message or "Preview clamp execute failed")
 
     local downstream_after = Clip.load("clip_downstream", layout.db)
-    assert(downstream_after.timeline_start == downstream_start - 300,
+    assert(downstream_after.sequence_start == downstream_start - 300,
         "Execute path should match preview clamp position")
 
     os.remove(TEST_DB)

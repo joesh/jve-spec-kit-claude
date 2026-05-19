@@ -42,7 +42,7 @@ do
     data.state.clips = {
         {
             id = "c1", track_id = "t1",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             source_in = 0, source_out = 100,
             fps_numerator = 24, fps_denominator = 1,
         },
@@ -60,13 +60,13 @@ do
     data.state.clips = {
         {
             id = "c1", track_id = "t1",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             source_in = 0, source_out = 100,
             fps_numerator = 24, fps_denominator = 1,
         },
         {
             id = "c2", track_id = "t2",
-            timeline_start = 50, duration = 200,
+            sequence_start = 50, duration = 200,
             source_in = 0, source_out = 200,
             fps_numerator = 24, fps_denominator = 1,
         },
@@ -84,7 +84,7 @@ do
     data.state.clips = {
         {
             id = "c1", track_id = "t1",
-            timeline_start = 10,
+            sequence_start = 10,
             duration = 90,
             source_in = 0,
             source_out = 90,

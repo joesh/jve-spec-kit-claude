@@ -15,7 +15,7 @@ local timeline_state = require("ui.timeline.timeline_state")
 
 -- Selection anchor: position + track of the last individually clicked clip.
 -- Shift+Click forms a box from anchor to target (time × track range).
-local selection_anchor = nil  -- {timeline_start, timeline_end, track_index, track_type}
+local selection_anchor = nil  -- {sequence_start, sequence_end, track_index, track_type}
 
 local SPEC = {
     undoable = false,
@@ -78,12 +78,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if target_track then
                 local target_index = target_track.track_index
                     or (timeline_state.get_track_index and timeline_state.get_track_index(target_clip.track_id))
-                local target_start = target_clip.timeline_start
+                local target_start = target_clip.sequence_start
                 local target_end = target_start + target_clip.duration
 
                 -- Box bounds: time range and track index range
-                local time_min = math.min(selection_anchor.timeline_start, target_start)
-                local time_max = math.max(selection_anchor.timeline_end, target_end)
+                local time_min = math.min(selection_anchor.sequence_start, target_start)
+                local time_max = math.max(selection_anchor.sequence_end, target_end)
                 local idx_min = math.min(selection_anchor.track_index, target_index)
                 local idx_max = math.max(selection_anchor.track_index, target_index)
                 local anchor_type = selection_anchor.track_type
@@ -92,9 +92,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local all_clips = timeline_state.get_clips()
                 local new_selection = {}
                 for _, clip in ipairs(all_clips) do
-                    local clip_end = clip.timeline_start + clip.duration
+                    local clip_end = clip.sequence_start + clip.duration
                     -- Time overlap: clip intersects [time_min, time_max)
-                    if clip.timeline_start < time_max and clip_end > time_min then
+                    if clip.sequence_start < time_max and clip_end > time_min then
                         local track = timeline_state.get_track_by_id
                             and timeline_state.get_track_by_id(clip.track_id)
                         if track then
@@ -181,14 +181,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         -- Update anchor on non-Shift clicks (requires position data for range select)
         if not modifiers.shift and target_clip
-            and type(target_clip.timeline_start) == "number"
+            and type(target_clip.sequence_start) == "number"
             and type(target_clip.duration) == "number" then
             local track = timeline_state.get_track_by_id
                 and timeline_state.get_track_by_id(target_clip.track_id)
             if track then
                 selection_anchor = {
-                    timeline_start = target_clip.timeline_start,
-                    timeline_end = target_clip.timeline_start + target_clip.duration,
+                    sequence_start = target_clip.sequence_start,
+                    sequence_end = target_clip.sequence_start + target_clip.duration,
                     track_index = track.track_index
                         or (timeline_state.get_track_index
                             and timeline_state.get_track_index(target_clip.track_id)),

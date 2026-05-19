@@ -27,15 +27,15 @@ db:exec(require('import_schema'))
 local now = os.time()
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('project_1', 'Test Project One', 'resample', %d, %d, '{"key":"value"}');
+    VALUES ('project_1', 'Test Project One', 'resample', %d, %d, '{"key":"value","master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('project_2', 'Test Project Two', 'resample', %d, %d, '{}');
+    VALUES ('project_2', 'Test Project Two', 'resample', %d, %d, '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 ]], now, now))
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence_1', 'project_1', 'Test Sequence', 'nested', 30, 1, 48000, 1920, 1080, %d, %d);
+    VALUES ('sequence_1', 'project_1', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
 ]], now, now))
 
 command_manager.init('sequence_1', 'project_1')

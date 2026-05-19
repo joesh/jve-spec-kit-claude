@@ -69,7 +69,7 @@ end
 --- Check that all frame coordinate columns contain integers (not floats).
 local function check_integer_frames(db, result)
     local frame_columns = {
-        {"clips", "timeline_start_frame"},
+        {"clips", "sequence_start_frame"},
         {"clips", "duration_frames"},
         {"clips", "source_in_frame"},
         {"clips", "source_out_frame"},
@@ -115,15 +115,15 @@ end
 local function check_video_overlaps(db, result)
     local sql = [[
         SELECT c1.id, c1.name, c2.id, c2.name, c1.track_id,
-               c1.timeline_start_frame, c1.duration_frames,
-               c2.timeline_start_frame, c2.duration_frames
+               c1.sequence_start_frame, c1.duration_frames,
+               c2.sequence_start_frame, c2.duration_frames
         FROM clips c1
         JOIN clips c2 ON c1.track_id = c2.track_id AND c1.id < c2.id
         JOIN tracks t ON t.id = c1.track_id
         WHERE t.track_type = 'VIDEO'
           AND 1=1
-          AND c1.timeline_start_frame < (c2.timeline_start_frame + c2.duration_frames)
-          AND (c1.timeline_start_frame + c1.duration_frames) > c2.timeline_start_frame
+          AND c1.sequence_start_frame < (c2.sequence_start_frame + c2.duration_frames)
+          AND (c1.sequence_start_frame + c1.duration_frames) > c2.sequence_start_frame
     ]]
     each_row(db, sql, function(stmt)
         fail(result, string.format(
@@ -148,7 +148,7 @@ end
 
 --- Check fps values are positive.
 local function check_fps_positive(db, result)
-    -- V13: clips no longer carry fps; rate derives from nested_sequence_id.
+    -- V13: clips no longer carry fps; rate derives from source_sequence_id.
     local tables = {
         {"sequences", "fps_numerator", "fps_denominator"},
         {"media", "fps_numerator", "fps_denominator"},
@@ -197,14 +197,10 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
     if sequence_id_filter then
         where_clause = string.format(" AND t.sequence_id = '%s'", sequence_id_filter)
     end
-    -- V13: clip's source units depend on the OWNER track type:
-    --   * VIDEO clips → source_in/out are in nested-sequence FRAMES at
-    --     nested.fps_numerator/denominator. Unity = dur * nested_fps/seq_fps.
-    --   * AUDIO clips → source_in/out are in nested-sequence SAMPLES at
-    --     nested.audio_sample_rate. Unity = dur * audio_sr / seq_fps.
-    -- The pre-013 single-fps formula generated false ABSURD_SPEED on every
-    -- audio clip with implied speed = audio_sample_rate / seq_fps. See
-    -- todo_audio_media_tc_rate_normalization in MEMORY.md.
+    -- 018: clip.source_in/out are in master.fps frames for BOTH VIDEO and
+    -- AUDIO clips (sample residual lives in source_*_subframe). Unity =
+    -- dur * master_fps / seq_fps regardless of track type. Per INV-7 the
+    -- master row has audio_sample_rate=NULL (rate lives on media_refs).
     local sql = string.format([[
         SELECT c.id, c.name, c.source_in_frame, c.source_out_frame,
                c.duration_frames,
@@ -214,7 +210,7 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences s ON t.sequence_id = s.id
-        JOIN sequences nested ON c.nested_sequence_id = nested.id
+        JOIN sequences nested ON c.sequence_id = nested.id
         WHERE 1=1
           AND c.source_in_frame IS NOT NULL
           AND c.source_out_frame IS NOT NULL
@@ -241,21 +237,12 @@ local function check_source_out_speed_ratio(db, result, sequence_id_filter)
         -- Reverse clips have negative source range — use absolute value for speed
         if actual_source_range < 0 then actual_source_range = -actual_source_range end
 
-        -- Pick the right source-unit rate per track type (see comment above).
-        local src_num, src_den
-        if track_type == "AUDIO" then
-            if not (nested_audio_sr and nested_audio_sr > 0) then
-                fail(result, string.format(
-                    "MISSING_AUDIO_RATE: audio clip %s (%s) — nested master "
-                    .. "%s has no audio_sample_rate; importer dropped it",
-                    tostring(clip_id), tostring(stmt:value(1)),
-                    tostring(stmt:value(0))))
-                return
-            end
-            src_num, src_den = nested_audio_sr, 1
-        else
-            src_num, src_den = clip_fps_num, clip_fps_den
-        end
+        -- 018: BOTH VIDEO and AUDIO clip source units are master.fps frames.
+        -- track_type and nested_audio_sr are no longer used in this check;
+        -- left in the SELECT for diagnostic context only.
+        local _ = track_type
+        local _ = nested_audio_sr
+        local src_num, src_den = clip_fps_num, clip_fps_den
 
         -- Unity source range = duration * source_rate / seq_rate
         local unity_source_range = duration * src_num * seq_fps_den
@@ -312,16 +299,16 @@ end
 local function check_video_overlaps_for_sequence(db, sequence_id, result)
     local sql = string.format([[
         SELECT c1.id, c1.name, c2.id, c2.name, c1.track_id,
-               c1.timeline_start_frame, c1.duration_frames,
-               c2.timeline_start_frame, c2.duration_frames
+               c1.sequence_start_frame, c1.duration_frames,
+               c2.sequence_start_frame, c2.duration_frames
         FROM clips c1
         JOIN clips c2 ON c1.track_id = c2.track_id AND c1.id < c2.id
         JOIN tracks t ON t.id = c1.track_id
         WHERE t.track_type = 'VIDEO'
           AND t.sequence_id = '%s'
           AND 1=1
-          AND c1.timeline_start_frame < (c2.timeline_start_frame + c2.duration_frames)
-          AND (c1.timeline_start_frame + c1.duration_frames) > c2.timeline_start_frame
+          AND c1.sequence_start_frame < (c2.sequence_start_frame + c2.duration_frames)
+          AND (c1.sequence_start_frame + c1.duration_frames) > c2.sequence_start_frame
     ]], sequence_id)
     each_row(db, sql, function(stmt)
         fail(result, string.format(
@@ -337,7 +324,7 @@ end
 --- Check integer frames scoped to clips in a specific sequence.
 local function check_integer_frames_for_sequence(db, sequence_id, result)
     local frame_columns = {
-        "timeline_start_frame", "duration_frames",
+        "sequence_start_frame", "duration_frames",
         "source_in_frame", "source_out_frame",
         "playhead_frame", "mark_in_frame", "mark_out_frame",
     }
@@ -459,7 +446,7 @@ local function check_clips_match_db(ts, db, sequence_id, result)
     local db_clips = {}
     each_row(db,
         string.format(
-            [[SELECT c.id, c.timeline_start_frame, c.duration_frames,
+            [[SELECT c.id, c.sequence_start_frame, c.duration_frames,
                      c.source_in_frame, c.source_out_frame
               FROM clips c
               JOIN tracks t ON c.track_id = t.id
@@ -467,7 +454,7 @@ local function check_clips_match_db(ts, db, sequence_id, result)
             sequence_id),
         function(stmt)
             db_clips[stmt:value(0)] = {
-                timeline_start = stmt:value(1),
+                sequence_start = stmt:value(1),
                 duration = stmt:value(2),
                 source_in = stmt:value(3),
                 source_out = stmt:value(4),
@@ -481,10 +468,10 @@ local function check_clips_match_db(ts, db, sequence_id, result)
             fail(result, string.format(
                 "CLIP_MISSING_IN_MEMORY: DB clip %s not in timeline_state", id))
         else
-            if mem.timeline_start ~= db_clip.timeline_start then
+            if mem.sequence_start ~= db_clip.sequence_start then
                 fail(result, string.format(
                     "CLIP_START_MISMATCH: clip %s memory=%d db=%d",
-                    id, mem.timeline_start, db_clip.timeline_start))
+                    id, mem.sequence_start, db_clip.sequence_start))
             end
             if mem.duration ~= db_clip.duration then
                 fail(result, string.format(
@@ -527,12 +514,12 @@ local function check_gap_invariants(ts, result)
     end
 
     for track_id, track_clips in pairs(by_track) do
-        -- Sort by timeline_start
+        -- Sort by sequence_start
         table.sort(track_clips, function(a, b)
-            if a.timeline_start == b.timeline_start then
+            if a.sequence_start == b.sequence_start then
                 return (a.id or "") < (b.id or "")
             end
-            return a.timeline_start < b.timeline_start
+            return a.sequence_start < b.sequence_start
         end)
 
         -- Check: no two adjacent gaps
@@ -542,7 +529,7 @@ local function check_gap_invariants(ts, result)
             if is_gap and prev_was_gap then
                 fail(result, string.format(
                     "ADJACENT_GAPS: track %s has adjacent gaps at position %d",
-                    track_id, clip.timeline_start))
+                    track_id, clip.sequence_start))
             end
             prev_was_gap = is_gap
         end
@@ -553,15 +540,15 @@ local function check_gap_invariants(ts, result)
             local next_clip = track_clips[i + 1]
 
             if next_clip then
-                local clip_end = clip.timeline_start + clip.duration
-                if clip_end ~= next_clip.timeline_start then
+                local clip_end = clip.sequence_start + clip.duration
+                if clip_end ~= next_clip.sequence_start then
                     -- Allow zero-length gaps between adjacent media clips
                     -- (they may not have been materialized yet)
                     if not (not clip.is_gap and not next_clip.is_gap
-                            and clip_end == next_clip.timeline_start) then
+                            and clip_end == next_clip.sequence_start) then
                         fail(result, string.format(
                             "GAP_DISCONTINUITY: track %s: clip %s ends at %d but next clip %s starts at %d",
-                            track_id, clip.id, clip_end, next_clip.id, next_clip.timeline_start))
+                            track_id, clip.id, clip_end, next_clip.id, next_clip.sequence_start))
                     end
                 end
             end
@@ -592,37 +579,37 @@ local function check_gap_invariants(ts, result)
         for i = 1, #media_only - 1 do
             local curr = media_only[i]
             local next_media = media_only[i + 1]
-            local curr_end = curr.timeline_start + curr.duration
-            local gap_size = next_media.timeline_start - curr_end
+            local curr_end = curr.sequence_start + curr.duration
+            local gap_size = next_media.sequence_start - curr_end
 
             if gap_size > 0 then
                 -- There should be exactly one gap between these clips
                 local gap_count = 0
                 for _, clip in ipairs(track_clips) do
                     if clip.is_gap == true
-                        and clip.timeline_start >= curr_end
-                        and clip.timeline_start < next_media.timeline_start then
+                        and clip.sequence_start >= curr_end
+                        and clip.sequence_start < next_media.sequence_start then
                         gap_count = gap_count + 1
                     end
                 end
                 if gap_count ~= 1 then
                     fail(result, string.format(
                         "GAP_COUNT: track %s between clips %s (end=%d) and %s (start=%d): expected 1 gap, found %d",
-                        track_id, curr.id, curr_end, next_media.id, next_media.timeline_start, gap_count))
+                        track_id, curr.id, curr_end, next_media.id, next_media.sequence_start, gap_count))
                 end
             end
         end
 
         -- Check: gap before first clip if it doesn't start at 0
-        if #media_only > 0 and media_only[1].timeline_start > 0 then
+        if #media_only > 0 and media_only[1].sequence_start > 0 then
             local leading_gap = false
             for _, clip in ipairs(track_clips) do
-                if clip.is_gap == true and clip.timeline_start == 0 then
+                if clip.is_gap == true and clip.sequence_start == 0 then
                     leading_gap = true
-                    if clip.duration ~= media_only[1].timeline_start then
+                    if clip.duration ~= media_only[1].sequence_start then
                         fail(result, string.format(
                             "LEADING_GAP_SIZE: track %s leading gap duration=%d but first clip starts at %d",
-                            track_id, clip.duration, media_only[1].timeline_start))
+                            track_id, clip.duration, media_only[1].sequence_start))
                     end
                     break
                 end
@@ -630,7 +617,7 @@ local function check_gap_invariants(ts, result)
             if not leading_gap then
                 fail(result, string.format(
                     "MISSING_LEADING_GAP: track %s first clip starts at %d but no gap from 0",
-                    track_id, media_only[1].timeline_start))
+                    track_id, media_only[1].sequence_start))
             end
         end
     end

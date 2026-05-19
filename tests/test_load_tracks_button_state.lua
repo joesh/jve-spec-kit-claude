@@ -15,24 +15,25 @@ db:exec(require('import_schema'))
 
 local now = os.time()
 db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES ('proj1', 'Test', 'resample', %d, %d)
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d)
 ]], now, now))
 
 db:exec(string.format([[
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('seq1', 'proj1', 'Seq 1', 'nested', 24, 1, 48000, 1920, 1080, %d, %d)
+    VALUES ('seq1', 'proj1', 'Seq 1', 'sequence', 24, 1, 48000, 1920, 1080, %d, %d)
 ]], now, now))
 
--- Insert tracks with muted/soloed/locked set to TRUE
+-- Insert tracks with muted/soloed/locked set to TRUE and distinct sync_mode
+-- values so the round-trip exercises a non-default mode too.
 db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('at1', 'seq1', 'A1', 'AUDIO', 1, 1, 1, 1, 1, 1.0, 0.0)
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan, sync_mode)
+    VALUES ('at1', 'seq1', 'A1', 'AUDIO', 1, 1, 1, 1, 1, 1.0, 0.0, 'cut')
 ]])
 
 db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('at2', 'seq1', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0)
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan, sync_mode)
+    VALUES ('at2', 'seq1', 'A2', 'AUDIO', 2, 1, 0, 0, 0, 1.0, 0.0, 'ripple')
 ]])
 
 --------------------------------------------------------------------------------
@@ -67,7 +68,16 @@ assert(at2.soloed == false,
 assert(at2.locked == false,
     string.format("at2.locked should be false, got %s (%s)", tostring(at2.locked), type(at2.locked)))
 
-print("  ✓ load_tracks returns muted/soloed/locked with correct boolean values")
+-- sync_mode must round-trip through load_tracks — the track-header sync
+-- indicator pulls from this dict, so a nil here renders as "?" for every
+-- track in the UI (caught against 015 with the field absent from the SQL
+-- SELECT).
+assert(at1.sync_mode == "cut",
+    string.format("at1.sync_mode should be 'cut', got %s", tostring(at1.sync_mode)))
+assert(at2.sync_mode == "ripple",
+    string.format("at2.sync_mode should be 'ripple', got %s", tostring(at2.sync_mode)))
+
+print("  ✓ load_tracks returns muted/soloed/locked/sync_mode with correct values")
 
 --------------------------------------------------------------------------------
 -- 2. Verify Track.load() agrees (sanity check)

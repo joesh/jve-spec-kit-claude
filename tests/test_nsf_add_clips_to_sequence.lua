@@ -29,7 +29,7 @@ print("\n--- AddClipsToSequence asserts on required clip_desc fields ---")
 -- Confirm the asserts that gate clip_desc shape are present.
 local required_asserts = {
     "target_track_id",
-    "nested_sequence_id",
+    "sequence_id",
     "fps_mismatch_policy",
 }
 for _, field in ipairs(required_asserts) do

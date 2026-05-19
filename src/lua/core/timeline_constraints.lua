@@ -36,8 +36,8 @@ end
 
 local function clip_start(clip)
     if not clip then return nil end
-    local val = to_ms(clip.timeline_start) or to_ms(clip.start_value)
-    assert(val, "timeline_constraints.clip_start: clip missing timeline_start/start_value (id=" .. tostring(clip.id) .. ")")
+    local val = to_ms(clip.sequence_start) or to_ms(clip.start_value)
+    assert(val, "timeline_constraints.clip_start: clip missing sequence_start/start_value (id=" .. tostring(clip.id) .. ")")
     return val
 end
 
@@ -259,7 +259,7 @@ function M.calculate_trim_range(clip, edge_type, all_clips, check_all_tracks, sk
         local max_drag_left = start_val  -- Can't go before 0
         if -max_drag_left > min_delta then
             min_delta = -max_drag_left
-            limit_left = "timeline_start"
+            limit_left = "sequence_start"
         end
     end
 
@@ -283,7 +283,7 @@ function M.check_move_collision(clip, new_start_value, new_track_id, all_clips)
     -- Check timeline boundaries
     if new_start_value < 0 then
         return {
-            type = "timeline_start",
+            type = "sequence_start",
             message = "Cannot move clip before timeline start"
         }
     end

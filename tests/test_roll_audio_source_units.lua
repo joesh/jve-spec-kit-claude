@@ -54,21 +54,21 @@ local layout = ripple_layout.create({
         order = {"clip_left", "clip_right", "clip_downstream"},
         clip_left = {
             id = "clip_left", name = "Left", track_key = "a1", media_key = "main",
-            timeline_start = 0, duration = TIMELINE_DURATION,
+            sequence_start = 0, duration = TIMELINE_DURATION,
             source_in = AUDIO_SOURCE_IN,
             fps_numerator = AUDIO_RATE,
             fps_denominator = 1,
         },
         clip_right = {
             id = "clip_right", name = "Right", track_key = "a1", media_key = "main",
-            timeline_start = TIMELINE_DURATION, duration = TIMELINE_DURATION,
+            sequence_start = TIMELINE_DURATION, duration = TIMELINE_DURATION,
             source_in = AUDIO_SOURCE_IN + 192000,  -- offset by 4 seconds of samples
             fps_numerator = AUDIO_RATE,
             fps_denominator = 1,
         },
         clip_downstream = {
             id = "clip_downstream", name = "Downstream", track_key = "a1", media_key = "main",
-            timeline_start = TIMELINE_DURATION * 2, duration = TIMELINE_DURATION,
+            sequence_start = TIMELINE_DURATION * 2, duration = TIMELINE_DURATION,
             source_in = AUDIO_SOURCE_IN + 384000,
             fps_numerator = AUDIO_RATE,
             fps_denominator = 1,
@@ -118,15 +118,15 @@ assert(left_after.duration == TIMELINE_DURATION + DELTA_FRAMES,
     string.format("Left duration: expected %d, got %d",
         TIMELINE_DURATION + DELTA_FRAMES, left_after.duration))
 
-assert(right_after.timeline_start == TIMELINE_DURATION + DELTA_FRAMES,
+assert(right_after.sequence_start == TIMELINE_DURATION + DELTA_FRAMES,
     string.format("Right start: expected %d, got %d",
-        TIMELINE_DURATION + DELTA_FRAMES, right_after.timeline_start))
+        TIMELINE_DURATION + DELTA_FRAMES, right_after.sequence_start))
 
 assert(right_after.duration == TIMELINE_DURATION - DELTA_FRAMES,
     string.format("Right duration: expected %d, got %d",
         TIMELINE_DURATION - DELTA_FRAMES, right_after.duration))
 
-assert(ds_after.timeline_start == ds_before.timeline_start,
+assert(ds_after.sequence_start == ds_before.sequence_start,
     "Downstream must not shift (roll, not ripple)")
 
 -- THE CRITICAL ASSERTION: source_in must change by samples, not frames

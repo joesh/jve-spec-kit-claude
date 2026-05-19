@@ -103,6 +103,31 @@ function M.register_executor(command_type, executor, undoer, spec)
     end
     if spec ~= nil then
         command_specs[command_type] = spec
+        -- Data-driven keyboard-customisation registration (rule 1.5):
+        -- if the SPEC declares keyboard metadata, surface it in the
+        -- shortcut editor automatically — no separate registrations
+        -- module needed. menu_system's own register_command call wins
+        -- when both apply (menu category is more user-meaningful).
+        local kb = spec.keyboard
+        if kb then
+            local kbsr = require("core.keyboard_shortcut_registry")
+            if not kbsr.commands[command_type] then
+                assert(type(kb.category) == "string" and kb.category ~= "",
+                    "command " .. command_type .. ": SPEC.keyboard.category required")
+                assert(type(kb.display_name) == "string" and kb.display_name ~= "",
+                    "command " .. command_type .. ": SPEC.keyboard.display_name required")
+                -- NSF: a blank dialog row hides the command's purpose from
+                -- the user — require an explicit, non-empty description.
+                assert(type(kb.description) == "string" and kb.description ~= "",
+                    "command " .. command_type .. ": SPEC.keyboard.description required (non-empty)")
+                kbsr.register_command({
+                    id          = command_type,
+                    category    = kb.category,
+                    name        = kb.display_name,
+                    description = kb.description,
+                })
+            end
+        end
     end
 end
 
@@ -243,6 +268,29 @@ function M.load_command_module(command_type)
     return true
 end
 
+
+-- snake_case → CamelCase: "toggle_track_preference" → "ToggleTrackPreference".
+local function snake_to_camel(name)
+    return (name:gsub("_(%w)", string.upper):gsub("^%w", string.upper))
+end
+
+--- Eagerly load every command module in the canonical bundle list. Use
+--- cases: the keyboard customisation dialog (so SPEC.keyboard metadata
+--- is visible before the user invokes anything), test harnesses, any
+--- code needing the full command table populated. Idempotent —
+--- already-loaded modules short-circuit inside load_command_module.
+---
+--- Multi-registration modules (e.g. set_marks.lua → SetMarkIn / SetMarkOut /
+--- … ) only need ONE load call: their register() populates every command
+--- they own in a single pass. We pick the first CamelCase derived from
+--- the file name for that call; the others get registered as a side
+--- effect.
+function M.load_all_command_modules()
+    local impls = require("core.command_implementations")
+    for _, mod_name in ipairs(impls.command_modules) do
+        M.load_command_module(snake_to_camel(mod_name))
+    end
+end
 
 function M.get_spec(command_type)
     local spec = command_specs[command_type]

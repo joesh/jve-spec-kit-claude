@@ -23,21 +23,21 @@ do
     local layout = ripple_layout.create({
         clips = {
             order = {"v1_left", "v1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 2000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 2000, duration = 1000, source_in = 500 },
         }
     })
 
     -- Compute gaps for the track
     local clips_on_track = {
-        { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
-        { id = "clip_v1_right", track_id = "track_v1", timeline_start = 2000, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+        { id = "clip_v1_left", track_id = "track_v1", sequence_start = 0, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
+        { id = "clip_v1_right", track_id = "track_v1", sequence_start = 2000, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, string.format("expected 1 gap, got %d", #gaps))
-    assert(gaps[1].timeline_start == 1000, "gap should start at 1000")
+    assert(gaps[1].sequence_start == 1000, "gap should start at 1000")
     assert(gaps[1].duration == 1000, "gap should be 1000 frames")
 
     -- Roll: clip_v1_left:out + gap:in, delta = +200 (extend clip into gap)
@@ -56,7 +56,7 @@ do
     local left = Clip.load("clip_v1_left")
     local right = Clip.load("clip_v1_right")
     assert(left.duration == 1200, string.format("left clip duration=%d, expected 1200", left.duration))
-    assert(right.timeline_start == 2000, string.format("right clip should stay at 2000, got %d", right.timeline_start))
+    assert(right.sequence_start == 2000, string.format("right clip should stay at 2000, got %d", right.sequence_start))
 
     layout:cleanup()
 end
@@ -67,16 +67,16 @@ do
     local layout = ripple_layout.create({
         clips = {
             order = {"v1_left", "v1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 2000, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 2000, duration = 1000, source_in = 500 },
         }
     })
 
     local clips_on_track = {
-        { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
-        { id = "clip_v1_right", track_id = "track_v1", timeline_start = 2000, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+        { id = "clip_v1_left", track_id = "track_v1", sequence_start = 0, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
+        { id = "clip_v1_right", track_id = "track_v1", sequence_start = 2000, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, "expected 1 gap")
@@ -97,7 +97,7 @@ do
     local left = Clip.load("clip_v1_left")
     local right = Clip.load("clip_v1_right")
     assert(left.duration == 800, string.format("left clip duration=%d, expected 800", left.duration))
-    assert(right.timeline_start == 2000, string.format("right clip should stay at 2000, got %d", right.timeline_start))
+    assert(right.sequence_start == 2000, string.format("right clip should stay at 2000, got %d", right.sequence_start))
 
     layout:cleanup()
 end
@@ -108,16 +108,16 @@ do
     local layout = ripple_layout.create({
         clips = {
             order = {"v1_left", "v1_right"},
-            v1_left = { timeline_start = 0, duration = 1000, source_in = 500 },
-            v1_right = { timeline_start = 1500, duration = 1000, source_in = 500 },
+            v1_left = { sequence_start = 0, duration = 1000, source_in = 500 },
+            v1_right = { sequence_start = 1500, duration = 1000, source_in = 500 },
         }
     })
 
     local clips_on_track = {
-        { id = "clip_v1_left", track_id = "track_v1", timeline_start = 0, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
-        { id = "clip_v1_right", track_id = "track_v1", timeline_start = 1500, duration = 1000,
-          clip_kind = "nested", media_id = "media_primary" },
+        { id = "clip_v1_left", track_id = "track_v1", sequence_start = 0, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
+        { id = "clip_v1_right", track_id = "track_v1", sequence_start = 1500, duration = 1000,
+          clip_kind = "sequence", media_id = "media_primary" },
     }
     local gaps = gap_lifecycle.compute_gaps_for_track("track_v1", clips_on_track, SEQ_FPS)
     assert(#gaps == 1, "expected 1 gap")
@@ -139,7 +139,7 @@ do
     local left = Clip.load("clip_v1_left")
     local right = Clip.load("clip_v1_right")
     assert(left.duration == 1500, string.format("left clip duration=%d, expected 1500", left.duration))
-    assert(right.timeline_start == 1500, string.format("right clip should stay at 1500, got %d", right.timeline_start))
+    assert(right.sequence_start == 1500, string.format("right clip should stay at 1500, got %d", right.sequence_start))
 
     layout:cleanup()
 end

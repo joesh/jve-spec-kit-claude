@@ -1,0 +1,843 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Source-in-Timeline v4 — single timeline, tabbed mode switch</title>
+<style>
+  :root {
+    --bg:           #14141a;
+    --panel:        #1c1c23;
+    --panel-2:      #1f1f27;
+    --panel-3:      #16161c;
+    --line:         #262630;
+    --line-strong:  #353542;
+    --text:         #d8d8de;
+    --text-dim:     #8a8a92;
+    --text-faint:   #4a4a56;
+
+    --src:          #5cbacc;
+    --src-bg:       rgba(92,186,204,0.07);
+    --src-strong:   rgba(92,186,204,0.18);
+    --src-dim:      #2c5e68;
+
+    --rec:          #e64b3d;
+    --rec-bg:       rgba(230,75,61,0.07);
+    --rec-strong:   rgba(230,75,61,0.18);
+    --rec-dim:      #6e2a26;
+
+    --clip-v:       #3a78c8;
+    --clip-v-sel:   #f0a050;
+    --clip-a:       #4a9a64;
+    --clip-off:     #c44444;
+
+    --mark-in:      #6fce6f;
+    --mark-out:     #d96f6f;
+
+    --hcell-bg:     #2c2c34;
+    --hcell-bd:     #404048;
+
+    --row-h:        28px;
+  }
+
+  html, body { background: var(--bg); color: var(--text); margin: 0; }
+  body { font: 12px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif; padding: 22px; }
+
+  h1 { font-size: 13px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--text-dim); margin: 0 0 12px; font-size: 11px; }
+
+  /* ============== APP FRAME ============== */
+  .app {
+    width: 1600px; height: 940px;
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    display: grid; grid-template-rows: 36px 1fr 26px;
+    overflow: hidden; position: relative;
+    box-shadow: 0 14px 42px rgba(0,0,0,0.5);
+  }
+
+  .toolbar {
+    background: #0c0c12; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; padding: 0 12px; gap: 14px;
+    color: var(--text-dim); font-size: 11.5px;
+  }
+  .toolbar .menu { display: flex; gap: 14px; }
+  .toolbar .menu .app-name { color: var(--text); font-weight: 600; }
+  .toolbar .right { margin-left: auto; }
+
+  .body { display: grid; grid-template-columns: 220px 1fr 232px; overflow: hidden; }
+
+  /* ============== BROWSER ============== */
+  .browser {
+    background: var(--panel-3); border-right: 1px solid var(--line);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .browser .tabs { display: flex; height: 24px; border-bottom: 1px solid var(--line); padding: 0 4px; }
+  .browser .tab { padding: 0 10px; height: 24px; display: flex; align-items: center;
+    font-size: 11px; color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line); border-bottom: none; border-radius: 3px 3px 0 0; margin-top: 2px;
+  }
+  .browser .columns {
+    display: grid; grid-template-columns: 1fr 56px 56px 36px; height: 22px;
+    border-bottom: 1px solid var(--line); background: var(--panel-2);
+    font-size: 10.5px; color: var(--text-dim); align-items: center;
+  }
+  .browser .columns div { padding: 0 6px; border-right: 1px solid var(--line); }
+  .browser .columns div:last-child { border-right: none; }
+  .browser .tree { flex: 1; overflow: auto; padding: 4px 0; }
+  .browser .tn {
+    display: grid; grid-template-columns: 1fr 56px 56px 36px;
+    height: 20px; align-items: center; font-size: 11px; color: var(--text);
+  }
+  .browser .tn .name { padding: 0 6px; display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .browser .tn .name .chev { color: var(--text-faint); width: 8px; }
+  .browser .tn .name .ico { width: 10px; color: #d4a060; }
+  .browser .tn .col { padding: 0 6px; color: var(--text-dim); font-size: 10.5px;
+    font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; }
+  .browser .tn.sel { background: rgba(107,186,207,0.16); }
+  .browser .tn.loaded .name { color: var(--src); }
+  .browser .tn.loaded .name .ico { color: var(--src); }
+  .browser .indent .name { padding-left: 18px; }
+  .browser .indent .indent .name { padding-left: 30px; }
+
+  /* ============== CENTER ============== */
+  .center { display: grid; grid-template-rows: 296px 1fr; overflow: hidden; }
+
+  /* monitors */
+  .monitors {
+    display: grid; grid-template-columns: 1fr 1fr;
+    background: #0a0a0e; border-bottom: 1px solid var(--line-strong);
+    padding: 8px; gap: 8px;
+  }
+  .monitor { display: flex; flex-direction: column; }
+  .monitor .mhead { height: 22px; padding: 0 8px; display: flex; align-items: center; gap: 8px; font-size: 11px; background: var(--panel); }
+  .monitor.src .mhead { color: var(--src); border-top: 2px solid var(--src); }
+  .monitor.rec .mhead { color: var(--rec); border-top: 2px solid var(--rec); }
+  .monitor .mhead .name { color: var(--text); font-weight: 500; }
+  .monitor .mhead .meta { margin-left: auto; color: var(--text-dim); font-size: 10.5px; font-feature-settings: "tnum"; }
+  .monitor .frame { flex: 1; position: relative; overflow: hidden; background: #050507; border: 1px solid var(--line); border-top: none; }
+  .monitor.src .frame { border-color: var(--src); }
+  .monitor.rec .frame { border-color: var(--rec); }
+  .frame .placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--text-faint); font-size: 12px; }
+  .frame .badges { position: absolute; top: 6px; left: 6px; display: flex; gap: 4px; }
+  .badge { padding: 1px 5px; border-radius: 2px; font-size: 10px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.1); color: var(--text); font-feature-settings: "tnum"; }
+  .badge.in { color: var(--mark-in); border-color: rgba(111,206,111,0.5); }
+  .badge.out { color: var(--mark-out); border-color: rgba(217,111,111,0.5); }
+  .badge.ghost { color: var(--text-dim); border-style: dashed; }
+  .frame .meters { position: absolute; right: 4px; top: 6px; bottom: 30px; display: flex; gap: 1px; }
+  .ameter { width: 3px; background: linear-gradient(to top, #2a4a36 0%, #2a4a36 var(--lvl, 60%), #14141a var(--lvl, 60%), #14141a 100%); }
+  .frame .tcdisplay { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.7); padding: 2px 8px; color: #fff; font-size: 11.5px; font-feature-settings: "tnum"; }
+  .monitor .ttbar { height: 26px; background: var(--panel-2); border: 1px solid var(--line); border-top: none; display: flex; align-items: center; gap: 4px; padding: 0 8px; }
+  .ttbar .b { width: 22px; height: 18px; background: var(--hcell-bg); border: 1px solid var(--hcell-bd); border-radius: 2px; font-size: 9px; color: var(--text-dim); display: flex; align-items: center; justify-content: center; }
+  .ttbar .b.in { color: var(--mark-in); border-color: rgba(111,206,111,0.4); }
+  .ttbar .b.out { color: var(--mark-out); border-color: rgba(217,111,111,0.4); }
+  .ttbar .b.play { background: #2a4a3a; border-color: #3a6a4a; color: #cfe8d0; }
+  .ttbar .spc { flex: 1; }
+  .ttbar .dur { color: var(--text-dim); font-size: 10.5px; font-feature-settings: "tnum"; }
+
+  /* ============== TIMELINE ============== */
+  .timeline {
+    display: flex; flex-direction: column;
+    background: var(--panel);
+    overflow: hidden; position: relative;
+  }
+  /* mode tinting — the WHOLE timeline takes on a subtle mode color so the active mode is unmistakable */
+  .timeline.mode-src { background: linear-gradient(to bottom, var(--src-bg) 0%, var(--panel) 80px); }
+  .timeline.mode-rec { background: linear-gradient(to bottom, var(--rec-bg) 0%, var(--panel) 80px); }
+
+  .tl-tabstrip {
+    height: 26px; background: #0c0c12; border-bottom: 1px solid var(--line);
+    display: flex; align-items: stretch; padding: 0 6px; gap: 2px;
+  }
+  .tl-tabstrip .tab {
+    padding: 0 14px; display: flex; align-items: center; gap: 8px;
+    font-size: 11.5px; color: var(--text-dim);
+    border-top: 2px solid transparent;
+    border-left: 1px solid transparent;
+    border-right: 1px solid transparent;
+    border-radius: 3px 3px 0 0;
+  }
+  .tl-tabstrip .tab .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .tl-tabstrip .tab .x { color: var(--text-faint); margin-left: 8px; }
+  .tl-tabstrip .tab.active.src {
+    background: var(--panel); color: var(--src); border-top-color: var(--src);
+    border-left-color: var(--line); border-right-color: var(--line);
+  }
+  .tl-tabstrip .tab.active.rec {
+    background: var(--panel); color: var(--rec); border-top-color: var(--rec);
+    border-left-color: var(--line); border-right-color: var(--line);
+  }
+  .tl-tabstrip .tab.inactive.src { color: var(--src-dim); }
+  .tl-tabstrip .tab.inactive.rec { color: var(--rec-dim); }
+  .tl-tabstrip .mode-hint {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    color: var(--text-faint); font-size: 10px; letter-spacing: 0.4px; text-transform: uppercase;
+  }
+
+  /* ruler row holds TC readout (in header column) + ruler ticks (in lane area) */
+  .tl-rulerrow {
+    display: flex; height: 38px;
+    background: #14141a;
+    border-bottom: 1px solid var(--line-strong);
+    position: sticky; top: 0; z-index: 4;
+  }
+  .tl-rulerrow .tc-readout {
+    width: 200px; flex: 0 0 200px;
+    border-right: 1px solid var(--line-strong);
+    background: #0a0a0e;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 18px;
+    font-feature-settings: "tnum"; font-variant-numeric: tabular-nums; letter-spacing: 0.5px;
+  }
+  .timeline.mode-src .tc-readout { color: var(--src); }
+  .timeline.mode-rec .tc-readout { color: var(--rec); }
+
+  .tl-rulerrow .ruler {
+    flex: 1; position: relative;
+    color: var(--text-faint); font-size: 9.5px;
+  }
+  .ruler .tick { position: absolute; top: 14px; transform: translateX(-50%); }
+  .ruler .seg { position: absolute; top: 25px; bottom: 0; width: 1px; background: var(--line-strong); }
+  .ruler .seg.major { background: var(--text-faint); }
+  .ruler .mark { position: absolute; top: 0; bottom: -1px; width: 2px; }
+  .ruler .mark.in { background: var(--mark-in); }
+  .ruler .mark.out { background: var(--mark-out); }
+  .ruler .mark.ghost { background: transparent; border-left: 2px dashed #fff; opacity: 0.5; }
+  .ruler .ph { position: absolute; top: 0; bottom: -1px; width: 1px; background: rgba(255,255,255,0.85); }
+  .ruler .ph::before { content:""; position:absolute; top:-1px; left:-4px; border-left:4px solid transparent; border-right:4px solid transparent; border-top:5px solid #fff; }
+
+  .tl-scroll { flex: 1; overflow-y: auto; overflow-x: hidden; }
+
+  /* ============== ROW ============== */
+  .row {
+    display: flex; height: var(--row-h);
+    border-bottom: 1px solid var(--line);
+  }
+  .row:nth-child(odd)  { background: rgba(255,255,255,0.012); }
+  .row:nth-child(even) { background: rgba(255,255,255,0.025); }
+  .row.muted { opacity: 0.5; }
+
+  .header {
+    width: 200px; flex: 0 0 200px;
+    background: var(--panel-2);
+    border-right: 1px solid var(--line-strong);
+    display: flex; align-items: center; gap: 4px;
+    padding: 0 4px;
+  }
+  .timeline.mode-src .header { background: linear-gradient(to right, rgba(92,186,204,0.10), var(--panel-2) 90%); }
+  .timeline.mode-rec .header { background: linear-gradient(to right, rgba(107,186,207,0.10), var(--panel-2) 90%); }
+
+  /* paired track-id buttons: src indicator (blue) + rec patch indicator (red).
+     The displayed tab fills its side; the other side is outline-only. */
+  .tid {
+    height: 22px; min-width: 28px; padding: 0 6px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 3px; font-size: 11px; font-weight: 700;
+    cursor: default; user-select: none;
+    border: 1.5px solid transparent;
+  }
+  .tid.src.filled    { background: var(--src);     color: #1c0e08; border-color: var(--src); }
+  .tid.src.outline   { background: transparent;    color: var(--src); border-color: var(--src-dim); }
+  .tid.src.dim       { background: transparent;    color: var(--src-dim); border-color: var(--src-dim); }
+  .tid.rec.filled    { background: var(--rec);     color: #06141a; border-color: var(--rec); }
+  .tid.rec.outline   { background: transparent;    color: var(--rec); border-color: var(--rec-dim); }
+  .tid.rec.dim       { background: transparent;    color: var(--rec-dim); border-color: var(--rec-dim); }
+  .tid.empty {
+    width: 28px; min-width: 28px;
+    background: transparent; border: 1.5px dashed #38383f;
+    color: transparent;
+  }
+
+  .lbl { font-size: 10.5px; color: var(--text-dim); flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 2px; }
+  .lbl.unrouted { color: #6c5040; font-style: italic; }
+
+  /* compact lock icon (replaces letter L) */
+  .lock {
+    width: 16px; height: 22px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-faint); cursor: default;
+  }
+  .lock svg { width: 11px; height: 11px; }
+  .lock.on { color: var(--mark-out); }
+
+  /* tristate sync mode: off / ripple (Premiere) / anchor (Avid) */
+  .sync {
+    width: 18px; height: 22px; display: flex; align-items: center; justify-content: center;
+    cursor: default; border-radius: 2px; border: 1px solid transparent;
+  }
+  .sync svg { width: 12px; height: 12px; display: block; }
+  .sync.off    { color: var(--text-faint); }                  /* dim, no fill */
+  /* Sync-mode colors are deliberately distinct from role colors (src-blue, rec-red)
+     so the sync indicator never gets confused with the patch indicator. */
+  .sync.ripple { color: #80c89c; background: rgba(128,200,156,0.16); border-color: #3a6a4e; }
+  .sync.cut    { color: #c8c8d0; background: rgba(200,200,208,0.16); border-color: #5a5a64; }
+
+  /* S/M vertical stack (rightmost) — replaces Mute/Solo separate cells AND the V button on video */
+  .sm-stack {
+    display: flex; flex-direction: column; gap: 1px;
+    height: 24px;
+  }
+  .sm-stack .b {
+    height: 11px; min-width: 16px; padding: 0 3px;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--hcell-bg); border: 1px solid var(--hcell-bd);
+    border-radius: 2px;
+    font-size: 8.5px; font-weight: 700; color: var(--text-dim);
+    line-height: 1;
+  }
+  .sm-stack .b.solo { background: rgba(232,200,80,0.22); border-color: #8a7a3c; color: #f5e090; }
+  .sm-stack .b.mute { background: rgba(217,111,111,0.20); border-color: #8a4a4a; color: #f0bcbc; }
+
+  /* ============== LANE / CLIPS ============== */
+  .lane {
+    flex: 1; position: relative;
+    background:
+      repeating-linear-gradient(to right,
+        transparent 0, transparent 49px,
+        rgba(255,255,255,0.025) 49px, rgba(255,255,255,0.025) 50px);
+  }
+  .clip {
+    position: absolute; top: 1px; bottom: 1px;
+    border-radius: 2px; overflow: hidden;
+    padding: 1px 5px;
+    font-size: 10px; color: rgba(255,255,255,0.92);
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.18);
+  }
+  .clip.v { background: var(--clip-v); }
+  .clip.v.sel { box-shadow: inset 0 0 0 2px var(--clip-v-sel); }
+  .clip.a { background: var(--clip-a); }
+  .clip.off { background: var(--clip-off); }
+  .clip.dim { opacity: 0.6; }
+
+  .lane > .mark { position: absolute; top: 0; bottom: 0; width: 2px; z-index: 3; pointer-events: none; }
+  .lane > .mark.in { background: var(--mark-in); box-shadow: 0 0 4px rgba(111,206,111,0.5); }
+  .lane > .mark.out { background: var(--mark-out); box-shadow: 0 0 4px rgba(217,111,111,0.5); }
+  .lane > .mark.ghost { background: transparent; border-left: 2px dashed #fff; opacity: 0.45; }
+  .lane > .ph { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.85); z-index: 3; }
+  .lane > .range { position: absolute; top: 0; bottom: 0; z-index: 1; background: rgba(255,255,255,0.05); }
+  .lane > .range.ghost { background: rgba(255,255,255,0.025); border-top: 1px dashed rgba(255,255,255,0.18); border-bottom: 1px dashed rgba(255,255,255,0.18); }
+
+  /* ============== INSPECTOR / STATUS — same shape as v3 ============== */
+  .inspector { background: var(--panel-3); border-left: 1px solid var(--line); display: flex; flex-direction: column; overflow: hidden; }
+  .inspector .search { margin: 8px; padding: 4px 8px; background: #0a0a0e; border: 1px solid var(--line); border-radius: 3px; color: var(--text-dim); font-size: 11px; }
+  .inspector .empty { padding: 12px; color: var(--text); font-size: 12px; border-bottom: 1px solid var(--line); }
+  .inspector .section { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+  .inspector .section h3 { margin: 0 0 6px; font-size: 9.5px; letter-spacing: 0.5px; text-transform: uppercase; color: var(--text-dim); font-weight: 500; }
+  .inspector .kv { display: grid; grid-template-columns: 70px 1fr; gap: 3px 8px; font-size: 11px; }
+  .inspector .kv .k { color: var(--text-dim); }
+  .inspector .kv .v { color: var(--text); font-feature-settings: "tnum"; }
+  .inspector .kv .v.ghost { color: var(--text-dim); font-style: italic; }
+  .inspector .kv .v.src { color: var(--src); }
+
+  .status { background: #0a0a0e; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 16px; padding: 0 10px; font-size: 10.5px; color: var(--text-dim); }
+  .status .v { color: var(--text); font-feature-settings: "tnum"; }
+  .status .v.ghost { color: var(--text-dim); font-style: italic; }
+  .status .v.src { color: var(--src); }
+  .status .pip { width: 7px; height: 7px; border-radius: 1px; display: inline-block; vertical-align: -1px; margin-right: 5px; }
+
+  /* explainer caption above the second timeline panel for comparison */
+  .compare-row {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 18px;
+  }
+  .compare-cell { background: var(--panel-3); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .compare-cell h2 { margin: 0; padding: 8px 12px; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; text-transform: uppercase; color: var(--text-dim); border-bottom: 1px solid var(--line); }
+  .compare-cell .compare-tl { height: 360px; }
+</style>
+</head>
+<body>
+
+<h1>Source-in-Timeline v4 — single timeline, tabbed mode switch</h1>
+<p class="sub">Avid-faithful: one timeline visible at a time, mode switched via the tab strip (visible affordance, not a hidden menu/shortcut). Header redesign — paired src/rec track-id toggle buttons, lock icon, vertical S/M stack rightmost, P + R removed. Below: side-by-side comparison of both modes.</p>
+
+<div class="app">
+
+  <div class="toolbar">
+    <div class="menu">
+      <span class="app-name">JVEEditor</span>
+      <span>File</span><span>Edit</span><span>Clip</span><span>Timeline</span><span>Mark</span><span>Media</span><span>Window</span><span>Help</span>
+    </div>
+    <div class="right" style="color:var(--text)">Untitled.jvp</div>
+  </div>
+
+  <div class="body">
+
+    <!-- BROWSER -->
+    <div class="browser">
+      <div class="tabs"><div class="tab">anamnesis-gold-timeline</div></div>
+      <div class="columns"><div>Clip Name ▲</div><div>Duration</div><div>Reso.</div><div>FPS</div></div>
+      <div class="tree">
+        <div class="tn loaded"><div class="name"><span class="chev">▸</span><span class="ico">⌑</span>A023_10251352_C026.mov</div><div class="col">00:01:56:13</div><div class="col">1920×1080</div><div class="col">25.0</div></div>
+        <div class="tn"><div class="name"><span class="chev">▾</span><span class="ico">▦</span>master clips</div><div class="col"></div><div class="col"></div><div class="col"></div></div>
+        <div class="indent">
+          <div class="tn"><div class="name"><span class="chev"></span><span class="ico">⌑</span>58-204-004</div><div class="col">00:00:42:11</div><div class="col">1920×1080</div><div class="col">23.98</div></div>
+          <div class="tn"><div class="name"><span class="chev"></span><span class="ico">⌑</span>56,59-197-002</div><div class="col">00:00:24:08</div><div class="col">1920×1080</div><div class="col">23.98</div></div>
+          <div class="tn"><div class="name"><span class="chev"></span><span class="ico">⌑</span>56,59-203-1afs</div><div class="col">00:00:18:14</div><div class="col">1920×1080</div><div class="col">23.98</div></div>
+          <div class="tn"><div class="name"><span class="chev"></span><span class="ico">⌑</span>LAB-ROOMTONE-1</div><div class="col">00:01:00:00</div><div class="col">—</div><div class="col">—</div></div>
+        </div>
+        <div class="tn sel"><div class="name"><span class="chev">▸</span><span class="ico">▦</span>2026-03-28-anamnesis-GOLD</div><div class="col">14:22:06</div><div class="col">1920×1080</div><div class="col">23.98</div></div>
+      </div>
+    </div>
+
+    <!-- CENTER -->
+    <div class="center">
+
+      <!-- monitors -->
+      <div class="monitors">
+        <div class="monitor src">
+          <div class="mhead">SOURCE <span class="name">A023_10251352_C026.mov</span><span class="meta">25p · 8ch · 01:56:13</span></div>
+          <div class="frame">
+            <div class="placeholder">◳ Anna at counter, OTS Ben</div>
+            <div class="badges">
+              <span class="badge in">IN 13:52:16:09</span>
+              <span class="badge out">OUT 13:52:28:09</span>
+            </div>
+            <div class="meters">
+              <div class="ameter" style="--lvl:72%"></div><div class="ameter" style="--lvl:65%"></div>
+              <div class="ameter" style="--lvl:58%"></div><div class="ameter" style="--lvl:24%"></div>
+              <div class="ameter" style="--lvl:18%"></div><div class="ameter" style="--lvl:18%"></div>
+              <div class="ameter" style="--lvl:8%"></div><div class="ameter" style="--lvl:5%"></div>
+            </div>
+            <div class="tcdisplay">13:52:18:11</div>
+          </div>
+          <div class="ttbar">
+            <div class="b in">I</div><div class="b out">O</div>
+            <div class="b">⏮</div><div class="b play">▶</div><div class="b">⏭</div>
+            <div class="spc"></div><div class="dur">DUR 00:00:12:00</div>
+          </div>
+        </div>
+        <div class="monitor rec">
+          <div class="mhead">RECORD <span class="name">2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE</span><span class="meta">23.976 · 14:22:06</span></div>
+          <div class="frame">
+            <div class="placeholder">◳ 58-204-004 · parked</div>
+            <div class="badges">
+              <span class="badge in">IN 02:09:13:17</span>
+              <span class="badge ghost">OUT 02:09:25:17 ↺</span>
+            </div>
+            <div class="meters">
+              <div class="ameter" style="--lvl:62%"></div><div class="ameter" style="--lvl:48%"></div><div class="ameter" style="--lvl:54%"></div>
+            </div>
+            <div class="tcdisplay">02:09:13:17</div>
+          </div>
+          <div class="ttbar">
+            <div class="b in">I</div><div class="b out">O</div>
+            <div class="b">⏮</div><div class="b play">▶</div><div class="b">⏭</div>
+            <div class="spc"></div><div class="dur">DUR 14:22:06 · 1042 clips</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TIMELINE — SOURCE MODE ACTIVE in the main app pane to demonstrate the new feature -->
+      <div class="timeline mode-src">
+        <div class="tl-tabstrip">
+          <div class="tab inactive rec"><span class="dot"></span>Sequence: Main<span class="x">×</span></div>
+          <div class="tab active src"><span class="dot"></span>Source: A023_10251352_C026.mov<span class="x">×</span></div>
+          <div class="mode-hint">SOURCE MODE · click a tab to switch</div>
+        </div>
+
+        <!-- Ruler row: TC readout (200px) + ticks lane -->
+        <div class="tl-rulerrow">
+          <div class="tc-readout">13:52:18:11</div>
+          <div class="ruler">
+            <span class="tick" style="left:80px">13:52:13</span>
+            <span class="tick" style="left:280px">13:52:19</span>
+            <span class="tick" style="left:480px">13:52:25</span>
+            <span class="tick" style="left:680px">13:52:31</span>
+            <span class="tick" style="left:880px">13:52:37</span>
+            <span class="seg major" style="left:80px"></span>
+            <span class="seg major" style="left:280px"></span>
+            <span class="seg major" style="left:480px"></span>
+            <span class="seg major" style="left:680px"></span>
+            <span class="seg major" style="left:880px"></span>
+            <span class="mark in"  style="left:200px"></span>
+            <span class="mark out" style="left:400px"></span>
+            <span class="ph"       style="left:264px"></span>
+          </div>
+        </div>
+
+        <div class="tl-scroll">
+
+          <!-- ROW: V1 — source video. Header: [src V1 filled-blue] [rec V1 outline-red] label sync lock S/M -->
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">V1</div>
+              <div class="tid rec outline">V1</div>
+              <div class="lbl">picture</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip v" style="left:40px; width:920px">SC4_T2 · V1 — A023_10251352_C026.mov</div>
+              <div class="mark in" style="left:200px"></div>
+              <div class="mark out" style="left:400px"></div>
+              <div class="ph" style="left:264px"></div>
+            </div>
+          </div>
+
+          <!-- A1 boom — patched to rec A1 -->
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">A1</div>
+              <div class="tid rec outline">A1</div>
+              <div class="lbl">boom</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip a" style="left:40px; width:920px">boom</div>
+              <div class="mark in" style="left:200px"></div>
+              <div class="mark out" style="left:400px"></div>
+            </div>
+          </div>
+
+          <!-- A2 lav1 — patched to rec A2, with solo lit -->
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">A2</div>
+              <div class="tid rec outline">A2</div>
+              <div class="lbl">lav1 · Anna</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b solo">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip a" style="left:40px; width:920px">lav1 (Anna)</div>
+              <div class="mark in" style="left:200px"></div>
+              <div class="mark out" style="left:400px"></div>
+            </div>
+          </div>
+
+          <!-- A3 lav2 — patched to rec A3, with mute lit -->
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">A3</div>
+              <div class="tid rec outline">A3</div>
+              <div class="lbl">lav2 · Ben</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b mute">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip a" style="left:40px; width:920px">lav2 (Ben)</div>
+              <div class="mark in" style="left:200px"></div>
+              <div class="mark out" style="left:400px"></div>
+            </div>
+          </div>
+
+          <!-- A4 lav3 — UNROUTED. rec slot is "empty" dashed cell -->
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A4</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">lav3 · unrouted</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:920px">lav3</div></div>
+          </div>
+
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A5</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">cam mic L</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:920px">cam-L</div></div>
+          </div>
+
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A6</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">cam mic R</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:920px">cam-R</div></div>
+          </div>
+
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A7</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">room tone</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:920px">room</div></div>
+          </div>
+
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A8</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">slate / aux</div>
+              <div class="sync off" title="Sync: Off (independent — slate stays put)"><svg viewBox="0 0 14 14" fill="currentColor"><circle cx="7" cy="7" r="1.2" opacity="0.5"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:920px">slate</div></div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <!-- INSPECTOR -->
+    <div class="inspector">
+      <div class="search">Search properties…</div>
+      <div class="empty">No editable selection</div>
+      <div class="section">
+        <h3>Loaded source</h3>
+        <div class="kv">
+          <div class="k">Clip</div><div class="v src">A023_10251352_C026.mov</div>
+          <div class="k">TC start</div><div class="v">13:52:00:00</div>
+          <div class="k">Duration</div><div class="v">00:01:56:13</div>
+          <div class="k">Reso.</div><div class="v">1920×1080</div>
+          <div class="k">Rate</div><div class="v">25.000 fps</div>
+          <div class="k">Channels</div><div class="v">8</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>3-point edit</h3>
+        <div class="kv">
+          <div class="k">Src IN</div><div class="v" style="color:var(--mark-in)">13:52:16:09</div>
+          <div class="k">Src OUT</div><div class="v" style="color:var(--mark-out)">13:52:28:09</div>
+          <div class="k">Rec IN</div><div class="v" style="color:var(--mark-in)">02:09:13:17</div>
+          <div class="k">Rec OUT</div><div class="v ghost">02:09:25:17 (computed)</div>
+        </div>
+      </div>
+      <div class="section">
+        <h3>Patches</h3>
+        <div class="kv">
+          <div class="k">src V1</div><div class="v">→ rec V1</div>
+          <div class="k">src A1</div><div class="v">→ rec A1 (boom)</div>
+          <div class="k">src A2</div><div class="v">→ rec A2 (lav1)</div>
+          <div class="k">src A3</div><div class="v">→ rec A3 (lav2)</div>
+          <div class="k">src A4–A8</div><div class="v ghost">unrouted</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="status">
+    <span><span class="pip" style="background:var(--src)"></span><span class="v src">SOURCE MODE</span></span>
+    <span><span class="pip" style="background:var(--mark-in)"></span><span class="v">src IN 13:52:16:09</span></span>
+    <span><span class="v">→ src OUT 13:52:28:09</span></span>
+    <span><span class="v">rec IN 02:09:13:17</span></span>
+    <span><span class="v ghost">→ 02:09:25:17 (computed)</span></span>
+    <span style="margin-left:auto" class="v">Patches 3/8 · DUR 00:00:12:00</span>
+  </div>
+
+</div>
+
+<!-- ===================== SIDE-BY-SIDE COMPARISON OF MODES ===================== -->
+<div class="compare-row">
+
+  <!-- LEFT: Sequence mode -->
+  <div class="compare-cell">
+    <h2 style="color: var(--rec)">Sequence mode (rec) — what 99% of editing time looks like</h2>
+    <div class="compare-tl">
+      <div class="timeline mode-rec" style="height:100%">
+        <div class="tl-tabstrip">
+          <div class="tab active rec"><span class="dot"></span>Sequence: Main<span class="x">×</span></div>
+          <div class="tab inactive src"><span class="dot"></span>Source: A023…<span class="x">×</span></div>
+        </div>
+        <div class="tl-rulerrow">
+          <div class="tc-readout">02:09:13:17</div>
+          <div class="ruler">
+            <span class="tick" style="left:80px">02:09:09</span>
+            <span class="tick" style="left:280px">02:09:14</span>
+            <span class="tick" style="left:480px">02:09:19</span>
+            <span class="seg major" style="left:80px"></span>
+            <span class="seg major" style="left:280px"></span>
+            <span class="seg major" style="left:480px"></span>
+            <span class="mark in" style="left:280px"></span>
+            <span class="mark ghost" style="left:400px"></span>
+            <span class="ph" style="left:280px"></span>
+          </div>
+        </div>
+        <div class="tl-scroll">
+          <!-- record V1 with src patch indicator (blue outline, dim — patched but the Record tab is displayed) -->
+          <div class="row">
+            <div class="header">
+              <div class="tid src outline">V1</div>
+              <div class="tid rec filled">V1</div>
+              <div class="lbl">picture</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range ghost" style="left:280px; width:120px"></div>
+              <div class="clip v" style="left:60px;  width:140px">SC3 · OTS Anna</div>
+              <div class="clip v" style="left:420px; width:200px">SC5 · 2-shot</div>
+              <div class="mark in" style="left:280px"></div>
+              <div class="mark ghost" style="left:400px"></div>
+              <div class="ph" style="left:280px"></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid src outline">A1</div>
+              <div class="tid rec filled">A1</div>
+              <div class="lbl">boom</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range ghost" style="left:280px; width:120px"></div>
+              <div class="clip a" style="left:60px;  width:140px">boom</div>
+              <div class="clip a" style="left:420px; width:200px">boom</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid src outline">A2</div>
+              <div class="tid rec filled">A2</div>
+              <div class="lbl">lav1 · Anna</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range ghost" style="left:280px; width:120px"></div>
+              <div class="clip a" style="left:60px;  width:140px">lav1</div>
+              <div class="clip a" style="left:420px; width:200px">lav1</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid src outline">A3</div>
+              <div class="tid rec filled">A3</div>
+              <div class="lbl">lav2 · Ben</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range ghost" style="left:280px; width:120px"></div>
+              <div class="clip a" style="left:60px;  width:140px">lav2</div>
+              <div class="clip a" style="left:420px; width:200px">lav2</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid empty"></div>
+              <div class="tid rec filled">A4</div>
+              <div class="lbl">music</div>
+              <div class="sync cut" title="Sync: Cut (preserves music-bed TC via filler)"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><line x1="3" y1="11" x2="11" y2="3"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: Source mode -->
+  <div class="compare-cell">
+    <h2 style="color: var(--src)">Source mode (src) — toggled by clicking the source tab</h2>
+    <div class="compare-tl">
+      <div class="timeline mode-src" style="height:100%">
+        <div class="tl-tabstrip">
+          <div class="tab inactive rec"><span class="dot"></span>Sequence: Main<span class="x">×</span></div>
+          <div class="tab active src"><span class="dot"></span>Source: A023…<span class="x">×</span></div>
+        </div>
+        <div class="tl-rulerrow">
+          <div class="tc-readout">13:52:18:11</div>
+          <div class="ruler">
+            <span class="tick" style="left:80px">13:52:13</span>
+            <span class="tick" style="left:280px">13:52:19</span>
+            <span class="tick" style="left:480px">13:52:25</span>
+            <span class="seg major" style="left:80px"></span>
+            <span class="seg major" style="left:280px"></span>
+            <span class="seg major" style="left:480px"></span>
+            <span class="mark in" style="left:200px"></span>
+            <span class="mark out" style="left:400px"></span>
+            <span class="ph" style="left:264px"></span>
+          </div>
+        </div>
+        <div class="tl-scroll">
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">V1</div>
+              <div class="tid rec outline">V1</div>
+              <div class="lbl">picture</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip v" style="left:40px; width:680px">SC4_T2 · V1</div>
+              <div class="mark in" style="left:200px"></div>
+              <div class="mark out" style="left:400px"></div>
+              <div class="ph" style="left:264px"></div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">A1</div>
+              <div class="tid rec outline">A1</div>
+              <div class="lbl">boom</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip a" style="left:40px; width:680px">boom</div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="header">
+              <div class="tid src filled">A2</div>
+              <div class="tid rec outline">A2</div>
+              <div class="lbl">lav1 · Anna</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b solo">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane">
+              <div class="range" style="left:200px; width:200px"></div>
+              <div class="clip a" style="left:40px; width:680px">lav1 (Anna)</div>
+            </div>
+          </div>
+          <div class="row muted">
+            <div class="header">
+              <div class="tid src dim">A4</div>
+              <div class="tid empty"></div>
+              <div class="lbl unrouted">lav3 · unrouted</div>
+              <div class="sync ripple" title="Sync: Ripple"><svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M2 5 Q4.5 2, 7 5 T12 5"/><path d="M2 9 Q4.5 6, 7 9 T12 9"/></svg></div>
+              <div class="lock"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="6" width="8" height="5" rx="1"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg></div>
+              <div class="sm-stack"><div class="b">S</div><div class="b">M</div></div>
+            </div>
+            <div class="lane"><div class="clip a dim" style="left:40px; width:680px">lav3</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</body>
+</html>

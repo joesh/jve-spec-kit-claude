@@ -5,7 +5,7 @@
 ---      session; not yet flushed to the model/DB but authoritative to
 ---      the Inspector until Apply commits.
 ---   2. clip_ref — the live clip object from timeline_state (columns:
----      name, enabled, timeline_start, duration, source_in, source_out,
+---      name, enabled, sequence_start, duration, source_in, source_out,
 ---      marks, rate, …). Preferred for clip-row fields so the Inspector
 ---      stays in sync with timeline edits without a DB roundtrip.
 ---   3. properties — rows from the `properties` table loaded via

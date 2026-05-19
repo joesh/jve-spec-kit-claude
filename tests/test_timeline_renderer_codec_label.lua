@@ -47,8 +47,11 @@ local function make_state(clips_by_track)
         get_viewport_start_time = function() return 0 end,
         get_viewport_duration = function() return 200 end,
         get_playhead_position = function() return 0 end,
-        get_mark_in = function() return nil end,
-        get_mark_out = function() return nil end,
+        get_mark_in          = function() return nil end,
+        get_mark_out         = function() return nil end,
+        get_display_mark_in  = function() return nil end,
+        get_display_mark_out = function() return nil end,
+        get_ghost_mark       = function() return nil end,
         get_sequence_frame_rate = function() return seq_rate end,
         time_to_pixel = function(t, width)
             return ((t or 0) / 200) * width
@@ -104,7 +107,7 @@ do
     local clips = {
         {
             id = "c1", track_id = "v1", label = "MyClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "FileNotFound",
         },
     }
@@ -132,7 +135,7 @@ do
     local clips = {
         {
             id = "c2", track_id = "v1", label = "BRAWClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "Unsupported",
         },
     }
@@ -160,7 +163,7 @@ do
     local clips = {
         {
             id = "c3", track_id = "v1", label = "CorruptClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = true, error_code = "DecodeFailed",
         },
     }
@@ -186,7 +189,7 @@ do
     local clips = {
         {
             id = "c4", track_id = "v1", label = "NormalClip",
-            timeline_start = 0, duration = 100,
+            sequence_start = 0, duration = 100,
             enabled = true, offline = false, error_code = nil,
         },
     }

@@ -24,7 +24,7 @@ local function seed_db(db_path)
 
     exec([[INSERT INTO projects(id,name,fps_mismatch_policy, created_at,modified_at) VALUES('proj','P','resample',0,0);]])
     exec([[INSERT INTO sequences(id,project_id,name,kind,fps_numerator,fps_denominator,audio_sample_rate,width,height,view_start_frame,view_duration_frames,playhead_frame,created_at,modified_at)
-        VALUES('seq','proj','Seq','nested',24,1,48000,1920,1080,0,2000,0,0,0);]])
+        VALUES('seq','proj','Seq','sequence',24,1,48000,1920,1080,0,2000,0,0,0);]])
     exec([[INSERT INTO tracks(id,sequence_id,name,track_type,track_index,enabled,locked,muted,soloed,volume,pan)
         VALUES('v1','seq','V1','VIDEO',1,1,0,0,0,1.0,0.0);]])
 
@@ -35,14 +35,14 @@ local function insert_clip(id, start_frames, duration_frames, source_in_frame)
 INSERT OR IGNORE INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', 'proj', 'placeholder', '_placeholder', 1, 30, 1, 1920, 1080, 0, 'raw', 0, 0);
 INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, 0, 0);
+VALUES ('_v13_placeholder_master', 'proj', 'placeholder_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
 INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
+INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
 VALUES ('_v13_placeholder_mr', 'proj', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1, 0, 1, 1, 1.0, 0, 0, 0);
 
-INSERT INTO clips (id, project_id, name, track_id, nested_sequence_id, owner_sequence_id, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
+INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
     ('%s', 'proj', '%s', 'v1', '_v13_placeholder_master', 'seq', %d, %d, %d, %d, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0)]],
         id, id, start_frames, duration_frames, source_in_frame, source_out_frame))
 end
@@ -55,7 +55,7 @@ insert_clip("downstream", 500, 120)
 end
 
 local function fetch_start(db, id)
-    local stmt = db:prepare("SELECT timeline_start_frame FROM clips WHERE id = ?")
+    local stmt = db:prepare("SELECT sequence_start_frame FROM clips WHERE id = ?")
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "missing clip " .. id)
     local start = tonumber(stmt:value(0))

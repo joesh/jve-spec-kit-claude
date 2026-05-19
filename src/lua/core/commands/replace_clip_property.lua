@@ -91,6 +91,7 @@ end
 -- @param value string
 local function write_value(db, clip_id, column, value)
     if column == "name" then
+        require("core.track_lock_guard").assert_clip_writable(db, clip_id)
         local stmt = db:prepare("UPDATE clips SET name = ? WHERE id = ?")
         assert(stmt, "ReplaceClipProperty: failed to prepare UPDATE name")
         stmt:bind_value(1, value)

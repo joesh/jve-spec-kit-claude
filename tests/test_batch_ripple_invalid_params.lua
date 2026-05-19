@@ -18,8 +18,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_invalid_edge_type.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -43,7 +43,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_nil_edge_type.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 
@@ -65,8 +65,8 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_missing_clip_id.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}
         }
     })
 
@@ -89,7 +89,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_nonexistent_clip.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 
@@ -113,7 +113,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_empty_edges.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 
@@ -134,7 +134,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_no_edges.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 
@@ -154,7 +154,7 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_no_delta.db",
         clips = {
-            v1_left = {timeline_start = 0, duration = 1000}
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 

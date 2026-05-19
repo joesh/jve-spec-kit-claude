@@ -28,14 +28,14 @@ local function setup_db(path)
     assert(conn:exec(SCHEMA_SQL))
     local now = os.time()
     assert(conn:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('proj', 'Test', 'resample', %d, %d);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate,
             width, height, playhead_frame,
             view_start_frame, view_duration_frames,
             created_at, modified_at)
-        VALUES ('seq', 'proj', 'Timeline', 'nested',
+        VALUES ('seq', 'proj', 'Timeline', 'sequence',
             24, 1, 48000, 1920, 1080, 0, 0, 10000, %d, %d);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
         VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
@@ -70,7 +70,7 @@ local function insert_clip(conn, id, start_frames, dur_frames, track_id)
         "proj", media_id, 24, 1, dur_frames, media_id)
     assert(conn:exec(string.format([[
         INSERT INTO clips (id, project_id, name, track_id,
-            owner_sequence_id, nested_sequence_id, timeline_start_frame, duration_frames,
+            owner_sequence_id, sequence_id, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
             enabled, volume, playhead_frame, created_at, modified_at)

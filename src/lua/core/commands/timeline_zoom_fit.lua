@@ -70,10 +70,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             -- in-memory clip rows with is_gap=true). Skip them so leading
             -- gaps don't flatten min_start to 0 and inflate the fit window.
             if not clip.is_gap then
-                local s = clip.timeline_start
+                local s = clip.sequence_start
                 local d = clip.duration
                 assert(type(s) == "number",
-                    string.format("TimelineZoomFit: clip %s has non-number timeline_start: %s",
+                    string.format("TimelineZoomFit: clip %s has non-number sequence_start: %s",
                         tostring(clip.id), type(s)))
                 assert(type(d) == "number",
                     string.format("TimelineZoomFit: clip %s has non-number duration: %s",

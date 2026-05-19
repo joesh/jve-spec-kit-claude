@@ -15,7 +15,7 @@ local function make_clip(id, track_id, start_value, duration_value, fps_num, fps
     return {
         id = id,
         track_id = track_id,
-        timeline_start = Rational.new(start_value, fps_num, fps_den),
+        sequence_start = Rational.new(start_value, fps_num, fps_den),
         duration = Rational.new(duration_value, fps_num, fps_den),
         start_value = start_value,
         duration_value = duration_value,

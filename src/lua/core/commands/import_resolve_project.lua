@@ -18,6 +18,7 @@
 -- @file import_resolve_project.lua
 local M = {}
 local log = require("core.logger").for_area("media")
+local subframe_math = require("core.subframe_math")
 local file_browser = require("core.file_browser")
 
 -- Schema for .drp import command
@@ -297,7 +298,7 @@ local function create_track_with_clips(project_id, sequence, track_data,
             project_id        = project_id,
             owner_sequence_id = sequence.id,
             track_id          = track.id,
-            timeline_start    = c.start_value,
+            sequence_start    = c.start_value,
             duration          = c.duration,
             source_in         = c.source_in,
             source_out        = source_out,
@@ -380,6 +381,8 @@ function M.register(executors, undoers, db)
             height = parse_result.project.settings.height,
             audio_sample_rate = args.audio_sample_rate
                 or pick_majority(parse_result),
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
+            default_fps = { num = 24, den = 1 },
         }
 
         local project = Project.create(parse_result.project.name, {
@@ -491,6 +494,8 @@ function M.register(executors, undoers, db)
             frame_rate = import_result_raw.project.frame_rate,
             width = import_result_raw.project.width,
             height = import_result_raw.project.height,
+            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
+            default_fps = { num = 24, den = 1 },
         }
 
         local project = Project.create(import_result_raw.project.name, {

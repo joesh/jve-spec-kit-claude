@@ -29,8 +29,8 @@ local TEST_DB = "/tmp/jve/test_opposing_brackets_bug.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_right = {timeline_start = 2500},  -- Gap from 1500-2500
-        v2 = {timeline_start = 1800, duration = 800}  -- Ends at 2600, NOT adjacent to V1 gap
+        v1_right = {sequence_start = 2500},  -- Gap from 1500-2500
+        v2 = {sequence_start = 1800, duration = 800}  -- Ends at 2600, NOT adjacent to V1 gap
     }
 })
 local db = layout.db
@@ -61,16 +61,16 @@ local v1_left = Clip.load(clips.v1_left.id, db)
 local v1_right = Clip.load(clips.v1_right.id, db)
 local v2 = Clip.load(clips.v2.id, db)
 
-local gap_size = v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration)
+local gap_size = v1_right.sequence_start - (v1_left.sequence_start + v1_left.duration)
 
 print("\nAFTER:")
 print(string.format("  V1 gap:  %d-%d (%d frames)",
-    v1_left.timeline_start + v1_left.duration,
-    v1_right.timeline_start,
+    v1_left.sequence_start + v1_left.duration,
+    v1_right.sequence_start,
     gap_size))
 print(string.format("  V2:      %d-%d (%d frames)",
-    v2.timeline_start,
-    v2.timeline_start + v2.duration,
+    v2.sequence_start,
+    v2.sequence_start + v2.duration,
     v2.duration))
 
 assert(v2.duration == 1000,
@@ -80,8 +80,8 @@ assert(v2.duration == 1000,
 local expected_gap = 1200
 assert(gap_size == expected_gap,
     string.format("Gap should open by 200 (expected %d, got %d)", expected_gap, gap_size))
-assert(v1_right.timeline_start == 2700,
-    string.format("Downstream clip should shift right to 2700, got %d", v1_right.timeline_start))
+assert(v1_right.sequence_start == 2700,
+    string.format("Downstream clip should shift right to 2700, got %d", v1_right.sequence_start))
 print("✅ Multi-track opposing brackets open upstream gaps when dragging right")
 
 layout:cleanup()
@@ -90,8 +90,8 @@ layout:cleanup()
 local layout_close = ripple_layout.create({
     db_path = "/tmp/jve/test_opposing_brackets_bug_close.db",
     clips = {
-        v1_right = {timeline_start = 2500},
-        v2 = {timeline_start = 1800, duration = 800}
+        v1_right = {sequence_start = 2500},
+        v2 = {sequence_start = 1800, duration = 800}
     }
 })
 local db_close = layout_close.db
@@ -116,14 +116,14 @@ assert(result_close.success, result_close.error_message or "Command failed for c
 local v1_left_close = Clip.load(clips_close.v1_left.id, db_close)
 local v1_right_close = Clip.load(clips_close.v1_right.id, db_close)
 local v2_close = Clip.load(clips_close.v2.id, db_close)
-local gap_close = v1_right_close.timeline_start - (v1_left_close.timeline_start + v1_left_close.duration)
+local gap_close = v1_right_close.sequence_start - (v1_left_close.sequence_start + v1_left_close.duration)
 
 assert(v2_close.duration == 600,
     string.format("V2 should shrink by 200 (800→600) when dragging left, got %d", v2_close.duration))
 assert(gap_close == 800,
     string.format("Gap should close by 200 (expected 800, got %d)", gap_close))
-assert(v1_right_close.timeline_start == 2300,
-    string.format("Downstream clip should shift left to 2300, got %d", v1_right_close.timeline_start))
+assert(v1_right_close.sequence_start == 2300,
+    string.format("Downstream clip should shift left to 2300, got %d", v1_right_close.sequence_start))
 print("✅ Multi-track opposing brackets close upstream gaps when dragging left")
 
 layout_close:cleanup()

@@ -12,9 +12,9 @@ local ripple_layout = require("tests.helpers.ripple_layout")
 -- Test asymmetric ripple with gap in-edge [  and clip out ]
 -- This tests the "opposing brackets" logic (Rule 11)
 local CANONICAL_LAYOUT = {
-    v1_left = {timeline_start = 0, duration = 1500},
-    v1_right = {timeline_start = 3500, duration = 1200},
-    v2 = {timeline_start = 2000, duration = 1000}
+    v1_left = {sequence_start = 0, duration = 1500},
+    v1_right = {sequence_start = 3500, duration = 1200},
+    v2 = {sequence_start = 2000, duration = 1000}
 }
 
 local function run_asymmetric_case(delta_frames, expect)
@@ -46,20 +46,20 @@ local function run_asymmetric_case(delta_frames, expect)
     local v1_right = Clip.load(clips.v1_right.id, db)
     local v2 = Clip.load(clips.v2.id, db)
 
-    local gap_size = v1_right.timeline_start - (v1_left.timeline_start + v1_left.duration)
+    local gap_size = v1_right.sequence_start - (v1_left.sequence_start + v1_left.duration)
 
     assert(v2.duration == expect.v2_duration,
         string.format("V2 duration mismatch for delta %d: expected %d, got %d",
             delta_frames, expect.v2_duration, v2.duration))
-    assert(v2.timeline_start == expect.v2_start,
+    assert(v2.sequence_start == expect.v2_start,
         string.format("V2 start mismatch for delta %d: expected %d, got %d",
-            delta_frames, expect.v2_start, v2.timeline_start))
+            delta_frames, expect.v2_start, v2.sequence_start))
     assert(gap_size == expect.gap_duration,
         string.format("Gap duration mismatch for delta %d: expected %d, got %d",
             delta_frames, expect.gap_duration, gap_size))
-    assert(v1_right.timeline_start == expect.v1_right_start,
+    assert(v1_right.sequence_start == expect.v1_right_start,
         string.format("V1 right start mismatch for delta %d: expected %d, got %d",
-            delta_frames, expect.v1_right_start, v1_right.timeline_start))
+            delta_frames, expect.v1_right_start, v1_right.sequence_start))
 
     layout:cleanup()
 end

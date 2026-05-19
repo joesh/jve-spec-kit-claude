@@ -213,14 +213,14 @@ end
 -- Canonical formula: source_out = source_in + timeline_to_source(duration, ...)
 --
 -- @param source_in number Source in-point (in clip's native units)
--- @param timeline_duration number Duration in timeline frames
+-- @param sequence_duration number Duration in timeline frames
 -- @param clip_fps_num number Clip's fps_numerator
 -- @param clip_fps_den number Clip's fps_denominator
 -- @param seq_fps_num number Sequence fps_numerator
 -- @param seq_fps_den number Sequence fps_denominator
 -- @return number source_out (integer)
-function M.compute_source_out(source_in, timeline_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
-    local source_duration = M.timeline_to_source(timeline_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
+function M.compute_source_out(source_in, sequence_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
+    local source_duration = M.timeline_to_source(sequence_duration, clip_fps_num, clip_fps_den, seq_fps_num, seq_fps_den)
     return source_in + source_duration
 end
 

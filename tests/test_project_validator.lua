@@ -23,15 +23,15 @@ local layout = ripple_layout.create({
         order = {"clip_a", "clip_b", "clip_c"},
         clip_a = {
             id = "clip_a", name = "A", track_key = "v1", media_key = "main",
-            timeline_start = 0, duration = 500, source_in = 100,
+            sequence_start = 0, duration = 500, source_in = 100,
         },
         clip_b = {
             id = "clip_b", name = "B", track_key = "v1", media_key = "main",
-            timeline_start = 500, duration = 700, source_in = 200,
+            sequence_start = 500, duration = 700, source_in = 200,
         },
         clip_c = {
             id = "clip_c", name = "C", track_key = "a1", media_key = "main",
-            timeline_start = 0, duration = 1200, source_in = 300,
+            sequence_start = 0, duration = 1200, source_in = 300,
         },
     },
 })
@@ -125,7 +125,7 @@ print("  Test 3b: zero source range detected — OK")
 -- Temporarily disable the trigger so we can create the invalid state
 db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update")
 
-update_clip_field("clip_b", "timeline_start_frame", 400)
+update_clip_field("clip_b", "sequence_start_frame", 400)
 -- Now clip_a [0,500] and clip_b [400,1100] overlap on V1
 
 local overlap_result = validator.validate_jvp(db)
@@ -138,7 +138,7 @@ end
 assert(found_overlap, "Should report VIDEO_OVERLAP error")
 
 -- Restore
-update_clip_field("clip_b", "timeline_start_frame", 500)
+update_clip_field("clip_b", "sequence_start_frame", 500)
 
 print("  Test 4: video overlap detected — OK")
 

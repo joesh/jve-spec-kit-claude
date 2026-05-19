@@ -10,9 +10,9 @@ local TEST_DB = "/tmp/jve/test_timeline_restart_edge_selection.db"
 local layout = ripple_layout.create({
     db_path = TEST_DB,
     clips = {
-        v1_left = {timeline_start = 0, duration = 1500},
-        v1_right = {timeline_start = 3500, duration = 1200},
-        v2 = {timeline_start = 2000, duration = 900}
+        v1_left = {sequence_start = 0, duration = 1500},
+        v1_right = {sequence_start = 3500, duration = 1200},
+        v2 = {sequence_start = 2000, duration = 900}
     }
 })
 local clips = layout.clips

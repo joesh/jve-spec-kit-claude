@@ -82,11 +82,27 @@ package.loaded["core.logger"] = {
     end,
 }
 
+package.loaded["models.track"] = {
+    find_by_sequence = function(_seq_id, track_type)
+        if track_type == "VIDEO" then
+            return { { track_index = 0, muted = false, soloed = false } }
+        end
+        return {}
+    end,
+    load = function(_track_id) return nil end,
+}
+
 package.loaded["core.renderer"] = {
+    compute_effective_video_indices = function(tracks)
+        local idxs = {}
+        for _, t in ipairs(tracks) do idxs[#idxs+1] = t.track_index end
+        table.sort(idxs, function(a, b) return a > b end)
+        return idxs
+    end,
     get_sequence_info = function()
         return {
             fps_num = 25, fps_den = 1,
-            kind = "nested", name = "Test",
+            kind = "sequence", name = "Test",
             audio_sample_rate = 48000,
         }
     end,
@@ -100,7 +116,7 @@ local bad_clip = {
     source_in = 0,
     source_out = 0,
     duration = 100,
-    timeline_start = 0,
+    sequence_start = 0,
     fps_numerator = 25,
     fps_denominator = 1,
 }
@@ -113,6 +129,7 @@ local bad_track = {
 
 local mock_sequence = {
     id = "seq_with_bad_clip",
+    start_timecode_frame = 0,
     compute_content_end = function() return 100 end,
     get_video_at = function(_self, frame)
         if frame >= 0 and frame < 100 then
@@ -122,7 +139,7 @@ local mock_sequence = {
                 source_frame = 0,
                 clip_id = bad_clip.id,
                 source_in = bad_clip.source_in, source_out = bad_clip.source_out,
-                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                duration = bad_clip.duration, sequence_start = bad_clip.sequence_start,
                 fps_numerator = bad_clip.fps_numerator, fps_denominator = bad_clip.fps_denominator,
                 track_index = bad_track.track_index, track_type = bad_track.type,
             }}
@@ -140,7 +157,7 @@ local mock_sequence = {
                 media_path = "/test.mov",
                 clip_id = bad_clip.id,
                 source_in = bad_clip.source_in, source_out = bad_clip.source_out,
-                duration = bad_clip.duration, timeline_start = bad_clip.timeline_start,
+                duration = bad_clip.duration, sequence_start = bad_clip.sequence_start,
                 fps_numerator = 25, fps_denominator = 1,
                 track_index = bad_track.track_index, track_type = bad_track.type,
             }}
@@ -169,7 +186,7 @@ print("=== test_zero_source_range_clip.lua ===")
 
 local PlaybackEngine = require("core.playback.playback_engine")
 local noop = function() end
-local engine = PlaybackEngine.new({
+local engine = PlaybackEngine.new("source", {
     view_id = "test_monitor",
     on_show_frame = noop,
     on_show_gap = noop,
@@ -198,7 +215,7 @@ print("  PASS: assert fires correctly on zero source range")
 -- Test 2: _provide_clips with bad clip is catchable (pcall boundary works)
 --------------------------------------------------------------------------------
 print("TEST 2: _provide_clips with bad clip is catchable via pcall")
-engine:load_sequence("seq_with_bad_clip")
+engine:load_sequence("seq_with_bad_clip", nil, 48000)
 
 local provide_ok, provide_err = pcall(function()
     engine:_provide_clips(0, 1, "video")

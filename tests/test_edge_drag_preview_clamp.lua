@@ -34,10 +34,10 @@ for _, p in ipairs(zero_previews) do
 end
 
 -- Regression: in-edge previews must shift their start positions when trimming.
-local clip = { timeline_start = 100, duration = 200 }
+local clip = { sequence_start = 100, duration = 200 }
 local delta = 24
 local in_start, in_duration = edge_drag_renderer.compute_preview_geometry(clip, "in", delta)
-local expected_in_start = clip.timeline_start
+local expected_in_start = clip.sequence_start
 assert(in_start == expected_in_start,
     string.format("in-edge preview should keep clip start anchored; expected %d got %d", expected_in_start, in_start or -1))
 assert(in_duration == clip.duration - delta,

@@ -10,11 +10,11 @@
 ---     * Every clip is on an AUDIO track.
 ---     * Every clip has non-NULL master_audio_track_id (already-composite
 ---       refuses — collapse is the inverse of expand).
----     * All share the same nested_sequence_id.
+---     * All share the same sequence_id.
 ---     * All share the same source_in_frame AND source_out_frame
 ---       (divergent windows refuse — per-track slip is the genuine
 ---       expressiveness Expand buys; composite has nowhere to encode it).
----     * All share the same timeline_start_frame AND duration_frames.
+---     * All share the same sequence_start_frame AND duration_frames.
 ---     * All share the same fps_mismatch_policy.
 ---     * All members of the same link_group_id.
 ---     * Each clip's master_audio_track_id is distinct.
@@ -103,10 +103,10 @@ local function assert_consistent_selection(selected)
             .. "master_audio_track_id=%s; each selected clip must point at "
             .. "a distinct nested A track.", tostring(r.master_audio_track_id)))
         seen[r.master_audio_track_id] = true
-        assert(r.nested_sequence_id == first.nested_sequence_id, string.format(
+        assert(r.sequence_id == first.sequence_id, string.format(
             "CollapseAudio: clip %s nested=%s differs from first selected "
             .. "clip nested=%s. All selected clips must reference the same "
-            .. "master.", r.id, r.nested_sequence_id, first.nested_sequence_id))
+            .. "master.", r.id, r.sequence_id, first.sequence_id))
         assert(r.source_in_frame == first.source_in_frame
            and r.source_out_frame == first.source_out_frame, string.format(
             "CollapseAudio: clip %s window [%d, %d) differs from first "
@@ -114,12 +114,12 @@ local function assert_consistent_selection(selected)
             .. "in composite — refused.",
             r.id, r.source_in_frame, r.source_out_frame,
             first.source_in_frame, first.source_out_frame))
-        assert(r.timeline_start_frame == first.timeline_start_frame
+        assert(r.sequence_start_frame == first.sequence_start_frame
            and r.duration_frames == first.duration_frames, string.format(
             "CollapseAudio: clip %s timeline window [%d..+%d) differs from "
             .. "first selected clip [%d..+%d).",
-            r.id, r.timeline_start_frame, r.duration_frames,
-            first.timeline_start_frame, first.duration_frames))
+            r.id, r.sequence_start_frame, r.duration_frames,
+            first.sequence_start_frame, first.duration_frames))
         assert(r.fps_mismatch_policy == first.fps_mismatch_policy, string.format(
             "CollapseAudio: clip %s fps_mismatch_policy=%s differs from first "
             .. "selected clip's %s.",
@@ -166,17 +166,20 @@ end
 -- into per-channel gain below; the row itself carries volume=1.
 local function insert_composite_clip(sequence_id, first, topmost)
     local composite_id = uuid.generate()
+    -- 018 FR-014: collapse onto topmost track preserves subframe from source.
     Clip.create({
         id                    = composite_id,
         project_id            = first.project_id,
         owner_sequence_id     = sequence_id,
         track_id              = topmost.row.track_id,
-        nested_sequence_id    = first.nested_sequence_id,
+        sequence_id    = first.sequence_id,
         name                  = first.name,
-        timeline_start_frame  = first.timeline_start_frame,
+        sequence_start_frame  = first.sequence_start_frame,
         duration_frames       = first.duration_frames,
         source_in_frame       = first.source_in_frame,
         source_out_frame      = first.source_out_frame,
+        source_in_subframe    = first.source_in_subframe,
+        source_out_subframe   = first.source_out_subframe,
         master_layer_track_id = nil,
         master_audio_track_id = nil,
         fps_mismatch_policy   = first.fps_mismatch_policy,
@@ -264,7 +267,7 @@ function M.execute(args)
     local first, first_lg = assert_consistent_selection(selected)
     local topmost = pick_topmost_selected(selected)
     local unselected_tracks =
-        compute_unselected_master_tracks(first.nested_sequence_id, selected)
+        compute_unselected_master_tracks(first.sequence_id, selected)
 
     -- DELETE the selected clip rows (cascades clip_links + overrides);
     -- INSERT composite; project channel state; re-link.

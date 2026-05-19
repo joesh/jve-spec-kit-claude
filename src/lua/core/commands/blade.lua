@@ -170,9 +170,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     owner_sequence_id     = row.owner_sequence_id,
                     track_sequence_id     = row.owner_sequence_id,
                     track_id              = row.track_id,
-                    nested_sequence_id    = row.nested_sequence_id,
-                    start_value           = row.timeline_start_frame,
-                    timeline_start        = row.timeline_start_frame,
+                    sequence_id    = row.sequence_id,
+                    start_value           = row.sequence_start_frame,
+                    sequence_start        = row.sequence_start_frame,
                     duration_value        = row.duration_frames,
                     duration              = row.duration_frames,
                     source_in             = row.source_in_frame,
@@ -218,7 +218,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 local restored_source_out = right.source_out_frame
                 Clip.delete_one(s.second_clip_id)
                 Clip.update_bounds(s.clip_id,
-                    left.timeline_start_frame, restored_duration,
+                    left.sequence_start_frame, restored_duration,
                     left.source_in_frame, restored_source_out)
             end
         end)

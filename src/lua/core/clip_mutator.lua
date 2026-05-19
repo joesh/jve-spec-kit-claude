@@ -38,7 +38,7 @@ end
             track_type = row.track_type,
             name = row.name,
             track_id = row.track_id,
-            nested_sequence_id = row.nested_sequence_id,
+            sequence_id = row.sequence_id,
             master_layer_track_id = row.master_layer_track_id,
             master_audio_track_id = row.master_audio_track_id,
             fps_mismatch_policy = assert(row.fps_mismatch_policy,
@@ -47,7 +47,7 @@ end
             owner_sequence_id = row.owner_sequence_id,
             created_at = row.created_at,
             modified_at = row.modified_at,
-            timeline_start = row.timeline_start,
+            sequence_start = row.sequence_start,
             duration = row.duration,
             source_in = row.source_in,
             source_out = row.source_out,
@@ -112,7 +112,7 @@ local function plan_update(row, original)
         type = "update",
         clip_id = row.id,
         track_id = row.track_id,
-        timeline_start_frame = get_frames(row.timeline_start),
+        sequence_start_frame = get_frames(row.sequence_start),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
@@ -134,29 +134,29 @@ local function plan_insert(row)
     -- need fps for the SQL (no fps columns on the clips table) — keeps the
     -- single-shape contract enforced at every entry point.
     get_row_fps(row)
-    assert(row.timeline_start, "clip_mutator: insert mutation missing timeline_start")
+    assert(row.sequence_start, "clip_mutator: insert mutation missing sequence_start")
     assert(row.duration, "clip_mutator: insert mutation missing duration")
     assert(row.source_in, "clip_mutator: insert mutation missing source_in")
     assert(row.source_out, "clip_mutator: insert mutation missing source_out")
-    -- V13: nested_sequence_id replaces master_clip_id; clip_kind/media_id/
+    -- V13: sequence_id replaces master_clip_id; clip_kind/media_id/
     -- offline are gone from clips.
-    local nested_id = row.nested_sequence_id
+    local nested_id = row.sequence_id
     assert(nested_id and nested_id ~= "",
-        "clip_mutator.plan_insert: missing nested_sequence_id for clip " .. tostring(row.id))
+        "clip_mutator.plan_insert: missing sequence_id for clip " .. tostring(row.id))
     return {
         type = "insert",
         clip_id = row.id,
         project_id = row.project_id,
         name = row.name or "",
         track_id = row.track_id,
-        nested_sequence_id = nested_id,
+        sequence_id = nested_id,
         master_layer_track_id = row.master_layer_track_id,
         master_audio_track_id = row.master_audio_track_id,
         fps_mismatch_policy = assert(row.fps_mismatch_policy,
             "clip_mutator: insert mutation missing fps_mismatch_policy "
             .. "for clip " .. tostring(row.id)),
         owner_sequence_id = row.owner_sequence_id,
-        timeline_start_frame = get_frames(row.timeline_start),
+        sequence_start_frame = get_frames(row.sequence_start),
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
@@ -174,9 +174,9 @@ local function plan_insert(row)
     }
 end
 
--- Resolve occlusions for a clip about to occupy [timeline_start, end_time).
+-- Resolve occlusions for a clip about to occupy [sequence_start, end_time).
 -- Params:
---   track_id, timeline_start, duration
+--   track_id, sequence_start, duration
 --   exclude_clip_id: clip id to ignore while checking overlaps (e.g., the clip being updated)
 local function load_track_clips(db, track_id)
     -- V13 SELECT: same column set produced by database.load_clips, plus
@@ -187,8 +187,8 @@ local function load_track_clips(db, track_id)
     -- duplicates. GROUP BY collapses to one row per clip.
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.owner_sequence_id, c.sequence_id,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -200,8 +200,8 @@ local function load_track_clips(db, track_id)
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
                                 AND EXISTS (
                                     SELECT 1 FROM tracks mt
@@ -210,7 +210,7 @@ local function load_track_clips(db, track_id)
                                 )
         WHERE c.track_id = ?
         GROUP BY c.id
-        ORDER BY c.timeline_start_frame
+        ORDER BY c.sequence_start_frame
     ]])
     if not stmt then
         return nil, "Failed to prepare track clip query"
@@ -239,15 +239,15 @@ local function load_track_clips(db, track_id)
             name = stmt:value(2),
             track_id = stmt:value(3),
             owner_sequence_id = stmt:value(4),
-            nested_sequence_id = nested_id,
-            nested_sequence_kind = stmt:value(20),
+            sequence_id = nested_id,
+            source_sequence_kind = stmt:value(20),
             master_layer_track_id = stmt:value(10),
             master_audio_track_id = stmt:value(11),
             fps_mismatch_policy = stmt:value(12),
             created_at = stmt:value(15),
             modified_at = stmt:value(16),
             -- Integer frame coordinates
-            timeline_start = stmt:value(6),
+            sequence_start = stmt:value(6),
             duration = stmt:value(7),
             source_in = stmt:value(8),
             source_out = stmt:value(9),
@@ -281,7 +281,7 @@ local function normalize_pending_lookup(pending_clips, exclude_id)
             return
         end
         lookup[clip_id] = {
-            timeline_start = pending.timeline_start,
+            sequence_start = pending.sequence_start,
             duration = pending.duration,
             tolerance = pending.tolerance,
             _seen = false,
@@ -311,7 +311,7 @@ local function iter_overlaps(clip_list, start_value, end_time)
         while index <= count do
             local item = clip_list[index]
             index = index + 1
-            local clip_start = item.timeline_start
+            local clip_start = item.sequence_start
             assert(type(clip_start) == "number", "clip_mutator: overlap check missing clip_start")
             local clip_end = clip_start + (item.duration or 0)
 
@@ -349,10 +349,10 @@ local function plan_full_cover_action(original)
     return plan_delete(original)
 end
 
--- Span clips the tail. Keep timeline_start, shorten duration to end at
+-- Span clips the tail. Keep sequence_start, shorten duration to end at
 -- start_value. source_in stays; source_out moves (right edge trim).
 local function plan_trim_tail_action(row, original, start_value, get_seq_fps)
-    local clip_start = row.timeline_start
+    local clip_start = row.sequence_start
     local new_duration = start_value - clip_start
     if new_duration < 1 then
         return plan_delete(original)
@@ -365,18 +365,18 @@ local function plan_trim_tail_action(row, original, start_value, get_seq_fps)
     return plan_update(row, original)
 end
 
--- Span clips the head. Shift timeline_start to end_time, shorten duration
+-- Span clips the head. Shift sequence_start to end_time, shorten duration
 -- from the front. source_in moves by trim_amount (in source units);
 -- source_out stays.
 local function plan_trim_head_action(row, original, end_time, get_seq_fps)
-    local clip_start = row.timeline_start
+    local clip_start = row.sequence_start
     local clip_end = clip_start + row.duration
     local trim_amount = end_time - clip_start
     local new_duration = clip_end - end_time
     if new_duration < 1 then
         return plan_delete(original)
     end
-    row.timeline_start = end_time
+    row.sequence_start = end_time
     row.duration = new_duration
     row.source_in = get_source_in(row) + frame_utils.timeline_to_source(
         trim_amount, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
@@ -390,7 +390,7 @@ end
 -- — caller appends both. Returns just (delete_action) when the left half
 -- would be sub-frame.
 local function plan_straddle_split_actions(row, original, start_value, end_time, get_seq_fps)
-    local clip_start = row.timeline_start
+    local clip_start = row.sequence_start
     local clip_end = clip_start + row.duration
     local row_fps_num, row_fps_den = get_row_fps(row)
     local left_duration = start_value - clip_start
@@ -417,7 +417,7 @@ local function plan_straddle_split_actions(row, original, start_value, end_time,
         track_type            = original.track_type,
         name                  = original.name,
         track_id              = original.track_id,
-        timeline_start        = end_time,
+        sequence_start        = end_time,
         duration              = right_duration,
         source_in             = get_source_in(original) + frame_utils.timeline_to_source(
             right_shift, row_fps_num, row_fps_den, get_seq_fps(original)),
@@ -425,7 +425,7 @@ local function plan_straddle_split_actions(row, original, start_value, end_time,
         frame_rate            = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
         enabled               = original.enabled,
         volume                = original.volume,
-        nested_sequence_id    = original.nested_sequence_id,
+        sequence_id    = original.sequence_id,
         master_layer_track_id = original.master_layer_track_id,
         master_audio_track_id = original.master_audio_track_id,
         fps_mismatch_policy   = original.fps_mismatch_policy,
@@ -440,7 +440,7 @@ end
 -- emit the corresponding actions onto `actions`. No-op when the span
 -- doesn't actually intersect (caller already filtered).
 local function plan_overlap_actions(row, start_value, end_time, get_seq_fps, actions)
-    local clip_start = row.timeline_start
+    local clip_start = row.sequence_start
     assert(type(clip_start) == "number", "clip_mutator.resolve_occlusions: missing clip_start")
     local clip_duration = row.duration
     assert(type(clip_duration) == "number", "clip_mutator.resolve_occlusions: missing clip duration")
@@ -474,8 +474,8 @@ function ClipMutator.resolve_occlusions(db, params)
     local track_id = params.track_id
     assert(type(track_id) == "string" and track_id ~= "",
         "clip_mutator.resolve_occlusions: params.track_id required")
-    local start_value = assert(params.timeline_start,
-        "clip_mutator.resolve_occlusions: timeline_start is required")
+    local start_value = assert(params.sequence_start,
+        "clip_mutator.resolve_occlusions: sequence_start is required")
     local duration = assert(params.duration, "clip_mutator.resolve_occlusions: duration is required")
 
     -- Ensure integer frame coordinates
@@ -567,9 +567,9 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
     local actions = {}
 
     for _, row in ipairs(track_clips) do
-        local clip_start = row.timeline_start
+        local clip_start = row.sequence_start
         assert(type(clip_start) == "number",
-            string.format("resolve_occlusions_multi: clip %s missing timeline_start",
+            string.format("resolve_occlusions_multi: clip %s missing sequence_start",
                 tostring(row.id)))
         local clip_dur = row.duration
         assert(type(clip_dur) == "number" and clip_dur > 0,
@@ -620,7 +620,7 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
             local first = valid[1]
             local trim_left = first.s - clip_start  -- timeline frames removed from left
             local trim_right = clip_end - first.e   -- timeline frames removed from right
-            row.timeline_start = first.s
+            row.sequence_start = first.s
             row.duration = first.e - first.s
             row.source_in = get_source_in(original) + frame_utils.timeline_to_source(
                 trim_left, row.frame_rate.fps_numerator, row.frame_rate.fps_denominator,
@@ -643,12 +643,12 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                     track_type = original.track_type,
                     name = original.name,
                     track_id = original.track_id,
-                    nested_sequence_id = original.nested_sequence_id,
+                    sequence_id = original.sequence_id,
                     master_layer_track_id = original.master_layer_track_id,
                     master_audio_track_id = original.master_audio_track_id,
                     fps_mismatch_policy = original.fps_mismatch_policy,
                     owner_sequence_id = original.owner_sequence_id,
-                    timeline_start = f.s,
+                    sequence_start = f.s,
                     duration = f.e - f.s,
                     source_in = get_source_in(original) + frame_utils.timeline_to_source(
                         shift, row_fps_num, row_fps_den,
@@ -678,12 +678,12 @@ ClipMutator.plan_insert = plan_insert
 function ClipMutator.resolve_ripple(db, params)
     assert(type(params) == "table", "clip_mutator.resolve_ripple: params table required")
     local track_id = params.track_id
-    local insert_time = params.insert_time or params.timeline_start or params.timeline_start_frame
+    local insert_time = params.insert_time or params.sequence_start or params.sequence_start_frame
     local shift_amount = params.shift_amount or params.duration or params.duration_frames
     assert(type(track_id) == "string" and track_id ~= "",
         "clip_mutator.resolve_ripple: params.track_id required")
     assert(type(insert_time) == "number",
-        "clip_mutator.resolve_ripple: params.insert_time/timeline_start required")
+        "clip_mutator.resolve_ripple: params.insert_time/sequence_start required")
     assert(shift_amount, "clip_mutator.resolve_ripple: shift_amount/duration is required")
 
     -- Ensure integer frame coordinates
@@ -704,13 +704,13 @@ function ClipMutator.resolve_ripple(db, params)
     -- Note: clips are ordered by start time
     for _, row in ipairs(track_clips) do
         local original = clone_state(row)
-        local clip_start = row.timeline_start
+        local clip_start = row.sequence_start
         assert(type(clip_start) == "number", "clip_mutator.resolve_ripple: missing clip_start")
         local clip_end = clip_start + row.duration
 
         if clip_start >= insert_time then
             -- Fully after: Shift
-            row.timeline_start = clip_start + shift_amount
+            row.sequence_start = clip_start + shift_amount
             table.insert(actions, plan_update(row, original))
             
         elseif clip_start < insert_time and clip_end > insert_time then
@@ -740,14 +740,14 @@ function ClipMutator.resolve_ripple(db, params)
                 track_type = row.track_type,
                 name = row.name .. " (2)",
                 track_id = row.track_id,
-                nested_sequence_id = original.nested_sequence_id,
+                sequence_id = original.sequence_id,
                 master_layer_track_id = original.master_layer_track_id,
                 master_audio_track_id = original.master_audio_track_id,
                 fps_mismatch_policy = assert(original.fps_mismatch_policy,
                     "clip_mutator: original clip missing fps_mismatch_policy "
                     .. "in resolve_ripple (split right-half)"),
                 owner_sequence_id = original.owner_sequence_id,
-                timeline_start = right_start,
+                sequence_start = right_start,
                 duration = right_dur,
                 source_in = right_src_in,
                 source_out = require_source_out(original, "resolve_ripple"),
@@ -885,8 +885,8 @@ end
 local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_num, seq_fps_den)
     local stmt = db:prepare([[
         SELECT c.id, c.project_id, c.name, c.track_id,
-               c.owner_sequence_id, c.nested_sequence_id,
-               c.timeline_start_frame, c.duration_frames,
+               c.owner_sequence_id, c.sequence_id,
+               c.sequence_start_frame, c.duration_frames,
                c.source_in_frame, c.source_out_frame,
                c.master_layer_track_id, c.master_audio_track_id,
                c.fps_mismatch_policy,
@@ -898,8 +898,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
-        JOIN sequences nested_seq ON c.nested_sequence_id = nested_seq.id
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.nested_sequence_id
+        JOIN sequences nested_seq ON c.sequence_id = nested_seq.id
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
                                 AND nested_seq.kind = 'master'
         WHERE c.id = ?
     ]])
@@ -936,11 +936,11 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         name = stmt:value(2),
         track_id = stmt:value(3),
         owner_sequence_id = owning_sequence_id,
-        nested_sequence_id = nested_id,
+        sequence_id = nested_id,
         master_layer_track_id = stmt:value(10),
         master_audio_track_id = stmt:value(11),
         fps_mismatch_policy = stmt:value(12),
-        timeline_start = stmt:value(6),
+        sequence_start = stmt:value(6),
         duration = stmt:value(7),
         source_in = stmt:value(8),
         source_out = stmt:value(9),
@@ -950,7 +950,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         created_at = stmt:value(15),
         modified_at = stmt:value(16),
         track_type = track_type,
-        nested_sequence_kind = stmt:value(20),
+        source_sequence_kind = stmt:value(20),
         -- V13-resolved chain leaf (nil when nested is itself nested).
         media_id = stmt:value(23),
     }
@@ -959,7 +959,7 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
 end
 
 -- Load every source clip referenced by the duplicate request. Returns
--- (clips, min_timeline_start) | (nil, err_string). The min start lets the
+-- (clips, min_sequence_start) | (nil, err_string). The min start lets the
 -- caller compute a lower bound for delta_frames (clamping prevents the
 -- duplicate landing at a negative timeline frame).
 local function load_source_clips_for_duplicate(db, sequence_id, clip_ids,
@@ -971,13 +971,13 @@ local function load_source_clips_for_duplicate(db, sequence_id, clip_ids,
         if not clip then
             return nil, "clip_mutator.plan_duplicate_block: source clip not found: " .. tostring(clip_id)
         end
-        assert(type(clip.timeline_start) == "number",
-            "clip_mutator.plan_duplicate_block: source clip timeline_start must be integer")
+        assert(type(clip.sequence_start) == "number",
+            "clip_mutator.plan_duplicate_block: source clip sequence_start must be integer")
         assert(type(clip.duration) == "number",
             "clip_mutator.plan_duplicate_block: source clip duration must be integer")
         source_clips[#source_clips + 1] = clip
-        if not min_start or clip.timeline_start < min_start then
-            min_start = clip.timeline_start
+        if not min_start or clip.sequence_start < min_start then
+            min_start = clip.sequence_start
         end
     end
     return source_clips, min_start
@@ -988,11 +988,11 @@ end
 -- map to no track on the target side or whose duplicate would land
 -- exactly on the source.
 local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_delta)
-    local new_start = clip.timeline_start + effective_delta
+    local new_start = clip.sequence_start + effective_delta
     if new_start < 0 then
-        return nil, "clip_mutator.plan_duplicate_block: computed negative timeline_start after clamping"
+        return nil, "clip_mutator.plan_duplicate_block: computed negative sequence_start after clamping"
     end
-    if new_start == clip.timeline_start and mapped_track.id == clip.track_id then
+    if new_start == clip.sequence_start and mapped_track.id == clip.track_id then
         return nil  -- no-op (same place, same track)
     end
     local now = os.time()
@@ -1003,11 +1003,11 @@ local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_
         name                  = clip.name,
         track_id              = mapped_track.id,
         owner_sequence_id     = sequence_id,
-        nested_sequence_id    = clip.nested_sequence_id,
+        sequence_id    = clip.sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
         master_audio_track_id = clip.master_audio_track_id,
         fps_mismatch_policy   = clip.fps_mismatch_policy,
-        timeline_start        = new_start,
+        sequence_start        = new_start,
         duration              = clip.duration,
         source_in             = clip.source_in,
         source_out            = clip.source_out,
@@ -1054,8 +1054,8 @@ local function plan_duplicate_inserts(source_clips, tracks_by_id, tracks_by_type
                 new_clip_ids[#new_clip_ids + 1] = new_clip.id
                 intervals_by_track[mapped_track.id] = intervals_by_track[mapped_track.id] or {}
                 table.insert(intervals_by_track[mapped_track.id], {
-                    start  = new_clip.timeline_start,
-                    ["end"] = new_clip.timeline_start + new_clip.duration,
+                    start  = new_clip.sequence_start,
+                    ["end"] = new_clip.sequence_start + new_clip.duration,
                 })
             end
         end
@@ -1134,8 +1134,8 @@ function ClipMutator.plan_duplicate_block(db, params)
     -- clips (including the source clip being copied from).
     local min_start
     for _, c in ipairs(source_clips) do
-        if not min_start or c.timeline_start < min_start then
-            min_start = c.timeline_start
+        if not min_start or c.sequence_start < min_start then
+            min_start = c.sequence_start
         end
     end
     local lower_bound = -(min_start or 0)

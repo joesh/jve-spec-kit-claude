@@ -145,9 +145,9 @@ local function build_snapshot_payload(db, sequence_id, clips)
     for _, clip in ipairs(clips) do
         require_field("build_snapshot_payload", "clip", "id", clip.id)
         require_field("build_snapshot_payload", "clip", "track_type", clip.track_type)
-        require_field("build_snapshot_payload", "clip", "nested_sequence_id", clip.nested_sequence_id)
-        assert(type(clip.timeline_start) == "number", string.format(
-            "snapshot_manager.build_snapshot_payload: clip %s timeline_start must be integer", tostring(clip.id)))
+        require_field("build_snapshot_payload", "clip", "sequence_id", clip.sequence_id)
+        assert(type(clip.sequence_start) == "number", string.format(
+            "snapshot_manager.build_snapshot_payload: clip %s sequence_start must be integer", tostring(clip.id)))
 
         table.insert(clip_data, {
             id = clip.id,
@@ -156,12 +156,12 @@ local function build_snapshot_payload(db, sequence_id, clips)
             project_id = clip.project_id,
             track_id = clip.track_id,
             owner_sequence_id = clip.owner_sequence_id,
-            nested_sequence_id = clip.nested_sequence_id,
+            sequence_id = clip.sequence_id,
             master_layer_track_id = clip.master_layer_track_id,
             master_audio_track_id = clip.master_audio_track_id,
             fps_mismatch_policy = clip.fps_mismatch_policy,
 
-            timeline_start_frame = clip.timeline_start,
+            sequence_start_frame = clip.sequence_start,
             duration_frames = clip.duration,
             source_in_frame = clip.source_in,
             source_out_frame = clip.source_out,
@@ -284,7 +284,7 @@ local function deserialize_snapshot_payload(json_str)
         for _, data in ipairs(payload.clips) do
             require_field("deserialize_snapshot_payload", "clip", "id", data.id)
             require_field("deserialize_snapshot_payload", "clip", "track_type", data.track_type)
-            require_field("deserialize_snapshot_payload", "clip", "nested_sequence_id", data.nested_sequence_id)
+            require_field("deserialize_snapshot_payload", "clip", "sequence_id", data.sequence_id)
 
             assert(data.fps_numerator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_numerator")
             assert(data.fps_denominator, "deserialize_snapshot_payload: clip " .. data.id .. " missing fps_denominator")
@@ -297,13 +297,13 @@ local function deserialize_snapshot_payload(json_str)
                 name = data.name,
                 project_id = data.project_id,
                 owner_sequence_id = data.owner_sequence_id,
-                nested_sequence_id = data.nested_sequence_id,
+                sequence_id = data.sequence_id,
                 master_layer_track_id = data.master_layer_track_id,
                 master_audio_track_id = data.master_audio_track_id,
                 fps_mismatch_policy = data.fps_mismatch_policy,
                 track_id = data.track_id,
 
-                timeline_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "timeline_start_frame", data.timeline_start_frame),
+                sequence_start = require_field("deserialize_snapshot_payload", "clip " .. data.id, "sequence_start_frame", data.sequence_start_frame),
                 duration = require_field("deserialize_snapshot_payload", "clip " .. data.id, "duration_frames", data.duration_frames),
                 source_in = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_in_frame", data.source_in_frame),
                 source_out = require_field("deserialize_snapshot_payload", "clip " .. data.id, "source_out_frame", data.source_out_frame),

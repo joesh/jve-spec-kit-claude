@@ -45,7 +45,7 @@ for i = 1, 1500 do
         height = (i % 3 == 0) and 2160 or 1080,
         audio_channels = (codec_idx <= 5) and 2 or ((i % 2 == 0) and 1 or 4),
         audio_sample_rate = 48000,
-        timeline_start_frame = i * 100,
+        sequence_start_frame = i * 100,
         properties = {
             scene = scenes[scene_idx],
             take = tostring((i % 7) + 1),

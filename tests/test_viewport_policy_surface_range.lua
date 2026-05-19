@@ -17,7 +17,7 @@ local function reset(viewport_start, viewport_duration, playhead, content_end)
     -- to derive the scroll floor/ceiling; we plant one sentinel clip reaching
     -- content_end so the viewport can scroll freely up to content.
     data.state.clips = {
-        { timeline_start = 0, duration = content_end },
+        { sequence_start = 0, duration = content_end },
     }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start

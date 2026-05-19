@@ -27,10 +27,10 @@ do
         db_path = "/tmp/jve/test_batch_ripple_gap_after_unselected_track_expand_no_clamp.db",
         clips = {
             order = {"v1_left", "v1_right", "v2_prefix", "v2_shift"},
-            v1_left = {timeline_start = 0, duration = 1000},
-            v1_right = {timeline_start = 2000, duration = 1000}, -- V1 gap = 1000
-            v2_prefix = {id = "clip_v2_prefix", track_key = "v2", timeline_start = 0, duration = 1400},
-            v2_shift = {id = "clip_v2_shift", track_key = "v2", timeline_start = 1500, duration = 500}, -- 100 frame gap on V2
+            v1_left = {sequence_start = 0, duration = 1000},
+            v1_right = {sequence_start = 2000, duration = 1000}, -- V1 gap = 1000
+            v2_prefix = {id = "clip_v2_prefix", track_key = "v2", sequence_start = 0, duration = 1400},
+            v2_shift = {id = "clip_v2_shift", track_key = "v2", sequence_start = 1500, duration = 500}, -- 100 frame gap on V2
         }
     })
 

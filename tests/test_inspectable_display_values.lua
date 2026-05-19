@@ -29,7 +29,7 @@ local fake_clip = {
     media_id        = "m1",
     enabled         = true,
     offline         = false,               -- crucial: false, not nil
-    timeline_start  = 1000,
+    sequence_start  = 1000,
     duration        = 240,
     source_in       = 5000,
     source_out      = 5240,
@@ -46,7 +46,7 @@ check("clip.name",           clip_ins:get("name"),           "TestClip")
 check("clip.enabled=true",   clip_ins:get("enabled"),        true)
 -- The key assertion for this regression.
 check("clip.offline=false (not nil)", clip_ins:get("offline"), false)
-check("clip.timeline_start", clip_ins:get("timeline_start"), 1000)
+check("clip.sequence_start", clip_ins:get("sequence_start"), 1000)
 check("clip.duration",       clip_ins:get("duration"),       240)
 check("clip.source_in",      clip_ins:get("source_in"),      5000)
 check("clip.source_out",     clip_ins:get("source_out"),     5240)

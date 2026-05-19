@@ -32,6 +32,7 @@ local function new_state(folder_priority)
         clip_relink_map      = {},
         media_path_changes   = {},
         media_tc_updates     = {},   -- media_id → probed_tc for metadata sync on path change
+        media_duration_updates = {}, -- media_id → {duration_frames, audio_duration_samples}
         new_media_records    = {},   -- split-created clone media descriptors
         clone_path_to_id     = {},   -- new_path → clone media_id (this session)
         path_to_media        = {},   -- new_path → {media_id, priority}
@@ -189,6 +190,7 @@ local function handle_normal_entry(state, db, entry)
         end
         state.media_path_changes[mid] = entry.new_path
         state.media_tc_updates[mid] = entry.probed_tc
+        state.media_duration_updates[mid] = entry.probed_duration
     elseif my_priority < existing.priority then
         log.event("folder priority: %s (pri=%d) beats %s (pri=%d) for %s",
             mid:sub(1, 8), my_priority,
@@ -196,9 +198,11 @@ local function handle_normal_entry(state, db, entry)
             entry.new_path:match("([^/]+)$") or entry.new_path)
         state.media_path_changes[existing.media_id] = nil
         state.media_tc_updates[existing.media_id] = nil
+        state.media_duration_updates[existing.media_id] = nil
         state.priority_losers[existing.media_id] = mid
         state.media_path_changes[mid] = entry.new_path
         state.media_tc_updates[mid] = entry.probed_tc
+        state.media_duration_updates[mid] = entry.probed_duration
         state.path_to_media[entry.new_path] = {
             media_id = mid, priority = my_priority
         }
@@ -477,6 +481,7 @@ function M.build_plan(db, relinked, failed, folder_priority, project_id)
         clip_relink_map       = state.clip_relink_map,
         media_path_changes    = state.media_path_changes,
         media_tc_updates      = state.media_tc_updates,
+        media_duration_updates = state.media_duration_updates,
         new_media_records     = state.new_media_records,
         media_offline_notes   = media_offline_notes,
         salvaged_count        = salvaged,

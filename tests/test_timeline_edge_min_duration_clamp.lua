@@ -19,7 +19,7 @@ local layout = ripple_layout.create({
     },
     clips = {
         order = {"v1_left"},
-        v1_left = {timeline_start = 0, duration = 5, source_in = 0},
+        v1_left = {sequence_start = 0, duration = 5, source_in = 0},
     }
 })
 

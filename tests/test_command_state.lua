@@ -51,7 +51,7 @@ db:exec(string.format(
     project_id, now, now
 ))
 db:exec(string.format(
-    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('%s', '%s', 'Seq1', 'nested', 30, 1, 48000, 1920, 1080, %d, %d)",
+    "INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at) VALUES ('%s', '%s', 'Seq1', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d)",
     sequence_id, project_id, now, now
 ))
 db:exec(string.format(
@@ -60,23 +60,23 @@ db:exec(string.format(
 ))
 
 -- V13 placeholder master sequence + media_ref + media so clips below
--- can reference '_v13_placeholder_master' as their nested_sequence_id.
+-- can reference '_v13_placeholder_master' as their source_sequence_id.
 db:exec(string.format([[
 INSERT INTO media (id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator, width, height, audio_channels, codec, created_at, modified_at)
 VALUES ('_v13_placeholder_media', '%s', 'placeholder', '_placeholder', 1000, 30, 1, 1920, 1080, 0, 'raw', %d, %d);
 INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('_v13_placeholder_master', '%s', 'placeholder_master', 'master', 30, 1, 48000, 1920, 1080, %d, %d);
+VALUES ('_v13_placeholder_master', '%s', 'placeholder_master', 'master', 30, 1, NULL, 1920, 1080, %d, %d);
 INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
 VALUES ('_v13_placeholder_track', '_v13_placeholder_master', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
 UPDATE sequences SET default_video_layer_track_id = '_v13_placeholder_track' WHERE id = '_v13_placeholder_master';
-INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, timeline_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('_v13_placeholder_mr', '%s', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 1, 1.0, 0, %d, %d);
+INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+VALUES ('_v13_placeholder_mr', '%s', '_v13_placeholder_master', '_v13_placeholder_track', '_v13_placeholder_media', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, %d, %d);
 ]], project_id, now, now, project_id, now, now, project_id, now, now))
 
 -- Helper: insert a V13 clip row.
 local function insert_clip(id, opts)
     opts = opts or {}
-    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, nested_sequence_id, name, timeline_start_frame, duration_frames, source_in_frame, source_out_frame, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)")
+    local stmt = db:prepare("INSERT OR REPLACE INTO clips (id, project_id, owner_sequence_id, track_id, sequence_id, name, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, enabled, volume, playhead_frame, created_at, modified_at) VALUES (?, ?, ?, ?, '_v13_placeholder_master', ?, ?, ?, ?, ?, NULL, NULL, 'resample', 1, 1.0, 0, ?, ?)")
     stmt:bind_value(1, id)
     stmt:bind_value(2, project_id)
     stmt:bind_value(3, sequence_id)
@@ -232,7 +232,7 @@ print("\n--- gap clip setup ---")
 do
     -- Insert a clip at a known position (after clip_cs_001 which is 0-200)
     insert_clip("clip_gap_test", {start = 300, duration = 50, source_out = 50})
-    -- Gap clips use format: "gap_<track_id>_<timeline_start>"
+    -- Gap clips use format: "gap_<track_id>_<sequence_start>"
     check("gap id format documented", true)
 end
 

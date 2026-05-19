@@ -105,7 +105,9 @@ do
 
     check("explicit height", track_state.get_height("v1") == 100)
     check("default height", track_state.get_height("a1") == data.dimensions.default_track_height)
-    check("nonexistent track", track_state.get_height("nope") == data.dimensions.default_track_height)
+    -- Unknown track asserts — see test_nsf_track_height_unknown_asserts.lua.
+    -- Previous expectation was silent DEFAULT fallback (NSF violation, 2026-05-14).
+    check("nonexistent track asserts", not pcall(track_state.get_height, "nope"))
 end
 
 -- ============================================================
@@ -134,9 +136,9 @@ do
     track_state.set_height("v1", 120)
     check("same height no-op dirty", track_state.is_layout_dirty() == false)
 
-    -- Nonexistent track → no crash
-    track_state.set_height("nope", 200)
-    check("nonexistent set_height no crash", true)
+    -- Unknown track asserts — see test_nsf_track_height_unknown_asserts.lua.
+    -- Previous expectation was silent no-op (NSF violation, 2026-05-14).
+    check("nonexistent set_height asserts", not pcall(track_state.set_height, "nope", 200))
 end
 
 do

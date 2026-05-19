@@ -52,8 +52,8 @@ local _ = {frames=10, fps_numerator=30, fps_denominator=1}  -- r_nometa for manu
 
 -- Wait, `resolve_occlusions` takes `params`.
 -- `params.start_value`.
--- `local start_value = params.timeline_start or params.start_value`.
+-- `local start_value = params.sequence_start or params.start_value`.
 
--- If `Overwrite` passed `timeline_start = overwrite_time_rat` (Rational).
+-- If `Overwrite` passed `sequence_start = overwrite_time_rat` (Rational).
 
 -- I'll check the output of this script.

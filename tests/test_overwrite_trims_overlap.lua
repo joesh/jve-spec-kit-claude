@@ -15,7 +15,7 @@
 -- 24fps timeline → duration_under_resample = round(60 * 24/25) = 58,
 -- duration_under_passthrough = 60. Existing [50,150) clip is trimmed to
 -- [50, 100) in both cases (the trim is in owner frames and pegs to
--- new clip's timeline_start).
+-- new clip's sequence_start).
 --
 -- Black-box: exercises overwrite.execute against a directly-built DB.
 
@@ -36,8 +36,8 @@ end
 local function build_fixture(project_policy, existing_clip_policy)
     local db = fresh_db()
     assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', '%s', 0, 0)
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', '%s', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0)
     ]], project_policy)))
 
     -- V-only master (60 frames at 25fps).
@@ -45,7 +45,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m', 'p1', 'master', 'master', 25, 1, 48000, 1920, 1080,
+        VALUES ('m', 'p1', 'master', 'master', 25, 1, NULL, 1920, 1080,
             NULL, 0, 0)
     ]]))
     -- Second V-only master for the pre-existing clip. Independent so the
@@ -55,7 +55,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             default_video_layer_track_id, created_at, modified_at)
-        VALUES ('m-pre', 'p1', 'master-pre', 'master', 25, 1, 48000, 1920, 1080,
+        VALUES ('m-pre', 'p1', 'master-pre', 'master', 25, 1, NULL, 1920, 1080,
             NULL, 0, 0)
     ]]))
     -- Edit sequence (nested) at 24/1.
@@ -63,7 +63,7 @@ local function build_fixture(project_policy, existing_clip_policy)
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'nested', 24, 1, 48000, 1920, 1080, 0, 0)
+        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0)
     ]]))
 
     assert(db:exec([[
@@ -94,18 +94,18 @@ local function build_fixture(project_policy, existing_clip_policy)
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60,
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
+        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, 60, 0, 60, 48000,
             1, 1.0, 0, 0, 0)
     ]]))
     assert(db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames,
-            enabled, volume, playhead_frame, created_at, modified_at)
+            sequence_start_frame, duration_frames,
+            audio_sample_rate, enabled, volume, playhead_frame, created_at, modified_at)
         VALUES ('mr-v-pre', 'p1', 'm-pre', 'm-pre-v1', 'med-v-pre',
-            0, 200, 0, 200, 1, 1.0, 0, 0, 0)
+            0, 200, 0, 200, 48000, 1, 1.0, 0, 0, 0)
     ]]))
 
     -- Pre-existing clip on edit.V1 at [50, 150). Uses 'passthrough' policy
@@ -114,7 +114,7 @@ local function build_fixture(project_policy, existing_clip_policy)
     -- within m-pre's 200-frame native duration.
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name, timeline_start_frame, duration_frames,
+            sequence_id, name, sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
@@ -134,16 +134,16 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames,
+        SELECT sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame,
-               nested_sequence_id, fps_mismatch_policy, enabled
+               sequence_id, fps_mismatch_policy, enabled
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec(), "load_clip: exec failed")
     if not stmt:next() then stmt:finalize(); return nil end
     local row = {
-        timeline_start  = stmt:value(0),
+        sequence_start  = stmt:value(0),
         duration        = stmt:value(1),
         source_in       = stmt:value(2),
         source_out      = stmt:value(3),
@@ -158,7 +158,7 @@ end
 local function clips_on_track(db, track_id)
     local stmt = db:prepare([[
         SELECT id FROM clips WHERE track_id = ?
-        ORDER BY timeline_start_frame
+        ORDER BY sequence_start_frame
     ]])
     stmt:bind_value(1, track_id)
     assert(stmt:exec(), "clips_on_track: exec failed")
@@ -181,8 +181,8 @@ local function run_case(label, new_clip_policy_arg, expected_new_policy,
 
     local result = overwrite.execute({
         sequence_id = ids.edit_id,
-        nested_sequence_id = ids.master_id,
-        timeline_start_frame = 100,
+        source_sequence_id = ids.master_id,
+        sequence_start_frame = 100,
         target_video_track_id = ids.edit_v1,
         fps_mismatch_policy = new_clip_policy_arg,
     })
@@ -199,8 +199,8 @@ local function run_case(label, new_clip_policy_arg, expected_new_policy,
     -- Pre-existing clip trimmed to [50, 100).
     local pre = load_clip(db, ids.pre_clip_id)
     assert(pre, "pre-existing clip must still exist (head-overlap trim, not delete)")
-    assert(pre.timeline_start == 50, string.format(
-        "pre clip timeline_start=%d expected 50", pre.timeline_start))
+    assert(pre.sequence_start == 50, string.format(
+        "pre clip sequence_start=%d expected 50", pre.sequence_start))
     assert(pre.duration == 50, string.format(
         "pre clip duration=%d expected 50 (trimmed from 100 to [50, 100))",
         pre.duration))
@@ -217,7 +217,7 @@ local function run_case(label, new_clip_policy_arg, expected_new_policy,
     -- New clip lives at [100, 100 + expected_duration).
     local new_id = result.created_clip_ids[1]
     local nc = load_clip(db, new_id)
-    assert(nc.timeline_start == 100, "new clip must start at frame 100")
+    assert(nc.sequence_start == 100, "new clip must start at frame 100")
     assert(nc.duration == expected_new_duration, string.format(
         "new clip duration=%d expected %d", nc.duration, expected_new_duration))
     assert(nc.policy == expected_new_policy, string.format(
@@ -234,7 +234,7 @@ local function run_case(label, new_clip_policy_arg, expected_new_policy,
     assert(#all == 2, string.format("edit V1 should have 2 clips; has %d", #all))
 
     print(string.format("  ok (new_duration=%d, policy=%s, pre_trimmed_to=[50,%d))",
-        expected_new_duration, expected_new_policy, pre.timeline_start + pre.duration))
+        expected_new_duration, expected_new_policy, pre.sequence_start + pre.duration))
 end
 
 run_case("resample new clip (policy arg)", "resample", "resample", 58)

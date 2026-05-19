@@ -17,6 +17,7 @@ local stub_source_monitor = {
         self.sequence_id = sequence_id
         table.insert(source_monitor_loaded_ids, sequence_id)
     end,
+    get_loaded_master_seq_id = function(self) return self.sequence_id end,
 }
 
 -- Only mock needed: panel_manager (Qt widget management)
@@ -38,14 +39,14 @@ package.loaded["ui.focus_manager"] = {
 -- Mock project_browser to capture focus_master_clip calls (Qt boundary)
 local focus_calls = {}
 local project_browser = {
-    focused_nested_sequence_id = nil,
+    focused_source_sequence_id = nil,
     focus_calls_count = 0,
 }
 
 function project_browser.refresh() end
 
 function project_browser.focus_master_clip(master_clip_id, _opts)
-    project_browser.focused_nested_sequence_id = master_clip_id
+    project_browser.focused_source_sequence_id = master_clip_id
     project_browser.focus_calls_count = project_browser.focus_calls_count + 1
     table.insert(focus_calls, {master_id = master_clip_id})
     return true
@@ -78,8 +79,9 @@ local function bootstrap_schema(conn)
     assert(conn, "bootstrap_schema requires a database connection")
     assert(conn:exec(require('import_schema')), "Failed to create schema tables")
     assert(conn:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
-        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy, settings)
+        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough',
+                '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
         INSERT INTO sequences (
             id, project_id, name, kind,
@@ -92,7 +94,7 @@ local function bootstrap_schema(conn)
             created_at, modified_at
         )
         VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'nested',
+            'default_sequence', 'default_project', 'Default Sequence', 'sequence',
             30, 1, 48000,
             1920, 1080,
             0, 240, 0,
@@ -156,8 +158,8 @@ end
 
 local function fetch_clip_ids(limit)
     local ids = {}
-    -- V13: every row in `clips` is a timeline-side clip (clips must be owned by a kind='nested' sequence).
-    local stmt = db:prepare("SELECT id FROM clips ORDER BY timeline_start_frame DESC")
+    -- V13: every row in `clips` is a timeline-side clip (clips must be owned by a kind='sequence' sequence).
+    local stmt = db:prepare("SELECT id FROM clips ORDER BY sequence_start_frame DESC")
     assert(stmt, "fetch_clip_ids: prepare failed")
     assert(stmt:exec())
     while stmt:next() do
@@ -291,10 +293,10 @@ os.remove(scratch_db_path)
 -- ============================================================
 -- MatchFrame on imported clips (real timeline_state)
 -- ============================================================
--- V13: timeline-side clips reference their master via nested_sequence_id
--- (the V8 master_clip_id column is gone), and clips must be owned by a kind='nested' sequence; that
--- every clip has a non-null nested_sequence_id, so no NULL filter needed.
-local timeline_master_stmt = db:prepare([[SELECT c.id, c.nested_sequence_id, c.timeline_start_frame
+-- V13: timeline-side clips reference their master via source_sequence_id
+-- (the V8 master_clip_id column is gone), and clips must be owned by a kind='sequence' sequence; that
+-- every clip has a non-null source_sequence_id, so no NULL filter needed.
+local timeline_master_stmt = db:prepare([[SELECT c.id, c.sequence_id, c.sequence_start_frame
     FROM clips c LIMIT 1]])
 assert(timeline_master_stmt, "Timeline clip master query should prepare")
 assert(timeline_master_stmt:exec(), "Timeline clip master query should run")
@@ -306,7 +308,7 @@ if timeline_master_stmt:next() then
 end
 timeline_master_stmt:finalize()
 assert(timeline_clip_id and timeline_master_id,
-    "Importer should assign nested_sequence_id (master) for timeline clips")
+    "Importer should assign source_sequence_id (master) for timeline clips")
 
 -- Get the imported sequence and switch real timeline_state to it
 local import_record = command_manager.get_last_command('default_project')
@@ -526,7 +528,7 @@ assert(db:exec([[
         current_sequence_number,
         created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'nested',
+        'default_sequence', 'default_project', 'Default Sequence', 'sequence',
         30, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -600,11 +602,13 @@ end
 
 local function fetch_single_clip_id(sequence_id)
     assert(sequence_id, "fetch_single_clip_id: sequence_id required")
-    -- V13: every clip is on the owner sequence's tracks (clips must be owned by a kind='nested' sequence).
+    -- 018: pick a VIDEO clip — MoveClipToTrack target below is a VIDEO track,
+    -- and INV-3 forbids moving an AUDIO clip (carries source_*_subframe) onto
+    -- a VIDEO track without first nulling the sub-frame columns.
     local stmt = db:prepare([[
         SELECT c.id FROM clips c
         JOIN tracks t ON c.track_id = t.id
-        WHERE t.sequence_id = ?
+        WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
         LIMIT 1
     ]])
     assert(stmt, "fetch_single_clip_id: prepare failed")
@@ -619,7 +623,7 @@ local function fetch_single_clip_id(sequence_id)
 end
 
 -- Switch real timeline_state to the replayed imported sequence
-local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'nested' LIMIT 1]])
+local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'sequence' LIMIT 1]])
 assert(replay_seq_stmt:exec())
 local replayed_sequence_id = nil
 if replay_seq_stmt:next() then
@@ -637,7 +641,7 @@ local media_ids = fetch_media_ids(1)
 assert(#media_ids >= 1, "Importer should provide media rows for insert operations")
 
 -- Create masterclip sequence for the media (required for Insert after IS-a refactor)
-local insert_nested_sequence_id = test_env.create_test_masterclip_sequence(
+local insert_source_sequence_id = test_env.create_test_masterclip_sequence(
     'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
 
 local clip_for_move = fetch_single_clip_id(replayed_sequence_id)
@@ -647,7 +651,11 @@ local move_cmd = Command.create("MoveClipToTrack", "default_project")
 move_cmd:set_parameter("clip_id", clip_for_move)
 move_cmd:set_parameter("target_track_id", video_tracks[2])
 move_cmd:set_parameter("skip_occlusion", true)
-assert(command_manager.execute(move_cmd).success, "MoveClipToTrack should succeed")
+do
+    local r = command_manager.execute(move_cmd)
+    assert(r and r.success, "MoveClipToTrack should succeed; got result="
+        .. require("dkjson").encode(r) .. " last_error=" .. tostring(command_manager.get_last_error and command_manager.get_last_error()))
+end
 local nudge_cmd2 = Command.create("Nudge", "default_project")
 nudge_cmd2:set_parameter("nudge_amount", -10)
 nudge_cmd2:set_parameter("selected_clip_ids", {clip_for_move})
@@ -659,10 +667,10 @@ toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
 -- V13 Insert: source range comes from the master sequence's marks; the
--- timeline-side spec is just (target track, timeline_start_frame).
+-- timeline-side spec is just (target track, sequence_start_frame).
 do
     local Sequence = require("models.sequence")
-    local mc_seq = Sequence.load(insert_nested_sequence_id)
+    local mc_seq = Sequence.load(insert_source_sequence_id)
     assert(mc_seq, "master sequence must load to set marks")
     -- Constrain marks to the media's actual duration (the master inherits it
     -- from the media row; ensure_master ignores the duration arg passed to
@@ -675,9 +683,9 @@ do
     mc_seq:save()
 end
 local insert_cmd2 = Command.create("Insert", "default_project")
-insert_cmd2:set_parameter("nested_sequence_id", insert_nested_sequence_id)
+insert_cmd2:set_parameter("source_sequence_id", insert_source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", video_tracks[1])
-insert_cmd2:set_parameter("timeline_start_frame", 800)
+insert_cmd2:set_parameter("sequence_start_frame", 800)
 insert_cmd2:set_parameter("sequence_id", replayed_sequence_id)
 do
     local _r = command_manager.execute(insert_cmd2)

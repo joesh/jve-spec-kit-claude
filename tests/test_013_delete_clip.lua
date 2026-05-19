@@ -26,13 +26,13 @@ end
 local function build_fixture()
     local db = fresh_db()
     assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', 0, 0);
+        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
         INSERT INTO sequences (id, project_id, name, kind,
             fps_numerator, fps_denominator, audio_sample_rate, width, height,
             created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e', 'p1', 'e', 'nested', 24, 1, 48000, 1920, 1080, 0, 0);
+        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0),
+               ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
         INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
         VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
                ('m-a1', 'm', 'A1', 'AUDIO', 1),
@@ -44,26 +44,33 @@ local function build_fixture()
         VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 2000, 24, 1, 0, 0, 0);
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
-            timeline_start_frame, duration_frames, enabled, volume, playhead_frame,
+            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES
-          ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0),
-          ('mr-a', 'p1', 'm', 'm-a1', 'med', 0, 2000, 0, 2000, 1, 1.0, 0, 0, 0);
+          ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 2000, 0, 2000, 48000, 1, 1.0, 0, 0, 0),
+          ('mr-a', 'p1', 'm', 'm-a1', 'med', 0, 2000, 0, 2000, 48000, 1, 1.0, 0, 0, 0);
     ]]))
     return db
 end
 
 local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
+    -- 018 INV-3 subframe: AUDIO needs (0,0), VIDEO needs NULL.
+    local _tt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
+    _tt:bind_value(1, track_id)
+    assert(_tt:exec()); assert(_tt:next())
+    local _sub_lit = _tt:value(0) == "AUDIO" and "0, 0" or "NULL, NULL"
+    _tt:finalize()
     assert(db:exec(string.format([[
         INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            nested_sequence_id, name,
-            timeline_start_frame, duration_frames,
+            sequence_id, name,
+            sequence_start_frame, duration_frames,
             source_in_frame, source_out_frame,
+            source_in_subframe, source_out_subframe,
             fps_mismatch_policy, enabled, volume, playhead_frame,
             created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d,
+        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d, %s,
             'passthrough', 1, 1.0, 0, 0, 0)
-    ]], id, track_id, id, ts, dur, src_in, src_out)))
+    ]], id, track_id, id, ts, dur, src_in, src_out, _sub_lit)))
 end
 
 local function link_clips(db, group_id, members)
@@ -86,13 +93,13 @@ end
 
 local function load_clip(db, id)
     local stmt = db:prepare([[
-        SELECT timeline_start_frame, duration_frames, track_id
+        SELECT sequence_start_frame, duration_frames, track_id
         FROM clips WHERE id = ?
     ]])
     stmt:bind_value(1, id)
     assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
     local r = {
-        timeline_start = stmt:value(0),
+        sequence_start = stmt:value(0),
         duration       = stmt:value(1),
         track_id       = stmt:value(2),
     }
@@ -117,7 +124,7 @@ do
 
     assert(not clip_exists(db, "v1"), "v1 deleted")
     local v2 = load_clip(db, "v2")
-    assert(v2.timeline_start == 200 and v2.duration == 50,
+    assert(v2.sequence_start == 200 and v2.duration == 50,
         "v2 must NOT shift (Delete is non-ripple)")
     print("  ok")
 end
@@ -144,8 +151,8 @@ do
     -- Downstream pair must NOT shift (non-ripple).
     local v2 = load_clip(db, "v2")
     local a2 = load_clip(db, "a2")
-    assert(v2.timeline_start == 100, "v2 must not move")
-    assert(a2.timeline_start == 100, "a2 must not move")
+    assert(v2.sequence_start == 100, "v2 must not move")
+    assert(a2.sequence_start == 100, "a2 must not move")
     print("  ok")
 end
 
@@ -205,7 +212,7 @@ do
     assert(undo(cmd))
     assert(clip_exists(db, "v1"), "v1 restored after undo")
     local v1 = load_clip(db, "v1")
-    assert(v1.timeline_start == 100 and v1.duration == 50,
+    assert(v1.sequence_start == 100 and v1.duration == 50,
         "v1 timeline restored")
 
     local stmt = db:prepare(
