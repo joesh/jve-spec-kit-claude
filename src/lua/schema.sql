@@ -2,9 +2,12 @@
 -- Feature 018: Uniform Clip Source Timebase + Canonical-Clock Sub-Frame Primitives.
 --   - clips.source_in_subframe / source_out_subframe (INTEGER, NULL for video, NOT NULL for audio)
 --   - media_refs.audio_sample_rate (INTEGER, denormalized from media row)
---   - sequences.audio_sample_rate MUST be NULL on kind='master' (INV-7)
---   - projects.settings carries default_fps {num,den} and master_clock_hz (canonical 705600000 — flicks; immutable post-create per INV-6)
---   - INV-3 .. INV-7 triggers enforce subframe presence/bound + fps/clock single-writer
+--   - sequences.audio_sample_rate MUST be NULL on kind='master' (per-media_ref rate)
+--   - projects.settings carries default_fps {num,den} and master_clock_hz (canonical 705600000 — flicks; immutable post-create)
+--   - Triggers enforce: clip subframe presence by kind (NULL on video, non-NULL on audio),
+--     subframe in-bounds (0 ≤ subframe < ticks_per_frame), sequences.fps single-writer
+--     (ConformSequence only), projects.settings.master_clock_hz immutable post-create,
+--     master.audio_sample_rate NULL, AUDIO media_refs carry non-NULL audio_sample_rate.
 -- Feature 015: Source-in-Timeline — adds tracks.sync_mode column and patches table.
 -- No backward compatibility with V10 or earlier (rule 2.15: re-import on schema change).
 
@@ -265,7 +268,9 @@ CREATE TABLE IF NOT EXISTS clips (
     -- Window into the source sequence's timebase.
     -- source_*_frame: integer frames in source sequence's fps.
     -- source_*_subframe (018, V11): integer ticks at project.master_clock_hz, in [0, ticks_per_frame).
-    --   NULL on video clips; NOT NULL on audio clips. Enforced by INV-3 + INV-4.
+    --   NULL on video clips; NOT NULL on audio clips, with each subframe in
+    --   [0, ticks_per_frame). Enforced by clips_subframe_kind_* /
+    --   clips_subframe_bound_* triggers below.
     source_in_frame INTEGER NOT NULL,
     source_out_frame INTEGER NOT NULL,
     source_in_subframe INTEGER,
@@ -600,20 +605,24 @@ END;
 -- ============================================================================
 -- 018 INVARIANT TRIGGERS — sub-frame primitives + fps/clock single-writer
 -- ============================================================================
--- INV-3: clips subframe presence by clip kind (FR-001)
---   VIDEO clips MUST have NULL subframes.
---   AUDIO clips MUST have non-NULL subframes.
--- INV-4: clips subframe bound (FR-002)
+-- Subframe presence by clip kind (FR-001):
+--   VIDEO clips MUST have NULL source_*_subframe.
+--   AUDIO clips MUST have non-NULL source_*_subframe.
+-- Subframe bound (FR-002):
 --   0 <= source_*_subframe < master_clock_hz * source_seq.fps_den / source_seq.fps_num.
--- INV-5: sequences.fps_num/den single-writer (FR-031)
+-- sequences.fps_num/den single-writer (FR-031):
 --   UPDATE rejected unless db_session_flags has '_conform_sequence_in_progress' row.
--- INV-6: projects.settings.master_clock_hz immutable post-create (FR-028)
+-- projects.settings.master_clock_hz immutable post-create (FR-028):
 --   UPDATE OF settings that changes master_clock_hz is unconditionally
 --   rejected. The canonical clock (705,600,000 — flicks) exactly
 --   represents every supported audio rate and frame rate, so no command
 --   has any reason to change it. INSERT (project create) sets the
 --   canonical value once and never again.
--- INV-7: sequences.audio_sample_rate must be NULL on kind='master' (FR-004)
+-- master.audio_sample_rate must be NULL (FR-004):
+--   sequences with kind='master' carry NULL audio_sample_rate (rate is
+--   per-media_ref, since a master can hold heterogeneous-rate audio).
+-- AUDIO media_refs carry non-NULL audio_sample_rate (FR-008):
+--   denormalized from media for resolver hot path.
 --
 -- Session-flag pattern: SQLite non-TEMP triggers cannot reference temp.*,
 -- so the flag table is a permanent table (db_session_flags). Commands INSERT
@@ -624,7 +633,7 @@ CREATE TABLE IF NOT EXISTS db_session_flags (
     name TEXT PRIMARY KEY
 );
 
--- ---------- INV-3 — subframe presence by clip kind ----------
+-- ---------- subframe presence by clip kind ----------
 
 DROP TRIGGER IF EXISTS trg_clips_subframe_kind_insert;
 CREATE TRIGGER trg_clips_subframe_kind_insert
@@ -654,7 +663,7 @@ BEGIN
     END;
 END;
 
--- ---------- INV-4 — subframe bound ----------
+-- ---------- subframe bound ----------
 -- ticks_per_frame = master_clock_hz * source_seq.fps_den / source_seq.fps_num.
 -- master_clock_hz pulled from projects.settings JSON via json_extract.
 -- SQLite JSON1 is compiled into the lsqlite3 build used by JVE.
@@ -713,12 +722,12 @@ BEGIN
     END;
 END;
 
--- ---------- INV-5 — sequences.fps_num/den single-writer ----------
+-- ---------- sequences.fps_num/den single-writer ----------
 -- Allowed only when temp table _conform_sequence_in_progress exists
 -- (ConformSequence creates it inside its transaction).
 
 DROP TRIGGER IF EXISTS trg_sequences_fps_guard;
--- INV-5 trigger fires only on ACTUAL change. SQLite's BEFORE UPDATE OF col
+-- The fps-guard trigger fires only on ACTUAL change. SQLite's BEFORE UPDATE OF col
 -- fires whenever the column appears in the SET clause regardless of value,
 -- so callers writing a row-image with unchanged fps would trigger spurious
 -- aborts. Comparing NEW vs OLD makes the trigger value-driven, matching the
@@ -734,7 +743,7 @@ BEGIN
         'INV-5: sequences.fps_num/den mutable only via ConformSequence');
 END;
 
--- ---------- INV-6 — projects.settings.master_clock_hz immutable post-create ----------
+-- ---------- projects.settings.master_clock_hz immutable post-create ----------
 -- The canonical master clock (705,600,000 — flicks) exactly represents
 -- every supported audio rate and frame rate, so no user-facing reason to
 -- change it exists. The previous SetProjectMasterClock command is gone;
@@ -753,9 +762,9 @@ BEGIN
         'INV-6: projects.settings.master_clock_hz is immutable post-create (canonical value is 705600000 flicks)');
 END;
 
--- ---------- INV-7 — master.audio_sample_rate must be NULL ----------
+-- ---------- master.audio_sample_rate must be NULL on kind=master ----------
 
--- ---------- INV-8 — audio media_refs MUST carry audio_sample_rate ----------
+-- ---------- AUDIO media_refs MUST carry non-NULL audio_sample_rate ----------
 -- 018 V5: schema-layer enforcement of FR-008 prerequisite. The resolver
 -- reads media_refs.audio_sample_rate per-emit; NULL on an AUDIO row is a
 -- writer bug that must be caught at insert time, not silently coerced.
