@@ -565,6 +565,7 @@ function M.switch_to_source_tab(source_seq_id)
     -- Space/J/K/L have a sequence to act on. bind_role_to_sequence is
     -- a no-op pre-bootstrap (headless tests).
     require("core.playback.transport").bind_role_to_sequence("source", source_seq_id)
+    M.persist_displayed_tab_kind()
 end
 
 -- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
@@ -594,6 +595,21 @@ function M.switch_to_record_tab(seq_id)
         require("core.playback.transport").bind_role_to_sequence("record", seq_id)
         Signals.emit("active_sequence_changed", seq_id, prev_active)
     end
+    M.persist_displayed_tab_kind()
+end
+
+--- Write `displayed_tab_kind` ("source" or "record") to project settings
+--- so the next project open lands on the same side. 017 plan revision:
+--- transport target is NOT persisted directly; it's derived from this
+--- (+ persisted focus) at the next launch. No-op when no project is
+--- open (pre-init headless tests) or when the strip is blank.
+function M.persist_displayed_tab_kind()
+    local project_id = data.state.project_id
+    if not project_id or project_id == "" then return end
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return end
+    local database = require("core.database")
+    database.set_project_setting(project_id, "displayed_tab_kind", displayed.kind)
 end
 M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
 M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end

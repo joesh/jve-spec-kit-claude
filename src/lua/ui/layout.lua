@@ -597,6 +597,20 @@ if initial_sequence_id and project_browser_mod.focus_sequence then
     end
 end
 
+-- Restore the saved displayed-tab side (source vs record). The initial
+-- record tab is already shown by the timeline_state.init above; we
+-- only need to flip TO the source tab when the user left off there.
+-- 017 plan revision: transport.get_target() is derived from this on
+-- the next launch (no separately stored transport_target).
+local saved_displayed_kind =
+    db_module.get_project_setting(project_id, "displayed_tab_kind")
+if saved_displayed_kind == "source"
+   and type(source_tab_seq_id) == "string" and source_tab_seq_id ~= "" then
+    local timeline_state = require("ui.timeline.timeline_state")
+    timeline_state.switch_to_source_tab(source_tab_seq_id)
+    log.event("Restored displayed tab kind=source seq=%s", source_tab_seq_id)
+end
+
 -- Override the bootstrap default focus with the per-project saved one.
 -- Runs after the "timeline" default above so first-open (no setting yet)
 -- still lands on the timeline; a subsequent reopen lands wherever the
