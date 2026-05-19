@@ -1116,7 +1116,7 @@ end
 --   master.fps). The split keeps the C++ TMB's `source_in -
 --   first_sample_tc` arithmetic intact while making placement units
 --   uniform with video MRs in the same master.
-local function resolve_audio_mref_writes(entry, tc_entry, old_mref)
+local function mref_writes_audio(entry, tc_entry, old_mref)
     local a_dur_samples = entry.audio_duration_samples
     if a_dur_samples == nil then return nil end
     local new_source_in
@@ -1159,7 +1159,7 @@ local function resolve_audio_mref_writes(entry, tc_entry, old_mref)
     return new_seq_start, new_dur, new_source_in, new_source_out
 end
 
-local function resolve_video_mref_writes(entry, tc_entry, old_mref)
+local function mref_writes_video(entry, tc_entry, old_mref)
     local new_dur = entry.duration_frames
     if new_dur == nil then return nil end
     local new_source_in
@@ -1195,10 +1195,10 @@ local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
         local new_seq_start, new_dur, new_source_in, new_source_out
         if track_type == "VIDEO" then
             new_seq_start, new_dur, new_source_in, new_source_out =
-                resolve_video_mref_writes(entry, tc_entry, old_mref)
+                mref_writes_video(entry, tc_entry, old_mref)
         elseif track_type == "AUDIO" then
             new_seq_start, new_dur, new_source_in, new_source_out =
-                resolve_audio_mref_writes(entry, tc_entry, old_mref)
+                mref_writes_audio(entry, tc_entry, old_mref)
         else
             assert(false, string.format(
                 "Media.batch_set_durations: unknown track_type '%s' on "

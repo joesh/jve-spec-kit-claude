@@ -1003,7 +1003,7 @@ local function fetch_track_type(db, clip_id, track_id)
     return tt
 end
 
-local function resolve_subframe_for_kind(db, clip_id, fields)
+local function subframe_for_kind(db, clip_id, fields)
     local tt = fetch_track_type(db, clip_id, fields.track_id)
     if tt == "AUDIO" then
         assert(fields.source_in_subframe ~= nil, string.format(
@@ -1035,7 +1035,7 @@ function M._create_v13_row(fields)
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
     assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
 
-    local sub_in, sub_out = resolve_subframe_for_kind(db, id, fields)
+    local sub_in, sub_out = subframe_for_kind(db, id, fields)
 
     local now = fields.created_at or os.time()
     local stmt = db:prepare([[

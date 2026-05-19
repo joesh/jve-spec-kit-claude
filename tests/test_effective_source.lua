@@ -31,10 +31,10 @@
 --   T9: timeline (nested-sequence) item is a valid source.
 --   T10: master_seq_id_of predicate.
 --   T11: _reset_for_tests clears state.
---   T12: resolve_for_edit — missing_item (no source at all).
---   T13: resolve_for_edit — not_insertable (browser active w/ bin).
---   T14: resolve_for_edit — cycle_self (source == destination).
---   T15: resolve_for_edit — happy path returns seq id.
+--   T12: pick_for_edit — missing_item (no source at all).
+--   T13: pick_for_edit — not_insertable (browser active w/ bin).
+--   T14: pick_for_edit — cycle_self (source == destination).
+--   T15: pick_for_edit — happy path returns seq id.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -166,32 +166,32 @@ print("-- T11: _reset_for_tests clears all state")
 effective_src._reset_for_tests()
 assert(effective_src.get() == nil, "T11: get() nil after reset")
 
--- ── T12: resolve_for_edit — missing_item ────────────────────────────────
-print("-- T12: resolve_for_edit — missing_item when no source")
+-- ── T12: pick_for_edit — missing_item ────────────────────────────────
+print("-- T12: pick_for_edit — missing_item when no source")
 -- Reset, no source viewer load, browser empty, browser active.
 effective_src._reset_for_tests()
 selection_hub.update_selection("project_browser", {})
 selection_hub.set_active_panel("project_browser")
-local seq, problem = effective_src.resolve_for_edit("rec-1", "Overwrite")
+local seq, problem = effective_src.pick_for_edit("rec-1", "Overwrite")
 assert(seq == nil, "T12: no source → nil")
 assert(problem and problem.kind == "missing_item",
     "T12: problem.kind == missing_item")
 assert(problem.cmd == "Overwrite",
     "T12: problem.cmd carries command name for popup")
 
--- ── T13: resolve_for_edit — not_insertable ──────────────────────────────
-print("-- T13: resolve_for_edit — not_insertable")
+-- ── T13: pick_for_edit — not_insertable ──────────────────────────────
+print("-- T13: pick_for_edit — not_insertable")
 selection_hub.update_selection("project_browser",
     { { item_type = "bin", id = "bin-1", display_name = "Trash Takes" } })
-local seq13, problem13 = effective_src.resolve_for_edit("rec-1", "Overwrite")
+local seq13, problem13 = effective_src.pick_for_edit("rec-1", "Overwrite")
 assert(seq13 == nil, "T13: bin selection → nil")
 assert(problem13 and problem13.kind == "not_insertable",
     "T13: problem.kind == not_insertable")
 assert(problem13.label == "Trash Takes",
     "T13: problem.label carries item display_name")
 
--- ── T14: resolve_for_edit — cycle_self (source == destination) ──────────
-print("-- T14: resolve_for_edit — cycle_self short-circuit")
+-- ── T14: pick_for_edit — cycle_self (source == destination) ──────────
+print("-- T14: pick_for_edit — cycle_self short-circuit")
 -- We pin Sequence.get_name and Cycle.would_create_cycle out of the
 -- way: cycle_self returns BEFORE Cycle.would_create_cycle runs (so no
 -- DB is required), but Sequence.get_name DOES run. Stub it black-box
@@ -202,7 +202,7 @@ sequence_mod.get_name = function(id) return "Master Timeline" end
 -- Browser active, selecting the very same id as the destination.
 selection_hub.update_selection("project_browser",
     { { item_type = "timeline", id = "rec-1" } })
-local seq14, problem14 = effective_src.resolve_for_edit("rec-1", "Overwrite")
+local seq14, problem14 = effective_src.pick_for_edit("rec-1", "Overwrite")
 assert(seq14 == nil, "T14: source == rec → nil")
 assert(problem14 and problem14.kind == "cycle_self",
     "T14: problem.kind == cycle_self")
@@ -210,8 +210,8 @@ assert(problem14.seq_name == "Master Timeline",
     "T14: problem.seq_name comes from Sequence.get_name")
 sequence_mod.get_name = orig_get_name
 
--- ── T15: resolve_for_edit — happy path ──────────────────────────────────
-print("-- T15: resolve_for_edit — happy path returns seq id, no problem")
+-- ── T15: pick_for_edit — happy path ──────────────────────────────────
+print("-- T15: pick_for_edit — happy path returns seq id, no problem")
 -- Distinct source vs destination, browser active. Stub get_name so the
 -- transitive-cycle branch (which calls Cycle.would_create_cycle requiring
 -- a DB) doesn't fire; we set up a same-id check by-pass via a destination
@@ -223,42 +223,42 @@ cycle_mod.would_create_cycle = function(_a, _b) return false end
 sequence_mod.get_name = function(id) return "named-" .. id end
 selection_hub.update_selection("project_browser",
     { { item_type = "master_clip", master_sequence_id = "src-1" } })
-local seq15, problem15 = effective_src.resolve_for_edit("rec-1", "Overwrite")
+local seq15, problem15 = effective_src.pick_for_edit("rec-1", "Overwrite")
 assert(seq15 == "src-1", string.format(
     "T15: happy path returns source id; got %s", tostring(seq15)))
 assert(problem15 == nil, "T15: no problem on happy path")
 cycle_mod.would_create_cycle = orig_would
 sequence_mod.get_name = orig_get_name
 
--- ── T16: resolve_for_edit input invariants (pcall-based) ────────────────
+-- ── T16: pick_for_edit input invariants (pcall-based) ────────────────
 -- ENGINEERING.md 2.32: assert-based failure paths MUST be exercised via
 -- pcall so the assert message is part of the regression contract.
-print("-- T16: resolve_for_edit input invariants")
+print("-- T16: pick_for_edit input invariants")
 do
     local ok, err
 
-    ok, err = pcall(effective_src.resolve_for_edit, nil, "Overwrite")
+    ok, err = pcall(effective_src.pick_for_edit, nil, "Overwrite")
     assert(not ok, "T16a: nil rec_id must assert")
     assert(tostring(err):find("rec_id required"),
         "T16a: assert message must mention 'rec_id required'; got: " .. tostring(err))
 
-    ok, err = pcall(effective_src.resolve_for_edit, "", "Overwrite")
+    ok, err = pcall(effective_src.pick_for_edit, "", "Overwrite")
     assert(not ok, "T16b: empty rec_id must assert")
     assert(tostring(err):find("rec_id required"),
         "T16b: assert message must mention 'rec_id required'; got: " .. tostring(err))
 
-    ok, err = pcall(effective_src.resolve_for_edit, "rec-1", nil)
+    ok, err = pcall(effective_src.pick_for_edit, "rec-1", nil)
     assert(not ok, "T16c: nil cmd_name must assert")
     assert(tostring(err):find("cmd_name required"),
         "T16c: assert message must mention 'cmd_name required'; got: " .. tostring(err))
 
-    ok, err = pcall(effective_src.resolve_for_edit, "rec-1", "")
+    ok, err = pcall(effective_src.pick_for_edit, "rec-1", "")
     assert(not ok, "T16d: empty cmd_name must assert")
     assert(tostring(err):find("cmd_name required"),
         "T16d: assert message must mention 'cmd_name required'; got: " .. tostring(err))
 end
 
--- ── T17: resolve_for_edit asserts on browser item missing display_name ──
+-- ── T17: pick_for_edit asserts on browser item missing display_name ──
 print("-- T17: not_insertable path requires display_name from normalizer")
 do
     -- Browser active, single non-insertable item with NO display_name
@@ -266,7 +266,7 @@ do
     selection_hub.update_selection("project_browser",
         { { item_type = "bin", id = "bin-1" } })  -- display_name missing
     selection_hub.set_active_panel("project_browser")
-    local ok, err = pcall(effective_src.resolve_for_edit, "rec-1", "Overwrite")
+    local ok, err = pcall(effective_src.pick_for_edit, "rec-1", "Overwrite")
     assert(not ok, "T17: missing display_name must assert (normalizer contract)")
     assert(tostring(err):find("display_name"),
         "T17: assert message must mention 'display_name'; got: " .. tostring(err))

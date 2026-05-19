@@ -177,7 +177,7 @@ local mc_id = test_env.create_test_masterclip_sequence(
     "proj1", "TestClip", 24, 1, 300, "media1")
 
 -- 018 FR-005: a project must have at least one record sequence so the audio
--- bus rate resolver (audio_bus_rate.resolve_for_monitor case 3) can pick it
+-- bus rate resolver (audio_bus_rate.pick_for_monitor case 3) can pick it
 -- up without an active sequence having been set yet. No timeline_state
 -- wiring needed — production fall-back handles this.
 assert(db:exec(string.format([[

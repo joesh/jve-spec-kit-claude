@@ -20,7 +20,7 @@
 --- whenever the computed `M.get()` value changes.
 ---
 --- Consumers:
----   - `command_manager.execute_interactive` calls `resolve_for_edit` to
+---   - `command_manager.execute_interactive` calls `pick_for_edit` to
 ---     inject `source_sequence_id` for Insert/Overwrite (and any future
 ---     command declaring source_sequence_id in its arg spec). The resolver
 ---     returns either a valid source id, or a `problem` table that the
@@ -94,7 +94,7 @@ local function compute_current()
         if seq ~= nil then return seq end
         -- Non-empty browser selection but no insertable item, OR empty
         -- selection. Either way: rule 2 (fall through to source viewer).
-        -- `resolve_for_edit` distinguishes the two for popup purposes.
+        -- `pick_for_edit` distinguishes the two for popup purposes.
     end
     return _source_viewer_seq_id
 end
@@ -135,7 +135,7 @@ Signals.connect("source_loaded_changed", on_source_loaded_changed)
 selection_hub.register_listener(on_selection_changed)
 
 --- Get the current effective master sequence id (or nil if no source).
---- Destination-agnostic — use `resolve_for_edit` for edit-command dispatch.
+--- Destination-agnostic — use `pick_for_edit` for edit-command dispatch.
 function M.get()
     return _current
 end
@@ -159,11 +159,11 @@ end
 --- `_place_shared.pick_endpoints`; that assert remains as defense-in-depth.
 --- Surfacing the failure here lets us show a user-friendly popup instead
 --- of an internal Lua stacktrace warning.
-function M.resolve_for_edit(rec_id, cmd_name)
+function M.pick_for_edit(rec_id, cmd_name)
     assert(rec_id and rec_id ~= "",
-        "effective_source.resolve_for_edit: rec_id required")
+        "effective_source.pick_for_edit: rec_id required")
     assert(cmd_name and cmd_name ~= "",
-        "effective_source.resolve_for_edit: cmd_name required")
+        "effective_source.pick_for_edit: cmd_name required")
 
     local seq
     if browser_is_active() and #_browser_items > 0 then
@@ -174,7 +174,7 @@ function M.resolve_for_edit(rec_id, cmd_name)
             local first = _browser_items[1]
             local label = first.display_name
             assert(type(label) == "string" and label ~= "", string.format(
-                "effective_source.resolve_for_edit: first browser item missing "
+                "effective_source.pick_for_edit: first browser item missing "
                 .. "display_name (item_type=%s) — normalize_* contract violated",
                 tostring(first.item_type)))
             return nil, { kind = "not_insertable", label = label }

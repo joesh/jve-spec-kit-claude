@@ -22,13 +22,13 @@ local M = {}
 -- @param active_id             active record sequence id (from timeline_state); may be nil
 -- @param load_seq              function(id) → Sequence (injected for testability)
 -- @param find_first_record     function(project_id) → rate or nil (injected; model-layer)
-function M.resolve_for_monitor(seq, active_id, load_seq, find_first_record)
+function M.pick_for_monitor(seq, active_id, load_seq, find_first_record)
     assert(seq and seq.id and seq.id ~= "",
-        "audio_bus_rate.resolve_for_monitor: seq required")
+        "audio_bus_rate.pick_for_monitor: seq required")
     assert(type(load_seq) == "function",
-        "audio_bus_rate.resolve_for_monitor: load_seq injector required")
+        "audio_bus_rate.pick_for_monitor: load_seq injector required")
     assert(type(find_first_record) == "function",
-        "audio_bus_rate.resolve_for_monitor: find_first_record injector required")
+        "audio_bus_rate.pick_for_monitor: find_first_record injector required")
 
     -- Case 1: sequence carries its own rate (record sequence; masters
     -- never do per FR-004, so this branch skips them by construction).

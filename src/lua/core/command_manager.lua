@@ -446,7 +446,7 @@ function M.execute_interactive(command_name, params)
                 "execute_interactive: command %s requires source_sequence_id "
                 .. "resolution but no active sequence is set", command_name))
             local effective_source = require("core.effective_source")
-            local seq, problem = effective_source.resolve_for_edit(
+            local seq, problem = effective_source.pick_for_edit(
                 active_sequence_id, command_name)
             if problem ~= nil then
                 require("ui.edit_source_popup").show(problem)

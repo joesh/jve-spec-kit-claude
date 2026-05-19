@@ -1,5 +1,5 @@
 --- Renders user-facing popups for source-resolution problems detected
---- by `core.effective_source.resolve_for_edit`. Lives in `ui/` because
+--- by `core.effective_source.pick_for_edit`. Lives in `ui/` because
 --- the copy is a UI concern; `effective_source` only returns structured
 --- problem tables.
 ---

@@ -486,13 +486,13 @@ end
 
 --- Resolve the audio bus output rate to thread into PlaybackEngine for `seq`.
 --
--- Delegates the actual resolution to `core.audio_bus_rate.resolve_for_monitor`
+-- Delegates the actual resolution to `core.audio_bus_rate.pick_for_monitor`
 -- (pure model-layer helper, fully unit-tested). This wrapper only injects
 -- the timeline_state's active sequence id and the DB connection.
 local audio_bus_rate = require("core.audio_bus_rate")
 local function resolve_output_audio_rate(seq)
     local timeline_state = require("ui.timeline.timeline_state")
-    return audio_bus_rate.resolve_for_monitor(
+    return audio_bus_rate.pick_for_monitor(
         seq,
         timeline_state.get_active_sequence_id(),
         Sequence.load,
