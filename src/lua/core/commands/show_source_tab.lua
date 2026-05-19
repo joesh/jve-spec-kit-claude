@@ -1,8 +1,9 @@
 --- ShowSourceTab — open (or make visible) the SourceTab in the timeline tab strip.
 --
 -- Reads the source monitor's loaded master sequence and opens a tab for it.
--- If no master is currently loaded the tab opens showing the empty-placeholder
--- state per FR-007b; no error is raised.
+-- If no master is currently loaded, blanks the timeline body (same blank
+-- state as closing the last tab) — picking masters[1] from the DB is
+-- fabrication (TSO 2026-05-17: "opens the tab with a random clip loaded").
 --
 -- Non-undoable: tab visibility is a UI preference, not a content mutation.
 --
@@ -41,53 +42,24 @@ local function open_source_tab(master_seq_id)
     ts.switch_to_source_tab(master_seq_id)
 end
 
--- When the source monitor has nothing loaded (clean startup, or after the
--- user closed the source tab and never reloaded), the menu used to be a
--- silent no-op. Pick the first project master and seed the source monitor;
--- source_viewer.load_master_clip fires source_loaded_changed, which the
--- timeline_panel listener catches and opens the source tab. Pre-existing
--- the auto-open behavior for browser-click; this just supplies the
--- "trigger" event that browser-click would have supplied.
-local function seed_first_master_into_source(project_id)
-    assert(type(project_id) == "string" and project_id ~= "",
-        "ShowSourceTab.seed_first_master_into_source: project_id required")
-    local db = require("core.database")
-    local masters = db.load_master_clips(project_id)
-    if not masters or #masters == 0 then
-        log.event("ShowSourceTab: project has no master clips — nothing to show")
-        return nil
-    end
-    local first = masters[1]
-    assert(first.clip_id and first.clip_id ~= "",
-        "ShowSourceTab: load_master_clips returned a row with no clip_id")
-    local source_viewer = require("ui.source_viewer")
-    source_viewer.load_master_clip(first.clip_id)
-    return first.clip_id
-end
-
 function M.register(command_executors, command_undoers, _db, _set_last_error)
     command_executors["ShowSourceTab"] = function(_command)
         local monitor = resolve_source_monitor()
         local master_seq_id = monitor:get_loaded_master_seq_id()
 
-        if not master_seq_id or master_seq_id == "" then
-            -- No master loaded → seed one. source_viewer.load_master_clip
-            -- emits source_loaded_changed which auto-opens the source tab
-            -- via the existing timeline_panel listener. Re-read the monitor
-            -- after seeding so we propagate the new id below.
-            local project_id = require("ui.timeline.timeline_state").get_project_id()
-            assert(project_id and project_id ~= "",
-                "ShowSourceTab: no active project_id to pick a master from")
-            seed_first_master_into_source(project_id)
-            master_seq_id = monitor:get_loaded_master_seq_id()
-        end
-
         if master_seq_id and master_seq_id ~= "" then
             open_source_tab(master_seq_id)
+            Signals.emit("source_tab_visibility_changed", true)
+            log.event("ShowSourceTab: master_seq_id=%s", master_seq_id)
+            return true
         end
 
-        Signals.emit("source_tab_visibility_changed", true)
-        log.event("ShowSourceTab: master_seq_id=%s", tostring(master_seq_id))
+        -- No master loaded → blank the timeline body, matching the
+        -- close-last-tab state (TSO 2026-05-17, user request). Auto-
+        -- seeding masters[1] was fabrication; the user chose nothing,
+        -- so the editor shows nothing.
+        require("ui.timeline.timeline_state").clear()
+        log.event("ShowSourceTab: no master loaded — body blanked")
         return true
     end
 

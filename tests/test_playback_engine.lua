@@ -149,6 +149,7 @@ package.loaded["core.renderer"] = {
 local mock_content_end = 100
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return mock_content_end end,
     get_video_at = function(self, frame) return {} end,
     get_next_video = function() return {} end,
@@ -203,7 +204,7 @@ local function make_engine()
 
     reset_playback()
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function(frame_handle, metadata)
             log.frames_shown[#log.frames_shown + 1] = {
                 handle = frame_handle,
@@ -953,7 +954,7 @@ do
 
     -- Set audio ownership (simulates activate_audio having already run but
     -- ACTIVATE_AUDIO was skipped because fps_num was nil at the time)
-    engine._audio_owner = true
+    mock_audio._owning_engine = engine
     engine.current_audio_clip_ids = {}
 
     -- Call _configure_and_start_audio (called from play path)
@@ -1040,7 +1041,7 @@ do
         activate_called = true
     end
 
-    engine._audio_owner = true
+    mock_audio._owning_engine = engine
     engine.current_audio_clip_ids = {}
 
     -- _configure_and_start_audio must init session even though no clips changed
@@ -1143,7 +1144,13 @@ do
     audio_pb.sse = nil
     PlaybackEngine.init_audio(audio_pb)
 
-    engine._audio_owner = true
+    -- 017: take ownership through the public surface (writes the
+    -- module-private _owning_engine so is_owner returns true).
+    if audio_pb.acquire_for then
+        audio_pb.acquire_for(engine)
+    else
+        audio_pb._owning_engine = engine
+    end
     engine.current_audio_clip_ids = {}
     engine.audio_sample_rate = 48000
 

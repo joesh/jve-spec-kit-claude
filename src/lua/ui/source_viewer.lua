@@ -30,6 +30,17 @@ function M.load_master_clip(master_seq_id, opts)
     local prev_seq_id = source:get_loaded_master_seq_id()
 
     source:load_sequence(master_seq_id)
+
+    -- 017: bind the source-role engine to this master. Transport target
+    -- routing is DERIVED from UI state (focus + displayed tab), not set
+    -- here — when this call path completes, focus_manager.focus_panel
+    -- below moves focus to source_monitor and transport.get_target()
+    -- automatically resolves to "source".
+    -- bind_role_to_sequence is idempotent and a pre-bootstrap no-op for
+    -- headless tests. load asserts on qt_constants — tests exercising
+    -- this path bootstrap the stub via helpers.test_017_setup.
+    require("core.playback.transport").bind_role_to_sequence("source", master_seq_id)
+
     Signals.emit("source_loaded_changed", master_seq_id, prev_seq_id)
 
     if not opts.skip_focus then

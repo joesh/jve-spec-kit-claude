@@ -243,12 +243,24 @@ local function flush_state_to_db()
     -- writes to displayed_tab_id's DB row. When source tab is displayed,
     -- the active record's row is untouched by viewport/playhead changes
     -- the user makes while viewing source.
+    --
+    -- No-displayed state (post-core.clear): the strip carries no displayed
+    -- tab — there is no DB row to write per-sequence view-state to.
+    -- Persistence is gated on the displayed pointer (the strip is the
+    -- canonical "is anything displayed?" property of the model). A
+    -- selection-mutating command that fires while the timeline is blank
+    -- (e.g. DeselectAll after ShowSourceTab's no-master branch) must
+    -- silently no-op here, not crash.
     local sequence_id = strip_holder.displayed_sequence_id()
-    assert(sequence_id and sequence_id ~= "",
-        "timeline_core_state.flush_state_to_db: no displayed tab on strip")
+    if not sequence_id or sequence_id == "" then return end
 
+    -- Symmetric to the displayed gate: no project_id → no DB row to
+    -- write to (tests that drive core.activate_displayed directly,
+    -- without going through timeline_state.init, leave project_id nil).
+    -- The active_project check below also catches this, but gating up
+    -- front avoids a stale command_manager state read.
     local project_id = data.state.project_id
-    assert(project_id and project_id ~= "", "timeline_core_state.flush_state_to_db: missing project_id")
+    if not project_id or project_id == "" then return end
 
     -- Skip persistence if command_manager is not initialized or undo/redo is in progress.
     -- This prevents recursive command execution during undo/redo operations and allows
@@ -387,6 +399,11 @@ local function schedule_state_persist(immediate)
 end
 
 function M.persist_state_to_db(force)
+    -- Gate at the public boundary: no displayed tab → nothing to persist
+    -- (matches flush_state_to_db's gate; avoids scheduling a debounce timer
+    -- whose fire-time would also no-op, and avoids surprising callers from
+    -- selection / viewport paths after core.clear).
+    if not strip_holder.displayed_sequence_id() then return end
     if force == true then
         schedule_state_persist(true)
     else
@@ -614,11 +631,12 @@ function M.activate_displayed(seq_id, prev_seq_id)
         "timeline_core_state.activate_displayed: prev_seq_id must be string or nil")
     if prev_seq_id == seq_id then return false end
 
-    -- Flush outgoing displayed view-state BEFORE swap so persistence
-    -- writes to the OLD displayed sequence's row.
-    if persist_dirty and prev_seq_id then
-        M.persist_state_to_db(true)
-    end
+    -- Outgoing view-state flush is the WRAPPER's responsibility (it runs
+    -- BEFORE the strip pointer is swapped, so persist resolves the
+    -- correct row). By the time this fires the strip already points at
+    -- seq_id; flushing here would write outgoing data.state values to
+    -- the incoming row. Drop any leftover dirty bit — the wrapper either
+    -- flushed it or there was nothing to flush.
     persist_dirty = false
 
     load_displayed_sequence(seq_id)
@@ -627,18 +645,31 @@ function M.activate_displayed(seq_id, prev_seq_id)
     return true
 end
 
---- Enter the no-active-sequence state: drop the active-sequence reference
+--- Enter the no-displayed-tab state: drop the active-sequence reference
 --- and all per-sequence data. The project identity (data.state.project_id)
 --- is untouched — the editor stays inside the current project; only the
 --- timeline becomes blank. Views pull get_sequence_id() == nil and render
---- blank of their own accord (MVC). Idempotent.
-function M.clear()
-    -- Persist pending per-sequence state BEFORE tearing it down so unsaved
-    -- viewport/scroll/selection aren't lost on the round-trip.
-    if persist_dirty then
-        M.persist_state_to_db(true)
-        persist_dirty = false
-    end
+--- blank of their own accord (MVC).
+---
+--- `prev_displayed_seq_id` MUST be the strip's outgoing displayed sequence
+--- id (captured by the caller before the strip pointer was cleared), or
+--- nil when there was no displayed tab to begin with. Passed in (not
+--- queried) because the public wrapper clears the strip pointer first —
+--- by the time we run, strip_holder reports nil regardless.
+---
+--- Idempotent: if `prev_displayed_seq_id == nil`, no transition occurred
+--- and the `displayed_tab_cleared` signal is NOT emitted (avoids spurious
+--- stop-playback / cancel-seek work on subscribers).
+function M.clear(prev_displayed_seq_id)
+    assert(prev_displayed_seq_id == nil
+        or (type(prev_displayed_seq_id) == "string" and prev_displayed_seq_id ~= ""),
+        "timeline_core_state.clear: prev_displayed_seq_id must be a non-empty string or nil")
+
+    -- Outgoing view-state flush is the WRAPPER's responsibility (it runs
+    -- BEFORE the strip is cleared, while persist can still resolve the
+    -- row). By the time this fires the strip is already cleared and
+    -- there is no row to flush to; drop the dirty bit.
+    persist_dirty = false
 
     data.state.sequence_id = nil
     data.state.tracks = {}
@@ -658,6 +689,15 @@ function M.clear()
 
     clip_state.invalidate_indexes()
     data.notify_listeners()
+
+    -- Announce the no-displayed transition AFTER model fields are nilled so
+    -- subscribers (playback engine stops the engine that was transporting
+    -- the closed sequence; pending viewer-seek timers cancel their stale
+    -- targets) see the fully-cleared model when they pull. Skip on the
+    -- idempotent path: no transition → no notification.
+    if prev_displayed_seq_id then
+        Signals.emit("displayed_tab_cleared", prev_displayed_seq_id)
+    end
 end
 
 --- Full timeline-model reset for a project change. Unlike clear() — which
@@ -746,7 +786,6 @@ end
 
 -- Re-read marks from DB when a mark command executes (or undoes)
 Signals.connect("marks_changed", function(sequence_id)
-    local changed = false
     if data.sequence and data.state.sequence_id == sequence_id then
         local Sequence = require("models.sequence")
         local fresh = Sequence.load(sequence_id)
@@ -755,15 +794,15 @@ Signals.connect("marks_changed", function(sequence_id)
             tostring(sequence_id)))
         data.sequence.mark_in  = fresh.mark_in
         data.sequence.mark_out = fresh.mark_out
-        changed = true
     end
     -- Strip-authoritative (015 #6): the SourceTab branch used to refresh a
     -- parallel data.source_sequence cache. That cache is gone — readers
-    -- now go through tab_strip:get_source_tab() and Sequence.load. So we
-    -- only need to notify here when the marks_changed event corresponds
-    -- to the source tab, so view-layer listeners re-render the ruler.
-    -- Notification is unconditional; cheap pull-on-redraw absorbs it.
-    if changed then data.notify_listeners() end
+    -- (ruler, scrollbar, view_renderer) pull through
+    -- timeline_state.get_display_mark_in/out → tab_strip:get_displayed() →
+    -- Sequence.load. So notification must fire UNCONDITIONALLY: source-tab
+    -- mark changes don't touch data.state.sequence_id (the active record)
+    -- but the displayed-tab ruler still needs to re-render.
+    data.notify_listeners()
 end)
 
 -- Source-loaded notification: rerender on load/unload. Strip-authoritative

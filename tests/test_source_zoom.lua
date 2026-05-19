@@ -198,6 +198,13 @@ mock_renderer_info[mc_id] = {
 -- Load SequenceMonitor
 --------------------------------------------------------------------------------
 
+-- 017: SequenceMonitor.new no longer constructs a local fallback engine
+-- when transport is not bootstrapped (anti-pattern #5 eliminated). Boot
+-- transport for this project so monitors observe the canonical role-bound
+-- engines. Without this self.engine stays nil and the first load_sequence
+-- call fails.
+require("core.playback.transport").init("proj1")
+
 local SequenceMonitor = require("ui.sequence_monitor")
 
 print("=== Source Monitor Zoom Tests ===")

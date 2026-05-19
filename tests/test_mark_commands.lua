@@ -273,15 +273,20 @@ rd = r.result_data
 check("GetMarkOut nil when cleared", r.success and type(rd) == "table" and rd.mark_out == nil)
 
 --------------------------------------------------------------------------------
--- Error: missing sequence_id
+-- sequence_id auto-injection: when caller omits sequence_id, mark commands
+-- resolve it from the displayed side (017 FR-005/020). Here transport is
+-- not bootstrapped so the injector falls through to active_sequence_id
+-- (set via command_manager.init above) — the command succeeds.
 --------------------------------------------------------------------------------
-print("\n--- Error paths ---")
+print("\n--- sequence_id auto-injection ---")
 
-local ok, err = pcall(execute_cmd, "SetMarkIn", {frame = 10})
-check("SetMarkIn missing seq_id errors", not ok, tostring(err))
+local r_auto = execute_cmd("SetMarkIn", {frame = 11})
+check("SetMarkIn auto-resolves sequence_id from active context",
+    r_auto.success, tostring(r_auto.error_message))
 
-ok, err = pcall(execute_cmd, "SetMarkOut", {frame = 10})
-check("SetMarkOut missing seq_id errors", not ok, tostring(err))
+r_auto = execute_cmd("SetMarkOut", {frame = 22})
+check("SetMarkOut auto-resolves sequence_id from active context",
+    r_auto.success, tostring(r_auto.error_message))
 
 --------------------------------------------------------------------------------
 -- SetPlayhead emits playhead_changed signal

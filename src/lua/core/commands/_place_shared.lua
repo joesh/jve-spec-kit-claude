@@ -146,38 +146,57 @@ local function compute_native_durations(nested, mediums)
 end
 
 -- Honor nested-sequence marks (FCP/Premiere/Resolve UX). mark_in/mark_out
--- are in the nested's video timebase, absolute TC. When set, narrow the
--- video and audio source ranges to the marked sub-region. Returns four
--- values: video_native_dur, video_source_in, audio_native_dur, audio_source_in.
+-- are absolute TC frames in the nested's master.fps timebase. When set,
+-- narrow the video and audio source ranges to the marked sub-region.
+-- Returns four values: video_native_dur, video_source_in, audio_native_dur,
+-- audio_source_in — all in the nested's master.fps timebase.
+--
+-- TIMECODE IS THE SOURCE OF TRUTH: clip.source_in_frame must match the
+-- nested's media_refs' sequence_start_frame coordinate system (= TC space
+-- with offset tc_origin). The resolver (Sequence.resolve_master_leaf)
+-- converts to file-natural samples internally for AUDIO media_refs via
+-- audio_sample_rate * fps_denominator / fps_numerator; we must NOT
+-- pre-convert here.
+--
+-- For mixed V+A masters the timebase is the video framerate; both V and
+-- A clip rows carry source_in in video frames (master.fps). For
+-- audio-only masters master.fps == audio_sample_rate so master.fps frames
+-- ARE samples — same field, consistent unit.
+local function assert_marks_in_range(medium_label, nested_id, lo, hi, tc_origin, dur)
+    local content_end = tc_origin + dur
+    assert(lo >= tc_origin and hi <= content_end and hi > lo, string.format(
+        "place_shared.apply_nested_marks: nested %s %s marks [%s,%s) "
+        .. "out of bounds for TC range [%d,%d)",
+        nested_id, medium_label, tostring(lo), tostring(hi),
+        tc_origin, content_end))
+end
+
 local function apply_nested_marks(nested, mediums, v_dur, a_dur)
-    local mark_in, mark_out = nested.mark_in, nested.mark_out
-    if mark_in == nil and mark_out == nil then
-        return v_dur, 0, a_dur, 0
-    end
     local tc_origin = nested.start_timecode_frame
     assert(tc_origin, string.format(
         "place_shared: nested sequence %s missing start_timecode_frame", nested.id))
-    local lo = mark_in  and (mark_in  - tc_origin) or 0
-    local hi = mark_out and (mark_out - tc_origin) or v_dur
-    local video_source_in, audio_source_in = 0, 0
+
+    local mark_in, mark_out = nested.mark_in, nested.mark_out
+    if mark_in == nil and mark_out == nil then
+        -- No marks: take the full media. source_in starts at the master's
+        -- TC origin, not 0 — media_refs sit at [tc_origin, tc_origin+span).
+        return v_dur, tc_origin, a_dur, tc_origin
+    end
+
+    -- Marks already in TC space (master.fps frames). Use directly.
+    local lo = mark_in  or tc_origin
+    local hi = mark_out or (tc_origin + (mediums.VIDEO and v_dur or a_dur))
+
     if mediums.VIDEO then
-        assert(lo >= 0 and hi <= v_dur and hi > lo, string.format(
-            "place_shared: nested %s marks [%s,%s) out of bounds for video duration %d",
-            nested.id, tostring(lo), tostring(hi), v_dur))
-        v_dur, video_source_in = hi - lo, lo
+        assert_marks_in_range("video", nested.id, lo, hi, tc_origin, v_dur)
+        v_dur = hi - lo
     end
     if mediums.AUDIO then
-        local samples_per_frame =
-            Sequence.effective_audio_sample_rate(nested) * nested.fps_denominator / nested.fps_numerator
-        local a_lo = math.floor(lo * samples_per_frame + 0.5)
-        local a_hi = math.floor(hi * samples_per_frame + 0.5)
-        assert(a_lo >= 0 and a_hi <= a_dur and a_hi > a_lo, string.format(
-            "place_shared: nested %s mark-derived audio range [%d,%d) "
-            .. "out of bounds for audio duration %d",
-            nested.id, a_lo, a_hi, a_dur))
-        a_dur, audio_source_in = a_hi - a_lo, a_lo
+        assert_marks_in_range("audio", nested.id, lo, hi, tc_origin, a_dur)
+        a_dur = hi - lo
     end
-    return v_dur, video_source_in, a_dur, audio_source_in
+
+    return v_dur, lo, a_dur, lo
 end
 
 -- Project the placement onto owner-timebase frames. Video drives the

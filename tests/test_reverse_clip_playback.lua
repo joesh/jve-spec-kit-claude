@@ -148,6 +148,7 @@ local mock_clips = {}
 
 local mock_sequence = {
     id = "seq1",
+    start_timecode_frame = 0,
     compute_content_end = function() return 100 end,
     get_video_at = function() return {} end,
     get_next_video = function() return {} end,
@@ -176,7 +177,7 @@ local function make_engine()
     reset_playback()
     tmb_clips = {}
 
-    local engine = PlaybackEngine.new({
+    local engine = PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,

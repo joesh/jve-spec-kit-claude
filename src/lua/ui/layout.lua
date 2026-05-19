@@ -408,11 +408,14 @@ local timeline_monitor = SequenceMonitor.new({ view_id = "timeline_monitor" })
 panel_manager.register_sequence_monitor("source_monitor", source_monitor)
 panel_manager.register_sequence_monitor("timeline_monitor", timeline_monitor)
 
--- Initialize audio: PlaybackEngine needs the audio module reference,
--- and timeline_monitor owns audio by default (source_monitor activates on focus).
+-- Initialize audio. The 017 transport refactor moves ownership off the
+-- "activate on focus" model; engines acquire the device on transport-start
+-- (engine:play / shuttle / slow_play) via the synchronous handover in
+-- audio_playback.halt_current / acquire_for. The legacy init_audio call
+-- is kept for backward compat with any mock-injecting test, but we no
+-- longer call activate_audio() here — audio is acquired lazily.
 local PlaybackEngine = require("core.playback.playback_engine")
 PlaybackEngine.init_audio(require("core.media.audio_playback"))
-timeline_monitor.engine:activate_audio()
 
 -- 3. Inspector (right) - Create container for Lua inspector
 local inspector_panel = qt_constants.WIDGET.CREATE_INSPECTOR()
@@ -446,22 +449,11 @@ local focus_manager = require("ui.focus_manager")
 focus_manager.register_view("timeline", timeline_panel_mod)
 focus_manager.register_view("project_browser", project_browser_mod)
 
--- Audio follows focus: transfer audio ownership when switching between monitors.
--- Non-monitor panels (browser, inspector) keep the last monitor's audio active.
-focus_manager.on_focus_change(function(old_id, new_id)
-    local monitor_for = {
-        source_monitor = source_monitor,
-        timeline_monitor = timeline_monitor,
-        timeline = timeline_monitor,
-    }
-    local new_mon = monitor_for[new_id]
-    if not new_mon then return end
-
-    source_monitor.engine:deactivate_audio()
-    timeline_monitor.engine:deactivate_audio()
-    new_mon.engine:activate_audio()
-
-    -- Fullscreen follows viewer focus
+-- 017 FR-009: focus changes do NOT touch audio ownership any more. Audio
+-- ownership is structural (lives in core.media.audio_playback) and changes
+-- only on transport-start through the synchronous halt/acquire handover.
+-- The fullscreen follow-focus behavior is retained.
+focus_manager.on_focus_change(function(_old_id, new_id)
     local fv = require("ui.fullscreen_viewer")
     if fv.is_active() then
         local view_id = (new_id == "timeline") and "timeline_monitor" or new_id

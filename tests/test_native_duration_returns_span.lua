@@ -69,10 +69,15 @@ assert(v == DUR, string.format(
     v, DUR, v - DUR, TC_ORIGIN))
 
 local a = Sequence.native_duration_for_medium(seq_id, "AUDIO")
--- Audio is in samples: 100 frames @ 24fps × 48000/24 = 200_000 samples.
-local EXPECT_A = DUR * 48000 / FPS
+-- Post placement-unit unification: AUDIO media_ref's duration_frames is
+-- in master.fps frames (was: samples). For dual-medium masters that
+-- equals the video duration. Sub-frame BWF precision lives on
+-- media.start_tc_audio_samples, not in the placement column.
+local EXPECT_A = DUR
 print(string.format("native_duration_for_medium AUDIO: got %d, expected %d", a, EXPECT_A))
 assert(a == EXPECT_A, string.format(
-    "AUDIO duration: got %d, expected %d", a, EXPECT_A))
+    "AUDIO duration: got %d, expected %d (post-unification: AUDIO MR "
+    .. "duration_frames is in master.fps frames, matches VIDEO)",
+    a, EXPECT_A))
 
 print("✅ test_native_duration_returns_span.lua passed")

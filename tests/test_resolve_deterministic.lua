@@ -34,8 +34,8 @@ for i = 1, 3 do
 end
 assert(db:exec(
     "INSERT INTO media (id, project_id, name, file_path, duration_frames, "
-    .. "fps_numerator, fps_denominator, created_at, modified_at) "
-    .. "VALUES ('med', 'p1', 'x', '/tmp/a.wav', 48000, 48000, 1, 0, 0)"))
+    .. "fps_numerator, fps_denominator, audio_channels, audio_sample_rate, created_at, modified_at) "
+    .. "VALUES ('med', 'p1', 'x', '/tmp/a.wav', 48000, 48000, 1, 1, 48000, 0, 0)"))
 assert(db:exec(
     "INSERT INTO tracks (id, sequence_id, name, track_type, track_index) "
     .. "VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1)"))

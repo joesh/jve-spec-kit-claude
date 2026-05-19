@@ -34,12 +34,26 @@ local function insert_project(db)
         .. "VALUES ('p1', 'p', 'resample', '{\"master_clock_hz\":192000,\"default_fps\":{\"num\":24,\"den\":1}}', 0, 0)"))
 end
 
--- Build a media row with embedded TC metadata (start_tc_value at the
--- media's fps). 24fps media; start TC at frame 86400 = 01:00:00:00.
+-- Build a media row with embedded TC metadata. Post-normalization
+-- (2026-05-16) V and A TC live in separate fields; audio_start_tc_samples
+-- is derived from start_tc_frames * sr / fps_num so the per-medium pair
+-- expresses the same TC moment in its native unit.
 local function insert_media(db, opts)
-    local meta_json = string.format(
-        '{"start_tc_value":%d,"start_tc_rate":%d}',
-        opts.start_tc_frames, opts.fps_num)
+    local meta = {}
+    local function add(k, v)
+        meta[#meta + 1] = string.format('"%s":%s', k, tostring(v))
+    end
+    if opts.width and opts.width > 0 then
+        add("start_tc_value", opts.start_tc_frames)
+        add("start_tc_rate", opts.fps_num)
+    end
+    if opts.audio_channels and opts.audio_channels > 0 then
+        local samp = math.floor(
+            opts.start_tc_frames * opts.audio_sample_rate / opts.fps_num + 0.5)
+        add("start_tc_audio_samples", samp)
+        add("start_tc_audio_rate", opts.audio_sample_rate)
+    end
+    local meta_json = "{" .. table.concat(meta, ",") .. "}"
     local sql = string.format([[
         INSERT INTO media (id, project_id, name, file_path, duration_frames,
             fps_numerator, fps_denominator, audio_sample_rate, audio_channels,

@@ -245,7 +245,7 @@ assert(db:exec([[
                      fps_numerator, fps_denominator, width, height,
                      audio_channels, audio_sample_rate, codec, created_at, modified_at, metadata)
     VALUES('media1', 'proj', '/test/clip.mov', 'TestClip', 100, 24, 1,
-           1920, 1080, 2, 48000, 'h264', 0, 0, '{"start_tc_value":0,"start_tc_rate":24}')
+           1920, 1080, 2, 48000, 'h264', 0, 0, '{"start_tc_value":0,"start_tc_rate":24,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}')
 ]]))
 
 -- Create masterclip sequence with stream clip
@@ -297,6 +297,13 @@ mock_renderer_info["timeline1"] = {
 --------------------------------------------------------------------------------
 -- Load SequenceMonitor
 --------------------------------------------------------------------------------
+-- 017: bootstrap transport so SequenceMonitor.new resolves the canonical
+-- role-bound engines. The orphan local-engine fallback (anti-pattern #5)
+-- is gone; without transport.init self.engine stays nil and any deref
+-- crashes. Production startup path inits transport at project open; this
+-- test mirrors that.
+require("core.playback.transport").init("proj")
+
 local SequenceMonitor = require("ui.sequence_monitor")
 
 --------------------------------------------------------------------------------

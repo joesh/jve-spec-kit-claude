@@ -156,6 +156,7 @@ package.loaded["models.sequence"] = {
     load = function()
         return {
             id = "seq_test",
+            start_timecode_frame = 0,
             compute_content_end = function() return 100 end,
             get_video_at = function() return { mock_entry } end,
             get_next_video = function() return {} end,
@@ -190,7 +191,7 @@ PlaybackEngine.init_audio(mock_audio)
 local Signals = package.loaded["core.signals"]
 
 local function make_engine()
-    return PlaybackEngine.new({
+    return PlaybackEngine.new("source", {
         on_show_frame = function() end,
         on_show_gap = function() end,
         on_set_rotation = function() end,

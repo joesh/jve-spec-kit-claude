@@ -70,6 +70,12 @@ local active_filter = ""
 local key_filter = nil            -- {key, modifiers} when filtering by clicked tile
 local picture = nil               -- keyboard_picture handle
 
+-- Tracks whether the user edited bindings since loading the current preset.
+-- Auto-persist writes every edit to the "User" preset for crash safety, but
+-- on Close we still prompt to roll those edits back into a named preset.
+local loaded_preset = nil
+local dirty = false
+
 -- C++ tree selection callback returns {item_id=N, items={...}} — there is no
 -- event.data field. Maintain our own item_id → command_id map instead.
 -- GET_TREE_SELECTED_INDEX is also a misnomer: it returns the item ID, not a
@@ -232,6 +238,7 @@ local function do_assign()
     clear_capture_state()
     set_status(string.format("Assigned %s to %s", shortcut_string,
         registry.commands[current_command_id].name), false)
+    dirty = true
     refresh_assigned_list()
     populate_command_tree()  -- shortcut summary in the tree updates
     if picture then picture.refresh() end
@@ -249,7 +256,8 @@ local function do_remove_selected()
         set_status("Select a shortcut to remove", true); return
     end
     registry.remove_shortcut(current_command_id, sc.string)
-    set_status("Removed " .. sc.string, false)
+    dirty = true
+    set_status("Removed " .. format_shortcut_with_context(sc), false)
     refresh_assigned_list()
     populate_command_tree()
 end
@@ -305,22 +313,35 @@ local function do_load_preset()
     local ok, err = registry.load_preset(name)
     if not ok then set_status(err or "Load failed", true); return end
     registry.set_active_preset(name == registry.DEFAULT_PRESET and nil or name)
+    loaded_preset = name
+    dirty = false
     populate_command_tree()
     refresh_assigned_list()
     if picture then picture.refresh() end
     set_status(string.format("Loaded preset '%s'", name), false)
 end
 
+-- Suggested name when forking the current preset into a new one. Encodes
+-- provenance so a wall of "Based on Default", "Based on keys1" presets
+-- communicate where each one came from at a glance.
+local function suggested_fork_name()
+    local base = loaded_preset or registry.DEFAULT_PRESET
+    return string.format("Based on %s", base)
+end
+
 -- Inline "Save preset as…" prompt — child modal QDialog parented to our
 -- main dialog so the application-modal stack works (a tool window would be
 -- blocked by our parent's Qt::ApplicationModal).
-local function show_save_as_prompt()
-    local prompt = qt_constants.DIALOG.CREATE("Save Keyboard Preset", 360, 140, dialog_widget)
+-- on_saved (optional): called after a successful Save, before the prompt
+-- closes — used by the on-close flow to chain "Save As New → close outer".
+local function show_save_as_prompt(on_saved)
+    local prompt = qt_constants.DIALOG.CREATE("Save Keyboard Preset", 380, 140, dialog_widget)
 
     local layout = LAYOUT.CREATE_VBOX()
     LAYOUT.ADD_WIDGET(layout, WIDGET.CREATE_LABEL("Preset name:"))
 
     local name_edit = WIDGET.CREATE_LINE_EDIT()
+    PROP.SET_TEXT(name_edit, suggested_fork_name())
     LAYOUT.ADD_WIDGET(layout, name_edit)
 
     local row = LAYOUT.CREATE_HBOX()
@@ -340,9 +361,12 @@ local function show_save_as_prompt()
         end
         registry.save_preset(name)
         registry.set_active_preset(name)
+        loaded_preset = name
+        dirty = false
         refresh_preset_combo()
         qt_constants.DIALOG.CLOSE(prompt, true)
         set_status(string.format("Saved preset '%s'", name), false)
+        if on_saved then on_saved() end
     end)
     LAYOUT.ADD_WIDGET(row, save)
 
@@ -393,10 +417,10 @@ local function build_preset_toolbar()
     LAYOUT.ADD_WIDGET(toolbar, preset_combo)
 
     for _, spec in ipairs({
-        { "Load",              do_load_preset       },
-        { "Save As…",          show_save_as_prompt  },
-        { "Delete",            do_delete_preset     },
-        { "Reset to Defaults", do_reset_to_defaults },
+        { "Load",              do_load_preset                      },
+        { "Save As…",          function() show_save_as_prompt() end },
+        { "Delete",            do_delete_preset                    },
+        { "Reset to Defaults", do_reset_to_defaults                },
     }) do
         local btn = WIDGET.CREATE_BUTTON(spec[1])
         connect_button(btn, spec[2])
@@ -498,14 +522,158 @@ local function build_command_splitter()
     return splitter
 end
 
+-- Discard the autosave for the current base and reload the base clean.
+-- Used by the "Discard Changes" button in both close prompts.
+local function discard_and_reload_base()
+    local base = loaded_preset
+    assert(base, "discard_and_reload_base: loaded_preset unset")
+    registry.discard_autosave(base)
+    if base == registry.DEFAULT_PRESET then
+        registry.reset_to_defaults()
+    else
+        registry.load_preset(base)
+    end
+    dirty = false
+end
+
+-- Confirmation prompt for a NAMED preset (case 1: keys1, modified, close).
+-- Folding edits back into keys1 is fine since keys1 is a user-owned preset.
+local function show_named_close_prompt(preset_name)
+    local prompt = qt_constants.DIALOG.CREATE(
+        "Save Changes to Preset?", 460, 160, dialog_widget)
+
+    local layout = LAYOUT.CREATE_VBOX()
+    LAYOUT.ADD_WIDGET(layout, WIDGET.CREATE_LABEL(string.format(
+        "You modified preset '%s'. Save your changes?", preset_name)))
+
+    local row = LAYOUT.CREATE_HBOX()
+    LAYOUT.ADD_STRETCH(row, 1)
+
+    local cancel = WIDGET.CREATE_BUTTON("Cancel")
+    connect_button(cancel, function() qt_constants.DIALOG.CLOSE(prompt, false) end)
+    LAYOUT.ADD_WIDGET(row, cancel)
+
+    local discard = WIDGET.CREATE_BUTTON("Discard Changes")
+    connect_button(discard, function()
+        discard_and_reload_base()
+        qt_constants.DIALOG.CLOSE(prompt, true)
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+    end)
+    LAYOUT.ADD_WIDGET(row, discard)
+
+    -- Keep the named prompt up behind save_as so Cancel returns here
+    -- instead of tearing both dialogs down. Saving in save_as collapses
+    -- both prompts AND the outer dialog (via on_saved chained close).
+    local save_as_new = WIDGET.CREATE_BUTTON("Save as New Preset…")
+    connect_button(save_as_new, function()
+        show_save_as_prompt(function()
+            qt_constants.DIALOG.CLOSE(prompt, true)
+            qt_constants.DIALOG.CLOSE(dialog_widget, true)
+        end)
+    end)
+    LAYOUT.ADD_WIDGET(row, save_as_new)
+
+    local save_to_named = WIDGET.CREATE_BUTTON(
+        string.format("Save to '%s'", preset_name))
+    connect_button(save_to_named, function()
+        registry.save_preset(preset_name)
+        registry.set_active_preset(preset_name)
+        loaded_preset = preset_name
+        dirty = false
+        qt_constants.DIALOG.CLOSE(prompt, true)
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+    end)
+    LAYOUT.ADD_WIDGET(row, save_to_named)
+
+    local row_widget = WIDGET.CREATE()
+    LAYOUT.SET_ON_WIDGET(row_widget, row)
+    LAYOUT.ADD_WIDGET(layout, row_widget)
+
+    qt_constants.DIALOG.SET_LAYOUT(prompt, layout)
+    qt_constants.DIALOG.SHOW(prompt, false)
+end
+
+-- Confirmation prompt for the bundled DEFAULT preset (case 2: Default,
+-- modified, close). Default is read-only, so the only "save" path is to
+-- fork into a new preset. Name field is pre-filled with provenance and
+-- editable; user can pick a different name or Cancel/Discard.
+local function show_default_close_prompt()
+    local prompt = qt_constants.DIALOG.CREATE(
+        "Default Preset Not Modifiable", 460, 180, dialog_widget)
+
+    local layout = LAYOUT.CREATE_VBOX()
+    LAYOUT.ADD_WIDGET(layout, WIDGET.CREATE_LABEL(
+        "The Default preset can't be modified. Save your changes as a new preset?"))
+    LAYOUT.ADD_WIDGET(layout, WIDGET.CREATE_LABEL("New preset name:"))
+
+    local name_edit = WIDGET.CREATE_LINE_EDIT()
+    PROP.SET_TEXT(name_edit, suggested_fork_name())
+    LAYOUT.ADD_WIDGET(layout, name_edit)
+
+    local row = LAYOUT.CREATE_HBOX()
+    LAYOUT.ADD_STRETCH(row, 1)
+
+    local cancel = WIDGET.CREATE_BUTTON("Cancel")
+    connect_button(cancel, function() qt_constants.DIALOG.CLOSE(prompt, false) end)
+    LAYOUT.ADD_WIDGET(row, cancel)
+
+    local discard = WIDGET.CREATE_BUTTON("Discard Changes")
+    connect_button(discard, function()
+        discard_and_reload_base()
+        qt_constants.DIALOG.CLOSE(prompt, true)
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+    end)
+    LAYOUT.ADD_WIDGET(row, discard)
+
+    local save = WIDGET.CREATE_BUTTON("Save")
+    connect_button(save, function()
+        local name = PROP.GET_TEXT(name_edit)
+        if not name or name == "" then
+            set_status("Preset name required", true); return
+        end
+        if name == registry.DEFAULT_PRESET then
+            set_status("Cannot overwrite bundled Default — choose another name", true)
+            return
+        end
+        registry.save_preset(name)
+        registry.set_active_preset(name)
+        loaded_preset = name
+        dirty = false
+        refresh_preset_combo()
+        qt_constants.DIALOG.CLOSE(prompt, true)
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+        set_status(string.format("Saved preset '%s'", name), false)
+    end)
+    LAYOUT.ADD_WIDGET(row, save)
+
+    local row_widget = WIDGET.CREATE()
+    LAYOUT.SET_ON_WIDGET(row_widget, row)
+    LAYOUT.ADD_WIDGET(layout, row_widget)
+
+    qt_constants.DIALOG.SET_LAYOUT(prompt, layout)
+    qt_constants.DIALOG.SHOW(prompt, false)
+    qt_set_focus(name_edit)  -- luacheck: globals qt_set_focus
+end
+
+local function on_close_clicked()
+    if not dirty then
+        qt_constants.DIALOG.CLOSE(dialog_widget, true)
+        return
+    end
+    assert(loaded_preset, "on_close_clicked: loaded_preset unset while dirty")
+    if loaded_preset == registry.DEFAULT_PRESET then
+        show_default_close_prompt()
+    else
+        show_named_close_prompt(loaded_preset)
+    end
+end
+
 -- Close button at the lower-right. Mutations apply immediately, so no "Apply".
 local function build_bottom_bar()
     local bottom = LAYOUT.CREATE_HBOX()
     LAYOUT.ADD_STRETCH(bottom, 1)
     local close_btn = WIDGET.CREATE_BUTTON("Close")
-    connect_button(close_btn, function()
-        qt_constants.DIALOG.CLOSE(dialog_widget, true)
-    end)
+    connect_button(close_btn, on_close_clicked)
     LAYOUT.ADD_WIDGET(bottom, close_btn)
     return hbox_as_widget(bottom)
 end
@@ -538,6 +706,10 @@ local function create_dialog_impl()
 
     refresh_preset_combo()
     populate_command_tree()
+    assert(registry.current_preset,
+        "create_dialog_impl: registry.current_preset unset")
+    loaded_preset = registry.current_preset
+    dirty = false
 end
 
 -- Transactional wrapper: if any build step raises, reset module-scope state
@@ -563,6 +735,9 @@ function M.show()
     refresh_preset_combo()
     populate_command_tree()
     refresh_assigned_list()
+    assert(registry.current_preset, "M.show: registry.current_preset unset")
+    loaded_preset = registry.current_preset
+    dirty = false
     if picture then picture.refresh() end
     -- DIALOG.SHOW(dialog, blocking=false) shows modally without blocking the
     -- Lua call (we want to return to the menu dispatcher promptly).

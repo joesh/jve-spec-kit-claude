@@ -45,7 +45,7 @@ local SET_MARK_IN_SPEC = {
     undoable = true,
     mutates_clips = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
         frame = { required = true, kind = "number" },
     },
 }
@@ -54,7 +54,7 @@ local SET_MARK_OUT_SPEC = {
     undoable = true,
     mutates_clips = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
         frame = { required = true, kind = "number" },
     },
 }
@@ -63,7 +63,7 @@ local CLEAR_MARK_IN_SPEC = {
     undoable = true,
     mutates_clips = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
@@ -71,7 +71,7 @@ local CLEAR_MARK_OUT_SPEC = {
     undoable = true,
     mutates_clips = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
@@ -79,35 +79,35 @@ local CLEAR_MARKS_SPEC = {
     undoable = true,
     mutates_clips = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
 local GET_MARK_IN_SPEC = {
     undoable = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
 local GET_MARK_OUT_SPEC = {
     undoable = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
 local GO_TO_MARK_IN_SPEC = {
     undoable = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
 local GO_TO_MARK_OUT_SPEC = {
     undoable = false,
     args = {
-        sequence_id = { required = true, kind = "string" },
+        sequence_id = { kind = "string" },
     },
 }
 
@@ -280,36 +280,40 @@ function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     -- GoToMarkIn (non-undoable): set playhead to mark_in
     ---------------------------------------------------------------------------
+    -- Shared park helper: write model, emit signal, sync the displayed-side
+    -- engine, surface the playhead in the viewport. Same shape as
+    -- MovePlayhead/GoToStart/GoToEnd — without this, GoToMark* updated only
+    -- the sequence row, leaving each side's engine to render from whatever
+    -- frame it last reported and producing visible src/rec divergence.
+    local function park_at(seq_id, target)
+        local seq = load_sequence(seq_id)
+        seq.playhead_position = target
+        seq:save()
+        Signals.emit("playhead_changed", seq_id, target)
+        require("core.playback.transport").seek_target_if_loaded(seq_id, target)
+        require("ui.timeline.timeline_state").surface_playhead()
+    end
+
     executors["GoToMarkIn"] = function(command)
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "GoToMarkIn: sequence_id is required")
-
         local seq = load_sequence(args.sequence_id)
-        if seq.mark_in then
-            seq.playhead_position = seq.mark_in
-            seq:save()
-            Signals.emit("playhead_changed", args.sequence_id, seq.mark_in)
-        end
+        if seq.mark_in then park_at(args.sequence_id, seq.mark_in) end
         return { success = true }
     end
 
     ---------------------------------------------------------------------------
-    -- GoToMarkOut (non-undoable): set playhead to last included frame
+    -- GoToMarkOut (non-undoable): set playhead to last included frame.
+    -- mark_out is exclusive; last included frame = mark_out - 1 (canonical
+    -- NLE behavior — FCP/Premiere/Resolve all park there).
     ---------------------------------------------------------------------------
     executors["GoToMarkOut"] = function(command)
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "GoToMarkOut: sequence_id is required")
-
         local seq = load_sequence(args.sequence_id)
-        if seq.mark_out then
-            -- mark_out is exclusive; last included frame = mark_out - 1
-            local target = seq.mark_out - 1
-            seq.playhead_position = target
-            seq:save()
-            Signals.emit("playhead_changed", args.sequence_id, target)
-        end
+        if seq.mark_out then park_at(args.sequence_id, seq.mark_out - 1) end
         return { success = true }
     end
 
@@ -321,7 +325,7 @@ function M.register(executors, undoers)
         mutates_clips = false,
         args = {
             _positional = {},
-            sequence_id = { required = true, kind = "string" },
+            sequence_id = { kind = "string" },
             frame = { kind = "number" },
         },
     }
@@ -333,8 +337,9 @@ function M.register(executors, undoers)
         assert(which == "in" or which == "out",
             "SetMark: positional arg must be 'in' or 'out', got: " .. tostring(which))
 
-        -- Auto-resolve frame from playhead if not provided
-        local frame = args.frame
+        -- sequence_id and playhead are auto-injected by command_manager based
+        -- on SPEC.mutates_clips (movement-class → transport.engine_for_target()).
+        local frame = args.frame or args.playhead
         if frame == nil then
             local pm = require("ui.panel_manager")
             local sv = pm.get_active_sequence_monitor()
@@ -378,7 +383,7 @@ function M.register(executors, undoers)
         undoable = false,
         args = {
             _positional = {},
-            sequence_id = { required = true, kind = "string" },
+            sequence_id = { kind = "string" },
         },
     }
     executors["GoToMark"] = function(command)
@@ -391,18 +396,9 @@ function M.register(executors, undoers)
 
         local seq = load_sequence(args.sequence_id)
         if which == "in" then
-            if seq.mark_in then
-                seq.playhead_position = seq.mark_in
-                seq:save()
-                Signals.emit("playhead_changed", args.sequence_id, seq.mark_in)
-            end
+            if seq.mark_in then park_at(args.sequence_id, seq.mark_in) end
         else
-            if seq.mark_out then
-                local target = seq.mark_out - 1
-                seq.playhead_position = target
-                seq:save()
-                Signals.emit("playhead_changed", args.sequence_id, target)
-            end
+            if seq.mark_out then park_at(args.sequence_id, seq.mark_out - 1) end
         end
         return { success = true }
     end
@@ -415,7 +411,7 @@ function M.register(executors, undoers)
         mutates_clips = false,
         args = {
             _positional = {},
-            sequence_id = { required = true, kind = "string" },
+            sequence_id = { kind = "string" },
         },
     }
     executors["ClearMark"] = function(command)

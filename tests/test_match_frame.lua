@@ -16,6 +16,9 @@
 --   350 → only clip_no_parent (no master)
 
 require('test_env')
+-- MatchFrame → source_viewer.load_master_clip binds the source engine
+-- eagerly (no silent pcall fallback).
+require("helpers.test_017_setup").install_qt_stub()
 
 -- No-op timer: prevent debounced persistence from firing mid-command
 _G.qt_create_single_shot_timer = function() end

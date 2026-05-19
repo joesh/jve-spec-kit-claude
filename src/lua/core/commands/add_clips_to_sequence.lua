@@ -50,6 +50,12 @@ local log          = require("core.logger").for_area("commands")
 local SAVEPOINT = "add_clips_to_sequence_atomic"
 
 local SPEC = {
+    -- Called from import flows (DRP, FCP7, ResolveDB) where the caller
+    -- already knows which sequence is the target. No keyboard dispatch
+    -- path; auto-injecting active_sequence_id would silently land clips
+    -- in the wrong sequence when an import runs while a different
+    -- timeline is open.
+    caller_supplied_sequence_id = true,
     args = {
         sequence_id = { required = true },
         project_id  = { required = true },

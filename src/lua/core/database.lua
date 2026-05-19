@@ -1074,7 +1074,6 @@ function M.load_master_virtual_clips(master_seq_id)
                mr.enabled,
                t.track_type, t.name AS track_name,
                s.fps_numerator, s.fps_denominator,
-               mr.audio_sample_rate,
                m.id, m.name, m.file_path, m.offline_note
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
@@ -1092,7 +1091,7 @@ function M.load_master_virtual_clips(master_seq_id)
             local mref_id    = query:value(0)
             local proj_id    = query:value(1)
             local track_id   = query:value(2)
-            local tl_start   = query:value(3)
+            local seq_start   = query:value(3)
             local duration   = query:value(4)
             local src_in     = query:value(5)
             local src_out    = query:value(6)
@@ -1100,35 +1099,23 @@ function M.load_master_virtual_clips(master_seq_id)
             local track_type = query:value(8)
             local fps_num    = query:value(10)
             local fps_den    = query:value(11)
-            local audio_rate = query:value(12)
-            local media_id   = query:value(13)
-            local media_name = query:value(14)
-            local media_path = query:value(15)
-            local offline_note = query:value(16)
+            local media_id   = query:value(12)
+            local media_name = query:value(13)
+            local media_path = query:value(14)
+            local offline_note = query:value(15)
 
-            assert(tl_start, "load_master_virtual_clips: media_ref missing sequence_start_frame")
+            assert(seq_start, "load_master_virtual_clips: media_ref missing sequence_start_frame")
             assert(duration, "load_master_virtual_clips: media_ref missing duration_frames")
             assert(src_in and src_out, "load_master_virtual_clips: media_ref missing source range")
 
-            -- Audio media_refs store positions in the master's AUDIO timebase
-            -- (samples). Convert to the master's primary VIDEO timebase
-            -- (frames) — every clip in data.state.clips is interpreted in
-            -- the sequence's frame timebase by downstream consumers
-            -- (renderer, gap recompute, viewport math). Without this, an
-            -- audio span at sample N would land at frame N — ~2000× past
-            -- where it belongs at typical 48kHz/24fps.
-            local sequence_start = tl_start
-            local sequence_duration = duration
-            if track_type == "AUDIO" then
-                assert(audio_rate and audio_rate > 0, string.format(
-                    "load_master_virtual_clips: master %s has audio media_ref %s on "
-                    .. "track %s but audio_sample_rate is %s — schema invariant violated",
-                    tostring(master_seq_id), tostring(mref_id), tostring(track_id),
-                    tostring(audio_rate)))
-                -- frame = sample × fps / sample_rate
-                sequence_start = math.floor(tl_start * fps_num / (fps_den * audio_rate))
-                sequence_duration = math.floor(duration * fps_num / (fps_den * audio_rate))
-            end
+            -- Post placement-unit unification (2026-05-16): every media_ref's
+            -- sequence_start_frame and duration_frames live in master.fps
+            -- frames regardless of track_type. For dual-medium masters that's
+            -- video fps; for audio-only masters master.fps == sample_rate so
+            -- "frames at master.fps" === samples. No per-track-type conversion
+            -- needed here — the old samples→frames divide produced ~2000×
+            -- under-sized audio virtual clips that vanished off-screen
+            -- (TSO 2026-05-16: src tab on V+A master showed empty A1/A2).
 
             local clip = {
                 id = "mref:" .. mref_id,
@@ -1139,8 +1126,8 @@ function M.load_master_virtual_clips(master_seq_id)
                 track_sequence_id = master_seq_id,
                 sequence_id = master_seq_id,
                 source_sequence_kind = "master",
-                sequence_start = sequence_start,
-                duration = sequence_duration,
+                sequence_start = seq_start,
+                duration = duration,
                 source_in = src_in,    -- source-media units (samples for audio, frames for video)
                 source_out = src_out,
                 frame_rate = { fps_numerator = fps_num, fps_denominator = fps_den },

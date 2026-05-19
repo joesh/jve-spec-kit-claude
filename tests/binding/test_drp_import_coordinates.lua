@@ -275,18 +275,25 @@ assert(math.abs(tc_seconds - 51099.76) < 0.1, string.format(
     "TC should be ~51099.76s, got %.2f", tc_seconds))
 print(string.format("  PASS: A001_05191411_C020.mov TC = %.2fs (14:11:39)", tc_seconds))
 
--- APM_Adobe_Going Home_v3.wav: mst=3603.6s → start_tc_value=172972800 at rate=48000
+-- APM_Adobe_Going Home_v3.wav: mst=3603.6s → start_tc_audio_samples=172972800 @ 48000.
+-- Audio-only files carry their TC in the A pair only post-normalization
+-- (2026-05-16) — start_tc_value/rate stay nil (retires the overload).
 local r2 = query_one([[
     SELECT metadata FROM media WHERE name = 'APM_Adobe_Going Home_v3.wav'
 ]])
 assert(r2, "WAV media not found")
 local meta2 = json.decode(r2[1])
-assert(meta2.start_tc_value == 172972800, "WAV start_tc_value: " .. tostring(meta2.start_tc_value))
-assert(meta2.start_tc_rate == 48000, "WAV start_tc_rate: " .. tostring(meta2.start_tc_rate))
+assert(meta2.start_tc_value == nil,
+    "WAV (audio-only): start_tc_value must be nil post-normalization, got "
+    .. tostring(meta2.start_tc_value))
+assert(meta2.start_tc_audio_samples == 172972800,
+    "WAV start_tc_audio_samples: " .. tostring(meta2.start_tc_audio_samples))
+assert(meta2.start_tc_audio_rate == 48000,
+    "WAV start_tc_audio_rate: " .. tostring(meta2.start_tc_audio_rate))
 -- 172972800/48000 = 3603.6s = 01:00:03.6 ✓
-local wav_tc = meta2.start_tc_value / meta2.start_tc_rate
+local wav_tc = meta2.start_tc_audio_samples / meta2.start_tc_audio_rate
 assert(math.abs(wav_tc - 3603.6) < 0.01, string.format("WAV TC: %.2f", wav_tc))
-print(string.format("  PASS: WAV TC = %.1fs (01:00:03.6)", wav_tc))
+print(string.format("  PASS: WAV TC = %.1fs (01:00:03.6, clean shape)", wav_tc))
 
 -- ═══════════════════════════════════════════════════════════════
 -- 6. Total clip count (sanity)

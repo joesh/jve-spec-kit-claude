@@ -57,7 +57,7 @@ local PlaybackEngine = require("core.playback.playback_engine")
 
 local function fresh_engine()
     tmb_audio_format_calls = {}
-    return PlaybackEngine.new({
+    return PlaybackEngine.new("source", {
         on_show_frame   = function() end,
         on_show_gap     = function() end,
         on_set_rotation = function() end,

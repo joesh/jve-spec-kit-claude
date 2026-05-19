@@ -15,6 +15,10 @@ local restore_sequence_from_payload
 
 local SPEC = {
     mutates_clips = false,  -- mutates sequences table, not clips
+    -- Destructive: caller (menu / tree click) must supply explicit
+    -- sequence_id. Falling back to active_sequence_id here would silently
+    -- delete the user's currently-open timeline.
+    caller_supplied_sequence_id = true,
     args = {
         delete_sequence_snapshot = {},
         project_id = { required = true },

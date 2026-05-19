@@ -81,7 +81,7 @@ package.loaded["core.media.media_status"] = {
 
 local PlaybackEngine = require("core.playback.playback_engine")
 
-local engine = PlaybackEngine.new({
+local engine = PlaybackEngine.new("source", {
     on_show_frame       = function() end,
     on_show_gap         = function() end,
     on_set_rotation     = function() end,

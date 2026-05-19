@@ -56,7 +56,7 @@ end
 
 local function make_test_engine()
     local events = {}
-    return PlaybackEngine.new({
+    return PlaybackEngine.new("source", {
         on_show_frame = function(fh, meta)
             events[#events + 1] = {type = "show_frame", fh = fh, meta = meta}
         end,

@@ -173,28 +173,32 @@ do
 end
 
 -- ═══════════════════════════════════════════════════════════
--- B9: Audio ownership transfers on focus change
+-- B9: Audio ownership in the 017 architecture.
+-- The legacy "audio follows focus" wiring is DELETED — focus changes no
+-- longer flip activate_audio / deactivate_audio. Ownership lives in
+-- core.media.audio_playback as a module-private pointer flipped on
+-- transport-start via the halt_current / acquire_for handover.
 -- ═══════════════════════════════════════════════════════════
-print("\n=== B9: audio follows focus ===")
+print("\n=== B9: audio ownership is structural (017) ===")
 do
-    local f = io.open("../src/lua/ui/focus_manager.lua", "r")
-    assert(f, "Cannot open focus_manager.lua")
+    local f = io.open("../src/lua/core/media/audio_playback.lua", "r")
+    assert(f, "Cannot open audio_playback.lua")
     local content = f:read("*a")
     f:close()
-
-    check("focus_manager has on_focus_change callback",
-        content:find("on_focus_change") ~= nil)
+    check("audio_playback exposes halt_current",
+        content:find("function M.halt_current") ~= nil)
+    check("audio_playback exposes acquire_for",
+        content:find("function M.acquire_for") ~= nil)
+    check("audio_playback exposes is_owner",
+        content:find("function M.is_owner") ~= nil)
 end
 do
     local f = io.open("../src/lua/ui/layout.lua", "r")
     assert(f, "Cannot open layout.lua")
     local content = f:read("*a")
     f:close()
-
-    check("layout wires audio transfer on focus change",
-        content:find("on_focus_change") ~= nil
-        and content:find("activate_audio") ~= nil
-        and content:find("deactivate_audio") ~= nil)
+    check("layout no longer calls deactivate_audio in focus_change",
+        content:find("deactivate_audio") == nil)
 end
 
 -- Summary

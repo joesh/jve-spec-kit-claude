@@ -148,17 +148,32 @@ assert(vdur == NEW_DUR_FRAMES, string.format(
 print(string.format("  ✓ V media_ref duration_frames updated %d → %d",
     OLD_DUR_FRAMES, vdur))
 
--- ── Assertion 3: A media_ref duration in samples updated ──
+-- ── Assertion 3: A media_ref duration in master.fps frames updated ──
+-- Post placement-unit unification: AUDIO MR's duration_frames matches
+-- the file's video duration in master.fps frames (was: audio samples).
+-- Sub-frame BWF precision lives on media.start_tc_audio_samples; the
+-- placement column tracks the V dimension for dual-medium masters.
 local stmt_a = db:prepare(
     "SELECT duration_frames FROM media_refs WHERE id = 'mref_a'")
 assert(stmt_a and stmt_a:exec() and stmt_a:next())
 local adur = stmt_a:value(0)
 stmt_a:finalize()
-assert(adur == NEW_DUR_SAMPLES, string.format(
-    "media_refs[A].duration (samples): expected %d, got %d",
-    NEW_DUR_SAMPLES, adur))
-print(string.format("  ✓ A media_ref duration (samples) updated %d → %d",
-    OLD_DUR_SAMPLES, adur))
+assert(adur == NEW_DUR_FRAMES, string.format(
+    "media_refs[A].duration_frames (master.fps frames, post-unification): "
+    .. "expected %d, got %d", NEW_DUR_FRAMES, adur))
+print(string.format("  ✓ A media_ref duration_frames updated → %d (master.fps frames)", adur))
+
+-- source_in / source_out on the AUDIO MR still live in file-natural
+-- samples — verify they reflect the new audio extent.
+local stmt_a_src = db:prepare(
+    "SELECT source_in_frame, source_out_frame FROM media_refs WHERE id = 'mref_a'")
+assert(stmt_a_src and stmt_a_src:exec() and stmt_a_src:next())
+local a_src_in  = stmt_a_src:value(0)
+local a_src_out = stmt_a_src:value(1)
+stmt_a_src:finalize()
+assert(a_src_out - a_src_in == NEW_DUR_SAMPLES, string.format(
+    "media_refs[A] source span (samples) expected %d, got %d",
+    NEW_DUR_SAMPLES, a_src_out - a_src_in))
 
 -- ── Assertion 4: undo restores the pre-relink durations ──
 local undo_result = command_manager.undo()
