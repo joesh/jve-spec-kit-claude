@@ -39,10 +39,11 @@ function M.register(executors, undoers, _db)
         assert(type(delta) == "number" and delta == math.floor(delta),
             "ScrollTimelineViewport: delta_frames must be an integer "
             .. "(handler does the pixel→frame conversion; pass whole frames)")
-        assert(delta ~= 0,
-            "ScrollTimelineViewport: delta_frames must be non-zero "
-            .. "(handler must filter no-op gestures rather than dispatch)")
 
+        -- A zero delta is a benign no-op; gesture handlers filter zero
+        -- before dispatch (same shape as Pan/Scrub), so we don't assert
+        -- on it here. set_viewport_start_time clamps to the sequence
+        -- extent.
         local ts = require("ui.timeline.timeline_state")
         local new_start = ts.get_viewport_start_time() + delta
         ts.set_viewport_start_time(new_start)
