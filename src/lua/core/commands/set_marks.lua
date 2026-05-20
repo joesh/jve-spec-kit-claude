@@ -116,10 +116,12 @@ local GO_TO_MARK_OUT_SPEC = {
 -- schema) so clearing them has no defined destination. Returns true if
 -- the executor should no-op + log; the dispatched sequence_id is the
 -- source viewer's loaded sequence (auto-injected from active_sequence_id
--- in the source_monitor scope).
+-- in the source_monitor scope). Plain require — `ui.source_viewer` is
+-- registered at panel init; if it's not yet loadable the command path
+-- shouldn't be reachable, so a missing module is a real wiring bug, not
+-- a "fall through silently" condition.
 local function should_skip_for_live_bound(cmd_name)
-    local ok, sv = pcall(require, "ui.source_viewer")
-    if not ok or not sv.get_mode then return false end
+    local sv = require("ui.source_viewer")
     if sv.get_mode() == "live_bound_clip" then
         local log_mod = require("core.logger").for_area("commands")
         log_mod.event("%s: not applicable in live-bound source-viewer mode", cmd_name)

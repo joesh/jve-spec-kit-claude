@@ -241,7 +241,15 @@ function M.load_clip(clip_id, opts)
     update_effective_source_live(clip)
     set_monitor_title(source, compute_title("live_bound_clip", nil, clip, owner))
 
-    Signals.emit("source_loaded_changed", clip_id, prev_id)
+    -- Signal payload is always the SOURCE SEQUENCE id (never clip_id). The
+    -- timeline_panel auto-source-tab handler and effective_source's listener
+    -- both interpret arg1 as a sequence id; passing a clip_id here breaks
+    -- both (auto-tab keys on it, effective_source._source_viewer_seq_id
+    -- gets clobbered with the wrong namespace, overwriting the correct
+    -- value just written by update_effective_source_live). The clip
+    -- identity is carried through selection_hub publish + effective_source
+    -- override fields — the signal doesn't need to carry it.
+    Signals.emit("source_loaded_changed", clip.sequence_id, prev_id)
 
     if not opts.skip_focus then
         require("ui.focus_manager").focus_panel("source_monitor")

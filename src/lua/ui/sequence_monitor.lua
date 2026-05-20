@@ -698,14 +698,11 @@ end
 --- sequence_monitor.lua:1021-1024) read from this single accessor so the
 --- divergence has one home.
 function SequenceMonitor:get_playback_range()
-    -- pcall the require: this module is loaded inside the source monitor
-    -- itself, so ui.source_viewer's require may cycle on init. The
-    -- failure mode is "mode unknown" which falls through to staged
-    -- behavior — the safe default.
-    local ok, sv = pcall(require, "ui.source_viewer")
-    local mode = (ok and sv.get_mode) and sv.get_mode() or "staged_sequence"
-
-    if mode == "live_bound_clip" then
+    -- Plain require: ui.source_viewer is loaded at panel init, well before
+    -- any monitor calls get_playback_range. A genuine cycle would be a
+    -- wiring bug worth crashing on, not a "silent staged fallback" case.
+    local sv = require("ui.source_viewer")
+    if sv.get_mode() == "live_bound_clip" then
         return self.start_frame, self.total_frames
     end
     local mark_in  = self.sequence and self.sequence.mark_in or nil
