@@ -551,30 +551,22 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
         self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
-    -- Clamp playhead to valid range [start_frame, max(start_frame, total_frames - 1)].
-    -- Playhead can end up at total_frames after Overwrite advance_playhead or undo
-    -- with content change — clamping is safer than asserting.
-    if self.total_frames > self.start_frame then
-        if saved_playhead < self.start_frame then
-            log.warn("load_sequence(%s): clamping playhead %d to start %d",
-                sequence_id:sub(1, 8), saved_playhead, self.start_frame)
-            saved_playhead = self.start_frame
-        elseif saved_playhead >= self.total_frames then
-            local clamped = self.total_frames - 1
-            log.warn("load_sequence(%s): clamping playhead %d to last frame %d",
-                sequence_id:sub(1, 8), saved_playhead, clamped)
-            saved_playhead = clamped
-        end
-    else
-        -- Empty sequence: playhead must be at start
-        if saved_playhead ~= self.start_frame then
-            log.warn("load_sequence(%s): empty sequence, clamping playhead %d to %d",
-                sequence_id:sub(1, 8), saved_playhead, self.start_frame)
-            saved_playhead = self.start_frame
-        end
-    end
+    -- Preserve the user's saved playhead in self.playhead (the value mirrored
+    -- back into timeline_state and re-persisted on tab swap). monitor.playhead
+    -- has no upper clamp — matches set_playhead/seek_to_frame contract
+    -- (test_sequence_monitor.lua: "no upper clamp — playhead free beyond
+    -- content"). Engine seek requires frame >= start_frame; clamp only that
+    -- floor for the engine call so a saved value below the sequence's TC
+    -- origin doesn't trip engine:seek's assert.
     self.playhead = saved_playhead
-    self.engine:seek(saved_playhead)
+    local engine_target = saved_playhead
+    if engine_target < self.start_frame then
+        log.warn("load_sequence(%s): saved playhead %d below start_frame %d; "
+            .. "seeking engine to start (self.playhead preserved at saved value)",
+            sequence_id:sub(1, 8), saved_playhead, self.start_frame)
+        engine_target = self.start_frame
+    end
+    self.engine:seek(engine_target)
 
     -- Update title
     local title = seq:is_master() and "Source" or "Timeline"

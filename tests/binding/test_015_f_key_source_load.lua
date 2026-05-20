@@ -58,11 +58,11 @@ db:exec(string.format([[
       ('bv1', 'msb', 'V1', 'VIDEO', 1, 1);
 
     INSERT INTO media (id, project_id, name, file_path, duration_frames,
-        fps_numerator, fps_denominator, audio_sample_rate, width, height,
-        created_at, modified_at)
+        fps_numerator, fps_denominator, audio_sample_rate, audio_channels,
+        width, height, created_at, modified_at)
     VALUES
-      ('ma', 'proj', 'A012', '/tmp/A012.mov', 1200, 24, 1, 48000, 1920, 1080, %d, %d),
-      ('mb', 'proj', 'A037', '/tmp/A037.mov',  600, 24, 1, 48000, 1920, 1080, %d, %d);
+      ('ma', 'proj', 'A012', '/tmp/A012.mov', 1200, 24, 1, 48000, 2, 1920, 1080, %d, %d),
+      ('mb', 'proj', 'A037', '/tmp/A037.mov',  600, 24, 1, 48000, 2, 1920, 1080, %d, %d);
 
     INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
         media_id, source_in_frame, source_out_frame,

@@ -999,7 +999,7 @@ do
     print("  ok")
 end
 
--- ─── Test 30: out-of-bounds saved playhead clamped on load ───
+-- ─── Test 30: out-of-bounds saved playhead loads without crash ───
 print("\n--- out-of-bounds saved playhead ---")
 do
     -- Artificially save a playhead beyond total_frames (bypasses set_playhead validation)
@@ -1011,9 +1011,20 @@ do
     local view = SequenceMonitor.new({ view_id = "test_oob_ph" })
     timer_callbacks = {}
 
-    -- load_sequence must clamp stale DB playhead (not crash — prevents startup failure)
+    -- load_sequence must not crash on a stale-beyond-content saved value,
+    -- and must preserve the saved value as monitor.playhead so it can be
+    -- mirrored back to timeline_state without corruption (binding test
+    -- test_015_f_key_source_load pins this contract: a viewport-only F-key
+    -- press on a fresh project must not rewrite rec.playhead). The
+    -- monitor.playhead/set_playhead/seek_to_frame contract is "no upper
+    -- clamp — playhead free beyond content" (Test 7); load_sequence must
+    -- match it.
     view:load_sequence(mc_id)
-    assert(view.playhead < 999, "out-of-bounds playhead must be clamped on load (got " .. tostring(view.playhead) .. ")")
+    assert(view.playhead == 999,
+        "load_sequence must preserve saved playhead verbatim (got " .. tostring(view.playhead) .. ")")
+    -- Sanity: further set_playhead operations still work afterwards.
+    view:set_playhead(42)
+    assert(view.playhead == 42, "set_playhead still works after out-of-bounds load")
     view:destroy()
 
     -- Reset DB to valid state for subsequent tests
