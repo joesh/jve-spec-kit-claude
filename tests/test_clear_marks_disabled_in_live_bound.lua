@@ -102,7 +102,7 @@ do
         sequence_id = "seq_S",
         project_id  = "proj_X",
     })
-    local mi, mo = read_seq_marks()
+    local mi, _ = read_seq_marks()
     assert(mi == 100, string.format(
         "live-bound ClearMarkIn must NOT mutate mark_in; got %s", tostring(mi)))
     print("  ✓ live-bound + ClearMarkIn: no mutation")

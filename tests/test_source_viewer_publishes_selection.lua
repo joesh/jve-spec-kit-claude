@@ -106,7 +106,6 @@ print("  ✓ load_master_clip publishes sequence selection under source_monitor"
 -- =============================================================================
 -- Test 2: unload clears the published selection
 -- =============================================================================
-last_items, last_panel = nil, nil
 source_viewer.unload()
 
 -- After unload the hub's stored selection for source_monitor must be empty,
@@ -194,17 +193,17 @@ source_viewer.load_clip("clip_live", { skip_focus = true })
 local published = selection_hub.get_selection("source_monitor")
 assert(#published == 1, string.format(
     "live-bound load_clip must publish exactly one item; got %d", #published))
-local item = published[1]
-assert(item.item_type == "clip", string.format(
+local live_item = published[1]
+assert(live_item.item_type == "clip", string.format(
     "live-bound publish item_type must be 'clip' (FR-028); got %q",
-    tostring(item.item_type)))
-assert(item.clip_id == "clip_live",
+    tostring(live_item.item_type)))
+assert(live_item.clip_id == "clip_live",
     "published item must carry clip_id")
-assert(item.project_id == "proj_under_test",
+assert(live_item.project_id == "proj_under_test",
     "published item must carry project_id")
-assert(item.sequence_id == "owner_seq_live", string.format(
+assert(live_item.sequence_id == "owner_seq_live", string.format(
     "published sequence_id must be the OWNER sequence (where the clip lives), "
-    .. "not the source sequence; got %q", tostring(item.sequence_id)))
+    .. "not the source sequence; got %q", tostring(live_item.sequence_id)))
 print("  ✓ live-bound mode publishes item_type='clip' with owner sequence_id")
 
 print("\n✅ test_source_viewer_publishes_selection.lua passed")

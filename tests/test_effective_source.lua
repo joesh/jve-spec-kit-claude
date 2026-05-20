@@ -297,9 +297,9 @@ selection_hub.set_active_panel("source_monitor")
 -- T18: live-bound entry — get() returns the triple.
 do
     effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
-    local seq, in_, out = effective_src.get()
-    assert(seq == "source-seq-X", string.format(
-        "T18: live-bound get() seq must equal _set arg; got %s", tostring(seq)))
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "source-seq-X", string.format(
+        "T18: live-bound get() seq must equal _set arg; got %s", tostring(got_seq)))
     assert(in_ == 100, string.format(
         "T18: live-bound get() in must equal _set arg; got %s", tostring(in_)))
     assert(out == 250, string.format(
@@ -309,9 +309,9 @@ end
 -- T19: staged entry — get() returns just the seq, in/out are nil.
 do
     effective_src._set_source_viewer_sequence("staged-seq-Y")
-    local seq, in_, out = effective_src.get()
-    assert(seq == "staged-seq-Y", string.format(
-        "T19: staged get() seq; got %s", tostring(seq)))
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "staged-seq-Y", string.format(
+        "T19: staged get() seq; got %s", tostring(got_seq)))
     assert(in_ == nil and out == nil, string.format(
         "T19: staged get() in/out must be nil; got (%s, %s)",
         tostring(in_), tostring(out)))
@@ -321,10 +321,10 @@ end
 do
     effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
     effective_src._clear_source_viewer()
-    local seq, in_, out = effective_src.get()
-    assert(seq == nil and in_ == nil and out == nil, string.format(
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == nil and in_ == nil and out == nil, string.format(
         "T20: after _clear_source_viewer, all three must be nil; got (%s, %s, %s)",
-        tostring(seq), tostring(in_), tostring(out)))
+        tostring(got_seq), tostring(in_), tostring(out)))
 end
 
 -- T21: browser-active precedence still wins — even with a live-bound
@@ -345,10 +345,10 @@ do
     })
     selection_hub.set_active_panel("project_browser")
 
-    local seq, in_, out = effective_src.get()
-    assert(seq == "browser-master", string.format(
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "browser-master", string.format(
         "T21: browser-active must win over live-bound source viewer override; "
-        .. "got seq=%s", tostring(seq)))
+        .. "got seq=%s", tostring(got_seq)))
     -- Browser source has no override marks; in/out must be nil even when
     -- live-bound override was previously set on a different sequence.
     assert(in_ == nil and out == nil, string.format(
