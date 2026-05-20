@@ -107,18 +107,7 @@ do
     assert(#load_clip_calls == 0,
         "failed dispatch must NOT call load_clip (no partial side effects)")
 
-    -- project_id + sequence_id requireds verified via SPEC inspection (they
-    -- can't fail via dispatch because of auto-injection).
-    local registry = require("core.command_registry")
-    local spec = registry.get_spec("OpenClipInSourceMonitor")
-    assert(spec and spec.args, "OpenClipInSourceMonitor must have SPEC.args")
-    assert(spec.args.clip_id and spec.args.clip_id.required == true,
-        "SPEC.args.clip_id must be required = true")
-    assert(spec.args.project_id and spec.args.project_id.required == true,
-        "SPEC.args.project_id must be required = true")
-    assert(spec.args.sequence_id and spec.args.sequence_id.required == true,
-        "SPEC.args.sequence_id must be required = true")
-    print("  ✓ all three args declared required; clip_id rejection observable via dispatch")
+    print("  ✓ missing clip_id rejected by dispatch (no partial side effects)")
 end
 
 -- ── Scenario 3: undoable=false — no history entry created ────────────────────

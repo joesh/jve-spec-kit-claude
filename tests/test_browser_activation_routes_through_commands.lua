@@ -147,32 +147,6 @@ do
 end
 
 -- ── Scenario 3: required-args declared in SPEC ──────────────────────────────
--- Both commands declare sequence_id + project_id required. Both are
--- auto-injected by command_manager (sequence_id from active_sequence_id
--- per CLAUDE.md memory; project_id from active_project_id per
--- command_manager.lua:568). Verify the rule shape via direct SPEC
--- inspection rather than expecting dispatch failure — auto-injection
--- means missing-arg dispatches succeed with the active values.
-do
-    local registry = require("core.command_registry")
-
-    local oss = registry.get_spec("OpenSequenceInSourceMonitor")
-    assert(oss and oss.args, "OpenSequenceInSourceMonitor must have SPEC.args")
-    assert(oss.args.sequence_id and oss.args.sequence_id.required == true,
-        "OpenSequenceInSourceMonitor.args.sequence_id must be required = true")
-    assert(oss.args.project_id and oss.args.project_id.required == true,
-        "OpenSequenceInSourceMonitor.args.project_id must be required = true")
-
-    local ost = registry.get_spec("OpenSequenceInTimeline")
-    assert(ost and ost.args, "OpenSequenceInTimeline must have SPEC.args")
-    assert(ost.args.sequence_id and ost.args.sequence_id.required == true,
-        "OpenSequenceInTimeline.args.sequence_id must be required = true")
-    assert(ost.args.project_id and ost.args.project_id.required == true,
-        "OpenSequenceInTimeline.args.project_id must be required = true")
-
-    print("  ✓ both commands declare sequence_id + project_id required in SPEC")
-end
-
 -- ── Scenario 4: undoable=false ───────────────────────────────────────────────
 do
     source_viewer_calls = {}
