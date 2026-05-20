@@ -64,6 +64,19 @@ local function compute_trim(clip, edge, delta)
     }
 end
 
+--- Build the __timeline_mutations bucket for this command's single-row
+--- update. Used by both the executor (after the mutation lands) and the
+--- undoer (after restoring the prior state) — same payload, same shape.
+local function single_row_update_bucket(sequence_id, clip_id)
+    return {
+        sequence_id = sequence_id,
+        inserts     = {},
+        updates     = { clip_id },
+        deletes     = {},
+        bulk_shifts = {},
+    }
+end
+
 --- Assert the new source range lies inside the source-sequence's content
 --- extent. Per FR-015: no silent clamp.
 local function assert_in_content_extent(clip_id, sequence_id, new_in, new_out)
@@ -119,13 +132,8 @@ function M.register(executors, undoers, _db, _set_last_error)
         -- Report the single-row update through the standard __timeline_mutations
         -- channel so the command_manager downstream + UI cache invalidate
         -- correctly. Same shape DeleteClip/Blade/etc. emit.
-        command:set_parameter("__timeline_mutations", {
-            sequence_id = args.sequence_id,
-            inserts     = {},
-            updates     = { args.clip_id },
-            deletes     = {},
-            bulk_shifts = {},
-        })
+        command:set_parameter("__timeline_mutations",
+            single_row_update_bucket(args.sequence_id, args.clip_id))
 
         Signals.emit("sequence_content_changed", args.sequence_id)
 
@@ -144,6 +152,13 @@ function M.register(executors, undoers, _db, _set_last_error)
             args._old_duration,
             args._old_source_in,
             args._old_source_out)
+
+        -- Mirror the executor's mutation report so the UI cache invalidates
+        -- on undo too (same pattern as DeleteClip's undoer at
+        -- delete_clip.lua:163). Without this, the row stays correct in the
+        -- DB but consumers driven off __timeline_mutations don't refresh.
+        command:set_parameter("__timeline_mutations",
+            single_row_update_bucket(args.sequence_id, args.clip_id))
 
         Signals.emit("sequence_content_changed", args.sequence_id)
         return true
