@@ -29,11 +29,17 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
 
 - [X] **T003 [P]** Contract test for `core/edit_mode` + `ToggleTrimMode` in `tests/test_edit_mode_toggle.lua` — per `contracts/toggle_trim_mode.md` Tests section. Cover initial state, toggle behavior, signal emission, session-transient reset, enum-guard assert. *Done 2026-05-19: 7 scenarios (initial value, flip, enum guard, signal payload, reset, command dispatch, non-undoable). Verified red — `module 'core.edit_mode' not found`.*
 
+- [X] **T004 [P]** Contract test for `source_viewer.load_clip` in `tests/test_source_viewer_load_clip.lua` — covers mode entry, selection_hub publish (item_type="clip"), mark-setter dispatch routing on `edit_mode.get_trim_mode()` (RippleTrimEdge vs OverwriteTrimEdge with correct edge/delta/owner_seq), key-repeat suppression (FR-016b), mutation re-resolve via `sequence_content_changed` (FR-004b), auto-unload on clip deletion (FR-004a). *Done 2026-05-19: 6 scenarios. Verified red — `source_viewer.load_clip` does not exist. NOTE: scope is source_viewer's own surface; cross-module behaviors FR-016e (sequence_monitor playback range) and FR-016c (set_marks ClearMarks gate) are covered by T008b + T008c respectively.*
+
+- [ ] **T008b [P]** Failing test in `tests/test_live_bound_play_ignores_marks.lua` covering FR-016e. Load a clip in live-bound mode with marks set inside its source range; trigger sequence_monitor's playback-range computation; assert the range = content extent in live-bound mode, AND `[mark_in or start, mark_out or total)` in staged mode (the divergence). Tests sequence_monitor.lua, not source_viewer. TDD precondition for T020.
+
+- [ ] **T008c [P]** Failing test in `tests/test_clear_marks_disabled_in_live_bound.lua` covering FR-016c. Dispatch `ClearMarks` / `ClearMarkIn` / `ClearMarkOut` against `source_monitor` while `source_viewer.get_mode() == "live_bound_clip"`; assert no mutation to the loaded clip's `source_in_frame` / `source_out_frame` AND no mutation to any sequence-row marks; assert a log event was emitted. Parallel staged-mode dispatch confirms the disable is mode-scoped. Tests set_marks.lua, not source_viewer. TDD precondition for T019.
+
 - [ ] **T004 [P]** Contract test for `source_viewer.load_clip` in `tests/test_source_viewer_load_clip.lua` — per `contracts/source_viewer_load_clip.md` Tests section. Cover live-bound mode entry, mode flag transitions, mark-setter dispatch routing branching on `edit_mode.get_trim_mode()`, **plus the four folded sub-FR scenarios**: key-repeat suppression (FR-016b — synthesize `is_auto_repeat=true` and `false` events, assert one dispatch only), Play ignores marks (FR-016e — verify playback range = content extent in live-bound; staged stays mark-bounded), ClearMarks disabled (FR-016c — dispatch ClearMarkIn/Out/Marks in live-bound mode, assert no mutation + log event), and FR-004b mutation re-resolve (rename clip, verify title + selection_hub republish via observable state).
 
-- [ ] **T005 [P]** Contract test for `OpenClipInSourceMonitor` in `tests/test_open_clip_in_source_monitor.lua` — per `contracts/open_clip_in_source_monitor.md` Tests section. Cover happy-path dispatch (asserts `source_viewer.load_clip` was called with the right id), `undoable = false`, selection_hub publish carries `item_type="clip"`, command_manager rejects missing args.
+- [X] **T005 [P]** Contract test for `OpenClipInSourceMonitor` in `tests/test_open_clip_in_source_monitor.lua` — per `contracts/open_clip_in_source_monitor.md` Tests section. Cover happy-path dispatch (asserts `source_viewer.load_clip` was called with the right id), `undoable = false`, selection_hub publish carries `item_type="clip"`, command_manager rejects missing args. *Done 2026-05-19: 3 scenarios (happy-path dispatch, required-args enforcement for all 3 args, undoable=false no-re-invoke on undo). Verified red — `No executor registered for command type: OpenClipInSourceMonitor`.*
 
-- [ ] **T006 [P]** Contract test for browser activation router in `tests/test_browser_activation_routes_through_commands.lua` — per `contracts/open_sequence_in_source_monitor.md` + `contracts/open_sequence_in_timeline.md` Tests sections. Cover: media-sequence Return → OpenSequenceInSourceMonitor; clip-sequence Return → OpenSequenceInTimeline; clip-sequence Opt+Return → OpenSequenceInSourceMonitor (modifier override).
+- [X] **T006 [P]** Contract test for browser activation router in `tests/test_browser_activation_routes_through_commands.lua` — per `contracts/open_sequence_in_source_monitor.md` + `contracts/open_sequence_in_timeline.md` Tests sections. *Done 2026-05-19: 4 scenarios (OpenSequenceInSourceMonitor dispatch, OpenSequenceInTimeline dispatch + focus, required-args enforcement on both, undoable=false). Verified red — `No executor registered for command type: OpenSequenceInSourceMonitor`. NOTE: scoped to the two `OpenSequenceIn*` commands' contracts; the activate_item router refactor + Opt+Return modifier integration belong to T018/T009 integration tests when those impl tasks land.*
 
 - [ ] **T007 [P]** Effective-source extension test in `tests/test_effective_source.lua` (EXTEND, do not rewrite existing assertions per ENGINEERING.md §2.31). Add scenarios per `contracts/effective_source_pass_through.md` Tests section: `_set_source_viewer_clip(seq, in, out)` returns triple; `_set_source_viewer_sequence(seq)` returns just seq; `_clear_source_viewer()` returns nil; browser-active-wins precedence.
 
@@ -88,9 +94,9 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
   - Modifier override: Opt+Return on a clip-sequence entry routes to `OpenSequenceInSourceMonitor` (FR-022).
   - Depends on T015, T016, T017. T006 MUST be red before this lands.
 
-- [ ] **T019** Modify `src/lua/core/commands/set_marks.lua` (per FR-016c): when `ClearMarkIn` / `ClearMarkOut` / `ClearMarks` dispatch with `panel_context="source_monitor"` AND `source_viewer` is in `live_bound_clip` mode, executor returns early with `log.event("ClearMarks*: not applicable in live-bound source-viewer mode")`. Staged mode unchanged. Depends on T013. T004's ClearMarks scenarios MUST be red before this lands; green after.
+- [ ] **T019** Modify `src/lua/core/commands/set_marks.lua` (per FR-016c): when `ClearMarkIn` / `ClearMarkOut` / `ClearMarks` dispatch with `panel_context="source_monitor"` AND `source_viewer.get_mode() == "live_bound_clip"`, executor returns early with `log.event("ClearMarks*: not applicable in live-bound source-viewer mode")`. Staged mode unchanged. Depends on T013. **T008c MUST be red before this lands; green after.**
 
-- [ ] **T020** Modify `src/lua/ui/sequence_monitor.lua` (per FR-016e): playback-range computation (around line 1021-1024) branches on source_viewer mode. In live-bound mode, range = content extent (ignore marks). In staged mode, range = `[mark_in or start_frame, mark_out or total_frames)` (existing). Depends on T013. T004's Play-ignores-marks scenarios MUST be red before this lands; green after.
+- [ ] **T020** Modify `src/lua/ui/sequence_monitor.lua` (per FR-016e): playback-range computation (around line 1021-1024) branches on source_viewer mode. In live-bound mode, range = content extent (ignore marks). In staged mode, range = `[mark_in or start_frame, mark_out or total_frames)` (existing). Depends on T013. **T008b MUST be red before this lands; green after.**
 
 - [ ] **T021** Modify `src/lua/ui/source_viewer.lua` (additive — same file as T013 but separable concern; sequential after T013): suppress Qt key-repeat per FR-016b. Mark-set key handler checks the inbound Lua event table for `is_auto_repeat == true` and drops if so; only `false` events dispatch the mark-set command. Depends on T013. T004's key-repeat scenarios MUST be red before this lands; green after.
 
@@ -137,7 +143,7 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
 ```
 T001 (verify baseline)
    ↓
-T002..T008 + T008d (8 TDD tests, all parallel, all must be red)
+T002..T008 + T008b/c/d (10 TDD tests, all parallel, all must be red)
    ↓
    ├──→ T010 [P] (edit_mode module)        T011 [P] (toggle command)        T012 [P] (OverwriteTrimEdge)
    │       │                                     │                                 │
@@ -169,16 +175,18 @@ T028 (commit + push)
 
 ## Parallel execution windows
 
-**Window 1** (after T001): launch all of T002–T008 + T008d in parallel. Eight independent test files; no shared edits. (T008a/b/c were folded into T004 per the 2026-05-19 scope-trim — see spec.md ## Clarifications.)
+**Window 1** (after T001): launch all of T002–T008 + T008b + T008c + T008d in parallel. Ten independent test files; no shared edits. (T008a — was for FR-016b key-repeat — folded into T004 since FR-016b is source_viewer's own concern. T008b/c/d remain separate because they test different modules: sequence_monitor, set_marks.lua, and the Qt double-click handler respectively.)
 
 ```
 Task: "Write failing test in tests/test_overwrite_trim_edge.lua per contracts/overwrite_trim_edge.md"
 Task: "Write failing test in tests/test_edit_mode_toggle.lua per contracts/toggle_trim_mode.md"
-Task: "Write failing test in tests/test_source_viewer_load_clip.lua per contracts/source_viewer_load_clip.md (includes folded FR-016b/c/e + FR-004b scenarios)"
+Task: "Write failing test in tests/test_source_viewer_load_clip.lua per contracts/source_viewer_load_clip.md (covers source_viewer surface: mode entry, mark-setter dispatch, FR-016b key-repeat, FR-004a/b signal handling)"
 Task: "Write failing test in tests/test_open_clip_in_source_monitor.lua per contracts/open_clip_in_source_monitor.md"
 Task: "Write failing test in tests/test_browser_activation_routes_through_commands.lua per contracts/open_sequence_in_*.md"
 Task: "Extend tests/test_effective_source.lua per contracts/effective_source_pass_through.md"
 Task: "Extend tests/test_source_viewer_publishes_selection.lua with live-bound scenario"
+Task: "Write failing test in tests/test_live_bound_play_ignores_marks.lua per FR-016e (tests sequence_monitor playback range branch)"
+Task: "Write failing test in tests/test_clear_marks_disabled_in_live_bound.lua per FR-016c (tests set_marks ClearMark* gate)"
 Task: "Write failing test in tests/test_timeline_double_click_dispatches_open_clip.lua per FR-026 + FR-027"
 ```
 

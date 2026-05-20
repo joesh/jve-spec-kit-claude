@@ -65,6 +65,22 @@ Returns `true`. Throws on assert failure.
 
 **`_on_clip_mutated`** (FR-004b): if `clip_id == live_clip_id`, re-read clip + source sequence via `Clip.load` / `Sequence.load`, update title (`sequence_monitor:_set_title(...)`), re-bind playback engine if rate/duration changed, republish selection_hub. No mode change.
 
+### `M.get_mode()` — public mode accessor
+
+Returns one of `"neutral"`, `"staged_sequence"`, `"live_bound_clip"`. Documented as part of the public API so tests can verify mode transitions without inspecting internal fields (black-box).
+
+### `M.handle_mark_key(mark_kind, frame, is_auto_repeat)` — I/O key event entry point
+
+**Args**: `mark_kind : "in" | "out"`; `frame : integer` (the target frame for the new mark); `is_auto_repeat : boolean` (Qt's `QKeyEvent::isAutoRepeat()` propagated from the key handler).
+
+**Behavior**:
+- `is_auto_repeat == true` → drop, return without dispatch (FR-016b).
+- `mode == "neutral"` → drop, return without dispatch (no entity loaded).
+- `mode == "staged_sequence"` → delegate to the existing `Sequence:set_in / set_out` path on the loaded sequence row.
+- `mode == "live_bound_clip"` → mark-setter dispatch per FR-013 (next section).
+
+This is the single entry point key handlers call; the dispatch logic lives in source_viewer rather than in each key binding, so the mode discrimination + key-repeat filter happen in one place.
+
 ### Internal: mark-setter dispatch (FR-013)
 
 When `mode == "live_bound_clip"` and an I/O key event arrives (with `isAutoRepeat() == false` per FR-016b):

@@ -110,9 +110,8 @@ tests/                                             [NEW + EXTEND]
 ├── test_source_viewer_load_clip.lua               FR-031 [NEW]
 ├── test_open_clip_in_source_monitor.lua           FR-031 [NEW]
 ├── test_browser_activation_routes_through_commands.lua  FR-031 [NEW]
-├── test_live_bound_key_repeat_suppressed.lua      FR-016b [NEW]
-├── test_live_bound_play_ignores_marks.lua         FR-016e [NEW]
-├── test_clear_marks_disabled_in_live_bound.lua    FR-016c [NEW]
+├── test_live_bound_play_ignores_marks.lua         FR-016e [NEW] (T008b)
+├── test_clear_marks_disabled_in_live_bound.lua    FR-016c [NEW] (T008c)
 ├── test_timeline_double_click_dispatches_open_clip.lua  FR-026, FR-027 [NEW]
 ├── test_source_viewer_publishes_selection.lua     [EXTEND — live-bound scenario]
 ├── test_effective_source.lua                      [EXTEND — override channel scenarios per FR-016d]
