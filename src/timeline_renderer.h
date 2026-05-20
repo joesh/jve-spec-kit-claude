@@ -79,6 +79,7 @@ public:
 protected:
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
@@ -102,6 +103,14 @@ private:
 
     // Execute all drawing commands
     void executeDrawingCommands(QPainter& painter);
+
+    // Shared body for mousePressEvent + mouseDoubleClickEvent — both build
+    // the same Lua event-table shape, differing only in the dispatched
+    // type string. Helper exists to avoid a 50-line copy between two
+    // virtual overrides that must stay in lockstep.
+    void dispatchMousePressLikeEvent(QMouseEvent* event,
+                                     const char* type_str,
+                                     const char* callsite);
 
     // Drawing commands queue
     std::vector<DrawCommand> drawing_commands_;

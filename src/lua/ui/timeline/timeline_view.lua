@@ -98,6 +98,16 @@ function M.create(widget, state_module, track_filter_fn, options)
         renderer.render(view)
     end
 
+    --- 019 FR-026: Resolve the clip (or nil) under cursor coordinates.
+    --- Wraps the file-local hit-test in timeline_view_input so view-using
+    --- code (Qt double-click dispatch, future trim-handle drag) can ask
+    --- "what's at (x, y)?" without reaching into private helpers.
+    function view.hit_test_clip(x, y)
+        local timeline_view_input = require("ui.timeline.view.timeline_view_input")
+        local width, height = timeline.get_dimensions(view.widget)
+        return timeline_view_input._find_clip_under_cursor(view, x, y, width, height)
+    end
+
     -- Scroll vertically so every track in the given list is visible.
     -- Called by the viewport_surface_tracks signal after undo/redo of a
     -- multi-track edit. If the union of requested tracks fits within

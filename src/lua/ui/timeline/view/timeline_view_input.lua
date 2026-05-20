@@ -61,6 +61,11 @@ local function discard_drag(view, state)
     state.flush_pending_notify()
 end
 
+-- Module-internal export so timeline_view's view.hit_test_clip wrapper
+-- (consumed by Qt MouseButtonDblClick dispatch in timeline_renderer.cpp)
+-- can reach the existing hit-test without duplicating geometry math.
+-- Underscore prefix marks it as not-for-public-API but exposed across
+-- the timeline view package.
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
     if not state.get_track_clip_index then
@@ -449,6 +454,16 @@ end
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
     local width, height = timeline.get_dimensions(view.widget)
+
+    -- 019 FR-026: Qt mouseDoubleClickEvent dispatch lands here with
+    -- event_type="double_click". Route to the clip-double-click handler
+    -- which resolves the hit, rejects gaps (FR-027), and dispatches
+    -- OpenClipInSourceMonitor. Bypass press/move/release branches —
+    -- a double-click is a discrete gesture, not a state-machine input.
+    if event_type == "double_click" then
+        M.handle_clip_double_click(view, x, y)
+        return
+    end
 
     if event_type == "press" then
         view.pending_gap_click = nil
@@ -883,5 +898,10 @@ function M.handle_clip_double_click(view, x, y)
         sequence_id = clip.owner_sequence_id,
     })
 end
+
+-- Internal export (underscore-prefixed): exposed across the timeline
+-- view package so timeline_view.view.hit_test_clip can wrap it without
+-- duplicating geometry. Not part of the public M.* surface.
+M._find_clip_under_cursor = find_clip_under_cursor
 
 return M

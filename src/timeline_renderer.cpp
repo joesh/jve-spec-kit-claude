@@ -267,64 +267,74 @@ void TimelineRenderer::setResizeEventHandler(const std::string& handler_name)
     resize_event_handler_ = handler_name;
 }
 
-void TimelineRenderer::mousePressEvent(QMouseEvent* event)
+void TimelineRenderer::dispatchMousePressLikeEvent(QMouseEvent* event,
+                                                   const char* type_str,
+                                                   const char* callsite)
 {
-    if (!mouse_event_handler_.empty() && lua_state_) {
-        lua_getglobal(lua_state_, mouse_event_handler_.c_str());
-        if (lua_isfunction(lua_state_, -1)) {
-            // Create event table
-            lua_newtable(lua_state_);
-            lua_pushstring(lua_state_, "press");
-            lua_setfield(lua_state_, -2, "type");
-            lua_pushnumber(lua_state_, event->position().x());
-            lua_setfield(lua_state_, -2, "x");
-            lua_pushnumber(lua_state_, event->position().y());
-            lua_setfield(lua_state_, -2, "y");
-            lua_pushnumber(lua_state_, event->globalPosition().x());
-            lua_setfield(lua_state_, -2, "gx");
-            lua_pushnumber(lua_state_, event->globalPosition().y());
-            lua_setfield(lua_state_, -2, "gy");
-            lua_pushnumber(lua_state_, event->globalPosition().x());
-            lua_setfield(lua_state_, -2, "gx");
-            lua_pushnumber(lua_state_, event->globalPosition().y());
-            lua_setfield(lua_state_, -2, "gy");
+    if (mouse_event_handler_.empty() || !lua_state_) return;
 
-            Qt::KeyboardModifiers mods = event->modifiers();
-            Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
+    lua_getglobal(lua_state_, mouse_event_handler_.c_str());
+    if (!lua_isfunction(lua_state_, -1)) {
+        jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), callsite);
+        return;
+    }
+
+    lua_newtable(lua_state_);
+    lua_pushstring(lua_state_, type_str);
+    lua_setfield(lua_state_, -2, "type");
+    lua_pushnumber(lua_state_, event->position().x());
+    lua_setfield(lua_state_, -2, "x");
+    lua_pushnumber(lua_state_, event->position().y());
+    lua_setfield(lua_state_, -2, "y");
+    lua_pushnumber(lua_state_, event->globalPosition().x());
+    lua_setfield(lua_state_, -2, "gx");
+    lua_pushnumber(lua_state_, event->globalPosition().y());
+    lua_setfield(lua_state_, -2, "gy");
+
+    Qt::KeyboardModifiers mods = event->modifiers();
+    Qt::KeyboardModifiers globalMods = QApplication::keyboardModifiers();
 #if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
-            bool is_command = mods.testFlag(Qt::ControlModifier) ||
-                              globalMods.testFlag(Qt::ControlModifier);
-            bool is_ctrl = mods.testFlag(Qt::MetaModifier) ||
-                           globalMods.testFlag(Qt::MetaModifier);
+    bool is_command = mods.testFlag(Qt::ControlModifier) ||
+                      globalMods.testFlag(Qt::ControlModifier);
+    bool is_ctrl = mods.testFlag(Qt::MetaModifier) ||
+                   globalMods.testFlag(Qt::MetaModifier);
 #else
-            bool is_command = mods.testFlag(Qt::MetaModifier) ||
-                              globalMods.testFlag(Qt::MetaModifier);
-            bool is_ctrl = mods.testFlag(Qt::ControlModifier) ||
-                           globalMods.testFlag(Qt::ControlModifier);
+    bool is_command = mods.testFlag(Qt::MetaModifier) ||
+                      globalMods.testFlag(Qt::MetaModifier);
+    bool is_ctrl = mods.testFlag(Qt::ControlModifier) ||
+                   globalMods.testFlag(Qt::ControlModifier);
 #endif
 
-            lua_pushboolean(lua_state_, is_ctrl);
-            lua_setfield(lua_state_, -2, "ctrl");
-            lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
-            lua_setfield(lua_state_, -2, "shift");
-            lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
-            lua_setfield(lua_state_, -2, "alt");
-            lua_pushboolean(lua_state_, is_command);
-            lua_setfield(lua_state_, -2, "command");
-            lua_pushinteger(lua_state_, event->button());
-            lua_setfield(lua_state_, -2, "button");
+    lua_pushboolean(lua_state_, is_ctrl);
+    lua_setfield(lua_state_, -2, "ctrl");
+    lua_pushboolean(lua_state_, event->modifiers() & Qt::ShiftModifier);
+    lua_setfield(lua_state_, -2, "shift");
+    lua_pushboolean(lua_state_, event->modifiers() & Qt::AltModifier);
+    lua_setfield(lua_state_, -2, "alt");
+    lua_pushboolean(lua_state_, is_command);
+    lua_setfield(lua_state_, -2, "command");
+    lua_pushinteger(lua_state_, event->button());
+    lua_setfield(lua_state_, -2, "button");
 
-            {
-                JveLuaStateGuard guard(lua_state_);
-                if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
-                    jve_handle_lua_callback_error(lua_state_, "TimelineRenderer.mouse_press");
-                }
-            }
-        } else {
-            jve_discard_non_function_handler(lua_state_, mouse_event_handler_.c_str(), "TimelineRenderer.mouse_press");
-        }
+    JveLuaStateGuard guard(lua_state_);
+    if (lua_pcall(lua_state_, 1, 0, 0) != LUA_OK) {
+        jve_handle_lua_callback_error(lua_state_, callsite);
     }
+}
+
+void TimelineRenderer::mousePressEvent(QMouseEvent* event)
+{
+    dispatchMousePressLikeEvent(event, "press", "TimelineRenderer.mouse_press");
     QWidget::mousePressEvent(event);
+}
+
+// 019 FR-026: timeline clip double-click routes through the same Lua
+// mouse-event handler as press, with type="double_click". The Lua side
+// (timeline_view_input.handle_mouse) branches on the type field.
+void TimelineRenderer::mouseDoubleClickEvent(QMouseEvent* event)
+{
+    dispatchMousePressLikeEvent(event, "double_click", "TimelineRenderer.mouse_double_click");
+    QWidget::mouseDoubleClickEvent(event);
 }
 
 void TimelineRenderer::mouseReleaseEvent(QMouseEvent* event)
