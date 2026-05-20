@@ -695,6 +695,32 @@ function SequenceMonitor:get_mark_in()
     return self.sequence:get_in()
 end
 
+--- Compute the playback range as (range_start, range_end). Branches on
+--- the source_viewer's mode (spec 019 FR-016e):
+---   * live_bound_clip → [start_frame, total_frames) — marks ignored,
+---     because in live-bound mode the marks ARE the clip's source_in/out
+---     (edit bounds), not playback bounds.
+---   * staged_sequence / neutral (anything else) → existing convention
+---     [mark_in or start_frame, mark_out or total_frames).
+--- Consumers (the playback engine + the duration-label site at
+--- sequence_monitor.lua:1021-1024) read from this single accessor so the
+--- divergence has one home.
+function SequenceMonitor:get_playback_range()
+    -- pcall the require: this module is loaded inside the source monitor
+    -- itself, so ui.source_viewer's require may cycle on init. The
+    -- failure mode is "mode unknown" which falls through to staged
+    -- behavior — the safe default.
+    local ok, sv = pcall(require, "ui.source_viewer")
+    local mode = (ok and sv.get_mode) and sv.get_mode() or "staged_sequence"
+
+    if mode == "live_bound_clip" then
+        return self.start_frame, self.total_frames
+    end
+    local mark_in  = self.sequence and self.sequence.mark_in or nil
+    local mark_out = self.sequence and self.sequence.mark_out or nil
+    return mark_in or self.start_frame, mark_out or self.total_frames
+end
+
 --- Get mark out (video frame). Works on any sequence kind.
 -- @return number|nil
 function SequenceMonitor:get_mark_out()

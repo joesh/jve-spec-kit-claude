@@ -89,40 +89,36 @@ do
     print("  ✓ happy-path dispatch calls source_viewer.load_clip(clip_id)")
 end
 
--- ── Scenario 2: required-args enforcement ────────────────────────────────────
--- SPEC.args declares clip_id, project_id, sequence_id all required. Missing
--- any must cause the command_manager schema check to reject (no load_clip
--- call). This pins the SPEC.args shape from contracts/open_clip_in_source_monitor.md.
+-- ── Scenario 2: required-args declared in SPEC ──────────────────────────────
+-- All three args (clip_id, project_id, sequence_id) are declared required in
+-- the SPEC. clip_id has no auto-injection so a missing one is observable via
+-- dispatch. project_id + sequence_id ARE auto-injected by command_manager
+-- (CLAUDE.md memory: "command_manager auto-injects sequence_id"), so we
+-- pin those by reading the spec directly through the registry — verifying
+-- the rule shape that the contract calls for.
 do
+    -- clip_id missing → schema raises (pcall to catch the assert).
     load_clip_calls = {}
-    local r = command_manager.execute_interactive("OpenClipInSourceMonitor", {
-        project_id  = "proj_X",
-        sequence_id = "owner_seq_1",
-        -- clip_id omitted
-    })
-    assert(not (r and r.success),
-        "missing clip_id must NOT succeed")
+    local ok, err = pcall(command_manager.execute_interactive,
+        "OpenClipInSourceMonitor", { project_id = "proj_X", sequence_id = "owner_seq_1" })
+    assert(not ok, "missing clip_id must raise; got ok=" .. tostring(ok))
+    assert(tostring(err):find("clip_id", 1, true),
+        "rejection message must name clip_id; got: " .. tostring(err))
     assert(#load_clip_calls == 0,
         "failed dispatch must NOT call load_clip (no partial side effects)")
 
-    load_clip_calls = {}
-    r = command_manager.execute_interactive("OpenClipInSourceMonitor", {
-        clip_id    = "clip_alpha",
-        project_id = "proj_X",
-        -- sequence_id omitted
-    })
-    assert(not (r and r.success),
-        "missing sequence_id must NOT succeed")
-
-    load_clip_calls = {}
-    r = command_manager.execute_interactive("OpenClipInSourceMonitor", {
-        clip_id     = "clip_alpha",
-        sequence_id = "owner_seq_1",
-        -- project_id omitted
-    })
-    assert(not (r and r.success),
-        "missing project_id must NOT succeed")
-    print("  ✓ all three required args rejected when missing")
+    -- project_id + sequence_id requireds verified via SPEC inspection (they
+    -- can't fail via dispatch because of auto-injection).
+    local registry = require("core.command_registry")
+    local spec = registry.get_spec("OpenClipInSourceMonitor")
+    assert(spec and spec.args, "OpenClipInSourceMonitor must have SPEC.args")
+    assert(spec.args.clip_id and spec.args.clip_id.required == true,
+        "SPEC.args.clip_id must be required = true")
+    assert(spec.args.project_id and spec.args.project_id.required == true,
+        "SPEC.args.project_id must be required = true")
+    assert(spec.args.sequence_id and spec.args.sequence_id.required == true,
+        "SPEC.args.sequence_id must be required = true")
+    print("  ✓ all three args declared required; clip_id rejection observable via dispatch")
 end
 
 -- ── Scenario 3: undoable=false — no history entry created ────────────────────

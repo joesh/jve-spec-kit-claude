@@ -146,30 +146,31 @@ do
     print("  ✓ OpenSequenceInTimeline → timeline_panel.load_sequence + focus(timeline)")
 end
 
--- ── Scenario 3: required-args enforcement ────────────────────────────────────
+-- ── Scenario 3: required-args declared in SPEC ──────────────────────────────
+-- Both commands declare sequence_id + project_id required. Both are
+-- auto-injected by command_manager (sequence_id from active_sequence_id
+-- per CLAUDE.md memory; project_id from active_project_id per
+-- command_manager.lua:568). Verify the rule shape via direct SPEC
+-- inspection rather than expecting dispatch failure — auto-injection
+-- means missing-arg dispatches succeed with the active values.
 do
-    -- OpenSequenceInSourceMonitor requires sequence_id + project_id.
-    source_viewer_calls = {}
-    local r = command_manager.execute_interactive("OpenSequenceInSourceMonitor", {
-        project_id = "proj_X",
-        -- sequence_id missing
-    })
-    assert(not (r and r.success),
-        "OpenSequenceInSourceMonitor with missing sequence_id must NOT succeed")
-    assert(#source_viewer_calls == 0,
-        "failed dispatch must NOT invoke source_viewer.load_sequence")
+    local registry = require("core.command_registry")
 
-    -- OpenSequenceInTimeline requires sequence_id + project_id.
-    timeline_panel_calls = {}
-    r = command_manager.execute_interactive("OpenSequenceInTimeline", {
-        sequence_id = "seq_main",
-        -- project_id missing
-    })
-    assert(not (r and r.success),
-        "OpenSequenceInTimeline with missing project_id must NOT succeed")
-    assert(#timeline_panel_calls == 0,
-        "failed dispatch must NOT invoke timeline_panel.load_sequence")
-    print("  ✓ required args enforced for both commands")
+    local oss = registry.get_spec("OpenSequenceInSourceMonitor")
+    assert(oss and oss.args, "OpenSequenceInSourceMonitor must have SPEC.args")
+    assert(oss.args.sequence_id and oss.args.sequence_id.required == true,
+        "OpenSequenceInSourceMonitor.args.sequence_id must be required = true")
+    assert(oss.args.project_id and oss.args.project_id.required == true,
+        "OpenSequenceInSourceMonitor.args.project_id must be required = true")
+
+    local ost = registry.get_spec("OpenSequenceInTimeline")
+    assert(ost and ost.args, "OpenSequenceInTimeline must have SPEC.args")
+    assert(ost.args.sequence_id and ost.args.sequence_id.required == true,
+        "OpenSequenceInTimeline.args.sequence_id must be required = true")
+    assert(ost.args.project_id and ost.args.project_id.required == true,
+        "OpenSequenceInTimeline.args.project_id must be required = true")
+
+    print("  ✓ both commands declare sequence_id + project_id required in SPEC")
 end
 
 -- ── Scenario 4: undoable=false ───────────────────────────────────────────────

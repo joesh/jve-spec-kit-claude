@@ -111,6 +111,23 @@ local GO_TO_MARK_OUT_SPEC = {
     },
 }
 
+-- 019 FR-016c: ClearMark{In,Out,All} are disabled when source_viewer is
+-- in live-bound mode. A clip's source_in/out columns are NOT NULL (DB
+-- schema) so clearing them has no defined destination. Returns true if
+-- the executor should no-op + log; the dispatched sequence_id is the
+-- source viewer's loaded sequence (auto-injected from active_sequence_id
+-- in the source_monitor scope).
+local function should_skip_for_live_bound(cmd_name)
+    local ok, sv = pcall(require, "ui.source_viewer")
+    if not ok or not sv.get_mode then return false end
+    if sv.get_mode() == "live_bound_clip" then
+        local log_mod = require("core.logger").for_area("commands")
+        log_mod.event("%s: not applicable in live-bound source-viewer mode", cmd_name)
+        return true
+    end
+    return false
+end
+
 function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     -- SetMarkIn
@@ -176,6 +193,9 @@ function M.register(executors, undoers)
     -- ClearMarkIn
     ---------------------------------------------------------------------------
     executors["ClearMarkIn"] = function(command)
+        if should_skip_for_live_bound("ClearMarkIn") then
+            return { success = true }
+        end
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "ClearMarkIn: sequence_id is required")
@@ -202,6 +222,9 @@ function M.register(executors, undoers)
     -- ClearMarkOut
     ---------------------------------------------------------------------------
     executors["ClearMarkOut"] = function(command)
+        if should_skip_for_live_bound("ClearMarkOut") then
+            return { success = true }
+        end
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "ClearMarkOut: sequence_id is required")
@@ -228,6 +251,9 @@ function M.register(executors, undoers)
     -- ClearMarks (both)
     ---------------------------------------------------------------------------
     executors["ClearMarks"] = function(command)
+        if should_skip_for_live_bound("ClearMarks") then
+            return { success = true }
+        end
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "ClearMarks: sequence_id is required")
