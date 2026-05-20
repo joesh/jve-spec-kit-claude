@@ -28,8 +28,14 @@ _G.qt_create_single_shot_timer = function() end
 local load_calls = {}
 local stub_source_monitor = {
     sequence_id = nil,
+    sequence = nil,
     load_sequence = function(self, sequence_id)
         self.sequence_id = sequence_id
+        -- Mirror real SequenceMonitor:load_sequence — it stores the
+        -- loaded Sequence model on `.sequence`. source_viewer reads
+        -- project_id off it to publish to selection_hub.
+        local Sequence = require("models.sequence")
+        self.sequence = Sequence.load(sequence_id)
         table.insert(load_calls, sequence_id)
     end,
     get_loaded_master_seq_id = function(self)

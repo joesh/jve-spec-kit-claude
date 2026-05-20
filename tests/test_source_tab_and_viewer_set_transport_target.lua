@@ -39,15 +39,24 @@ assert(transport.get_target() == "record")
 
 -- ── source viewer load ─────────────────────────────────────────────────
 -- Stub panel_manager so source_viewer can find a "source_monitor".
+-- Stub source monitor mirrors real SequenceMonitor:load_sequence — after
+-- load it stores the loaded Sequence model on `.sequence`, which
+-- source_viewer reads to publish a selection_hub item carrying the
+-- sequence's project_id.
+local stub_source_monitor = {
+    sequence = nil,
+    load_sequence = function(self, seq_id)
+        local Sequence = require("models.sequence")
+        self.sequence = Sequence.load(seq_id)
+    end,
+    unload = function(self) self.sequence = nil end,
+    get_loaded_master_seq_id = function(self)
+        return self.sequence and self.sequence.id or nil
+    end,
+}
 package.loaded["ui.panel_manager"] = {
     get_sequence_monitor = function(view_id)
-        if view_id == "source_monitor" then
-            return {
-                load_sequence = function() end,
-                unload = function() end,
-                get_loaded_master_seq_id = function() return nil end,
-            }
-        end
+        if view_id == "source_monitor" then return stub_source_monitor end
     end,
 }
 -- 017 derived target: source_viewer.load_master_clip calls

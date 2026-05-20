@@ -8,12 +8,44 @@
 local M = {}
 
 local Signals = require("core.signals")
+local selection_hub = require("ui.selection_hub")
+
+-- panel_id under which the loaded sequence is published to selection_hub
+-- so the Inspector (and any other panel-keyed listener) can pick up the
+-- focused source monitor's target. Matches the view_id the source
+-- SequenceMonitor registers with panel_manager / focus_manager.
+local SOURCE_PANEL_ID = "source_monitor"
 
 local function get_source_monitor()
     local pm = require("ui.panel_manager")
     local source = pm.get_sequence_monitor("source_monitor")
     assert(source, "source_viewer: source_monitor not registered in panel_manager")
     return source
+end
+
+-- Publish the loaded sequence as a single-item selection under
+-- SOURCE_PANEL_ID. item_type "timeline" routes to the Inspector's
+-- sequence schema (see selection_binding.lua:157,168), which works
+-- uniformly for both kinds of sequence the source monitor can hold
+-- (media-kind wrapping one file, or compositional clip-kind).
+local function publish_loaded_sequence(monitor, sequence_id)
+    local seq = monitor.sequence
+    assert(seq, string.format(
+        "source_viewer.publish_loaded_sequence: monitor.sequence must be "
+        .. "set after load_sequence(%s)", tostring(sequence_id)))
+    local project_id = seq.project_id
+    assert(project_id and project_id ~= "", string.format(
+        "source_viewer.publish_loaded_sequence: loaded sequence %s has "
+        .. "no project_id", tostring(sequence_id)))
+    selection_hub.update_selection(SOURCE_PANEL_ID, {
+        {
+            item_type   = "timeline",
+            id          = sequence_id,
+            sequence_id = sequence_id,
+            project_id  = project_id,
+            sequence    = seq,
+        },
+    })
 end
 
 --- Load a master sequence into the source monitor.
@@ -41,6 +73,8 @@ function M.load_master_clip(master_seq_id, opts)
     -- this path bootstrap the stub via helpers.test_017_setup.
     require("core.playback.transport").bind_role_to_sequence("source", master_seq_id)
 
+    publish_loaded_sequence(source, master_seq_id)
+
     Signals.emit("source_loaded_changed", master_seq_id, prev_seq_id)
 
     if not opts.skip_focus then
@@ -60,6 +94,7 @@ function M.unload()
     if not prev_seq_id then return end
 
     source:unload()
+    selection_hub.clear_selection(SOURCE_PANEL_ID)
     Signals.emit("source_loaded_changed", nil, prev_seq_id)
 end
 

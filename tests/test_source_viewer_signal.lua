@@ -28,10 +28,16 @@ local Signals = require("core.signals")
 
 local mock_monitor = {
     sequence_id = nil,
+    sequence    = nil,
     load_calls  = {},
 }
 function mock_monitor:load_sequence(seq_id)
     self.sequence_id = seq_id
+    -- Mirror real SequenceMonitor:load_sequence — it stores the loaded
+    -- Sequence model on `.sequence`. This test isolates the signal
+    -- contract from the DB, so the stub fabricates the minimal record
+    -- source_viewer reads: id + project_id.
+    self.sequence = { id = seq_id, project_id = "test_project" }
     table.insert(self.load_calls, seq_id)
 end
 function mock_monitor:get_loaded_master_seq_id()
@@ -39,6 +45,7 @@ function mock_monitor:get_loaded_master_seq_id()
 end
 function mock_monitor:unload()
     self.sequence_id = nil
+    self.sequence = nil
 end
 
 package.loaded["ui.panel_manager"] = {
