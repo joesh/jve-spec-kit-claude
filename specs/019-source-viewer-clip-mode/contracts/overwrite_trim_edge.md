@@ -28,8 +28,8 @@
 6. Assert `new_source_in < new_source_out` (no inverted range).
 7. Assert source range fits within the source-sequence content extent (`Sequence:content_duration` of `clip.sequence_id`). No silent clamp.
 8. Capture undo state (clip's current `source_in_frame`, `source_out_frame`, `sequence_start_frame`, `duration_frames`).
-9. Mutate the clip via `Clip:save()`.
-10. Emit `__timeline_mutations` signal for the clip's owner sequence.
+9. Mutate the clip via `Clip.update_bounds(clip_id, sequence_start, duration, source_in, source_out)` — surgical 4-column UPDATE, not full row save.
+10. Report a single-row mutation: set `__timeline_mutations` parameter on the command + emit `sequence_content_changed` for the clip's owner sequence.
 
 ## Undoer
 

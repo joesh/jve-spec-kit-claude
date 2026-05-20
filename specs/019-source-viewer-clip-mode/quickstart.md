@@ -81,7 +81,7 @@ This is the user-facing validation script. Run it manually in a JVE session afte
 ## K — Non-trim mutation re-resolve (FR-004b)
 
 26. With a clip live-bound, rename it via the inspector or by mutating its `name` field.
-27. ✅ Expect: source viewer's title updates to reflect the new name (no manual reload). Holding sequence is rebuilt under the covers.
+27. ✅ Expect: source viewer's title updates to reflect the new name (no manual reload). Source viewer re-resolves clip + source sequence under the covers (FR-004b).
 
 ## Definition of Done for this quickstart
 

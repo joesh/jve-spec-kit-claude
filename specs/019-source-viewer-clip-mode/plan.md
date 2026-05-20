@@ -30,7 +30,7 @@
 **Testing**: LuaJIT harness (`tests/test_*.lua`); existing `tests/run_lua_tests_all.sh` runs the full suite. Integration test for the timeline double-click + Qt binding uses `./build/bin/JVEEditor --test <script.lua>` per CLAUDE.md guidance.
 **Target Platform**: macOS desktop (primary). Linux/Windows untested but should work — only Qt-binding code (one new connection) is platform-aware.
 **Project Type**: single (existing JVE structure: `src/lua/`, `src/`, `tests/`).
-**Performance Goals**: live-bound mark-set dispatch latency < 50ms per press (perceived-instant). Auto-repeat suppressed (FR-016b) so no per-frame command flood. Holding-sequence construction must not stall the UI thread (< 5ms target — in-memory object).
+**Performance Goals**: live-bound mark-set dispatch latency < 50ms per press (perceived-instant). Auto-repeat suppressed (FR-016b) so no per-frame command flood.
 **Constraints**: zero luacheck warnings; all 844 existing Lua tests continue to pass; no `make` regressions. Spec-mandated NSF discipline (rule 1.14, 2.13, 2.32). Cross-spec contract amendment to 015 implemented in lockstep (FR-016d + 015 forward-pointing note).
 **Scale/Scope**: single source viewer instance per project. One live-bound clip at a time. Trim-mode toggle is a single boolean. Browser refactor touches 3 new commands + the existing `activate_item` router. Estimated source-code delta: ~600 LOC Lua + ~30 LOC C++ + ~250 LOC tests.
 
@@ -148,7 +148,7 @@ See `data-model.md`, `contracts/*`, `quickstart.md`. Summary:
 **Entities** (existing — no new schema):
 - `clips` row — mutated by `OverwriteTrimEdge` and `RippleTrimEdge` via existing model paths
 - `sequences` row — unchanged in scope
-- **Holding sequence** — NEW in-memory entity, not persisted, owned by source-viewer state
+- Source-viewer live-bound state — process-resident `(mode, live_clip_id)` only; the 2026-05-19 scope-trim dropped the original in-memory holding-sequence entity (see research.md §3).
 
 **Contracts**:
 - 5 new commands (each with full SPEC.args, executor semantics, undoability)

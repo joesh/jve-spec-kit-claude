@@ -119,7 +119,7 @@ The user double-clicks a different timeline clip — the source viewer switches 
 - **FR-004a** Source viewer auto-unloads when its currently-loaded entity (clip in live-bound mode; sequence in staged mode) is deleted. Listener: `sequence_content_changed` (existing JVE signal, emitted by `delete_clip.lua:126,166` and other clip-mutating commands on the owner sequence). On receipt for the loaded entity's owner sequence, source_viewer re-reads via `Clip.load`/`Sequence.load`; if the loaded id has vanished, calls `unload()` which emits `source_loaded_changed(nil, prev_id)`. Inspector and transport react via that single signal — no separate teardown wiring per listener. No assert on stale access; viewer is a reactive listener (rule 3.14 MVC).
 - **FR-004b** Source viewer **re-resolves** when its currently-loaded entity is mutated by any non-delete edit (rate / enabled / name / source-sequence rename / etc.). Same `sequence_content_changed` listener as FR-004a: if the loaded id still resolves but its fields have changed, source_viewer refreshes its title (FR-016f), re-binds the playback engine if rate/duration changed, and republishes to selection_hub (FR-028, FR-029). Single handler, two outcomes (delete vs mutate) — distinguished by whether `Clip.load`/`Sequence.load` returns nil. NSF posture: a missed signal surfaces as a stale title or stale published selection (observable in tests), not a silent stale read.
 
-### Holding sequence
+### Live-bound state
 
 - **FR-005** Source-viewer live-bound state is `(mode, live_clip_id)` only — no new in-memory entity, no DB row. `mode == "live_bound_clip" ⇔ live_clip_id ~= nil` (asserted on every transition). Playback is bound to `clip.sequence_id` via `SequenceMonitor:load_sequence` — the same code path staged mode uses. The choice not to wrap the clip in an in-memory holding sequence keeps the playback engine sequence-only without inventing a new entity (alternative considered + rejected in research.md §3).
 
@@ -177,7 +177,7 @@ The user double-clicks a different timeline clip — the source viewer switches 
 
 ### Timeline double-click
 
-- **FR-026** A new Qt timeline binding (in `view_bindings.cpp` or similar — exact location TBD in implementation) routes mouse double-click on a clip rectangle to the Lua handler `timeline_view_input.handle_clip_double_click(view, x, y)`. The handler queries `view.hit_test_clip(x, y)` to resolve the clip (or nil) under the mouse, then dispatches `OpenClipInSourceMonitor` with that clip's ids — `clip_id`, `project_id`, and `sequence_id` (the clip's `owner_sequence_id`, i.e., the timeline that contains the clip).
+- **FR-026** `src/timeline_renderer.cpp::mouseDoubleClickEvent` dispatches mouse double-click events through the existing mouse-event handler with `type = "double_click"`. `timeline_view_input.handle_mouse` branches on the type and calls `M.handle_clip_double_click(view, x, y)`. The handler queries `view.hit_test_clip(x, y)` to pick the clip (or nil) under the mouse, then dispatches `OpenClipInSourceMonitor` with that clip's ids — `clip_id`, `project_id`, and `sequence_id` (the clip's `owner_sequence_id`, i.e., the timeline that contains the clip).
 - **FR-027** `handle_clip_double_click` rejects two cases without dispatching: (a) `view.hit_test_clip` returns nil (empty timeline space) — no-op; (b) the resolved clip's `is_gap` is true (gap-as-clip row) — log event, no dispatch. Gaps cannot be loaded into the source viewer because they have no underlying media to play.
 
 ### Selection-hub publishing

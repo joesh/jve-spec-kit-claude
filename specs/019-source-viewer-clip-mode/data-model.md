@@ -21,7 +21,7 @@ Live-bound mode reads and mutates the following columns:
 | `track_id` | TEXT (FK tracks.id) | — | RippleTrimEdge / OverwriteTrimEdge (track context) |
 | `source_in_frame` | INTEGER | OverwriteTrimEdge (left edge), RippleTrimEdge (via BatchRippleEdit) | source_viewer mark display, effective_source pass-through (FR-016d) |
 | `source_out_frame` | INTEGER | OverwriteTrimEdge (right edge), RippleTrimEdge (via BatchRippleEdit) | source_viewer mark display, effective_source pass-through (FR-016d) |
-| `duration_frames` | INTEGER | OverwriteTrimEdge, RippleTrimEdge (recomputed from `source_out - source_in` on the source-sequence timebase) | timeline renderer |
+| `duration_frames` | INTEGER | OverwriteTrimEdge, RippleTrimEdge (delta applied directly on the source-sequence timebase: left-edge → duration -= delta; right-edge → duration += delta) | timeline renderer |
 | `sequence_start_frame` | INTEGER | OverwriteTrimEdge (only on left-edge trim; right-edge trim leaves this unchanged per FR-014) | timeline renderer |
 
 No new columns, no new constraints, no migrations.
