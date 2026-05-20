@@ -285,7 +285,19 @@ do
     PLAYBACK.PLAY(pc, 1, 1.0)
     for _ = 1, 30 do poll_sleep(pc, 0.016) end  -- ~500ms at ~60Hz tick rate
     if has_audio then
-        qt_constants.AOP.CLEAR_UNDERRUN(aop)
+        -- Headless --test mode on macOS: CVDisplayLink creation fails (see
+        -- WARN at startup) and QAudioSink may open but never get pulled by
+        -- the OS audio device. Detect by probing PLAYHEAD_US — if it's
+        -- still 0 after 500ms of warmup ticks, audio isn't actually
+        -- running and AUDIBLE_US assertions would compare against a
+        -- frozen clock. Downgrade has_audio for this run.
+        if not ienv.audio_is_live(aop) then
+            print("  ⚠ Audio device opened but PLAYHEAD_US stays at 0 — "
+                .. "headless audio backend not ticking; downgrading to video-only")
+            has_audio = false
+        else
+            qt_constants.AOP.CLEAR_UNDERRUN(aop)
+        end
     end
 
     -- Poll for ~2 seconds at ~60Hz tick rate. Sample every 3rd tick for measurements.

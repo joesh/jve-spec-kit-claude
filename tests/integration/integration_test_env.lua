@@ -158,4 +158,17 @@ function M.try_open_audio(sample_rate, channels)
     return aop, sse
 end
 
+-- Returns true iff AOP's internal clock is actually advancing. Call AFTER
+-- playback has started + warmed up (typically ~500ms of poll_sleep ticks).
+-- In headless `--test` mode on macOS, CVDisplayLink creation fails and the
+-- QAudioSink backend may open successfully but never receive a pull from
+-- the OS audio device — PLAYHEAD_US stays at 0 forever and AUDIBLE_US
+-- assertions can't be evaluated. Use this probe to downgrade `has_audio`
+-- to false for the remainder of the test rather than asserting against
+-- a frozen audio clock. Returns false if `aop` is nil.
+function M.audio_is_live(aop)
+    if not aop then return false end
+    return qt_constants.AOP.PLAYHEAD_US(aop) > 0
+end
+
 return M
