@@ -183,14 +183,21 @@ check("trim mode toggled back to overwrite",
     edit_mode.get_trim_mode() == "overwrite",
     "got " .. tostring(edit_mode.get_trim_mode()))
 
--- ── Scenario 5: I-key in live-bound mode → OverwriteTrimEdge fires ───────────
---   Default trim mode is overwrite; mark-in at frame 130 with current
---   source_in=100 means delta=+30 (shrink from the head). After the
---   command, clip.source_in should be 130, source_out unchanged (300),
---   duration shrunk by 30.
+-- ── Scenario 5: I-key dispatch in live-bound mode → OverwriteTrimEdge fires ──
+--   Default trim mode is overwrite; with playhead parked at 130 (set on the
+--   source monitor's engine first), pressing I should shrink the head by 30
+--   frames (delta = 130 - 100). Dispatch via the SAME route the keymap takes:
+--   SetMark command (NOT a direct handle_mark_key call) — that's the path
+--   the buggy 2026-05-20 master shipped with SetMark mutating the sequence
+--   row instead of trimming the clip.
 
-print("\n-- 5. handle_mark_key('in', 130) → OverwriteTrimEdge in live-bound --")
-source_viewer.handle_mark_key("in", 130, false)
+print("\n-- 5. SetMark 'in' (the I-key keymap path) → OverwriteTrimEdge in live-bound --")
+src_monitor.engine:seek(130)
+ui.pump(50)
+
+require("core.command_manager").execute_interactive("SetMark", {
+    _positional = { "in" },
+})
 ui.pump(100)
 
 local c1_after = Clip.load("c1")

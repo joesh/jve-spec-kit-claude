@@ -158,17 +158,23 @@ function M.try_open_audio(sample_rate, channels)
     return aop, sse
 end
 
--- Returns true iff AOP's internal clock is actually advancing. Call AFTER
+-- Returns true iff AOP's AUDIBLE clock is actually advancing. Call AFTER
 -- playback has started + warmed up (typically ~500ms of poll_sleep ticks).
--- In headless `--test` mode on macOS, CVDisplayLink creation fails and the
--- QAudioSink backend may open successfully but never receive a pull from
--- the OS audio device — PLAYHEAD_US stays at 0 forever and AUDIBLE_US
--- assertions can't be evaluated. Use this probe to downgrade `has_audio`
--- to false for the remainder of the test rather than asserting against
--- a frozen audio clock. Returns false if `aop` is nil.
+-- In headless `--test` mode on macOS, CVDisplayLink creation fails and
+-- the QAudioSink backend may open successfully but never get drained by
+-- the OS audio device — AUDIBLE_US (= PLAYHEAD_US - sink_buffer_us)
+-- stays at 0 forever and downstream A/V sync assertions can't be
+-- evaluated. Use this probe to downgrade `has_audio` to false for the
+-- remainder of the test rather than asserting against a frozen audio
+-- clock. Returns false if `aop` is nil.
+--
+-- Checks AUDIBLE_US (not PLAYHEAD_US) because A/V sync assertions
+-- consume AUDIBLE_US; PLAYHEAD_US can briefly tick during initial
+-- buffer fill even when the sink never drains, producing a false
+-- "live" reading from the probe.
 function M.audio_is_live(aop)
     if not aop then return false end
-    return qt_constants.AOP.PLAYHEAD_US(aop) > 0
+    return qt_constants.AOP.AUDIBLE_US(aop) > 0
 end
 
 return M

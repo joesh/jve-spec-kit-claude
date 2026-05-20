@@ -81,6 +81,8 @@ Returns one of `"neutral"`, `"staged_sequence"`, `"live_bound_clip"`. Documented
 
 This is the single entry point key handlers call; the dispatch logic lives in source_viewer rather than in each key binding, so the mode discrimination + key-repeat filter happen in one place.
 
+**Keymap routing**: The I/O keys are bound at the keymap layer to the existing `SetMark` command (`keymaps/default.jvekeys`: `"I" = "SetMark in @timeline @source_monitor @timeline_monitor"`). `SetMark`'s executor calls `source_viewer.get_mode()` at the top: in `live_bound_clip` mode it delegates to `handle_mark_key(which, playhead, false)` (which dispatches the nested trim command) and returns success without mutating sequence-row marks; in any other mode it falls through to its existing sequence-mark behavior. The wrapper command persists an empty undo entry in the live-bound branch — see `todo_set_mark_undo_polish` for the cleanup followup.
+
 ### Internal: mark-setter dispatch (FR-013)
 
 When `mode == "live_bound_clip"` and an I/O key event arrives (with `isAutoRepeat() == false` per FR-016b):
