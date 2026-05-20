@@ -47,6 +47,8 @@ function mock_monitor:unload()
     self.sequence_id = nil
     self.sequence = nil
 end
+-- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
+function mock_monitor:_set_title(text) self.title = text end
 
 package.loaded["ui.panel_manager"] = {
     get_sequence_monitor = function(view_id)

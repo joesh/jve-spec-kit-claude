@@ -41,6 +41,13 @@ local M = {}
 
 -- Internal state.
 local _source_viewer_seq_id = nil
+-- 019 FR-016d: when source_viewer is in live-bound mode, it carries
+-- (in, out) overrides drawn from the loaded clip's source_in/out columns.
+-- get() returns the triple in that case; staged mode leaves these nil.
+-- All three fields are mutated through the three per-direction entry
+-- points below — no other writers (see contracts/effective_source_pass_through.md).
+local _source_viewer_in     = nil
+local _source_viewer_out    = nil
 local _browser_items        = {}    -- last persisted project_browser selection
 local _active_panel_id      = nil
 local _current              = nil
@@ -134,10 +141,69 @@ end
 Signals.connect("source_loaded_changed", on_source_loaded_changed)
 selection_hub.register_listener(on_selection_changed)
 
---- Get the current effective master sequence id (or nil if no source).
+--- Get the current effective source.
+--- Returns one of:
+---   (nil)                           — no source.
+---   (seq_id)                        — staged-mode source viewer, OR browser-active.
+---   (seq_id, in_frame, out_frame)   — live-bound clip in source viewer; in/out
+---                                     are the loaded clip's source_in/out
+---                                     and override any mark_in/out on the
+---                                     source sequence itself for Insert/Overwrite
+---                                     (spec 019 FR-016d).
 --- Destination-agnostic — use `pick_for_edit` for edit-command dispatch.
 function M.get()
+    -- The override fields only carry meaning when the source viewer is the
+    -- effective source (i.e., browser-active doesn't trump it). Browser
+    -- precedence is already baked into _current; if browser won, _current
+    -- holds the browser's seq_id, and we don't want stale source-viewer
+    -- in/out leaking through. So gate the triple return on
+    -- "_current matches the source-viewer seq id".
+    if _source_viewer_in ~= nil and _current == _source_viewer_seq_id then
+        return _current, _source_viewer_in, _source_viewer_out
+    end
     return _current
+end
+
+--- 019 FR-016d entry point: live-bound source viewer carries clip's
+--- source_in/out as overrides. All three fields written atomically.
+--- @param seq_id string  the clip's source sequence id
+--- @param in_frame integer
+--- @param out_frame integer  must be > in_frame
+function M._set_source_viewer_clip(seq_id, in_frame, out_frame)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "effective_source._set_source_viewer_clip: seq_id required (non-empty string)")
+    assert(type(in_frame) == "number", string.format(
+        "effective_source._set_source_viewer_clip: in_frame must be a number; got %s",
+        type(in_frame)))
+    assert(type(out_frame) == "number", string.format(
+        "effective_source._set_source_viewer_clip: out_frame must be a number; got %s",
+        type(out_frame)))
+    assert(out_frame > in_frame, string.format(
+        "effective_source._set_source_viewer_clip: out_frame (%d) must be > in_frame (%d)",
+        out_frame, in_frame))
+    _source_viewer_seq_id = seq_id
+    _source_viewer_in     = in_frame
+    _source_viewer_out    = out_frame
+    recompute_and_emit()
+end
+
+--- 019 FR-016d entry point: staged source viewer carries just a seq id;
+--- in/out overrides cleared in one pass.
+function M._set_source_viewer_sequence(seq_id)
+    assert(type(seq_id) == "string" and seq_id ~= "",
+        "effective_source._set_source_viewer_sequence: seq_id required")
+    _source_viewer_seq_id = seq_id
+    _source_viewer_in     = nil
+    _source_viewer_out    = nil
+    recompute_and_emit()
+end
+
+--- 019 FR-016d entry point: clear all three fields atomically on unload.
+function M._clear_source_viewer()
+    _source_viewer_seq_id = nil
+    _source_viewer_in     = nil
+    _source_viewer_out    = nil
+    recompute_and_emit()
 end
 
 --- Resolve the source for an interactive edit command into a given
@@ -210,6 +276,8 @@ end
 --- Test-only reset. Restores module state without re-subscribing.
 function M._reset_for_tests()
     _source_viewer_seq_id = nil
+    _source_viewer_in     = nil
+    _source_viewer_out    = nil
     _browser_items        = {}
     _active_panel_id      = nil
     _current              = nil

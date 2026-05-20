@@ -37,6 +37,8 @@ function fake_monitor:unload()
     self._sequence = nil
     self.sequence = nil
 end
+-- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
+function fake_monitor:_set_title(text) self.title = text end
 
 package.loaded["ui.panel_manager"] = {
     get_sequence_monitor = function(view_id)
@@ -153,9 +155,11 @@ package.loaded["models.clip"] = {
                 owner_sequence_id = "owner_seq_live",
                 sequence_id       = "src_seq_for_clip",  -- the clip's source
                 track_id          = "track_v1",
-                source_in_frame   = 30,
-                source_out_frame  = 180,
-                duration_frames   = 150,
+                -- Model-field names (no _frame suffix) — matches what
+                -- real models/clip.lua build_clip_from_load_row returns.
+                source_in         = 30,
+                source_out        = 180,
+                duration          = 150,
             }
         end
         return nil

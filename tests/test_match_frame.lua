@@ -41,6 +41,9 @@ local stub_source_monitor = {
     get_loaded_master_seq_id = function(self)
         return self.sequence_id
     end,
+    -- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
+    -- source_viewer.load_sequence calls this on every mode transition.
+    _set_title = function(self, text) self.title = text end,
 }
 
 package.loaded["ui.panel_manager"] = {

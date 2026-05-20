@@ -98,10 +98,12 @@ local clip_rows = {
         owner_sequence_id    = "owner_seq_1",
         sequence_id          = "source_seq_A",   -- the clip's SOURCE sequence
         track_id             = "track_v1",
-        source_in_frame      = 50,
-        source_out_frame     = 250,
-        duration_frames      = 200,
-        sequence_start_frame = 100,
+        -- Model-field names (no _frame suffix) — matches what
+        -- real models/clip.lua build_clip_from_load_row returns.
+        source_in            = 50,
+        source_out           = 250,
+        duration             = 200,
+        sequence_start       = 100,
     },
 }
 

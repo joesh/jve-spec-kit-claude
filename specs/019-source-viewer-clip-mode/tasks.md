@@ -63,23 +63,9 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
 
 - [X] **T012 [P]** New command `src/lua/core/commands/overwrite_trim_edge.lua` (per contracts/overwrite_trim_edge.md + FR-014, FR-015, FR-015b). *Done 2026-05-19. 120 LOC. Reuses existing `Clip.update_bounds` + `Clip.assert_within_master_coverage`. Emits `__timeline_mutations` (single-row update bucket) + `sequence_content_changed`. T002 5/5 scenarios green; pre/post DB read-back assertions pass.*
 
-- [ ] **T013** Modify `src/lua/ui/source_viewer.lua` (per contracts/source_viewer_load_clip.md + plan.md):
-  - Add `M.load_sequence(sequence_id, opts)` as the new public API.
-  - Keep `M.load_master_clip(sequence_id, opts)` as a one-line alias to `M.load_sequence` (plan.md Complexity Tracking, removed by 020).
-  - Add `M.load_clip(clip_id, opts)`: load clip row + source sequence, call `monitor:load_sequence(clip.sequence_id)`, stash `live_clip_id`.
-  - Add internal `mode` flag (`"neutral"`, `"staged_sequence"`, `"live_bound_clip"`); assert state invariants on transitions (data-model.md SourceViewerState).
-  - Add `_on_clip_deleted` (FR-004a) and `_on_clip_mutated` (FR-004b) signal listeners. Wire to existing clip/sequence deletion + mutation signals.
-  - Update `publish_loaded_sequence` to be mode-aware: `item_type="clip"` in live-bound, `item_type="sequence"` in staged.
-  - Mark-setter dispatch routes to `RippleTrimEdge` or `OverwriteTrimEdge` per `edit_mode.get_trim_mode()` (FR-013).
-  - Title computation per FR-016f (sentinel `clip_label`).
-  - Depends on T010, T012. T004 + T008 MUST be red before this lands.
+- [X] **T013** Modify `src/lua/ui/source_viewer.lua`. *Done 2026-05-19. ~270 LOC rewrite. M.load_sequence (new), M.load_master_clip alias, M.load_clip (live-bound entry), M.get_mode, M.handle_mark_key (with FR-016b key-repeat filter + Ripple/OverwriteTrimEdge dispatch via edit_mode), single `sequence_content_changed` listener covers both FR-004a delete and FR-004b mutate paths, mode-flag transitions with asserted invariants, FR-016f sentinel title (clip_label = name or id_prefix). Pre-existing test stubs (test_match_frame x2, test_source_tab_and_viewer_set_transport_target, test_source_viewer_signal, test_source_viewer_publishes_selection) got `_set_title` added to mirror real SequenceMonitor; all stay green. T004 + T008 went green.*
 
-- [ ] **T014** Modify `src/lua/core/effective_source.lua` (per contracts/effective_source_pass_through.md + FR-016d):
-  - Add `_source_viewer_in`, `_source_viewer_out` module-level state.
-  - Add `_set_source_viewer_clip(seq_id, in, out)`, `_set_source_viewer_sequence(seq_id)`, `_clear_source_viewer()` — the three single-direction entry points.
-  - Extend `get()` to return the triple when overrides present, single seq_id when not.
-  - source_viewer (T013) calls these on mode transitions.
-  - Depends on T013. T007 MUST be red before this lands.
+- [X] **T014** Modify `src/lua/core/effective_source.lua` (per contracts/effective_source_pass_through.md + FR-016d). *Done 2026-05-19, in lockstep with T013 (source_viewer needed the entry points). Added `_source_viewer_in`/`_source_viewer_out` state. Three single-direction entry points (`_set_source_viewer_clip`, `_set_source_viewer_sequence`, `_clear_source_viewer`) — all mutate the three internal fields atomically, with fail-fast asserts on arg validity. get() returns the triple when the source viewer is the effective source AND overrides are present; gated by `_current == _source_viewer_seq_id` so browser-active leakage is impossible. _reset_for_tests clears the new fields. T007 4 new scenarios green.*
 
 - [ ] **T015 [P]** New command `src/lua/core/commands/open_clip_in_source_monitor.lua` (per contracts/open_clip_in_source_monitor.md + FR-017). SPEC.args: `clip_id`, `project_id`, `sequence_id` all required. `undoable = false`. Executor: `source_viewer.load_clip(args.clip_id)`. Depends on T013. T005 MUST be red before this lands.
 

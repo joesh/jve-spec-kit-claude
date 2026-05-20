@@ -53,6 +53,8 @@ local stub_source_monitor = {
     get_loaded_master_seq_id = function(self)
         return self.sequence and self.sequence.id or nil
     end,
+    -- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
+    _set_title = function(self, text) self.title = text end,
 }
 package.loaded["ui.panel_manager"] = {
     get_sequence_monitor = function(view_id)

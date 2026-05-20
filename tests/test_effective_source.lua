@@ -284,8 +284,14 @@ Signals.disconnect(listener_token)
 
 print("\n--- 019 override channel ---")
 
+-- Reset only effective_src here; do NOT reset selection_hub because
+-- effective_src registered as a listener at module load and
+-- selection_hub._reset_for_tests() would silently drop that subscription
+-- (selection_hub re-keys its listeners on `next_token`, which starts from
+-- 0 on reset). After this section's test cases the existing T1–T17
+-- assertions don't run again, so it's fine to inherit selection_hub state.
 effective_src._reset_for_tests()
-selection_hub._reset_for_tests()
+selection_hub.update_selection("project_browser", {})
 selection_hub.set_active_panel("source_monitor")
 
 -- T18: live-bound entry — get() returns the triple.
@@ -323,9 +329,11 @@ end
 
 -- T21: browser-active precedence still wins — even with a live-bound
 -- override set, an insertable browser selection takes priority.
+-- Note: only effective_src is reset; selection_hub keeps its registered
+-- listeners (effective_src subscribes to selection_hub at module-load and
+-- selection_hub._reset_for_tests() would silently drop that subscription).
 do
     effective_src._reset_for_tests()
-    selection_hub._reset_for_tests()
     effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
     selection_hub.update_selection("project_browser", {
         {
