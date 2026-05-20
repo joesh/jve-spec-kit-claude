@@ -132,4 +132,75 @@ assert(second[1].sequence_id == "second_seq", string.format(
     .. "got %s", tostring(second[1].sequence_id)))
 print("  ✓ subsequent load replaces selection (no accumulation)")
 
+-- =============================================================================
+-- Test 4 (019 T008): live-bound mode publishes item_type="clip" (FR-028)
+-- =============================================================================
+-- Per spec FR-028 + contracts/source_viewer_load_clip.md, source_viewer in
+-- live-bound mode publishes a clip-typed selection (NOT sequence-typed), so
+-- the Inspector renders clip-schema fields for the loaded clip.
+--
+-- Stub Clip.load + Sequence.load so the load_clip path resolves without a
+-- real DB. The publish shape (item_type="clip" with clip_id + project_id +
+-- owner sequence_id) is the assertion target.
+
+package.loaded["models.clip"] = {
+    load = function(id)
+        if id == "clip_live" then
+            return {
+                id                = "clip_live",
+                name              = "LiveClip",
+                project_id        = "proj_under_test",
+                owner_sequence_id = "owner_seq_live",
+                sequence_id       = "src_seq_for_clip",  -- the clip's source
+                track_id          = "track_v1",
+                source_in_frame   = 30,
+                source_out_frame  = 180,
+                duration_frames   = 150,
+            }
+        end
+        return nil
+    end,
+}
+package.loaded["models.sequence"] = {
+    load = function(id)
+        if id == "src_seq_for_clip" then
+            return {
+                id              = "src_seq_for_clip",
+                project_id      = "proj_under_test",
+                name            = "SourceMaster",
+                kind            = "master",
+                fps_numerator   = 24,
+                fps_denominator = 1,
+            }
+        end
+        if id == "owner_seq_live" then
+            return {
+                id   = "owner_seq_live",
+                project_id = "proj_under_test",
+                name = "OwnerTimeline",
+                kind = "sequence",
+            }
+        end
+        return nil
+    end,
+}
+
+source_viewer.load_clip("clip_live", { skip_focus = true })
+
+local published = selection_hub.get_selection("source_monitor")
+assert(#published == 1, string.format(
+    "live-bound load_clip must publish exactly one item; got %d", #published))
+local item = published[1]
+assert(item.item_type == "clip", string.format(
+    "live-bound publish item_type must be 'clip' (FR-028); got %q",
+    tostring(item.item_type)))
+assert(item.clip_id == "clip_live",
+    "published item must carry clip_id")
+assert(item.project_id == "proj_under_test",
+    "published item must carry project_id")
+assert(item.sequence_id == "owner_seq_live", string.format(
+    "published sequence_id must be the OWNER sequence (where the clip lives), "
+    .. "not the source sequence; got %q", tostring(item.sequence_id)))
+print("  ✓ live-bound mode publishes item_type='clip' with owner sequence_id")
+
 print("\n✅ test_source_viewer_publishes_selection.lua passed")
