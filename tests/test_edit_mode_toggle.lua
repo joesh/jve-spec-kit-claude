@@ -105,7 +105,29 @@ print("  ✓ _reset_for_tests restores initial 'overwrite'")
 -- =============================================================================
 -- 6. ToggleTrimMode command flips via set_trim_mode (FR-011).
 -- =============================================================================
+-- Minimal DB so command_manager.init can resolve active project/sequence.
+_G.qt_create_single_shot_timer = function() end
+local database = require("core.database")
+local TEST_DB = "/tmp/jve/test_edit_mode_toggle.db"
+os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
+database.init(TEST_DB)
+local db = database.get_connection()
+db:exec(require("import_schema"))
+db:exec([[
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj', 'P', 'resample',
+            '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
+    INSERT INTO sequences (id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_sample_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at)
+    VALUES ('seq', 'proj', 'S', 'sequence', 24, 1, 48000, 1920, 1080,
+            0, 10000, 0, '[]', '[]', '[]', 0, 0, 0);
+]])
+
 local command_manager = require("core.command_manager")
+command_manager.init("seq", "proj")
 
 edit_mode._reset_for_tests()  -- known starting state
 

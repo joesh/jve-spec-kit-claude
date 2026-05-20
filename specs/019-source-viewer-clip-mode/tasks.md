@@ -57,11 +57,11 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
 
 ## Phase 3.4: Core Implementation (ONLY after Phase 3.2 tests are red)
 
-- [ ] **T010 [P]** New module `src/lua/core/edit_mode.lua` (per data-model.md §EditModeState + contracts/toggle_trim_mode.md). API: `get_trim_mode()`, `set_trim_mode(mode)`, `_reset_for_tests()`. Asserts enum validity (FR-009). Emits `trim_mode_changed` signal via existing `core.signals`. Module-level state. T003 MUST be red before this lands; green after.
+- [X] **T010 [P]** New module `src/lua/core/edit_mode.lua` (per data-model.md §EditModeState + contracts/toggle_trim_mode.md). API: `get_trim_mode()`, `set_trim_mode(mode)`, `_reset_for_tests()`. Asserts enum validity (FR-009). Emits `trim_mode_changed` signal via existing `core.signals`. Module-level state. *Done 2026-05-19. 44 LOC. T003 7/7 scenarios green.*
 
-- [ ] **T011 [P]** New command `src/lua/core/commands/toggle_trim_mode.lua` (per contracts/toggle_trim_mode.md). SPEC.args empty, `undoable = false`. Executor flips via `core/edit_mode.set_trim_mode`. T003 covers this.
+- [X] **T011 [P]** New command `src/lua/core/commands/toggle_trim_mode.lua` (per contracts/toggle_trim_mode.md). SPEC.args empty, `undoable = false`. Executor flips via `core/edit_mode.set_trim_mode`. *Done 2026-05-19. 32 LOC. Auto-registered via command_registry snake_case→CamelCase convention.*
 
-- [ ] **T012 [P]** New command `src/lua/core/commands/overwrite_trim_edge.lua` (per contracts/overwrite_trim_edge.md + FR-014, FR-015, FR-015b). Same SPEC.args as `ripple_trim_edge.lua`. Executor mutates ONE clip row (source_in_frame or source_out_frame + duration_frames + sequence_start_frame on left-edge only). Own undo entry capturing those four columns. T002 MUST be red before this lands; green after.
+- [X] **T012 [P]** New command `src/lua/core/commands/overwrite_trim_edge.lua` (per contracts/overwrite_trim_edge.md + FR-014, FR-015, FR-015b). *Done 2026-05-19. 120 LOC. Reuses existing `Clip.update_bounds` + `Clip.assert_within_master_coverage`. Emits `__timeline_mutations` (single-row update bucket) + `sequence_content_changed`. T002 5/5 scenarios green; pre/post DB read-back assertions pass.*
 
 - [ ] **T013** Modify `src/lua/ui/source_viewer.lua` (per contracts/source_viewer_load_clip.md + plan.md):
   - Add `M.load_sequence(sequence_id, opts)` as the new public API.
