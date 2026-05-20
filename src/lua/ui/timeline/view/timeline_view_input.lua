@@ -846,4 +846,42 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
     end
 end
 
+--- 019 FR-026 / FR-027: Qt MouseButtonDblClick on a timeline-clip rectangle
+--- routes here. Resolves the clip under the cursor via the view's existing
+--- hit-test surface; on a real clip dispatches `OpenClipInSourceMonitor` to
+--- load it into the source viewer in live-bound mode. Two reject paths
+--- (no dispatch):
+---   * empty timeline space (hit_test returns nil) — no-op
+---   * gap-as-clip rows (clip.is_gap == true) — gaps have no source media,
+---     so loading them into the source viewer is undefined. Log + return.
+function M.handle_clip_double_click(view, x, y)
+    assert(view, "handle_clip_double_click: view required")
+    assert(type(view.hit_test_clip) == "function", string.format(
+        "handle_clip_double_click: view.hit_test_clip(x, y) must be a "
+        .. "function returning the clip under cursor (or nil); got %s",
+        type(view.hit_test_clip)))
+
+    local clip = view.hit_test_clip(x, y)
+    if clip == nil then return end  -- empty space; no-op
+
+    if clip.is_gap == true then
+        log.event("handle_clip_double_click: gap-as-clip rejected (id=%s)",
+            tostring(clip.id))
+        return
+    end
+
+    assert(clip.id and clip.id ~= "",
+        "handle_clip_double_click: hit_test returned clip without id")
+    assert(clip.project_id and clip.project_id ~= "",
+        "handle_clip_double_click: hit_test returned clip without project_id")
+    assert(clip.owner_sequence_id and clip.owner_sequence_id ~= "",
+        "handle_clip_double_click: hit_test returned clip without owner_sequence_id")
+
+    command_manager.execute_interactive("OpenClipInSourceMonitor", {
+        clip_id     = clip.id,
+        project_id  = clip.project_id,
+        sequence_id = clip.owner_sequence_id,
+    })
+end
+
 return M

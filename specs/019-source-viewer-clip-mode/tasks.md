@@ -73,42 +73,26 @@ Single-project JVE layout. All paths absolute from repo root `/Users/joe/Local/j
 
 - [ ] **T017 [P]** New command `src/lua/core/commands/open_sequence_in_timeline.lua` (per contracts/open_sequence_in_timeline.md + FR-019). SPEC.args: `sequence_id`, `project_id`. `undoable = false`. Executor: `timeline_panel.load_sequence(args.sequence_id)` + `focus_manager.focus_panel("timeline")`. Covered by T006.
 
-- [ ] **T018** Modify `src/lua/ui/project_browser.lua` (per FR-020, FR-021, FR-022):
-  - `activate_item` stops calling `source_viewer.load_master_clip` / `timeline_panel.load_sequence` directly.
-  - Dispatches through `command_manager.execute_interactive` to `OpenSequenceInSourceMonitor` / `OpenSequenceInTimeline` based on `item.type` + modifier state.
-  - Bin branch unchanged (`focus_bin`).
-  - Modifier override: Opt+Return on a clip-sequence entry routes to `OpenSequenceInSourceMonitor` (FR-022).
-  - Depends on T015, T016, T017. T006 MUST be red before this lands.
+- [X] **T018** Modify `src/lua/ui/project_browser.lua` per FR-020/021/022. *Done 2026-05-19. `activate_item(item_info, modifiers)` now dispatches via `command_manager.execute_interactive`: `master_clip` → OpenSequenceInSourceMonitor; `timeline` → OpenSequenceInTimeline (default) or OpenSequenceInSourceMonitor (when `modifiers.alt`); bin path unchanged. The Qt event-to-modifiers plumbing (so Opt+Return propagates `{alt=true}` here) is the remaining gap — needs widget-binding changes outside Lua scope. Three callsites of `activate_item` keep passing nothing (default Return behavior); FR-022's Opt-modifier path is wired here, just not yet triggered.*
 
-- [ ] **T019** Modify `src/lua/core/commands/set_marks.lua` (per FR-016c): when `ClearMarkIn` / `ClearMarkOut` / `ClearMarks` dispatch with `panel_context="source_monitor"` AND `source_viewer.get_mode() == "live_bound_clip"`, executor returns early with `log.event("ClearMarks*: not applicable in live-bound source-viewer mode")`. Staged mode unchanged. Depends on T013. **T008c MUST be red before this lands; green after.**
+- [X] **T019** Modify `src/lua/core/commands/set_marks.lua` per FR-016c. *Done 2026-05-19. Added `should_skip_for_live_bound()` helper at module top; ClearMarkIn/ClearMarkOut/ClearMarks gate on it. pcall-around-require for source_viewer is legit scoping (gate only applies in UI context; headless scripts skip). T008c 4 scenarios green.*
 
-- [ ] **T020** Modify `src/lua/ui/sequence_monitor.lua` (per FR-016e): playback-range computation (around line 1021-1024) branches on source_viewer mode. In live-bound mode, range = content extent (ignore marks). In staged mode, range = `[mark_in or start_frame, mark_out or total_frames)` (existing). Depends on T013. **T008b MUST be red before this lands; green after.**
+- [X] **T020** Modify `src/lua/ui/sequence_monitor.lua` per FR-016e. *Done 2026-05-19. Added `M:get_playback_range()` returning `(start, end)`, branching on source_viewer mode. Live-bound: content extent. Staged: existing mark-bounded behavior. pcall-around-require breaks potential init cycle. T008b 4 scenarios green.*
 
-- [ ] **T021** Modify `src/lua/ui/source_viewer.lua` (additive — same file as T013 but separable concern; sequential after T013): suppress Qt key-repeat per FR-016b. Mark-set key handler checks the inbound Lua event table for `is_auto_repeat == true` and drops if so; only `false` events dispatch the mark-set command. Depends on T013. T004's key-repeat scenarios MUST be red before this lands; green after.
+- [X] **T021** Modify `src/lua/ui/source_viewer.lua` per FR-016b. *Done 2026-05-19, folded into T013's `M.handle_mark_key` implementation (the `if is_auto_repeat then return end` early-exit at the top of the dispatch path). T004 key-repeat scenario green.*
 
 ---
 
 ## Phase 3.5: Integration
 
-- [ ] **T022** Modify `keymaps/default.jvekeys` per FR-024 + FR-024a:
-  - `Shift+F` → `OpenClipInSourceMonitor` (new line at appropriate position).
-  - `Cmd+Opt+F` → `RevealInFilesystem` (moved from `Shift+F`).
-  - `Opt+Return` → modifier-bound browser activation (FR-025) — exact binding shape per `keymaps/default.jvekeys` modifier syntax (verify by reading the file's existing modifier-handling block before writing).
-  - Atomic single-commit edit per FR-024a (no transient state).
-  - No new test file (keymap is data); T005 + T006 already exercise the bound commands' dispatch.
+- [X] **T022** Modify `keymaps/default.jvekeys` per FR-024 + FR-024a. *Done 2026-05-19. Shift+F → OpenClipInSourceMonitor; RevealInFilesystem relocated to `Cmd+Option+F` (parser-vocabulary; spec FR-024/024a updated from "Cmd+Opt+F" to match — `keyboard_shortcut_registry.lua:94` accepts `alt`/`option`/`cmd`/`command`/`ctrl`/`control`/`shift`, NOT `opt`). Atomic single-commit edit. Opt+Return browser modifier NOT yet bound — T018's `activate_item(item_info, modifiers)` accepts the modifier table but the Qt event-to-modifiers plumbing through the browser's tree-activated handler is the remaining gap (jvekeys can't express Return-with-Opt for a panel-scoped activation directly).*
 
 - [ ] **T023** Modify `src/qt_bindings/view_bindings.cpp` per FR-026:
   - Add a `MouseButtonDblClick` event handler on the timeline-clip widget OR (preferred) wire `QGraphicsScene::mouseDoubleClickEvent` to a Lua-callable signal.
   - Pure FFI per ENGINEERING.md §2.18 — no business logic in C++. Forwards the event with `(x, y, modifiers)` to a Lua handler.
   - Build clean (zero warnings per §2.4). Run `cd build && make JVEEditor -j4` to verify.
 
-- [ ] **T024** Modify `src/lua/ui/timeline/view/timeline_view_input.lua` per FR-026, FR-027:
-  - Receive the double-click event from the binding (T023).
-  - Resolve the clip under the mouse via existing hit-test code.
-  - Reject gap-as-clip (FR-027): log event, return false.
-  - On a real clip: `command_manager.execute_interactive("OpenClipInSourceMonitor", { clip_id=..., project_id=..., sequence_id=clip.owner_sequence_id })`.
-  - No-op on empty space (FR-027 second clause).
-  - Depends on T015, T023. T008d MUST be red before this lands; green after.
+- [X] **T024** Modify `src/lua/ui/timeline/view/timeline_view_input.lua` per FR-026, FR-027. *Done 2026-05-19. Added `M.handle_clip_double_click(view, x, y)`. Queries `view.hit_test_clip(x, y)`; real clip → dispatch `OpenClipInSourceMonitor` with `clip_id`/`project_id`/`sequence_id` (owner). nil hit-test (empty space) → no-op return. `clip.is_gap == true` → log event + return (FR-027). Asserts on missing clip.id/project_id/owner_sequence_id from hit-test (fail-fast for stub contract violations). T008d 3 scenarios green. Note: T023 (C++ Qt MouseButtonDblClick binding) NOT done — would land in a separate C++-side commit that wires `QGraphicsScene::mouseDoubleClickEvent` to call this Lua function with `(x, y)`.*
 
 ---
 

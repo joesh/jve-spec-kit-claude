@@ -19,7 +19,7 @@
 - Q: Source viewer title in live-bound mode → A: `"Source: <clip_name> (in <owner_sequence_name>)"`. Clip name plus context naming the timeline the live-bound clip lives on. Disambiguates two different clips with the same name living in different sequences.
 - Q: Live-bound clip is mutated by a non-trim edit (rate/enabled/name/etc.) while loaded — what does the source viewer do? → A: Full re-resolve. Signal-driven handler reloads the clip + its source sequence, recomputes title, rebinds playback if rate/duration changed, republishes selection_hub. Same pattern as the FR-004a auto-unload-on-delete handler, just refresh instead of unload.
 - Q: Scope-trim 2026-05-19 → A: Dropped the in-memory holding-sequence wrap (was FR-005/006/007). Source viewer stores `clip_id` and binds playback to `clip.sequence_id` directly via existing `SequenceMonitor:load_sequence` — same code path as staged mode. Dropped FR-016d.1 atomicity-invariant overhead (override fields only mutated through documented entry points; defensive in-`get()` assert was paranoia). Dropped Phase 3.2 sub-tests T008a–T008d (folded into broader tests). Dropped Phase 3.3 spike T009 (no longer needed without holding sequence).
-- Q: Shift+F binding conflict resolution — Shift+F currently binds `RevealInFilesystem`. Where does it move? → A: `RevealInFilesystem` moves to `Cmd+Opt+F` (verified unbound). Shift+F becomes `OpenClipInSourceMonitor` per FR-024.
+- Q: Shift+F binding conflict resolution — Shift+F currently binds `RevealInFilesystem`. Where does it move? → A: `RevealInFilesystem` moves to `Cmd+Option+F` (verified unbound). Shift+F becomes `OpenClipInSourceMonitor` per FR-024.
 
 ---
 
@@ -169,10 +169,10 @@ The user double-clicks a different timeline clip — the source viewer switches 
 - **FR-024** `keymaps/default.jvekeys`:
   - `F` → `MatchFrame` (unchanged)
   - `Shift+F` → `OpenClipInSourceMonitor` (new; **replaces existing `RevealInFilesystem` binding** — see FR-024a)
-  - `Cmd+Opt+F` → `RevealInFilesystem` (**relocated** from `Shift+F` to free that slot for 019)
+  - `Cmd+Option+F` → `RevealInFilesystem` (**relocated** from `Shift+F` to free that slot for 019)
   - `Alt+F` → `FindMasterClipInBrowser` (unchanged; renames to `FindSourceInBrowser` after 020)
   - No default binding for `ToggleTrimMode` (UI placement deferred).
-- **FR-024a** The `RevealInFilesystem` move (`Shift+F` → `Cmd+Opt+F`) is part of 019 (not deferred): the keymap edit lands in the same commit as the new `Shift+F` binding to avoid a transient state where two commands fight over one key. `Cmd+Opt+F` was verified unbound at audit time (2026-05-19); if a future spec needs it, that spec is responsible for picking another slot for `RevealInFilesystem`.
+- **FR-024a** The `RevealInFilesystem` move (`Shift+F` → `Cmd+Option+F`) is part of 019 (not deferred): the keymap edit lands in the same commit as the new `Shift+F` binding to avoid a transient state where two commands fight over one key. `Cmd+Option+F` was verified unbound at audit time (2026-05-19); if a future spec needs it, that spec is responsible for picking another slot for `RevealInFilesystem`.
 - **FR-025** Browser keymap adds `Opt+Return` for the modifier override (FR-022). Plain `Return` continues to invoke `ActivateBrowserSelection`. `Shift+Return` is intentionally NOT bound to this action (reserved for future range-select semantics).
 
 ### Timeline double-click
