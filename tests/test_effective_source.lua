@@ -306,8 +306,13 @@ do
         "T18: live-bound get() out must equal _set arg; got %s", tostring(out)))
 end
 
--- T19: staged entry — get() returns just the seq, in/out are nil.
+-- T19: staged entry — get() returns just the seq, in/out are nil. Explicit
+-- _clear_source_viewer first so this test doesn't accidentally pass on the
+-- prior T18 triple's residue (overlapping seq_id would also work via the
+-- `_current ~= _source_viewer_seq_id` gate, but ordering-independence is
+-- worth the one extra line).
 do
+    effective_src._clear_source_viewer()
     effective_src._set_source_viewer_sequence("staged-seq-Y")
     local got_seq, in_, out = effective_src.get()
     assert(got_seq == "staged-seq-Y", string.format(

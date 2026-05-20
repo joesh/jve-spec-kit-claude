@@ -224,6 +224,41 @@ do
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 2b. Left-edge grow: source_in retreats earlier into source; start advances
+--     EARLIER; duration grows. Downstream upstream-neighbor distinction
+--     irrelevant here (no overlap-policy logic in OverwriteTrimEdge — that's
+--     RippleTrimEdge's concern). The clip's head extends earlier into its
+--     source media; the timeline start_frame moves earlier by |delta|.
+-- ─────────────────────────────────────────────────────────────────────────────
+print("\n--- Left-edge grow ---")
+do
+    reset()
+    create_clip("A", 100, 200, 50)   -- start=100, dur=200, src_in=50, src_out=250
+
+    local r = command_manager.execute_interactive("OverwriteTrimEdge", {
+        clip_id      = "A",
+        edge         = "left",
+        delta_frames = -25,          -- extend left edge 25 frames earlier
+        sequence_id  = "seq",
+        project_id   = "proj",
+    })
+    assert(r and r.success, "left-edge grow must succeed")
+
+    local after = read_clip_columns("A")
+    assert(after.sequence_start_frame == 75,
+        string.format("left-edge grow moves start earlier by |delta|; got %d (expected 75)",
+            after.sequence_start_frame))
+    assert(after.source_in_frame == 25,
+        string.format("source_in must retreat by 25 to 25; got %d", after.source_in_frame))
+    assert(after.source_out_frame == 250,
+        string.format("source_out unchanged on left-edge; got %d (expected 250)",
+            after.source_out_frame))
+    assert(after.duration_frames == 225,
+        string.format("duration must grow by 25 to 225; got %d", after.duration_frames))
+    print("  ✓ left-edge grow: source_in retreats; start advances earlier; source_out unchanged")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 3. Right-edge grow: source_out + duration increase; downstream stays put
 --    (overlap policy not this command's concern).
 -- ─────────────────────────────────────────────────────────────────────────────

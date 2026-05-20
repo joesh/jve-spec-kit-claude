@@ -94,13 +94,14 @@ assert(item.sequence_id == "loaded_seq_id", string.format(
 assert(item.project_id == "proj_under_test", string.format(
     "published item must carry project_id of the loaded sequence; got %s",
     tostring(item.project_id)))
--- Inspector's resolve_inspectables (selection_binding.lua:157,168) maps
--- item_type "timeline" or "timeline_sequence" to the sequence schema.
--- Either value satisfies the contract.
-assert(item.item_type == "timeline" or item.item_type == "timeline_sequence",
-    string.format(
-    "published item_type must route to sequence schema (timeline / "
-    .. "timeline_sequence); got %s", tostring(item.item_type)))
+-- Pin the published item_type to the value the source viewer actually
+-- emits for a staged sequence. The Inspector's resolve_inspectables
+-- accepts both "timeline" and "timeline_sequence" as routes to the
+-- sequence schema, but staged-mode publish is canonical "timeline" —
+-- this test pins that contract so a silent flip would be caught.
+assert(item.item_type == "timeline", string.format(
+    "staged-mode publish must emit item_type='timeline'; got %s",
+    tostring(item.item_type)))
 print("  ✓ load_master_clip publishes sequence selection under source_monitor")
 
 -- =============================================================================
