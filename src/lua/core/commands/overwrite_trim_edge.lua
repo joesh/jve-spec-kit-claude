@@ -77,6 +77,15 @@ local function single_row_update_bucket(sequence_id, clip_id)
     }
 end
 
+--- Report a single-row clip mutation to the __timeline_mutations bucket
+--- and emit sequence_content_changed. Both executor and undoer use the
+--- exact same pair, so factor it out (DRY).
+local function report_single_row_mutation(command, sequence_id, clip_id)
+    command:set_parameter("__timeline_mutations",
+        single_row_update_bucket(sequence_id, clip_id))
+    require("core.signals").emit("sequence_content_changed", sequence_id)
+end
+
 --- Assert the new source range lies inside the source-sequence's content
 --- extent. Per FR-015: no silent clamp.
 local function assert_in_content_extent(clip_id, sequence_id, new_in, new_out)
@@ -96,10 +105,9 @@ end
 
 function M.register(executors, undoers, _db, _set_last_error)
     executors["OverwriteTrimEdge"] = function(command)
-        local args    = command:get_all_parameters()
-        local Clip    = require("models.clip")
-        local Signals = require("core.signals")
-        local log     = require("core.logger").for_area("commands")
+        local args = command:get_all_parameters()
+        local Clip = require("models.clip")
+        local log  = require("core.logger").for_area("commands")
 
         assert(args.edge == "left" or args.edge == "right", string.format(
             "OverwriteTrimEdge: edge must be 'left' or 'right'; got %q",
@@ -129,38 +137,20 @@ function M.register(executors, undoers, _db, _set_last_error)
             new_vals.source_in_frame,
             new_vals.source_out_frame)
 
-        -- Report the single-row update through the standard __timeline_mutations
-        -- channel so the command_manager downstream + UI cache invalidate
-        -- correctly. Same shape DeleteClip/Blade/etc. emit.
-        command:set_parameter("__timeline_mutations",
-            single_row_update_bucket(args.sequence_id, args.clip_id))
-
-        Signals.emit("sequence_content_changed", args.sequence_id)
-
+        report_single_row_mutation(command, args.sequence_id, args.clip_id)
         log.event("OverwriteTrimEdge: clip=%s edge=%s delta=%d",
             args.clip_id, args.edge, args.delta_frames)
         return { success = true }
     end
 
     undoers["OverwriteTrimEdge"] = function(command)
-        local args    = command:get_all_parameters()
-        local Clip    = require("models.clip")
-        local Signals = require("core.signals")
-
-        Clip.update_bounds(args.clip_id,
+        local args = command:get_all_parameters()
+        require("models.clip").update_bounds(args.clip_id,
             args._old_sequence_start,
             args._old_duration,
             args._old_source_in,
             args._old_source_out)
-
-        -- Mirror the executor's mutation report so the UI cache invalidates
-        -- on undo too (same pattern as DeleteClip's undoer at
-        -- delete_clip.lua:163). Without this, the row stays correct in the
-        -- DB but consumers driven off __timeline_mutations don't refresh.
-        command:set_parameter("__timeline_mutations",
-            single_row_update_bucket(args.sequence_id, args.clip_id))
-
-        Signals.emit("sequence_content_changed", args.sequence_id)
+        report_single_row_mutation(command, args.sequence_id, args.clip_id)
         return true
     end
 

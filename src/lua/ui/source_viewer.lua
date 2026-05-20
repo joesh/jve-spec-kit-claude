@@ -186,7 +186,6 @@ function M.load_sequence(sequence_id, opts)
 
     source:load_sequence(sequence_id)
 
-    -- 017 derived-target binding (unchanged).
     require("core.playback.transport").bind_role_to_sequence("source", sequence_id)
 
     transition_to_staged(sequence_id)
@@ -241,14 +240,9 @@ function M.load_clip(clip_id, opts)
     update_effective_source_live(clip)
     set_monitor_title(source, compute_title("live_bound_clip", nil, clip, owner))
 
-    -- Signal payload is always the SOURCE SEQUENCE id (never clip_id). The
-    -- timeline_panel auto-source-tab handler and effective_source's listener
-    -- both interpret arg1 as a sequence id; passing a clip_id here breaks
-    -- both (auto-tab keys on it, effective_source._source_viewer_seq_id
-    -- gets clobbered with the wrong namespace, overwriting the correct
-    -- value just written by update_effective_source_live). The clip
-    -- identity is carried through selection_hub publish + effective_source
-    -- override fields — the signal doesn't need to carry it.
+    -- Payload is the SOURCE sequence id — see
+    -- contracts/source_viewer_load_clip.md step 7. Clip identity rides
+    -- selection_hub + effective_source override fields, not this signal.
     Signals.emit("source_loaded_changed", clip.sequence_id, prev_id)
 
     if not opts.skip_focus then
@@ -275,11 +269,45 @@ end
 
 -- ─── I/O key dispatch (FR-013, FR-016b) ─────────────────────────────────────
 
--- In live-bound mode, route I/O presses to the active trim command
--- (Ripple or Overwrite per edit_mode.get_trim_mode()), with the right
--- edge ("left"=IN, "right"=OUT) and delta. In staged mode, delegate
--- to the underlying SequenceMonitor's existing Sequence:set_in/set_out
--- path. Key-repeat events (is_auto_repeat=true) are dropped (FR-016b).
+-- In live-bound mode, route an I/O press to the active trim command
+-- (Ripple or Overwrite per edit_mode.get_trim_mode()), targeting the
+-- corresponding edge ("left"=IN, "right"=OUT).
+local function dispatch_live_bound_trim(mark_kind, frame)
+    local clip = require("models.clip").load(_state.live_clip_id)
+    assert(clip, string.format(
+        "source_viewer.dispatch_live_bound_trim: live-bound clip %s no longer "
+        .. "exists; stale state — sequence_content_changed listener should have fired",
+        tostring(_state.live_clip_id)))
+
+    local edge    = (mark_kind == "in") and "left" or "right"
+    local current = (mark_kind == "in") and clip.source_in or clip.source_out
+    local delta   = frame - current
+    if delta == 0 then return end  -- mark already at this frame
+
+    local cmd_name = (require("core.edit_mode").get_trim_mode() == "ripple")
+        and "RippleTrimEdge" or "OverwriteTrimEdge"
+    require("core.command_manager").execute_interactive(cmd_name, {
+        clip_id      = clip.id,
+        edge         = edge,
+        delta_frames = delta,
+        sequence_id  = clip.owner_sequence_id,
+        project_id   = clip.project_id,
+    })
+end
+
+-- Staged mode: delegate to the loaded sequence row's mark_in/out columns
+-- via SequenceMonitor's cached sequence object.
+local function dispatch_staged_mark(mark_kind, frame)
+    local source = get_source_monitor()
+    if mark_kind == "in" then
+        source.sequence:set_in(frame)
+    else
+        source.sequence:set_out(frame)
+    end
+    source.sequence:save()
+end
+
+-- Key-repeat events (is_auto_repeat=true) are dropped (FR-016b).
 function M.handle_mark_key(mark_kind, frame, is_auto_repeat)
     assert(mark_kind == "in" or mark_kind == "out", string.format(
         "source_viewer.handle_mark_key: mark_kind must be 'in' or 'out'; got %q",
@@ -290,85 +318,40 @@ function M.handle_mark_key(mark_kind, frame, is_auto_repeat)
 
     if is_auto_repeat then return end
     if _state.mode == "neutral" then return end
-
     if _state.mode == "live_bound_clip" then
-        local Clip = require("models.clip")
-        local clip = Clip.load(_state.live_clip_id)
-        assert(clip, string.format(
-            "source_viewer.handle_mark_key: live-bound clip %s no longer exists; "
-            .. "stale state — sequence_content_changed listener should have fired",
-            tostring(_state.live_clip_id)))
-
-        local edge       = (mark_kind == "in") and "left" or "right"
-        local current    = (mark_kind == "in") and clip.source_in or clip.source_out
-        local delta      = frame - current
-        if delta == 0 then return end  -- mark is already at this frame
-
-        local edit_mode  = require("core.edit_mode")
-        local cmd_name   = (edit_mode.get_trim_mode() == "ripple")
-            and "RippleTrimEdge" or "OverwriteTrimEdge"
-        require("core.command_manager").execute_interactive(cmd_name, {
-            clip_id      = clip.id,
-            edge         = edge,
-            delta_frames = delta,
-            sequence_id  = clip.owner_sequence_id,
-            project_id   = clip.project_id,
-        })
-        return
+        return dispatch_live_bound_trim(mark_kind, frame)
     end
-
-    -- staged_sequence mode: existing behavior — delegate to monitor's
-    -- get/set on the loaded sequence row's mark_in/out.
-    local source = get_source_monitor()
-    if mark_kind == "in" then
-        source.sequence:set_in(frame)
-    else
-        source.sequence:set_out(frame)
-    end
-    source.sequence:save()
+    return dispatch_staged_mark(mark_kind, frame)
 end
 
 -- ─── Reactor: sequence_content_changed → FR-004a unload / FR-004b refresh ───
 
-local function on_sequence_content_changed(changed_seq_id)
-    if _state.mode == "neutral" then return end
+local function refresh_staged(changed_seq_id)
+    if changed_seq_id ~= _state.staged_seq_id then return end
+    local seq = require("models.sequence").load(_state.staged_seq_id)
+    if not seq then M.unload(); return end                       -- FR-004a
+    local source = get_source_monitor()                          -- FR-004b
+    publish_staged(_state.staged_seq_id, seq)
+    set_monitor_title(source, compute_title("staged_sequence", seq))
+end
 
-    if _state.mode == "staged_sequence" then
-        if changed_seq_id ~= _state.staged_seq_id then return end
-        local Sequence = require("models.sequence")
-        local seq = Sequence.load(_state.staged_seq_id)
-        if not seq then
-            -- FR-004a: loaded sequence vanished.
-            M.unload()
-            return
-        end
-        -- FR-004b: refresh title + selection_hub publish.
-        local source = get_source_monitor()
-        publish_staged(_state.staged_seq_id, seq)
-        set_monitor_title(source, compute_title("staged_sequence", seq))
-        return
-    end
-
-    -- live_bound_clip
-    local Clip = require("models.clip")
-    local clip = Clip.load(_state.live_clip_id)
-    if not clip then
-        -- FR-004a: loaded clip vanished (e.g., DeleteClip).
-        M.unload()
-        return
-    end
+local function refresh_live_bound(changed_seq_id)
+    local clip = require("models.clip").load(_state.live_clip_id)
+    if not clip then M.unload(); return end                      -- FR-004a
     if changed_seq_id ~= clip.owner_sequence_id then return end
-
-    -- FR-004b: refresh from current model state.
-    local Sequence = require("models.sequence")
-    local owner = Sequence.load(clip.owner_sequence_id)
-    local source = get_source_monitor()
+    local owner = require("models.sequence").load(clip.owner_sequence_id)
+    local source = get_source_monitor()                          -- FR-004b
     publish_live_bound(clip)
     update_effective_source_live(clip)
     set_monitor_title(source, compute_title("live_bound_clip", nil, clip, owner))
-    -- Note: we do NOT call source:load_sequence again here on every change.
-    -- Rate/duration changes that need engine re-bind would come through a
-    -- different path; routine retrim mutations don't require it.
+    -- Engine re-bind on rate/duration change is a separate path; routine
+    -- retrim mutations don't require source:load_sequence again here.
+end
+
+local function on_sequence_content_changed(changed_seq_id)
+    if _state.mode == "neutral"         then return end
+    if _state.mode == "staged_sequence" then return refresh_staged(changed_seq_id) end
+    return refresh_live_bound(changed_seq_id)
 end
 
 Signals.connect("sequence_content_changed", on_sequence_content_changed)

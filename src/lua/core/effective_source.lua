@@ -206,7 +206,7 @@ function M._clear_source_viewer()
     recompute_and_emit()
 end
 
---- Resolve the source for an interactive edit command into a given
+--- Pick the source for an interactive edit command into a given
 --- destination sequence. Returns `(seq_id, nil)` on success, or
 --- `(nil, problem)` where `problem` is a structured table the UI layer
 --- formats into a popup. Possible kinds:
