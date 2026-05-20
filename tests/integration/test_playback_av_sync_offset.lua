@@ -189,7 +189,18 @@ PLAYBACK.PLAY(pc, 1, 1.0)
 
 -- Warm up (500ms)
 for _ = 1, 30 do poll_sleep(pc, 0.016) end
-if has_audio then qt_constants.AOP.CLEAR_UNDERRUN(aop) end
+if has_audio then
+    -- See note in test_playback_av_sync.lua: headless --test mode may
+    -- open the audio device but never tick it (CVDisplayLink absent).
+    -- Downgrade rather than asserting against a frozen audio clock.
+    if not ienv.audio_is_live(aop) then
+        print("  ⚠ Audio device opened but PLAYHEAD_US stays at 0 — "
+            .. "headless audio backend not ticking; downgrading to video-only")
+        has_audio = false
+    else
+        qt_constants.AOP.CLEAR_UNDERRUN(aop)
+    end
+end
 
 -- Collect samples for ~2 seconds
 local samples = {}

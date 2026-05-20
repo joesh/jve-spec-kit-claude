@@ -28,6 +28,8 @@ This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Re
 - SQLite `.jvp` project files. New per-project setting: `transport_target` in `projects.settings` JSON column. Sequence `playhead_frame` already persisted. (017-refactor-playback-engine)
 - Lua (LuaJIT 2.1) for the model, command, importer, and edit-command layers; C++17 (Qt 6.x) for any binding-layer touches (none expected — this feature lives entirely above the C++/Qt boundary). (018-uniform-clip-source)
 - SQLite `.jvp` project files. Schema bumps from V10 → V11 in this feature. (018-uniform-clip-source)
+- LuaJIT 2.1 (UI, commands, source viewer state, edit_mode module) + C++17/Qt6 (one new mouse-event binding for timeline double-click only) + existing modules — `core/command_manager`, `core/signals`, `core/effective_source` (FR-016d amends contract), `core/commands/ripple_trim_edge` + `core/commands/batch_ripple_edit` (reused), `models/sequence`, `models/clip`, `ui/panel_manager`, `ui/focus_manager`, `ui/sequence_monitor`, `ui/source_viewer`, `ui/selection_hub`, `ui/project_browser`, `core/commands/match_frame` (binding unchanged), `keymaps/default.jvekeys` (keybinding additions), `view_bindings.cpp` (one new event binding) (019-source-viewer-clip-mode)
+- SQLite `.jvp` project files — **NO schema change in 019**. Live-bound state is process-resident (`live_clip_id` on source_viewer module); no new entity. `clips.source_in_frame` / `source_out_frame` mutated by `RippleTrimEdge`/`OverwriteTrimEdge` are existing columns. Trim-mode toggle is process-state only, not persisted. (019-source-viewer-clip-mode)
 
 READ ENGINEERING.md
 

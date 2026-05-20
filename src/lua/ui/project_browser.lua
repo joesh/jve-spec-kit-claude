@@ -415,22 +415,32 @@ M.pending_project_title = nil
 
 local ACTIVATE_COMMAND = "ActivateBrowserSelection"
 
-local function activate_item(item_info)
+-- 019 FR-020/021/022: route activation through the command_manager via
+-- the OpenSequenceIn{Source,Timeline} commands. Bins keep their direct
+-- focus_bin path (no model mutation, no destination ambiguity, not a
+-- "source" the way clips/sequences are).
+--
+-- Modifier override (FR-022): Opt held on a clip-sequence ("timeline")
+-- entry routes to the source viewer instead of the timeline panel.
+-- Caller supplies modifiers (or nil for the default no-modifier route).
+local function activate_item(item_info, modifiers)
     if not item_info or type(item_info) ~= "table" then
         return false, "No browser item selected"
     end
+    modifiers = modifiers or {}
 
     if item_info.type == "timeline" then
-        if M.timeline_panel and M.timeline_panel.load_sequence then
-            M.timeline_panel.load_sequence(item_info.id)
+        local project_id = item_info.project_id or M.project_id
+        if modifiers.alt then
+            command_manager.execute_interactive("OpenSequenceInSourceMonitor", {
+                sequence_id = item_info.id,
+                project_id  = project_id,
+            })
         else
-            log.warn("Timeline panel not available")
-        end
-
-        if focus_manager and focus_manager.focus_panel then
-            focus_manager.focus_panel("timeline")
-        else
-            focus_manager.set_focused_panel("timeline")
+            command_manager.execute_interactive("OpenSequenceInTimeline", {
+                sequence_id = item_info.id,
+                project_id  = project_id,
+            })
         end
         return true
     elseif item_info.type == "master_clip" then
@@ -439,9 +449,10 @@ local function activate_item(item_info)
         if not clip then
             return false, "Master clip metadata missing"
         end
-
-        local source_viewer = require("ui.source_viewer")
-        source_viewer.load_master_clip(clip.clip_id)
+        command_manager.execute_interactive("OpenSequenceInSourceMonitor", {
+            sequence_id = clip.clip_id,
+            project_id  = item_info.project_id or M.project_id,
+        })
         return true
     elseif item_info.type == "bin" then
         if item_info.id then

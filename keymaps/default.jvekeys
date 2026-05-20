@@ -77,7 +77,13 @@
 # every focus that can carry a selected clip (timeline_monitor included).
 "F" = "MatchFrame"
 "Alt+F" = "FindMasterClipInBrowser"
-"Shift+F" = "RevealInFilesystem"
+# 019 FR-024: Shift+F loads the timeline clip under the playhead into the
+# source viewer in live-bound mode (retrim by setting marks). Distinct
+# from F (MatchFrame) which loads the underlying master with copied marks.
+"Shift+F" = "OpenClipInSourceMonitor"
+# 019 FR-024a: RevealInFilesystem relocated from Shift+F to free that
+# slot. Cmd+Opt+F verified unbound at the time of the move (2026-05-19).
+"Cmd+Option+F" = "RevealInFilesystem"
 "Cmd+L" = "LinkClips @timeline"
 "Cmd+Shift+L" = "UnlinkClips @timeline"
 "Cmd+Delete" = "CloseGap @timeline"

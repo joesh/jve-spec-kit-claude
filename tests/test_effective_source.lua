@@ -274,4 +274,93 @@ end
 
 Signals.disconnect(listener_token)
 
+-- =============================================================================
+-- 019: live-bound override channel (FR-016d)
+-- =============================================================================
+-- Per contracts/effective_source_pass_through.md. Three single-direction
+-- entry points carry (seq_id, in, out) triple when live-bound; clear when
+-- staged or unloaded. get() return shape grows from a single seq_id to an
+-- optional triple. Browser-active still wins (015 precedence rule).
+
+print("\n--- 019 override channel ---")
+
+-- Reset only effective_src here; do NOT reset selection_hub because
+-- effective_src registered as a listener at module load and
+-- selection_hub._reset_for_tests() would silently drop that subscription
+-- (selection_hub re-keys its listeners on `next_token`, which starts from
+-- 0 on reset). After this section's test cases the existing T1–T17
+-- assertions don't run again, so it's fine to inherit selection_hub state.
+effective_src._reset_for_tests()
+selection_hub.update_selection("project_browser", {})
+selection_hub.set_active_panel("source_monitor")
+
+-- T18: live-bound entry — get() returns the triple.
+do
+    effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "source-seq-X", string.format(
+        "T18: live-bound get() seq must equal _set arg; got %s", tostring(got_seq)))
+    assert(in_ == 100, string.format(
+        "T18: live-bound get() in must equal _set arg; got %s", tostring(in_)))
+    assert(out == 250, string.format(
+        "T18: live-bound get() out must equal _set arg; got %s", tostring(out)))
+end
+
+-- T19: staged entry — get() returns just the seq, in/out are nil. Explicit
+-- _clear_source_viewer first so this test doesn't accidentally pass on the
+-- prior T18 triple's residue (overlapping seq_id would also work via the
+-- `_current ~= _source_viewer_seq_id` gate, but ordering-independence is
+-- worth the one extra line).
+do
+    effective_src._clear_source_viewer()
+    effective_src._set_source_viewer_sequence("staged-seq-Y")
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "staged-seq-Y", string.format(
+        "T19: staged get() seq; got %s", tostring(got_seq)))
+    assert(in_ == nil and out == nil, string.format(
+        "T19: staged get() in/out must be nil; got (%s, %s)",
+        tostring(in_), tostring(out)))
+end
+
+-- T20: clear — all three nil.
+do
+    effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
+    effective_src._clear_source_viewer()
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == nil and in_ == nil and out == nil, string.format(
+        "T20: after _clear_source_viewer, all three must be nil; got (%s, %s, %s)",
+        tostring(got_seq), tostring(in_), tostring(out)))
+end
+
+-- T21: browser-active precedence still wins — even with a live-bound
+-- override set, an insertable browser selection takes priority.
+-- Note: only effective_src is reset; selection_hub keeps its registered
+-- listeners (effective_src subscribes to selection_hub at module-load and
+-- selection_hub._reset_for_tests() would silently drop that subscription).
+do
+    effective_src._reset_for_tests()
+    effective_src._set_source_viewer_clip("source-seq-X", 100, 250)
+    selection_hub.update_selection("project_browser", {
+        {
+            item_type           = "master_clip",
+            clip_id             = "browser-clip",
+            master_sequence_id  = "browser-master",
+            display_name        = "Browser Master",
+        },
+    })
+    selection_hub.set_active_panel("project_browser")
+
+    local got_seq, in_, out = effective_src.get()
+    assert(got_seq == "browser-master", string.format(
+        "T21: browser-active must win over live-bound source viewer override; "
+        .. "got seq=%s", tostring(got_seq)))
+    -- Browser source has no override marks; in/out must be nil even when
+    -- live-bound override was previously set on a different sequence.
+    assert(in_ == nil and out == nil, string.format(
+        "T21: browser-sourced get() must not leak the prior live-bound in/out "
+        .. "overrides; got (%s, %s)", tostring(in_), tostring(out)))
+end
+
+print("  ✓ live-bound override channel: set/clear/precedence")
+
 print("\n✅ test_effective_source.lua passed")

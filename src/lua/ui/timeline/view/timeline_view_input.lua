@@ -61,6 +61,11 @@ local function discard_drag(view, state)
     state.flush_pending_notify()
 end
 
+-- Module-internal export so timeline_view's view.hit_test_clip wrapper
+-- (consumed by Qt MouseButtonDblClick dispatch in timeline_renderer.cpp)
+-- can reach the existing hit-test without duplicating geometry math.
+-- Underscore prefix marks it as not-for-public-API but exposed across
+-- the timeline view package.
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
     if not state.get_track_clip_index then
@@ -449,6 +454,16 @@ end
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
     local width, height = timeline.get_dimensions(view.widget)
+
+    -- 019 FR-026: Qt mouseDoubleClickEvent dispatch lands here with
+    -- event_type="double_click". Route to the clip-double-click handler
+    -- which resolves the hit, rejects gaps (FR-027), and dispatches
+    -- OpenClipInSourceMonitor. Bypass press/move/release branches —
+    -- a double-click is a discrete gesture, not a state-machine input.
+    if event_type == "double_click" then
+        M.handle_clip_double_click(view, x, y)
+        return
+    end
 
     if event_type == "press" then
         view.pending_gap_click = nil
@@ -845,5 +860,48 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
         state.flush_pending_notify()
     end
 end
+
+--- 019 FR-026 / FR-027: Qt MouseButtonDblClick on a timeline-clip rectangle
+--- routes here. Resolves the clip under the cursor via the view's existing
+--- hit-test surface; on a real clip dispatches `OpenClipInSourceMonitor` to
+--- load it into the source viewer in live-bound mode. Two reject paths
+--- (no dispatch):
+---   * empty timeline space (hit_test returns nil) — no-op
+---   * gap-as-clip rows (clip.is_gap == true) — gaps have no source media,
+---     so loading them into the source viewer is undefined. Log + return.
+function M.handle_clip_double_click(view, x, y)
+    assert(view, "handle_clip_double_click: view required")
+    assert(type(view.hit_test_clip) == "function", string.format(
+        "handle_clip_double_click: view.hit_test_clip(x, y) must be a "
+        .. "function returning the clip under cursor (or nil); got %s",
+        type(view.hit_test_clip)))
+
+    local clip = view.hit_test_clip(x, y)
+    if clip == nil then return end  -- empty space; no-op
+
+    if clip.is_gap == true then
+        log.event("handle_clip_double_click: gap-as-clip rejected (id=%s)",
+            tostring(clip.id))
+        return
+    end
+
+    assert(clip.id and clip.id ~= "",
+        "handle_clip_double_click: hit_test returned clip without id")
+    assert(clip.project_id and clip.project_id ~= "",
+        "handle_clip_double_click: hit_test returned clip without project_id")
+    assert(clip.owner_sequence_id and clip.owner_sequence_id ~= "",
+        "handle_clip_double_click: hit_test returned clip without owner_sequence_id")
+
+    command_manager.execute_interactive("OpenClipInSourceMonitor", {
+        clip_id     = clip.id,
+        project_id  = clip.project_id,
+        sequence_id = clip.owner_sequence_id,
+    })
+end
+
+-- Internal export (underscore-prefixed): exposed across the timeline
+-- view package so timeline_view.view.hit_test_clip can wrap it without
+-- duplicating geometry. Not part of the public M.* surface.
+M._find_clip_under_cursor = find_clip_under_cursor
 
 return M
