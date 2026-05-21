@@ -68,7 +68,15 @@ function M.register(executors, undoers, db)
         if current_frame == nil then current_frame = sequence.playhead_position end
         assert(type(current_frame) == "number", string.format(
             "MovePlayhead: current_frame must be a number; got %s", type(current_frame)))
-        local new_frame = math.max(0, current_frame + delta_frames)
+
+        -- Floor-only clamp at the sequence's TC origin (mirrors timeline's
+        -- viewport_state.set_playhead_position; the engine's seek-boundary
+        -- assert lives on the same lower bound). No upper clamp — playhead
+        -- is free beyond content per the seek_to_frame contract.
+        assert(type(sequence.start_timecode_frame) == "number", string.format(
+            "MovePlayhead: sequence %s missing start_timecode_frame", tostring(seq_id)))
+        local new_frame = math.max(
+            sequence.start_timecode_frame, current_frame + delta_frames)
 
         sequence.playhead_position = new_frame
         sequence:save()

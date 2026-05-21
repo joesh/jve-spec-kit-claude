@@ -161,4 +161,24 @@ reset(100)
 local r9 = command_manager.execute("MovePlayhead", { _positional = {"1x"}, project_id = "proj" })
 assert(not r9.success, "Expected failure for unknown unit '1x'")
 
+-- Test 10: Sequence with non-zero TC origin — backward step past the TC
+-- origin must clamp to the TC origin (NOT to 0). Regression for the
+-- source-viewer Shift+Back bug (TSO 2026-05-20): old `math.max(0, ...)`
+-- clamp let MovePlayhead seek below a master's start_frame and trip the
+-- engine's start-boundary assert.
+print("Test 10: TC-origin clamp (start_timecode_frame=2086474)")
+do
+    local Sequence = require("models.sequence")
+    local s = Sequence.load("seq")
+    s.start_timecode_frame  = 2086474
+    s.playhead_position     = 2086474
+    s:save()
+    seeked_frame = nil
+    exec("-1f")
+    assert(seeked_frame == 2086474, string.format(
+        "MovePlayhead -1f at TC origin (2086474) must clamp to TC origin, "
+        .. "not 0 or below; got %s", tostring(seeked_frame)))
+    print("  ✓ clamp at TC origin (not 0)")
+end
+
 print("✅ test_move_playhead_command.lua passed")
