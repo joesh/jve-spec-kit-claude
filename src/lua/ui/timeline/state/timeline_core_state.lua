@@ -323,16 +323,21 @@ local function flush_state_to_db()
     local edge_descriptors = {}
     for _, edge in ipairs(data.state.selected_edges) do
         if edge and edge.clip_id and edge.edge_type then
-            -- Skip gap clip edges — gap clips are in-memory only, not persisted
-            if type(edge.clip_id) == "string" and edge.clip_id:find("^gap_") then
-                goto continue_edge_persist
-            end
+            -- Gap-edge selections persist via the gap's deterministic id
+            -- (`gap_<track_id>_<sequence_start>`). On restore, gaps are
+            -- recomputed BEFORE selection restore in `load_displayed_sequence`,
+            -- so gap_id at restore-time matches gap_id at save-time as long
+            -- as the surrounding clips haven't moved. Previously this loop
+            -- filtered out gap edges entirely on the "gap clips are in-memory
+            -- only" theory, which silently broke roll selections crossing a
+            -- gap boundary (TSO 2026-05-20: roll `][` restored as ripple `[`).
+            -- Real-clip and gap-clip edges share the same restore path; the
+            -- save side should mirror that.
             table.insert(edge_descriptors, {
                 clip_id = edge.clip_id,
                 edge_type = edge.edge_type,
                 trim_type = edge.trim_type
             })
-            ::continue_edge_persist::
         end
     end
     local success_edges, edges_json = pcall(json.encode, edge_descriptors)
