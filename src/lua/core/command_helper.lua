@@ -343,6 +343,57 @@ function M.add_delete_mutation(command, sequence_id, entries)
     command:set_parameter("__timeline_mutations", command:get_parameter("__timeline_mutations"))
 end
 
+--- Translate a list of planner mutations (clip_mutator.plan_{insert,update,
+--- delete} shape) into the timeline_mutations bucket via add_*_mutation.
+--- Single canonical home for the planner→bucket mapping, used by every
+--- "carve space" command (Paste, LiftRange, ExtractRange, OverwriteTrimEdge).
+--- The planner only emits insert/update/delete; bulk_shift / ripple
+--- mutations come from different planners and must be reported via their
+--- own paths — unknown types assert (no silent skip).
+function M.report_planner_mutations(command, sequence_id, mutations)
+    assert(type(mutations) == "table",
+        "report_planner_mutations: mutations table required (got " .. type(mutations) .. ")")
+    for _, mut in ipairs(mutations) do
+        if mut.type == "insert" then
+            M.add_insert_mutation(command, sequence_id, {
+                id                    = mut.clip_id,
+                track_id              = mut.track_id,
+                start_value           = mut.sequence_start_frame,
+                duration_value        = mut.duration_frames,
+                source_in_value       = mut.source_in_frame,
+                source_out_value      = mut.source_out_frame,
+                name                  = mut.name,
+                sequence_id           = mut.sequence_id,
+                master_layer_track_id = mut.master_layer_track_id,
+                master_audio_track_id = mut.master_audio_track_id,
+                fps_mismatch_policy   = mut.fps_mismatch_policy,
+                owner_sequence_id     = mut.owner_sequence_id,
+                enabled               = mut.enabled ~= false,
+                track_type            = mut.track_type,
+                fps_numerator         = mut.fps_numerator,
+                fps_denominator       = mut.fps_denominator,
+            })
+        elseif mut.type == "update" then
+            M.add_update_mutation(command, sequence_id, {
+                clip_id          = mut.clip_id,
+                track_id         = mut.track_id,
+                start_value      = mut.sequence_start_frame,
+                duration_value   = mut.duration_frames,
+                source_in_value  = mut.source_in_frame,
+                source_out_value = mut.source_out_frame,
+            })
+        elseif mut.type == "delete" then
+            M.add_delete_mutation(command, sequence_id, mut.clip_id)
+        else
+            assert(false, string.format(
+                "report_planner_mutations: unknown mut.type=%q (clip_id=%s) — "
+                .. "planner emitted a mutation shape this translator doesn't "
+                .. "handle; extend the translator or use a sibling reporter",
+                tostring(mut.type), tostring(mut.clip_id)))
+        end
+    end
+end
+
 function M.resolve_sequence_id_for_edges(command, primary_edge, edge_list)
     local provided = command:get_parameter("sequence_id")
 
