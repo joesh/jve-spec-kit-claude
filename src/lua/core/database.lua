@@ -113,6 +113,21 @@ function M.move_aside_wal_sidecars(project_path, suffix)
     return moves
 end
 
+--- Flush all WAL pages to the main database file and truncate the WAL.
+--- After this returns true, the .jvp main file alone carries every write
+--- made up to now — cross-process consumers (smoke runner copying just
+--- the .jvp; backup / sync tools that skip sidecars) won't lose data.
+--- The active connection stays open and resumes writing to a fresh WAL.
+--- @return boolean ok, string|nil err
+function M.checkpoint_wal()
+    if not db_connection then return true end
+    local ok, err = db_connection:exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    if ok == false then
+        return false, "wal_checkpoint failed: " .. tostring(err)
+    end
+    return true
+end
+
 local function checkpoint_and_disable_wal(opts)
     if not db_connection then
         return true
@@ -120,13 +135,13 @@ local function checkpoint_and_disable_wal(opts)
 
     opts = opts or {}
 
-    local ok, err = db_connection:exec("PRAGMA wal_checkpoint(TRUNCATE);")
-    if ok == false then
+    local ok, err = M.checkpoint_wal()
+    if not ok then
         if opts.best_effort then
             log.warn("wal_checkpoint failed during shutdown (best_effort): %s", tostring(err))
             return true
         end
-        return false, "wal_checkpoint failed: " .. tostring(err)
+        return false, err
     end
 
     ok, err = db_connection:exec("PRAGMA journal_mode = DELETE;")

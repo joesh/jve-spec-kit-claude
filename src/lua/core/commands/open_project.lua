@@ -172,6 +172,15 @@ local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
         report(98, "Recording provenance…")
         record_provenance(project.id, drp_path, parse_result.project.name)
 
+        -- Self-contained-file contract: cross-process consumers (smoke
+        -- runner moves only the .jvp; backup / sync tools may skip
+        -- sidecars) would otherwise lose every write made since the
+        -- last auto-checkpoint — most visibly tab state, which causes
+        -- the editor to fall back to an arbitrary sequence on next open.
+        local checkpoint_ok, checkpoint_err = require("core.database").checkpoint_wal()
+        assert(checkpoint_ok, string.format(
+            "convert_drp_to_jvp: WAL checkpoint failed — %s", tostring(checkpoint_err)))
+
         report(100, "Done")
     end)
 
@@ -358,13 +367,18 @@ function M.post_open_init(project, sequence, project_path)
     local display_name = (project and project.name) or "Untitled"
     recent_projects.add(display_name, project_path)
 
-    log.event("Opened project: %s (sequence: %s)", sequence.project_id, sequence.id)
+    log.event("Opened project: %s (sequence: %s)",
+        project.id, sequence and sequence.id or "none")
 
     -- Initialize peak cache and queue waveform generation for all audio media
     local peak_cache = require("core.media.peak_cache")
-    peak_cache.init_for_project(sequence.project_id)
+    peak_cache.init_for_project(project.id)
 
-    return { success = true, project_id = sequence.project_id, sequence_id = sequence.id }
+    return {
+        success    = true,
+        project_id = project.id,
+        sequence_id = sequence and sequence.id or nil,
+    }
 end
 
 function M.register(executors, undoers, db, set_last_error)
