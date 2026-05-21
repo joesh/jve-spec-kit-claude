@@ -192,11 +192,30 @@ class JVERunner:
 
         Required before any test that drives via real keypresses — Qt's
         QShortcut activation needs a foregrounded application.
+
+        We address the process via System Events + ``unix id``: the
+        JVEEditor binary is not a ``.app`` bundle, so
+        ``tell application "JVEEditor" to activate`` fails to resolve.
+        ``set frontmost of process whose unix id is <pid>`` is the
+        ``.app``-less equivalent.
         """
-        script = 'tell application "JVEEditor" to activate'
-        subprocess.run(
+        if self._proc is None:
+            raise JVERunnerError("JVERunner.foreground: process not started")
+        pid = self._proc.pid
+        script = (
+            f'tell application "System Events" '
+            f'to set frontmost of (first process whose unix id is {pid}) to true'
+        )
+        result = subprocess.run(
             ["osascript", "-e", script],
-            check=True, capture_output=True, timeout=5)
+            capture_output=True, timeout=5)
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise JVERunnerError(
+                f"foreground failed (osascript exit {result.returncode}): {stderr}\n"
+                f"  Likely cause: the terminal running these tests lacks\n"
+                f"  System Events / Accessibility permission. Grant it in\n"
+                f"  System Settings → Privacy & Security → Accessibility.")
         # Brief settle — activation is asynchronous in System Events.
         time.sleep(0.05)
 
@@ -207,12 +226,26 @@ class JVERunner:
         ``"I"``, ``"Cmd+Z"``, ``"Shift+F"``, ``"Grave"``. Modifiers are
         normalized; the key is delivered as a real OS event to whatever
         widget currently holds focus.
+
+        Requires the parent process (Terminal/iTerm/etc.) to have
+        Accessibility permission. Without it macOS returns error 1002
+        — "not allowed to send keystrokes". Surfaced as JVERunnerError
+        with the fix location.
         """
         keystroke = _combo_to_osascript_keystroke(combo)
-        subprocess.run(
+        result = subprocess.run(
             ["osascript", "-e",
              f'tell application "System Events" to {keystroke}'],
-            check=True, capture_output=True, timeout=5)
+            capture_output=True, timeout=5)
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise JVERunnerError(
+                f"key({combo!r}) failed (osascript exit {result.returncode}): "
+                f"{stderr}\n"
+                f"  If the message is 'not allowed to send keystrokes' (1002):\n"
+                f"  grant the parent process (Terminal / iTerm / your IDE)\n"
+                f"  permission in System Settings → Privacy & Security →\n"
+                f"  Accessibility.")
         # Settle — let Qt's event loop pick up the key + dispatch the
         # QShortcut + run the Lua handler before the next eval. Short by
         # design; bump per-test if a specific binding triggers a long

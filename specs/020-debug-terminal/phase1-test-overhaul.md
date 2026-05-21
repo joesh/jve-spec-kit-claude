@@ -87,6 +87,8 @@ Cost: one file copy (~few MB) + one project-open (~tens of ms). That replaces a 
 
 ### Real keypress delivery
 
+**macOS Accessibility prerequisite.** Whatever process spawns the runner (Terminal, iTerm, your IDE, ssh shell) needs to be granted **Accessibility** permission in *System Settings → Privacy & Security → Accessibility*. Without it macOS refuses the keystroke event with osascript error `1002` ("not allowed to send keystrokes"). The runner detects this and raises with the fix location, so the first run on a new machine surfaces the requirement immediately. One-time setup per dev box; same dependency as any other automation tool that drives the UI (`cliclick`, AppleScript-based test runners, etc.).
+
 `cliclick` (Homebrew package, ubiquitous on dev macs) for everything except menu invocation:
 
 ```python

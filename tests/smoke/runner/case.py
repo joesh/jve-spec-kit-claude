@@ -97,16 +97,15 @@ class JVESmokeCase(unittest.TestCase):
         self.runner.click(x, y, double=double)
 
     def focus_panel(self, panel_id: str) -> None:
-        """Force keyboard focus to the named panel by name.
+        """Force keyboard focus to the named panel by id.
 
-        Reaches into the panel_manager to set the active scope without
-        relying on a real mouse click landing on the panel's widget.
-        Use sparingly — Smoke tests should prefer real focus shifts —
+        Calls focus_manager.focus_panel directly. Use sparingly —
+        Smoke tests should prefer real focus shifts via mouse click —
         but it's the right tool when the test is targeting a key, not
-        the focus mechanism.
+        the focus mechanism itself.
         """
         self.eval(
-            f"require('ui.focus_manager').set_focus_scope('{panel_id}')")
+            f"require('ui.focus_manager').focus_panel('{panel_id}')")
 
     # ─── assertion helpers ─────────────────────────────────────────────
 
