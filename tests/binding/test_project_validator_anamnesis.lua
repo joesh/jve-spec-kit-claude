@@ -11,7 +11,9 @@ require("test_env")
 local test_env = require("test_env")
 
 local database = require("core.database")
-local drp = require("importers.drp_importer")
+-- 2026-05-21: DRP convert orchestration lives in open_project.lua; see
+-- drp_importer.lua "M.convert was removed" note.
+local open_project = require("core.commands.open_project")
 local validator = require("tests.helpers.project_validator")
 
 local drp_path = test_env.require_fixture(
@@ -24,8 +26,8 @@ os.remove(jvp_path .. "-wal")
 os.remove(jvp_path .. "-shm")
 
 -- DRP carries no project-wide audio rate; supply explicitly.
-local convert_ok, convert_err = drp.convert(drp_path, jvp_path, nil,
-    {audio_sample_rate = 48000})
+local convert_ok, convert_err = open_project._convert_drp_to_jvp(
+    drp_path, jvp_path, nil, {audio_sample_rate = 48000})
 assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))
 
 local db = database.get_connection()

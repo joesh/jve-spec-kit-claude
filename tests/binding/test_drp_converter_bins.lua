@@ -6,7 +6,6 @@ require("test_env")
 
 print("\n=== DRP Converter Bin Creation ===")
 
-local drp_converter = require("importers.drp_importer")
 local database = require("core.database")
 local tag_service = require("core.tag_service")
 
@@ -29,8 +28,8 @@ local function check(label, condition)
 end
 
 -- Convert DRP fixture
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
-assert(ok, "drp_converter.convert() failed: " .. tostring(err))
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
 assert(db, "No database connection after convert")

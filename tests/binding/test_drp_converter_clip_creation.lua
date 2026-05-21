@@ -1,12 +1,11 @@
 #!/usr/bin/env luajit
 
--- Regression: drp_importer.convert() must pass project_id and
+-- Regression: convert must pass project_id and
 -- owner_sequence_id to Clip.create for timeline clips. Without these,
 -- Clip.create asserts since the masterclip invariant requires them.
 
 require("test_env")
 
-local drp_converter = require("importers.drp_importer")
 local database = require("core.database")
 
 local test_env = require("test_env")
@@ -20,8 +19,8 @@ os.remove(JVP_PATH .. "-shm")
 print("\n=== DRP Converter Clip Creation Regression ===")
 
 -- Convert must succeed (previously asserted on missing owner_sequence_id)
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
-assert(ok, "drp_converter.convert() failed: " .. tostring(err))
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
 assert(db, "No database connection after convert")

@@ -88,10 +88,10 @@ command_manager.init('default_sequence', 'default_project')
 
 -- ImportResolveProject must REFUSE to run against a non-empty .jvp
 -- (2026-05-21 hardening — first-open of a .drp goes through OpenProject
--- → resolve_format → drp_importer.convert, which writes a fresh
--- single-project .jvp in one shot; the executor is reserved for the
--- genuinely-empty-DB case). The bootstrap above seeded one project,
--- so the assertion in the executor must fire.
+-- → resolve_format → open_project._convert_drp_to_jvp, which writes a
+-- fresh single-project .jvp in one shot; this executor is reserved
+-- for the genuinely-empty-DB case). The bootstrap above seeded one
+-- project, so the assertion in the executor must fire.
 local cmd = Command.create("ImportResolveProject", "default_project")
 cmd:set_parameter("drp_path", fixture_path)
 cmd:set_parameter("audio_sample_rate", 48000)
@@ -108,8 +108,8 @@ assert_true(
 local project_count = scalar(db, "SELECT COUNT(*) FROM projects")
 assert_true("project count unchanged after refusal", project_count == 1)
 
--- Content-import coverage (tracks/clips/media populated correctly from a
--- .drp parse) lives in the drp_importer.convert tier:
+-- Content-import coverage (tracks/clips/media populated correctly from
+-- a .drp parse) lives in the _convert_drp_to_jvp tier:
 --   tests/binding/test_drp_converter_clip_creation.lua
 --   tests/binding/test_drp_import_marks.lua
 --   tests/binding/test_drp_reimport_stable_media_ids.lua

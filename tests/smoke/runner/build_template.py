@@ -12,13 +12,16 @@ Invocation:
 Idempotent: if the template already exists AND the DRP fixture hash
 has not changed since, skip and exit 0. ``--force`` bypasses.
 
-Uses ``drp_importer.convert(drp_path, jvp_path)`` — the same primitive
-``OpenProject`` drives behind its conversion dialog when the user picks
-a .drp at open time. This produces a fresh single-project .jvp in one
-shot; no placeholder, no second project. ``ImportResolveProject`` is
+Uses ``open_project._convert_drp_to_jvp(drp_path, jvp_path)`` — the
+same primitive ``OpenProject`` drives once the user has picked a
+destination through the conversion dialog. Produces a fresh single-
+project .jvp in one shot; no placeholder, no second project. The
+underscore-prefix alias is the sanctioned entry for headless callers
+(this script, the binding/integration tests in ``tests/binding/``)
+that can't drive the conversion dialog. ``ImportResolveProject`` is
 NOT the right tool here — it imports INTO an existing project (used
 when the user already has a .jvp open and wants to merge in a Resolve
-archive).
+archive) and asserts on non-empty .jvp.
 """
 
 import argparse
@@ -82,16 +85,12 @@ def build(force: bool = False) -> Path:
     path_lit = str(scratch_jvp).replace("'", "\\'")
     drp_lit = str(drp_path).replace("'", "\\'")
 
-    # Single pass — `drp_importer.convert(drp, jvp)` writes a fresh
-    # single-project .jvp directly. No placeholder; no second project;
-    # no OpenProject in the loop. This is the same primitive Open's
-    # conversion-dialog path drives behind the scenes (open_project.lua
-    # M.resolve_format → drp_importer.convert).
-    #
-    # ImportResolveProject is NOT the right tool here — it imports INTO
-    # an existing project (creating a second project alongside any
-    # pre-existing one). For first-open-of-a-.drp the dispatch is
-    # Open → resolve_format → drp_importer.convert.
+    # Single pass — call open_project._convert_drp_to_jvp directly.
+    # That's the same primitive the UI flow drives once the user has
+    # picked a destination path through the conversion dialog
+    # (File → Open → .drp → conversion_dialog → _convert_drp_to_jvp).
+    # The underscore-prefix alias exists for this exact use case:
+    # headless scripts and tests that can't click through the dialog.
     runner = JVERunner(
         socket_path="/tmp/jve_smoke_build.sock",
         stdout_log=fixtures.scratch_root / "build_template.log",
@@ -99,7 +98,7 @@ def build(force: bool = False) -> Path:
     try:
         runner.start()
         runner.eval(
-            "require('importers.drp_importer').convert("
+            "require('core.commands.open_project')._convert_drp_to_jvp("
             f"'{drp_lit}', '{path_lit}')")
     finally:
         runner.shutdown()

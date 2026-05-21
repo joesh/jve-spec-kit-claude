@@ -43,7 +43,7 @@ assert(clips_with_playhead > 0, "Fixture should have at least one clip with non-
 -- Convert DRP to JVP (exercises the full import pipeline)
 -- ======================================================================
 print("Step 2: Converting DRP...")
-local ok, err = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()

@@ -21,7 +21,9 @@
 
 require("test_env")
 
-local drp = require("importers.drp_importer")
+-- 2026-05-21: DRP convert orchestration lives in open_project.lua; see
+-- drp_importer.lua "M.convert was removed" note.
+local open_project = require("core.commands.open_project")
 local database = require("core.database")
 local test_env = require("test_env")
 
@@ -31,7 +33,7 @@ local function assert_post_import_invariants(drp_fixture, jvp_path)
     os.remove(jvp_path .. "-shm")
 
     print(string.format("\n--- Convert %s ---", drp_fixture))
-    local ok, err = drp.convert(drp_fixture, jvp_path)
+    local ok, err = open_project._convert_drp_to_jvp(drp_fixture, jvp_path)
     assert(ok, "convert failed: " .. tostring(err))
 
     local pid = database.get_current_project_id()

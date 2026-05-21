@@ -55,7 +55,7 @@ print("\n--- Phase 2: convert to SQLite ---")
 local JVP_PATH = "/tmp/jve/test_drp_anamnesis_full.jvp"
 os.remove(JVP_PATH); os.remove(JVP_PATH .. "-wal"); os.remove(JVP_PATH .. "-shm")
 
-local ok, err = drp_converter.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "DRP convert failed: " .. tostring(err))
 local db = database.get_connection()
 print("  PASS: convert succeeded")

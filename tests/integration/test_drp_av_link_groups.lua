@@ -38,11 +38,13 @@ f:close()
 os.execute("mkdir -p " .. TEST_DIR)
 os.execute("rm -f " .. JVP_PATH .. "*")
 
-local drp_importer = require("importers.drp_importer")
 local database     = require("core.database")
 
-assert(drp_importer.convert(DRP_PATH, JVP_PATH, function() end),
-    "INTEGRATION: drp_importer.convert returned falsey")
+-- 2026-05-21: convert orchestration moved to open_project.lua. See
+-- drp_importer.lua "M.convert was removed" note.
+local open_project = require("core.commands.open_project")
+assert(open_project._convert_drp_to_jvp(DRP_PATH, JVP_PATH, function() end),
+    "INTEGRATION: _convert_drp_to_jvp returned falsey")
 assert(database.set_path(JVP_PATH),
     "INTEGRATION: database.set_path failed on imported jvp")
 

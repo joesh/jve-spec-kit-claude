@@ -48,6 +48,153 @@ local function detect_project_format(path)
     end
 end
 
+-- ---------------------------------------------------------------------------
+-- DRP → JVP conversion (private to OpenProject)
+-- ---------------------------------------------------------------------------
+-- The convert orchestration lives here, not in drp_importer, because it
+-- owns DB-lifecycle: filesystem wipe + active-connection swap + signal
+-- cascade. drp_importer is the format-knowledge layer (parse + merge +
+-- derive); see specs/020-debug-terminal/phase1-test-overhaul.md for the
+-- decision rationale.
+
+-- Report progress through the caller's optional callback and raise a
+-- cancellation sentinel if it returned the cancel string. Bare
+-- table-with-flag (no message) keeps error()'s level 0 from emitting
+-- a traceback for what is a normal control-flow event, not a fault.
+local function report_progress(progress_cb, pct, text)
+    if progress_cb == nil then return end
+    if progress_cb(pct, text) == "cancel" then
+        error({ cancelled = true }, 0)
+    end
+end
+
+-- Build a sub-phase progress callback that maps the parser/importer's
+-- 0-100 progress onto a slice of the overall 0-100 range. Returns nil
+-- when no outer callback was supplied — drp_importer treats nil as
+-- "don't report sub-progress" and skips its Qt event-pump path.
+local function remap_progress(progress_cb, base_pct, range_pct)
+    if not progress_cb then return nil end
+    return function(sub_pct, text)
+        progress_cb(base_pct + math.floor(sub_pct * range_pct / 100), text)
+    end
+end
+
+-- The destination .jvp belongs entirely to the project we're about to
+-- write. Stale -shm / -wal from a prior failed convert would otherwise
+-- replay junk onto the fresh schema on next open.
+local function wipe_destination(jvp_path)
+    os.remove(jvp_path)
+    os.remove(jvp_path .. "-shm")
+    os.remove(jvp_path .. "-wal")
+end
+
+-- Open the destination as the active DB connection. database.init's
+-- own asserts give noisy backtraces; we wrap and re-raise with a clean
+-- one-line message so the convert log stays scannable.
+local function init_destination(jvp_path)
+    local ok, err = pcall(function() require("core.database").init(jvp_path) end)
+    if not ok then
+        error("Failed to create database: " .. tostring(err), 0)
+    end
+end
+
+-- Create the Project row from a DRP parse_result + caller-resolved
+-- settings. Project.create's settings field is JSON-encoded; assert on
+-- :save() failure because a silent-skip would leave the .jvp with media
+-- rows pointing at a non-existent project_id.
+local function create_project_record(parse_result, settings)
+    local Project = require("models.project")
+    local json    = require("dkjson")
+    local project = Project.create(parse_result.project.name, {
+        settings            = json.encode(settings),
+        fps_mismatch_policy = "resample",
+    })
+    if not project:save() then
+        error("Failed to save project record", 0)
+    end
+    log.event("Created project: %s (%dx%d @ %sfps)",
+        project.name, settings.width, settings.height,
+        tostring(settings.frame_rate))
+    return project
+end
+
+local function persist_tab_state(project_id, tabs)
+    local database = require("core.database")
+    database.set_project_setting(project_id, "open_sequence_ids",     tabs.open_sequence_ids)
+    database.set_project_setting(project_id, "last_open_sequence_id", tabs.active_sequence_id)
+end
+
+-- Synthetic command in history records the project's origin (chain of
+-- custody): sequence_number=0, parent=-1 means "visible in history,
+-- invisible to undo/redo." The literal "ImportResolveProject" is the
+-- DOMAIN name for the operation (Resolve-project import), not the
+-- command-dispatch name — OpenProject is the command that performs it.
+local function record_provenance(project_id, drp_path, source_name)
+    require("command").insert_provenance("ImportResolveProject", project_id, {
+        drp_path    = drp_path,
+        source_name = source_name,
+    })
+    require("models.sequence").set_undo_cursor_for_project(project_id, 0)
+end
+
+--- Convert a .drp into a .jvp. Private — drives the conversion-dialog's
+--- ``convert_fn``; ``M._convert_drp_to_jvp`` exposes it for tests.
+--- Returns ``true`` on success, ``false, "Cancelled"`` on user cancel.
+--- Raises on every other failure mode (parse / DB / save).
+local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
+    assert(drp_path and drp_path ~= "", "convert_drp_to_jvp: drp_path required")
+    assert(jvp_path and jvp_path ~= "", "convert_drp_to_jvp: jvp_path required")
+    opts = opts or {}
+
+    local function report(pct, text) report_progress(progress_cb, pct, text) end
+    local drp_importer = require("importers.drp_importer")
+
+    log.event("Converting %s -> %s", drp_path, jvp_path)
+
+    local convert_ok, convert_err = pcall(function()
+        report(5, "Parsing archive…")
+        local parse_result = drp_importer.parse_drp_file(
+            drp_path, remap_progress(progress_cb, 5, 25))
+        assert(parse_result.success,
+            "Failed to parse .drp file: " .. tostring(parse_result.error))
+
+        -- Audio rate resolution: explicit caller arg, else majority vote
+        -- across parsed media. nil propagates → import_into_project
+        -- asserts (Resolve has no project-wide audio default to invent).
+        local audio_rate = opts.audio_sample_rate
+            or drp_importer.pick_majority_audio_sample_rate(parse_result)
+        local settings = drp_importer.derive_project_settings(parse_result, audio_rate)
+
+        report(30, "Creating project database…")
+        wipe_destination(jvp_path)
+        init_destination(jvp_path)
+        local project = create_project_record(parse_result, settings)
+
+        report(40, "Importing media…")
+        local import_result = drp_importer.import_into_project(project.id, parse_result, {
+            project_settings = settings,
+            progress_cb      = remap_progress(progress_cb, 40, 50),
+        })
+
+        report(95, "Setting active timeline…")
+        local tabs = drp_importer.extract_tab_state(parse_result, import_result)
+        if tabs then persist_tab_state(project.id, tabs) end
+
+        report(98, "Recording provenance…")
+        record_provenance(project.id, drp_path, parse_result.project.name)
+
+        report(100, "Done")
+    end)
+
+    if convert_ok then return true end
+    if type(convert_err) == "table" and convert_err.cancelled then
+        return false, "Cancelled"
+    end
+    error(convert_err)
+end
+
+M._convert_drp_to_jvp = convert_drp_to_jvp  -- exported for tests
+
 --- Resolve project format: detect .drp/.jvp, convert if needed.
 -- @param path string: path to project file (.jvp or .drp)
 -- @param parent_widget userdata|nil: parent widget for conversion dialog
@@ -71,7 +218,11 @@ function M.resolve_format(path, parent_widget)
             project_name = meta.name,
             default_ext = ".jvp",
             file_filter = "JVE Project Files (*.jvp)",
-            convert_fn = drp_importer.convert,
+            -- The convert orchestration lives in this module (see
+            -- ``convert_drp_to_jvp`` above) — drp_importer is format-
+            -- knowledge only, and the lifecycle (DB swap + signal
+            -- cascade) belongs to OpenProject.
+            convert_fn = convert_drp_to_jvp,
             parent = parent_widget,
         })
 

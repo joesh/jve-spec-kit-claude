@@ -22,7 +22,6 @@
 
 require("test_env")
 
-local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
 local test_env = require("test_env")
 
@@ -64,7 +63,7 @@ end
 -- ---------------------------------------------------------------------------
 print("\n--- Step 1: first import ---")
 reset_jvp()
-local ok1, err1 = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+local ok1, err1 = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok1, "first import failed: " .. tostring(err1))
 
 local first = snapshot_media()
@@ -110,7 +109,7 @@ assert(#mismatches == 0, string.format(
 -- ---------------------------------------------------------------------------
 print("\n--- Step 3: re-import + verify stable ids ---")
 database.shutdown()  -- release the DB before convert reopens
-local ok2, err2 = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+local ok2, err2 = require("core.commands.open_project")._convert_drp_to_jvp(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok2, "second import failed: " .. tostring(err2))
 
 local second = snapshot_media()

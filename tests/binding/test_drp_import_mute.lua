@@ -11,7 +11,6 @@
 
 require("test_env")
 
-local drp_converter = require("importers.drp_importer")
 local database = require("core.database")
 local Sequence = require("models.sequence")
 local test_env = require("test_env")
@@ -24,7 +23,7 @@ print("\n=== DRP Import Mute Flag Test (anamnesis) ===")
 local JVP = "/tmp/jve/test_drp_mute.jvp"
 os.remove(JVP); os.remove(JVP .. "-wal"); os.remove(JVP .. "-shm")
 
-local ok, err = drp_converter.convert(fixture, JVP, nil, {audio_sample_rate = 48000})
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(fixture, JVP, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()

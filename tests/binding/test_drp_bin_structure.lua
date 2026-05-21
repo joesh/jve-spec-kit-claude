@@ -7,7 +7,9 @@
 
 require("test_env")
 
-local drp = require("importers.drp_importer")
+-- 2026-05-21: DRP convert orchestration lives in open_project.lua; see
+-- drp_importer.lua "M.convert was removed" note.
+local open_project = require("core.commands.open_project")
 local database = require("core.database")
 local test_env = require("test_env")
 
@@ -22,7 +24,7 @@ do
     local jvp = "/tmp/jve/test_bin_structure_sample.jvp"
     os.remove(jvp); os.remove(jvp.."-wal"); os.remove(jvp.."-shm")
 
-    local ok, err = drp.convert(path, jvp)
+    local ok, err = open_project._convert_drp_to_jvp(path, jvp)
     assert(ok, tostring(err))
 
     local db = database.get_connection()
@@ -66,7 +68,7 @@ do
     local jvp = "/tmp/jve/test_bin_structure_anam.jvp"
     os.remove(jvp); os.remove(jvp.."-wal"); os.remove(jvp.."-shm")
 
-    local ok, err = drp.convert(path, jvp)
+    local ok, err = open_project._convert_drp_to_jvp(path, jvp)
     assert(ok, tostring(err))
 
     local db = database.get_connection()

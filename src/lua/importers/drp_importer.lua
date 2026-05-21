@@ -2355,8 +2355,9 @@ end
 -- import_into_project() is the single source of truth for DRP entity creation:
 -- media records, sequences, tracks, clips, A/V link groups.
 
--- Models (SQL isolation: only what DRP-specific code needs post-extraction)
-local Project = require("models.project")
+-- Models (SQL isolation: only what DRP-specific code needs post-extraction).
+-- Project was previously required here for init_project_database (moved to
+-- open_project.lua with the rest of the convert orchestration, 2026-05-21).
 local Sequence = require("models.sequence")
 
 -- ---------------------------------------------------------------------------
@@ -2534,47 +2535,49 @@ M.pick_majority_audio_sample_rate = pick_majority_audio_sample_rate
 -- the saved project (asserts on save failure). Removes any existing
 -- jvp/-shm/-wal at the target path first (caller already confirmed
 -- overwrite in the save dialog).
-local function init_project_database(jvp_path, parse_result, picked_audio_rate)
-    os.remove(jvp_path)
-    os.remove(jvp_path .. "-shm")
-    os.remove(jvp_path .. "-wal")
-    local database = require("core.database")
-    local ok, err = pcall(function() database.init(jvp_path) end)
-    if not ok then
-        error("Failed to create database: " .. tostring(err), 0)
-    end
-
-    local json = require("dkjson")
-    -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
-    -- on every project; populated here to the spec'd defaults. DRPs don't
-    -- carry a master-clock concept of their own.
-    local settings = {
+--- Derive the JVE project-settings table from a parsed DRP.
+-- Format-knowledge: which fields the parse_result carries + the
+-- master-clock / default-fps defaults JVE requires on every project
+-- (018 FR-028 / FR-036a — DRPs don't carry a master-clock concept of
+-- their own, so we fill in the spec'd defaults).
+-- @param parse_result table  — the result of M.parse_drp_file
+-- @param audio_sample_rate number  — caller-resolved audio rate (the DRP
+--   carries no project-wide default; the caller resolves explicit-arg
+--   vs majority-vote, see pick_majority_audio_sample_rate).
+-- @return table  settings ready to JSON-encode into projects.settings
+function M.derive_project_settings(parse_result, audio_sample_rate)
+    assert(parse_result and parse_result.project and parse_result.project.settings,
+        "drp_importer.derive_project_settings: parse_result.project.settings required")
+    assert(type(audio_sample_rate) == "number",
+        "drp_importer.derive_project_settings: audio_sample_rate (number) required")
+    return {
         frame_rate        = parse_result.project.settings.frame_rate,
         width             = parse_result.project.settings.width,
         height            = parse_result.project.settings.height,
-        audio_sample_rate = picked_audio_rate,
+        audio_sample_rate = audio_sample_rate,
         master_clock_hz   = subframe_math.MASTER_CLOCK_HZ,
         default_fps       = { num = 24, den = 1 },
     }
-    local project = Project.create(parse_result.project.name, {
-        settings            = json.encode(settings),
-        fps_mismatch_policy = "resample",
-    })
-    if not project:save() then
-        error("Failed to save project record", 0)
-    end
-    log.event("Created project: %s (%dx%d @ %sfps)",
-        project.name, settings.width, settings.height, tostring(settings.frame_rate))
-    return project, settings
 end
 
--- Translate parsed-result tab UUIDs to JVE Sequence.ids and persist the
--- open / last-open project settings. Asserts on any unresolved UUID —
--- a missing mapping means a timeline the DRP marked open was silently
--- dropped during import, which is a real bug to fix (not hide).
-local function persist_open_tabs(parse_result, import_result, project_id)
+--- Translate a parsed DRP's tab UUIDs to JVE sequence ids for tab
+--- restoration. Pure transform; does NOT write to the DB (the caller
+--- decides what to do with the result — typically writes
+--- ``open_sequence_ids`` / ``last_open_sequence_id`` project settings).
+--- Asserts on any unresolved UUID — a missing mapping means a timeline
+--- the DRP marked open was silently dropped during import.
+--- @param parse_result table
+--- @param import_result table  — output of M.import_into_project
+--- @return table|nil  ``{ open_sequence_ids, active_sequence_id }``
+---                    or nil when the DRP has no open tabs.
+function M.extract_tab_state(parse_result, import_result)
+    assert(parse_result and parse_result.project,
+        "drp_importer.extract_tab_state: parse_result.project required")
+    assert(import_result,
+        "drp_importer.extract_tab_state: import_result required")
+
     local open_tab_uuids = parse_result.project.open_timeline_ids or {}
-    if #open_tab_uuids == 0 then return end
+    if #open_tab_uuids == 0 then return nil end
     local active_tab_uuid = parse_result.project.active_timeline_id
     local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
 
@@ -2582,11 +2585,12 @@ local function persist_open_tabs(parse_result, import_result, project_id)
     for _, tab_uuid in ipairs(open_tab_uuids) do
         local seq_id = tab_uuid_to_sequence_id[tab_uuid]
         assert(seq_id, string.format(
-            "drp_importer: open timeline tab UUID %s has no corresponding "
-            .. "sequence. Timeline was present in project.xml open-tab list "
-            .. "but never created during import (check for parse_drp_file "
-            .. "skips or a mismatch between Sm2Sequence.DbId and the id "
-            .. "used in SequenceTabsData / TimelineHandleVec).",
+            "drp_importer.extract_tab_state: open timeline tab UUID %s has "
+            .. "no corresponding sequence. Timeline was present in "
+            .. "project.xml open-tab list but never created during import "
+            .. "(check for parse_drp_file skips or a mismatch between "
+            .. "Sm2Sequence.DbId and the id used in SequenceTabsData / "
+            .. "TimelineHandleVec).",
             tostring(tab_uuid)))
         open_sequence_ids[#open_sequence_ids + 1] = seq_id
         if tab_uuid == active_tab_uuid then
@@ -2599,106 +2603,28 @@ local function persist_open_tabs(parse_result, import_result, project_id)
     -- active_tab_uuid whenever they emit open_tab_uuids. Any violation
     -- here means the parser returned inconsistent state — fail loud.
     assert(active_tab_uuid, string.format(
-        "drp_importer: %d open tab UUIDs but active_tab_uuid is nil — "
-        .. "parser returned inconsistent tab state", #open_tab_uuids))
+        "drp_importer.extract_tab_state: %d open tab UUIDs but "
+        .. "active_tab_uuid is nil — parser returned inconsistent tab state",
+        #open_tab_uuids))
     assert(active_sequence_id, string.format(
-        "drp_importer: active timeline UUID %s was not in the open-tab "
-        .. "list %s — project.xml inconsistency",
+        "drp_importer.extract_tab_state: active timeline UUID %s was not "
+        .. "in the open-tab list %s — project.xml inconsistency",
         tostring(active_tab_uuid), table.concat(open_tab_uuids, ",")))
 
-    local database = require("core.database")
-    database.set_project_setting(project_id, "open_sequence_ids", open_sequence_ids)
-    database.set_project_setting(project_id, "last_open_sequence_id", active_sequence_id)
+    return {
+        open_sequence_ids   = open_sequence_ids,
+        active_sequence_id  = active_sequence_id,
+    }
 end
 
--- Record provenance: insert a synthetic command so the history shows
--- where this project came from (chain of custody). sequence_number=0,
--- parent=-1: visible in history, invisible to undo/redo.
-local function record_drp_provenance(project_id, drp_path, source_name)
-    local Command = require("command")
-    Command.insert_provenance("ImportResolveProject", project_id, {
-        drp_path    = drp_path,
-        source_name = source_name,
-    })
-    -- Undo cursor at 0 — provenance is history, not undoable.
-    Sequence.set_undo_cursor_for_project(project_id, 0)
-end
-
---- Convert a .drp into a .jvp.
--- @param drp_path string
--- @param jvp_path string
--- @param progress_cb function|nil
--- @param opts table|nil
---   audio_sample_rate: explicit project audio rate (Hz). DRP carries no
---     project-wide audio default; callers must supply when the parsed media
---     don't agree on one (pick_majority returns nil). Tests typically pass
---     48000; production UI prompts the user.
-function M.convert(drp_path, jvp_path, progress_cb, opts)
-    assert(drp_path and drp_path ~= "", "drp_importer.convert: drp_path required")
-    assert(jvp_path and jvp_path ~= "", "drp_importer.convert: jvp_path required")
-    opts = opts or {}
-    local raw_report = progress_cb or function() end
-    local function report(pct, text)
-        if raw_report(pct, text) == "cancel" then
-            -- level 0: suppress stack trace from error() override
-            error({cancelled = true}, 0)
-        end
-    end
-
-    log.event("Converting %s -> %s", drp_path, jvp_path)
-
-    local convert_ok, convert_err = pcall(function()
-
-    report(5, "Parsing archive…")
-    -- Thread progress_cb into parse phase so Qt events get pumped.
-    -- parse_drp_file reports 0-100 internally; remap to 5-30 of overall.
-    local parse_progress = progress_cb and function(sub_pct, text)
-        report(5 + math.floor(sub_pct * 0.25), text)
-    end or nil
-    local parse_result = M.parse_drp_file(drp_path, parse_progress)
-    if not parse_result.success then
-        return false, "Failed to parse .drp file: " .. tostring(parse_result.error)
-    end
-
-    report(30, "Creating project database…")
-    -- Explicit opts.audio_sample_rate wins; otherwise vote across parsed
-    -- media. nil here propagates: importer_core asserts when no rate is
-    -- available — Resolve carries no project-wide default to invent.
-    local picked_audio_rate = opts.audio_sample_rate
-        or pick_majority_audio_sample_rate(parse_result)
-    local project, settings = init_project_database(jvp_path, parse_result, picked_audio_rate)
-
-    report(40, "Importing media…")
-    local import_result = M.import_into_project(project.id, parse_result, {
-        project_settings = settings,
-        progress_cb = progress_cb and function(sub_pct, text)
-            -- Map sub_pct 0-100 → overall range 40-90.
-            report(40 + math.floor(sub_pct * 0.5), text)
-        end or nil,
-    })
-
-    report(95, "Setting active timeline…")
-    -- Use the project we just created — `database.get_current_project_id()`
-    -- asserts when more than one project exists in the DB (test contexts
-    -- that bootstrap a default project before driving import). We already
-    -- have the authoritative id from init_project_database.
-    persist_open_tabs(parse_result, import_result, project.id)
-
-    report(98, "Recording provenance…")
-    record_drp_provenance(project.id, drp_path, parse_result.project.name)
-
-    report(100, "Done")
-
-    end) -- pcall wrapping convert body
-
-    if not convert_ok then
-        if type(convert_err) == "table" and convert_err.cancelled then
-            return false, "Cancelled"
-        end
-        error(convert_err)  -- re-throw real errors
-    end
-    return true
-end
+-- ``M.convert`` was removed 2026-05-21. It bundled DB lifecycle
+-- (os.remove + database.init swap) with content production and could
+-- be called from outside the OpenProject signal cascade, leaving
+-- listeners holding stale connections. The convert orchestration now
+-- lives in src/lua/core/commands/open_project.lua. Tests / smoke
+-- runners that need to materialize a .jvp from a .drp drive
+-- ``OpenProject`` (or the underscore-prefixed
+-- ``open_project._convert_drp_to_jvp`` for direct-call test contexts).
 
 M.frame_rate_to_rational = importer_core.frame_rate_to_rational
 M.decode_bt_clip_path = decode_bt_clip_path

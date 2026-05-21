@@ -16,7 +16,9 @@ local Clip = require("models.clip")
 local Sequence = require("models.sequence")
 local Command = require("command")
 local validator = require("tests.helpers.project_validator")
-local drp = require("importers.drp_importer")
+-- 2026-05-21: DRP convert orchestration moved into open_project.lua;
+-- see drp_importer.lua "M.convert was removed" note.
+local open_project = require("core.commands.open_project")
 
 -- =========================================================================
 -- Setup: import the anamnesis gold-timeline DRP fixture into a fresh .jvp.
@@ -33,11 +35,12 @@ os.remove(dst_path)
 os.remove(dst_path .. "-wal")
 os.remove(dst_path .. "-shm")
 
-local convert_ok, convert_err = drp.convert(drp_path, dst_path)
+local convert_ok, convert_err = open_project._convert_drp_to_jvp(drp_path, dst_path)
 assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))
--- drp.convert leaves the database open on the freshly-imported project.
--- Close it so the production open path (which is what the editor uses
--- when the user picks a .jvp) is exercised end-to-end.
+-- The convert orchestration leaves the database open on the freshly-
+-- imported project. Close it so the production open path (which is
+-- what the editor uses when the user picks a .jvp) is exercised
+-- end-to-end.
 database.shutdown()
 
 local project_open = require("core.project_open")

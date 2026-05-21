@@ -47,7 +47,10 @@ assert(with_alt_paths > 0, "expected some media with alt_paths (cross-volume ded
 
 -- Step 2: Convert to JVP
 print("\n--- Step 2: Convert to JVP ---")
-local ok, err = drp_importer.convert(fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
+-- 2026-05-21: convert orchestration moved from drp_importer to
+-- open_project.lua. See drp_importer.lua "M.convert was removed" note.
+local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(
+    fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))
 
 local db = database.get_connection()
