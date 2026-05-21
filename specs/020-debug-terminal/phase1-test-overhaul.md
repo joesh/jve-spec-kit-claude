@@ -371,11 +371,7 @@ README.md                                        [MODIFIED] dev-onboarding updat
 
 ## Open questions
 
-- **Anamnesis template construction** (discovered 2026-05-21 during runner bring-up). `ImportResolveProject` creates a NEW project in the active .jvp alongside the placeholder created from `project_templates.create_project_from_template`. The resulting .jvp has 2 projects, which JVE refuses to reopen (`database.get_current_project_id`: `FATAL: Multiple projects exist`). Three plausible resolutions:
-  1. Add a project-delete API and drop the placeholder after import.
-  2. Build a smaller hand-crafted fixture via the model layer (Sequence.create + Clip.create) — sufficient for Phase A keymap smokes which only need a couple of clips on a track. Sacrifices Anamnesis-as-realistic-data but bypasses the import path entirely.
-  3. Teach `ImportResolveProject` to overwrite the existing project when invoked from a smoke-build context (probably wrong — would mask user-facing import behavior).
-  Runner + sanity tests don't depend on the template; Phase A keymap smokes do. Pending Joe's call before further work on the template.
+- ~~**Anamnesis template construction**~~ — **Resolved 2026-05-21**: use `drp_importer.convert(drp, jvp)` directly. That is the same primitive `OpenProject` drives through its conversion-dialog path for first-open of a .drp; it produces a single-project .jvp in one pass with no placeholder. `ImportResolveProject` is for *merging into an existing project*, not for first-open, and a separate hardening change refuses it against a non-empty .jvp so this mistake fails loudly next time.
 
 
 - **`cliclick` vs `osascript` for keys.** `cliclick` is faster + cleaner per-keystroke; `osascript` handles modifier combos that cliclick sometimes mis-encodes. Default = `cliclick`, fallback table for known cliclick gaps. *Recommendation: start cliclick-only, add fallbacks as bugs surface.*

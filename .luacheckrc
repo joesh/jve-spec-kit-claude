@@ -79,6 +79,10 @@ globals = {
 exclude_files = {
     "build/**",
     "CMakeFiles/**",
+    "tests/smoke/**",       -- Python runner (spec 020 Phase 1)
+    "**/*.py",
+    "**/*.pyc",
+    "**/__pycache__/**",
     "src/lua/ui/keyboard_dialog_premiere.lua",
     "src/lua/ui/**/*.json",
     "**/.DS_Store",
