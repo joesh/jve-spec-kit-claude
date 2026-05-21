@@ -80,12 +80,15 @@ do
         tostring(dispatched[1].name)))
     assert(dispatched[1].args.clip_id == "clip_alpha",
         "dispatch must carry clip_id")
-    assert(dispatched[1].args.project_id == "proj_X",
-        "dispatch must carry project_id")
-    assert(dispatched[1].args.sequence_id == "owner_seq_1", string.format(
-        "dispatch sequence_id must be the OWNER sequence (where the clip lives); "
-        .. "got %q", tostring(dispatched[1].args.sequence_id)))
-    print("  ✓ real clip → OpenClipInSourceMonitor dispatched with correct ids")
+    -- Per FR-026 (updated 2026-05-20): only clip_id is passed; project_id
+    -- and the owner sequence are re-derived inside source_viewer.load_clip.
+    assert(dispatched[1].args.project_id == nil, string.format(
+        "double-click dispatch must NOT pass project_id (re-derived downstream); got %q",
+        tostring(dispatched[1].args.project_id)))
+    assert(dispatched[1].args.sequence_id == nil, string.format(
+        "double-click dispatch must NOT pass sequence_id (re-derived downstream); got %q",
+        tostring(dispatched[1].args.sequence_id)))
+    print("  ✓ real clip → OpenClipInSourceMonitor dispatched with clip_id only")
 end
 
 -- ── Scenario 2: gap-as-clip → rejected (FR-027) ──────────────────────────────

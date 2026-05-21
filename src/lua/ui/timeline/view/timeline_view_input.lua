@@ -892,10 +892,10 @@ function M.handle_clip_double_click(view, x, y)
     assert(clip.owner_sequence_id and clip.owner_sequence_id ~= "",
         "handle_clip_double_click: hit_test returned clip without owner_sequence_id")
 
+    -- Only clip_id is meaningful — project_id / owner_sequence_id are
+    -- re-derived from the clip row inside source_viewer.load_clip.
     command_manager.execute_interactive("OpenClipInSourceMonitor", {
-        clip_id     = clip.id,
-        project_id  = clip.project_id,
-        sequence_id = clip.owner_sequence_id,
+        clip_id = clip.id,
     })
 end
 

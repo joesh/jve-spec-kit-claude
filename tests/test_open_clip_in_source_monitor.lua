@@ -89,25 +89,90 @@ do
     print("  ✓ happy-path dispatch calls source_viewer.load_clip(clip_id)")
 end
 
--- ── Scenario 2: required-args declared in SPEC ──────────────────────────────
--- All three args (clip_id, project_id, sequence_id) are declared required in
--- the SPEC. clip_id has no auto-injection so a missing one is observable via
--- dispatch. project_id + sequence_id ARE auto-injected by command_manager
--- (CLAUDE.md memory: "command_manager auto-injects sequence_id"), so we
--- pin those by reading the spec directly through the registry — verifying
--- the rule shape that the contract calls for.
+-- ── Scenario 2: keymap path (no clip_id) resolves via command_helper ────────
+-- Per FR-024 (updated 2026-05-20), Shift+F dispatches the command with no
+-- clip_id. The executor must resolve the target clip via the canonical
+-- playhead+selection policy (same one MatchFrame uses) and then call
+-- source_viewer.load_clip with the resolved id. Stub command_helper to
+-- return a known clip so the test exercises only the dispatch routing.
 do
-    -- clip_id missing → schema raises (pcall to catch the assert).
     load_clip_calls = {}
-    local ok, err = pcall(command_manager.execute_interactive,
-        "OpenClipInSourceMonitor", { project_id = "proj_X", sequence_id = "owner_seq_1" })
-    assert(not ok, "missing clip_id must raise; got ok=" .. tostring(ok))
-    assert(tostring(err):find("clip_id", 1, true),
-        "rejection message must name clip_id; got: " .. tostring(err))
-    assert(#load_clip_calls == 0,
-        "failed dispatch must NOT call load_clip (no partial side effects)")
 
-    print("  ✓ missing clip_id rejected by dispatch (no partial side effects)")
+    local resolve_calls = 0
+    local pick_calls = 0
+    package.loaded["core.command_helper"] = {
+        resolve_clips_at_playhead = function()
+            resolve_calls = resolve_calls + 1
+            return { { id = "resolved_clip_42", is_gap = nil } }
+        end,
+        pick_best_clip = function(candidates)
+            pick_calls = pick_calls + 1
+            return candidates[1]
+        end,
+    }
+
+    local r = command_manager.execute_interactive("OpenClipInSourceMonitor", {})
+    assert(r and r.success, string.format(
+        "no-clip_id dispatch must succeed via playhead resolver; got %s",
+        tostring(r and r.error_message)))
+    assert(resolve_calls == 1, "resolve_clips_at_playhead must be called exactly once")
+    assert(pick_calls == 1, "pick_best_clip must be called exactly once")
+    assert(#load_clip_calls == 1, "load_clip must be called exactly once")
+    assert(load_clip_calls[1].clip_id == "resolved_clip_42", string.format(
+        "load_clip must receive the resolved clip id; got %q",
+        tostring(load_clip_calls[1].clip_id)))
+
+    package.loaded["core.command_helper"] = nil
+    print("  ✓ keymap path (no clip_id) resolves via playhead + load_clip(resolved)")
+end
+
+-- ── Scenario 2b: keymap path rejects gap-as-clip loudly ─────────────────────
+-- FR-027 mirror — when the playhead resolver returns a gap row (no source
+-- media), the executor must assert loudly, never silently call load_clip.
+do
+    load_clip_calls = {}
+
+    package.loaded["core.command_helper"] = {
+        resolve_clips_at_playhead = function()
+            return { { id = "gap_xyz", is_gap = true } }
+        end,
+        pick_best_clip = function(candidates) return candidates[1] end,
+    }
+
+    local r = command_manager.execute_interactive("OpenClipInSourceMonitor", {})
+    assert(r and r.success == false, string.format(
+        "gap-as-clip under playhead must fail dispatch; got success=%s",
+        tostring(r and r.success)))
+    assert(tostring(r.error_message):find("gap", 1, true),
+        "error_message must mention gap; got: " .. tostring(r.error_message))
+    assert(#load_clip_calls == 0,
+        "rejected dispatch must NOT call load_clip")
+
+    package.loaded["core.command_helper"] = nil
+    print("  ✓ keymap path rejects gap-as-clip loudly (no load_clip call)")
+end
+
+-- ── Scenario 2c: keymap path with empty resolver result raises ──────────────
+-- FR-024 contract: when there is no clip under the playhead, the keymap
+-- dispatch must surface this loudly rather than silently doing nothing.
+do
+    load_clip_calls = {}
+
+    package.loaded["core.command_helper"] = {
+        resolve_clips_at_playhead = function() return {} end,
+        pick_best_clip = function(_) assert(false, "should not be called") end,
+    }
+
+    local r = command_manager.execute_interactive("OpenClipInSourceMonitor", {})
+    assert(r and r.success == false, string.format(
+        "empty resolver result must fail dispatch; got success=%s",
+        tostring(r and r.success)))
+    assert(tostring(r.error_message):find("no clips", 1, true),
+        "error_message must mention 'no clips'; got: " .. tostring(r.error_message))
+    assert(#load_clip_calls == 0, "rejected dispatch must NOT call load_clip")
+
+    package.loaded["core.command_helper"] = nil
+    print("  ✓ keymap path with empty playhead result raises loudly")
 end
 
 -- ── Scenario 3: undoable=false — no history entry created ────────────────────
