@@ -1174,4 +1174,62 @@ do
     print("  ok")
 end
 
+-- ─── Test 35: content_changed reads playhead from THIS sequence's row,
+--                not from timeline_state (TSO 2026-05-20 regression).
+-- After a DRP import (or any content_changed on a not-currently-displayed
+-- sequence), the global timeline_state cursor may hold a stale value from
+-- a different sequence. The handler must read the per-sequence playhead.
+print("\n--- content_changed reads per-sequence playhead, not timeline_state ---")
+do
+    local Sequence = require("models.sequence")
+    local Signals  = package.loaded["core.signals"]
+
+    -- Use the existing masterclip fixture but bump its TC origin so a
+    -- stale-low timeline_state.playhead would be visibly out-of-range.
+    local seq = Sequence.load(mc_id)
+    seq.start_timecode_frame = 80000
+    seq.playhead_position    = 80050
+    seq:save()
+
+    local view = SequenceMonitor.new({ view_id = "test_content_changed_per_seq" })
+    timer_callbacks = {}
+    view:load_sequence(mc_id)
+
+    -- Pre-poison timeline_state with an out-of-sequence-range value, as
+    -- if the global cursor were left over from a different tab.
+    local ts = require('ui.timeline.timeline_state')
+    ts.set_playhead_position(116)
+
+    -- Mutate the model row's playhead (simulates undo/redo or an
+    -- external writer) so we can prove the handler reads from here.
+    local fresh = Sequence.load(mc_id)
+    fresh.playhead_position = 80120
+    fresh:save()
+
+    -- Sanity: timeline_state still holds the stale value.
+    assert(ts.get_playhead_position() == 116, string.format(
+        "fixture: timeline_state should still be 116; got %s",
+        tostring(ts.get_playhead_position())))
+
+    -- Fire content_changed. The handler MUST read from the sequence row
+    -- (80120) — NOT from timeline_state (116). With timeline_state
+    -- 116 < start_timecode_frame 80000, reading from timeline_state would
+    -- trip PlaybackEngine:seek's start-boundary assert. The handler
+    -- reading from the sequence row keeps the seek in-range.
+    local ok, err = pcall(function() Signals.emit("content_changed", mc_id) end)
+    assert(ok, string.format(
+        "content_changed must not blow up; got: %s", tostring(err)))
+    assert(view.playhead == 80120, string.format(
+        "view.playhead must come from sequence row (80120), not "
+        .. "timeline_state (116); got %s", tostring(view.playhead)))
+
+    -- Reset for other tests.
+    seq.start_timecode_frame = 0
+    seq.playhead_position    = 0
+    seq:save()
+    ts.set_playhead_position(0)
+    view:destroy()
+    print("  ok")
+end
+
 print("\n✅ test_sequence_monitor.lua passed")

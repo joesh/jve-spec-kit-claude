@@ -205,11 +205,23 @@ function SequenceMonitor.new(config)
             if self.viewport_start + self.viewport_duration > self.total_frames then
                 self.viewport_start = math.max(self.start_frame, self.total_frames - self.viewport_duration)
             end
-            -- MVC pull: re-read playhead from model (undo/redo restores it)
-            -- then re-display frame at that position
-            local ts = require('ui.timeline.timeline_state')
-            local model_playhead = ts.get_playhead_position()
-            if type(model_playhead) == "number" and model_playhead ~= self.playhead then
+            -- MVC pull: re-read playhead from THIS sequence's row, not from
+            -- timeline_state. timeline_state.playhead_position is a single
+            -- global cursor for whichever tab is displayed; it does NOT
+            -- track per-sequence. After a DRP import (or any background
+            -- content_changed on a not-currently-displayed sequence), the
+            -- global cursor can hold a stale value from a different
+            -- sequence — seeking the engine to it then trips the
+            -- start-boundary assert (TSO 2026-05-20: frame=116 below
+            -- start_frame=89750 after DRP import).
+            local seq = require('models.sequence').load(sequence_id)
+            assert(seq, string.format(
+                "SequenceMonitor.content_changed: sequence %s not found", sequence_id))
+            local model_playhead = seq.playhead_position
+            assert(type(model_playhead) == "number", string.format(
+                "SequenceMonitor.content_changed: sequence %s missing playhead_position",
+                sequence_id))
+            if model_playhead ~= self.playhead then
                 self.playhead = model_playhead
             end
             self:on_model_changed()
