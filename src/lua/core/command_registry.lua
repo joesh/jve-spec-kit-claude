@@ -42,6 +42,11 @@ local module_aliases = {
     GoToMarkOut = "core.commands.set_marks",
     GoToMark = "core.commands.set_marks",
 
+    -- 019: source-monitor I/O dispatcher (mode-aware: trim in live-bound,
+    -- set sequence mark in staged). Disjoint scope from SetMark, so the
+    -- two commands never compete for the same key+scope.
+    SetMarkAndTrimIfClip = "core.commands.set_mark_and_trim_if_clip",
+
     -- Playback commands live in playback.lua (multi-register)
     TogglePlay = "core.commands.playback",
     ShuttleForward = "core.commands.playback",

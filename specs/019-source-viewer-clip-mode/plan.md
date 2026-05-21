@@ -53,7 +53,7 @@ Evaluated against constitution v2.0.0 (`.specify/memory/constitution.md`):
 
 **VII. No Fallbacks or Default Values**: ✅ — FR-016f's title `clip_label` is a sentinel (deterministic title from row data), not a fallback masking an error. Mark-setter dispatch (FR-013) reads `edit_mode.get_trim_mode()` which asserts on missing value. Effective_source pass-through (FR-016d) carries explicit `(in, out)` — no silent defaulting.
 
-**VIII. No Backward Compatibility**: ⚠️ — ONE controlled deviation: `source_viewer.load_master_clip` retained as a thin alias to the new `source_viewer.load_sequence` until spec 020 lands. See **Complexity Tracking** below for justification.
+**VIII. No Backward Compatibility**: ⚠️ — ONE controlled deviation: `source_viewer.load_master_clip` retained as a thin alias to the new `source_viewer.load_sequence` until spec 021 lands. See **Complexity Tracking** below for justification.
 
 ## Project Structure
 
@@ -119,7 +119,7 @@ tests/                                             [NEW + EXTEND]
 └── test_source_viewer_signal.lua                  [UNCHANGED — staged-mode signal contract preserved]
 
 specs/015-source-in-timeline/spec.md               [ALREADY MODIFIED in this session — forward-pointing note]
-specs/020-rename-master-to-media-sequence/         [UNTOUCHED — 019 ships first; 020's renames sweep through 019's new code]
+specs/021-rename-master-to-media-sequence/         [UNTOUCHED — 019 ships first; 021's renames sweep through 019's new code]
 ```
 
 **Structure Decision**: single-project layout; this is a feature add to the existing JVE Lua + Qt6 hybrid. No new top-level directories. Two-plus new Lua command files plus modifications to four existing Lua files plus one C++ binding file plus the keymap file plus five new test files.
@@ -197,7 +197,7 @@ Parallel windows: T2 and T1 are independent (no shared file), so both can be in 
 |-----------|------------|-------------------------------------|
 | **Constitution VIII (No Backward Compatibility)** — keep `source_viewer.load_master_clip` as a thin alias to `source_viewer.load_sequence` during the 019→020 transition window. | 019 ships before 020 (Joe's directive). The function is called from 5 sites (`project_browser.lua:444`, `commands/match_frame.lua:128`, `ui/layout.lua:589`, plus 4 test stubs). Renaming all callsites in 019 = touching files that will all be touched again in 020 anyway. The alias is a one-line forwarding function with an explicit deprecation comment pointing to 020. | Deleting the alias and renaming all 5 callsites in 019 is acceptable code volume, BUT it commits 019 to a touch-pattern that 020 has to re-touch. Doing it twice is duplicate work and risks merge conflicts between sessions working on 019 and 020 simultaneously. The alias is scoped (one function, one comment, removed by 020) and has no runtime cost — literally `function M.load_master_clip(...) return M.load_sequence(...) end`. |
 
-This deviation is removed in spec 020 in lockstep with the global rename — see spec 020 §FR-014 (which renames the function definition and removes all callers; at that point the alias has no consumers and is deleted).
+This deviation is removed in spec 021 in lockstep with the global rename — see spec 021 §FR-014 (which renames the function definition and removes all callers; at that point the alias has no consumers and is deleted).
 
 ## Progress Tracking
 

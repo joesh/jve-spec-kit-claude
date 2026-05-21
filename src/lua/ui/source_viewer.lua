@@ -44,22 +44,16 @@ local function get_source_monitor()
     return source
 end
 
--- Take the first 8 chars of an id — JVE's existing log/identifier
--- convention for short labels.
-local function id_prefix(id)
+-- Display name for any entity (clip, sequence): the row's `name` when
+-- non-empty, otherwise the first 8 chars of its id (JVE's standard
+-- short-label convention). FR-016f: clips and sequences can legitimately
+-- be nameless (gap-as-clip rows, freshly-created entities before naming);
+-- this is deterministic identification from available row data, not a
+-- fallback masking an error.
+local function display_name(name, id)
+    if type(name) == "string" and name ~= "" then return name end
+    assert(id, "source_viewer.display_name: id required when name is missing")
     return tostring(id):sub(1, 8)
-end
-
--- FR-016f: title sentinel selection for the clip-label component.
--- Returns clip.name when it's a non-empty string; otherwise the clip-id
--- prefix. Clips can legitimately be nameless (gap-as-clip rows,
--- freshly-created clips before naming) — this is not a fallback masking
--- an error, it's deterministic identification from available row data.
-local function clip_label(clip)
-    if type(clip.name) == "string" and clip.name ~= "" then
-        return clip.name
-    end
-    return id_prefix(clip.id)
 end
 
 local function set_monitor_title(monitor, text)
@@ -72,13 +66,14 @@ end
 
 local function compute_title(mode, sequence, clip, owner_sequence)
     if mode == "staged_sequence" then
-        return string.format("Source: %s",
-            (sequence and sequence.name) or id_prefix(sequence and sequence.id))
+        assert(sequence, "compute_title(staged_sequence): sequence required")
+        return string.format("Source: %s", display_name(sequence.name, sequence.id))
     elseif mode == "live_bound_clip" then
+        assert(clip, "compute_title(live_bound_clip): clip required")
+        assert(owner_sequence, "compute_title(live_bound_clip): owner_sequence required")
         return string.format("Source: %s (in %s)",
-            clip_label(clip),
-            (owner_sequence and owner_sequence.name)
-                or id_prefix(clip.owner_sequence_id))
+            display_name(clip.name, clip.id),
+            display_name(owner_sequence.name, clip.owner_sequence_id))
     end
     return "Source"
 end
@@ -173,6 +168,19 @@ function M.get_mode()
     return _state.mode
 end
 
+--- Return the live-bound clip id, or nil when not in live-bound mode.
+--- Model accessor consumed by source-monitor-scoped commands
+--- (SetMarkAndTrimIfClip and similar) that need the loaded clip
+--- identity without reaching into module-private state.
+function M.get_live_clip_id()
+    return _state.live_clip_id
+end
+
+--- Return the staged sequence id, or nil when not in staged mode.
+function M.get_staged_seq_id()
+    return _state.staged_seq_id
+end
+
 --- Load a sequence into the source monitor in staged mode.
 --- @param sequence_id string  Any sequence kind (master or clip-kind).
 --- @param opts table|nil      Options: skip_focus (bool)
@@ -201,8 +209,8 @@ function M.load_sequence(sequence_id, opts)
     return true
 end
 
---- Compatibility alias retained for the 019→020 transition window per
---- plan.md Complexity Tracking. Spec 020 §FR-014 deletes this.
+--- Compatibility alias retained for the 019→021 transition window per
+--- plan.md Complexity Tracking. Spec 021 §FR-014 deletes this.
 function M.load_master_clip(sequence_id, opts)
     return M.load_sequence(sequence_id, opts)
 end
@@ -235,6 +243,19 @@ function M.load_clip(clip_id, opts)
     source:load_sequence(clip.sequence_id)
     require("core.playback.transport").bind_role_to_sequence("source", clip.sequence_id)
 
+    -- Park the source-side engine + view at the clip's IN. Without this,
+    -- the engine inherits the master sequence's saved playhead_position
+    -- (commonly its start_frame / TC origin), which produces a visible
+    -- vs. internal mismatch: the view renders the clip's mark range while
+    -- the engine sits at the master's origin. The first jog-step then
+    -- falls below start_frame and asserts. Mode-specific contract: in
+    -- live-bound mode the loaded clip IS the window; its IN is where the
+    -- engine belongs.
+    assert(type(clip.source_in) == "number", string.format(
+        "source_viewer.load_clip: clip %s has non-number source_in (%s)",
+        tostring(clip_id), type(clip.source_in)))
+    source:seek_to_frame(clip.source_in)
+
     transition_to_live_bound(clip_id)
     publish_live_bound(clip)
     update_effective_source_live(clip)
@@ -265,63 +286,6 @@ function M.unload()
     set_monitor_title(source, compute_title("neutral"))
 
     Signals.emit("source_loaded_changed", nil, prev_id)
-end
-
--- ─── I/O key dispatch (FR-013, FR-016b) ─────────────────────────────────────
-
--- In live-bound mode, route an I/O press to the active trim command
--- (Ripple or Overwrite per edit_mode.get_trim_mode()), targeting the
--- corresponding edge ("left"=IN, "right"=OUT).
-local function dispatch_live_bound_trim(mark_kind, frame)
-    local clip = require("models.clip").load(_state.live_clip_id)
-    assert(clip, string.format(
-        "source_viewer.dispatch_live_bound_trim: live-bound clip %s no longer "
-        .. "exists; stale state — sequence_content_changed listener should have fired",
-        tostring(_state.live_clip_id)))
-
-    local edge    = (mark_kind == "in") and "left" or "right"
-    local current = (mark_kind == "in") and clip.source_in or clip.source_out
-    local delta   = frame - current
-    if delta == 0 then return end  -- mark already at this frame
-
-    local cmd_name = (require("core.edit_mode").get_trim_mode() == "ripple")
-        and "RippleTrimEdge" or "OverwriteTrimEdge"
-    require("core.command_manager").execute_interactive(cmd_name, {
-        clip_id      = clip.id,
-        edge         = edge,
-        delta_frames = delta,
-        sequence_id  = clip.owner_sequence_id,
-        project_id   = clip.project_id,
-    })
-end
-
--- Staged mode: delegate to the loaded sequence row's mark_in/out columns
--- via SequenceMonitor's cached sequence object.
-local function dispatch_staged_mark(mark_kind, frame)
-    local source = get_source_monitor()
-    if mark_kind == "in" then
-        source.sequence:set_in(frame)
-    else
-        source.sequence:set_out(frame)
-    end
-    source.sequence:save()
-end
-
--- Key-repeat events (is_auto_repeat=true) are dropped (FR-016b).
-function M.handle_mark_key(mark_kind, frame, is_auto_repeat)
-    assert(mark_kind == "in" or mark_kind == "out", string.format(
-        "source_viewer.handle_mark_key: mark_kind must be 'in' or 'out'; got %q",
-        tostring(mark_kind)))
-    assert(type(frame) == "number", string.format(
-        "source_viewer.handle_mark_key: frame must be a number; got %s (%s)",
-        type(frame), tostring(frame)))
-
-    if is_auto_repeat then return end
-    if _state.mode == "neutral" then return end
-    if _state.mode == "live_bound_clip" then
-        return dispatch_live_bound_trim(mark_kind, frame)
-    end
-    return dispatch_staged_mark(mark_kind, frame)
 end
 
 -- ─── Reactor: sequence_content_changed → FR-004a unload / FR-004b refresh ───

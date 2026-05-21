@@ -39,6 +39,7 @@ function fake_monitor:unload()
 end
 -- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
 function fake_monitor:_set_title(text) self.title = text end
+function fake_monitor:seek_to_frame(_) end  -- load_clip parks engine at clip.source_in (FR-003)
 
 package.loaded["ui.panel_manager"] = {
     get_sequence_monitor = function(view_id)

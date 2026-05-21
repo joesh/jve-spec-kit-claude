@@ -69,31 +69,41 @@ Returns `true`. Throws on assert failure.
 
 Returns one of `"neutral"`, `"staged_sequence"`, `"live_bound_clip"`. Documented as part of the public API so tests can verify mode transitions without inspecting internal fields (black-box).
 
-### `M.handle_mark_key(mark_kind, frame, is_auto_repeat)` — I/O key event entry point
+### `M.get_live_clip_id()` / `M.get_staged_seq_id()` — mode accessors
 
-**Args**: `mark_kind : "in" | "out"`; `frame : integer` (the target frame for the new mark); `is_auto_repeat : boolean` (Qt's `QKeyEvent::isAutoRepeat()` propagated from the key handler).
+Pure model getters returning the currently-loaded clip id (live-bound mode) or sequence id (staged mode), or nil when not in that mode. Consumed by source-monitor-scoped commands (`SetMarkAndTrimIfClip`) that need the loaded entity identity without reaching into module-private state.
 
-**Behavior**:
-- `is_auto_repeat == true` → drop, return without dispatch (FR-016b).
-- `mode == "neutral"` → drop, return without dispatch (no entity loaded).
-- `mode == "staged_sequence"` → delegate to the existing `Sequence:set_in / set_out` path on the loaded sequence row.
-- `mode == "live_bound_clip"` → mark-setter dispatch per FR-013 (next section).
+### I/O key dispatch — owned by `SetMarkAndTrimIfClip`, not source_viewer
 
-This is the single entry point key handlers call; the dispatch logic lives in source_viewer rather than in each key binding, so the mode discrimination + key-repeat filter happen in one place.
+The dispatch logic that was sketched here in pre-implementation drafts (`M.handle_mark_key`) has been moved into the `SetMarkAndTrimIfClip` command (`src/lua/core/commands/set_mark_and_trim_if_clip.lua`). `source_viewer` exposes only model accessors; the command owns the mode-aware dispatch.
 
-**Keymap routing**: The I/O keys are bound at the keymap layer to the existing `SetMark` command (`keymaps/default.jvekeys`: `"I" = "SetMark in @timeline @source_monitor @timeline_monitor"`). `SetMark`'s executor calls `source_viewer.get_mode()` at the top: in `live_bound_clip` mode it delegates to `handle_mark_key(which, playhead, false)` (which dispatches the nested trim command) and returns success without mutating sequence-row marks; in any other mode it falls through to its existing sequence-mark behavior. The wrapper command persists an empty undo entry in the live-bound branch — see `todo_set_mark_undo_polish` for the cleanup followup.
+**Keymap routing**: I/O keys are bound in `keymaps/default.jvekeys` to *two different commands* on disjoint scopes:
+
+- `"I" = "SetMark in @timeline @timeline_monitor"` / `"O" = "SetMark out @timeline @timeline_monitor"` — plain `SetMark` is pure: it always mutates the addressed sequence row's `mark_in`/`mark_out`. No source-viewer awareness, no hidden branches.
+- `"I" = "SetMarkAndTrimIfClip in @source_monitor"` / `"O" = "SetMarkAndTrimIfClip out @source_monitor"` — `SetMarkAndTrimIfClip` is the source-monitor variant. Internally it reads `source_viewer.get_mode()` and dispatches a nested command:
+  - `live_bound_clip` → dispatches `OverwriteTrimEdge` (or `RippleTrimEdge` per `edit_mode.get_trim_mode()`) on the loaded clip's leading/trailing edge with `delta_frames = playhead - clip.source_in/out`. The clip's `source_in`/`source_out` IS the mark in live-bound mode; there is no sequence row to mutate.
+  - `staged_sequence` → dispatches a nested `SetMark` on the staged sequence row (so the mutation rides the proper undo stack with `SetMark`'s undoer, not a duplicated implementation here).
+  - `neutral` → no-op.
+
+The two scopes are disjoint, so the keymap registry has no precedence rules to resolve. The command name in each scope is honest about what it does there. `SetMarkAndTrimIfClip` is `SPEC.undoable = false`, so the outer wrapper never persists an empty entry on the undo stack — only the nested `SetMark` / `OverwriteTrimEdge` / `RippleTrimEdge` does, and that's the entry the user undoes.
+
+Auto-repeat suppression (FR-016b) lives at `keyboard_shortcuts.lua` and the C++ `shortcut_bindings.cpp` event filter — events with `isAutoRepeat()==true` are dropped before reaching any command dispatch.
 
 ### Internal: mark-setter dispatch (FR-013)
 
-When `mode == "live_bound_clip"` and an I/O key event arrives (with `isAutoRepeat() == false` per FR-016b):
+```lua
+-- inside set_mark_and_trim_if_clip.lua, live-bound branch
+local clip_id = sv.get_live_clip_id()  -- asserts non-nil in live-bound mode
+local clip    = require("models.clip").load(clip_id)
+local edge    = (which == "in") and "left" or "right"
+local current = (which == "in") and clip.source_in or clip.source_out
+local delta   = frame - current
+if delta == 0 then return end  -- mark already at playhead — no-op
 
-```
-local mode = require("core.edit_mode").get_trim_mode()
-local cmd  = (mode == "ripple") and "RippleTrimEdge" or "OverwriteTrimEdge"
-local edge = is_in_mark and "left" or "right"
-local delta = new_mark_frame - old_mark_frame
-command_manager.execute_interactive(cmd, {
-    clip_id      = state.live_clip_id,
+local cmd_name = (require("core.edit_mode").get_trim_mode() == "ripple")
+    and "RippleTrimEdge" or "OverwriteTrimEdge"
+command_manager.execute_interactive(cmd_name, {
+    clip_id      = clip.id,
     edge         = edge,
     delta_frames = delta,
     sequence_id  = clip.owner_sequence_id,
@@ -101,9 +111,7 @@ command_manager.execute_interactive(cmd, {
 })
 ```
 
-When `mode == "staged_sequence"`, use the existing `Sequence:set_in / set_out` path (unchanged by 019).
-
-When `mode == "neutral"`, the I/O key is a no-op (no entity loaded).
+`staged_sequence` branch dispatches a nested `SetMark`; `neutral` is a no-op.
 
 ### Internal: title computation (FR-016f)
 

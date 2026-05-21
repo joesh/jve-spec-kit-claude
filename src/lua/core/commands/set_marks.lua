@@ -376,21 +376,10 @@ function M.register(executors, undoers)
         end
         assert(type(frame) == "number", "SetMark: frame must be a number")
 
-        -- 019 FR-013: in live-bound source-viewer mode the I/O keys trim the
-        -- loaded clip's source range, not the sequence-row marks. Delegate
-        -- to source_viewer.handle_mark_key, which dispatches the appropriate
-        -- trim command (Overwrite/Ripple per edit_mode.get_trim_mode()) as
-        -- a nested undoable. SetMark itself becomes a no-op shell in this
-        -- branch — the empty undo entry is a minor wart we accept rather
-        -- than splitting the keymap dispatch (see todo_set_mark_undo_polish).
-        local sv = require("ui.source_viewer")
-        if sv.get_mode() == "live_bound_clip" then
-            sv.handle_mark_key(which, frame, false)
-            command:set_parameter("_live_bound_delegated", true)
-            command:set_parameter("_which", which)
-            return { success = true }
-        end
-
+        -- 019: SetMark is pure — it always mutates the addressed sequence
+        -- row's mark_in/out. The source-monitor I/O keys are bound to
+        -- SetMarkAndTrimIfClip instead (disjoint scope), which dispatches
+        -- a trim when source_viewer is in live_bound_clip mode.
         local seq = load_sequence(args.sequence_id)
         if which == "in" then
             command:set_parameter("_old_mark_in", seq.mark_in)
@@ -408,10 +397,6 @@ function M.register(executors, undoers)
 
     undoers["SetMark"] = function(command)
         local args = command:get_all_parameters()
-        -- Live-bound delegate path mutated nothing on this command — the
-        -- nested OverwriteTrimEdge/RippleTrimEdge carries its own undo
-        -- entry. Mirror that by no-op'ing the wrapper's undo too.
-        if args._live_bound_delegated then return { success = true } end
         local seq = load_sequence(args.sequence_id)
         if args._which == "in" then
             seq.mark_in = args._old_mark_in

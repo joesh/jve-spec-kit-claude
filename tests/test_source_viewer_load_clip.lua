@@ -36,13 +36,17 @@ selection_hub._reset_for_tests()
 
 -- panel_manager / focus_manager / transport — minimal pass-through stubs.
 local fake_monitor = {
-    sequence_id = nil,
-    sequence    = nil,
+    sequence_id  = nil,
+    sequence     = nil,
+    seek_calls   = {},  -- ordered list of frames passed to seek_to_frame
 }
 function fake_monitor:get_loaded_master_seq_id() return self.sequence_id end
 function fake_monitor:load_sequence(seq_id)
     self.sequence_id = seq_id
     self.sequence = { id = seq_id, project_id = "proj_X", name = "SrcSeq " .. seq_id }
+end
+function fake_monitor:seek_to_frame(frame)
+    table.insert(self.seek_calls, frame)
 end
 function fake_monitor:unload()
     self.sequence_id = nil
@@ -67,26 +71,15 @@ package.loaded["core.playback.transport"] = {
     bind_role_to_sequence = function(_role, _seq_id) end,
 }
 
--- core.edit_mode stub (controlled per test scenario).
-local trim_mode_state = "overwrite"
-package.loaded["core.edit_mode"] = {
-    get_trim_mode = function() return trim_mode_state end,
-    set_trim_mode = function(m)
-        assert(m == "overwrite" or m == "ripple",
-            "fixture edit_mode stub: bad mode " .. tostring(m))
-        trim_mode_state = m
-    end,
-    _reset_for_tests = function() trim_mode_state = "overwrite" end,
-}
-
--- Capture every command_manager dispatch so we can verify the right
--- trim command + args were sent.
-local dispatched = {}
+-- Intercept-and-discard stub. The I/O dispatch contract that scenarios
+-- 2/3/4 used to exercise via command_manager moved into the
+-- SetMarkAndTrimIfClip command and is pinned by
+-- tests/test_set_mark_and_trim_if_clip_routes_to_trim.lua. This stub
+-- stays so that if source_viewer's code ever calls into command_manager
+-- the test doesn't crash — if such a call appears unexpectedly, replace
+-- with an asserting stub then.
 package.loaded["core.command_manager"] = {
-    execute_interactive = function(name, args)
-        table.insert(dispatched, { name = name, args = args })
-        return { success = true }
-    end,
+    execute_interactive = function() return { success = true } end,
 }
 
 -- models.clip / models.sequence stubs returning known rows for `load_clip`.
@@ -168,82 +161,33 @@ do
         "publish.sequence_id must be the OWNER sequence (where the clip lives), "
         .. "not the source sequence; got %q", tostring(it.sequence_id)))
 
+    -- FR-003 (updated 2026-05-20): load_clip must park the engine + view at
+    -- clip.source_in so the visible playhead and engine position agree from
+    -- the first frame. Without this, the engine inherits the master
+    -- sequence's saved playhead_position (commonly its start_frame TC
+    -- origin), the user sees the clip's range while the engine sits at the
+    -- master's origin, and the first jog-step trips the engine's start-
+    -- boundary assert. Regression test for the visible-vs-internal
+    -- mismatch reported 2026-05-20.
+    assert(#fake_monitor.seek_calls == 1, string.format(
+        "load_clip must seek the monitor exactly once (to clip.source_in); "
+        .. "got %d seek calls", #fake_monitor.seek_calls))
+    assert(fake_monitor.seek_calls[1] == 50, string.format(
+        "load_clip must seek to clip.source_in (=50 per fixture); got %s",
+        tostring(fake_monitor.seek_calls[1])))
+
     print("  ✓ load_clip enters live-bound mode + publishes item_type='clip'")
+    print("  ✓ load_clip parks engine at clip.source_in (FR-003)")
 end
 
--- ── Scenario 2: mark-setter dispatches OverwriteTrimEdge (default mode) ──────
-do
-    dispatched = {}
-    trim_mode_state = "overwrite"
+-- I/O dispatch contract (formerly scenarios 2/3) lives in
+-- tests/test_set_mark_and_trim_if_clip_routes_to_trim.lua — the dispatch
+-- moved out of source_viewer into the SetMarkAndTrimIfClip command.
+-- Auto-repeat suppression (formerly scenario 4) lives in
+-- keyboard_shortcuts.lua, which drops auto-repeat events before any
+-- command runs.
 
-    assert(type(source_viewer.handle_mark_key) == "function",
-        "source_viewer must expose handle_mark_key(mark_kind, frame, "
-        .. "is_auto_repeat) for I/O key events")
-
-    -- Press 'O' (OUT mark) at frame 200 — clip currently has source_out=250,
-    -- so delta = 200 - 250 = -50.
-    source_viewer.handle_mark_key("out", 200, false)
-
-    assert(#dispatched == 1, string.format(
-        "one mark-set must dispatch one command; got %d dispatches", #dispatched))
-    local cmd = dispatched[1]
-    assert(cmd.name == "OverwriteTrimEdge", string.format(
-        "in overwrite mode, mark-set must dispatch OverwriteTrimEdge; got %q",
-        cmd.name))
-    assert(cmd.args.clip_id == "clip_alpha",
-        "dispatch args.clip_id must be the live-bound clip")
-    assert(cmd.args.edge == "right",
-        "OUT mark maps to edge='right'")
-    assert(cmd.args.delta_frames == -50, string.format(
-        "delta must be new_frame - clip.source_out; got %s",
-        tostring(cmd.args.delta_frames)))
-    assert(cmd.args.sequence_id == "owner_seq_1",
-        "dispatch args.sequence_id must be the OWNER sequence")
-    assert(cmd.args.project_id == "proj_X",
-        "dispatch args.project_id must propagate")
-    print("  ✓ overwrite-mode mark-set dispatches OverwriteTrimEdge")
-end
-
--- ── Scenario 3: mark-setter dispatches RippleTrimEdge (toggle) ───────────────
-do
-    dispatched = {}
-    trim_mode_state = "ripple"
-
-    -- Press 'I' (IN mark) at frame 80 — clip currently has source_in=50,
-    -- so delta = 80 - 50 = +30 (shrink the head by 30).
-    source_viewer.handle_mark_key("in", 80, false)
-
-    assert(#dispatched == 1, "one mark-set must dispatch one command")
-    assert(dispatched[1].name == "RippleTrimEdge", string.format(
-        "in ripple mode, mark-set must dispatch RippleTrimEdge; got %q",
-        dispatched[1].name))
-    assert(dispatched[1].args.edge == "left",
-        "IN mark maps to edge='left'")
-    assert(dispatched[1].args.delta_frames == 30, string.format(
-        "delta must be new_frame - clip.source_in; got %s",
-        tostring(dispatched[1].args.delta_frames)))
-    print("  ✓ ripple-mode mark-set dispatches RippleTrimEdge")
-end
-
--- ── Scenario 4: key-repeat suppression (FR-016b) ─────────────────────────────
-do
-    dispatched = {}
-    trim_mode_state = "overwrite"
-
-    -- Auto-repeat event must be dropped — no dispatch, no mutation.
-    source_viewer.handle_mark_key("out", 200, true)
-    assert(#dispatched == 0, string.format(
-        "is_auto_repeat=true must NOT dispatch any command; got %d",
-        #dispatched))
-
-    -- Discrete press immediately after must still dispatch normally.
-    source_viewer.handle_mark_key("out", 200, false)
-    assert(#dispatched == 1,
-        "is_auto_repeat=false after a repeat must dispatch")
-    print("  ✓ key-repeat events dropped; discrete press dispatches")
-end
-
--- ── Scenario 5: mutation re-resolve via sequence_content_changed (FR-004b) ───
+-- ── Scenario 2: mutation re-resolve via sequence_content_changed (FR-004b) ───
 do
     -- Mutate the clip's name in the model and emit the signal. Source viewer
     -- must reload + recompute its title via monitor:_set_title.
@@ -260,7 +204,7 @@ do
     print("  ✓ sequence_content_changed triggers reload + title recompute")
 end
 
--- ── Scenario 6: auto-unload on clip deletion (FR-004a) ───────────────────────
+-- ── Scenario 3: auto-unload on clip deletion (FR-004a) ───────────────────────
 do
     local captured_unload = {}
     Signals.connect("source_loaded_changed", function(new_id, prev_id)

@@ -36,6 +36,7 @@
 "J" = "ShuttleReverse @timeline @source_monitor @timeline_monitor"
 "K" = "ShuttleStop @timeline @source_monitor @timeline_monitor"
 "L" = "ShuttleForward @timeline @source_monitor @timeline_monitor"
+"Grave" = "ToggleSourceRecordTab @timeline @source_monitor @timeline_monitor"
 
 [Navigation]
 # 017 FR-020 movement-class: same multi-scope reach as Transport. Acts on
@@ -51,8 +52,14 @@
 [Marks]
 # 017 FR-020 movement-class: mark commands target the displayed side
 # (source tab → master marks; record tab → timeline marks).
-"I" = "SetMark in @timeline @source_monitor @timeline_monitor"
-"O" = "SetMark out @timeline @source_monitor @timeline_monitor"
+# 019: plain SetMark stays bound only to timeline scopes. The source
+# monitor's I/O variant lives in the [SourceMonitor] section below —
+# TOML disallows duplicate keys in one table, so the two commands have
+# to be in separate sections even though both map to "I" and "O"
+# physically. The runtime registry dedupes by (combo, scope), not by
+# section — section is only a UI grouping label.
+"I" = "SetMark in @timeline @timeline_monitor"
+"O" = "SetMark out @timeline @timeline_monitor"
 "Shift+I" = "GoToMark in @timeline @source_monitor @timeline_monitor"
 "Shift+O" = "GoToMark out @timeline @source_monitor @timeline_monitor"
 "Alt+I" = "ClearMark in @timeline @source_monitor @timeline_monitor"
@@ -115,6 +122,15 @@
 "T" = "RollTool @timeline"
 
 [SourceMonitor]
+# 019: source-monitor I/O is mode-aware — in live_bound_clip mode it
+# dispatches a clip trim (Overwrite or Ripple per edit_mode); in
+# staged_sequence mode it dispatches a nested SetMark on the staged
+# sequence. Same physical key as @timeline's SetMark; disjoint scope.
+# Lives in this section (not [Marks]) because TOML forbids two values
+# for the same key inside one table.
+"I" = "SetMarkAndTrimIfClip in @source_monitor"
+"O" = "SetMarkAndTrimIfClip out @source_monitor"
+
 # Source viewer mark bar zoom (same keys as timeline zoom, different context)
 "Cmd+Equal" = "SourceZoomIn @source_monitor"
 "Shift+Cmd+Equal" = "SourceZoomIn @source_monitor"
