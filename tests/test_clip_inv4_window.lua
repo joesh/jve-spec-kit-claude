@@ -97,6 +97,29 @@ local ok3 = pcall(function()
 end)
 assert(not ok3, "source_in == source_out must refuse (source window must be non-empty)")
 
+-- Bad: duration_frames <= 0 (trim that would collapse the clip).
+-- This invariant is the model-layer backstop for the SetMarkAndTrimIfClip
+-- collapse rejection — when a trim command somehow reaches Clip.update
+-- with duration <= 0, the Lua assert must fire with full context before
+-- the SQL CHECK does (the SQL message is opaque).
+local ok_dur_zero, err_dur_zero = pcall(function()
+    Clip.update(clip_id, { duration_frames = 0 })
+end)
+assert(not ok_dur_zero, "duration_frames=0 must refuse")
+assert(tostring(err_dur_zero):find("duration_frames must be > 0", 1, true),
+    "error must name the invariant; got: " .. tostring(err_dur_zero))
+
+local ok_dur_neg = pcall(function()
+    Clip.update(clip_id, { duration_frames = -1 })
+end)
+assert(not ok_dur_neg, "negative duration_frames must refuse")
+
+-- Non-number must also refuse (type check inside the invariant).
+local ok_dur_str = pcall(function()
+    Clip.update(clip_id, { duration_frames = "10" })
+end)
+assert(not ok_dur_str, "string duration_frames must refuse")
+
 -- assert_within_master_coverage: input validation.
 -- source_sequence_id is required.
 local ok_no_seq = pcall(Clip.assert_within_master_coverage, nil, 50, "test")

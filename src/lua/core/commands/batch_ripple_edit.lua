@@ -1245,8 +1245,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Compute the trimmed (duration, source_in, source_out) for an "in"
     -- edge. Does NOT mutate the clip — returns the new values. Caller
     -- decides whether the values are legal (non-negative duration).
+    -- Duration math goes through Clip.compute_trim_duration so this
+    -- command, OverwriteTrimEdge, and SetMarkAndTrimIfClip can't drift.
     local function compute_in_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
-        local new_duration = clip.duration - delta_frames
+        local new_duration = Clip.compute_trim_duration(clip, "in", delta_frames)
         local new_source_in = clip.source_in
         if new_source_in then
             local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)
@@ -1258,7 +1260,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Compute the trimmed values for an "out" edge. Timeline start never
     -- changes for out edges.
     local function compute_out_edge_trim(clip, delta_frames, seq_fps_num, seq_fps_den)
-        local new_duration = clip.duration + delta_frames
+        local new_duration = Clip.compute_trim_duration(clip, "out", delta_frames)
         local new_source_out = clip.source_out
         if new_source_out then
             local source_delta = timeline_delta_to_source(delta_frames, clip, seq_fps_num, seq_fps_den)

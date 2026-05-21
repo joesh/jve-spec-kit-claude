@@ -1125,6 +1125,17 @@ function M.update(id, fields)
         assert_window_in_bounds(id, new_in, new_out)
     end
 
+    -- Catch duration_frames <= 0 at the Lua boundary with full context
+    -- (the SQL CHECK fires too but its message is opaque). Reverse clips
+    -- carry positive owner-timebase duration too, so this is unconditional.
+    if fields.duration_frames ~= nil then
+        assert(type(fields.duration_frames) == "number"
+               and fields.duration_frames > 0, string.format(
+            "Clip.update: duration_frames must be > 0 (clip %s); got %s — "
+            .. "typically a trim that would collapse the clip",
+            tostring(id), tostring(fields.duration_frames)))
+    end
+
     local sets, values = {}, {}
     for k, v in pairs(fields) do
         assert(CLIP_UPDATABLE_V13[k], string.format(
@@ -1146,8 +1157,19 @@ function M.update(id, fields)
     for i, v in ipairs(values) do stmt:bind_value(i, v) end
     stmt:bind_value(#values + 1, id)
     local ok = stmt:exec()
+    -- Capture the sqlite error before finalize (finalize can reset state).
+    -- Codebase standard: stmt:last_error() inside the prepare/exec scope.
+    local errmsg = ok and nil or stmt:last_error()
     stmt:finalize()
-    assert(ok, string.format("Clip.update: exec failed for id=%s", id))
+    if not ok then
+        local field_vals = {}
+        for k, v in pairs(fields) do
+            field_vals[#field_vals + 1] = k .. "=" .. tostring(v)
+        end
+        assert(false, string.format(
+            "Clip.update: exec failed for id=%s sqlite_err=%s values={%s}",
+            id, tostring(errmsg), table.concat(field_vals, ", ")))
+    end
     return true
 end
 
@@ -1244,6 +1266,58 @@ function M.find_overlapping_on_track(track_id, window_start, window_end)
     end
     stmt:finalize()
     return rows
+end
+
+--- Owner-timebase duration after an edge trim at 1:1 source↔timeline
+--- mapping. Edge convention is dual — OverwriteTrimEdge / RippleTrimEdge
+--- use "left"/"right"; selection edge_infos and SetMarkAndTrimIfClip use
+--- "in"/"out". Direction is derived from `clip.source_in` vs
+--- `clip.source_out`:
+---   forward (source_out > source_in) → sign = +1
+---   reverse (source_out < source_in) → sign = -1  (source plays
+---       backwards as timeline advances; left/in delta inverts because
+---       pushing source_in higher GROWS the playback range)
+--- left/in:  new_duration = current_duration - sign * delta
+--- right/out: new_duration = current_duration + sign * delta
+--- Source-frame arithmetic itself (`source_in + delta`,
+--- `source_out + delta`) is direction-agnostic and lives at the caller.
+--- This helper is the canonical home for trim duration math so the
+--- precheck (SetMarkAndTrimIfClip), the overwrite-trim arithmetic
+--- (compute_trim), and the ripple arithmetic (batch_ripple_edit) cannot
+--- drift on the direction-sign question. fps_mismatch (non-1:1) is a
+--- separate latent concern — see TODO in MEMORY.
+function M.compute_trim_duration(clip, edge, delta_frames)
+    assert(type(clip) == "table", "Clip.compute_trim_duration: clip table required")
+    assert(type(clip.duration) == "number",
+        "Clip.compute_trim_duration: clip.duration must be a number")
+    assert(type(delta_frames) == "number",
+        "Clip.compute_trim_duration: delta_frames must be a number")
+
+    -- Gap clips (`is_gap = true`, source_in/source_out nil) have no
+    -- source direction. They trim as pure timeline-frame arithmetic, so
+    -- the forward sign applies. Real clips must carry both source bounds
+    -- and a non-zero direction.
+    local sign
+    if clip.source_in == nil and clip.source_out == nil then
+        sign = 1
+    else
+        assert(type(clip.source_in) == "number" and type(clip.source_out) == "number",
+            "Clip.compute_trim_duration: clip.source_in / source_out must both be numbers (or both nil for gaps)")
+        assert(clip.source_in ~= clip.source_out, string.format(
+            "Clip.compute_trim_duration: zero-direction clip (source_in == source_out == %d) "
+            .. "violates the model invariant; direction is undefined", clip.source_in))
+        sign = (clip.source_out > clip.source_in) and 1 or -1
+    end
+
+    if edge == "left" or edge == "in" then
+        return clip.duration - sign * delta_frames
+    end
+    if edge == "right" or edge == "out" then
+        return clip.duration + sign * delta_frames
+    end
+    assert(false, string.format(
+        "Clip.compute_trim_duration: unknown edge %q (expected 'left'/'in' or 'right'/'out')",
+        tostring(edge)))
 end
 
 --- Low-level UPDATE: set timeline + duration + source bounds on one clip.
