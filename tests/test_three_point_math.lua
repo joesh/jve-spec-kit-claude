@@ -144,6 +144,57 @@ do
     print("  two-marks rejected — OK")
 end
 
+-- ── Strict mode rejects sub-frame remainders ─────────────────────────────────
+-- 241 src-frames @ 24fps → 241 * 25 / 24 = 251.0416… (not integer). Strict
+-- mode (default) must assert; this is the Insert/Overwrite invariant.
+print("-- strict mode rejects non-exact cross-rate --")
+do
+    local SRC = {24, 1}
+    local REC = {25, 1}
+    local ok = pcall(tpm.compute, { src_in=0, src_out=241, rec_in=0 }, SRC, REC)
+    assert(not ok, "FAIL: strict mode must reject non-exact cross-rate conversion")
+    print("  strict mode rejected non-exact 24→25 dur=241 — OK")
+end
+
+-- ── Floor mode tolerates sub-frame remainders for ghost-mark display ─────────
+print("-- floor mode floors non-exact + sets exact=false --")
+do
+    local SRC = {24, 1}
+    local REC = {25, 1}
+    -- 241 * 25 / 24 = 6025/24 = 251 floor
+    local result = tpm.compute(
+        { src_in=0, src_out=241, rec_in=0 }, SRC, REC, { rounding = "floor" })
+    assert(result.computed_key == "rec_out", "Case floor: wrong computed_key")
+    assert(result.rec_out == 251, string.format(
+        "Case floor: rec_out=%s, expected 251 (floor of 6025/24)", tostring(result.rec_out)))
+    assert(result.exact == false, "Case floor: exact must be false for non-exact conversion")
+    print(string.format("  floor 24→25 dur=241 → rec_out=%d, exact=false — OK", result.rec_out))
+end
+
+-- ── Floor mode still reports exact=true when conversion IS exact ─────────────
+print("-- floor mode preserves exact=true on integer conversion --")
+do
+    local SRC = {25, 1}
+    local REC = {24, 1}
+    -- 150 * 24 / 25 = 144 exactly.
+    local result = tpm.compute(
+        { src_in=100, src_out=250, rec_in=480 }, SRC, REC, { rounding = "floor" })
+    assert(result.rec_out == 624, "exact case under floor mode must still produce 624")
+    assert(result.exact == true, "exact case under floor mode must report exact=true")
+    print("  floor mode + exact conversion → exact=true — OK")
+end
+
+-- ── Invalid rounding option rejected ─────────────────────────────────────────
+print("-- invalid rounding option rejected --")
+do
+    local SRC = {25, 1}
+    local REC = {24, 1}
+    local ok = pcall(tpm.compute,
+        { src_in=100, src_out=250, rec_in=480 }, SRC, REC, { rounding = "round" })
+    assert(not ok, "FAIL: unknown rounding mode must assert")
+    print("  unknown rounding mode rejected — OK")
+end
+
 -- NOTE: ghost-mark rendering ("(computed)" label, dashed style, sequence-ruler
 -- placement) and mark persistence across SourceTab switch require --test mode.
 -- Those assertions live in the T044 implementation test.

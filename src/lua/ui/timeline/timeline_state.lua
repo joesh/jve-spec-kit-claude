@@ -776,10 +776,15 @@ M.get_ghost_mark = function()
     if marks.src_in  ~= nil and marks.src_out ~= nil and marks.src_out <= marks.src_in  then return nil end
     if marks.rec_in  ~= nil and marks.rec_out ~= nil and marks.rec_out <= marks.rec_in  then return nil end
 
+    -- Ghost mark is a transient UI display, not a committed edit. Cross-rate
+    -- ranges (e.g. 241 src-frames @ 24fps → 251.04 rec-frames @ 25fps) don't
+    -- generally divide exactly; we floor for display. The Insert/Overwrite
+    -- commit path uses default "strict" mode, which still asserts on
+    -- non-integer conversions per FR-036/037/038.
     local tpm = require("core.three_point_math")
     local src_pair = { src_fps.fps_numerator, src_fps.fps_denominator }
     local rec_pair = { rec_fps.fps_numerator, rec_fps.fps_denominator }
-    local result = tpm.compute(marks, src_pair, rec_pair)
+    local result = tpm.compute(marks, src_pair, rec_pair, { rounding = "floor" })
 
     local key = result.computed_key
     local on_source_side = (key == "src_in" or key == "src_out")

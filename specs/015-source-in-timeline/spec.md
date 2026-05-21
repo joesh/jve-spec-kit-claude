@@ -94,6 +94,8 @@ Header cells, left to right: **src-id button | rec-patch-id button | label (flex
 ### F5 · 3-point ghost mark
 When 3 of 4 marks (src in/out, rec in/out) are set, the 4th is computed and rendered as a **dashed ghost** at its timeline position, labeled "computed" wherever shown textually. Source marks live on the loaded master sequence; record marks on the active record sequence; both persist regardless of which tab is displayed. Edit operations target `ActiveRecordTab` even when SourceTab is displayed.
 
+**Cross-rate ghost display:** `three_point_math.compute` has two rounding modes. Committed edits (Insert/Overwrite) use the default **strict** mode, which asserts integer divisibility (e.g. 150 src-frames @ 25fps → 144 rec-frames @ 24fps is exact). The transient ghost-mark display invokes the same module with `{ rounding = "floor" }`, which floors the converted duration and returns `exact=false` when a sub-frame remainder was dropped. This avoids spurious assertion storms during routine cross-rate editing (e.g. 241 src-frames @ 24fps → 251.04 rec-frames @ 25fps) while keeping the commit-path invariant intact. Callers may surface the `exact=false` flag in the inspector/status bar later; today it is computed but not rendered.
+
 ### F6 · Non-undoable routing preferences (incl. pre-existing bug fix)
 The following toggles are **session-level non-undoable preferences**: persisted to the project DB, restored on reopen, NOT on the per-sequence undo stack:
 
