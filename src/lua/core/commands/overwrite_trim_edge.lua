@@ -1,25 +1,29 @@
 --- OverwriteTrimEdge — peer of RippleTrimEdge. Mutates ONE clip row's
---- source range without propagating the duration delta to downstream
---- clips. Per spec 019 FR-014, FR-015, FR-015b.
+--- source range. Growth into occupied space ABSORBS the neighbor clips
+--- in the path (the "overwrite" semantics — same primitive that Insert /
+--- Overwrite / Paste use to carve space on a track). Shrinking leaves a
+--- gap; downstream is never rippled. Per spec 019 FR-014, FR-015, FR-015b.
 ---
 --- Right-edge trim:
 ---   source_out_frame += delta
 ---   duration_frames += delta
 ---   sequence_start_frame unchanged
----   downstream stays put → gap if shrinking, overlap-attempt if growing
+---   downstream eaten by ClipMutator.resolve_occlusions when growing.
 ---
 --- Left-edge trim:
 ---   source_in_frame += delta
 ---   duration_frames -= delta
 ---   sequence_start_frame += delta  (the placement shifts to absorb the trim)
----   downstream stays put
+---   upstream eaten by ClipMutator.resolve_occlusions when growing.
 ---
 --- Asserts on every precondition violation (FR-015): missing clip,
 --- edge ∉ {"left","right"}, delta_frames == 0, resulting range out of
 --- the clip's source-sequence content extent. No silent clamps.
 ---
---- Own undo entry capturing the four pre-mutation columns
---- (source_in/out_frame, duration_frames, sequence_start_frame).
+--- Own undo entry — the planned mutations (focus update + neighbor
+--- absorption) are stored on the command and reverted via
+--- command_helper.revert_mutations, the same shape Paste / LiftRange /
+--- ExtractRange use.
 ---
 --- @file overwrite_trim_edge.lua
 
@@ -34,55 +38,52 @@ local SPEC = {
         project_id   = { required = true, kind = "string" },
     },
     persisted = {
-        _old_source_in      = {},
-        _old_source_out     = {},
-        _old_duration       = {},
-        _old_sequence_start = {},
+        -- Mutation plan (focus update + absorbed neighbors) captured at
+        -- execute time so the undoer can revert via revert_mutations.
+        _executed_mutations = {},
     },
 }
 
 --- Compute the four new columns from the edge + delta. The Clip model
 --- (see `models/clip.lua` build_clip_from_load_row) exposes the columns
---- WITHOUT the `_frame` suffix; the DB column names retain it. This
---- function reads from the model fields and returns the DB-column-named
---- payload Clip.update_bounds expects.
+--- WITHOUT the `_frame` suffix; the DB column names retain it.
+---
+--- Direction-aware (forward clip: source_in < source_out; reverse clip:
+--- source_in > source_out). Source-bound arithmetic
+--- (`source_in + delta`, `source_out + delta`) is direction-agnostic —
+--- delta is in source frames either way. Duration and sequence_start
+--- deltas use a `sign` derived from clip direction so reverse clips
+--- behave correctly (extending source_in higher GROWS the clip).
+--- Duration delegates to `Clip.compute_trim_duration` for canonical
+--- duration math; sequence_start picks up the same sign here.
 local function compute_trim(clip, edge, delta)
+    local Clip = require("models.clip")
+    local new_duration = Clip.compute_trim_duration(clip, edge, delta)
+    local sign = (clip.source_out > clip.source_in) and 1 or -1
     if edge == "right" then
         return {
             source_in_frame      = clip.source_in,
             source_out_frame     = clip.source_out + delta,
-            duration_frames      = clip.duration + delta,
-            sequence_start_frame = clip.sequence_start,
+            duration_frames      = new_duration,
+            sequence_start_frame = clip.sequence_start,  -- right edge: head pinned
         }
     end
-    -- edge == "left" — validated by caller
+    -- edge == "left" — validated by caller. Tail pinned: head moves by
+    -- the timeline-frame equivalent of delta, with direction sign applied.
     return {
         source_in_frame      = clip.source_in + delta,
         source_out_frame     = clip.source_out,
-        duration_frames      = clip.duration - delta,
-        sequence_start_frame = clip.sequence_start + delta,
+        duration_frames      = new_duration,
+        sequence_start_frame = clip.sequence_start + sign * delta,
     }
 end
 
---- Build the __timeline_mutations bucket for this command's single-row
---- update. Used by both the executor (after the mutation lands) and the
---- undoer (after restoring the prior state) — same payload, same shape.
-local function single_row_update_bucket(sequence_id, clip_id)
-    return {
-        sequence_id = sequence_id,
-        inserts     = {},
-        updates     = { clip_id },
-        deletes     = {},
-        bulk_shifts = {},
-    }
-end
-
---- Report a single-row clip mutation to the __timeline_mutations bucket
---- and emit sequence_content_changed. Both executor and undoer use the
---- exact same pair, so factor it out (DRY).
-local function report_single_row_mutation(command, sequence_id, clip_id)
-    command:set_parameter("__timeline_mutations",
-        single_row_update_bucket(sequence_id, clip_id))
+--- Report planner mutations to the timeline_mutations bucket via the
+--- canonical helper, then emit sequence_content_changed so the UI
+--- refreshes off the same signal.
+local function report_mutations(command, sequence_id, mutations)
+    require("core.command_helper").report_planner_mutations(
+        command, sequence_id, mutations)
     require("core.signals").emit("sequence_content_changed", sequence_id)
 end
 
@@ -103,10 +104,12 @@ local function assert_in_content_extent(clip_id, sequence_id, new_in, new_out)
         string.format("OverwriteTrimEdge[%s]", clip_id))
 end
 
-function M.register(executors, undoers, _db, _set_last_error)
+function M.register(executors, undoers, db, _set_last_error)
     executors["OverwriteTrimEdge"] = function(command)
         local args = command:get_all_parameters()
-        local Clip = require("models.clip")
+        local Clip          = require("models.clip")
+        local clip_mutator  = require("core.clip_mutator")
+        local command_helper = require("core.command_helper")
         local log  = require("core.logger").for_area("commands")
 
         assert(args.edge == "left" or args.edge == "right", string.format(
@@ -123,34 +126,69 @@ function M.register(executors, undoers, _db, _set_last_error)
         assert_in_content_extent(args.clip_id, clip.sequence_id,
             new_vals.source_in_frame, new_vals.source_out_frame)
 
-        -- Capture pre-mutation state on the command for the undoer. The
-        -- Clip model exposes columns without the `_frame` suffix; the
-        -- underlying DB columns retain it. See compute_trim header.
-        command:set_parameter("_old_source_in",      clip.source_in)
-        command:set_parameter("_old_source_out",     clip.source_out)
-        command:set_parameter("_old_duration",       clip.duration)
-        command:set_parameter("_old_sequence_start", clip.sequence_start)
+        -- Carve space for the new clip span via the canonical occlusion
+        -- resolver — the same primitive Insert / Overwrite / Paste use.
+        -- Neighbors fully covered by the new span are deleted; clipped
+        -- ones are trimmed at head or tail. The focus clip is excluded
+        -- via exclude_clip_id; resolve_occlusions evaluates other clips
+        -- on the same track against the NEW span [start, start+duration).
+        local ok, err, neighbor_mutations = clip_mutator.resolve_occlusions(db, {
+            track_id         = clip.track_id,
+            sequence_start   = new_vals.sequence_start_frame,
+            duration         = new_vals.duration_frames,
+            exclude_clip_id  = clip.id,
+        })
+        assert(ok, string.format(
+            "OverwriteTrimEdge: resolve_occlusions failed for clip %s on track %s: %s",
+            tostring(clip.id), tostring(clip.track_id), tostring(err)))
 
-        Clip.update_bounds(args.clip_id,
-            new_vals.sequence_start_frame,
-            new_vals.duration_frames,
-            new_vals.source_in_frame,
-            new_vals.source_out_frame)
+        -- plan_update for the focus clip itself. The mutator expects the
+        -- model-field shape (no `_frame` suffix); apply_update_revert
+        -- additionally requires `frame_rate` + `volume` on `previous` (see
+        -- require_clip_frame_rate). Pass the loaded clip through as the
+        -- `original` snapshot — it already carries every column read by
+        -- the revert path — and clone it with the four mutated fields
+        -- overridden for the post-trim `row`.
+        local original_row = clip
+        local new_row = {}
+        for k, v in pairs(clip) do new_row[k] = v end
+        new_row.sequence_start = new_vals.sequence_start_frame
+        new_row.duration       = new_vals.duration_frames
+        new_row.source_in      = new_vals.source_in_frame
+        new_row.source_out     = new_vals.source_out_frame
 
-        report_single_row_mutation(command, args.sequence_id, args.clip_id)
-        log.event("OverwriteTrimEdge: clip=%s edge=%s delta=%d",
-            args.clip_id, args.edge, args.delta_frames)
+        local all_mutations = {}
+        for _, m in ipairs(neighbor_mutations) do
+            all_mutations[#all_mutations + 1] = m
+        end
+        all_mutations[#all_mutations + 1] = clip_mutator.plan_update(new_row, original_row)
+
+        local ok_apply, apply_err = command_helper.apply_mutations(db, all_mutations)
+        assert(ok_apply, string.format(
+            "OverwriteTrimEdge: apply_mutations failed for clip %s: %s",
+            tostring(clip.id), tostring(apply_err)))
+
+        -- Persist the executed plan so the undoer can revert via the same
+        -- canonical helper (revert_mutations) — mirrors Paste / LiftRange.
+        command:set_parameter("_executed_mutations", all_mutations)
+        report_mutations(command, args.sequence_id, all_mutations)
+        log.event("OverwriteTrimEdge: clip=%s edge=%s delta=%d (mutations=%d)",
+            args.clip_id, args.edge, args.delta_frames, #all_mutations)
         return { success = true }
     end
 
     undoers["OverwriteTrimEdge"] = function(command)
         local args = command:get_all_parameters()
-        require("models.clip").update_bounds(args.clip_id,
-            args._old_sequence_start,
-            args._old_duration,
-            args._old_source_in,
-            args._old_source_out)
-        report_single_row_mutation(command, args.sequence_id, args.clip_id)
+        local command_helper = require("core.command_helper")
+        local executed = assert(args._executed_mutations, string.format(
+            "OverwriteTrimEdge.undo: _executed_mutations missing — executor "
+            .. "must have stored the plan before returning success (clip=%s)",
+            tostring(args.clip_id)))
+        local ok, err = command_helper.revert_mutations(
+            db, executed, command, args.sequence_id)
+        assert(ok, string.format(
+            "OverwriteTrimEdge.undo: revert_mutations failed: %s", tostring(err)))
+        require("core.signals").emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

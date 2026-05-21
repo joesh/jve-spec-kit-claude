@@ -367,4 +367,164 @@ do
     print("  ✓ all four preconditions reject without partial mutation")
 end
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 6. Left-edge grow ABSORBS upstream neighbor (FR-014 update, 2026-05-20).
+--    "Overwrite trim" means extension into occupied space eats the neighbor —
+--    the same primitive (clip_mutator.resolve_occlusions) Insert / Overwrite /
+--    Paste use to carve space. Regression for the VIDEO_OVERLAP trigger that
+--    used to fire when growing into a neighbor (TSO 2026-05-20).
+-- ─────────────────────────────────────────────────────────────────────────────
+print("\n--- Left-edge grow absorbs upstream neighbor ---")
+do
+    reset()
+    -- Two-clip layout on v1:
+    --   B at [0, 80)        — upstream neighbor (the one to be absorbed)
+    --   A at [100, 300)     — focus clip (src_in=50)
+    -- Grow A's left edge by 30 frames earlier → A spans [70, 300). The
+    -- last 10 frames of B [70, 80) sit under A's new head → B should be
+    -- trimmed at the tail down to [0, 70).
+    create_clip("B",   0,  80,  500)
+    create_clip("A", 100, 200,   50)
+
+    local r = command_manager.execute_interactive("OverwriteTrimEdge", {
+        clip_id      = "A",
+        edge         = "left",
+        delta_frames = -30,
+        sequence_id  = "seq",
+        project_id   = "proj",
+    })
+    assert(r and r.success, string.format(
+        "left-edge grow into occupied space must succeed; got %s",
+        tostring(r and r.error_message)))
+
+    local a_after = read_clip_columns("A")
+    assert(a_after.sequence_start_frame == 70, string.format(
+        "A.sequence_start must move to 70 (100 + delta -30); got %d",
+        a_after.sequence_start_frame))
+    assert(a_after.duration_frames == 230, string.format(
+        "A.duration must grow to 230; got %d", a_after.duration_frames))
+    assert(a_after.source_in_frame == 20, string.format(
+        "A.source_in must retreat to 20 (50 + -30); got %d", a_after.source_in_frame))
+
+    -- B was partially absorbed: tail trimmed to 70 (A's new start).
+    local b_after = read_clip_columns("B")
+    assert(b_after.sequence_start_frame == 0, string.format(
+        "B.sequence_start unchanged when only its tail is eaten; got %d",
+        b_after.sequence_start_frame))
+    assert(b_after.duration_frames == 70, string.format(
+        "B.duration trimmed to 70 (start unchanged; new end at A.new_start=70); got %d",
+        b_after.duration_frames))
+    print("  ✓ neighbor absorbed (tail trimmed) by left-edge grow")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 7. Right-edge grow ABSORBS downstream neighbor — symmetric to scenario 6.
+-- ─────────────────────────────────────────────────────────────────────────────
+print("\n--- Right-edge grow absorbs downstream neighbor ---")
+do
+    reset()
+    -- A at [100, 300), B at [320, 400). Grow A's right edge by +40 → A
+    -- spans [100, 340). B's head [320, 340) is eaten; B should be
+    -- trimmed at the head down to [340, 400) (duration 60).
+    create_clip("A", 100, 200, 50)
+    create_clip("B", 320,  80, 200)
+
+    local r = command_manager.execute_interactive("OverwriteTrimEdge", {
+        clip_id      = "A",
+        edge         = "right",
+        delta_frames = 40,
+        sequence_id  = "seq",
+        project_id   = "proj",
+    })
+    assert(r and r.success, "right-edge grow into occupied space must succeed")
+
+    local a_after = read_clip_columns("A")
+    assert(a_after.sequence_start_frame == 100,
+        "A.sequence_start unchanged for right-edge trim")
+    assert(a_after.duration_frames == 240, string.format(
+        "A.duration must grow to 240; got %d", a_after.duration_frames))
+
+    local b_after = read_clip_columns("B")
+    assert(b_after.sequence_start_frame == 340, string.format(
+        "B.sequence_start must move to 340 (A's new end); got %d",
+        b_after.sequence_start_frame))
+    assert(b_after.duration_frames == 60, string.format(
+        "B.duration trimmed to 60 (head eaten); got %d", b_after.duration_frames))
+    print("  ✓ neighbor absorbed (head trimmed) by right-edge grow")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 8. Grow that FULLY COVERS a neighbor deletes it.
+-- ─────────────────────────────────────────────────────────────────────────────
+print("\n--- Grow that fully covers a neighbor deletes it ---")
+do
+    reset()
+    -- A at [0, 100), N at [120, 180), C at [300, 400). Grow A's right
+    -- edge by +200 → A spans [0, 300). N is fully covered → deleted.
+    -- C is untouched.
+    create_clip("A",   0, 100, 50)
+    create_clip("N", 120,  60, 200)
+    create_clip("C", 300, 100, 300)
+
+    local r = command_manager.execute_interactive("OverwriteTrimEdge", {
+        clip_id      = "A",
+        edge         = "right",
+        delta_frames = 200,
+        sequence_id  = "seq",
+        project_id   = "proj",
+    })
+    assert(r and r.success, "fully-covering grow must succeed")
+
+    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = 'N'")
+    assert(stmt:exec()); assert(stmt:next())
+    local n_count = stmt:value(0); stmt:finalize()
+    assert(n_count == 0, string.format(
+        "fully-covered neighbor N must be deleted; got %d row(s) remaining",
+        n_count))
+
+    local c_after = read_clip_columns("C")
+    assert(c_after.sequence_start_frame == 300 and c_after.duration_frames == 100,
+        "C (not in the path) must be untouched")
+    print("  ✓ fully-covered neighbor deleted; uninvolved clip untouched")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 9. Undo restores absorbed neighbor bit-for-bit.
+-- ─────────────────────────────────────────────────────────────────────────────
+print("\n--- Undo restores absorbed neighbor ---")
+do
+    reset()
+    create_clip("B",   0,  80, 500)
+    create_clip("A", 100, 200,  50)
+    local b_before = read_clip_columns("B")
+    local a_before = read_clip_columns("A")
+
+    local r = command_manager.execute_interactive("OverwriteTrimEdge", {
+        clip_id      = "A",
+        edge         = "left",
+        delta_frames = -30,
+        sequence_id  = "seq",
+        project_id   = "proj",
+    })
+    assert(r and r.success)
+
+    command_manager.undo()
+
+    local b_after = read_clip_columns("B")
+    local a_after = read_clip_columns("A")
+    for k, _ in pairs(b_before) do
+        assert(b_after[k] == b_before[k], string.format(
+            "undo must restore B.%s bit-for-bit; before=%s after=%s",
+            k, tostring(b_before[k]), tostring(b_after[k])))
+    end
+    for k, _ in pairs(a_before) do
+        assert(a_after[k] == a_before[k], string.format(
+            "undo must restore A.%s bit-for-bit; before=%s after=%s",
+            k, tostring(a_before[k]), tostring(a_after[k])))
+    end
+    print("  ✓ undo restores focus clip + absorbed neighbor bit-for-bit")
+end
+
+print("\n✅ test_overwrite_trim_edge.lua passed")
+
 print("\n✅ test_overwrite_trim_edge.lua passed")
