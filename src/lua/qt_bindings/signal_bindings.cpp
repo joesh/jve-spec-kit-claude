@@ -243,14 +243,6 @@ protected:
                 event->accept();
                 return true;
             }
-            // Residual without Cmd/Ctrl/Alt: Comma, Period, E.
-            // Shift+Comma/Period = 5-frame nudge (still residual).
-            // Cmd+Comma, Cmd+E etc. → let QShortcut resolve.
-            if (mods == Qt::NoModifier &&
-                (k == Qt::Key_Comma || k == Qt::Key_Period || k == Qt::Key_E)) {
-                event->accept();
-                return true;
-            }
             // Text-input priority: when focus is on a text-editing widget and
             // the key is a canonical text-editing key (typing, caret nav,
             // selection, clipboard, undo/redo, delete), claim ShortcutOverride
