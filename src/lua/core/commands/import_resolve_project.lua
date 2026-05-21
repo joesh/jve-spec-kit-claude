@@ -367,6 +367,24 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
         assert(args.project_id and args.project_id ~= "", "ImportResolveProject: Missing project_id")
 
+        -- Empty-DB precondition (2026-05-21). ImportResolveProject creates
+        -- a NEW project in the active DB; calling it against a .jvp that
+        -- already carries a project produces a 2-project file JVE then
+        -- refuses to reopen. First-open of a .drp must go through
+        -- OpenProject → resolve_format → drp_importer.convert, which
+        -- writes a fresh single-project .jvp in one shot. This command
+        -- is reserved for the case where the active DB is genuinely
+        -- empty (e.g. an importer-driven bootstrap flow). Loud fail per
+        -- §1.14 so the misuse can't silently produce broken project
+        -- files like it did during the 2026-05-21 smoke-template bring-up.
+        local Project = require("models.project")
+        local existing = Project.count()
+        assert(existing == 0, string.format(
+            "ImportResolveProject: refuses to import into a non-empty .jvp "
+            .. "(active DB has %d project(s)). Use OpenProject on the .drp "
+            .. "directly — its resolve_format path drives "
+            .. "drp_importer.convert to write a fresh .jvp.", existing))
+
         local drp_path, cancel = gather_file_path(
             command, args,
             "import_resolve_drp", "Import Resolve Project (.drp)",
@@ -382,7 +400,6 @@ function M.register(executors, undoers, db)
             return { success = false, error_message = parse_result.error }
         end
 
-        local Project = require("models.project")
         local json = require("dkjson")
 
         -- Order: caller-supplied → majority vote across parsed media →

@@ -116,9 +116,12 @@ end)
 assert(handler_fired, string.format(
     "SCENARIO 1 INPUT INVARIANT: timer callback must have been invoked\n" ..
     "  during PROCESS_EVENTS. Captured: %q", string_log))
-assert(string_log:find("Lua callback error in signal.single_shot_timer", 1, true),
+assert(string_log:find("LUA CALLBACK ERROR", 1, true)
+       and string_log:find("Location: signal.single_shot_timer", 1, true),
     string.format(
-    "SCENARIO 1 LOG FORMAT: expected the canonical bridge prefix.\n" ..
+    "SCENARIO 1 LOG FORMAT: expected the canonical bridge banner +\n" ..
+    "  'Location: <where>' (jve_lua_callback.cpp stderr format,\n" ..
+    "  2026-05-21 loud-fail switch).\n" ..
     "  Captured: %q", string_log))
 assert(string_log:find("synthetic test error", 1, true), string.format(
     "SCENARIO 1 LOG CONTENT: must include the original error message.\n" ..
@@ -152,9 +155,10 @@ end)
 
 assert(handler_fired,
     "SCENARIO 2 INPUT INVARIANT: timer callback must have been invoked")
-assert(table_log:find("Lua callback error in signal.single_shot_timer", 1, true),
-    string.format("SCENARIO 2 LOG FORMAT: missing canonical prefix.\n" ..
-    "  Captured: %q", table_log))
+assert(table_log:find("LUA CALLBACK ERROR", 1, true)
+       and table_log:find("Location: signal.single_shot_timer", 1, true),
+    string.format("SCENARIO 2 LOG FORMAT: missing canonical banner +\n" ..
+    "  'Location: <where>'. Captured: %q", table_log))
 assert(table_log:find("stack traceback", 1, true), string.format(
     "SCENARIO 2 STACK TRACE: non-string errors (tables, userdata) must\n" ..
     "  still produce a traceback. T015's luaL_tolstring + luaL_traceback\n" ..

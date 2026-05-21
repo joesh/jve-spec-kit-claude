@@ -86,37 +86,35 @@ end
 
 command_manager.init('default_sequence', 'default_project')
 
+-- ImportResolveProject must REFUSE to run against a non-empty .jvp
+-- (2026-05-21 hardening — first-open of a .drp goes through OpenProject
+-- → resolve_format → drp_importer.convert, which writes a fresh
+-- single-project .jvp in one shot; the executor is reserved for the
+-- genuinely-empty-DB case). The bootstrap above seeded one project,
+-- so the assertion in the executor must fire.
 local cmd = Command.create("ImportResolveProject", "default_project")
 cmd:set_parameter("drp_path", fixture_path)
--- DRP carries no project-wide audio rate; supply explicitly (production
--- prompts the user when pick_majority returns nil).
 cmd:set_parameter("audio_sample_rate", 48000)
 
 local exec_result = command_manager.execute(cmd)
-assert_true("command executed", exec_result and exec_result.success)
-assert_true("command result has project_id", exec_result.project_id ~= nil)
-
-local imported_project_id = exec_result.project_id
-assert_true("imported project id present", imported_project_id ~= nil)
+assert_true("execute returns a result", type(exec_result) == "table")
+assert_true("execute against non-empty DB returns success=false",
+    exec_result.success == false)
+assert_true(
+    "error message names the refusal",
+    tostring(exec_result.error_message or "")
+        :find("refuses to import into a non-empty .jvp", 1, true) ~= nil)
 
 local project_count = scalar(db, "SELECT COUNT(*) FROM projects")
-assert_true("project count increased", project_count and project_count > 1)
-assert_true(
-    "resolve project name persisted",
-    scalar(db, "SELECT COUNT(*) FROM projects WHERE name = 'resolve playground'") == 1
-)
+assert_true("project count unchanged after refusal", project_count == 1)
 
-local sequence_count = scalar(db, "SELECT COUNT(*) FROM sequences WHERE project_id = ?", imported_project_id)
-assert_true("sequences created", sequence_count and sequence_count > 0)
-
-local track_count = scalar(db, "SELECT COUNT(*) FROM tracks WHERE sequence_id IN (SELECT id FROM sequences WHERE project_id = ?)", imported_project_id)
-assert_true("tracks created", track_count and track_count > 0)
-
-local clip_count = scalar(db, "SELECT COUNT(*) FROM clips WHERE track_id IN (SELECT id FROM tracks WHERE sequence_id IN (SELECT id FROM sequences WHERE project_id = ?))", imported_project_id)
-assert_true("clips created", clip_count and clip_count > 0)
-
-local media_count = scalar(db, "SELECT COUNT(*) FROM media WHERE project_id = ?", imported_project_id)
-assert_true("media created", media_count and media_count > 0)
+-- Content-import coverage (tracks/clips/media populated correctly from a
+-- .drp parse) lives in the drp_importer.convert tier:
+--   tests/binding/test_drp_converter_clip_creation.lua
+--   tests/binding/test_drp_import_marks.lua
+--   tests/binding/test_drp_reimport_stable_media_ids.lua
+-- Don't duplicate that coverage here; this file pins the command-layer
+-- contract (parse → refuse-non-empty), not the importer's output shape.
 
 os.remove(TEST_DB)
 
