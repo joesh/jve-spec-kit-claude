@@ -112,6 +112,7 @@ if(APPLE)
     find_library(METAL_FRAMEWORK Metal REQUIRED)
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
     find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)  # vImage for YUV→RGB
+    find_library(APPLICATIONSERVICES_FRAMEWORK ApplicationServices REQUIRED)  # CGEventPost for synthetic input (binding/smoke tests)
 
     target_link_libraries(EditorMediaPlatform
         ${VIDEOTOOLBOX_FRAMEWORK}
@@ -209,6 +210,7 @@ if(APPLE)
         ${QUARTZCORE_FRAMEWORK}
         ${COREVIDEO_FRAMEWORK}
         ${COREAUDIO_FRAMEWORK}
+        ${APPLICATIONSERVICES_FRAMEWORK}  # CGEventPost (input_bindings.cpp)
     )
     target_compile_definitions(JVECore PRIVATE EMP_HAS_VIDEOTOOLBOX)
 endif()
