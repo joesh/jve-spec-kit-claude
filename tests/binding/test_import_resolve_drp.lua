@@ -86,12 +86,11 @@ end
 
 command_manager.init('default_sequence', 'default_project')
 
--- ImportResolveProject must REFUSE to run against a non-empty .jvp
--- (2026-05-21 hardening — first-open of a .drp goes through OpenProject
--- → resolve_format → open_project._convert_drp_to_jvp, which writes a
--- fresh single-project .jvp in one shot; this executor is reserved
--- for the genuinely-empty-DB case). The bootstrap above seeded one
--- project, so the assertion in the executor must fire.
+-- ImportResolveProject must REFUSE to run against a non-empty .jvp:
+-- first-open of a .drp goes through OpenProject's convert path, which
+-- writes a fresh single-project .jvp; this executor is reserved for
+-- the genuinely-empty-DB case. The bootstrap above seeded one project,
+-- so the assertion in the executor must fire.
 local cmd = Command.create("ImportResolveProject", "default_project")
 cmd:set_parameter("drp_path", fixture_path)
 cmd:set_parameter("audio_sample_rate", 48000)

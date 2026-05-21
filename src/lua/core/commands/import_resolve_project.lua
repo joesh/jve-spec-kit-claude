@@ -367,17 +367,6 @@ function M.register(executors, undoers, db)
         local args = command:get_all_parameters()
         assert(args.project_id and args.project_id ~= "", "ImportResolveProject: Missing project_id")
 
-        -- Empty-DB precondition (2026-05-21). ImportResolveProject creates
-        -- a NEW project in the active DB; calling it against a .jvp that
-        -- already carries a project produces a 2-project file JVE then
-        -- refuses to reopen. First-open of a .drp must go through
-        -- OpenProject → resolve_format → open_project._convert_drp_to_jvp,
-        -- which writes a fresh single-project .jvp in one shot. This
-        -- command is reserved for the case where the active DB is
-        -- genuinely empty (e.g. an importer-driven bootstrap flow).
-        -- Loud fail per §1.14 so the misuse can't silently produce
-        -- broken project files like it did during the 2026-05-21
-        -- smoke-template bring-up.
         local Project = require("models.project")
         local existing = Project.count()
         assert(existing == 0, string.format(
@@ -404,19 +393,9 @@ function M.register(executors, undoers, db)
 
         local json = require("dkjson")
 
-        -- Order: caller-supplied → majority vote across parsed media →
-        -- 48000 Hz spec-implied default (Fairlight FieldsBlob not yet decoded;
-        -- see pick_majority_audio_sample_rate TODO).
-        local pick_majority = require("importers.drp_importer").pick_majority_audio_sample_rate
-        local settings = {
-            frame_rate = parse_result.project.settings.frame_rate,
-            width = parse_result.project.settings.width,
-            height = parse_result.project.settings.height,
-            audio_sample_rate = args.audio_sample_rate
-                or pick_majority(parse_result),
-            master_clock_hz = subframe_math.MASTER_CLOCK_HZ,
-            default_fps = { num = 24, den = 1 },
-        }
+        local audio_rate = args.audio_sample_rate
+            or drp_importer.pick_majority_audio_sample_rate(parse_result)
+        local settings = drp_importer.derive_project_settings(parse_result, audio_rate)
 
         local project = Project.create(parse_result.project.name, {
             settings = json.encode(settings),

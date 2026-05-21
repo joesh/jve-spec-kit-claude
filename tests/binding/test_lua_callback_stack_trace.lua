@@ -120,8 +120,7 @@ assert(string_log:find("LUA CALLBACK ERROR", 1, true)
        and string_log:find("Location: signal.single_shot_timer", 1, true),
     string.format(
     "SCENARIO 1 LOG FORMAT: expected the canonical bridge banner +\n" ..
-    "  'Location: <where>' (jve_lua_callback.cpp stderr format,\n" ..
-    "  2026-05-21 loud-fail switch).\n" ..
+    "  'Location: <where>' (jve_lua_callback.cpp stderr format).\n" ..
     "  Captured: %q", string_log))
 assert(string_log:find("synthetic test error", 1, true), string.format(
     "SCENARIO 1 LOG CONTENT: must include the original error message.\n" ..

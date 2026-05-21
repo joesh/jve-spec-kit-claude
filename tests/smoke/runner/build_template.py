@@ -1,27 +1,12 @@
 #!/usr/bin/env python3
 """Build the Anamnesis .jvp template that the smoke suite copies per test.
 
-Runs JVE twice, imports the DRP fixture, exits. Result lives at
-``/tmp/jve_smoke/template.jvp``. Re-run when the DRP fixture changes
-(or when JVE's import surface changes in a way that affects the
-resulting .jvp).
-
 Invocation:
     python3 tests/smoke/runner/build_template.py [--force]
 
-Idempotent: if the template already exists AND the DRP fixture hash
-has not changed since, skip and exit 0. ``--force`` bypasses.
-
-Uses ``open_project._convert_drp_to_jvp(drp_path, jvp_path)`` — the
-same primitive ``OpenProject`` drives once the user has picked a
-destination through the conversion dialog. Produces a fresh single-
-project .jvp in one shot; no placeholder, no second project. The
-underscore-prefix alias is the sanctioned entry for headless callers
-(this script, the binding/integration tests in ``tests/binding/``)
-that can't drive the conversion dialog. ``ImportResolveProject`` is
-NOT the right tool here — it imports INTO an existing project (used
-when the user already has a .jvp open and wants to merge in a Resolve
-archive) and asserts on non-empty .jvp.
+Idempotent against the DRP fixture's sha256: re-runs only when the
+fixture changes (or with ``--force``). Result lives at
+``/tmp/jve_smoke/template.jvp``.
 """
 
 import argparse
@@ -85,12 +70,6 @@ def build(force: bool = False) -> Path:
     path_lit = str(scratch_jvp).replace("'", "\\'")
     drp_lit = str(drp_path).replace("'", "\\'")
 
-    # Single pass — call open_project._convert_drp_to_jvp directly.
-    # That's the same primitive the UI flow drives once the user has
-    # picked a destination path through the conversion dialog
-    # (File → Open → .drp → conversion_dialog → _convert_drp_to_jvp).
-    # The underscore-prefix alias exists for this exact use case:
-    # headless scripts and tests that can't click through the dialog.
     runner = JVERunner(
         socket_path="/tmp/jve_smoke_build.sock",
         stdout_log=fixtures.scratch_root / "build_template.log",

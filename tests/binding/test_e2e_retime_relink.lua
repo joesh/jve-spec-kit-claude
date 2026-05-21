@@ -28,8 +28,6 @@ os.remove(JVP_PATH .. "-wal")
 
 print("=== test_e2e_retime_relink.lua ===")
 print("[1/6] Converting DRP → " .. JVP_PATH)
--- 2026-05-21: convert orchestration moved from drp_importer to
--- open_project.lua. See drp_importer.lua "M.convert was removed" note.
 local convert_ok, convert_err = require("core.commands.open_project")
     ._convert_drp_to_jvp(DRP_PATH, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(convert_ok, "DRP convert failed: " .. tostring(convert_err))

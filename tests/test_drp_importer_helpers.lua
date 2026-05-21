@@ -1,8 +1,6 @@
 #!/usr/bin/env luajit
 --- Tests for drp_importer.derive_project_settings and
---- drp_importer.extract_tab_state — the format-knowledge helpers
---- introduced 2026-05-21 when the convert orchestration moved to
---- open_project.lua. Both are pure transforms on parse_result /
+--- drp_importer.extract_tab_state — pure transforms on parse_result /
 --- import_result tables; no DB, no Qt, no JVE process needed.
 
 require("test_env")
@@ -64,6 +62,39 @@ do
     print("  ✓ asserts on non-number audio_sample_rate")
 end
 
+-- Zero / negative audio rate → loud fail (NSF: must be positive).
+do
+    for _, bad in ipairs({0, -1, -48000}) do
+        local ok, err = pcall(drp_importer.derive_project_settings,
+            fake_parse_result(24, 1920, 1080), bad)
+        assert(not ok, "should refuse non-positive audio rate " .. tostring(bad))
+        assert(tostring(err):find("audio_sample_rate", 1, true),
+            "error names audio_sample_rate; got: " .. tostring(err))
+    end
+    print("  ✓ asserts on non-positive audio_sample_rate")
+end
+
+-- Non-positive frame_rate / width / height → loud fail (NSF: every
+-- field consumed from parse_result.project.settings must be sane).
+do
+    for _, bad_fr in ipairs({0, -24, "24"}) do
+        local ok = pcall(drp_importer.derive_project_settings,
+            fake_parse_result(bad_fr, 1920, 1080), 48000)
+        assert(not ok, "should refuse frame_rate " .. tostring(bad_fr))
+    end
+    for _, bad_w in ipairs({0, -1920, nil}) do
+        local ok = pcall(drp_importer.derive_project_settings,
+            fake_parse_result(24, bad_w, 1080), 48000)
+        assert(not ok, "should refuse width " .. tostring(bad_w))
+    end
+    for _, bad_h in ipairs({0, -1080, nil}) do
+        local ok = pcall(drp_importer.derive_project_settings,
+            fake_parse_result(24, 1920, bad_h), 48000)
+        assert(not ok, "should refuse height " .. tostring(bad_h))
+    end
+    print("  ✓ asserts on non-positive frame_rate/width/height")
+end
+
 -- ─── extract_tab_state ─────────────────────────────────────────────────────
 
 local function fake_parse_with_tabs(open_uuids, active_uuid)
@@ -100,6 +131,18 @@ do
     local tabs  = drp_importer.extract_tab_state(parse, imp)
     assert(tabs == nil, "empty open_timeline_ids → nil return")
     print("  ✓ returns nil when DRP has no open tabs (optional-data contract)")
+end
+
+-- import_result missing tab_uuid_to_sequence_id → loud fail (NSF Half 2:
+-- import_into_project must populate this; if it's nil/wrong-type the
+-- caller's open-tabs would silently come back empty).
+do
+    local parse = fake_parse_with_tabs({ "uuid-A" }, "uuid-A")
+    local ok, err = pcall(drp_importer.extract_tab_state, parse, { })
+    assert(not ok, "missing tab_uuid_to_sequence_id must raise")
+    assert(tostring(err):find("tab_uuid_to_sequence_id", 1, true),
+        "error names the missing field; got: " .. tostring(err))
+    print("  ✓ asserts on missing import_result.tab_uuid_to_sequence_id")
 end
 
 -- UUID mapping missing for an open tab → loud fail (silent drop would

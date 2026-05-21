@@ -11,8 +11,6 @@ require("test_env")
 local test_env = require("test_env")
 
 local database = require("core.database")
--- 2026-05-21: DRP convert orchestration lives in open_project.lua; see
--- drp_importer.lua "M.convert was removed" note.
 local open_project = require("core.commands.open_project")
 local validator = require("tests.helpers.project_validator")
 

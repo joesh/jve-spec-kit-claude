@@ -16,8 +16,6 @@ local Clip = require("models.clip")
 local Sequence = require("models.sequence")
 local Command = require("command")
 local validator = require("tests.helpers.project_validator")
--- 2026-05-21: DRP convert orchestration moved into open_project.lua;
--- see drp_importer.lua "M.convert was removed" note.
 local open_project = require("core.commands.open_project")
 
 -- =========================================================================

@@ -88,20 +88,9 @@ local function wipe_destination(jvp_path)
     os.remove(jvp_path .. "-wal")
 end
 
--- Open the destination as the active DB connection. database.init's
--- own asserts give noisy backtraces; we wrap and re-raise with a clean
--- one-line message so the convert log stays scannable.
-local function init_destination(jvp_path)
-    local ok, err = pcall(function() require("core.database").init(jvp_path) end)
-    if not ok then
-        error("Failed to create database: " .. tostring(err), 0)
-    end
-end
-
--- Create the Project row from a DRP parse_result + caller-resolved
--- settings. Project.create's settings field is JSON-encoded; assert on
--- :save() failure because a silent-skip would leave the .jvp with media
--- rows pointing at a non-existent project_id.
+-- Project:save returns false on no-connection rather than asserting, so
+-- the caller must check and surface — silent skip would leave the .jvp
+-- with media rows pointing at a non-existent project_id.
 local function create_project_record(parse_result, settings)
     local Project = require("models.project")
     local json    = require("dkjson")
@@ -109,9 +98,9 @@ local function create_project_record(parse_result, settings)
         settings            = json.encode(settings),
         fps_mismatch_policy = "resample",
     })
-    if not project:save() then
-        error("Failed to save project record", 0)
-    end
+    assert(project:save(), string.format(
+        "create_project_record: Project:save returned false for %q (id=%s)",
+        project.name, project.id))
     log.event("Created project: %s (%dx%d @ %sfps)",
         project.name, settings.width, settings.height,
         tostring(settings.frame_rate))
@@ -167,7 +156,7 @@ local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
 
         report(30, "Creating project database…")
         wipe_destination(jvp_path)
-        init_destination(jvp_path)
+        require("core.database").init(jvp_path)
         local project = create_project_record(parse_result, settings)
 
         report(40, "Importing media…")

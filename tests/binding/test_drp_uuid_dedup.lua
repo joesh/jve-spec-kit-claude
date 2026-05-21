@@ -41,11 +41,6 @@ assert(next(parse_result.media_items), "expected some media items")
 
 -- Step 2: Convert to JVP
 print("\n--- Step 2: Convert to JVP ---")
--- 2026-05-21: drp_importer.convert was retired (bundled DB lifecycle
--- with content production; bypassed OpenProject's signal cascade).
--- The convert orchestration lives in open_project.lua; the underscore-
--- prefixed alias is the sanctioned direct-call entry for tests like
--- this that exercise the convert primitive in isolation.
 local ok, err = require("core.commands.open_project")._convert_drp_to_jvp(
     fixture_path, JVP_PATH, nil, {audio_sample_rate = 48000})
 assert(ok, "convert failed: " .. tostring(err))

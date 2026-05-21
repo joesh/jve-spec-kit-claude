@@ -102,15 +102,7 @@ end
 local captured = capture_to_file(function()
     local database = require("core.database")
 
-    -- 1. Convert the DRP. This creates the .jvp via the convert
-    --    orchestration in open_project.lua: parse, derive settings,
-    --    DB lifecycle (rm + database.init swap), Project.create,
-    --    drp_importer.import_into_project, extract_tab_state +
-    --    persist, provenance record. 2026-05-21: the orchestration
-    --    moved from drp_importer.convert (now retired) into
-    --    open_project — see drp_importer.lua "M.convert was removed"
-    --    note. The underscore-prefixed alias is the sanctioned
-    --    direct-call entry for tests like this.
+    -- 1. Convert the DRP — produces the .jvp.
     local convert_ok = require("core.commands.open_project")
         ._convert_drp_to_jvp(DRP_PATH, JVP_PATH, function() end)
     assert(convert_ok, "INTEGRATION: _convert_drp_to_jvp returned falsey")

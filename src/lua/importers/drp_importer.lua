@@ -2356,8 +2356,6 @@ end
 -- media records, sequences, tracks, clips, A/V link groups.
 
 -- Models (SQL isolation: only what DRP-specific code needs post-extraction).
--- Project was previously required here for init_project_database (moved to
--- open_project.lua with the rest of the convert orchestration, 2026-05-21).
 local Sequence = require("models.sequence")
 
 -- ---------------------------------------------------------------------------
@@ -2531,10 +2529,6 @@ end
 -- uses.
 M.pick_majority_audio_sample_rate = pick_majority_audio_sample_rate
 
--- Create the project DB at jvp_path, build the Project row, and return
--- the saved project (asserts on save failure). Removes any existing
--- jvp/-shm/-wal at the target path first (caller already confirmed
--- overwrite in the save dialog).
 --- Derive the JVE project-settings table from a parsed DRP.
 -- Format-knowledge: which fields the parse_result carries + the
 -- master-clock / default-fps defaults JVE requires on every project
@@ -2548,12 +2542,23 @@ M.pick_majority_audio_sample_rate = pick_majority_audio_sample_rate
 function M.derive_project_settings(parse_result, audio_sample_rate)
     assert(parse_result and parse_result.project and parse_result.project.settings,
         "drp_importer.derive_project_settings: parse_result.project.settings required")
-    assert(type(audio_sample_rate) == "number",
-        "drp_importer.derive_project_settings: audio_sample_rate (number) required")
+    local s = parse_result.project.settings
+    assert(type(s.frame_rate) == "number" and s.frame_rate > 0, string.format(
+        "drp_importer.derive_project_settings: frame_rate must be a positive number; got %s",
+        tostring(s.frame_rate)))
+    assert(type(s.width) == "number" and s.width > 0, string.format(
+        "drp_importer.derive_project_settings: width must be a positive number; got %s",
+        tostring(s.width)))
+    assert(type(s.height) == "number" and s.height > 0, string.format(
+        "drp_importer.derive_project_settings: height must be a positive number; got %s",
+        tostring(s.height)))
+    assert(type(audio_sample_rate) == "number" and audio_sample_rate > 0, string.format(
+        "drp_importer.derive_project_settings: audio_sample_rate must be a positive number; got %s",
+        tostring(audio_sample_rate)))
     return {
-        frame_rate        = parse_result.project.settings.frame_rate,
-        width             = parse_result.project.settings.width,
-        height            = parse_result.project.settings.height,
+        frame_rate        = s.frame_rate,
+        width             = s.width,
+        height            = s.height,
         audio_sample_rate = audio_sample_rate,
         master_clock_hz   = subframe_math.MASTER_CLOCK_HZ,
         default_fps       = { num = 24, den = 1 },
@@ -2576,10 +2581,14 @@ function M.extract_tab_state(parse_result, import_result)
     assert(import_result,
         "drp_importer.extract_tab_state: import_result required")
 
-    local open_tab_uuids = parse_result.project.open_timeline_ids or {}
-    if #open_tab_uuids == 0 then return nil end
+    local open_tab_uuids = parse_result.project.open_timeline_ids
+    if not open_tab_uuids or #open_tab_uuids == 0 then return nil end
     local active_tab_uuid = parse_result.project.active_timeline_id
-    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id or {}
+    local tab_uuid_to_sequence_id = import_result.tab_uuid_to_sequence_id
+    assert(type(tab_uuid_to_sequence_id) == "table", string.format(
+        "drp_importer.extract_tab_state: import_result.tab_uuid_to_sequence_id "
+        .. "must be a table populated by import_into_project; got %s",
+        type(tab_uuid_to_sequence_id)))
 
     local open_sequence_ids, active_sequence_id = {}, nil
     for _, tab_uuid in ipairs(open_tab_uuids) do
@@ -2616,15 +2625,6 @@ function M.extract_tab_state(parse_result, import_result)
         active_sequence_id  = active_sequence_id,
     }
 end
-
--- ``M.convert`` was removed 2026-05-21. It bundled DB lifecycle
--- (os.remove + database.init swap) with content production and could
--- be called from outside the OpenProject signal cascade, leaving
--- listeners holding stale connections. The convert orchestration now
--- lives in src/lua/core/commands/open_project.lua. Tests / smoke
--- runners that need to materialize a .jvp from a .drp drive
--- ``OpenProject`` (or the underscore-prefixed
--- ``open_project._convert_drp_to_jvp`` for direct-call test contexts).
 
 M.frame_rate_to_rational = importer_core.frame_rate_to_rational
 M.decode_bt_clip_path = decode_bt_clip_path
