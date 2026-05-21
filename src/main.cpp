@@ -25,6 +25,7 @@
 #include "resource_paths.h"
 #include "assert_handler.h"
 #include "jve_log.h"
+#include "debug_terminal.h"
 #include "lua/qt_bindings/codec_probe_worker.h"
 
 static void printHelp(const char* programName)
@@ -36,6 +37,10 @@ static void printHelp(const char* programName)
     std::cout << "  --help, -h          Show this help message and exit\n";
     std::cout << "  --version, -v       Show version information and exit\n";
     std::cout << "  --test <script>     Run a Lua test script with full C++ bindings, then exit\n";
+    std::cout << "  --control-socket <path>\n";
+    std::cout << "                      Open a Lua REPL on the given Unix socket path\n";
+    std::cout << "                      for debugging + integration tests. DO NOT enable\n";
+    std::cout << "                      in production — gives full Lua-state access.\n";
     std::cout << "\n";
     std::cout << "Arguments:\n";
     std::cout << "  project.jvp         Path to project file (created if doesn't exist)\n";
@@ -105,8 +110,20 @@ int main(int argc, char *argv[])
 
     raiseFileDescriptorLimit();
 
-    // Handle --help, --version, and --test before creating QApplication
+    // Single argv scan: parse flags AND the project path here so the
+    // truth lives in one place. The project-path branch later in main()
+    // just reads what this loop assigned. Adding a new flag means
+    // touching only this loop.
     const char* testScript = nullptr;
+    const char* controlSocketPath = nullptr;
+    const char* projectArg = nullptr;
+    auto consumeValue = [&](int& i, const char* name) -> const char* {
+        if (i + 1 >= argc) {
+            std::cerr << "ERROR: " << name << " requires a value argument\n";
+            std::exit(1);
+        }
+        return argv[++i];
+    };
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
             printHelp(argv[0]);
@@ -117,13 +134,21 @@ int main(int argc, char *argv[])
             return 0;
         }
         if (std::strcmp(argv[i], "--test") == 0) {
-            if (i + 1 >= argc) {
-                std::cerr << "ERROR: --test requires a script path argument\n";
-                return 1;
-            }
-            testScript = argv[i + 1];
-            ++i; // skip the script argument in further parsing
+            testScript = consumeValue(i, "--test");
+            continue;
         }
+        if (std::strcmp(argv[i], "--control-socket") == 0) {
+            controlSocketPath = consumeValue(i, "--control-socket");
+            continue;
+        }
+        if (std::strncmp(argv[i], "--control-socket=", 17) == 0) {
+            controlSocketPath = argv[i] + 17;
+            continue;
+        }
+        if (std::strncmp(argv[i], "--", 2) == 0) {
+            continue;  // unknown flag — Qt or other consumer
+        }
+        if (!projectArg) projectArg = argv[i];
     }
 
     // Note: High DPI scaling is enabled by default in Qt 6
@@ -239,10 +264,10 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    // Determine project path (.jvp file)
+    // projectArg was set in the single argv scan at the top of main().
     QString projectPath;
-    if (argc > 1) {
-        projectPath = QString::fromLocal8Bit(argv[1]);
+    if (projectArg) {
+        projectPath = QString::fromLocal8Bit(projectArg);
         if (!projectPath.endsWith(".jvp", Qt::CaseInsensitive)) {
             projectPath += ".jvp";
         }
@@ -281,6 +306,23 @@ int main(int argc, char *argv[])
     if (!QFileInfo(mainWindowScript).exists()) {
         JVE_LOG_ERROR(Ui, "Main window script not found: %s", qPrintable(mainWindowScript));
         return -1;
+    }
+
+    // Optional Lua REPL debug terminal — start BEFORE running the main
+    // Lua script so it's available even on the welcome screen / when no
+    // project is open. CLI flag-gated; never on by default. Same Lua
+    // state as the main window. Single client at a time.
+    DebugTerminal* debug_terminal = nullptr;
+    if (controlSocketPath) {
+        debug_terminal = new DebugTerminal(
+            QString::fromLocal8Bit(controlSocketPath),
+            luaEngine.getLuaState(),
+            &app);
+        if (!debug_terminal->start()) {
+            JVE_LOG_ERROR(Ui, "Debug terminal failed to start; continuing without it");
+            delete debug_terminal;
+            debug_terminal = nullptr;
+        }
     }
 
     // Execute Lua main window creation with real LuaJIT integration

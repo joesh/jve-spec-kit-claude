@@ -28,6 +28,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Test
     Gui
     Multimedia
+    Network    # QLocalServer for debug_terminal
 )
 
 # Find SQLite (usually comes with Qt6::Sql)
@@ -142,6 +143,7 @@ set(CORE_SOURCES
     src/assert_handler.cpp
     src/jve_log.cpp
     src/jve_lua_callback.cpp
+    src/debug_terminal.cpp
 
     # Bug reporter system
     src/bug_reporter/gesture_logger.cpp
@@ -191,6 +193,7 @@ target_link_libraries(JVECore
     Qt6::Sql
     Qt6::Gui
     Qt6::Multimedia
+    Qt6::Network    # QLocalServer/QLocalSocket for debug_terminal.cpp
     SQLite::SQLite3
     ${LUAJIT_LIBRARIES}
     ${ZSTD_LIBRARIES}
