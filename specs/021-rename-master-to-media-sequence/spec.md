@@ -1,8 +1,8 @@
 # Feature Specification: Rename "master clip" → "media sequence", "regular sequence" → "clip sequence"
 
-**Feature Branch**: `020-rename-master-to-media-sequence`
+**Feature Branch**: `021-rename-master-to-media-sequence`
 **Created**: 2026-05-19
-**Status**: Draft (renumbered from 019 → 020 on 2026-05-19 to put `019-source-viewer-clip-mode` ahead per implementation order)
+**Status**: Draft (renumbered 019 → 020 on 2026-05-19, then 020 → 021 on 2026-05-20 to put `020-debug-terminal` ahead per implementation order)
 
 ---
 
