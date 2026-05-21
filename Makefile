@@ -3,7 +3,8 @@
 
 BUILD_DIR = build
 
-.PHONY: all build clean install help configure reconfigure luacheck nav-index test
+.PHONY: all build clean install help configure reconfigure luacheck nav-index test \
+        smoke smoke-coverage smoke-template
 
 # Default target: lint, build, and run all tests.
 #
@@ -45,6 +46,25 @@ install:
 luacheck:
 	@luacheck src tests
 
+# ---- Smoke (spec 020 Phase 1) ----
+# Long-lived JVE + external Python runner. See
+# specs/020-debug-terminal/phase1-test-overhaul.md.
+
+# Static coverage audit — every registered command / keymap entry /
+# menu item has a corresponding test. No JVE launch; fast (<1s).
+smoke-coverage:
+	@python3 tests/smoke/runner/coverage.py
+
+# Build the Anamnesis template .jvp that smoke tests copy per-case.
+# Idempotent — re-runs only when the DRP fixture hash changes (or --force).
+smoke-template: build
+	@python3 tests/smoke/runner/build_template.py
+
+# Run the Phase A/B/C smoke suite via stdlib unittest discovery.
+# Requires: built JVEEditor binary + smoke-template up to date.
+smoke: build
+	@python3 -m unittest discover -s tests/smoke/cases -p "test_*.py" -v
+
 # Configure CMake (automatic)
 configure:
 	@if [ ! -f "$(BUILD_DIR)/Makefile" ]; then \
@@ -72,6 +92,9 @@ help:
 	@echo "  reconfigure  - Force CMake reconfiguration"
 	@echo "  luacheck     - Run Lua lint (luacheck) across src/tests"
 	@echo "  nav-index    - Generate navigation indexes (ctags, symbols.json, commands.json)"
+	@echo "  smoke        - Run smoke suite (long-lived JVE + Python runner)"
+	@echo "  smoke-template - (Re)build Anamnesis .jvp template smoke tests copy from"
+	@echo "  smoke-coverage - Audit: every command/keymap/menu entry has a test"
 	@echo "  help         - Show this help message"
 	@echo ""
 	@echo "Example usage:"
