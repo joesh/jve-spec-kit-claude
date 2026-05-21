@@ -67,18 +67,33 @@ make clean          # Clean build artifacts
 # Run the application
 ./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
 
-## Dev Cycle
-After any Lua change: `make -j4` which will run luacheck (0 warnings required) and all the Lua tests
+## Dev Cycle — what to run after a change
 
-## Running Tests
+Pick the single command that matches what you touched. The "final check" rows are mutually exclusive: running both in sequence is pure redundancy because `make -j4` already runs the full Lua suite.
+
+| What you touched | Iteration loop                                              | Final check                |
+|------------------|-------------------------------------------------------------|----------------------------|
+| Lua only         | `cd tests && luajit test_harness.lua test_thing.lua`        | `./tests/run_lua_tests_all.sh` |
+| C++ only         | `cd build && make JVEEditor -j4` (rebuilds binary, no tests) | `make -j4`                 |
+| Lua + C++        | one of the above per iteration                              | `make -j4`                 |
+
+`make -j4` runs everything (C++ compile, luacheck, full Lua suite, C++ tests, binding tests, integration tests). It is **never** correct to run `./tests/run_lua_tests_all.sh` *and* `make -j4` for the same change — `make -j4` already runs that script. Pick the one for your change class.
+
+`make JVEEditor -j4` is the one exception that skips tests — use it during rapid UI iteration where you'll exercise the editor manually. Final validation still goes through the right row above.
+
+Never run `make | grep` directly — `make` takes real wall time. Redirect to `/tmp` and grep the file:
 ```bash
-# Run all Lua tests without stopping when one errors
-./tests/run_lua_tests_all.sh
+make -j4 > /tmp/make.log 2>&1; grep -E "warning:|error:|FAILED" /tmp/make.log
+```
 
+## Running tests (mechanics)
+```bash
 # Run a single test (from tests/ directory)
 cd tests && luajit test_harness.lua test_example.lua
 
-# Test output goes to test-errors.txt for failures
+# Run all Lua tests without stopping when one errors
+./tests/run_lua_tests_all.sh
+# Failures land in test-errors.txt
 ```
 
 Tests are LuaJIT scripts in `tests/` with `test_*.lua` naming. Each test:
