@@ -965,16 +965,26 @@ local function create_shortcut_handler(binding)
             params._positional = binding.positional_args
         end
 
-        local ok, err = pcall(command_manager.execute_interactive, binding.command_name, params)
+        local ok, result_or_err = pcall(command_manager.execute_interactive, binding.command_name, params)
 
         if owns_event then
             command_manager.end_command_event()
         end
 
+        -- Fail loud per CLAUDE.md §1.14: no silent error handling. Both
+        -- branches assert — pcall-level Lua errors AND clean `success=false`
+        -- returns from the command. The second case is the regression-class
+        -- that motivated this: a nested command can return success=false
+        -- (with an error_message) and the user sees nothing.
         if not ok then
-            -- Fail loud per CLAUDE.md §1.14: no silent error handling
             assert(false, string.format(
-                "shortcut handler %s: %s", binding.command_name, tostring(err)))
+                "shortcut handler %s: %s", binding.command_name, tostring(result_or_err)))
+        end
+        if type(result_or_err) == "table" and result_or_err.success == false then
+            assert(false, string.format(
+                "shortcut handler %s returned success=false: %s",
+                binding.command_name,
+                tostring(result_or_err.error_message or "(no error_message)")))
         end
     end
 
