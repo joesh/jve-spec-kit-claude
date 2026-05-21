@@ -1,16 +1,22 @@
---- 019 smoke test: full user-flow through the live-bound source-viewer feature.
---
--- Runs inside `./build/bin/JVEEditor --test` against the real Qt + UI stack
--- with a real project DB. Drives every 019 codepath end-to-end as one
--- continuous user journey (no per-scenario db tear-down) so any wiring
--- regression — signal payload, mode transition, command dispatch, monitor
--- bind, selection_hub publish, effective_source override channel — shows
--- up here even if the focused unit tests are green.
---
--- Smoke, not exhaustive — boundaries and error cases are covered by the
--- focused tests (test_source_viewer_load_clip, test_effective_source,
--- test_clear_marks_disabled_in_live_bound, test_overwrite_trim_edge,
--- test_timeline_double_click_dispatches_open_clip). This pins the through-line.
+--- 019 integration test — full user-flow through the live-bound
+--- source-viewer feature.
+---
+--- NOT a smoke test by the strict definition (see
+--- feedback_smoke_tests_real_keypress_only.md): this dispatches commands
+--- via `command_manager.execute_interactive(...)` rather than driving
+--- through real OS key events. Doing the latter requires the external
+--- test-runner architecture in spec 020 Phase 1 (FR-101) — when that
+--- lands, the file is renamed back to _smoke and rewritten to use
+--- foregrounded JVE + CGEventPost from outside the process.
+---
+--- What it covers: every 019 codepath end-to-end as one continuous
+--- journey (no per-scenario teardown) — signal payload, mode transition,
+--- command dispatch, monitor bind, selection_hub publish,
+--- effective_source override channel. Catches wiring regressions even
+--- when focused unit tests stay green. Boundaries and error cases live
+--- in the focused tests (test_source_viewer_load_clip,
+--- test_effective_source, test_clear_marks_disabled_in_live_bound,
+--- test_overwrite_trim_edge, test_timeline_double_click_dispatches_open_clip).
 
 local saved_home = os.getenv("HOME") or ""
 local ffi = require("ffi")
@@ -18,7 +24,7 @@ ffi.cdef[[ int setenv(const char *name, const char *value, int overwrite); ]]
 ffi.C.setenv("HOME", "/tmp/jve_test_home", 1)
 os.execute("mkdir -p /tmp/jve_test_home/.jve")
 
-print("=== test_019_source_viewer_smoke ===")
+print("=== test_019_source_viewer_integration ===")
 
 -- ── Seed DB ──────────────────────────────────────────────────────────────────
 
@@ -186,16 +192,15 @@ check("trim mode toggled back to overwrite",
 -- ── Scenario 5: I-key dispatch in live-bound mode → OverwriteTrimEdge fires ──
 --   Default trim mode is overwrite; with playhead parked at 130 (set on the
 --   source monitor's engine first), pressing I should shrink the head by 30
---   frames (delta = 130 - 100). Dispatch via the SAME route the keymap takes:
---   SetMark command (NOT a direct handle_mark_key call) — that's the path
---   the buggy 2026-05-20 master shipped with SetMark mutating the sequence
---   row instead of trimming the clip.
+--   frames (delta = 130 - 100). Dispatch via the SAME command the keymap
+--   resolves to for @source_monitor scope: SetMarkAndTrimIfClip. (Plain
+--   SetMark is still bound to the timeline scopes and stays pure.)
 
-print("\n-- 5. SetMark 'in' (the I-key keymap path) → OverwriteTrimEdge in live-bound --")
+print("\n-- 5. SetMarkAndTrimIfClip 'in' (the I-key @source_monitor path) → OverwriteTrimEdge in live-bound --")
 src_monitor.engine:seek(130)
 ui.pump(50)
 
-require("core.command_manager").execute_interactive("SetMark", {
+require("core.command_manager").execute_interactive("SetMarkAndTrimIfClip", {
     _positional = { "in" },
 })
 ui.pump(100)
@@ -234,9 +239,9 @@ check("effective_source.get() == nil after unload",
 
 print("")
 if #failures == 0 then
-    print("✅ test_019_source_viewer_smoke passed")
+    print("✅ test_019_source_viewer_integration passed")
 else
-    print(string.format("❌ test_019_source_viewer_smoke FAILED — %d broken behavior(s):", #failures))
+    print(string.format("❌ test_019_source_viewer_integration FAILED — %d broken behavior(s):", #failures))
     for _, label in ipairs(failures) do
         print("    - " .. label)
     end
