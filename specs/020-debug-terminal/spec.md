@@ -108,6 +108,6 @@ The `input_bindings.cpp` binding stays in the tree but is not directly used by t
 
 ## Memory / cross-spec notes
 
-- This spec is the foundation for the test-overhaul plan (separate doc). Smoke tests post-020 will run JVE once with `--control-socket`, drive it from an external runner, and verify outcomes through the socket.
+- Phase 1 is the consumer of this primitive — see [phase1-test-overhaul.md](phase1-test-overhaul.md) for the test taxonomy, long-lived runner architecture, three coverage axes (every registered command / every keymap entry / every menu item), and the Phase A/B/C plan. Smoke tests post-020 run JVE once with `--control-socket`, drive it from an external Python runner via real OS-level input (cliclick / osascript), and verify outcomes through the socket.
 - The CGEventPost binding (in `input_bindings.cpp`) was an unsuccessful in-process attempt at the same problem. Kept for Phase 1 / external-runner use, where the runner is foregrounded and posting events to JVE works correctly.
 - See [feedback_smoke_tests_real_keypress_only.md](../../.claude/projects/-Users-joe-Local-jve-spec-kit-claude/memory/feedback_smoke_tests_real_keypress_only.md) for the rule that motivated this entire arc.
