@@ -128,7 +128,7 @@ Single client, synchronous, one request → one response. No subscriptions, no s
 
 ## Runner language — Python
 
-stdlib `socket` (AF_UNIX, SOCK_STREAM) + `subprocess` (cliclick, osascript) + `unittest` covers everything. Zero new install on a typical dev mac. Considered Lua: keeps one-language discipline but `cliclick`/`osascript` shell-out plus socket framing in pure LuaJIT is unergonomic, and the test fixture file (`anamnesis-gold-timeline.drp`) is binary-handled by external tools anyway. Python pays for itself in test-author ergonomics.
+stdlib `socket` (AF_UNIX, SOCK_STREAM) + `subprocess` (osascript; cliclick as future fast-path) + stdlib `unittest` covers everything. Zero new install on a typical dev mac — no `pip install`, no virtualenv. unittest test classes are pytest-discoverable as-is, so a future move to pytest stays a one-line `pip install` away. Considered Lua: keeps one-language discipline but `osascript` shell-out plus socket framing in pure LuaJIT is unergonomic, and the test fixture file (`anamnesis-gold-timeline.drp`) is binary-handled by external tools anyway. Python pays for itself in test-author ergonomics.
 
 Boundary: Python lives only under `tests/smoke/runner/` and `tests/smoke/test_*.py`. JVE never imports Python. No build dependency. Runner ships as a Python script; CI installs `cliclick` from Homebrew on macOS runners.
 
@@ -233,7 +233,7 @@ The suite must cover three independent things. A single test typically hits one 
 - **Interactive command** (the kind you bind to a key or menu) → Command tier as above PLUS Smoke coverage of at least one invocation surface (key or menu) that reaches it. Catches the dispatch-chain regressions that drove this whole arc.
 - **Non-undoable command** (`SPEC.undoable = false`) — same as above minus the undo half.
 
-CI guard `check_command_coverage.py` walks `command_registry.lua` + finds matching test files (`tests/command/test_<command_name>.lua` or `tests/smoke/test_keymap_*.py` referencing the command). Missing → fail.
+CI guard `tests/smoke/runner/coverage.py` walks `command_registry.lua` + `src/lua/core/commands/`, then matches against test files under `tests/command/` (canonical) **or** `tests/test_<snake>.lua` / `tests/test_<snake>_*.lua` (legacy variant naming, accepted during the migration window). Missing → fail. Once the reorg moves all legacy variants into `tests/command/`, the legacy path falls out of the matcher.
 
 ### Axis 2 — every keymap entry
 
@@ -370,6 +370,13 @@ README.md                                        [MODIFIED] dev-onboarding updat
 ---
 
 ## Open questions
+
+- **Anamnesis template construction** (discovered 2026-05-21 during runner bring-up). `ImportResolveProject` creates a NEW project in the active .jvp alongside the placeholder created from `project_templates.create_project_from_template`. The resulting .jvp has 2 projects, which JVE refuses to reopen (`database.get_current_project_id`: `FATAL: Multiple projects exist`). Three plausible resolutions:
+  1. Add a project-delete API and drop the placeholder after import.
+  2. Build a smaller hand-crafted fixture via the model layer (Sequence.create + Clip.create) — sufficient for Phase A keymap smokes which only need a couple of clips on a track. Sacrifices Anamnesis-as-realistic-data but bypasses the import path entirely.
+  3. Teach `ImportResolveProject` to overwrite the existing project when invoked from a smoke-build context (probably wrong — would mask user-facing import behavior).
+  Runner + sanity tests don't depend on the template; Phase A keymap smokes do. Pending Joe's call before further work on the template.
+
 
 - **`cliclick` vs `osascript` for keys.** `cliclick` is faster + cleaner per-keystroke; `osascript` handles modifier combos that cliclick sometimes mis-encodes. Default = `cliclick`, fallback table for known cliclick gaps. *Recommendation: start cliclick-only, add fallbacks as bugs surface.*
 - **Anamnesis template invalidation.** Hash the DRP fixture; rebuild template when hash changes. Manual rebuild via `make smoke-template`. *Recommendation: yes, hash-based; cheap.*

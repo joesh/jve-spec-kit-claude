@@ -184,7 +184,8 @@ class JVERunner:
         project_changed cascade so every registered listener tears down."""
         path = str(jvp_path).replace("'", "\\'")
         self.eval(
-            f"require('core.open_project').execute({{ project_path = '{path}' }})")
+            "require('core.command_manager').execute('OpenProject', "
+            f"{{ project_path = '{path}' }})")
 
     def foreground(self) -> None:
         """Bring JVE's app to the foreground so OS keypresses route to it.
