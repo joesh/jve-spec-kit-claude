@@ -26,36 +26,7 @@ local SPEC = {
     persisted = {},  -- Delegates to Nudge / BatchRippleEdit for undo state.
 }
 
--- Build BatchRippleEdit-shaped edge_infos by joining selected_edges (which
--- carry edge_type and trim_type) against the active clips (which carry
--- track_id). The keyboard layer used to do this join inline; centralizing
--- it here keeps the dispatch in one place.
---
--- Asserts every selected edge resolves to a clip on the timeline. A
--- mismatch means selection state is out of sync with the timeline model
--- — a real bug upstream — and silently dropping the edge would let it
--- accumulate. Crash with the offending clip_id so the upstream cause
--- is identifiable.
-local function build_edge_infos(selected_edges, all_clips)
-    local clip_by_id = {}
-    for _, c in ipairs(all_clips) do clip_by_id[c.id] = c end
-
-    local edge_infos = {}
-    for _, edge in ipairs(selected_edges) do
-        local clip = clip_by_id[edge.clip_id]
-        assert(clip, string.format(
-            "NudgeSelection: selected edge references clip_id=%s, "
-            .. "which is not on the active timeline (selection is stale)",
-            tostring(edge.clip_id)))
-        edge_infos[#edge_infos + 1] = {
-            clip_id   = edge.clip_id,
-            edge_type = edge.edge_type,
-            track_id  = clip.track_id,
-            trim_type = edge.trim_type,
-        }
-    end
-    return edge_infos
-end
+local edge_decoration = require("ui.timeline.edge_decoration")
 
 function M.register(command_executors, command_undoers, _db, _set_last_error)
     command_executors["NudgeSelection"] = function(command)
@@ -77,17 +48,19 @@ function M.register(command_executors, command_undoers, _db, _set_last_error)
         local selected_clips = timeline_state.get_selected_clips()
 
         if selected_edges and #selected_edges > 0 then
-            local edge_infos = build_edge_infos(selected_edges, timeline_state.get_clips())
+            local edge_infos = edge_decoration.decorate(
+                selected_edges, timeline_state.get_clips(), "NudgeSelection")
             local result = command_manager.execute("BatchRippleEdit", {
                 edge_infos   = edge_infos,
                 delta_frames = delta,
                 sequence_id  = args.sequence_id,
                 project_id   = args.project_id,
             })
-            if not result or not result.success then
-                local msg = result and result.error_message or "BatchRippleEdit failed"
-                return false, "NudgeSelection: " .. msg
-            end
+            assert(result and result.success, string.format(
+                "NudgeSelection: nested BatchRippleEdit failed: %s "
+                .. "(edges=%d delta=%d)",
+                tostring(result and result.error_message or "no result"),
+                #edge_infos, delta))
             return true
         end
 
@@ -102,10 +75,10 @@ function M.register(command_executors, command_undoers, _db, _set_last_error)
                 sequence_id       = args.sequence_id,
                 project_id        = args.project_id,
             })
-            if not result or not result.success then
-                local msg = result and result.error_message or "Nudge failed"
-                return false, "NudgeSelection: " .. msg
-            end
+            assert(result and result.success, string.format(
+                "NudgeSelection: nested Nudge failed: %s (clips=%d delta=%d)",
+                tostring(result and result.error_message or "no result"),
+                #clip_ids, delta))
             return true
         end
 

@@ -294,7 +294,7 @@ do
     ripple_calls = {}
     -- Gap clip at [50, 100), out edge at 100. Playhead at 80.
     -- delta = 80 - 100 = -20 (shrink gap from the right)
-    clip_store["gap_t1_50"] = {
+    local gap_clip = {
         id = "gap_t1_50",
         sequence_start = 50,
         duration = 50,
@@ -305,6 +305,12 @@ do
         frame_rate = { fps_numerator = 24, fps_denominator = 1 },
         fps_numerator = 24,
         fps_denominator = 1,
+    }
+    clip_store["gap_t1_50"] = gap_clip
+    -- Gap clips resolve via timeline_state.get_clip_by_id per the 005
+    -- gap-as-clip refactor; ExtendEdit reaches there for gap_* ids.
+    package.loaded["ui.timeline.timeline_state"] = {
+        get_clip_by_id = function(id) return id == "gap_t1_50" and gap_clip or nil end,
     }
 
     local cmd = Command.create("ExtendEdit", "p1")

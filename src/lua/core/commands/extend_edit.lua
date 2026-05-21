@@ -24,41 +24,19 @@ local SPEC = {
     persisted = {},  -- Delegates to BatchRippleEdit for undo
 }
 
--- Gather selected edges from timeline_state and decorate with track_id +
--- trim_type by joining against the active clip set. Mirrors the join the
--- keyboard layer used to do; keeping it here means UI-facing dispatch sites
--- stay thin.
---
--- Asserts every selected edge resolves to a clip on the timeline. A
--- mismatch means selection state is out of sync with the timeline model
--- — silently dropping the edge would mask that bug. Crash with the
--- offending clip_id so the upstream cause is identifiable.
+local edge_decoration = require("ui.timeline.edge_decoration")
+
+-- Pull selected edges off the active timeline_state and decorate them
+-- with track_id via the shared edge_decoration helper. Thin wrapper so
+-- the dispatch path stays one line.
 local function gather_edge_infos_from_selection()
     local ts = require("ui.timeline.timeline_state")
     local selected_edges = ts.get_selected_edges()
     if not selected_edges or #selected_edges == 0 then return {} end
-
-    local clip_by_id = {}
-    for _, c in ipairs(ts.get_clips()) do clip_by_id[c.id] = c end
-
-    local edge_infos = {}
-    for _, edge in ipairs(selected_edges) do
-        local clip = clip_by_id[edge.clip_id]
-        assert(clip, string.format(
-            "ExtendEdit: selected edge references clip_id=%s, "
-            .. "which is not on the active timeline (selection is stale)",
-            tostring(edge.clip_id)))
-        edge_infos[#edge_infos + 1] = {
-            clip_id   = edge.clip_id,
-            edge_type = edge.edge_type,
-            track_id  = clip.track_id,
-            trim_type = edge.trim_type,
-        }
-    end
-    return edge_infos
+    return edge_decoration.decorate(selected_edges, ts.get_clips(), "ExtendEdit")
 end
 
-function M.register(command_executors, command_undoers, db, set_last_error)
+function M.register(command_executors, command_undoers, _db, _set_last_error)
     command_executors["ExtendEdit"] = function(command)
         local args = command:get_all_parameters()
         local log = require("core.logger").for_area("commands")
@@ -81,29 +59,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         log.event("ExtendEdit edges=%d playhead=%d", #edge_infos, playhead)
 
-        -- Compute delta for each edge to reach playhead
-        -- For simplicity, use lead edge (first edge) to compute single delta
-        -- (multi-edge extend with different deltas would need BatchRippleEdit enhancement)
+        -- Single-edge extend: lead edge drives the delta. Multi-edge with
+        -- divergent deltas would require a BatchRippleEdit enhancement
+        -- that isn't built yet; today's UX is "select one edge, press E."
         local lead_edge = edge_infos[1]
-        -- Try to find the clip: DB for media clips, timeline_state for gap clips.
-        local is_gap_clip = type(lead_edge.clip_id) == "string" and lead_edge.clip_id:find("^gap_")
+        local is_gap_clip = type(lead_edge.clip_id) == "string"
+            and lead_edge.clip_id:find("^gap_") ~= nil
         local clip
         if is_gap_clip then
-            -- Gap clips are in-memory only. Try timeline_state first, then load_optional.
-            local ts = package.loaded["ui.timeline.timeline_state"]
-            if ts and ts.get_clip_by_id then
-                clip = ts.get_clip_by_id(lead_edge.clip_id)
-            end
-            if not clip and Clip.load_optional then
-                clip = Clip.load_optional(lead_edge.clip_id)
-            end
+            -- Gap clips live in timeline_state only (in-memory, never
+            -- persisted per the 005 gap-as-clip refactor). timeline_state
+            -- is necessarily loaded — selected_edges came from it.
+            clip = require("ui.timeline.timeline_state").get_clip_by_id(lead_edge.clip_id)
         else
             clip = Clip.load(lead_edge.clip_id)
         end
-        if not clip then
-            set_last_error(string.format("ExtendEdit: clip not found: %s", lead_edge.clip_id))
-            return false
-        end
+        assert(clip, string.format(
+            "ExtendEdit: clip not found (id=%s, is_gap=%s)",
+            tostring(lead_edge.clip_id), tostring(is_gap_clip)))
 
         -- Compute current edge position
         local edge_position
@@ -112,8 +85,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         elseif lead_edge.edge_type == "out" then
             edge_position = clip.sequence_start + clip.duration
         else
-            set_last_error(string.format("ExtendEdit: unknown edge_type: %s", tostring(lead_edge.edge_type)))
-            return false
+            assert(false, string.format(
+                "ExtendEdit: unknown edge_type: %s (must be 'in' or 'out')",
+                tostring(lead_edge.edge_type)))
         end
 
         -- Delta = how much to move edge to reach playhead
@@ -140,11 +114,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             project_id = args.project_id,
         })
 
-        if not result or not result.success then
-            local msg = result and result.error_message or "RippleEdit/BatchRippleEdit failed"
-            set_last_error("ExtendEdit: " .. msg)
-            return false
-        end
+        assert(result and result.success, string.format(
+            "ExtendEdit: nested BatchRippleEdit failed: %s "
+            .. "(edges=%d delta=%d playhead=%d edge_position=%d)",
+            tostring(result and result.error_message or "no result"),
+            #edge_infos, delta_frames, playhead, edge_position))
 
         log.event("ExtendEdit: completed, delta=%d frames", delta_frames)
         return true
