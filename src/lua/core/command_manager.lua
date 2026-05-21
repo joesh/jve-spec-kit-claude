@@ -1350,13 +1350,13 @@ end
 -- Main execute function
 -- 017 FR-005/020/021a: sequence_id + playhead auto-injection.
 --
--- Single rule, driven by the schema arg's `required` flag:
+-- Routing class is derived from the schema arg's `required` flag:
 --   args.sequence_id = { required = true }   → ACTIVE-RECORD routing.
 --     Edit-class commands (Insert, Overwrite, Blade, Trim, Nudge,
---     SelectClips, AddTrack, etc.) always land on the active record
---     regardless of what the user is parked on — you can't edit the
---     master from the source tab.
---   args.sequence_id = {}  (not required)     → DISPLAYED-SIDE routing.
+--     ExtendEdit, SelectClips, AddTrack, etc.) always land on the
+--     active record regardless of what the user is parked on — you
+--     can't edit the master from the source tab.
+--   args.sequence_id = {}  (not required)    → DISPLAYED-SIDE routing.
 --     Movement-class (MovePlayhead, GoToStart/End, SetMark, etc.) acts
 --     on whatever the user is parked on (source tab/viewer or record
 --     timeline) per transport.engine_for_target().
@@ -1369,49 +1369,156 @@ end
 --     by sequence-management commands (DeleteSequence, RenameSequence)
 --     and metadata setters where the caller (menu, dialog, tree click)
 --     always supplies an explicit id.
-local function inject_sequence_context(command_or_name, params)
-    if type(command_or_name) ~= "string" then return end
-    if params.sequence_id ~= nil then return end
+--
+-- Playhead auto-injection (centralized — Insert/Overwrite/ExtendEdit etc.
+-- no longer resolve it locally): any command whose SPEC declares
+-- `args.playhead` receives it from the routing-appropriate transport
+-- engine. Pre-bootstrap (headless tests), the persisted
+-- `sequences.playhead_position` is the authoritative source — the same
+-- value the transport engine would converge to once bootstrapped.
 
-    local spec = registry.get_spec(command_or_name)
-    if spec == nil then return end
+-- Classify the routing class for a command's SPEC. Returns
+-- "active_record", "movement", or "none".
+local function classify_routing(spec)
+    if spec.caller_supplied_sequence_id == true then return "none" end
     local seq_arg = spec.args and spec.args.sequence_id
-    if seq_arg == nil then return end
+    if spec.targets_rec_sequence == true then return "active_record" end
+    if seq_arg == nil then return "none" end
+    if seq_arg.required == true then return "active_record" end
+    return "movement"
+end
 
-    if spec.caller_supplied_sequence_id == true then return end
+-- Resolve the transport engine relevant to a routing class. nil when
+-- transport hasn't been bootstrapped (headless tests, pre-project boot).
+-- Precondition: routing ∈ {"active_record","movement"}. Statically
+-- enforced by classify_routing's return type + inject_context's
+-- "none" guard, so no runtime assert here (per ENG 2.21
+-- statically-verifiable preferred over runtime checks).
+local function transport_engine_for_routing(routing)
+    local transport = require("core.playback.transport")
+    if not transport.is_bootstrapped() then return nil end
+    if routing == "active_record" then
+        return transport.engine_for_role("record")
+    end
+    return transport.engine_for_target()
+end
 
-    if spec.targets_rec_sequence == true or seq_arg.required == true then
-        if active_sequence_id ~= nil and active_sequence_id ~= "" then
-            params.sequence_id = active_sequence_id
+-- Resolve sequence_id from transport (live binding) or, pre-bootstrap,
+-- from the module-level active_sequence_id. Returns nil when neither is
+-- available; the caller surfaces that via schema-required validation.
+local function resolve_injected_sequence_id(te)
+    if te and te.loaded_sequence_id then
+        return te.loaded_sequence_id
+    end
+    if active_sequence_id and active_sequence_id ~= "" then
+        return active_sequence_id
+    end
+    return nil
+end
+
+-- Resolve playhead for MOVEMENT-class commands. Authority is the live
+-- transport engine, ONLY when it's currently bound to a sequence —
+-- otherwise its position is meaningless. Pre-bootstrap or unbound:
+-- no injection; commands fall back to their own "ask the active
+-- sequence monitor" surface (SetMark, MovePlayhead's executor).
+local function resolve_movement_playhead(te)
+    if not (te and te.loaded_sequence_id) then return nil end
+    return te:get_position()
+end
+
+-- Resolve playhead for ACTIVE-RECORD-class commands. Authority is the
+-- record engine when it's bound to our sequence; otherwise the model's
+-- persisted playhead_position (authoritative for headless tests and for
+-- engines bootstrapped but not yet bound).
+local function resolve_active_record_playhead(te, sequence_id)
+    if not (sequence_id and sequence_id ~= "") then return nil end
+    if te and te.loaded_sequence_id == sequence_id then
+        local pos = te:get_position()
+        if pos ~= nil then return pos end
+    end
+    local Sequence = require("models.sequence")
+    local seq = Sequence.find(sequence_id)
+    if not seq then return nil end
+    return seq.playhead_position
+end
+
+-- Inject sequence_id and/or playhead into `params` based on the command's
+-- SPEC. Single entry point for both string-form and object-form dispatch.
+--
+-- Per-routing contracts:
+--   MOVEMENT (017 FR-005, unchanged): sequence_id and playhead are PAIRED
+--     via transport.engine_for_target() — the displayed-side engine owns
+--     both. Inject the pair only when sequence_id is absent; if the caller
+--     pinned sequence_id, the transport's playhead may belong to a
+--     different sequence and is therefore not trustworthy. Executor falls
+--     back to timeline_state.get_playhead_position or its own monitor
+--     query in that case.
+--   ACTIVE-RECORD: sequence_id and playhead are INDEPENDENT. The active
+--     record is well-defined regardless of caller-supplied sequence_id;
+--     playhead comes from the record engine when bound, else the model's
+--     persisted `sequences.playhead_position`.
+--
+-- opts.inject_sequence_id (default true): when false, sequence_id is
+-- never auto-filled. Object-form callers (M.execute(cmd)) set this to
+-- false because they own their sequence_id by contract — a Command
+-- object built in script context that omits sequence_id did so on
+-- purpose (ImportMedia, undo/redo replay, etc.). Playhead injection is
+-- governed by SPEC.args.playhead regardless.
+local function inject_context(command_type, params, opts)
+    if type(command_type) ~= "string" then return end
+
+    local spec = registry.get_spec(command_type)
+    if not spec then return end
+
+    local routing = classify_routing(spec)
+    if routing == "none" then return end
+
+    opts = opts or {}
+    local may_inject_sequence_id = (opts.inject_sequence_id ~= false)
+
+    if routing == "movement" then
+        -- Paired: inject only if sequence_id is missing AND allowed.
+        if params.sequence_id ~= nil then return end
+        if not may_inject_sequence_id then return end
+        local te = transport_engine_for_routing(routing)
+        params.sequence_id = resolve_injected_sequence_id(te)
+        if params.playhead == nil then
+            params.playhead = resolve_movement_playhead(te)
         end
         return
     end
 
-    -- Movement-class routing — single source: transport.engine_for_target().
-    -- Pre-bootstrap (no transport, e.g. tests that command_manager.init
-    -- without opening a project): use active_sequence_id. That's the same
-    -- value transport.engine_for_target() would resolve to once bootstrapped
-    -- under the default target ('record' per FR-008a), so it's not a
-    -- competing source — it's the same source, observed earlier.
-    local transport = require("core.playback.transport")
-    if transport.is_bootstrapped() then
-        local te = transport.engine_for_target()
-        if te ~= nil and te.loaded_sequence_id ~= nil then
-            params.sequence_id = te.loaded_sequence_id
-            if params.playhead == nil then
-                params.playhead = te:get_position()
-            end
-            return
-        end
+    -- routing == "active_record": independent injection.
+    local needs_sequence_id = may_inject_sequence_id and (params.sequence_id == nil)
+    local needs_playhead = (params.playhead == nil
+        and spec.args and spec.args.playhead ~= nil)
+    if not (needs_sequence_id or needs_playhead) then return end
+
+    local te = transport_engine_for_routing(routing)
+    if needs_sequence_id then
+        params.sequence_id = resolve_injected_sequence_id(te)
     end
-    if active_sequence_id ~= nil and active_sequence_id ~= "" then
-        params.sequence_id = active_sequence_id
+    if needs_playhead then
+        params.playhead = resolve_active_record_playhead(te, params.sequence_id)
     end
 end
 
 function M.execute(command_or_name, params)
     params = params or {}
-    inject_sequence_context(command_or_name, params)
+    -- Centralized context injection (sequence_id + playhead) — same
+    -- function for both dispatch forms, posture flag selects the
+    -- contract. String-form (UI / menus / keyboard shortcuts) gets
+    -- full injection. Object-form (callers that built their own
+    -- Command) owns its sequence_id by contract; only playhead is
+    -- auto-filled, which is the one piece of context that used to be
+    -- duplicated inside Insert/Overwrite/ExtendEdit before centralization.
+    if type(command_or_name) == "string" then
+        inject_context(command_or_name, params)
+    elseif type(command_or_name) == "table" and type(command_or_name.type) == "string" then
+        local cmd_params = command_or_name.parameters or {}
+        inject_context(command_or_name.type, cmd_params, { inject_sequence_id = false })
+        command_or_name.parameters = cmd_params
+    end
     -- Auto-wrap in command event if none active (avoids requiring every call site to wrap)
     local auto_wrapped = false
     if not command_event_origin or command_event_depth == 0 then

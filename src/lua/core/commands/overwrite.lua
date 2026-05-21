@@ -38,7 +38,7 @@ function M.execute(args)
     -- sequence_start_frame resolution priority (three-point editing):
     --   1. explicit args.sequence_start_frame (caller pinned it)
     --   2. owner's rec mark-in (user marked the destination window)
-    --   3. owner's playhead (no marks: drop at the cursor)
+    --   3. framework-injected playhead (no marks: drop at the cursor)
     if args.sequence_start_frame == nil then
         local owner = assert(Sequence.find(args.sequence_id), string.format(
             "Overwrite: sequence %s not found (cannot resolve start_frame)",
@@ -46,11 +46,11 @@ function M.execute(args)
         if type(owner.mark_in) == "number" then
             args.sequence_start_frame = owner.mark_in
         else
-            assert(type(owner.playhead_position) == "number", string.format(
+            assert(type(args.playhead) == "number", string.format(
                 "Overwrite: sequence_start_frame omitted and sequence %s has "
-                .. "neither mark_in nor playhead_position to anchor on",
+                .. "no mark_in; framework did not inject a playhead",
                 tostring(args.sequence_id)))
-            args.sequence_start_frame = owner.playhead_position
+            args.sequence_start_frame = args.playhead
         end
     end
 
@@ -102,7 +102,11 @@ local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
         source_sequence_id    = { required = true,  kind = "string" },
-        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        -- playhead is framework-injected (command_manager.inject_context)
+        -- and used only as the fallback when mark_in is absent and
+        -- sequence_start_frame is not pinned.
+        playhead              = { kind = "number" },
+        -- sequence_start_frame omitted ⇒ mark_in (if set) else args.playhead.
         sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
         target_audio_track_id = { kind = "string" },

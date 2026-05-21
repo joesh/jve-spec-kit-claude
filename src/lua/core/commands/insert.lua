@@ -31,17 +31,13 @@ local log           = require("core.logger").for_area("commands")
 function M.execute(args)
     -- sequence_start_frame is optional at the SPEC layer because the
     -- editor's user-mode Insert is "insert at playhead." When omitted,
-    -- resolve from the owner sequence's authoritative playhead_position.
-    -- Loud-fail if neither is available — no silent default to 0
-    -- (rule 2.13).
+    -- consume the framework-injected playhead. (command_manager.inject_context
+    -- auto-injects `playhead` for any command that declares the arg.)
     if args.sequence_start_frame == nil then
-        local owner = assert(Sequence.find(args.sequence_id), string.format(
-            "Insert: sequence %s not found (cannot resolve playhead fallback)",
-            tostring(args.sequence_id)))
-        assert(type(owner.playhead_position) == "number", string.format(
-            "Insert: sequence_start_frame omitted and sequence %s has no "
-            .. "playhead_position to fall back on", tostring(args.sequence_id)))
-        args.sequence_start_frame = owner.playhead_position
+        assert(type(args.playhead) == "number", string.format(
+            "Insert: sequence_start_frame omitted and no playhead "
+            .. "available for sequence %s", tostring(args.sequence_id)))
+        args.sequence_start_frame = args.playhead
     end
 
     -- 015 F2: ensure identity patches exist for every source track in the
@@ -122,7 +118,12 @@ local SPEC = {
     args = {
         sequence_id           = { required = true,  kind = "string" },
         source_sequence_id    = { required = true,  kind = "string" },
-        -- sequence_start_frame omitted ⇒ resolve from sequence.playhead_position.
+        -- playhead is framework-injected (command_manager.inject_context).
+        -- Insert only needs it as the default for sequence_start_frame;
+        -- it's non-required so script callers building synthetic Insert
+        -- calls can pin sequence_start_frame explicitly and skip playhead.
+        playhead              = { kind = "number" },
+        -- sequence_start_frame omitted ⇒ defaults to args.playhead.
         -- No silent default-to-0 (rule 2.13).
         sequence_start_frame  = { kind = "number" },
         target_video_track_id = { kind = "string" },
