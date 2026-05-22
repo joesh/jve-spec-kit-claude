@@ -64,11 +64,13 @@ package.loaded["ui.source_viewer"] = {
     get_mode         = function() return "live_bound_clip" end,
 }
 
--- Stub transport: the executor reads the record-tab playhead via
--- transport.record_engine.loaded_sequence_id → Sequence.load(...).
--- This test isolates dispatch routing, not the rec-tab sync mechanics
--- (those are pinned by the smoke test). Provide just enough surface
--- for the executor's assertions to be satisfied.
+-- Stub transport + models for the rec-tab-playhead → source-frame map.
+-- The executor (FR-024 v2 2026-05-22) reads the rec sequence's playhead,
+-- loads the clip, then computes source_frame = clip.source_in +
+-- (rec_playhead - clip.sequence_start) and passes it via opts.playhead_frame.
+-- Choosing rec_playhead=150, clip.sequence_start=100, clip.source_in=50
+-- gives expected source_frame = 50 + (150-100) = 100 — a non-trivial
+-- value that catches sign/offset mistakes.
 db:exec([[
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -76,11 +78,34 @@ db:exec([[
         selected_clip_ids, selected_edge_infos, selected_gap_infos,
         current_sequence_number, created_at, modified_at)
     VALUES ('rec_seq_for_test', 'proj_X', 'R', 'sequence', 24, 1, 48000, 1920, 1080,
-            0, 10000, 0, '[]', '[]', '[]', 0, 0, 0);
+            0, 10000, 150, '[]', '[]', '[]', 0, 0, 0);
 ]])
 package.loaded["core.playback.transport"] = {
     is_bootstrapped = function() return true end,
     record_engine = { loaded_sequence_id = "rec_seq_for_test" },
+}
+
+-- Stub models.clip — the executor calls Clip.load to read sequence_start
+-- + source_in for the match-frame mapping. Same fixture values for both
+-- the explicit-clip_id and resolved-via-playhead clips.
+local fixture_clip_row = {
+    sequence_start = 100,
+    source_in      = 50,
+    source_out     = 250,
+    duration       = 150,
+    is_gap         = false,
+    project_id     = "proj_X",
+    owner_sequence_id = "owner_seq_1",
+    sequence_id    = "src_seq_for_clip",
+    name           = "Alpha",
+}
+package.loaded["models.clip"] = {
+    load = function(clip_id)
+        local row = {}
+        for k, v in pairs(fixture_clip_row) do row[k] = v end
+        row.id = clip_id
+        return row
+    end,
 }
 
 local command_manager = require("core.command_manager")
@@ -105,7 +130,19 @@ do
     assert(load_clip_calls[1].clip_id == "clip_alpha", string.format(
         "load_clip must receive the dispatched clip_id; got %q",
         tostring(load_clip_calls[1].clip_id)))
+
+    -- FR-024 v2: source_frame = source_in + (rec_playhead - sequence_start)
+    -- Fixture: 50 + (150 - 100) = 100.
+    local opts = load_clip_calls[1].opts or {}
+    assert(opts.playhead_frame == 100, string.format(
+        "load_clip opts.playhead_frame must be match-frame mapped "
+        .. "(source_in + rec_playhead - sequence_start = 50+150-100 = 100); "
+        .. "got %s", tostring(opts.playhead_frame)))
+    assert(opts.skip_focus == true,
+        "load_clip opts.skip_focus must be true (Shift+F keeps focus on Timeline)")
     print("  ✓ happy-path dispatch calls source_viewer.load_clip(clip_id)")
+    print("  ✓ executor match-frame maps rec_playhead → source_frame")
+    print("  ✓ executor passes skip_focus=true (focus stays on Timeline)")
 end
 
 -- ── Scenario 2: keymap path (no clip_id) resolves via command_helper ────────
