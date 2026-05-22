@@ -198,6 +198,12 @@ class JVERunner:
         ``tell application "JVEEditor" to activate`` fails to resolve.
         ``set frontmost of process whose unix id is <pid>`` is the
         ``.app``-less equivalent.
+
+        After activation, tucks the window into the bottom-right corner
+        of the main display so the user can keep working visually
+        (typing still routes to JVE while a test fires — that's the
+        macOS constraint, not something we can hide). Set
+        JVE_SMOKE_VISIBLE=1 to skip the tuck and see the full window.
         """
         if self._proc is None:
             raise JVERunnerError("JVERunner.foreground: process not started")
@@ -218,6 +224,45 @@ class JVERunner:
                 f"  System Settings → Privacy & Security → Accessibility.")
         # Brief settle — activation is asynchronous in System Events.
         time.sleep(0.05)
+        if not os.environ.get("JVE_SMOKE_VISIBLE"):
+            self._tuck_window_bottom_right()
+
+    def _tuck_window_bottom_right(self) -> None:
+        """Position JVE's frontmost window so only the top-left ~240×120 px
+        sits on-screen at the bottom-right of the main display. The rest of
+        the window extends off the screen edge (valid on macOS — windows
+        can have positive coordinates past the display bound). The title
+        bar's drag handle is the visible bit, so the user can grab and
+        reposition it manually if they want to see the full UI.
+        """
+        if self._proc is None:
+            return
+        pid = self._proc.pid
+        # Visible window area at the bottom-right; the rest extends off-
+        # screen. AppleScript's "set position" uses the upper-left corner
+        # of the window in screen coordinates (origin top-left of main
+        # display). For the visible patch to be at the bottom-right, the
+        # upper-left corner sits at (screen_w - visible_w, screen_h - visible_h).
+        visible_w = int(os.environ.get("JVE_SMOKE_VISIBLE_WIDTH", "240"))
+        visible_h = int(os.environ.get("JVE_SMOKE_VISIBLE_HEIGHT", "120"))
+        script = f'''
+            tell application "Finder" to set screenSize to bounds of window of desktop
+            set screenW to item 3 of screenSize
+            set screenH to item 4 of screenSize
+            set newX to screenW - {visible_w}
+            set newY to screenH - {visible_h}
+            tell application "System Events"
+                tell (first process whose unix id is {pid})
+                    if (count of windows) > 0 then
+                        set position of window 1 to {{newX, newY}}
+                    end if
+                end tell
+            end tell
+        '''
+        # Best-effort: window may not exist yet (very early in startup, or
+        # post-shutdown). Don't fail the foreground call on tuck failure.
+        subprocess.run(["osascript", "-e", script],
+                       capture_output=True, timeout=5)
 
     def key(self, combo: str) -> None:
         """Deliver a single key press via osascript / System Events.
