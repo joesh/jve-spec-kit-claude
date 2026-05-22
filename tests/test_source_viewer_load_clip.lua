@@ -190,49 +190,42 @@ do
     print("  ✓ load_clip default-parks master.playhead_position at clip.source_in (FR-024 v2)")
 end
 
+-- Common shape for the playhead_frame parking scenarios: reset the
+-- master row + source-viewer state, call load_clip with the given
+-- caller-supplied frame, then assert the master row landed at the
+-- expected value. Each scenario picks meaningful in-range vs
+-- out-of-range inputs; this helper carries the boilerplate.
+local function assert_load_clip_parks_at(input_frame, expected_position, message)
+    sequence_rows.source_seq_A.playhead_position = 0
+    source_viewer._reset_for_tests()
+    source_viewer.load_clip("clip_alpha", {
+        skip_focus = true, playhead_frame = input_frame,
+    })
+    assert(sequence_rows.source_seq_A.playhead_position == expected_position,
+        string.format("%s — expected master.playhead_position=%d, got %s",
+            message, expected_position,
+            tostring(sequence_rows.source_seq_A.playhead_position)))
+end
+
 -- ── Scenario 1b: opts.playhead_frame wins over default ───────────────────────
 -- FR-024 v2: when the caller (e.g. OpenClipInSourceMonitor for Shift+F)
 -- passes opts.playhead_frame, that value is written to the master row,
--- not clip.source_in. The rec-tab-sync behavior is built on top of
--- this; here we pin the helper's contract independently.
+-- not clip.source_in.
 do
-    sequence_rows.source_seq_A.playhead_position = 0  -- reset
-    -- Re-add clip_alpha (scenario 3 below will delete it; this scenario
-    -- runs before scenario 3 so it should still be present, but be
-    -- explicit for clarity).
-    source_viewer._reset_for_tests()
-    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = 137 })
-
-    assert(sequence_rows.source_seq_A.playhead_position == 137, string.format(
-        "scenario 1b sanity: in-range opts.playhead_frame written verbatim, got %s",
-        tostring(sequence_rows.source_seq_A.playhead_position)))
+    assert_load_clip_parks_at(137, 137,
+        "scenario 1b: in-range caller value written verbatim")
     print("  ✓ load_clip honors opts.playhead_frame (caller-supplied wins over default)")
 end
 
 -- ── Scenario 1c: parking-clamp to clip source range ──────────────────────────
--- FR-024 v2 parking-clamp: when opts.playhead_frame is outside the clip's
--- [min(source_in, source_out), max(source_in, source_out)] range, the
--- master row is written with the clamped value, not the raw input. The
--- loaded clip IS the user's viewport in live-bound mode, so a load-time
--- park outside that window would render a frame the user can't see.
+-- FR-024 v2 parking-clamp: when opts.playhead_frame is outside the
+-- clip's [source_in, source_out] window, the master row is written with
+-- the clamped value. The loaded clip IS the user's viewport in
+-- live-bound mode, so parking outside renders a frame they can't see.
 -- Fixture: clip.source_in=50, clip.source_out=250.
 do
-    -- Above source_out: clamp down.
-    sequence_rows.source_seq_A.playhead_position = 0
-    source_viewer._reset_for_tests()
-    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = 9999 })
-    assert(sequence_rows.source_seq_A.playhead_position == 250, string.format(
-        "above-range parking expected to clamp to source_out=250; got %s",
-        tostring(sequence_rows.source_seq_A.playhead_position)))
-
-    -- Below source_in: clamp up.
-    sequence_rows.source_seq_A.playhead_position = 0
-    source_viewer._reset_for_tests()
-    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = -50 })
-    assert(sequence_rows.source_seq_A.playhead_position == 50, string.format(
-        "below-range parking expected to clamp to source_in=50; got %s",
-        tostring(sequence_rows.source_seq_A.playhead_position)))
-
+    assert_load_clip_parks_at(9999, 250, "above source_out clamps down")
+    assert_load_clip_parks_at(-50,  50,  "below source_in clamps up")
     print("  ✓ load_clip parking-clamps opts.playhead_frame to clip's source range (forward)")
 end
 
