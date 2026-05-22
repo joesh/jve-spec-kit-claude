@@ -319,12 +319,31 @@ function M.register(executors, undoers)
         require("ui.timeline.timeline_state").surface_playhead()
     end
 
+    -- Resolve the in/out the USER currently sees on the source side.
+    -- In live-bound mode (spec 019 FR-016d) the displayed marks come
+    -- from the loaded clip's source_in/source_out via effective_source's
+    -- override slot, NOT the master sequence row's mark_in/out (which
+    -- stays whatever a prior staged-mode SetMark wrote, possibly stale
+    -- by hours). GoToMark* must read from the same channel the display
+    -- reads from, or pressing Shift+I/Shift+O parks the playhead at a
+    -- mark the user can't see and never set on the current clip.
+    -- Returns (in, out) — either side may be nil; callers check.
+    local function get_visible_marks(seq_id)
+        local override_in, override_out = require("core.effective_source")
+            .get_source_marks_for(seq_id)
+        if override_in ~= nil then
+            return override_in, override_out
+        end
+        local seq = load_sequence(seq_id)
+        return seq.mark_in, seq.mark_out
+    end
+
     executors["GoToMarkIn"] = function(command)
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "GoToMarkIn: sequence_id is required")
-        local seq = load_sequence(args.sequence_id)
-        if seq.mark_in then park_at(args.sequence_id, seq.mark_in) end
+        local mark_in = get_visible_marks(args.sequence_id)
+        if mark_in then park_at(args.sequence_id, mark_in) end
         return { success = true }
     end
 
@@ -337,8 +356,8 @@ function M.register(executors, undoers)
         local args = command:get_all_parameters()
         assert(args.sequence_id and args.sequence_id ~= "",
             "GoToMarkOut: sequence_id is required")
-        local seq = load_sequence(args.sequence_id)
-        if seq.mark_out then park_at(args.sequence_id, seq.mark_out - 1) end
+        local _, mark_out = get_visible_marks(args.sequence_id)
+        if mark_out then park_at(args.sequence_id, mark_out - 1) end
         return { success = true }
     end
 
@@ -423,13 +442,16 @@ function M.register(executors, undoers)
         assert(which == "in" or which == "out",
             "GoToMark: positional arg must be 'in' or 'out', got: " .. tostring(which))
 
-        local seq = load_sequence(args.sequence_id)
+        -- Delegate to GoToMarkIn/GoToMarkOut so the live-bound override
+        -- consultation (get_visible_marks) lives in exactly one place.
+        -- Pre-fix this alias read seq.mark_in/out directly and bypassed
+        -- the override — Shift+I jumped to the master's stale row even
+        -- when the source viewer showed the clip's source_in.
         if which == "in" then
-            if seq.mark_in then park_at(args.sequence_id, seq.mark_in) end
+            return executors["GoToMarkIn"](command)
         else
-            if seq.mark_out then park_at(args.sequence_id, seq.mark_out - 1) end
+            return executors["GoToMarkOut"](command)
         end
-        return { success = true }
     end
 
     ---------------------------------------------------------------------------

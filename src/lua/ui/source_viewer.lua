@@ -237,6 +237,20 @@ function M.load_clip(clip_id, opts)
     local source = get_source_monitor()
     local prev_id = _state.staged_seq_id or _state.live_clip_id
 
+    -- Set the live-bound override BEFORE binding the monitor. Without
+    -- this, `source:load_sequence` and `source:seek_to_frame` below
+    -- fire the monitor's listener (which the source-side mark bar
+    -- subscribes to via `config.on_listener(render)` in
+    -- monitor_mark_bar.lua:249) — that render reads marks through
+    -- `SequenceMonitor:get_mark_in/out`, which now consults
+    -- `effective_source.get_source_marks_for`. If the override isn't
+    -- populated yet, the first render draws no marks and the bar stays
+    -- empty until the user incidentally seeks (manual repro 2026-05-21:
+    -- "src viewer marks weren't moving til I moved the playhead").
+    -- effective_source has no state dependency on the source viewer's
+    -- mode flag, so it's safe to write here before transition.
+    update_effective_source_live(clip)
+
     -- Bind playback to the clip's SOURCE sequence (clip.sequence_id) via
     -- the same code path staged mode uses. No new entity / no wrap
     -- (FR-005, research.md §3).
@@ -258,7 +272,6 @@ function M.load_clip(clip_id, opts)
 
     transition_to_live_bound(clip_id)
     publish_live_bound(clip)
-    update_effective_source_live(clip)
     set_monitor_title(source, compute_title("live_bound_clip", nil, clip, owner))
 
     -- Payload is the SOURCE sequence id — see
