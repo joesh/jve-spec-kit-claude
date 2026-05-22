@@ -41,6 +41,31 @@ from tests.smoke.runner.case import JVESmokeCase
 class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
     """OpenClipInSourceMonitor must MAP rec playhead through the clip."""
 
+    # ── Per-scenario setUp: get to a known state + sample a fixture clip ──
+    def setUp(self) -> None:
+        super().setUp()
+        # The smoke runner is a long-lived singleton — prior tests may
+        # have left the source tab displayed. `timeline_state.get_clips()`
+        # is keyed on the displayed sequence, so we must put the
+        # timeline on the record tab before sampling (otherwise we'd
+        # pick a master clip whose `source_in == sequence_start` and
+        # the mapping equation goes degenerate).
+        self.eval(
+            "local ts = require('ui.timeline.timeline_state'); "
+            "if ts.get_displayed_tab_kind() ~= 'record' then "
+            "  local active = ts.get_active_sequence_id(); "
+            "  assert(active, 'no active sequence to switch back to'); "
+            "  ts.switch_to_record_tab(active); "
+            "end")
+        (
+            self.clip_id,
+            self.source_in,
+            self.seq_start,
+            self.src_seq,
+            self.rec_seq,
+        ) = self._find_media_clip()
+
+    # ── Probe helpers ──────────────────────────────────────────────────
     def _find_media_clip(self) -> tuple[str, int, int, str, str]:
         """Return (clip_id, source_in, sequence_start, src_seq_id, rec_seq_id)."""
         info = self.eval(
@@ -66,10 +91,10 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
         parts = info.strip('"').split('|', 4)
         return parts[0], int(parts[1]), int(parts[2]), parts[3], parts[4]
 
-    def _set_record_playhead(self, rec_seq_id: str, frame: int) -> None:
+    def _set_record_playhead(self, frame: int) -> None:
         self.eval(
             "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{rec_seq_id}', "
+            f"{{ sequence_id='{self.rec_seq}', "
             "project_id=require('core.command_manager').get_active_project_id(), "
             f"playhead_position={frame} }})")
 
@@ -80,129 +105,102 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
             "assert(sm and sm.engine, 'no source monitor engine'); "
             "return sm.engine:get_position()")
 
-    def _src_tab_playhead(self, src_seq_id: str) -> int:
+    def _src_tab_playhead(self) -> int:
         return self.eval_int(
-            f"return require('models.sequence').load('{src_seq_id}').playhead_position")
+            f"return require('models.sequence').load('{self.src_seq}').playhead_position")
 
     def _focused_panel(self) -> str:
         return self.eval_str(
             "return require('ui.focus_manager').get_focused_panel() or 'nil'")
 
-    def _shift_f(self, clip_id: str) -> None:
+    def _shift_f(self) -> None:
         self.eval(
             "require('core.command_manager').execute('OpenClipInSourceMonitor', "
-            f"{{ clip_id='{clip_id}', "
+            f"{{ clip_id='{self.clip_id}', "
             "project_id=require('core.command_manager').get_active_project_id() })")
 
     # ── Scenario 1: src playhead = source_in + (rec_playhead - sequence_start)
     def test_shift_f_match_frame_maps_rec_playhead(self) -> None:
-        self._ensure_record_tab_displayed()
-        clip_id, source_in, seq_start, src_seq, rec_seq = self._find_media_clip()
-
-        # Park rec playhead at clip.sequence_start + 47 — 47 frames into
-        # the clip. Match-frame map → source_in + 47.
         offset = 47
-        rec_target = seq_start + offset
-        self._set_record_playhead(rec_seq, rec_target)
+        rec_target = self.seq_start + offset
+        self._set_record_playhead(rec_target)
 
         # Focus the timeline first so we can verify focus DOESN'T move
         # to source_monitor on Shift+F.
         self.eval("require('ui.focus_manager').focus_panel('timeline')")
 
-        self._shift_f(clip_id)
+        self._shift_f()
 
         self.assertEqual("live_bound_clip", self.eval_str(
             "return tostring(require('ui.source_viewer').get_mode())"),
             "Shift+F didn't enter live_bound_clip mode")
 
-        expected_src = source_in + offset
-        self.assertEqual(expected_src, self._src_engine_position(), (
+        expected = self.source_in + offset
+        actual_engine = self._src_engine_position()
+        self.assertEqual(expected, actual_engine, (
             f"Shift+F must match-frame map rec_playhead → source: "
-            f"source_in({source_in}) + (rec_playhead({rec_target}) - "
-            f"sequence_start({seq_start})) = {expected_src}; "
-            f"got src engine at {self._src_engine_position()}. If src "
-            f"engine sits at {rec_target}, the executor is copying "
-            f"verbatim instead of mapping through the clip."))
-        self.assertEqual(expected_src, self._src_tab_playhead(src_seq), (
-            f"src tab (master.playhead_position) expected {expected_src}; "
-            f"got {self._src_tab_playhead(src_seq)}"))
+            f"source_in({self.source_in}) + (rec_playhead({rec_target}) - "
+            f"sequence_start({self.seq_start})) = {expected}; got "
+            f"{actual_engine}. If src engine sits at {rec_target}, the "
+            f"executor is copying verbatim instead of mapping through "
+            f"the clip."))
+        self.assertEqual(expected, self._src_tab_playhead(),
+            "src tab (master.playhead_position) must equal the mapped frame")
 
-        self.assertEqual("timeline", self._focused_panel(), (
+        focused = self._focused_panel()
+        self.assertEqual("timeline", focused, (
             "Shift+F must keep focus on the Timeline (the src tab on "
             "the timeline is the user-facing readout for the viewer); "
-            f"focused panel is {self._focused_panel()!r}"))
+            f"focused panel is {focused!r}"))
 
     # ── Scenario 1b: rec playhead beyond the clip clamps to source_out ────
-    # When the rec playhead is past the clip's range on the timeline,
-    # owner_frame_to_source produces a source frame past source_out.
-    # source_viewer.load_clip clamps to the clip's [source_in, source_out]
-    # window — the loaded clip IS the user's viewport in live-bound mode.
     def test_rec_playhead_beyond_clip_clamps_to_source_out(self) -> None:
-        self._ensure_record_tab_displayed()
-        clip_id, source_in, seq_start, src_seq, rec_seq = self._find_media_clip()
         clip_info = self.eval(
-            f"local c = require('models.clip').load('{clip_id}'); "
+            f"local c = require('models.clip').load('{self.clip_id}'); "
             "return string.format('%d|%d', c.duration, c.source_out)")
         duration, source_out = (int(x) for x in clip_info.strip('"').split('|'))
 
         # Rec playhead 500 frames past the clip's right edge → would map
         # to source_out + 500 if unclamped.
-        beyond = seq_start + duration + 500
-        self._set_record_playhead(rec_seq, beyond)
-        self._shift_f(clip_id)
+        beyond = self.seq_start + duration + 500
+        self._set_record_playhead(beyond)
+        self._shift_f()
 
-        clamped = max(source_in, min(source_out, source_in + (beyond - seq_start)))
-        self.assertEqual(clamped, self._src_engine_position(), (
-            f"Rec playhead {beyond} (past clip end {seq_start + duration}) "
+        unclamped = self.source_in + (beyond - self.seq_start)
+        clamped = max(self.source_in, min(source_out, unclamped))
+        actual_engine = self._src_engine_position()
+        self.assertEqual(clamped, actual_engine, (
+            f"Rec playhead {beyond} (past clip end {self.seq_start + duration}) "
             f"should clamp src playhead to clip's source bound; expected "
-            f"{clamped}, got {self._src_engine_position()}. Unclamped value "
-            f"would be {source_in + (beyond - seq_start)}."))
-        self.assertEqual(clamped, self._src_tab_playhead(src_seq),
+            f"{clamped}, got {actual_engine}. Unclamped value would be {unclamped}."))
+        self.assertEqual(clamped, self._src_tab_playhead(),
             "src tab (master.playhead_position) must reflect the clamp too")
-
-    def _ensure_record_tab_displayed(self) -> None:
-        """Smoke runner is a long-lived singleton — prior tests may have
-        left the source tab displayed. `_find_media_clip` reads through
-        `timeline_state.get_clips()` which is keyed on the displayed
-        sequence, so we must put the timeline on the record tab before
-        sampling (otherwise we pick a master-clip whose
-        `source_in == sequence_start` and the mapping equation becomes
-        degenerate)."""
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  assert(active, 'no active sequence to switch back to'); "
-            "  ts.switch_to_record_tab(active); "
-            "end")
 
     # ── Scenario 2: Joe's repro — Shift+F, `, move rec, Shift+F ───────────
     def test_joe_repro_second_shift_f_uses_moved_rec_playhead(self) -> None:
-        self._ensure_record_tab_displayed()
-        clip_id, source_in, seq_start, _src_seq, rec_seq = self._find_media_clip()
-
         # Step a: park rec at clip_start+10, Shift+F.
-        self._set_record_playhead(rec_seq, seq_start + 10)
-        self._shift_f(clip_id)
-        self.assertEqual(source_in + 10, self._src_engine_position(),
+        self._set_record_playhead(self.seq_start + 10)
+        self._shift_f()
+        self.assertEqual(self.source_in + 10, self._src_engine_position(),
             "first Shift+F mapping wrong")
 
-        # Step b: toggle tabs.
+        # Step b: toggle tabs (the manual `\``).
         self.eval(
             "require('core.command_manager').execute('ToggleSourceRecordTab', "
             "{ project_id=require('core.command_manager').get_active_project_id() })")
 
         # Step c: move rec to clip_start+60.
-        self._set_record_playhead(rec_seq, seq_start + 60)
+        self._set_record_playhead(self.seq_start + 60)
 
         # Step d: Shift+F same clip again — src must now reflect new rec.
-        self._shift_f(clip_id)
-        self.assertEqual(source_in + 60, self._src_engine_position(), (
+        self._shift_f()
+        actual_engine = self._src_engine_position()
+        self.assertEqual(self.source_in + 60, actual_engine, (
             f"Joe's repro: after moving rec playhead by +60 frames and "
             f"re-Shift+F'ing the same clip, src engine expected at "
-            f"{source_in + 60} (source_in + new offset); got "
-            f"{self._src_engine_position()}. If it sits at {source_in + 10}, "
-            f"the second Shift+F is using the stale rec-playhead value."))
+            f"{self.source_in + 60} (source_in + new offset); got "
+            f"{actual_engine}. If it sits at {self.source_in + 10}, the "
+            f"second Shift+F is using the stale rec-playhead value."))
 
 
 if __name__ == "__main__":
