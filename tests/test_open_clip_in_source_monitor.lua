@@ -238,6 +238,37 @@ do
     print("  ✓ keymap path with empty playhead result raises loudly")
 end
 
+-- ── Scenario 2d: rec engine has no loaded sequence — assert loud ──────────
+-- NSF Half-1: read_record_tab_playhead's preconditions must surface, not
+-- silently degrade. When transport.record_engine.loaded_sequence_id is
+-- nil (no record tab yet), the executor must fail dispatch with a
+-- clear message — never silently pass nil through to the mapping math.
+do
+    load_clip_calls = {}
+
+    local prior_transport = package.loaded["core.playback.transport"]
+    package.loaded["core.playback.transport"] = {
+        is_bootstrapped = function() return true end,
+        record_engine = { loaded_sequence_id = nil },
+    }
+
+    local r = command_manager.execute_interactive("OpenClipInSourceMonitor", {
+        clip_id     = "clip_alpha",
+        project_id  = "proj_X",
+        sequence_id = "owner_seq_1",
+    })
+    assert(r and r.success == false, string.format(
+        "missing rec-tab loaded_sequence_id must fail dispatch; got success=%s",
+        tostring(r and r.success)))
+    assert(tostring(r.error_message):find("no loaded sequence", 1, true),
+        "error_message must mention 'no loaded sequence'; got: "
+        .. tostring(r.error_message))
+    assert(#load_clip_calls == 0, "rejected dispatch must NOT call load_clip")
+
+    package.loaded["core.playback.transport"] = prior_transport
+    print("  ✓ no rec-tab loaded sequence raises loudly (no silent fallback)")
+end
+
 -- ── Scenario 3: undoable=false — no history entry created ────────────────────
 do
     load_clip_calls = {}
