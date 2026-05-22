@@ -64,6 +64,25 @@ package.loaded["ui.source_viewer"] = {
     get_mode         = function() return "live_bound_clip" end,
 }
 
+-- Stub transport: the executor reads the record-tab playhead via
+-- transport.record_engine.loaded_sequence_id → Sequence.load(...).
+-- This test isolates dispatch routing, not the rec-tab sync mechanics
+-- (those are pinned by the smoke test). Provide just enough surface
+-- for the executor's assertions to be satisfied.
+db:exec([[
+    INSERT INTO sequences (id, project_id, name, kind,
+        fps_numerator, fps_denominator, audio_sample_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at)
+    VALUES ('rec_seq_for_test', 'proj_X', 'R', 'sequence', 24, 1, 48000, 1920, 1080,
+            0, 10000, 0, '[]', '[]', '[]', 0, 0, 0);
+]])
+package.loaded["core.playback.transport"] = {
+    is_bootstrapped = function() return true end,
+    record_engine = { loaded_sequence_id = "rec_seq_for_test" },
+}
+
 local command_manager = require("core.command_manager")
 command_manager.init("owner_seq_1", "proj_X")
 

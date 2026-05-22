@@ -217,7 +217,15 @@ end
 
 --- Load a timeline clip into the source monitor in live-bound mode.
 --- @param clip_id string       The clips-table row id.
---- @param opts table|nil       Options: skip_focus (bool)
+--- @param opts table|nil       Options:
+---     * skip_focus (bool)     skip the focus-panel side effect
+---     * playhead_frame (number) park the source-side playhead at this
+---       frame (in clip.sequence_id's frame space). Caller-supplied;
+---       Shift+F passes the record-tab playhead (FR-024 v2 2026-05-22
+---       — both tabs show the same frame after the load). When absent,
+---       defaults to clip.source_in (the safe "no caller opinion"
+---       value used by direct callers — lua unit tests, future paths
+---       that don't have a rec-tab context).
 function M.load_clip(clip_id, opts)
     assert(clip_id and clip_id ~= "",
         "source_viewer.load_clip: clip_id required")
@@ -238,17 +246,17 @@ function M.load_clip(clip_id, opts)
     local prev_id = _state.staged_seq_id or _state.live_clip_id
 
     -- Set the live-bound override BEFORE binding the monitor. Without
-    -- this, `source:load_sequence` and `source:seek_to_frame` below
-    -- fire the monitor's listener (which the source-side mark bar
-    -- subscribes to via `config.on_listener(render)` in
-    -- monitor_mark_bar.lua:249) — that render reads marks through
-    -- `SequenceMonitor:get_mark_in/out`, which now consults
-    -- `effective_source.get_source_marks_for`. If the override isn't
-    -- populated yet, the first render draws no marks and the bar stays
-    -- empty until the user incidentally seeks (manual repro 2026-05-21:
-    -- "src viewer marks weren't moving til I moved the playhead").
-    -- effective_source has no state dependency on the source viewer's
-    -- mode flag, so it's safe to write here before transition.
+    -- this, `source:load_sequence` below fires the monitor's listener
+    -- (which the source-side mark bar subscribes to via
+    -- `config.on_listener(render)` in monitor_mark_bar.lua:249) —
+    -- that render reads marks through `SequenceMonitor:get_mark_in/out`,
+    -- which now consults `effective_source.get_source_marks_for`. If
+    -- the override isn't populated yet, the first render draws no
+    -- marks and the bar stays empty until the user incidentally seeks
+    -- (manual repro 2026-05-21: "src viewer marks weren't moving til
+    -- I moved the playhead"). effective_source has no state dependency
+    -- on the source viewer's mode flag, so it's safe to write here
+    -- before transition.
     update_effective_source_live(clip)
 
     -- Bind playback to the clip's SOURCE sequence (clip.sequence_id) via
@@ -257,18 +265,27 @@ function M.load_clip(clip_id, opts)
     source:load_sequence(clip.sequence_id)
     require("core.playback.transport").bind_role_to_sequence("source", clip.sequence_id)
 
-    -- Park the source-side engine + view at the clip's IN. Without this,
-    -- the engine inherits the master sequence's saved playhead_position
-    -- (commonly its start_frame / TC origin), which produces a visible
-    -- vs. internal mismatch: the view renders the clip's mark range while
-    -- the engine sits at the master's origin. The first jog-step then
-    -- falls below start_frame and asserts. Mode-specific contract: in
-    -- live-bound mode the loaded clip IS the window; its IN is where the
-    -- engine belongs.
-    assert(type(clip.source_in) == "number", string.format(
-        "source_viewer.load_clip: clip %s has non-number source_in (%s)",
-        tostring(clip_id), type(clip.source_in)))
-    source:seek_to_frame(clip.source_in)
+    -- Park the source-side playhead. Caller-supplied frame wins
+    -- (Shift+F passes rec-tab playhead so both tabs stay in sync,
+    -- FR-024 v2 2026-05-22); default = clip.source_in for callers
+    -- without a rec-tab context. The write goes through
+    -- core.playhead.set — single canonical model write — so the
+    -- master sequence's row (which the source tab's ruler reads) is
+    -- updated atomically with the engine seek. transport's
+    -- playhead_changed listener picks up the signal and seeks the
+    -- source engine that was bound above. No double-seek, no view/
+    -- model drift.
+    local target_frame = opts.playhead_frame
+    if target_frame == nil then
+        assert(type(clip.source_in) == "number", string.format(
+            "source_viewer.load_clip: clip %s has non-number source_in (%s)",
+            tostring(clip_id), type(clip.source_in)))
+        target_frame = clip.source_in
+    end
+    assert(type(target_frame) == "number", string.format(
+        "source_viewer.load_clip: opts.playhead_frame must be a number; got %s",
+        type(target_frame)))
+    require("core.playhead").set(clip.sequence_id, target_frame)
 
     transition_to_live_bound(clip_id)
     publish_live_bound(clip)

@@ -42,6 +42,35 @@ local function resolve_clip_id_from_playhead()
     return clip.id
 end
 
+-- Resolve the record-tab playhead so Shift+F can sync the source-tab +
+-- source viewer to it (FR-024 v2 2026-05-22). The record tab's playhead
+-- lives on the record engine's currently-loaded sequence — its
+-- `playhead_position` column is the model-side source of truth. The
+-- transport listener will seek the source engine when load_clip writes
+-- the master row via core.playhead.set, so this function only has to
+-- read; no engine-side seek is needed here.
+local function read_record_tab_playhead()
+    local transport = require("core.playback.transport")
+    assert(transport.is_bootstrapped(),
+        "OpenClipInSourceMonitor: transport not bootstrapped — "
+        .. "Shift+F dispatch requires an open project")
+    local rec_engine = transport.record_engine
+    assert(rec_engine, "OpenClipInSourceMonitor: record_engine is nil")
+    local rec_seq_id = rec_engine.loaded_sequence_id
+    assert(type(rec_seq_id) == "string" and rec_seq_id ~= "", string.format(
+        "OpenClipInSourceMonitor: record_engine has no loaded sequence "
+        .. "(loaded_sequence_id=%s) — Shift+F requires a record tab",
+        tostring(rec_seq_id)))
+    local rec_seq = require("models.sequence").load(rec_seq_id)
+    assert(rec_seq, string.format(
+        "OpenClipInSourceMonitor: record sequence %s not found",
+        tostring(rec_seq_id)))
+    assert(type(rec_seq.playhead_position) == "number", string.format(
+        "OpenClipInSourceMonitor: record sequence %s missing playhead_position",
+        tostring(rec_seq_id)))
+    return rec_seq.playhead_position
+end
+
 function M.register(executors, _undoers, _db)
     local function executor(command)
         local args = command:get_all_parameters()
@@ -49,7 +78,10 @@ function M.register(executors, _undoers, _db)
         if clip_id == nil or clip_id == "" then
             clip_id = resolve_clip_id_from_playhead()
         end
-        require("ui.source_viewer").load_clip(clip_id)
+        local rec_playhead = read_record_tab_playhead()
+        require("ui.source_viewer").load_clip(clip_id, {
+            playhead_frame = rec_playhead,
+        })
         return { success = true }
     end
 

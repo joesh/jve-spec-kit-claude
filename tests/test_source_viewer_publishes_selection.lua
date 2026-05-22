@@ -166,24 +166,33 @@ package.loaded["models.clip"] = {
         return nil
     end,
 }
+-- start_timecode_frame + playhead_position + :save() are required for
+-- core.playhead.set, which source_viewer.load_clip routes the post-load
+-- seek through (FR-024 v2 2026-05-22).
 package.loaded["models.sequence"] = {
     load = function(id)
         if id == "src_seq_for_clip" then
             return {
-                id              = "src_seq_for_clip",
-                project_id      = "proj_under_test",
-                name            = "SourceMaster",
-                kind            = "master",
-                fps_numerator   = 24,
-                fps_denominator = 1,
+                id                    = "src_seq_for_clip",
+                project_id            = "proj_under_test",
+                name                  = "SourceMaster",
+                kind                  = "master",
+                fps_numerator         = 24,
+                fps_denominator       = 1,
+                start_timecode_frame  = 0,
+                playhead_position     = 0,
+                save                  = function(_) return true end,
             }
         end
         if id == "owner_seq_live" then
             return {
-                id   = "owner_seq_live",
-                project_id = "proj_under_test",
-                name = "OwnerTimeline",
-                kind = "sequence",
+                id                    = "owner_seq_live",
+                project_id            = "proj_under_test",
+                name                  = "OwnerTimeline",
+                kind                  = "sequence",
+                start_timecode_frame  = 0,
+                playhead_position     = 0,
+                save                  = function(_) return true end,
             }
         end
         return nil

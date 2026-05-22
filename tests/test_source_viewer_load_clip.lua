@@ -100,22 +100,34 @@ local clip_rows = {
     },
 }
 
+-- Sequence stubs must expose start_timecode_frame + playhead_position +
+-- :save() because source_viewer.load_clip routes the post-load seek
+-- through core.playhead.set (canonical model write — see FR-024 v2
+-- 2026-05-22). core.playhead.set asserts start_timecode_frame, writes
+-- playhead_position, calls :save(), then emits playhead_changed.
 local sequence_rows = {
     source_seq_A = {
-        id              = "source_seq_A",
-        project_id      = "proj_X",
-        name            = "AlphaMaster",
-        kind            = "master",
-        fps_numerator   = 24,
-        fps_denominator = 1,
+        id                    = "source_seq_A",
+        project_id            = "proj_X",
+        name                  = "AlphaMaster",
+        kind                  = "master",
+        fps_numerator         = 24,
+        fps_denominator       = 1,
+        start_timecode_frame  = 0,
+        playhead_position     = 0,
     },
     owner_seq_1 = {
-        id   = "owner_seq_1",
-        project_id = "proj_X",
-        name = "MainEdit",
-        kind = "sequence",
+        id                    = "owner_seq_1",
+        project_id            = "proj_X",
+        name                  = "MainEdit",
+        kind                  = "sequence",
+        start_timecode_frame  = 0,
+        playhead_position     = 0,
     },
 }
+for _, row in pairs(sequence_rows) do
+    row.save = function(_self) return true end
+end
 
 package.loaded["models.clip"] = {
     load = function(clip_id) return clip_rows[clip_id] end,
@@ -161,23 +173,40 @@ do
         "publish.sequence_id must be the OWNER sequence (where the clip lives), "
         .. "not the source sequence; got %q", tostring(it.sequence_id)))
 
-    -- FR-003 (updated 2026-05-20): load_clip must park the engine + view at
-    -- clip.source_in so the visible playhead and engine position agree from
-    -- the first frame. Without this, the engine inherits the master
-    -- sequence's saved playhead_position (commonly its start_frame TC
-    -- origin), the user sees the clip's range while the engine sits at the
-    -- master's origin, and the first jog-step trips the engine's start-
-    -- boundary assert. Regression test for the visible-vs-internal
-    -- mismatch reported 2026-05-20.
-    assert(#fake_monitor.seek_calls == 1, string.format(
-        "load_clip must seek the monitor exactly once (to clip.source_in); "
-        .. "got %d seek calls", #fake_monitor.seek_calls))
-    assert(fake_monitor.seek_calls[1] == 50, string.format(
-        "load_clip must seek to clip.source_in (=50 per fixture); got %s",
-        tostring(fake_monitor.seek_calls[1])))
+    -- FR-024 v2 (2026-05-22): load_clip with no caller-supplied
+    -- playhead_frame defaults to clip.source_in. The seek is written
+    -- through core.playhead.set — the canonical model write — so the
+    -- master sequence's playhead_position row (which the src tab
+    -- ruler reads) ends up at clip.source_in. transport's
+    -- playhead_changed listener then seeks the source engine; in
+    -- production both stay in sync. This test stubs transport, so we
+    -- assert on the model write directly (the canonical observable).
+    assert(sequence_rows.source_seq_A.playhead_position == 50, string.format(
+        "load_clip (no opts.playhead_frame) must write "
+        .. "master.playhead_position = clip.source_in (=50); got %s",
+        tostring(sequence_rows.source_seq_A.playhead_position)))
 
     print("  ✓ load_clip enters live-bound mode + publishes item_type='clip'")
-    print("  ✓ load_clip parks engine at clip.source_in (FR-003)")
+    print("  ✓ load_clip default-parks master.playhead_position at clip.source_in (FR-024 v2)")
+end
+
+-- ── Scenario 1b: opts.playhead_frame wins over default ───────────────────────
+-- FR-024 v2: when the caller (e.g. OpenClipInSourceMonitor for Shift+F)
+-- passes opts.playhead_frame, that value is written to the master row,
+-- not clip.source_in. The rec-tab-sync behavior is built on top of
+-- this; here we pin the helper's contract independently.
+do
+    sequence_rows.source_seq_A.playhead_position = 0  -- reset
+    -- Re-add clip_alpha (scenario 3 below will delete it; this scenario
+    -- runs before scenario 3 so it should still be present, but be
+    -- explicit for clarity).
+    source_viewer._reset_for_tests()
+    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = 137 })
+
+    assert(sequence_rows.source_seq_A.playhead_position == 137, string.format(
+        "load_clip with opts.playhead_frame=137 must write master.playhead_position=137; "
+        .. "got %s", tostring(sequence_rows.source_seq_A.playhead_position)))
+    print("  ✓ load_clip honors opts.playhead_frame (caller-supplied wins over default)")
 end
 
 -- I/O dispatch contract (formerly scenarios 2/3) lives in
