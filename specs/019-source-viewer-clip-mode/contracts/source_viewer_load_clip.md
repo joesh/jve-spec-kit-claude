@@ -37,7 +37,7 @@ end
 
 **Args**: `clip_id : string`; `opts : table | nil` with:
 - `skip_focus : bool` — skip the focus-panel side effect.
-- `playhead_frame : number` — park the source-side playhead at this frame (in `clip.sequence_id`'s frame space). **Caller-supplied, no fallback masking the absence.** When omitted, defaults to `clip.source_in`. The Shift+F dispatch path (`OpenClipInSourceMonitor` per FR-024 v2 2026-05-22) **match-frame maps** the rec-tab playhead into the source frame space (`clip.source_in + (rec_playhead - clip.sequence_start)` — same arithmetic as `MatchFrame`, `match_frame.lua:102`) and passes the result here; that puts the src viewer on the source frame currently showing at the rec playhead.
+- `playhead_frame : number` — park the source-side playhead at this frame (in `clip.sequence_id`'s frame space). **Caller-supplied, no fallback masking the absence.** When omitted, defaults to `clip.source_in`. The Shift+F dispatch path (`OpenClipInSourceMonitor` per FR-024 v2 2026-05-22) **match-frame maps** the rec-tab playhead into the source frame space via `Clip.owner_frame_to_source(clip, rec_playhead)` (the shared helper — `MatchFrame` calls the same function) and passes the result here; that puts the src viewer on the source frame currently showing at the rec playhead.
 
 **Behavior**:
 1. Asserts `clip_id` non-empty.

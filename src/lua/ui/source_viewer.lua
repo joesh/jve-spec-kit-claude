@@ -221,8 +221,9 @@ end
 ---     * skip_focus (bool)     skip the focus-panel side effect
 ---     * playhead_frame (number) park the source-side playhead at this
 ---       frame (in clip.sequence_id's frame space). Caller-supplied;
----       Shift+F passes the record-tab playhead (FR-024 v2 2026-05-22
----       — both tabs show the same frame after the load). When absent,
+---       Shift+F passes `Clip.owner_frame_to_source(clip, rec_playhead)`
+---       so the source tab + viewer land on the source frame currently
+---       under the record playhead (FR-024 v2 2026-05-22). When absent,
 ---       defaults to clip.source_in (the safe "no caller opinion"
 ---       value used by direct callers — lua unit tests, future paths
 ---       that don't have a rec-tab context).
@@ -265,16 +266,16 @@ function M.load_clip(clip_id, opts)
     source:load_sequence(clip.sequence_id)
     require("core.playback.transport").bind_role_to_sequence("source", clip.sequence_id)
 
-    -- Park the source-side playhead. Caller-supplied frame wins
-    -- (Shift+F passes rec-tab playhead so both tabs stay in sync,
-    -- FR-024 v2 2026-05-22); default = clip.source_in for callers
-    -- without a rec-tab context. The write goes through
-    -- core.playhead.set — single canonical model write — so the
-    -- master sequence's row (which the source tab's ruler reads) is
-    -- updated atomically with the engine seek. transport's
-    -- playhead_changed listener picks up the signal and seeks the
-    -- source engine that was bound above. No double-seek, no view/
-    -- model drift.
+    -- Park the source-side playhead. Caller-supplied frame wins (Shift+F
+    -- passes `Clip.owner_frame_to_source(clip, rec_playhead)` so the
+    -- source tab + viewer land on the source frame currently under the
+    -- record playhead — FR-024 v2 2026-05-22); default = clip.source_in
+    -- for callers without a rec-tab context. The write goes through
+    -- core.playhead.set — single canonical model write — so the master
+    -- sequence's row (which the source tab's ruler reads) is updated
+    -- atomically with the engine seek. transport's playhead_changed
+    -- listener picks up the signal and seeks the source engine that
+    -- was bound above. No double-seek, no view/model drift.
     local target_frame = opts.playhead_frame
     if target_frame == nil then
         assert(type(clip.source_in) == "number", string.format(
