@@ -129,6 +129,33 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
             "the timeline is the user-facing readout for the viewer); "
             f"focused panel is {self._focused_panel()!r}"))
 
+    # ── Scenario 1b: rec playhead beyond the clip clamps to source_out ────
+    # When the rec playhead is past the clip's range on the timeline,
+    # owner_frame_to_source produces a source frame past source_out.
+    # source_viewer.load_clip clamps to the clip's [source_in, source_out]
+    # window — the loaded clip IS the user's viewport in live-bound mode.
+    def test_rec_playhead_beyond_clip_clamps_to_source_out(self) -> None:
+        clip_id, source_in, seq_start, src_seq, rec_seq = self._find_media_clip()
+        clip_info = self.eval(
+            f"local c = require('models.clip').load('{clip_id}'); "
+            "return string.format('%d|%d', c.duration, c.source_out)")
+        duration, source_out = (int(x) for x in clip_info.strip('"').split('|'))
+
+        # Rec playhead 500 frames past the clip's right edge → would map
+        # to source_out + 500 if unclamped.
+        beyond = seq_start + duration + 500
+        self._set_record_playhead(rec_seq, beyond)
+        self._shift_f(clip_id)
+
+        clamped = max(source_in, min(source_out, source_in + (beyond - seq_start)))
+        self.assertEqual(clamped, self._src_engine_position(), (
+            f"Rec playhead {beyond} (past clip end {seq_start + duration}) "
+            f"should clamp src playhead to clip's source bound; expected "
+            f"{clamped}, got {self._src_engine_position()}. Unclamped value "
+            f"would be {source_in + (beyond - seq_start)}."))
+        self.assertEqual(clamped, self._src_tab_playhead(src_seq),
+            "src tab (master.playhead_position) must reflect the clamp too")
+
     # ── Scenario 2: Joe's repro — Shift+F, `, move rec, Shift+F ───────────
     def test_joe_repro_second_shift_f_uses_moved_rec_playhead(self) -> None:
         clip_id, source_in, seq_start, _src_seq, rec_seq = self._find_media_clip()

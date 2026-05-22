@@ -44,18 +44,20 @@ end
 
 -- Read the rec-tab playhead. The record tab's playhead lives on the
 -- record engine's currently-loaded sequence; its `playhead_position`
--- column is the model-side source of truth.
+-- column is the model-side source of truth. Both dispatch paths
+-- (Shift+F keymap, timeline double-click) require an open project +
+-- record tab; assert rather than degrade.
 local function read_record_tab_playhead()
     local transport = require("core.playback.transport")
     assert(transport.is_bootstrapped(),
         "OpenClipInSourceMonitor: transport not bootstrapped — "
-        .. "Shift+F dispatch requires an open project")
+        .. "dispatch requires an open project")
     local rec_engine = transport.record_engine
     assert(rec_engine, "OpenClipInSourceMonitor: record_engine is nil")
     local rec_seq_id = rec_engine.loaded_sequence_id
     assert(type(rec_seq_id) == "string" and rec_seq_id ~= "", string.format(
         "OpenClipInSourceMonitor: record_engine has no loaded sequence "
-        .. "(loaded_sequence_id=%s) — Shift+F requires a record tab",
+        .. "(loaded_sequence_id=%s) — dispatch requires a record tab",
         tostring(rec_seq_id)))
     local rec_seq = require("models.sequence").load(rec_seq_id)
     assert(rec_seq, string.format(

@@ -135,6 +135,40 @@ local function clear_effective_source()
     require("core.effective_source")._clear_source_viewer()
 end
 
+-- Where to park the source-side playhead for a `load_clip` call.
+-- Caller-supplied (`opts.playhead_frame`) wins; otherwise `clip.source_in`.
+-- The raw value is then clamped to the clip's source range: in live-bound
+-- mode the loaded clip IS the window the user navigates, so a load-time
+-- park outside `[source_in, source_out]` (the playhead landing on a
+-- frame the user can't see in their mark window) is wrong. Common
+-- driver: Shift+F-ing a clip whose rec position is far from the rec
+-- playhead (e.g. double-click on a distant clip), where the
+-- match-frame map produces a source frame outside the clip's range.
+-- Forward AND reverse clips handled via min/max — reverse clips have
+-- `source_in > source_out`. Free scrubbing/jogging post-load is NOT
+-- clamped (FR-016a — the playhead is a free cursor); this is the
+-- parking-only policy.
+local function pick_playhead_target(opts, clip, clip_id)
+    local raw
+    if opts.playhead_frame ~= nil then
+        assert(type(opts.playhead_frame) == "number", string.format(
+            "source_viewer.load_clip: opts.playhead_frame must be a "
+            .. "number; got %s", type(opts.playhead_frame)))
+        raw = opts.playhead_frame
+    else
+        raw = clip.source_in
+    end
+    assert(type(clip.source_in) == "number", string.format(
+        "source_viewer.load_clip: clip %s missing source_in",
+        tostring(clip_id)))
+    assert(type(clip.source_out) == "number", string.format(
+        "source_viewer.load_clip: clip %s missing source_out",
+        tostring(clip_id)))
+    local lo = math.min(clip.source_in, clip.source_out)
+    local hi = math.max(clip.source_in, clip.source_out)
+    return math.max(lo, math.min(raw, hi))
+end
+
 -- ─── State transitions (assert invariants) ──────────────────────────────────
 
 local function assert_neutral_invariants()
@@ -266,34 +300,20 @@ function M.load_clip(clip_id, opts)
     source:load_sequence(clip.sequence_id)
     require("core.playback.transport").bind_role_to_sequence("source", clip.sequence_id)
 
-    -- Park the source-side playhead. Caller-supplied frame wins (Shift+F
-    -- passes `Clip.owner_frame_to_source(clip, rec_playhead)` so the
-    -- source tab + viewer land on the source frame currently under the
-    -- record playhead — FR-024 v2 2026-05-22); default = clip.source_in
-    -- for callers without a rec-tab context. The write goes through
-    -- core.playhead.set — single canonical model write — so the master
-    -- sequence's row (which the source tab's ruler reads) is updated
-    -- atomically with the engine seek. transport's playhead_changed
-    -- listener picks up the signal and seeks the source engine that
-    -- was bound above. No double-seek, no view/model drift.
-    local target_frame = opts.playhead_frame
-    if target_frame == nil then
-        assert(type(clip.source_in) == "number", string.format(
-            "source_viewer.load_clip: clip %s has non-number source_in (%s)",
-            tostring(clip_id), type(clip.source_in)))
-        target_frame = clip.source_in
-    end
-    assert(type(target_frame) == "number", string.format(
-        "source_viewer.load_clip: opts.playhead_frame must be a number; got %s",
-        type(target_frame)))
-    require("core.playhead").set(clip.sequence_id, target_frame)
+    -- Park the source-side playhead via core.playhead.set — single
+    -- canonical model write that fires playhead_changed; transport's
+    -- listener seeks the source engine bound above and the src tab's
+    -- ruler reads the freshly-written master row. No double-seek, no
+    -- view/model drift.
+    require("core.playhead").set(clip.sequence_id,
+        pick_playhead_target(opts, clip, clip_id))
 
     transition_to_live_bound(clip_id)
     publish_live_bound(clip)
     set_monitor_title(source, compute_title("live_bound_clip", nil, clip, owner))
 
-    -- Payload is the SOURCE sequence id — see
-    -- contracts/source_viewer_load_clip.md step 7. Clip identity rides
+    -- Payload is the SOURCE sequence id (see
+    -- contracts/source_viewer_load_clip.md). Clip identity rides
     -- selection_hub + effective_source override fields, not this signal.
     Signals.emit("source_loaded_changed", clip.sequence_id, prev_id)
 
