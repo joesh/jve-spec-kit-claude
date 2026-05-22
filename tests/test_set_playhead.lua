@@ -99,10 +99,16 @@ do
 end
 
 do
-    -- Negative TC consistent with frame_utils.parse_timecode signed support.
+    -- Negative TC: frame_utils.parse_timecode returns -120, but the
+    -- playhead primitive (core.playhead.set) clamps to
+    -- sequence.start_timecode_frame (0 in this test harness). The clamp
+    -- is the architectural invariant — sequence.playhead_position must
+    -- always be >= start_timecode_frame. Below-floor requests land at
+    -- the floor, silently.
     local r = execute_cmd({ sequence_id = "seq_1", _positional = { "-00:00:05:00" } })
-    check("TC-string '-00:00:05:00' resolves to -120",
-        r.success and Sequence.load("seq_1").playhead_position == -120)
+    check("negative TC clamps to start_timecode_frame",
+        r.success and Sequence.load("seq_1").playhead_position == 0,
+        tostring(Sequence.load("seq_1").playhead_position))
 end
 
 -- ─── Error paths — NSF: must fail loud, not silently substitute ──────────

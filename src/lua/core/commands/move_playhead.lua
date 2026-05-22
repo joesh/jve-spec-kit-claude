@@ -69,28 +69,13 @@ function M.register(executors, undoers, db)
         assert(type(current_frame) == "number", string.format(
             "MovePlayhead: current_frame must be a number; got %s", type(current_frame)))
 
-        -- Floor-only clamp at the sequence's TC origin (mirrors timeline's
-        -- viewport_state.set_playhead_position; the engine's seek-boundary
-        -- assert lives on the same lower bound). No upper clamp — playhead
-        -- is free beyond content per the seek_to_frame contract.
-        assert(type(sequence.start_timecode_frame) == "number", string.format(
-            "MovePlayhead: sequence %s missing start_timecode_frame", tostring(seq_id)))
-        local new_frame = math.max(
-            sequence.start_timecode_frame, current_frame + delta_frames)
+        -- Lower-bound clamp + model write + playhead_changed emission all
+        -- live in the playhead primitive; transport's listener handles
+        -- engine sync. The jog-audio burst is command-specific feedback.
+        local new_frame = require("core.playhead")
+            .set(seq_id, current_frame + delta_frames)
 
-        sequence.playhead_position = new_frame
-        sequence:save()
-        local Signals = require("core.signals")
-        Signals.emit("playhead_changed", seq_id, new_frame)
-
-        -- Scroll timeline viewport to keep playhead visible
-        local timeline_state = require("ui.timeline.timeline_state")
-        timeline_state.surface_playhead()
-
-        -- Engine sync happens via the playhead_changed signal — transport
-        -- listens at init time and seeks any engine bound to seq_id. The
-        -- jog-audio burst stays explicit because it's command-specific
-        -- (frame-step feel) and not implied by the model-change signal.
+        require("ui.timeline.timeline_state").surface_playhead()
         require("core.playback.transport")
             .play_frame_audio_target_if_loaded(seq_id, new_frame)
 

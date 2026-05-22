@@ -33,15 +33,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true, { start_frame = start_frame }
         end
 
-        sequence.playhead_position = start_frame
-        sequence:save()
-        local Signals = require("core.signals")
-        Signals.emit("playhead_changed", args.sequence_id, start_frame)
-
-        -- Engine sync via transport's playhead_changed listener.
-
-        local timeline_state = require("ui.timeline.timeline_state")
-        timeline_state.surface_playhead()
+        require("core.playhead").set(args.sequence_id, start_frame)
+        require("ui.timeline.timeline_state").surface_playhead()
         return true
     end
 

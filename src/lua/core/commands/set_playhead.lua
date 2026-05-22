@@ -5,13 +5,12 @@
 --   • positional: { _positional = {"01:00:05:12"} } -- HH:MM:SS:FF parsed at
 --                                                     sequence frame_rate
 -- Exactly one must be supplied. The string form is a thin convenience layer:
--- both resolve to the same integer frame, the same model write, the same
--- playhead_changed emission. Engine sync follows via the View listener in
--- sequence_monitor (MVC: model writes → signal → View pulls).
+-- both resolve to the same integer frame, then delegate to core.playhead.set
+-- which owns the lower-bound clamp + emits the playhead_changed signal.
+-- Engine sync follows via transport's listener.
 --
 -- @file set_playhead.lua
 local M = {}
-local Signals = require("core.signals")
 
 local SPEC = {
     undoable = false,
@@ -61,17 +60,15 @@ function M.register(executors, undoers, db)
         assert(args.sequence_id and args.sequence_id ~= "",
             "SetPlayhead: sequence_id is required")
 
+        -- Sequence load only needed to resolve the TC-string positional
+        -- against the right frame_rate; the actual write is delegated.
         local Sequence = require("models.sequence")
         local sequence = Sequence.load(args.sequence_id)
         assert(sequence,
             "SetPlayhead: sequence not found: " .. tostring(args.sequence_id))
 
         local frame = resolve_target_frame(args, sequence)
-
-        sequence.playhead_position = frame
-        assert(sequence:save(), "SetPlayhead: failed to save")
-
-        Signals.emit("playhead_changed", args.sequence_id, frame)
+        require("core.playhead").set(args.sequence_id, frame)
         return { success = true }
     end
 
