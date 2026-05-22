@@ -263,14 +263,14 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
 
                 register_original_state(clip)
-                
-                -- Nudge clip
-                local new_start = clip.sequence_start + nudge_frames
 
-                -- Clamp to 0
-                if new_start < 0 then
-                    new_start = 0
-                end
+                -- Clip-move primitive owns the lower-bound clamp
+                -- (sequence.start_timecode_frame, NOT 0). Per-command
+                -- clamps would leak the floor knowledge and let a
+                -- missing one corrupt the model — sister to the
+                -- core.playhead.set primitive.
+                local new_start = clip_mutator.compute_safe_position(
+                    clip, clip.sequence_start + nudge_frames)
 
                 if new_start ~= clip.sequence_start then
                     any_change = true

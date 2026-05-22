@@ -675,6 +675,57 @@ ClipMutator.plan_update = plan_update
 ClipMutator.plan_delete = plan_delete
 ClipMutator.plan_insert = plan_insert
 
+--- Clamp a candidate clip.sequence_start to the timeline's lower bound.
+--- Every caller that moves a clip's position (Nudge clip-move, drag,
+--- paste, future) routes through here so the invariant
+---     clip.sequence_start >= sequence.start_timecode_frame
+--- lives in one place. Sister primitive to core.playhead.set.
+---
+--- Does NOT write the clip — returns the clamped value for the caller
+--- to assign. (Persistence + occlusion handling happen at the caller's
+--- own apply step; this primitive only owns the floor.)
+---
+--- @param clip table  must carry track_id (used to look up owning sequence)
+--- @param requested_start number  the desired sequence_start
+--- @param opts table|nil  { floor = number }  precomputed lower bound;
+---     batch callers that have already loaded the sequence pass this
+---     to avoid per-clip lookups.
+--- @return number  clamped sequence_start (== requested_start if in-range)
+function ClipMutator.compute_safe_position(clip, requested_start, opts)
+    assert(clip and clip.track_id, string.format(
+        "ClipMutator.compute_safe_position: clip with track_id required; got %s",
+        tostring(clip and clip.id or "nil")))
+    assert(type(requested_start) == "number", string.format(
+        "ClipMutator.compute_safe_position: requested_start must be number; got %s",
+        type(requested_start)))
+
+    local floor = opts and opts.floor
+    if floor == nil then
+        local Track = require("models.track")
+        local seq_id = Track.get_sequence_id(clip.track_id)
+        assert(seq_id and seq_id ~= "", string.format(
+            "ClipMutator.compute_safe_position: track %s has no sequence",
+            tostring(clip.track_id)))
+        local Sequence = require("models.sequence")
+        local seq = Sequence.load(seq_id)
+        assert(seq, string.format(
+            "ClipMutator.compute_safe_position: sequence %s not found",
+            tostring(seq_id)))
+        assert(type(seq.start_timecode_frame) == "number", string.format(
+            "ClipMutator.compute_safe_position: sequence %s missing start_timecode_frame",
+            tostring(seq_id)))
+        floor = seq.start_timecode_frame
+    end
+    assert(type(floor) == "number", string.format(
+        "ClipMutator.compute_safe_position: floor must be number; got %s",
+        type(floor)))
+
+    if requested_start < floor then
+        return floor
+    end
+    return requested_start
+end
+
 function ClipMutator.resolve_ripple(db, params)
     assert(type(params) == "table", "clip_mutator.resolve_ripple: params table required")
     local track_id = params.track_id
