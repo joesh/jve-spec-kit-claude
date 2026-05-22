@@ -2,22 +2,28 @@ local M = {}
 
 local frame_utils = require("core.frame_utils")
 
-function M.resolve_sequence_rate(ctx, db)
+function M.resolve_sequence_meta(ctx, db)
     assert(ctx and ctx.sequence_id and ctx.sequence_id ~= "", "BatchRippleEdit: missing sequence_id")
     assert(db, "BatchRippleEdit: missing db handle")
 
-    local seq_stmt = db:prepare("SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?")
-    assert(seq_stmt, "BatchRippleEdit: failed to prepare sequence fps query")
+    local seq_stmt = db:prepare(
+        "SELECT fps_numerator, fps_denominator, start_timecode_frame FROM sequences WHERE id = ?")
+    assert(seq_stmt, "BatchRippleEdit: failed to prepare sequence meta query")
     seq_stmt:bind_value(1, ctx.sequence_id)
-    assert(seq_stmt:exec(), "BatchRippleEdit: failed to query sequence fps")
-    assert(seq_stmt:next(), "BatchRippleEdit: missing sequence fps row for " .. tostring(ctx.sequence_id))
+    assert(seq_stmt:exec(), "BatchRippleEdit: failed to query sequence meta")
+    assert(seq_stmt:next(), "BatchRippleEdit: missing sequence row for " .. tostring(ctx.sequence_id))
     local seq_fps_num = seq_stmt:value(0)
     local seq_fps_den = seq_stmt:value(1)
+    local sequence_floor = seq_stmt:value(2)
     seq_stmt:finalize()
 
-    assert(type(seq_fps_num) == "number" and type(seq_fps_den) == "number", "BatchRippleEdit: invalid sequence fps values")
+    assert(type(seq_fps_num) == "number" and type(seq_fps_den) == "number",
+        "BatchRippleEdit: invalid sequence fps values")
+    assert(type(sequence_floor) == "number",
+        "BatchRippleEdit: invalid start_timecode_frame for sequence " .. tostring(ctx.sequence_id))
     ctx.seq_fps_num = seq_fps_num
     ctx.seq_fps_den = seq_fps_den
+    ctx.sequence_floor = sequence_floor
 end
 
 function M.resolve_delta(ctx)

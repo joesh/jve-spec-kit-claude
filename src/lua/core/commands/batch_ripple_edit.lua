@@ -428,6 +428,44 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         apply_edge_constraint_limits(ctx, edge_info, build_edge_key(edge_info), min_limit, max_limit)
     end
 
+    -- Sequence-floor limit: clip.sequence_start must stay >=
+    -- sequence.start_timecode_frame. Ripple in-edge and ripple out-edge
+    -- both preserve the dragged clip's sequence_start (see
+    -- compute_in_edge_trim / compute_out_edge_trim), so neither can
+    -- violate the floor directly. Roll DOES move sequence_start of the
+    -- dragged clip — rolling an in-edge whose pre-edit sequence_start
+    -- was S sets the new start to S + delta, so the floor constraint is
+    -- delta >= floor - S. When the clip already sits at the floor, the
+    -- result is delta >= 0 — no leftward roll allowed.
+    --
+    -- Out-edge ripple shrink that drives downstream content below the
+    -- floor is a separate concern, applied as a global constraint by
+    -- apply_downstream_floor_limits (see below) — not per-edge.
+    --
+    -- Applies to media AND gap clips: there is always an implicit
+    -- 0-length leading-gap edge before the first clip, and roll-selecting
+    -- the first clip's in-edge selects that gap edge too. Without this
+    -- constraint, nudging that selection leftward would drive the gap
+    -- edge below the floor.
+    local function apply_sequence_floor_limits(ctx, edge_info, _clip, will_negate)
+        if edge_info.trim_type ~= "roll" then return end
+        local normalized_edge = edge_info.normalized_edge or edge_info.edge_type
+        if normalized_edge ~= "in" then return end
+        local clip_state = ctx.original_states_map[edge_info.clip_id]
+        if not clip_state then return end
+        assert(type(clip_state.sequence_start) == "number",
+            "apply_sequence_floor_limits: clip_state.sequence_start must be integer")
+        assert(type(ctx.sequence_floor) == "number",
+            string.format("apply_sequence_floor_limits: ctx.sequence_floor missing (seq=%s)",
+                tostring(ctx.sequence_id)))
+        local min_limit = ctx.sequence_floor - clip_state.sequence_start
+        local max_limit = nil
+        if will_negate then
+            min_limit, max_limit = negate_limits(min_limit, max_limit)
+        end
+        apply_edge_constraint_limits(ctx, edge_info, build_edge_key(edge_info), min_limit, max_limit)
+    end
+
     -- Media clips can trim to zero (which triggers delete) but not
     -- below. Apply that floor as a per-edge + global clamp. Gap clips
     -- are handled by apply_gap_min_duration.
@@ -1443,6 +1481,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         apply_gap_min_duration(ctx, edge_info, clip, will_negate)
         apply_media_limits(ctx, edge_info, clip, will_negate)
         apply_min_duration_limits(ctx, edge_info, clip, will_negate)
+        apply_sequence_floor_limits(ctx, edge_info, clip, will_negate)
     end
 
     -- Force the global bounds into a "no shift allowed" state. Used by

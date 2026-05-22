@@ -6,7 +6,7 @@ function M.run(ctx, db, ops)
     assert(ctx and type(ctx) == "table", "batch_pipeline.run: ctx is required")
     assert(type(ops) == "table", "batch_pipeline.run: ops table is required")
 
-    prepare.resolve_sequence_rate(ctx, db)
+    prepare.resolve_sequence_meta(ctx, db)
     if not prepare.resolve_delta(ctx) then
         return false, "Invalid delta"
     end
