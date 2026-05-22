@@ -96,6 +96,7 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
 
     # ── Scenario 1: src playhead = source_in + (rec_playhead - sequence_start)
     def test_shift_f_match_frame_maps_rec_playhead(self) -> None:
+        self._ensure_record_tab_displayed()
         clip_id, source_in, seq_start, src_seq, rec_seq = self._find_media_clip()
 
         # Park rec playhead at clip.sequence_start + 47 — 47 frames into
@@ -137,6 +138,7 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
     # source_viewer.load_clip clamps to the clip's [source_in, source_out]
     # window — the loaded clip IS the user's viewport in live-bound mode.
     def test_rec_playhead_beyond_clip_clamps_to_source_out(self) -> None:
+        self._ensure_record_tab_displayed()
         clip_id, source_in, seq_start, src_seq, rec_seq = self._find_media_clip()
         clip_info = self.eval(
             f"local c = require('models.clip').load('{clip_id}'); "
@@ -158,8 +160,25 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
         self.assertEqual(clamped, self._src_tab_playhead(src_seq),
             "src tab (master.playhead_position) must reflect the clamp too")
 
+    def _ensure_record_tab_displayed(self) -> None:
+        """Smoke runner is a long-lived singleton — prior tests may have
+        left the source tab displayed. `_find_media_clip` reads through
+        `timeline_state.get_clips()` which is keyed on the displayed
+        sequence, so we must put the timeline on the record tab before
+        sampling (otherwise we pick a master-clip whose
+        `source_in == sequence_start` and the mapping equation becomes
+        degenerate)."""
+        self.eval(
+            "local ts = require('ui.timeline.timeline_state'); "
+            "if ts.get_displayed_tab_kind() ~= 'record' then "
+            "  local active = ts.get_active_sequence_id(); "
+            "  assert(active, 'no active sequence to switch back to'); "
+            "  ts.switch_to_record_tab(active); "
+            "end")
+
     # ── Scenario 2: Joe's repro — Shift+F, `, move rec, Shift+F ───────────
     def test_joe_repro_second_shift_f_uses_moved_rec_playhead(self) -> None:
+        self._ensure_record_tab_displayed()
         clip_id, source_in, seq_start, _src_seq, rec_seq = self._find_media_clip()
 
         # Step a: park rec at clip_start+10, Shift+F.

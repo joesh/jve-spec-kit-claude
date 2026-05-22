@@ -137,21 +137,30 @@ end
 
 -- Where to park the source-side playhead for a `load_clip` call.
 -- Caller-supplied (`opts.playhead_frame`) wins; otherwise `clip.source_in`.
--- The raw value is then clamped to the clip's source range: in live-bound
--- mode the loaded clip IS the window the user navigates, so a load-time
--- park outside `[source_in, source_out]` (the playhead landing on a
--- frame the user can't see in their mark window) is wrong. Common
--- driver: Shift+F-ing a clip whose rec position is far from the rec
--- playhead (e.g. double-click on a distant clip), where the
--- match-frame map produces a source frame outside the clip's range.
--- Forward AND reverse clips handled via min/max — reverse clips have
--- `source_in > source_out`. Free scrubbing/jogging post-load is NOT
--- clamped (FR-016a — the playhead is a free cursor); this is the
--- parking-only policy.
+-- The raw value is then clamped to the loaded clip's source window: in
+-- live-bound mode the clip IS the user's viewport, so a load-time park
+-- outside its range would render a frame the user can't see in their
+-- marks. Common driver: Shift+F-ing a clip whose timeline extent
+-- doesn't cover the rec playhead (e.g. double-click on a distant clip)
+-- — owner_frame_to_source then maps to a value outside [source_in,
+-- source_out], which this clamp pulls back to the nearest edge.
+--
+-- Rule (Joe 2026-05-22): rec playhead *before* clip on the timeline
+-- → snap to IN; *after* → snap to OUT. Forward clips only: for forward
+-- clips `min(in, out) == source_in` and `max(in, out) == source_out`,
+-- so a plain min/max implements the rule. Reverse clips
+-- (`source_in > source_out`) can't reach this path today —
+-- `effective_source._set_source_viewer_clip` asserts `out > in` first
+-- — so we don't carry direction-aware logic; if reverse-clip support
+-- is added upstream this clamp needs a revisit (see the
+-- direction-aware version in git history `6158cd0e^..6158cd0e`).
+--
+-- Free scrubbing / jogging post-load is NOT clamped (FR-016a — the
+-- playhead is a free cursor). This is parking-only.
 local function pick_playhead_target(opts, clip, clip_id)
     -- Preconditions: source_in/source_out gate both the default-target
     -- branch and the clamp window. Assert before picking so an error
-    -- points at the missing column, not at a math.min on nil.
+    -- points at the missing column, not at arithmetic on nil.
     assert(type(clip.source_in) == "number", string.format(
         "source_viewer.load_clip: clip %s missing source_in",
         tostring(clip_id)))
@@ -169,9 +178,7 @@ local function pick_playhead_target(opts, clip, clip_id)
         raw = clip.source_in
     end
 
-    local lo = math.min(clip.source_in, clip.source_out)
-    local hi = math.max(clip.source_in, clip.source_out)
-    return math.max(lo, math.min(raw, hi))
+    return math.max(clip.source_in, math.min(raw, clip.source_out))
 end
 
 -- ─── State transitions (assert invariants) ──────────────────────────────────

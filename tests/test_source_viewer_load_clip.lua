@@ -233,8 +233,9 @@ do
         "below-range parking expected to clamp to source_in=50; got %s",
         tostring(sequence_rows.source_seq_A.playhead_position)))
 
-    print("  ✓ load_clip parking-clamps opts.playhead_frame to clip's source range")
+    print("  ✓ load_clip parking-clamps opts.playhead_frame to clip's source range (forward)")
 end
+
 
 -- I/O dispatch contract (formerly scenarios 2/3) lives in
 -- tests/test_set_mark_and_trim_if_clip_routes_to_trim.lua — the dispatch
