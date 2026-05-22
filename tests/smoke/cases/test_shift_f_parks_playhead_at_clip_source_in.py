@@ -10,14 +10,16 @@ playhead should sync to the rec tab's playhead."
 
 The naive interpretation ("copy the rec playhead value verbatim") is
 wrong because rec and source sequences don't share a frame space.
-The correct mapping is the same one MatchFrame uses
-(match_frame.lua:102):
+The correct mapping lives in `Clip.owner_frame_to_source(clip, frame)`
+(shared with MatchFrame):
 
     source_frame = clip.source_in + (rec_playhead - clip.sequence_start)
 
 This puts the src viewer on the same source frame that's currently
-showing at the rec playhead — which is what "show me the frame I'm
-on" actually means.
+showing at the rec playhead — what "show me the frame I'm on" means.
+`source_viewer.load_clip` then clamps to the clip's source range so
+a far-off rec playhead doesn't park the viewer outside its mark
+window (FR-024 v2 parking-clamp).
 
 Also pinned: Shift+F passes skip_focus=true so focus stays on the
 Timeline (the src tab on the timeline panel is the read-out for the

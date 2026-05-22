@@ -149,6 +149,16 @@ end
 -- clamped (FR-016a — the playhead is a free cursor); this is the
 -- parking-only policy.
 local function pick_playhead_target(opts, clip, clip_id)
+    -- Preconditions: source_in/source_out gate both the default-target
+    -- branch and the clamp window. Assert before picking so an error
+    -- points at the missing column, not at a math.min on nil.
+    assert(type(clip.source_in) == "number", string.format(
+        "source_viewer.load_clip: clip %s missing source_in",
+        tostring(clip_id)))
+    assert(type(clip.source_out) == "number", string.format(
+        "source_viewer.load_clip: clip %s missing source_out",
+        tostring(clip_id)))
+
     local raw
     if opts.playhead_frame ~= nil then
         assert(type(opts.playhead_frame) == "number", string.format(
@@ -158,12 +168,7 @@ local function pick_playhead_target(opts, clip, clip_id)
     else
         raw = clip.source_in
     end
-    assert(type(clip.source_in) == "number", string.format(
-        "source_viewer.load_clip: clip %s missing source_in",
-        tostring(clip_id)))
-    assert(type(clip.source_out) == "number", string.format(
-        "source_viewer.load_clip: clip %s missing source_out",
-        tostring(clip_id)))
+
     local lo = math.min(clip.source_in, clip.source_out)
     local hi = math.max(clip.source_in, clip.source_out)
     return math.max(lo, math.min(raw, hi))

@@ -204,9 +204,36 @@ do
     source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = 137 })
 
     assert(sequence_rows.source_seq_A.playhead_position == 137, string.format(
-        "load_clip with opts.playhead_frame=137 must write master.playhead_position=137; "
-        .. "got %s", tostring(sequence_rows.source_seq_A.playhead_position)))
+        "scenario 1b sanity: in-range opts.playhead_frame written verbatim, got %s",
+        tostring(sequence_rows.source_seq_A.playhead_position)))
     print("  ✓ load_clip honors opts.playhead_frame (caller-supplied wins over default)")
+end
+
+-- ── Scenario 1c: parking-clamp to clip source range ──────────────────────────
+-- FR-024 v2 parking-clamp: when opts.playhead_frame is outside the clip's
+-- [min(source_in, source_out), max(source_in, source_out)] range, the
+-- master row is written with the clamped value, not the raw input. The
+-- loaded clip IS the user's viewport in live-bound mode, so a load-time
+-- park outside that window would render a frame the user can't see.
+-- Fixture: clip.source_in=50, clip.source_out=250.
+do
+    -- Above source_out: clamp down.
+    sequence_rows.source_seq_A.playhead_position = 0
+    source_viewer._reset_for_tests()
+    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = 9999 })
+    assert(sequence_rows.source_seq_A.playhead_position == 250, string.format(
+        "above-range parking expected to clamp to source_out=250; got %s",
+        tostring(sequence_rows.source_seq_A.playhead_position)))
+
+    -- Below source_in: clamp up.
+    sequence_rows.source_seq_A.playhead_position = 0
+    source_viewer._reset_for_tests()
+    source_viewer.load_clip("clip_alpha", { skip_focus = true, playhead_frame = -50 })
+    assert(sequence_rows.source_seq_A.playhead_position == 50, string.format(
+        "below-range parking expected to clamp to source_in=50; got %s",
+        tostring(sequence_rows.source_seq_A.playhead_position)))
+
+    print("  ✓ load_clip parking-clamps opts.playhead_frame to clip's source range")
 end
 
 -- I/O dispatch contract (formerly scenarios 2/3) lives in
