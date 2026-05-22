@@ -75,7 +75,6 @@ package.loaded["core.playback.transport"] = {
         return role == "source" and src_engine or rec_engine
     end,
     engine_for_target = function() return src_engine end,
-    seek_target_if_loaded = function() end,
     play_frame_audio_target_if_loaded = function() end,
     bind_role_to_sequence = function() end,
 }

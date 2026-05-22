@@ -28,6 +28,25 @@ local M = {}
 M.source_engine = nil
 M.record_engine = nil
 M._project_id = nil
+local playhead_changed_conn = nil
+
+-- Listener registered in transport.init: when any module writes to the
+-- model's playhead (SetPlayhead, MovePlayhead, GoToMark*, …) and emits
+-- playhead_changed, seek every engine bound to that sequence so the
+-- engines stay reactive to model state. Service-layer ownership of
+-- engine sync — works in both UI (where sequence_monitor's listener
+-- also fires; engine:seek is idempotent on same-frame) and headless
+-- contexts (where no sequence_monitor exists).
+local function sync_engines_on_playhead_changed(seq_id, frame)
+    if not M.is_bootstrapped() then return end
+    if type(frame) ~= "number" then return end
+    for _, engine in ipairs({ M.source_engine, M.record_engine }) do
+        if engine and engine.loaded_sequence_id == seq_id then
+            if engine:is_playing() then engine:stop() end
+            engine:seek(frame)
+        end
+    end
+end
 
 local function assert_initialized(fn_name)
     assert(M._project_id ~= nil, string.format(
@@ -72,6 +91,13 @@ function M.init(project_id)
 
     M._project_id = project_id
 
+    -- Priority 25: ahead of timeline_state (40) + view modules (50/100)
+    -- so by the time UI listeners read engine state, the seek has landed.
+    assert(playhead_changed_conn == nil,
+        "transport.init: playhead_changed listener already connected")
+    playhead_changed_conn = require("core.signals").connect(
+        "playhead_changed", sync_engines_on_playhead_changed, 25)
+
     log.event("transport.init project=%s", project_id:sub(1, 8))
 
     -- Layout creates SequenceMonitor views at app startup, BEFORE any
@@ -87,6 +113,10 @@ end
 function M.shutdown()
     assert(M._project_id ~= nil,
         "core.playback.transport.shutdown: transport not initialized")
+    if playhead_changed_conn ~= nil then
+        require("core.signals").disconnect(playhead_changed_conn)
+        playhead_changed_conn = nil
+    end
     M.source_engine = nil
     M.record_engine = nil
     M._project_id = nil
@@ -121,21 +151,6 @@ end
 --- Return the engine receiving transport commands right now (derived).
 function M.engine_for_target()
     return M.engine_for_role(M.get_target())
-end
-
---- Seek the displayed-side engine to `frame`, but only when it's the
---- engine currently bound to `seq_id`. Movement commands write to the
---- sequence row first (model-truth) and call this to bring the
---- displayed-side engine into sync. No-op when transport hasn't been
---- bootstrapped (pre-project headless tests) or when the target engine
---- carries a different sequence. Stops the engine if it was playing —
---- a transport command from a non-playing context implies "park here".
-function M.seek_target_if_loaded(seq_id, frame)
-    if not M.is_bootstrapped() then return end
-    local te = M.engine_for_target()
-    if te == nil or te.loaded_sequence_id ~= seq_id then return end
-    if te:is_playing() then te:stop() end
-    te:seek(frame)
 end
 
 --- Fire jog-audio burst on the displayed-side engine when it's the one

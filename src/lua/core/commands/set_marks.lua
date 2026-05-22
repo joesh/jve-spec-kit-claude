@@ -308,17 +308,17 @@ function M.register(executors, undoers)
     ---------------------------------------------------------------------------
     -- GoToMarkIn (non-undoable): set playhead to mark_in
     ---------------------------------------------------------------------------
-    -- Shared park helper: write model, emit signal, sync the displayed-side
-    -- engine, surface the playhead in the viewport. Same shape as
-    -- MovePlayhead/GoToStart/GoToEnd — without this, GoToMark* updated only
-    -- the sequence row, leaving each side's engine to render from whatever
-    -- frame it last reported and producing visible src/rec divergence.
+    -- Shared park helper: write model, emit signal, surface the playhead
+    -- in the viewport. Engine sync happens via transport's playhead_changed
+    -- listener (any engine bound to seq_id seeks). Without this helper,
+    -- GoToMark* updated only the sequence row and let each side's engine
+    -- render from whatever frame it last reported, producing visible
+    -- src/rec divergence.
     local function park_at(seq_id, target)
         local seq = load_sequence(seq_id)
         seq.playhead_position = target
         seq:save()
         Signals.emit("playhead_changed", seq_id, target)
-        require("core.playback.transport").seek_target_if_loaded(seq_id, target)
         require("ui.timeline.timeline_state").surface_playhead()
     end
 

@@ -41,8 +41,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local Signals = require("core.signals")
         Signals.emit("playhead_changed", args.sequence_id, end_frame)
 
-        require("core.playback.transport").seek_target_if_loaded(
-            args.sequence_id, end_frame)
+        -- Engine sync via transport's playhead_changed listener.
 
         local timeline_state = require("ui.timeline.timeline_state")
         timeline_state.surface_playhead()

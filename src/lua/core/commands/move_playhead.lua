@@ -87,12 +87,12 @@ function M.register(executors, undoers, db)
         local timeline_state = require("ui.timeline.timeline_state")
         timeline_state.surface_playhead()
 
-        -- Sync the displayed-side engine to the new frame, then fire a
-        -- short jog-audio burst for frame-step feel. Both calls no-op
-        -- pre-bootstrap (headless tests).
-        local transport = require("core.playback.transport")
-        transport.seek_target_if_loaded(seq_id, new_frame)
-        transport.play_frame_audio_target_if_loaded(seq_id, new_frame)
+        -- Engine sync happens via the playhead_changed signal — transport
+        -- listens at init time and seeks any engine bound to seq_id. The
+        -- jog-audio burst stays explicit because it's command-specific
+        -- (frame-step feel) and not implied by the model-change signal.
+        require("core.playback.transport")
+            .play_frame_audio_target_if_loaded(seq_id, new_frame)
 
         return true
     end
