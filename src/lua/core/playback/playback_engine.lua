@@ -314,6 +314,15 @@ function PlaybackEngine:load_sequence(sequence_id, total_frames, output_audio_ra
         sequence_id))
     self.start_frame = seq.start_timecode_frame
     self._position = self.start_frame
+    -- Reset the seek-dedup guard. Without this, a stale value from a
+    -- previous sequence (e.g. 45 from the master before we loaded a
+    -- different one) makes the next seek(45) early-return at line
+    -- ~1004 (`frame == self._last_committed_frame`) — set_position_silent
+    -- is skipped and _position stays at start_frame instead of moving
+    -- to the requested frame. Repro 2026-05-22: Shift+F lands engine at
+    -- 0 instead of clip.source_in when source_viewer.load_clip's
+    -- seek_to_frame(clip.source_in) collides with a stale dedup value.
+    self._last_committed_frame = nil
 
     if total_frames and total_frames >= 1 then
         self.total_frames = total_frames
