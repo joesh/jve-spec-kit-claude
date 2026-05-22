@@ -244,7 +244,6 @@ function M.execute(args)
 
     log.event("ExpandAudio: clip=%s -> %d expanded clips on tracks [%s]",
         clip_id, #expanded_ids, track_index_list(plan))
-    require("core.signals").emit("sequence_content_changed", sequence_id)
 
     return {
         sequence_id          = sequence_id,
@@ -278,7 +277,6 @@ function M.undo(capture)
     Clip.restore_v13_state(capture.source_capture)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {

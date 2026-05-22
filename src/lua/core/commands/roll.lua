@@ -210,7 +210,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("prior_state", result_or_err.prior)
         emit_mutations(command, args)
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
@@ -251,7 +250,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         assert(database.release_savepoint(SAVEPOINT), "Undo Roll: release savepoint failed")
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

@@ -144,7 +144,6 @@ function M.execute(args)
         sequence_id, clip_id, #moved, tostring(orphan_deleted))
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
     if orphan_deleted then
         Signals.emit("sequence_deleted", nested_id)
     else
@@ -188,7 +187,6 @@ function M.undo(capture)
     Clip.restore_v13_state(capture.clip_capture)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
     if capture.orphan_deleted then
         -- Companion to the forward-path sequence_deleted signal.
         Signals.emit("sequence_resurrected", capture.nested_id)

@@ -141,7 +141,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes = {}, updates = {},
         })
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true, { new_clip_id = result_or_err.new_clip_id }
     end
 
@@ -153,7 +152,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- DELETE FROM clips cascades clip_channel_override and clip_links.
         Clip.delete_one(new_id)
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

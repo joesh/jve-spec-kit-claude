@@ -278,7 +278,6 @@ function M.execute(args)
     log.event("GrowMasterMedium: created %d companion clip(s)", #companions)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
     for parent_id, _ in pairs(touched_parents) do
         Signals.emit("sequence_content_changed", parent_id)
     end
@@ -334,7 +333,6 @@ function M.undo(capture)
     drop_master_audio_stream(capture.new_media_ref_id, capture.new_track_id)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
     local touched = {}
     for _, c in ipairs(capture.companions) do
         touched[c.owner_sequence_id] = true

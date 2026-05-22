@@ -226,11 +226,32 @@ local function notify_command_event(event)
         end
     end
 
-    -- Notify playback layer that sequence content may have changed.
-    -- Covers execute, undo, redo. Handler is a no-op when total_frames unchanged.
+    -- Notify listeners that this sequence's content may have changed.
+    -- Fires for every UNDOABLE command's execute/undo/redo. Non-undoable
+    -- commands (SetPlayhead, MovePlayhead, etc.) skip this path via the
+    -- `execute_as_non_persisting_parent` shortcut earlier in _execute_body —
+    -- those commands don't mutate clips, so the source viewer + inspectors
+    -- don't need to refresh on them. Centralizing here means individual
+    -- commands don't have to remember to emit:
+    --   * "content_changed" — playback layer; handler is a no-op when
+    --     total_frames unchanged.
+    --   * "sequence_content_changed" — source viewer, inspectors, and
+    --     any module that watches a sequence's content. Handlers must
+    --     be idempotent on no-op (re-pull from model + republish).
+    -- Cross-sequence commands (nest/unnest/grow_master_medium) still
+    -- emit explicitly for their SECONDARY seq_ids — the central emit
+    -- only knows the command's primary seq_id.
+    --
+    -- TODO(perf): some undoable commands (SetMarkIn/Out, SetClipProperty
+    -- on metadata, etc.) don't actually change clip layout; firing the
+    -- signal still triggers listeners to do their idempotent-no-op work.
+    -- If profiling shows hot path, gate this emit on a "mutated content"
+    -- marker — `__timeline_mutations` presence or a command-level
+    -- `mutates_clips` flag in SPEC.
     local seq_id = event.command and extract_sequence_id(event.command)
     if seq_id and seq_id ~= "" then
         Signals.emit("content_changed", seq_id)
+        Signals.emit("sequence_content_changed", seq_id)
     end
 end
 

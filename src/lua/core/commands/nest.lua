@@ -216,7 +216,6 @@ function M.execute(args)
         sequence_id, new_seq_id, #moved, span, min_start)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
     Signals.emit("sequence_content_changed", new_seq_id)
 
     return {
@@ -247,7 +246,6 @@ function M.undo(capture)
     Sequence.delete_one(capture.new_sequence_id)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {

@@ -423,7 +423,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 inserts = {}, updates = {}, deletes = {},
                 bulk_shifts = {}, placements = {},
             })
-            Signals.emit("sequence_content_changed", args.sequence_id)
             return true
         end
 
@@ -445,7 +444,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             build_executor_mutation_bucket(args, result))
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         advance_owner_playhead(args, command, result, Signals)
         return true
     end
@@ -486,7 +484,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         restore_owner_playhead(args, Signals)
         return true
     end

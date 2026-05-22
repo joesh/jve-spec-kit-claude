@@ -406,7 +406,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             build_executor_mutation_bucket(args.sequence_id, result_or_err))
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
 
         -- advance_playhead: same contract as Insert/Overwrite. Advance by
         -- total_duration from position; persist; emit playhead_changed.
@@ -488,7 +487,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
 
         -- Restore playhead if execute had advanced it.
         if args.prior_playhead ~= nil and args.sequence_id then

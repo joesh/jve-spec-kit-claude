@@ -59,8 +59,22 @@ function TimelineTab.new(kind, sequence_id)
 end
 
 --- Marks pulled lazily from the sequence row.
+--- Source tab in live-bound mode (spec 019 FR-016d): the visible marks
+--- come from the loaded CLIP's source_in/source_out via
+--- effective_source's override slot — NOT from the master source
+--- sequence's mark_in/mark_out (which stay nil for the master). Same
+--- channel the source monitor reads from (SequenceMonitor:get_mark_in).
+--- Record tabs and staged-mode source tab fall through to the sequence
+--- row's persisted marks.
 function TimelineTab:get_marks()
     local seq = load_seq_strict(self, "TimelineTab:get_marks")
+    if self.kind == "source" then
+        local in_frame, out_frame = require("core.effective_source")
+            .get_source_marks_for(seq.id)
+        if in_frame ~= nil then
+            return { in_frame = in_frame, out_frame = out_frame }
+        end
+    end
     return { in_frame = seq.mark_in, out_frame = seq.mark_out }
 end
 

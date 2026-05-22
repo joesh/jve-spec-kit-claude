@@ -195,7 +195,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true, { splits = result_or_err.splits }
     end
 
@@ -230,7 +229,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.release_savepoint(SAVEPOINT),
             "Undo Blade: release savepoint failed")
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

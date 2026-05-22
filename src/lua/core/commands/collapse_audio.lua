@@ -283,7 +283,6 @@ function M.execute(args)
 
     log.event("CollapseAudio: %d clips → composite %s on track %s (unselected=%d)",
         #selected, composite_id, topmost.row.track_id, #unselected_tracks)
-    require("core.signals").emit("sequence_content_changed", sequence_id)
 
     return {
         sequence_id       = sequence_id,
@@ -315,7 +314,6 @@ function M.undo(capture)
     end
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {

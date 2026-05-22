@@ -255,7 +255,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes     = {},
             updates     = { entry_with_media(left) },
         })
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return { success = true, result_data = result_or_err }
     end
 
@@ -292,7 +291,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes     = { { clip_id = second } },
             bulk_shifts = {},
         })
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

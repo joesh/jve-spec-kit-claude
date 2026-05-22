@@ -123,7 +123,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("__timeline_mutations", bucket)
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
@@ -163,7 +162,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("__timeline_mutations", bucket)
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

@@ -100,7 +100,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             } },
         })
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 
@@ -112,7 +111,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             prior.sequence_start_frame, prior.duration_frames,
             prior.source_in_frame, prior.source_out_frame)
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

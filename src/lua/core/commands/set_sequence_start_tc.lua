@@ -57,7 +57,6 @@ function M.execute(args)
         sequence_id, medium, tostring(prior_value), tostring(tc_value))
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
 
     return {
         sequence_id  = sequence_id,
@@ -75,7 +74,6 @@ function M.undo(capture)
     Sequence.set_start_tc(capture.sequence_id, capture.medium, capture.prior_value)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {

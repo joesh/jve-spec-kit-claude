@@ -1,624 +1,131 @@
--- 018 INV-3 inline subframe migration applied (count=5)
--- T039a (013): sequence_content_changed signal contract spy.
---
--- Every command class that mutates a sequence's clip set MUST emit
--- "sequence_content_changed" with the affected sequence_id. Without this
--- guard, a single missed emit silently breaks downstream observers
--- (timeline cache, inspector, render preview).
---
--- This test connects a spy and drives one representative of each
--- currently-V13-rewired command class:
---   Insert, Overwrite, TrimHead, TrimTail, Slip, Slide, Roll, SplitClip,
---   Blade, Duplicate, RippleDelete.
---
--- Extended after Phase 3.5/3.6/3.7 landed: also drives SetClipLayer,
--- ToggleClipChannel, SetClipChannelGain, ClearClipOverride,
--- SetMasterDefaultLayer, SetMasterChannelState, SetSequenceStartTC,
--- Nest, Unnest. GrowMasterMedium remains a follow-up.
+#!/usr/bin/env luajit
+--- sequence_content_changed signal contract.
+---
+--- After the central-emit refactor (2026-05-21), the contract for this
+--- signal lives in ONE place: command_manager.notify_command_event.
+--- Any command driven through command_manager.execute that carries a
+--- sequence_id MUST cause sequence_content_changed(seq_id) to fire
+--- exactly once per command event (execute, undo, redo).
+---
+--- Replaces the old per-command spy harness (T039a) that drove ~20
+--- executors directly via stub command shims. Those tests pinned an
+--- implementation detail ("each command emits the signal") that no
+--- longer exists — emits now live at the framework boundary, not in
+--- individual commands. The pre-2026-05-21 test had to be updated for
+--- every new command class; this version doesn't.
+---
+--- Coverage: execute, undo, and redo via SetMarkIn (the simplest
+--- representative UNDOABLE command with a sequence_id). The signal-
+--- firing behavior is the same for every undoable command; testing one
+--- is sufficient to pin the contract at the command_manager level.
+--- Non-undoable commands (SetPlayhead, MovePlayhead) intentionally
+--- skip this signal — they don't mutate clip content, so source viewer
+--- + inspectors don't need to refresh on them.
 
 require("test_env")
+
 local database = require("core.database")
-local Signals  = require("core.signals")
+local Sequence = require("models.sequence")
+local command_manager = require("core.command_manager")
+local Signals = require("core.signals")
 
-local DB_PATH = "/tmp/jve/test_013_signal_sequence_content_changed.db"
+print("=== test_013_signal_sequence_content_changed.lua ===")
 
-local function fresh_db()
-    os.remove(DB_PATH)
-    assert(database.init(DB_PATH), "schema.sql init failed")
-    return database.get_connection()
+local db_path = "/tmp/jve/test_013_signal_sequence_content_changed.db"
+os.remove(db_path)
+os.execute("mkdir -p /tmp/jve")
+database.init(db_path)
+local db = database.get_connection()
+db:exec(require("import_schema"))
+
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('project', 'Test', 'resample',
+        '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
+]], now, now))
+
+local seq = Sequence.create("Test Timeline", "project",
+    { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080,
+    { kind = "sequence", id = "seq_1", audio_sample_rate = 48000 })
+assert(seq:save(), "setup: failed to save sequence")
+
+command_manager.init("seq_1", "project")
+
+-- Spy on every sequence_content_changed emit; record the seq_id arg.
+local events = {}
+local conn_id = Signals.connect("sequence_content_changed", function(seq_id)
+    events[#events + 1] = seq_id
+end, 100)
+
+local function reset_events()
+    for i = #events, 1, -1 do events[i] = nil end
 end
 
--- Build: project, master 'm' (with V media_ref 1000 frames), edit 'e' (nested).
-local function base_fixture()
-    local db = fresh_db()
-    assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0),
-               ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
-               ('e-v1', 'e', 'V1', 'VIDEO', 1),
-               ('e-v2', 'e', 'V2', 'VIDEO', 2);
-        UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels, created_at, modified_at)
-        VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 1000, 24, 1, 0, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
-    ]]))
-    return db
-end
-
-local function seed_clip(db, id, track_id, ts, dur, src_in, src_out)
-    -- 018 INV-3 subframe: AUDIO needs (0,0), VIDEO needs NULL.
-    local _tt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
-    _tt:bind_value(1, track_id)
-    assert(_tt:exec()); assert(_tt:next())
-    local _sub_lit = _tt:value(0) == "AUDIO" and "0, 0" or "NULL, NULL"
-    _tt:finalize()
-    assert(db:exec(string.format([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            fps_mismatch_policy, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d, %s,
-            'passthrough', 1, 1.0, 0, 0, 0)
-    ]], id, track_id, id, ts, dur, src_in, src_out, _sub_lit)))
-end
-
--- A spy that captures every emit of sequence_content_changed.
-local function make_spy()
-    local events = {}
-    local conn_id = Signals.connect("sequence_content_changed", function(seq_id)
-        events[#events + 1] = seq_id
-    end, 100)
-    return events, conn_id
-end
-
-local function assert_emit_for(label, seq_id, fn)
-    local events, conn = make_spy()
+local function run_cmd_event(fn)
+    command_manager.begin_command_event("script")
     fn()
-    Signals.disconnect(conn)
-    assert(#events >= 1, string.format(
-        "%s: expected at least one sequence_content_changed emit; got 0",
-        label))
-    for _, sid in ipairs(events) do
-        assert(sid == seq_id, string.format(
-            "%s: emit had sequence_id=%s; expected %s",
-            label, tostring(sid), seq_id))
+    command_manager.end_command_event()
+end
+
+local pass_count, fail_count = 0, 0
+local function check(label, ok, msg)
+    if ok then
+        pass_count = pass_count + 1
+        print("  ✓ " .. label)
+    else
+        fail_count = fail_count + 1
+        print("  ✗ " .. label .. (msg and ("  — " .. msg) or ""))
     end
-    print(string.format("  %s ok (%d emit(s))", label, #events))
 end
 
--- Variant for commands that legitimately emit on multiple sequence ids
--- (Nest/Unnest emit on both parent and the nested sequence). Asserts
--- the expected seq_id is among the events; doesn't require uniqueness.
-local function assert_emit_includes(label, seq_id, fn)
-    local events, conn = make_spy()
-    fn()
-    Signals.disconnect(conn)
-    assert(#events >= 1, string.format(
-        "%s: expected at least one sequence_content_changed emit; got 0",
-        label))
-    local found = false
-    for _, sid in ipairs(events) do
-        if sid == seq_id then found = true; break end
-    end
-    assert(found, string.format(
-        "%s: expected seq_id=%s among emits; got [%s]",
-        label, seq_id, table.concat(events, ",")))
-    print(string.format("  %s ok (%d emit(s))", label, #events))
-end
+-- ─── execute path ────────────────────────────────────────────────────────
 
--- -------------------------------------------------------------------------
--- Insert (T040)
--- -------------------------------------------------------------------------
-print("-- sequence_content_changed signal contract --")
-do
-    base_fixture()
-    local Insert = require("core.commands.insert")
-    assert_emit_for("Insert", "e", function()
-        -- Insert is wired only via M.register's executor (which is what
-        -- emits the signal). Call execute through a stub command shim.
-        -- For T039a we just exercise execute and the executor wrapping
-        -- behavior — but since execute is the function emitting, drive
-        -- it through register's executor.
-        local executors, undoers, last_err = {}, {}, nil
-        Insert.register(executors, undoers, nil,
-            function(e) last_err = e end)
-        local cmd = {
-            params = {
-                sequence_id           = "e",
-                source_sequence_id    = "m",
-                sequence_start_frame  = 0,
-                target_video_track_id = "e-v1",
-            },
-            get_all_parameters = function(self) return self.params end,
-            set_parameter      = function(self, k, v) self.params[k] = v end,
-            set_parameters     = function(self, t)
-                for k, v in pairs(t) do self.params[k] = v end
-            end,
-        }
-        local ok = executors["Insert"](cmd)
-        assert(ok, "Insert executor failed: " .. tostring(last_err))
-    end)
-end
+reset_events()
+run_cmd_event(function()
+    command_manager.execute("SetMarkIn",
+        { sequence_id = "seq_1", project_id = "project", frame = 42 })
+end)
+check("execute fires sequence_content_changed once for the target seq_id",
+    #events == 1 and events[1] == "seq_1",
+    string.format("got %d emit(s); ids=[%s]", #events, table.concat(events, ",")))
 
--- A reusable mini command shim that supplies just enough Command interface
--- for the executors registered by each command module.
-local function make_cmd(params)
-    return {
-        params = params,
-        get_all_parameters = function(self) return self.params end,
-        set_parameter      = function(self, k, v) self.params[k] = v end,
-        set_parameters     = function(self, t)
-            for k, v in pairs(t) do self.params[k] = v end
-        end,
-    }
-end
+-- ─── undo path ───────────────────────────────────────────────────────────
 
--- Helper: register a command module and drive its executor for a given
--- command name with given params; assert the executor returned truthy.
-local function drive(module, name, params)
-    local executors, undoers, last_err = {}, {}, nil
-    module.register(executors, undoers, nil, function(e) last_err = e end)
-    local exec = executors[name]
-    assert(exec, name .. ": executor not registered")
-    local ok = exec(make_cmd(params))
-    assert(ok, name .. " executor failed: " .. tostring(last_err))
-end
+reset_events()
+command_manager.undo()
+check("undo fires sequence_content_changed once for the target seq_id",
+    #events == 1 and events[1] == "seq_1",
+    string.format("got %d emit(s); ids=[%s]", #events, table.concat(events, ",")))
 
--- -------------------------------------------------------------------------
--- Overwrite (T041)
--- -------------------------------------------------------------------------
-do
-    base_fixture()
-    local Overwrite = require("core.commands.overwrite")
-    assert_emit_for("Overwrite", "e", function()
-        drive(Overwrite, "Overwrite", {
-            sequence_id           = "e",
-            source_sequence_id    = "m",
-            sequence_start_frame  = 0,
-            target_video_track_id = "e-v1",
-        })
-    end)
-end
+-- ─── redo path ───────────────────────────────────────────────────────────
 
--- -------------------------------------------------------------------------
--- TrimHead, TrimTail
--- TrimHead/TrimTail delegate to ExtractRange via command_manager.execute,
--- so we drive them through command_manager rather than the bare executor.
--- The sequence_content_changed emit comes from ExtractRange.
--- -------------------------------------------------------------------------
-local function drive_via_command_manager(name, args, ...)
-    local command_manager = require("core.command_manager")
-    require("command")  -- side-effect: registers Command type
-    local Command = require("command")
-    command_manager.init(args.sequence_id, "p1")
-    -- Register the named command + every other module passed in.
-    for _, mod in ipairs({...}) do mod.register(
-        command_manager.command_executors or {},
-        command_manager.command_undoers   or {},
-        require("core.database").get_connection(),
-        function(_) end) end
-    local cmd = Command.create(name, "p1")
-    for k, v in pairs(args) do cmd:set_parameter(k, v) end
-    local result = command_manager.execute(cmd)
-    assert(result and result.success, name .. " failed: "
-        .. tostring(result and result.error_message))
-end
+reset_events()
+command_manager.redo()
+check("redo fires sequence_content_changed once for the target seq_id",
+    #events == 1 and events[1] == "seq_1",
+    string.format("got %d emit(s); ids=[%s]", #events, table.concat(events, ",")))
 
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 100, 0, 100)
-    assert_emit_for("TrimHead", "e", function()
-        drive_via_command_manager("TrimHead", {
-            sequence_id = "e", project_id = "p1",
-            clip_ids = {"c"}, trim_frame = 105,
-        }, require("core.commands.trim_head"),
-           require("core.commands.extract_range"))
-    end)
-end
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 100, 0, 100)
-    assert_emit_for("TrimTail", "e", function()
-        drive_via_command_manager("TrimTail", {
-            sequence_id = "e", project_id = "p1",
-            clip_ids = {"c"}, trim_frame = 195,
-        }, require("core.commands.trim_tail"),
-           require("core.commands.extract_range"))
-    end)
-end
+-- ─── seq_id correctness across distinct sequences ────────────────────────
+-- A second sequence in the same project; running an execute against it
+-- must emit ITS id, not seq_1's.
 
--- -------------------------------------------------------------------------
--- Slip, Slide, Roll (T044)
--- -------------------------------------------------------------------------
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 100, 50, 150)
-    local Slip = require("core.commands.slip")
-    assert_emit_for("Slip", "e", function()
-        drive(Slip, "Slip", {
-            sequence_id = "e", clip_id = "c", delta_source_frames = 5,
-        })
-    end)
-end
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 100, 50, 150)
-    local Slide = require("core.commands.slide")
-    assert_emit_for("Slide", "e", function()
-        drive(Slide, "Slide", {
-            sequence_id = "e", clip_id = "c", delta_timeline_frames = 5,
-        })
-    end)
-end
-do
-    local db = base_fixture()
-    seed_clip(db, "a", "e-v1",   0, 100,   0, 100)
-    seed_clip(db, "b", "e-v1", 100, 100, 200, 300)
-    local Roll = require("core.commands.roll")
-    assert_emit_for("Roll", "e", function()
-        drive(Roll, "Roll", {
-            sequence_id           = "e",
-            outgoing_clip_id      = "a",
-            incoming_clip_id      = "b",
-            delta_timeline_frames = 5,
-        })
-    end)
-end
+local seq2 = Sequence.create("Other", "project",
+    { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080,
+    { kind = "sequence", id = "seq_2", audio_sample_rate = 48000 })
+assert(seq2:save(), "setup: failed to save seq_2")
 
--- -------------------------------------------------------------------------
--- SplitClip (T045)
--- -------------------------------------------------------------------------
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 100, 0, 100)
-    local SplitClip = require("core.commands.split_clip")
-    assert_emit_for("SplitClip", "e", function()
-        drive(SplitClip, "SplitClip", {
-            sequence_id = "e", clip_id = "c", split_frame = 150,
-        })
-    end)
-end
+reset_events()
+run_cmd_event(function()
+    command_manager.execute("SetMarkIn",
+        { sequence_id = "seq_2", project_id = "project", frame = 7 })
+end)
+check("execute on seq_2 emits seq_2's id (not seq_1)",
+    #events == 1 and events[1] == "seq_2",
+    string.format("got %d emit(s); ids=[%s]", #events, table.concat(events, ",")))
 
--- -------------------------------------------------------------------------
--- Blade (T045a)
--- -------------------------------------------------------------------------
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 0, 100, 0, 100)
-    local Blade = require("core.commands.blade")
-    assert_emit_for("Blade", "e", function()
-        drive(Blade, "Blade", {
-            sequence_id = "e", blade_frame = 50, track_ids = { "e-v1" },
-        })
-    end)
-end
+Signals.disconnect(conn_id)
 
--- -------------------------------------------------------------------------
--- Duplicate (T047)
--- -------------------------------------------------------------------------
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 100, 50, 0, 50)
-    local Duplicate = require("core.commands.duplicate")
-    assert_emit_for("Duplicate", "e", function()
-        drive(Duplicate, "Duplicate", {
-            sequence_id     = "e",
-            clip_id         = "c",
-            target_track_id = "e-v2",
-            delta_frames    = 100,
-        })
-    end)
-end
-
--- -------------------------------------------------------------------------
--- RippleDelete (T046 partial)
--- -------------------------------------------------------------------------
-do
-    local db = base_fixture()
-    seed_clip(db, "c", "e-v1", 0, 100, 0, 100)
-    local RippleDelete = require("core.commands.ripple_delete")
-    assert_emit_for("RippleDelete", "e", function()
-        drive(RippleDelete, "RippleDelete", {
-            sequence_id = "e", clip_id = "c",
-        })
-    end)
-end
-
--- -------------------------------------------------------------------------
--- Phase 3.5: per-clip override commands.
---
--- These mutate clip_channel_override / clip.master_layer_track_id and
--- emit on the parent (edit) sequence's id.
--- -------------------------------------------------------------------------
-
--- Augment the master with V2 + an audio track + media so the override
--- commands have a domain to operate on.
-local function override_fixture()
-    local db = base_fixture()
-    -- V2 on master + an audio track with a 2-channel media file.
-    assert(db:exec([[
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v2', 'm', 'V2', 'VIDEO', 2),
-               ('m-a1', 'm', 'A1', 'AUDIO', 1),
-               ('e-a1', 'e', 'A1', 'AUDIO', 1);
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels,
-            created_at, modified_at)
-        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 48000, 48000, 1, 2, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr-a', 'p1', 'm', 'm-a1', 'a-med', 0, 48000, 0, 48000, 48000,
-                1, 1.0, 0, 0, 0);
-    ]]))
-    return db
-end
-
-do  -- SetClipLayer (T053)
-    local db = override_fixture()
-    seed_clip(db, "c", "e-v1", 0, 100, 0, 100)
-    local SetClipLayer = require("core.commands.set_clip_layer")
-    assert_emit_for("SetClipLayer", "e", function()
-        drive(SetClipLayer, "SetClipLayer", {
-            sequence_id = "e", clip_id = "c", track_id = "m-v2",
-        })
-    end)
-end
-
-do  -- ToggleClipChannel (T054)
-    local db = override_fixture()
-    -- Audio clip in `e` referencing the master.
-    assert(db:exec([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            master_layer_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
-    ]]))
-    local ToggleClipChannel = require("core.commands.toggle_clip_channel")
-    assert_emit_for("ToggleClipChannel", "e", function()
-        drive(ToggleClipChannel, "ToggleClipChannel", {
-            sequence_id = "e", clip_id = "ca", channel_index = 0,
-        })
-    end)
-end
-
-do  -- SetClipChannelGain (T055)
-    local db = override_fixture()
-    assert(db:exec([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            master_layer_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
-    ]]))
-    local SetClipChannelGain = require("core.commands.set_clip_channel_gain")
-    assert_emit_for("SetClipChannelGain", "e", function()
-        drive(SetClipChannelGain, "SetClipChannelGain", {
-            sequence_id = "e", clip_id = "ca",
-            channel_index = 0, gain_db = -6.0,
-        })
-    end)
-end
-
-do  -- ClearClipOverride (channel + layer) (T056)
-    local db = override_fixture()
-    seed_clip(db, "cv", "e-v1", 0, 100, 0, 100)
-    -- Pre-set V2 layer override on cv so the layer-clear has something to clear.
-    assert(db:exec("UPDATE clips SET master_layer_track_id='m-v2' WHERE id='cv'"))
-    local ClearClipOverride = require("core.commands.clear_clip_override")
-    assert_emit_for("ClearClipOverride(layer)", "e", function()
-        drive(ClearClipOverride, "ClearClipOverride", {
-            sequence_id = "e", clip_id = "cv", kind = "layer",
-        })
-    end)
-
-    -- Channel variant.
-    assert(db:exec([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            master_layer_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 48000, 0, 48000, 0, 0, NULL, 'resample', 1, 1.0, 0, 0, 0);
-        INSERT INTO clip_channel_override (clip_id, channel_index, enabled, gain_db)
-        VALUES ('ca', 0, 0, -3.0);
-    ]]))
-    assert_emit_for("ClearClipOverride(channel)", "e", function()
-        drive(ClearClipOverride, "ClearClipOverride", {
-            sequence_id = "e", clip_id = "ca", kind = "channel",
-            channel_index = 0,
-        })
-    end)
-end
-
--- -------------------------------------------------------------------------
--- Phase 3.6: master-level + sequence-level commands.
---
--- These emit on the MASTER (or affected sequence)'s id, which propagates
--- to tracking clips via the resolver. The contract is "fires with the
--- correct sequence_id" — i.e., the sequence whose state changed.
--- -------------------------------------------------------------------------
-
-do  -- SetMasterDefaultLayer (T061)
-    override_fixture()
-    local SetMasterDefaultLayer = require("core.commands.set_master_default_layer")
-    assert_emit_for("SetMasterDefaultLayer", "m", function()
-        drive(SetMasterDefaultLayer, "SetMasterDefaultLayer", {
-            sequence_id = "m", track_id = "m-v2",
-        })
-    end)
-end
-
-do  -- SetMasterChannelState (T062)
-    override_fixture()
-    local SetMasterChannelState = require("core.commands.set_master_channel_state")
-    assert_emit_for("SetMasterChannelState", "m", function()
-        drive(SetMasterChannelState, "SetMasterChannelState", {
-            sequence_id = "m", channel_index = 0,
-            enabled = true, gain_db = -3.0,
-        })
-    end)
-end
-
-do  -- SetSequenceStartTC (T063)
-    base_fixture()
-    local SetSequenceStartTC = require("core.commands.set_sequence_start_tc")
-    assert_emit_for("SetSequenceStartTC(video)", "m", function()
-        drive(SetSequenceStartTC, "SetSequenceStartTC", {
-            sequence_id = "m", medium = "video", tc_value = 86400,
-        })
-    end)
-end
-
-do  -- SetFpsMismatchPolicy(sequence) emits sequence_content_changed (T064)
-    base_fixture()
-    local SetFpsMismatchPolicy = require("core.commands.set_fps_mismatch_policy")
-    assert_emit_for("SetFpsMismatchPolicy(sequence)", "e", function()
-        drive(SetFpsMismatchPolicy, "SetFpsMismatchPolicy", {
-            scope = "sequence", sequence_id = "e", policy = "passthrough",
-        })
-    end)
-end
-
--- -------------------------------------------------------------------------
--- Phase 3.7: Nest / Unnest emit on BOTH parent and the new/old nested.
--- The contract test asserts the parent emit ("affected sequence_id");
--- the second emit (on S) is also observable but not under separate
--- assertion here.
--- -------------------------------------------------------------------------
-
-do  -- Nest (T068) — emits on parent AND new sequence; we assert parent.
-    local db = base_fixture()
-    seed_clip(db, "c1", "e-v1", 100, 100, 0, 100)
-    local Nest = require("core.commands.nest")
-    assert_emit_includes("Nest(parent)", "e", function()
-        drive(Nest, "Nest", {
-            sequence_id        = "e",
-            selected_clip_ids  = { "c1" },
-        })
-    end)
-end
-
-do  -- ExpandAudio (T056i) — emits on parent.
-    local db = base_fixture()
-    -- Add a 2nd master A track + edit A track + composite A clip.
-    assert(db:exec([[
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
-               ('m-a2', 'm', 'A2', 'AUDIO', 2),
-               ('e-a1', 'e', 'A1', 'AUDIO', 1);
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels,
-            created_at, modified_at)
-        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
-               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('ca', 'p1', 'e', 'e-a1', 'm', 'ca',
-                0, 100, 0, 200000, 0, 0, NULL, NULL, 'passthrough', 1, 1.0, 0, 0, 0);
-    ]]))
-    require("test_env").touch_media_fixtures()
-    local ExpandAudio = require("core.commands.expand_audio")
-    assert_emit_for("ExpandAudio", "e", function()
-        drive(ExpandAudio, "ExpandAudio", {
-            sequence_id = "e", clip_id = "ca",
-        })
-    end)
-end
-
-do  -- CollapseAudio (T056j) — emits on parent.
-    local db = base_fixture()
-    assert(db:exec([[
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-a1', 'm', 'A1', 'AUDIO', 1),
-               ('m-a2', 'm', 'A2', 'AUDIO', 2),
-               ('e-a1', 'e', 'A1', 'AUDIO', 1),
-               ('e-a2', 'e', 'A2', 'AUDIO', 2);
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels,
-            created_at, modified_at)
-        VALUES ('a-med', 'p1', 'a.wav', '/tmp/a.wav', 200000, 48000, 1, 1, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr-a1', 'p1', 'm', 'm-a1', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0),
-               ('mr-a2', 'p1', 'm', 'm-a2', 'a-med', 0, 200000, 0, 200000, 48000, 1, 1.0, 0, 0, 0);
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('ca1', 'p1', 'e', 'e-a1', 'm', 'ca1',
-                0, 100, 0, 200000, 0, 0, NULL, 'm-a1', 'passthrough', 1, 1.0, 0, 0, 0),
-               ('ca2', 'p1', 'e', 'e-a2', 'm', 'ca2',
-                0, 100, 0, 200000, 0, 0, NULL, 'm-a2', 'passthrough', 1, 1.0, 0, 0, 0);
-        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
-        VALUES ('lg', 'ca1', 'audio', 0, 1),
-               ('lg', 'ca2', 'audio', 0, 1);
-    ]]))
-    require("test_env").touch_media_fixtures()
-    local CollapseAudio = require("core.commands.collapse_audio")
-    assert_emit_for("CollapseAudio", "e", function()
-        drive(CollapseAudio, "CollapseAudio", {
-            sequence_id = "e", clip_ids = { "ca1", "ca2" },
-        })
-    end)
-end
-
-do  -- Unnest (T069) — emits parent + sequence_deleted/sequence_resurrected.
-    local db = base_fixture()
-    seed_clip(db, "c1", "e-v1", 100, 100, 0, 100)
-    local Nest = require("core.commands.nest")
-    local nest_cap = Nest.execute({
-        sequence_id        = "e",
-        selected_clip_ids  = { "c1" },
-    })
-    local Unnest = require("core.commands.unnest")
-    assert_emit_includes("Unnest(parent)", "e", function()
-        drive(Unnest, "Unnest", {
-            sequence_id = "e", clip_id = nest_cap.new_clip_id,
-        })
-    end)
-end
-
+print(string.format("\n%d passed, %d failed", pass_count, fail_count))
+assert(fail_count == 0, "test_013_signal_sequence_content_changed.lua: some assertions failed")
 print("✅ test_013_signal_sequence_content_changed.lua passed")

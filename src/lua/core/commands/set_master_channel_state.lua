@@ -92,7 +92,6 @@ function M.execute(args)
     end
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
 
     return capture
 end
@@ -112,7 +111,6 @@ function M.undo(capture)
     end
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {

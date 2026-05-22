@@ -72,7 +72,6 @@ function M.execute(args)
         clip_id, tostring(prior_track_id), tostring(track_id))
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", sequence_id)
 
     return {
         sequence_id     = sequence_id,
@@ -94,7 +93,6 @@ function M.undo(capture)
     Clip.set_master_layer_track_id(clip_id, prior_track_id)
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 -- ---------------------------------------------------------------------------

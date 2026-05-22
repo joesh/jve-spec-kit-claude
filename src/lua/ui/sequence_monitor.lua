@@ -693,9 +693,17 @@ function SequenceMonitor:has_clip()
 end
 
 --- Get mark in (video frame). Works on any sequence kind.
+--- In live-bound mode (spec 019 FR-016d), the source monitor's mark
+--- bar shows the loaded CLIP's source_in — pulled from effective_source's
+--- override slot (which source_viewer.load_clip wrote into). Staged
+--- mode and the record monitor fall through to the sequence row's
+--- persisted mark_in.
 -- @return number|nil
 function SequenceMonitor:get_mark_in()
     if not self.sequence then return nil end
+    local override_in = require("core.effective_source")
+        .get_source_marks_for(self.sequence.id)
+    if override_in ~= nil then return override_in end
     return self.sequence:get_in()
 end
 
@@ -723,9 +731,14 @@ function SequenceMonitor:get_playback_range()
 end
 
 --- Get mark out (video frame). Works on any sequence kind.
+--- In live-bound mode (spec 019 FR-016d), reads from effective_source's
+--- override slot — mirrors get_mark_in above.
 -- @return number|nil
 function SequenceMonitor:get_mark_out()
     if not self.sequence then return nil end
+    local _, override_out = require("core.effective_source")
+        .get_source_marks_for(self.sequence.id)
+    if override_out ~= nil then return override_out end
     return self.sequence:get_out()
 end
 

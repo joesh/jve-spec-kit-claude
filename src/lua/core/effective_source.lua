@@ -164,6 +164,28 @@ function M.get()
     return _current
 end
 
+--- 019 FR-016d display path: the source-side ruler (under the source
+--- monitor) and the source tab (in the timeline tab strip) both need to
+--- show the live-bound clip's in/out as visible marks when the source
+--- viewer is in live_bound_clip mode. The marks live on the clip's
+--- source_in/source_out columns (NOT the master source sequence's
+--- mark_in/mark_out, which stay nil for the master).
+---
+--- This accessor returns the overrides for `sequence_id` if the source
+--- viewer is currently live-bound to a clip whose source sequence
+--- matches; otherwise returns nil, nil so callers fall back to the
+--- sequence row's persisted marks (staged mode + non-source tabs).
+---
+--- Returns: (in_frame, out_frame) or (nil, nil).
+function M.get_source_marks_for(sequence_id)
+    if _source_viewer_seq_id == sequence_id
+        and _source_viewer_in ~= nil
+        and _source_viewer_out ~= nil then
+        return _source_viewer_in, _source_viewer_out
+    end
+    return nil, nil
+end
+
 --- 019 FR-016d entry point: live-bound source viewer carries clip's
 --- source_in/out as overrides. All three fields written atomically.
 --- @param seq_id string  the clip's source sequence id

@@ -232,7 +232,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("__timeline_mutations", bucket)
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
 
         -- advance_playhead: see insert.lua for the contract. Capture prior,
         -- set new, persist, emit.
@@ -358,7 +357,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", args.sequence_id)
 
         -- Restore playhead if we advanced it.
         if args.advance_playhead and type(args.prior_playhead) == "number" then

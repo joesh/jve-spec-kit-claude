@@ -84,7 +84,6 @@ end
 local function report_mutations(command, sequence_id, mutations)
     require("core.command_helper").report_planner_mutations(
         command, sequence_id, mutations)
-    require("core.signals").emit("sequence_content_changed", sequence_id)
 end
 
 --- Assert the new source range lies inside the source-sequence's content
@@ -188,7 +187,6 @@ function M.register(executors, undoers, db, _set_last_error)
             db, executed, command, args.sequence_id)
         assert(ok, string.format(
             "OverwriteTrimEdge.undo: revert_mutations failed: %s", tostring(err)))
-        require("core.signals").emit("sequence_content_changed", args.sequence_id)
         return true
     end
 

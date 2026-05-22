@@ -102,12 +102,10 @@ function M.execute(args)
     if kind == "channel" then
         local capture = execute_channel(args)
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", capture.sequence_id)
         return capture
     elseif kind == "layer" then
         local capture = execute_layer(args)
         local Signals = require("core.signals")
-        Signals.emit("sequence_content_changed", capture.sequence_id)
         return capture
     else
         error(string.format(
@@ -133,7 +131,6 @@ function M.undo(capture)
     end
 
     local Signals = require("core.signals")
-    Signals.emit("sequence_content_changed", capture.sequence_id)
 end
 
 local SPEC = {
