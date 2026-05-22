@@ -27,6 +27,7 @@ Failure isolation:
     respawned automatically and the current test is marked failed.
 """
 
+import atexit
 import unittest
 from pathlib import Path
 from typing import ClassVar, Optional
@@ -36,35 +37,56 @@ from tests.smoke.runner.jve_runner import (
 )
 
 
-class JVESmokeCase(unittest.TestCase):
-    """Base class. Subclasses get a shared long-lived JVE."""
+# Module-level singleton: one JVE for the entire suite run, not per
+# TestCase class. Per spec 020 phase1-test-overhaul.md: "One long-lived
+# JVE serves the entire smoke suite; no per-test process spawn for the
+# common case." Lazy-started on first setUpClass; shut down via atexit.
+_singleton_runner: Optional[JVERunner] = None
+_singleton_fixtures: Optional[Fixtures] = None
 
-    # Class-level: one process for the whole subclass.
+
+def _ensure_runner() -> tuple[JVERunner, Fixtures]:
+    """Start the singleton JVE on first call; return cached refs after."""
+    global _singleton_runner, _singleton_fixtures
+    if _singleton_runner is None:
+        _singleton_fixtures = Fixtures()
+        _singleton_runner = JVERunner(
+            stdout_log=Path("/tmp/jve_smoke") / "suite.log")
+        _singleton_runner.start()
+        _singleton_runner.foreground()
+        atexit.register(_singleton_shutdown)
+    assert _singleton_fixtures is not None  # set alongside _singleton_runner
+    return _singleton_runner, _singleton_fixtures
+
+
+def _singleton_shutdown() -> None:
+    """atexit hook: tear down the suite-wide JVE on interpreter exit."""
+    global _singleton_runner
+    if _singleton_runner is not None:
+        try:
+            _singleton_runner.shutdown()
+        finally:
+            _singleton_runner = None
+
+
+class JVESmokeCase(unittest.TestCase):
+    """Base class. All subclasses share one long-lived JVE for the suite."""
+
+    # Class-level aliases to the singleton, populated in setUpClass so
+    # test methods can use self._runner / self._fixtures as before.
     _runner: ClassVar[Optional[JVERunner]] = None
     _fixtures: ClassVar[Optional[Fixtures]] = None
 
-    # Per-test (set in setUp).
     runner: JVERunner  # alias for type-checking convenience
 
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        cls._fixtures = Fixtures()
-        # Launch JVE without a startup project; the welcome screen is fine —
-        # setUp opens a fresh Anamnesis copy before every test.
-        cls._runner = JVERunner(
-            stdout_log=Path("/tmp/jve_smoke") / f"{cls.__name__}.log")
-        cls._runner.start()
-        cls._runner.foreground()
+        cls._runner, cls._fixtures = _ensure_runner()
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls._runner is not None:
-            try:
-                cls._runner.shutdown()
-            finally:
-                cls._runner = None
-        super().tearDownClass()
+    # No tearDownClass: the suite-wide runner is owned by atexit. Per-
+    # class teardown would kill JVE between TestCase classes — defeats
+    # the long-lived design.
 
     def setUp(self) -> None:
         super().setUp()
