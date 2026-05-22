@@ -12,6 +12,7 @@ local M = {}
 local log = require("core.logger").for_area("commands")
 local source_viewer = require('ui.source_viewer')
 local Sequence = require('models.sequence')
+local Clip = require('models.clip')
 local command_helper = require("core.command_helper")
 local media_status = require("core.media.media_status")
 
@@ -99,8 +100,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- boundary; log.warn carries the per-frame deficit for diagnosis.
         local master_seq = Sequence.load(target_master_id)
         if master_seq then
-            local raw_play = target_clip.source_in
-                + (playhead - target_clip.sequence_start)
+            local raw_play = Clip.owner_frame_to_source(target_clip, playhead)
             local in_c, out_c, play_c, sf = clamp_to_master_range(
                 master_seq, target_clip.source_in, target_clip.source_out, raw_play)
             if sf then

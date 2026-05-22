@@ -106,6 +106,13 @@ package.loaded["models.clip"] = {
         row.id = clip_id
         return row
     end,
+    -- Pure function — the executor uses it after Clip.load. Mirror
+    -- the real implementation rather than stubbing a return value so
+    -- the test catches sign/offset mistakes if the production math
+    -- ever changes.
+    owner_frame_to_source = function(clip, owner_frame)
+        return clip.source_in + (owner_frame - clip.sequence_start)
+    end,
 }
 
 local command_manager = require("core.command_manager")

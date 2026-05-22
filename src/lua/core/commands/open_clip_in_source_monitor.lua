@@ -42,21 +42,6 @@ local function resolve_clip_id_from_playhead()
     return clip.id
 end
 
--- Match-frame map the record-tab playhead into the clip's source-frame
--- space (FR-024 v2 2026-05-22). The rec playhead and clip.sequence_start
--- both live in the rec sequence's frame space; subtracting yields the
--- offset_in_clip (rec frames). Adding to clip.source_in gives the
--- source frame — same arithmetic MatchFrame uses (match_frame.lua:102).
--- Rate-mismatched clips (non-1:1 source↔timeline) are a separate latent
--- concern — see FR-014; this assumes 1:1, consistent with sibling code.
-local function map_record_playhead_to_source(clip, rec_playhead)
-    assert(type(clip.sequence_start) == "number", string.format(
-        "OpenClipInSourceMonitor: clip %s missing sequence_start", tostring(clip.id)))
-    assert(type(clip.source_in) == "number", string.format(
-        "OpenClipInSourceMonitor: clip %s missing source_in", tostring(clip.id)))
-    return clip.source_in + (rec_playhead - clip.sequence_start)
-end
-
 -- Read the rec-tab playhead. The record tab's playhead lives on the
 -- record engine's currently-loaded sequence; its `playhead_position`
 -- column is the model-side source of truth.
@@ -89,11 +74,11 @@ function M.register(executors, _undoers, _db)
         if clip_id == nil or clip_id == "" then
             clip_id = resolve_clip_id_from_playhead()
         end
-        local clip = require("models.clip").load(clip_id)
+        local Clip = require("models.clip")
+        local clip = Clip.load(clip_id)
         assert(clip, string.format(
             "OpenClipInSourceMonitor: clip not found: %s", tostring(clip_id)))
-        local rec_playhead = read_record_tab_playhead()
-        local source_frame = map_record_playhead_to_source(clip, rec_playhead)
+        local source_frame = Clip.owner_frame_to_source(clip, read_record_tab_playhead())
         -- skip_focus=true: the src tab + viewer are the read-out surface
         -- for the loaded clip; the Timeline panel stays the user's input
         -- surface (FR-024 v2 — focus stays on Timeline so the user can

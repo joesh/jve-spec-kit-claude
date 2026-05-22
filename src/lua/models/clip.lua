@@ -761,6 +761,36 @@ function M.find_clips_for_media(media_id)
     return clips
 end
 
+--- Map a frame in the owner-timeline's frame space to the clip's source
+--- frame space. Same arithmetic used by `MatchFrame` (FR-024 F) and
+--- `OpenClipInSourceMonitor` (FR-024 v2 Shift+F): given a record-side
+--- frame inside `[sequence_start, sequence_start + duration)`, return
+--- the source frame it corresponds to. Assumes 1:1 source↔owner rate —
+--- non-1:1 (fps-mismatched clips) is a separate latent concern tracked
+--- under FR-014. No range clamp — callers that need clamping into a
+--- master sequence's coverage window apply it themselves
+--- (`match_frame.clamp_to_master_range`).
+---
+--- Module function (not method) so callers that have a plain clip table
+--- — `timeline_state.get_clips_at_time` returns rows without the Clip
+--- metatable — can use it without round-tripping through `Clip.load`.
+--- @param clip table            clip row with sequence_start + source_in
+--- @param owner_frame number    frame in owner-sequence space
+--- @return number               corresponding source-media frame
+function M.owner_frame_to_source(clip, owner_frame)
+    assert(type(clip) == "table", "Clip.owner_frame_to_source: clip required")
+    assert(type(clip.sequence_start) == "number", string.format(
+        "Clip.owner_frame_to_source: clip %s missing sequence_start",
+        tostring(clip.id)))
+    assert(type(clip.source_in) == "number", string.format(
+        "Clip.owner_frame_to_source: clip %s missing source_in",
+        tostring(clip.id)))
+    assert(type(owner_frame) == "number", string.format(
+        "Clip.owner_frame_to_source: owner_frame must be a number; got %s",
+        type(owner_frame)))
+    return clip.source_in + (owner_frame - clip.sequence_start)
+end
+
 --- Update source_in and source_out and persist.
 -- @param source_in number New source_in (native units)
 -- @param source_out number New source_out (native units)
