@@ -56,7 +56,6 @@ function M.execute(args)
     log.event("SetSequenceStartTC: seq=%s medium=%s %s -> %s",
         sequence_id, medium, tostring(prior_value), tostring(tc_value))
 
-    local Signals = require("core.signals")
 
     return {
         sequence_id  = sequence_id,
@@ -73,7 +72,6 @@ function M.undo(capture)
     -- restore path.
     Sequence.set_start_tc(capture.sequence_id, capture.medium, capture.prior_value)
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

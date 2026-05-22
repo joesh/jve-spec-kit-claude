@@ -245,7 +245,6 @@ function M.undo(capture)
     Track.delete(capture.new_track_id)
     Sequence.delete_one(capture.new_sequence_id)
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

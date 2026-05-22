@@ -84,7 +84,6 @@ local function execute_sequence(args)
     log.event("SetFpsMismatchPolicy(sequence): %s -> %s -> %s",
         sequence_id, tostring(prior), tostring(policy))
 
-    local Signals = require("core.signals")
 
     return {
         scope         = "sequence",
@@ -128,7 +127,6 @@ function M.undo(capture)
         Project.set_fps_mismatch_policy(capture.project_id, capture.prior_policy)
     elseif capture.scope == "sequence" then
         Sequence.set_fps_mismatch_policy(capture.sequence_id, capture.prior_policy)
-        local Signals = require("core.signals")
     else
         error("SetFpsMismatchPolicy.undo: unknown scope " .. tostring(capture.scope))
     end

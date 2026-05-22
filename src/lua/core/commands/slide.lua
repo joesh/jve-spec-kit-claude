@@ -101,7 +101,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 source_out_value = fresh.source_out_frame,
             } },
         })
-        local Signals = require("core.signals")
         return true
     end
 
@@ -112,7 +111,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         Clip.update_bounds(args.clip_id,
             prior.sequence_start_frame, prior.duration_frames,
             prior.source_in_frame, prior.source_out_frame)
-        local Signals = require("core.signals")
         return true
     end
 

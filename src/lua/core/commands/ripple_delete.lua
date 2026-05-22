@@ -130,7 +130,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         command:set_parameter("prior_unit",  result_or_err.deleted)
         command:set_parameter("ripple_plan", result_or_err.ripple_plan)
-        local Signals = require("core.signals")
         return true
     end
 
@@ -170,7 +169,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(database.release_savepoint(SAVEPOINT),
             "Undo RippleDelete: release savepoint failed")
 
-        local Signals = require("core.signals")
         return true
     end
 

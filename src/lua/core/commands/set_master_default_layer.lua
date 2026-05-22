@@ -65,7 +65,6 @@ function M.execute(args)
     log.event("SetMasterDefaultLayer: master=%s %s -> %s",
         sequence_id, tostring(prior_track_id), tostring(track_id))
 
-    local Signals = require("core.signals")
 
     return {
         sequence_id    = sequence_id,
@@ -79,7 +78,6 @@ function M.undo(capture)
     Sequence.update(capture.sequence_id, {
         default_video_layer_track_id = capture.prior_track_id,
     })
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

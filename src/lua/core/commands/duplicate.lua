@@ -140,7 +140,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             } },
             deletes = {}, updates = {},
         })
-        local Signals = require("core.signals")
         return true, { new_clip_id = result_or_err.new_clip_id }
     end
 
@@ -151,7 +150,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             "Undo Duplicate: new_clip_id missing")
         -- DELETE FROM clips cascades clip_channel_override and clip_links.
         Clip.delete_one(new_id)
-        local Signals = require("core.signals")
         return true
     end
 

@@ -104,7 +104,6 @@ function M.execute(args)
             clip_id, channel_index, tostring(gain_db), tostring(inh_enabled))
     end
 
-    local Signals = require("core.signals")
 
     return capture
 end
@@ -123,7 +122,6 @@ function M.undo(capture)
         Override.delete(capture.clip_id, capture.channel_index)
     end
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

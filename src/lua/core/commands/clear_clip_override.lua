@@ -101,11 +101,9 @@ function M.execute(args)
     local kind = args.kind
     if kind == "channel" then
         local capture = execute_channel(args)
-        local Signals = require("core.signals")
         return capture
     elseif kind == "layer" then
         local capture = execute_layer(args)
-        local Signals = require("core.signals")
         return capture
     else
         error(string.format(
@@ -130,7 +128,6 @@ function M.undo(capture)
         error("ClearClipOverride.undo: unknown kind " .. tostring(capture.kind))
     end
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

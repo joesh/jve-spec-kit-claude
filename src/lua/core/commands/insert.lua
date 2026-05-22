@@ -410,7 +410,6 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         -- goal (T042 path). Persist empty clip-insertion state and return.
         local src_mediums = Sequence.contained_mediums(args.source_sequence_id)
         if not next(src_mediums) then
-            local Signals = require("core.signals")
             command:set_parameter("created_clip_ids",      {})
             command:set_parameter("created_link_group_id", "")
             command:set_parameter("rippled_capture",       {})

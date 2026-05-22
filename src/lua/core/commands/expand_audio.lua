@@ -276,7 +276,6 @@ function M.undo(capture)
 
     Clip.restore_v13_state(capture.source_capture)
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

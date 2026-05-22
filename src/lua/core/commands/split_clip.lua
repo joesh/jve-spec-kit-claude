@@ -37,7 +37,6 @@ local M = {}
 local Clip     = require("models.clip")
 local Sequence = require("models.sequence")
 local database = require("core.database")
-local Signals  = require("core.signals")
 local uuid     = require("uuid")
 local log      = require("core.logger").for_area("commands")
 

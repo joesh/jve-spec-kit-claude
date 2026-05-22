@@ -91,7 +91,6 @@ function M.execute(args)
             sequence_id, channel_index, tostring(enabled), tostring(gain_db))
     end
 
-    local Signals = require("core.signals")
 
     return capture
 end
@@ -110,7 +109,6 @@ function M.undo(capture)
         State.delete(capture.sequence_id, capture.channel_index)
     end
 
-    local Signals = require("core.signals")
 end
 
 local SPEC = {

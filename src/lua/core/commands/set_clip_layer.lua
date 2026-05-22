@@ -71,7 +71,6 @@ function M.execute(args)
     log.event("SetClipLayer: clip=%s %s -> %s",
         clip_id, tostring(prior_track_id), tostring(track_id))
 
-    local Signals = require("core.signals")
 
     return {
         sequence_id     = sequence_id,
@@ -92,7 +91,6 @@ function M.undo(capture)
 
     Clip.set_master_layer_track_id(clip_id, prior_track_id)
 
-    local Signals = require("core.signals")
 end
 
 -- ---------------------------------------------------------------------------
