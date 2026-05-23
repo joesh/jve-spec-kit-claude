@@ -27,9 +27,11 @@ local function get_target_engine()
     return transport.engine_for_target()
 end
 
---- True iff the target engine has a sequence loaded. FR-027: when nothing
---- is loaded, the command layer makes Space a no-op rather than asserting
---- inside the engine.
+--- True iff the target engine has a sequence loaded. FR-027: when
+--- nothing is loaded, the command layer makes Space a no-op rather than
+--- asserting inside the engine. Per the PlaybackEngine lifecycle
+--- invariant, `loaded_sequence_id ~= nil` ⟺ `_playback_controller ~= nil`,
+--- so checking one is sufficient.
 local function target_ready()
     local engine = get_target_engine()
     if engine == nil then return false end

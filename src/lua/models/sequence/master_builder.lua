@@ -168,8 +168,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 id                       = opts.id,
                 kind                     = "master",
                 audio_sample_rate               = dims.seq_audio_rate,
-                start_timecode_frame     = dims.video_tc or 0,
-                playhead_frame           = dims.video_tc or 0,
+                start_timecode_frame     = dims.video_tc,
                 video_start_tc_frame     = dims.video_tc,
                 audio_start_tc_samples   = dims.audio_tc,
             })

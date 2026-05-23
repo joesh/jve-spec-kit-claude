@@ -297,27 +297,60 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 5. No controller (test mode) → no crash on content_changed
+-- 5. Unloaded engine → content_changed is a safe no-op
+--
+-- Lifecycle invariant (017 FR-027b): loaded_sequence_id ~= nil ⟺
+-- _playback_controller ~= nil. Constructed-but-not-loaded engines and
+-- torn-down engines have both nil. Content edits on any sequence id
+-- must not trigger RELOAD_ALL_CLIPS on these engines.
 --------------------------------------------------------------------------------
-print("\n--- 5. no controller → content_changed is safe no-op ---")
+print("\n--- 5. unloaded engine → content_changed is safe no-op ---")
 do
     local engine = make_engine()
-    engine:load_sequence("seq_test", 100, 48000)
-
-    -- WHITE-BOX: Simulate no controller (test environment) — need to nil private
-    -- field because there's no public API to remove the controller
-    engine._playback_controller = nil  -- luacheck: ignore
+    -- No load_sequence call — engine in constructor-default state.
+    assert(engine.loaded_sequence_id == nil,
+        "precondition: freshly-constructed engine has loaded_sequence_id == nil")
 
     reset_playback_calls()
 
-    -- Should not crash
+    -- The signal handler filters by `seq_id == self.loaded_sequence_id`,
+    -- so emitting nil here would assert (seq_id must be non-empty
+    -- string). Emit a real id; the engine's filter rejects it because
+    -- its own loaded_sequence_id is nil.
     Signals.emit("content_changed", "seq_test")
 
-    -- No RELOAD call (no controller)
     assert(not find_call("RELOAD_ALL_CLIPS"),
-        "no controller → no RELOAD_ALL_CLIPS call")
+        "unloaded engine → no RELOAD_ALL_CLIPS call")
 
-    print("  PASS: safe no-op without controller")
+    print("  PASS: unloaded engine ignores content_changed")
+end
+
+--------------------------------------------------------------------------------
+-- 6. Torn-down engine → content_changed is a safe no-op
+--
+-- teardown_engine clears loaded_sequence_id + _playback_controller +
+-- the rest of the load-set state, returning to constructor defaults.
+-- After teardown, even an emission for the previously-loaded id must
+-- not trigger RELOAD (the engine no longer claims that sequence).
+--------------------------------------------------------------------------------
+print("\n--- 6. torn-down engine → content_changed is safe no-op ---")
+do
+    local engine = make_engine()
+    engine:load_sequence("seq_test", 100, 48000)
+    PlaybackEngine.teardown_engine(engine)
+
+    assert(engine.loaded_sequence_id == nil,
+        "teardown_engine must clear loaded_sequence_id")
+    assert(engine._playback_controller == nil,
+        "teardown_engine must clear _playback_controller")
+
+    reset_playback_calls()
+    Signals.emit("content_changed", "seq_test")
+
+    assert(not find_call("RELOAD_ALL_CLIPS"),
+        "torn-down engine → no RELOAD_ALL_CLIPS call (lifecycle invariant)")
+
+    print("  PASS: torn-down engine ignores content_changed for ex-sequence")
 end
 
 --------------------------------------------------------------------------------

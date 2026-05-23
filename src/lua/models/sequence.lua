@@ -28,6 +28,20 @@ local function validate_frame_rate(val)
     error("Sequence: frame_rate is required (got " .. type(val) .. ")")
 end
 
+--- Resolve a non-negative integer field from opts, falling back to a
+--- caller-supplied documented default when absent. Asserts the type +
+--- non-negativity + integer-ness when the field IS provided — this is
+--- the validation that distinguishes a documented default from a silent
+--- `or 0` fallback (rule 2.13: present-but-bad values fail loudly).
+local function resolve_non_negative_int_arg(opts, key, default_value)
+    local v = opts[key]
+    if v == nil then return default_value end
+    assert(type(v) == "number" and v >= 0 and v == math.floor(v),
+        string.format("Sequence.create: %s must be a non-negative integer, "
+            .. "got %s", key, tostring(v)))
+    return v
+end
+
 --- Default viewport duration: 10 seconds worth of frames.
 -- Single source of truth; used by Sequence.create, import commands, and zoom_to_fit_if_first_open.
 function Sequence.default_viewport_duration(fps_num, fps_den)
@@ -64,16 +78,21 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
     end
     local now = os.time()
 
-    -- Integer frame coordinates (fps is metadata in frame_rate)
-    local playhead_pos = opts.playhead_frame or 0
+    -- Integer frame coordinates (fps is metadata in frame_rate). Documented
+    -- defaults: start_timecode_frame = 0 (no TC origin); playhead_frame =
+    -- start_timecode_frame (parked at sequence start). Invariant enforced
+    -- below: `playhead_frame >= start_timecode_frame` — a playhead in the
+    -- empty [0, start_tc) pre-content space is meaningless and would trip
+    -- the engine's start-frame seek assert.
+    local start_tc = resolve_non_negative_int_arg(opts, "start_timecode_frame", 0)
+    local playhead_pos = resolve_non_negative_int_arg(opts, "playhead_frame", start_tc)
+    assert(playhead_pos >= start_tc, string.format(
+        "Sequence.create: playhead_frame=%d must be >= "
+        .. "start_timecode_frame=%d (sequence '%s')",
+        playhead_pos, start_tc, tostring(name)))
+
     local viewport_start = opts.view_start_frame or 0
     local viewport_dur = opts.view_duration_frames or Sequence.default_viewport_duration(fr.fps_numerator, fr.fps_denominator)
-
-    local start_tc = opts.start_timecode_frame or 0
-    assert(type(start_tc) == "number" and start_tc >= 0,
-        string.format("Sequence.create: start_timecode_frame must be non-negative integer, got %s",
-            tostring(start_tc)))
-    start_tc = math.floor(start_tc)
 
     -- Rule 2.13: kind is required, no default. Schema V9 CHECK restricts to
     -- ('master', 'sequence'); caller must pick.
@@ -223,6 +242,7 @@ function Sequence.load(id)
             -- Optional gap selection (JSON string or nil)
             sequence.selected_gap_infos_json = stmt:value(20)
     stmt:finalize()
+
     return setmetatable(sequence, Sequence)
 end
 

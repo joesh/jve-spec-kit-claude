@@ -155,11 +155,46 @@ function PlaybackEngine.new(role, config)
 
     local self = setmetatable({}, PlaybackEngine)
 
-    -- 017: role is immutable; loaded_sequence_id replaces sequence_id.
+    -- 017: role is immutable across the engine's lifetime; survives teardown.
     self.role = role
+
+    -- View callbacks (set once at construction; survive teardown). When
+    -- config is nil, the engine is headless: callbacks are no-ops. This
+    -- is the production transport.init path; views attach via
+    -- attach_view() or via the frame_delivered signal.
+    local noop = function() end
+    self._on_show_frame       = config and config.on_show_frame       or noop
+    self._on_show_gap         = config and config.on_show_gap         or noop
+    self._on_set_rotation     = config and config.on_set_rotation     or noop
+    self._on_set_par          = config and config.on_set_par          or noop
+    self._on_position_changed = config and config.on_position_changed or noop
+
+    -- Video surface is bound externally via set_surface() and persists
+    -- across teardown — the C++ widget outlives the engine's loaded state.
+    self._video_surface = nil
+
+    -- All other fields represent the unloaded-engine snapshot;
+    -- teardown_engine resets them via the same helper.
+    PlaybackEngine._init_unloaded_state(self)
+
+    return self
+end
+
+--- Initialize the fields that describe an unloaded engine. Called by
+--- PlaybackEngine.new for the initial state and by teardown_engine to
+--- return a loaded engine to that same state. The fields NOT touched
+--- here (role, view callbacks, video surface) persist across teardown.
+function PlaybackEngine._init_unloaded_state(self)
+    -- Sequence binding
     self.loaded_sequence_id = nil
-    self._log_tag = role .. ":unloaded"
-    self._writeback_throttle_last_s = nil
+    self.sequence = nil
+    self._log_tag = self.role .. ":unloaded"
+    self.current_clip_id = nil
+    self.current_audio_clip_ids = {}
+    self.fps_num = nil
+    self.fps_den = nil
+    self.fps = nil  -- fps_num/fps_den, for interval computation only
+    self.audio_sample_rate = nil
 
     -- Transport state
     self.state = "stopped"
@@ -168,41 +203,24 @@ function PlaybackEngine.new(role, config)
     self._position = 0
     self.start_frame = 0
     self.total_frames = 0
-    self.fps_num = nil
-    self.fps_den = nil
-    self.fps = nil  -- fps_num/fps_den, for interval computation only
     self.max_media_time_us = 0
     self.transport_mode = "none"
-
-    -- Boundary latch (shuttle mode)
     self.latched = false
     self.latched_boundary = nil
 
-    -- Sequence state. `self.sequence` holds the Model row when loaded; nil
-    -- otherwise. `self.loaded_sequence_id` initialized above with role.
-    self.sequence = nil
-    self.current_clip_id = nil
-    self.current_audio_clip_ids = {}
-
-    -- View callbacks. When config is nil, the engine is headless: callbacks
-    -- are no-ops. This is the production transport.init path; views attach
-    -- via attach_view() or via the frame_delivered signal.
-    local noop = function() end
-    self._on_show_frame       = config and config.on_show_frame       or noop
-    self._on_show_gap         = config and config.on_show_gap         or noop
-    self._on_set_rotation     = config and config.on_set_rotation     or noop
-    self._on_set_par          = config and config.on_set_par          or noop
-    self._on_position_changed = config and config.on_position_changed or noop
-
-    -- Seek dedup
+    -- Seek dedup + writeback throttle
     self._last_committed_frame = nil
+    self._writeback_throttle_last_s = nil
 
-    -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer
+    -- TMB (TimelineMediaBuffer) — owns video readers, cache, pre-buffer.
+    -- Lua-side field; teardown_engine separately calls _close_tmb() to
+    -- release the C++ object before nilling.
     self._tmb = nil
     self._video_track_indices = {}        -- all video track indices (for TMB clip feeding)
     self._video_track_states = {}         -- {track_index, muted, soloed} per track (FR-019/020)
     self._effective_video_track_indices = {} -- filtered indices for Renderer (mute/solo applied)
     self._audio_track_indices = {}        -- audio track indices for TMB audio path
+
     -- Per-clip source range snapshot for the renderer. Populated when
     -- clips are fed to TMB; the renderer needs {source_in, source_out}
     -- to compose per-clip partial-coverage offline frames without
@@ -214,11 +232,11 @@ function PlaybackEngine.new(role, config)
     -- rebuild clips for paths that are actually live in TMB. Cleared
     -- whenever clip info is reset (content_changed, sequence unload).
     self._active_media_paths = {}
-    -- PlaybackController (C++ CVDisplayLink-driven playback)
-    self._playback_controller = nil
-    self._video_surface = nil
 
-    return self
+    -- PlaybackController (C++ CVDisplayLink-driven playback). Lua-side
+    -- field; teardown_engine separately calls PLAYBACK.STOP + .CLOSE on
+    -- the prior controller before nilling.
+    self._playback_controller = nil
 end
 
 --------------------------------------------------------------------------------
@@ -648,7 +666,10 @@ end
 -- internal cache invalidation so views never touch engine privates.
 function PlaybackEngine:notify_content_changed()
     self:_refresh_content_bounds()
-    if not self._playback_controller then return end
+    -- Signal-driven entry: unloaded engine has no TMB/controller to reload.
+    -- Per the lifecycle invariant, `loaded_sequence_id == nil` iff
+    -- `_playback_controller == nil`.
+    if self.loaded_sequence_id == nil then return end
     self:_reset_clip_snapshots()
     qt_constants.PLAYBACK.RELOAD_ALL_CLIPS(self._playback_controller)
     self._video_track_indices = self.sequence:get_track_indices("VIDEO")
@@ -1057,6 +1078,11 @@ end
 -- the surface wasn't ready before or the content changed under us.
 function PlaybackEngine:on_model_changed(frame)
     log.event("on_model_changed: frame=%s state=%s", tostring(frame), tostring(self.state))
+    -- Signal-driven entry: content_changed broadcasts to all engines.
+    -- An unloaded engine has no sequence to re-seek into; documented no-op
+    -- (mirrors notify_content_changed). Per the lifecycle invariant,
+    -- `loaded_sequence_id == nil` iff `_playback_controller == nil`.
+    if self.loaded_sequence_id == nil then return end
     self._last_committed_frame = nil  -- clear dedup so seek() re-decodes
     self:seek(frame)
 end
@@ -1130,16 +1156,24 @@ end
 
 
 --- Per-engine teardown: stop and close this engine's PlaybackController
---- and reset transport state. Called by transport (which owns the
---- cross-engine resource lifecycle) once per role-bound engine on project_changed.
+--- and TMB, and return the engine to the same state as a
+--- freshly-constructed one (sequence binding + transport state cleared
+--- via _init_unloaded_state). Called by transport on project_changed.
+---
+--- Invariant: `loaded_sequence_id ~= nil` ⟺ `_playback_controller ~= nil`.
+--- Both fields are set together in `load_sequence` and cleared together
+--- here. Callers that ask "is this engine bound to a sequence?" check
+--- `loaded_sequence_id`; the controller is an internal C++ object and
+--- not consulted at the public boundary.
 function PlaybackEngine.teardown_engine(engine)
     assert(engine ~= nil, "PlaybackEngine.teardown_engine: engine is nil")
+
+    -- Release C++ objects (PlaybackController, TMB) before nilling the
+    -- Lua-side fields in _init_unloaded_state. pcall the controller's
+    -- STOP/CLOSE so a STOP failure doesn't skip CLOSE — we want the C++
+    -- object closed and the Lua ref nilled regardless. NSF: surface
+    -- failures via log.warn (actionable diagnostic), not silently absorb.
     if engine._playback_controller then
-        -- pcall both C++ calls so a failure in STOP doesn't skip CLOSE
-        -- (we want the controller closed and the ref nilled regardless).
-        -- NSF: surface failures via log.warn rather than silently absorb
-        -- — a STOP/CLOSE error during project-change cleanup is
-        -- actionable diagnostic information, not noise to discard.
         local stop_ok, stop_err = pcall(
             qt_constants.PLAYBACK.STOP, engine._playback_controller)
         if not stop_ok then
@@ -1152,12 +1186,10 @@ function PlaybackEngine.teardown_engine(engine)
             log.warn("teardown_engine: PLAYBACK.CLOSE failed for role=%s: %s",
                 tostring(engine.role), tostring(close_err))
         end
-        engine._playback_controller = nil
     end
-    engine.state = "stopped"
-    engine.direction = 0
-    engine.speed = 1
-    engine._last_committed_frame = nil
+    engine:_close_tmb()
+
+    PlaybackEngine._init_unloaded_state(engine)
 end
 
 -- Install the audio-session lifecycle, audio-mix push, boundary latch,
