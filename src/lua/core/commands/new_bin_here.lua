@@ -34,15 +34,19 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
         assert(project_id and project_id ~= "",
             "NewBinHere: project_id required (auto-inject failed)")
 
+        -- command_manager.execute drops the executor's secondary return on
+        -- success; surface success/failure only (matches BladeAtPlayhead).
         local command_manager = require("core.command_manager")
         local new_bin_id = require("uuid").generate()
         local result = command_manager.execute("NewBin", {
             project_id = project_id,
             bin_id     = new_bin_id,
         })
-        assert(type(result) == "table", string.format(
-            "NewBinHere: nested NewBin returned non-table (%s)", type(result)))
-        if result.success == false then
+        assert(type(result) == "table" and type(result.success) == "boolean",
+            string.format("NewBinHere: command_manager.execute(\"NewBin\") "
+                .. "returned malformed result (got %s) — contract violation",
+                type(result)))
+        if not result.success then
             local msg = result.error_message
             assert(type(msg) == "string" and msg ~= "",
                 "NewBinHere: nested NewBin reported success=false but "
@@ -50,7 +54,7 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
             return false, msg
         end
         log.event("NewBinHere: created bin %s", new_bin_id:sub(1, 8))
-        return true, { bin_id = new_bin_id }
+        return true
     end
 
     return {

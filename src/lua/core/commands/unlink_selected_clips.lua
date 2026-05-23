@@ -51,11 +51,12 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
 
         if #clip_ids_to_unlink == 0 then
             log.event("UnlinkSelectedClips: no non-gap selected clips — no-op")
-            return true, { unlinked = 0 }
+            return true
         end
 
+        -- command_manager.execute drops the executor's secondary return on
+        -- success; surface success/failure only (matches BladeAtPlayhead).
         local command_manager = require("core.command_manager")
-        local unlinked = 0
         local group_label = "UnlinkSelectedClips"
         local use_group = #clip_ids_to_unlink > 1
         if use_group then
@@ -71,10 +72,12 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
                     project_id = project_id,
                     clip_id    = clip_id,
                 })
-                assert(type(result) == "table", string.format(
-                    "UnlinkSelectedClips: nested UnlinkClips returned non-table "
-                    .. "for clip %s (%s)", clip_id, type(result)))
-                if result.success == false then
+                assert(type(result) == "table" and type(result.success) == "boolean",
+                    string.format("UnlinkSelectedClips: command_manager.execute"
+                        .. "(\"UnlinkClips\") returned malformed result for clip "
+                        .. "%s (got %s) — contract violation",
+                        clip_id, type(result)))
+                if not result.success then
                     local msg = result.error_message
                     assert(type(msg) == "string" and msg ~= "",
                         "UnlinkSelectedClips: nested UnlinkClips reported "
@@ -84,12 +87,11 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
                         "UnlinkSelectedClips: nested UnlinkClips failed for "
                         .. "clip %s: %s", clip_id, msg), 0)
                 end
-                unlinked = unlinked + 1
             end
         end)
         if use_group then command_manager.end_undo_group() end
         if not ok then return false, tostring(err) end
-        return true, { unlinked = unlinked }
+        return true
     end
 
     return {

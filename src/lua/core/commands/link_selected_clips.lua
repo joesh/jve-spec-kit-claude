@@ -68,26 +68,29 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
         if #clips_to_link < 2 then
             log.event("LinkSelectedClips: need ≥2 selected video/audio "
                 .. "clips, got %d — no-op", #clips_to_link)
-            return true, { link_group_id = nil }
+            return true
         end
 
+        -- command_manager.execute drops the executor's secondary return on
+        -- success; surface success/failure only (matches BladeAtPlayhead).
         local command_manager = require("core.command_manager")
         local result = command_manager.execute("LinkClips", {
             project_id    = project_id,
             clips         = clips_to_link,
             link_group_id = require("uuid").generate(),
         })
-        assert(type(result) == "table", string.format(
-            "LinkSelectedClips: nested LinkClips returned non-table (%s)",
-            type(result)))
-        if result.success == false then
+        assert(type(result) == "table" and type(result.success) == "boolean",
+            string.format("LinkSelectedClips: command_manager.execute(\"LinkClips\") "
+                .. "returned malformed result (got %s) — contract violation",
+                type(result)))
+        if not result.success then
             local msg = result.error_message
             assert(type(msg) == "string" and msg ~= "",
                 "LinkSelectedClips: nested LinkClips reported success=false "
                 .. "but error_message missing — LinkClips contract violation")
             return false, msg
         end
-        return true, { link_group_id = result.link_group_id }
+        return true
     end
 
     return {
