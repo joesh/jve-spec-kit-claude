@@ -78,6 +78,40 @@ All operate on `clips` rows unchanged in mechanics. Split/Blade divides one clip
 
 **Contract test (CT-C7 — split with override)**: Given a clip with `master_layer_track_id = X`, when Split at midpoint, both halves have `master_layer_track_id = X`.
 
+#### Cmd+B keyboard adapter (`BladeAtPlayhead`)
+
+The pure-model `Blade` command takes `sequence_id`, `blade_frame`, and an explicit `track_ids` list (T045a). The Cmd+B keyboard binding routes through the `BladeAtPlayhead` adapter (`core/commands/blade_at_playhead.lua`), which resolves those params from ambient UI state. The adapter's selection-aware `track_ids` policy matches Premiere Pro's Cmd+K Add-Edit behavior:
+
+- `blade_frame` = the active record sequence's persisted `playhead_position`.
+- **Intersecting selection** — at least one clip in the timeline selection is on an armed (`autoselect=1, locked=0`) track AND strictly spans `blade_frame`: `track_ids` = the set of tracks owning those intersecting selected clips. Only the intersecting subset is cut.
+- **Non-intersecting selection** — selection is empty, contains only clips that don't span `blade_frame`, or contains only clips on non-armed tracks: `track_ids` = every armed track. Every spanning clip on every armed track is cut.
+- **No armed tracks**: silent no-op.
+
+The non-intersecting fallback is deliberate: a stale selection from elsewhere on the timeline doesn't turn Cmd+B into a surprise no-op. A user who has clicked a clip far from the playhead and then pressed Cmd+B clearly means "cut here," not "cut nothing because my selection isn't relevant."
+
+Track-arming filter on the intersection check: a selected clip on a locked or autoselect-off track is treated as non-intersecting even if it spans `blade_frame`. Blade is savepoint-atomic — letting a non-editable selected clip drive `track_ids` would unwind the whole cut on the lock guard. The check is "what would actually be cut," not "what the user clicked."
+
+Adapter is `undoable=false`; the nested Blade call owns the single user-visible undo entry.
+
+**Smoke coverage**: `tests/smoke/cases/test_keymap_cmd_b_blades_at_playhead.py` pins all three resolution paths via real Cmd+B keypresses against the Anamnesis fixture.
+
+#### Cmd+L / Cmd+Shift+L keyboard adapters (`LinkSelectedClips`, `UnlinkSelectedClips`)
+
+Same regression class as BladeAtPlayhead: the pure-model `LinkClips` command requires `clips` (list of `{clip_id, role, time_offset}`) and `UnlinkClip` requires `clip_id` — neither is on `command_manager`'s auto-inject set, so the keymap bindings need adapters that resolve the params from the current timeline selection.
+
+`LinkSelectedClips` (`core/commands/link_selected_clips.lua`):
+- Reads `timeline_state.get_selected_clips()`.
+- Filters to non-gap clips on `track_type ∈ {VIDEO, AUDIO}` (the only roles `clip_link.add_to_group` accepts; line 135).
+- Builds the clips list: `role = "video"|"audio"` (lowercase), `time_offset = 0` (synced linking; clips with non-zero time offsets are an advanced case the keyboard binding doesn't model — the user can construct them via scripted dispatch).
+- Refuses with a log.event when fewer than 2 valid clips are present (LinkClips contract requires ≥2).
+- Generates a fresh `link_group_id` UUID and dispatches `LinkClips` with the resolved params.
+
+`UnlinkSelectedClips`:
+- For each non-gap selected clip, dispatches `UnlinkClip` inside a `begin_undo_group("UnlinkSelectedClips")` so one Cmd+Z unlinks the whole batch.
+- No-op (log.event) when selection is empty.
+
+Both adapters are `undoable=false`; the nested command(s) own the undo entries.
+
 ---
 
 ### `Duplicate`

@@ -34,6 +34,34 @@ local log       = require("core.logger").for_area("commands")
 
 local SAVEPOINT = "blade_atomic"
 
+--- Build a __timeline_mutations entry for one clip row. Shared between
+--- the forward executor (left UPDATE + right INSERT per split) and the
+--- undoer (left UPDATE restoring original bounds; right DELETE keyed by
+--- id only, no entry needed). Mirrors the field set Insert/SplitClip
+--- emit so the timeline_state mutation applier handles all three
+--- uniformly.
+local function mutation_entry(row)
+    return {
+        id                    = row.id,
+        owner_sequence_id     = row.owner_sequence_id,
+        track_sequence_id     = row.owner_sequence_id,
+        track_id              = row.track_id,
+        sequence_id           = row.sequence_id,
+        start_value           = row.sequence_start_frame,
+        sequence_start        = row.sequence_start_frame,
+        duration_value        = row.duration_frames,
+        duration              = row.duration_frames,
+        source_in             = row.source_in_frame,
+        source_out            = row.source_out_frame,
+        master_layer_track_id = row.master_layer_track_id,
+        fps_mismatch_policy   = row.fps_mismatch_policy,
+        name                  = row.name,
+        enabled               = row.enabled,
+        volume                = row.volume,
+        playhead_frame        = row.playhead_frame,
+    }
+end
+
 function M.execute(args)
     assert(type(args) == "table", "Blade.execute: args must be table")
     assert(args.sequence_id and args.sequence_id ~= "",
@@ -154,45 +182,20 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
 
         -- Emit aggregate __timeline_mutations: each split is left UPDATE +
         -- right INSERT. Mirrors Insert's emission shape.
-        do
-            local bucket = {
-                sequence_id = args.sequence_id,
-                inserts = {},
-                updates = {},
-                deletes = {},
-                bulk_shifts = {},
-            }
-            local function entry_for(cid)
-                local row = Clip.load_v13_row(cid)
-                if not row then return nil end
-                return {
-                    id                    = row.id,
-                    owner_sequence_id     = row.owner_sequence_id,
-                    track_sequence_id     = row.owner_sequence_id,
-                    track_id              = row.track_id,
-                    sequence_id    = row.sequence_id,
-                    start_value           = row.sequence_start_frame,
-                    sequence_start        = row.sequence_start_frame,
-                    duration_value        = row.duration_frames,
-                    duration              = row.duration_frames,
-                    source_in             = row.source_in_frame,
-                    source_out            = row.source_out_frame,
-                    master_layer_track_id = row.master_layer_track_id,
-                    fps_mismatch_policy   = row.fps_mismatch_policy,
-                    name                  = row.name,
-                    enabled               = row.enabled,
-                    volume                = row.volume,
-                    playhead_frame        = row.playhead_frame,
-                }
-            end
-            for _, s in ipairs(result_or_err.splits) do
-                local left = entry_for(s.clip_id)
-                local right = entry_for(s.second_clip_id)
-                if left then bucket.updates[#bucket.updates + 1] = left end
-                if right then bucket.inserts[#bucket.inserts + 1] = right end
-            end
-            command:set_parameter("__timeline_mutations", bucket)
+        local bucket = {
+            sequence_id = args.sequence_id,
+            inserts     = {},
+            updates     = {},
+            deletes     = {},
+            bulk_shifts = {},
+        }
+        for _, s in ipairs(result_or_err.splits) do
+            local left  = Clip.load_v13_row(s.clip_id)
+            local right = Clip.load_v13_row(s.second_clip_id)
+            if left  then bucket.updates[#bucket.updates + 1] = mutation_entry(left)  end
+            if right then bucket.inserts[#bucket.inserts + 1] = mutation_entry(right) end
         end
+        command:set_parameter("__timeline_mutations", bucket)
 
         return true, { splits = result_or_err.splits }
     end
@@ -227,6 +230,28 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         assert(database.release_savepoint(SAVEPOINT),
             "Undo Blade: release savepoint failed")
+
+        -- Emit reverse __timeline_mutations symmetric with the forward
+        -- executor: each undone split becomes left UPDATE (restored
+        -- bounds) + right DELETE. Without this, run_undoer falls through
+        -- to the heavy reload_clips path AND logs an "no
+        -- __timeline_mutations" error.
+        local bucket = {
+            sequence_id = args.sequence_id,
+            inserts     = {},
+            updates     = {},
+            deletes     = {},
+            bulk_shifts = {},
+        }
+        for _, s in ipairs(prior) do
+            local restored = Clip.load_v13_row(s.clip_id)
+            assert(restored, string.format(
+                "Undo Blade: restored left half %s missing after update",
+                s.clip_id))
+            bucket.updates[#bucket.updates + 1] = mutation_entry(restored)
+            bucket.deletes[#bucket.deletes + 1] = { clip_id = s.second_clip_id }
+        end
+        command:set_parameter("__timeline_mutations", bucket)
         return true
     end
 

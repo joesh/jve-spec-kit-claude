@@ -76,7 +76,7 @@
 "Backspace" = "DeleteSelection"
 "Shift+Delete" = "DeleteSelection ripple=true"
 "Shift+Backspace" = "DeleteSelection ripple=true"
-"Cmd+B" = "Blade @timeline"
+"Cmd+B" = "BladeAtPlayhead @timeline"
 "Cmd+Shift+BracketLeft" = "TrimHead @timeline"
 "Cmd+Shift+BracketRight" = "TrimTail @timeline"
 "D" = "ToggleClipEnabled @timeline"
@@ -91,8 +91,8 @@
 # 019 FR-024a: RevealInFilesystem relocated from Shift+F to free that
 # slot. Cmd+Opt+F verified unbound at the time of the move (2026-05-19).
 "Cmd+Option+F" = "RevealInFilesystem"
-"Cmd+L" = "LinkClips @timeline"
-"Cmd+Shift+L" = "UnlinkClips @timeline"
+"Cmd+L" = "LinkSelectedClips @timeline"
+"Cmd+Shift+L" = "UnlinkSelectedClips @timeline"
 "Cmd+Delete" = "CloseGap @timeline"
 # Nudge keys: NudgeSelection routes to BatchRippleEdit (edges) or Nudge (clips)
 # based on the active timeline selection. Magnitude lives in the binding so
@@ -153,4 +153,4 @@
 [Browser]
 # Return handled natively: tree keymap (activate/toggle) + PanelFocusTrap (button click)
 "F2" = "StartRename @project_browser"
-"Cmd+Shift+N" = "NewBin @project_browser"
+"Cmd+Shift+N" = "NewBinHere @project_browser"

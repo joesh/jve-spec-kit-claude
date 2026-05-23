@@ -1,6 +1,14 @@
 #!/usr/bin/env luajit
--- Regression: Cmd/Ctrl+B (Blade/Split) should dispatch Blade command via TOML keybindings.
--- Uses LITERAL Qt key codes to catch wrong-constant bugs.
+-- Regression: Cmd/Ctrl+B should resolve through the TOML registry to the
+-- BladeAtPlayhead keyboard adapter (which in turn dispatches the pure-model
+-- Blade with the resolved blade_frame + autoselect track_ids). Uses LITERAL
+-- Qt key codes to catch wrong-constant bugs.
+--
+-- This is a CHEAP registry-presence canary, not a behavioral test — it
+-- proves the binding row is wired and not handled by the residual Lua
+-- handler. End-to-end behavior (Cmd+B actually splits a clip at the
+-- playhead) is covered by
+-- tests/smoke/cases/test_keymap_cmd_b_blades_at_playhead.py.
 
 require("test_env")
 
@@ -81,7 +89,9 @@ local parsed = registry.parse_shortcut("Cmd+B")
 local combo_key = string.format("%d_%d", parsed.key, parsed.modifiers)
 local bindings = registry.keybindings[combo_key]
 assert(bindings and #bindings > 0, "Cmd+B must exist in TOML registry")
-assert(bindings[1].command_name == "Blade",
-    "Cmd+B TOML binding must be Blade, got: " .. tostring(bindings[1].command_name))
+assert(bindings[1].command_name == "BladeAtPlayhead",
+    "Cmd+B TOML binding must be BladeAtPlayhead (keyboard adapter that "
+    .. "resolves blade_frame + track_ids before dispatching the pure-model "
+    .. "Blade), got: " .. tostring(bindings[1].command_name))
 
 print("✅ Cmd/Ctrl+B is registered in TOML for QShortcut dispatch")

@@ -3,20 +3,32 @@ local M = {}
 local log = require("core.logger").for_area("commands")
 
 
-local SPEC = {
+-- Two distinct SPECs (LINK_SPEC, UNLINK_SPEC) because the executors take
+-- different args. They were collapsed into one shared SPEC originally,
+-- which made UnlinkClips' SPEC validate-require `clips` and `link_group_id`
+-- (LinkClips-only fields it never reads) — caller had to pass dummies
+-- to satisfy validation. Split lets each command demand only what it
+-- actually uses.
+local LINK_SPEC = {
     args = {
-        clip_id = { required = true },
-        clips = { required = true },
-        dry_run = { kind = "boolean" },
+        clips         = { required = true },
         link_group_id = { required = true },
+        project_id    = { required = true },
+        dry_run       = { kind = "boolean" },
+    },
+}
+
+local UNLINK_SPEC = {
+    args = {
+        clip_id    = { required = true },
         project_id = { required = true },
+        dry_run    = { kind = "boolean" },
     },
     persisted = {
         original_link_group = {},
         original_role = {},
         original_time_offset = { kind = "number", default = 0 },
     },
-
 }
 
 function M.register(executors, undoers, db)
@@ -91,9 +103,10 @@ function M.register(executors, undoers, db)
         if link_group then
             command:set_parameter("original_link_group", link_group)
 
-            -- Find this clip's info in the group
+            -- Find this clip's info in the group. clip_links.get_link_group
+            -- returns rows with `clip_id` directly (not nested under .args).
             for _, link_info in ipairs(link_group) do
-                if link_info.args.clip_id == args.clip_id then
+                if link_info.clip_id == args.clip_id then
                     command:set_parameters({
                         ["original_role"] = link_info.role,
                         ["original_time_offset"] = link_info.time_offset,
@@ -177,10 +190,16 @@ function M.register(executors, undoers, db)
     executors["UnlinkClips"] = executors["UnlinkClip"]
     undoers["UnlinkClips"] = undoers["UnlinkClip"]
 
+    -- Multi-style registration: each name gets its OWN spec entry. The
+    -- prior single-style return registered `executor` (LinkClips) under
+    -- whatever name triggered the load, overwriting the direct
+    -- `executors["UnlinkClips"] = ...` assignment above with the LinkClips
+    -- function. Dispatches to UnlinkClips then ran the LINK executor
+    -- and failed the "≥2 clips" check.
     return {
-        executor = executor,
-        undoer = undoer,
-        spec = SPEC,
+        LinkClips   = { executor = executor,                   undoer = undoer,                   spec = LINK_SPEC },
+        UnlinkClip  = { executor = executors["UnlinkClip"],    undoer = undoers["UnlinkClip"],    spec = UNLINK_SPEC },
+        UnlinkClips = { executor = executors["UnlinkClips"],   undoer = undoers["UnlinkClips"],   spec = UNLINK_SPEC },
     }
 end
 

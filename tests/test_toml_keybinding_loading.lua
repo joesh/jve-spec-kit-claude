@@ -148,7 +148,9 @@ assert_binding(QT_KEY_DELETE, 0, "DeleteSelection", "Delete")
 assert_binding(QT_KEY_BACKSPACE, 0, "DeleteSelection", "Backspace")
 assert_binding(QT_KEY_DELETE, QT_MOD_SHIFT, "DeleteSelection", "Shift+Delete")
 assert_named(QT_KEY_DELETE, QT_MOD_SHIFT, "ripple", true, "Shift+Delete ripple")
-assert_binding(QT_KEY_B, QT_MOD_CONTROL, "Blade", "Cmd+B")
+-- Cmd+B → BladeAtPlayhead (keyboard adapter that resolves blade_frame +
+-- autoselect track_ids before dispatching the pure-model Blade command).
+assert_binding(QT_KEY_B, QT_MOD_CONTROL, "BladeAtPlayhead", "Cmd+B")
 assert_contexts(QT_KEY_B, QT_MOD_CONTROL, {"timeline"}, "Cmd+B contexts")
 print("  ✓ Editing bindings: Delete, Backspace, Shift+Delete(ripple), Cmd+B")
 
