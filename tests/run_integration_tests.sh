@@ -127,7 +127,8 @@ for t in \
   test_peak_cache_mtime_fractional.lua \
   test_peak_cache_coverage_regen.lua \
   test_relink_tc_resync.lua \
-  test_source_tab_rekey_no_orphan.lua
+  test_source_tab_rekey_no_orphan.lua \
+  test_set_mark_and_trim_if_clip_routes_to_trim.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
