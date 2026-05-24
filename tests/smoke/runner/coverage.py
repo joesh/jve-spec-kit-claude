@@ -214,15 +214,35 @@ def audit_commands() -> list[str]:
 
 
 def audit_keymap() -> list[str]:
-    """Every (combo, scope) must be referenced by some smoke test."""
+    """Every (combo, scope) must be referenced by some smoke test, OR
+    appear in ``keymap_exempt.EXEMPT`` with an L1 reason. New bindings
+    landing without a smoke test or an exemption fail the build."""
+    from tests.smoke.runner.keymap_exempt import l1_exempt_reason
     missing = []
     for b in list_keymap_bindings():
+        if l1_exempt_reason(b) is not None:
+            continue
         # Match liberally: any smoke test that mentions the combo string.
         # Phase A binding tests are per-(combo, scope), so this is the
         # mechanical fingerprint.
         if not _smoke_mentions(f'"{b.combo}"') and not _smoke_mentions(f"'{b.combo}'"):
             missing.append(repr(b))
     return missing
+
+
+def list_keymap_exemptions() -> list[tuple[str, str]]:
+    """Audit-visible list of every active exemption. Returned as
+    ``(binding_repr, reason)`` pairs sorted by binding repr. Used by
+    the CLI report so a reader sees what's NOT being checked alongside
+    what IS."""
+    from tests.smoke.runner.keymap_exempt import l1_exempt_reason
+    rows = []
+    for b in list_keymap_bindings():
+        reason = l1_exempt_reason(b)
+        if reason is not None:
+            rows.append((repr(b), reason))
+    rows.sort()
+    return rows
 
 
 def audit_menus() -> list[str]:
@@ -260,15 +280,55 @@ def _report(axis: str, missing: Iterable[str]) -> bool:
 
 
 def main() -> int:
+    import argparse
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument("--axis", choices=("commands", "keymap", "menus", "all"),
+                   default="all",
+                   help="Run only one axis. 'keymap' is the one currently "
+                        "wired into `make all` — the other axes are "
+                        "informational until their EXEMPT lists are built.")
+    p.add_argument("--show-exemptions", action="store_true",
+                   help="Print every active L1 exemption with its reason. "
+                        "Use to audit what isn't being covered.")
+    args = p.parse_args()
+
+    if args.show_exemptions:
+        rows = list_keymap_exemptions()
+        print(f"L1 exemptions ({len(rows)}):")
+        for binding_repr, reason in rows:
+            print(f"  {binding_repr}")
+            print(f"      reason: {reason}")
+        return 0
+
     print("Coverage audit:")
-    ok1 = _report("Axis 1 (registered commands → Command-tier test)",
-                  audit_commands())
-    ok2 = _report("Axis 2 ((combo, scope) → Smoke test)",
-                  audit_keymap())
-    ok3 = _report("Axis 3 (menu item → Smoke test)",
-                  audit_menus())
-    return 0 if (ok1 and ok2 and ok3) else 1
+    results = []
+    if args.axis in ("commands", "all"):
+        results.append(_report(
+            "Axis 1 (registered commands → Command-tier test)",
+            audit_commands()))
+    if args.axis in ("keymap", "all"):
+        results.append(_report(
+            "Axis 2 ((combo, scope) → Smoke test, minus EXEMPT)",
+            audit_keymap()))
+        # Surface the exemption count so a reader sees the EXEMPT list
+        # is doing work — otherwise a green Axis 2 looks suspicious next
+        # to a known-incomplete L3 surface.
+        exempt_count = len(list_keymap_exemptions())
+        if exempt_count:
+            print(f"      ({exempt_count} L1-exempt; "
+                  f"run --show-exemptions for the list)")
+    if args.axis in ("menus", "all"):
+        results.append(_report(
+            "Axis 3 (menu item → Smoke test)",
+            audit_menus()))
+    return 0 if all(results) else 1
 
 
 if __name__ == "__main__":
+    # Support direct-script invocation (`python3 path/to/coverage.py`) as
+    # well as module invocation (`python3 -m tests.smoke.runner.coverage`).
+    # The Makefile uses the script form; smoke test cases that import
+    # `keymap_exempt` use the module form. Both must work.
+    if "tests.smoke.runner.coverage" not in sys.modules:
+        sys.path.insert(0, str(REPO_ROOT))
     sys.exit(main())

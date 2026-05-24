@@ -444,6 +444,21 @@ def _combo_to_osascript_keystroke(combo: str) -> str:
     if len(key) == 1 and key.isprintable():
         ch = key.lower()
         return f'keystroke "{ch}"{using}'
+    # Tilde is the shifted form of Grave on US keyboards. The keymap
+    # spells the binding "Tilde" (not "Shift+Grave") because Qt's
+    # QKeySequence treats them as distinct codes (Qt::Key_AsciiTilde
+    # vs Qt::Key_QuoteLeft+Shift). Auto-add the shift modifier when
+    # delivering Tilde via osascript.
+    if key_lower == "tilde":
+        shift_clause = "shift down"
+        if using:
+            # Insert shift into existing using-list rather than appending
+            # another using-clause.
+            if shift_clause not in using:
+                using = using[:-1] + f", {shift_clause}" + using[-1:]
+        else:
+            using = " using {" + shift_clause + "}"
+        return f'key code {_KEY_CODES["grave"]}{using}'
     # Named key (Grave, Comma, Return, F1, ...): use key code.
     if key_lower in _KEY_CODES:
         return f'key code {_KEY_CODES[key_lower]}{using}'
