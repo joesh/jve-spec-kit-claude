@@ -11,27 +11,12 @@
 
 require("test_env")
 
-local stub_qt = setmetatable({},
-    { __index = function() return setmetatable({}, { __index = function() return function() end end }) end })
-package.loaded["core.qt_constants"] = stub_qt
-_G.qt_constants = stub_qt
-_G.qt_set_widget_cursor       = function() end
-_G.qt_set_widget_drag_handler = function() end
-_G.qt_set_layout_stretch_factor = function() end
-package.loaded["core.logger"] = {
-    for_area = function() return {
-        event = function() end, detail = function() end,
-        warn = function() end, error = function() end,
-    } end,
-}
-
 print("=== test_video_scroll_default_shows_v1.lua ===")
 
-local panel = require("ui.timeline.timeline_panel")
-local m = panel.metrics
+local m = require("ui.timeline.timeline_panel_metrics")
 
 assert(m.UNINITIALIZED_SCROLL_OFFSET == -1, string.format(
-    "panel.metrics.UNINITIALIZED_SCROLL_OFFSET sentinel must be -1; got %s",
+    "panel_metrics.UNINITIALIZED_SCROLL_OFFSET sentinel must be -1; got %s",
     tostring(m.UNINITIALIZED_SCROLL_OFFSET)))
 print("  ✓ sentinel constant exposed")
 

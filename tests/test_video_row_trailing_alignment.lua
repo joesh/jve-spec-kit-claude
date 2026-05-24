@@ -13,24 +13,9 @@ require("test_env")
 
 print("=== test_video_row_trailing_alignment.lua ===")
 
-local stub_qt = setmetatable({},
-    { __index = function() return setmetatable({}, { __index = function() return function() end end }) end })
-package.loaded["core.qt_constants"] = stub_qt
-_G.qt_constants = stub_qt
-_G.qt_set_widget_cursor       = function() end
-_G.qt_set_widget_drag_handler = function() end
-_G.qt_set_layout_stretch_factor = function() end
-package.loaded["core.logger"] = {
-    for_area = function() return {
-        event = function() end, detail = function() end,
-        warn = function() end, error = function() end,
-    } end,
-}
-
-local panel = require("ui.timeline.timeline_panel")
-local m = panel.metrics
+local m = require("ui.timeline.timeline_panel_metrics")
 assert(type(m.row_trailing_alignment_width) == "function",
-    "panel.metrics.row_trailing_alignment_width(track_type) missing")
+    "panel_metrics.row_trailing_alignment_width(track_type) missing")
 
 local v = m.row_trailing_alignment_width("VIDEO")
 local a = m.row_trailing_alignment_width("AUDIO")

@@ -17,25 +17,7 @@ require("test_env")
 
 print("=== test_track_header_lane_alignment.lua ===")
 
--- Stub the bits timeline_panel pulls in at require-time. We do NOT need
--- panel.create() — we only need the row-metrics table from module load.
-local stub_qt = setmetatable({},
-    { __index = function() return setmetatable({}, { __index = function() return function() end end }) end })
-package.loaded["core.qt_constants"] = stub_qt
-_G.qt_constants = stub_qt
-_G.qt_set_widget_cursor = function() end
-_G.qt_set_widget_drag_handler = function() end
-_G.qt_set_layout_stretch_factor = function() end
-package.loaded["core.logger"] = {
-    for_area = function() return {
-        event = function() end, detail = function() end,
-        warn = function() end, error = function() end,
-    } end,
-}
-
-local panel = require("ui.timeline.timeline_panel")
-assert(panel.metrics, "timeline_panel must expose .metrics for row-alignment checks")
-local m = panel.metrics
+local m = require("ui.timeline.timeline_panel_metrics")
 assert(type(m.header_row_total) == "function", "metrics.header_row_total missing")
 assert(type(m.lane_row_total)   == "function", "metrics.lane_row_total missing")
 

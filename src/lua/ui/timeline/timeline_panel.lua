@@ -26,81 +26,15 @@ local routing_state = require("ui.source_routing_view_state")
 local View = require("ui.view")
 local M = View.new("timeline")
 
--- Constants
-local MIN_TRACK_HEIGHT = 30
--- A track row in the headers column is laid out as
---   [ header widget ][ RESIZE_EDGE_PX-tall drag edge widget ]
--- A track row in the timeline view is laid out as a single lane of
--- exactly `track_height` pixels. For per-row alignment between the two
--- columns, the header widget must therefore be `track_height - RESIZE_EDGE_PX`
--- — the edge widget IS the separator now, not an extra delta on top.
-local RESIZE_EDGE_PX = 4
-
--- Width of the trailing alignment cell shared by both row kinds. Audio
--- rows render it as the W toggle; video rows render an empty spacer of
--- the same width so the M/S stacks align across the column.
-local TRAILING_ALIGNMENT_PX = 16
-
--- Sentinel scroll-offset value meaning "freshly created sequence — no
--- user-positioned scroll yet, position the viewport at V1 (the bottom
--- of the video header stack)." Schema column defaults to this; any
--- explicit user scroll (including 0/top) overwrites it.
-local UNINITIALIZED_SCROLL_OFFSET = -1
--- Larger than any plausible content height; Qt clamps to the actual
--- viewport-bottom max when SET_SCROLL_AREA_V_SCROLL receives this.
-local SCROLL_PAST_MAX = 100000000
-
--- Pure math. State owns the "what's this track's height" question (with
--- its own asserts); the drag handler enforces MIN_TRACK_HEIGHT at the
--- input boundary. These helpers just convert between row and header
--- pixel counts — passing nil / non-number / under-MIN is a caller bug.
-local function assert_track_height(h, caller)
-    assert(type(h) == "number" and h >= MIN_TRACK_HEIGHT,
-        string.format("%s: track_height must be number >= %d, got %s",
-            caller, MIN_TRACK_HEIGHT, tostring(h)))
-end
-
-local function content_to_header(track_height)
-    assert_track_height(track_height, "content_to_header")
-    return track_height - RESIZE_EDGE_PX
-end
-
--- Exposed for tests / alignment audits. header_row_total and lane_row_total
--- both collapse mathematically to `track_height`, but kept named-separately
--- to document the per-column structure (header column = widget + edge;
--- lane column = single lane).
-M.metrics = {
-    RESIZE_EDGE_PX   = RESIZE_EDGE_PX,
-    MIN_TRACK_HEIGHT = MIN_TRACK_HEIGHT,
-    header_row_total = function(track_height)
-        return content_to_header(track_height) + RESIZE_EDGE_PX
-    end,
-    lane_row_total = function(track_height)
-        assert_track_height(track_height, "lane_row_total")
-        return track_height
-    end,
-    -- Width of the trailing alignment cell on a track header row. Audio
-    -- rows trail with the W (waveform toggle); video rows have nothing
-    -- to put there but need an equivalent spacer so the M/S stack on
-    -- the two row kinds ends at the same x-coord. Single source of
-    -- truth used by both the renderer and the alignment regression test.
-    row_trailing_alignment_width = function(track_type)
-        assert(track_type == "VIDEO" or track_type == "AUDIO",
-            "row_trailing_alignment_width: track_type must be VIDEO|AUDIO")
-        return TRAILING_ALIGNMENT_PX
-    end,
-    UNINITIALIZED_SCROLL_OFFSET = UNINITIALIZED_SCROLL_OFFSET,
-    -- Translate a persisted scroll offset to the value passed to
-    -- SET_SCROLL_AREA_V_SCROLL. Sentinel (-1) → SCROLL_PAST_MAX so Qt
-    -- clamps to the actual content-bottom (V1 visible). Real
-    -- user-saved values pass through unchanged.
-    compute_initial_scroll_target = function(offset)
-        assert(type(offset) == "number",
-            "compute_initial_scroll_target: offset must be a number")
-        if offset == UNINITIALIZED_SCROLL_OFFSET then return SCROLL_PAST_MAX end
-        return offset
-    end,
-}
+-- Row metrics (sizing constants + pure helpers) live in their own module
+-- so tests can exercise them without pulling Qt into the require graph.
+-- Re-exposed below as M.metrics for the panel's public surface.
+local metrics = require("ui.timeline.timeline_panel_metrics")
+local MIN_TRACK_HEIGHT      = metrics.MIN_TRACK_HEIGHT
+local RESIZE_EDGE_PX        = metrics.RESIZE_EDGE_PX
+local TRAILING_ALIGNMENT_PX = metrics.TRAILING_ALIGNMENT_PX
+local content_to_header     = metrics.content_to_header
+M.metrics = metrics
 
 -- Store references
 local state = nil
