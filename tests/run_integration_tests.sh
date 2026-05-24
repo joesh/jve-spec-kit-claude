@@ -133,7 +133,8 @@ for t in \
   test_show_source_tab_empty_blanks_body.lua \
   test_source_tab_and_viewer_set_transport_target.lua \
   test_source_viewer_signal.lua \
-  test_source_viewer_load_clip.lua
+  test_source_viewer_load_clip.lua \
+  test_source_viewer_publishes_selection.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
