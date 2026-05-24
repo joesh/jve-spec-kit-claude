@@ -9,63 +9,15 @@ local test_env = require('test_env')
 -- No-op timer: prevent debounced persistence from firing mid-command
 _G.qt_create_single_shot_timer = function() end
 
--- Stub source monitor for source_viewer.load_master_clip
-local source_monitor_loaded_ids = {}
-local stub_source_monitor = {
-    sequence_id = nil,
-    sequence = nil,
-    load_sequence = function(self, sequence_id)
-        self.sequence_id = sequence_id
-        -- Mirror real SequenceMonitor:load_sequence — populates .sequence
-        -- with the loaded Sequence model (source_viewer reads project_id
-        -- + name off it for selection_hub publish + title).
-        local Sequence = require("models.sequence")
-        self.sequence = Sequence.load(sequence_id)
-        table.insert(source_monitor_loaded_ids, sequence_id)
-    end,
-    get_loaded_master_seq_id = function(self) return self.sequence_id end,
-    -- Mirror real SequenceMonitor:_set_title (sequence_monitor.lua:1036).
-    _set_title = function(self, text) self.title = text end,
-}
-
--- Only mock needed: panel_manager (Qt widget management)
-package.loaded["ui.panel_manager"] = {
-    get_active_sequence_monitor = function() return nil end,
-    get_sequence_monitor = function(view_id)
-        assert(view_id == "source_monitor", "unexpected view_id: " .. tostring(view_id))
-        return stub_source_monitor
-    end,
-}
-
--- Stub focus_manager (needed by source_viewer)
-package.loaded["ui.focus_manager"] = {
-    focus_panel = function() end,
-    get_focused_panel = function() return "timeline" end,
-    set_focused_panel = function() end,
-}
-
--- Mock project_browser to capture focus_master_clip calls (Qt boundary)
-local focus_calls = {}
-local project_browser = {
-    focused_source_sequence_id = nil,
-    focus_calls_count = 0,
-}
-
+-- project_browser stub: load-time satisfier for `find_master_clip_in_browser`.
+-- Not asserted on by this test. project_browser owns a QTreeView built by
+-- layout.lua bootstrap, which --test mode does not run; standing up a real
+-- one here would multiply the test's scope without changing what's verified.
+local project_browser = {}
 function project_browser.refresh() end
-
-function project_browser.focus_master_clip(master_clip_id, _opts)
-    project_browser.focused_source_sequence_id = master_clip_id
-    project_browser.focus_calls_count = project_browser.focus_calls_count + 1
-    table.insert(focus_calls, {master_id = master_clip_id})
-    return true
-end
-
-function project_browser.get_selected_master_clip()
-    return nil
-end
-
+function project_browser.focus_master_clip() return true end
+function project_browser.get_selected_master_clip() return nil end
 function project_browser.focus_bin() end
-
 package.loaded['ui.project_browser'] = project_browser
 
 local database = require('core.database')
@@ -120,6 +72,23 @@ end
 database.init(TEST_DB)
 local db = database.get_connection()
 bootstrap_schema(db)
+
+-- Real source/timeline monitors + focus_manager registration. MatchFrame
+-- (line 335 below) loads the master into the source monitor via the real
+-- panel_manager.get_sequence_monitor("source_monitor") path; the assertion
+-- at line ~349 reads sequence_id off the same monitor.
+local panel_manager   = require("ui.panel_manager")
+local focus_manager   = require("ui.focus_manager")
+local SequenceMonitor = require("ui.sequence_monitor")
+local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
+local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
+panel_manager.register_sequence_monitor("source_monitor",   source_mon)
+panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
+focus_manager.register_panel("source_monitor",   source_mon:get_widget(),
+    source_mon:get_title_widget(),   "Source")
+focus_manager.register_panel("timeline_monitor", timeline_mon:get_widget(),
+    timeline_mon:get_title_widget(), "Timeline")
+focus_manager.set_focused_panel("timeline_monitor")
 
 command_manager.init('default_sequence', 'default_project')
 local executors = {}
@@ -346,7 +315,7 @@ local match_result = command_manager.execute(match_cmd)
 -- being silently masked.
 assert(match_result.success, "MatchFrame should succeed on imported clips: "
     .. tostring(match_result.error_message))
-assert(stub_source_monitor.sequence_id == timeline_master_id,
+assert(source_mon.sequence_id == timeline_master_id,
     "MatchFrame should load the master clip into source viewer")
 
 -- ============================================================
