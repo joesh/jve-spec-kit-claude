@@ -232,6 +232,27 @@ if os.getenv("JVE_QUIT_AFTER_INIT") == "1" then
     end)
 end
 
+-- Splitters + panel_manager are wired up here, BEFORE the startup
+-- branch below, because the debug-terminal socket (spec 020) lets a
+-- runner send `OpenProject` while the welcome dialog is still pumping
+-- events. OpenProject's `post_open_init` reads `panel_manager.get_
+-- persistable_sizes()` to snapshot the outgoing layout — without this
+-- early init, that call hits a "not initialized" assert and the swap
+-- fails halfway, leaving `record_engine.loaded_sequence_id` nil and
+-- blocking every smoke test that runs through the singleton-JVE
+-- runner. Panels themselves get added to the splitters further down
+-- (line ~514); panel_manager.init only needs the splitters + a
+-- focus_manager handle, so all of that can land up here.
+local panel_manager = require("ui.panel_manager")
+local focus_manager = require("ui.focus_manager")
+local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
+local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
+panel_manager.init({
+    main_splitter = main_splitter,
+    top_splitter = top_splitter,
+    focus_manager = focus_manager,
+})
+
 -- Welcome screen handle — survives across retry iterations, destroyed after
 -- main window is created and shown (no window gap).
 local ws_handle = nil
@@ -369,16 +390,13 @@ Signals.connect("project_changed", function()
     end)
 end, 2)
 
--- Main vertical splitter (Top row | Timeline)
-local main_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("vertical")
-
--- Top row: Horizontal splitter (Project Browser | Viewer | Inspector)
-local top_splitter = qt_constants.LAYOUT.CREATE_SPLITTER("horizontal")
+-- Splitters + panel_manager were wired up earlier (before the startup
+-- branch) so that an out-of-band OpenProject from the debug-terminal
+-- socket can land while welcome is still pumping events.
 
 -- 1. Project Browser (left) - create EARLY so menu system can reference it
 local selection_hub = require("ui.selection_hub")
 local project_browser_mod = require("ui.project_browser")
-local panel_manager = require("ui.panel_manager")
 local project_browser = project_browser_mod.create()
 if project_browser_mod.set_project_title then
     project_browser_mod.set_project_title(project_display_name)
@@ -442,8 +460,8 @@ shortcut_registry.create_qt_shortcuts({
     project_browser = project_browser,
 })
 
--- 6. Initialize focus manager for visual panel indicators
-local focus_manager = require("ui.focus_manager")
+-- 6. focus_manager was required earlier (paired with panel_manager.init);
+-- below registers views/panels now that the actual panel widgets exist.
 
 -- Register views for navigation (Find uses focus_manager.get_active_view())
 focus_manager.register_view("timeline", timeline_panel_mod)
@@ -493,12 +511,6 @@ focus_manager.register_panel("inspector", inspector_panel, nil, "Inspector", {
 })
 focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
     focus_widgets = timeline_panel_mod.get_focus_widgets and timeline_panel_mod.get_focus_widgets() or nil
-})
-
-panel_manager.init({
-    main_splitter = main_splitter,
-    top_splitter = top_splitter,
-    focus_manager = focus_manager,
 })
 
 -- Initialize all panels to unfocused state
