@@ -1066,9 +1066,7 @@ ensure_tab_for_sequence = function(sequence_id)
         strip_tab = strip_tab,
         seq_box = seq_box,  -- handler-closure dereferences this; updated by rekey_source_tab
     }
-    if strip_tab.kind == "source" then
-        source_tab_seq_id = sequence_id
-    end
+    if is_source_request then source_tab_seq_id = sequence_id end
     update_tab_scroll_arrows()
 end
 
