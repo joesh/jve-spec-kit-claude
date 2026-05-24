@@ -355,6 +355,9 @@ end
 
 local function refresh_staged(changed_seq_id)
     if changed_seq_id ~= _state.staged_seq_id then return end
+    -- FR-004a: a sequence-content-changed signal MAY mean the staged
+    -- sequence was deleted. Use the nil-returning load variant so the
+    -- "if not seq → unload" branch actually fires instead of asserting.
     local seq = require("models.sequence").load(_state.staged_seq_id)
     if not seq then M.unload(); return end                       -- FR-004a
     local source = get_source_monitor()                          -- FR-004b
@@ -363,7 +366,11 @@ local function refresh_staged(changed_seq_id)
 end
 
 local function refresh_live_bound(changed_seq_id)
-    local clip = require("models.clip").load(_state.live_clip_id)
+    -- Use load_optional: a sequence_content_changed signal can mean the
+    -- live-bound clip was deleted (FR-004a). Clip.load asserts on a
+    -- missing row, which would mask the auto-unload path; load_optional
+    -- returns nil and lets the `if not clip` branch dispatch unload.
+    local clip = require("models.clip").load_optional(_state.live_clip_id)
     if not clip then M.unload(); return end                      -- FR-004a
     if changed_seq_id ~= clip.owner_sequence_id then return end
     local owner = require("models.sequence").load(clip.owner_sequence_id)
