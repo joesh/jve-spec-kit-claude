@@ -137,7 +137,8 @@ for t in \
   test_source_viewer_publishes_selection.lua \
   test_match_frame.lua \
   test_match_frame_partial_and_offline.lua \
-  test_go_to_next_prev_edit.lua
+  test_go_to_next_prev_edit.lua \
+  test_timeline_edit_navigation.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
