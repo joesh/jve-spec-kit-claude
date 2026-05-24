@@ -135,7 +135,8 @@ for t in \
   test_source_viewer_signal.lua \
   test_source_viewer_load_clip.lua \
   test_source_viewer_publishes_selection.lua \
-  test_match_frame.lua
+  test_match_frame.lua \
+  test_match_frame_partial_and_offline.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
