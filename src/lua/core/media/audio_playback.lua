@@ -18,14 +18,15 @@
 local log = require("core.logger").for_area("audio")
 local qt_constants = require("core.qt_constants")
 local project_gen = require("core.project_generation")
--- Quality mode constants (match SSE C++ enum)
-local Q1 = 1          -- Editor mode: 0.25x-4x
-local Q2 = 2          -- Extreme slomo: down to 0.10x
-local Q3_DECIMATE = 3 -- High-speed: >4x up to 16x, no pitch correction
-
--- Speed range constants (match SSE C++ constants)
-local MAX_SPEED_STRETCHED = 4.0  -- Max speed for pitch-corrected playback
-local MAX_SPEED_DECIMATE = 16.0  -- Max speed for decimate mode
+-- Quality mode policy lives in its own module so the speed→mode mapping
+-- can be exercised without the SSE/AOP/EMP require graph (audio_quality_mode
+-- is pure-Lua, no Qt deps).
+local quality_mode = require("core.media.audio_quality_mode")
+local Q1                  = quality_mode.Q1
+local Q2                  = quality_mode.Q2
+local Q3_DECIMATE         = quality_mode.Q3_DECIMATE
+local MAX_SPEED_STRETCHED = quality_mode.MAX_SPEED_STRETCHED
+local MAX_SPEED_DECIMATE  = quality_mode.MAX_SPEED_DECIMATE
 
 -- Synchronous drain timeout. Hard upper bound on how long halt_current()
 -- waits for in-flight audio buffers to flush before asserting. Caller of
@@ -555,27 +556,9 @@ function M.set_speed(new_signed_speed)
     assert(type(new_signed_speed) == "number",
         "audio_playback.set_speed: signed_speed must be number")
 
-    local abs_speed = math.abs(new_signed_speed)
-
-    -- Fail-fast for impossible UI speed
-    assert(abs_speed <= MAX_SPEED_DECIMATE,
-        ("audio_playback.set_speed: abs_speed %.1f exceeds MAX_SPEED_DECIMATE (16)"):format(abs_speed))
-
-    -- Auto-select quality mode from abs(speed)
-    -- Sub-1x: varispeed (Q3_DECIMATE) — natural pitch drop, no time-stretch
-    -- Sub-0.25x: extreme slomo (Q2) — pitch-corrected, higher latency
-    -- 1x-4x: editor (Q1) — pitch-corrected, low latency
-    -- >4x: decimate (Q3_DECIMATE) — sample-skipping, no pitch correction
-    local new_mode
-    if abs_speed > MAX_SPEED_STRETCHED then
-        new_mode = Q3_DECIMATE
-    elseif abs_speed < 0.25 then
-        new_mode = Q2
-    elseif abs_speed < 1.0 then
-        new_mode = Q3_DECIMATE
-    else
-        new_mode = Q1
-    end
+    -- audio_quality_mode.pick asserts the speed range (>= 0,
+    -- <= MAX_SPEED_DECIMATE) and returns the band-appropriate mode.
+    local new_mode = quality_mode.pick(math.abs(new_signed_speed))
 
     if not M.playing then
         -- Just store for next start
