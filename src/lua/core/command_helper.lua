@@ -13,6 +13,64 @@ local function lookup_track_sequence(track_id)
     return Track.get_sequence_id(track_id)
 end
 
+-- Canonical clips-row INSERT, shared by the apply_mutations forward path
+-- (batch INSERT for plan_insert mutations) and the undo-delete revert
+-- path (one-off INSERT to restore a captured pre-delete snapshot). The
+-- bind helper takes a normalized row table — each call site adapts its
+-- own field naming into this shape so the column-order is single-sourced.
+local CLIP_INSERT_SQL = [[
+    INSERT INTO clips (
+        id, project_id, name, track_id,
+        owner_sequence_id, sequence_id,
+        sequence_start_frame, duration_frames,
+        source_in_frame, source_out_frame,
+        source_in_subframe, source_out_subframe,
+        master_layer_track_id, master_audio_track_id,
+        fps_mismatch_policy,
+        enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
+        created_at, modified_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+]]
+
+-- Bind a normalized clips row to a prepared CLIP_INSERT_SQL statement.
+-- AUDIO/VIDEO subframe contract (V11 FR-005) is enforced upstream by
+-- clip_mutator.plan_insert; this helper trusts the row shape and trips
+-- only on the schema-required NOT NULLs that every clip must carry
+-- regardless of track type.
+local function bind_clip_insert(stmt, row)
+    assert(stmt, "bind_clip_insert: stmt required")
+    assert(row,  "bind_clip_insert: row required")
+    local function required(field, value)
+        assert(value ~= nil, string.format(
+            "bind_clip_insert: row missing required field %q (clip id=%s)",
+            field, tostring(row.id)))
+        return value
+    end
+    stmt:bind_value(1,  required("id",                   row.id))
+    stmt:bind_value(2,  required("project_id",           row.project_id))
+    stmt:bind_value(3,  required("name",                 row.name))
+    stmt:bind_value(4,  required("track_id",             row.track_id))
+    stmt:bind_value(5,  required("owner_sequence_id",    row.owner_sequence_id))
+    stmt:bind_value(6,  required("nested_sequence_id",   row.nested_sequence_id))
+    stmt:bind_value(7,  required("sequence_start_frame", row.sequence_start_frame))
+    stmt:bind_value(8,  required("duration_frames",      row.duration_frames))
+    stmt:bind_value(9,  required("source_in_frame",      row.source_in_frame))
+    stmt:bind_value(10, required("source_out_frame",     row.source_out_frame))
+    stmt:bind_value(11, row.source_in_subframe)   -- AUDIO non-NULL / VIDEO NULL
+    stmt:bind_value(12, row.source_out_subframe)  -- (enforced by plan_insert + schema)
+    stmt:bind_value(13, row.master_layer_track_id)
+    stmt:bind_value(14, row.master_audio_track_id)
+    stmt:bind_value(15, required("fps_mismatch_policy", row.fps_mismatch_policy))
+    stmt:bind_value(16, required("enabled",             row.enabled))
+    stmt:bind_value(17, required("volume",              row.volume))
+    if row.mark_in_frame  ~= nil then stmt:bind_value(18, row.mark_in_frame)  end
+    if row.mark_out_frame ~= nil then stmt:bind_value(19, row.mark_out_frame) end
+    stmt:bind_value(20, required("playhead_frame", row.playhead_frame))
+    stmt:bind_value(21, required("created_at",     row.created_at))
+    stmt:bind_value(22, required("modified_at",    row.modified_at))
+end
+
 function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
     if sequence_id_param and sequence_id_param ~= "" then
         return sequence_id_param
@@ -777,19 +835,7 @@ function M.apply_mutations(db, mutations)
         if insert_stmt then
             return insert_stmt
         end
-        insert_stmt = db:prepare([[
-            INSERT INTO clips (
-                id, project_id, name, track_id,
-                owner_sequence_id, sequence_id,
-                sequence_start_frame, duration_frames,
-                source_in_frame, source_out_frame,
-                master_layer_track_id, master_audio_track_id,
-                fps_mismatch_policy,
-                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
-                created_at, modified_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ]])
+        insert_stmt = db:prepare(CLIP_INSERT_SQL)
         if not insert_stmt then
             return nil, "Failed to prepare INSERT statement: " .. tostring(db:last_error() or "unknown")
         end
@@ -906,30 +952,34 @@ function M.apply_mutations(db, mutations)
                 finalize_all_stmts()
                 return false, "INSERT mutation missing created_at/modified_at for clip " .. tostring(mut.clip_id)
             end
-            stmt:bind_value(1, mut.clip_id)
-            stmt:bind_value(2, mut.project_id)
-            stmt:bind_value(3, mut.name)
-            stmt:bind_value(4, mut.track_id)
-            stmt:bind_value(5, mut.owner_sequence_id)
-            stmt:bind_value(6, nested_id)
-            stmt:bind_value(7, mut.sequence_start_frame)
-            stmt:bind_value(8, mut.duration_frames)
-            stmt:bind_value(9, mut.source_in_frame)
-            stmt:bind_value(10, mut.source_out_frame)
-            stmt:bind_value(11, mut.master_layer_track_id)  -- nullable
-            stmt:bind_value(12, mut.master_audio_track_id)  -- nullable
-            stmt:bind_value(13, policy)
-            stmt:bind_value(14, mut.enabled)
             -- volume/playhead_frame are NOT NULL in the schema. Plan_insert
             -- substitutes semantic neutrals (1.0, 0) when the source row
             -- omits them — both values are the only correct choices for a
             -- brand-new clip, so we accept them here without reasserting.
-            stmt:bind_value(15, mut.volume or 1.0)
-            if mut.mark_in_frame ~= nil then stmt:bind_value(16, mut.mark_in_frame) end
-            if mut.mark_out_frame ~= nil then stmt:bind_value(17, mut.mark_out_frame) end
-            stmt:bind_value(18, mut.playhead_frame or 0)
-            stmt:bind_value(19, mut.created_at)
-            stmt:bind_value(20, mut.modified_at)
+            bind_clip_insert(stmt, {
+                id                    = mut.clip_id,
+                project_id            = mut.project_id,
+                name                  = mut.name,
+                track_id              = mut.track_id,
+                owner_sequence_id     = mut.owner_sequence_id,
+                nested_sequence_id    = nested_id,
+                sequence_start_frame  = mut.sequence_start_frame,
+                duration_frames       = mut.duration_frames,
+                source_in_frame       = mut.source_in_frame,
+                source_out_frame      = mut.source_out_frame,
+                source_in_subframe    = mut.source_in_subframe,
+                source_out_subframe   = mut.source_out_subframe,
+                master_layer_track_id = mut.master_layer_track_id,
+                master_audio_track_id = mut.master_audio_track_id,
+                fps_mismatch_policy   = policy,
+                enabled               = mut.enabled,
+                volume                = mut.volume or 1.0,
+                mark_in_frame         = mut.mark_in_frame,
+                mark_out_frame        = mut.mark_out_frame,
+                playhead_frame        = mut.playhead_frame or 0,
+                created_at            = mut.created_at,
+                modified_at           = mut.modified_at,
+            })
             local ok = stmt:exec()
             local err = db:last_error()
             reset_stmt(stmt)
@@ -1202,47 +1252,39 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     local src_out = require_int_frame(prev.source_out, "source_out", cmd_type)
     local policy = prev.fps_mismatch_policy or "resample"
 
-    local stmt = db:prepare([[
-        INSERT INTO clips (
-            id, project_id, name, track_id,
-            owner_sequence_id, sequence_id,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            master_layer_track_id, master_audio_track_id,
-            fps_mismatch_policy,
-            enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
-            created_at, modified_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ]])
+    local stmt = db:prepare(CLIP_INSERT_SQL)
     if not stmt then
         return false, "Failed to prepare undo delete: " .. tostring(db:last_error())
     end
-    stmt:bind_value(1, prev.id)
-    stmt:bind_value(2, prev.project_id)
-    stmt:bind_value(3, prev.name)
-    stmt:bind_value(4, prev.track_id)
-    stmt:bind_value(5, prev.owner_sequence_id or prev.track_sequence_id)
-    stmt:bind_value(6, nested_id)
-    stmt:bind_value(7, ts)
-    stmt:bind_value(8, dur)
-    stmt:bind_value(9, src_in)
-    stmt:bind_value(10, src_out)
-    stmt:bind_value(11, prev.master_layer_track_id)
-    stmt:bind_value(12, prev.master_audio_track_id)
-    stmt:bind_value(13, policy)
-    stmt:bind_value(14, prev.enabled and 1 or 0)
     -- Snapshots from older capture sites may not carry volume/playhead
     -- (mainly because capture_clip_state pre-V13 didn't include them on
     -- every path). Schema requires both NOT NULL — substitute the same
     -- semantic neutrals used at clip creation rather than refusing to
     -- restore. mark_in/out remain nullable.
-    stmt:bind_value(15, prev.volume or 1.0)
-    if prev.mark_in  ~= nil then stmt:bind_value(16, prev.mark_in)  end
-    if prev.mark_out ~= nil then stmt:bind_value(17, prev.mark_out) end
-    stmt:bind_value(18, prev.playhead or 0)
-    stmt:bind_value(19, prev.created_at)
-    stmt:bind_value(20, prev.modified_at)
+    bind_clip_insert(stmt, {
+        id                    = prev.id,
+        project_id            = prev.project_id,
+        name                  = prev.name,
+        track_id              = prev.track_id,
+        owner_sequence_id     = prev.owner_sequence_id or prev.track_sequence_id,
+        nested_sequence_id    = nested_id,
+        sequence_start_frame  = ts,
+        duration_frames       = dur,
+        source_in_frame       = src_in,
+        source_out_frame      = src_out,
+        source_in_subframe    = prev.source_in_subframe,
+        source_out_subframe   = prev.source_out_subframe,
+        master_layer_track_id = prev.master_layer_track_id,
+        master_audio_track_id = prev.master_audio_track_id,
+        fps_mismatch_policy   = policy,
+        enabled               = prev.enabled and 1 or 0,
+        volume                = prev.volume or 1.0,
+        mark_in_frame         = prev.mark_in,
+        mark_out_frame        = prev.mark_out,
+        playhead_frame        = prev.playhead or 0,
+        created_at            = prev.created_at,
+        modified_at           = prev.modified_at,
+    })
 
     local ok = stmt:exec()
     stmt:finalize()

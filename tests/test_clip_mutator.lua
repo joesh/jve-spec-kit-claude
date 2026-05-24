@@ -38,7 +38,7 @@ print("\n--- plan_insert: valid clip ---")
 do
     local row = {
         id = "c1", project_id = "p1", name = "Clip",
-        track_id = "t1",
+        track_id = "t1", track_type = "VIDEO",
         owner_sequence_id = "owner_seq",
         sequence_id = "nested_seq",
         sequence_start = 0,

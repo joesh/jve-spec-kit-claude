@@ -157,10 +157,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             assert(cd.sequence_id and cd.sequence_id ~= "",
                 "Paste: clipboard entry missing sequence_id")
             local now = os.time()
+            -- Resolve target track once; plan_insert asserts the AUDIO/VIDEO
+            -- subframe contract from track_type, and the role tag below
+            -- mirrors it.
+            local track = track_lookup[p.track_id]
             local clip_row = {
                 id = clip_id,
                 project_id = project_id,
                 track_id = p.track_id,
+                track_type = track.track_type,
                 owner_sequence_id = sequence_id,
                 sequence_id = cd.sequence_id,
                 master_layer_track_id = cd.master_layer_track_id,
@@ -172,6 +177,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 duration = cd.duration,
                 source_in = cd.source_in,
                 source_out = cd.source_out,
+                source_in_subframe  = cd.source_in_subframe,
+                source_out_subframe = cd.source_out_subframe,
                 enabled = true,
                 volume = cd.volume or 1.0,
                 frame_rate = cd.frame_rate,
@@ -180,8 +187,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             }
 
             table.insert(all_mutations, clip_mutator.plan_insert(clip_row))
-            -- Determine role from track type
-            local track = track_lookup[p.track_id]
             local role = (track.track_type == "VIDEO") and "video" or "audio"
             table.insert(created_clips, {
                 clip_id = clip_id,

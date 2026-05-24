@@ -108,6 +108,11 @@ local function copy_mark_range()
             duration = eff_duration,
             source_in = source_in,
             source_out = source_out,
+            -- Mark-range trim adjusts source_in/source_out in whole source
+            -- units; the sub-frame fractional component is unchanged, so
+            -- carry the subframes through verbatim (audio NOT NULL contract).
+            source_in_subframe  = clip.source_in_subframe,
+            source_out_subframe = clip.source_out_subframe,
             name = clip.name,
             copied_properties = load_clip_properties(clip.id),
         }
@@ -188,6 +193,10 @@ local function copy_timeline_selection()
                 duration = clip.duration,
                 source_in = clip.source_in,
                 source_out = clip.source_out,
+                -- AUDIO clips schema-require non-NULL subframes (V11 FR-005);
+                -- carry them through so Paste can rebuild a valid INSERT.
+                source_in_subframe  = clip.source_in_subframe,
+                source_out_subframe = clip.source_out_subframe,
 
                 name = clip.name,
                 copied_properties = load_clip_properties(clip.id)

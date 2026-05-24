@@ -51,6 +51,11 @@ end
             duration = row.duration,
             source_in = row.source_in,
             source_out = row.source_out,
+            -- AUDIO carries non-NULL subframes (V11 FR-005); VIDEO carries
+            -- NULL. clone_state must round-trip both so straddle splits
+            -- preserve them.
+            source_in_subframe  = row.source_in_subframe,
+            source_out_subframe = row.source_out_subframe,
             frame_rate = row.frame_rate,
             enabled = row.enabled,
             volume = row.volume,
@@ -143,6 +148,25 @@ local function plan_insert(row)
     local nested_id = row.sequence_id
     assert(nested_id and nested_id ~= "",
         "clip_mutator.plan_insert: missing sequence_id for clip " .. tostring(row.id))
+    -- Canonical AUDIO/VIDEO subframe contract (V11 FR-005, schema trigger
+    -- trg_clips_subframe_kind_insert). plan_insert is the choke point for
+    -- the mutation pipeline; asserting here catches row-builder bugs at
+    -- the right layer instead of as opaque SQL errors at the trigger.
+    assert(row.track_type == "VIDEO" or row.track_type == "AUDIO", string.format(
+        "clip_mutator.plan_insert: row for clip %s missing/invalid track_type (got %s) — "
+        .. "row builder must include track_type to satisfy subframe contract",
+        tostring(row.id), tostring(row.track_type)))
+    if row.track_type == "AUDIO" then
+        assert(type(row.source_in_subframe) == "number" and type(row.source_out_subframe) == "number",
+            string.format("clip_mutator.plan_insert: AUDIO clip %s missing source_{in,out}_subframe "
+                .. "(in=%s out=%s) — V11 schema requires non-NULL for AUDIO",
+                tostring(row.id), tostring(row.source_in_subframe), tostring(row.source_out_subframe)))
+    else
+        assert(row.source_in_subframe == nil and row.source_out_subframe == nil,
+            string.format("clip_mutator.plan_insert: VIDEO clip %s carries subframes "
+                .. "(in=%s out=%s) — V11 schema requires NULL for non-AUDIO",
+                tostring(row.id), tostring(row.source_in_subframe), tostring(row.source_out_subframe)))
+    end
     return {
         type = "insert",
         clip_id = row.id,
@@ -160,6 +184,11 @@ local function plan_insert(row)
         duration_frames = get_frames(row.duration),
         source_in_frame = get_frames(row.source_in),
         source_out_frame = get_frames(row.source_out),
+        -- AUDIO clips schema-require non-NULL subframes (V11 FR-005,
+        -- trg_clips_subframe_kind_insert). VIDEO clips carry NULL. The
+        -- mutation forwards verbatim; AUDIO callers populate, VIDEO leave nil.
+        source_in_subframe  = row.source_in_subframe,
+        source_out_subframe = row.source_out_subframe,
         enabled = row.enabled and 1 or 0,
         created_at = assert(row.created_at, "clip_mutator: insert mutation missing created_at for clip " .. tostring(row.id)),
         modified_at = assert(row.modified_at, "clip_mutator: insert mutation missing modified_at for clip " .. tostring(row.id)),
@@ -196,7 +225,8 @@ local function load_track_clips(db, track_id)
                t.track_type,
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-               mr.media_id
+               mr.media_id,
+               c.source_in_subframe, c.source_out_subframe
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
@@ -261,6 +291,10 @@ local function load_track_clips(db, track_id)
             track_type = track_type,
             -- V13-resolved chain leaf (joined media_id; nil when nested is itself nested).
             media_id = stmt:value(23),
+            -- AUDIO non-NULL / VIDEO NULL per V11 FR-005; downstream splits
+            -- forward verbatim to satisfy plan_insert's subframe contract.
+            source_in_subframe  = stmt:value(24),
+            source_out_subframe = stmt:value(25),
         })
     end
     stmt:finalize()
@@ -422,6 +456,11 @@ local function plan_straddle_split_actions(row, original, start_value, end_time,
         source_in             = get_source_in(original) + frame_utils.timeline_to_source(
             right_shift, row_fps_num, row_fps_den, get_seq_fps(original)),
         source_out            = require_source_out(original, "resolve_occlusions/straddle_split"),
+        -- Splits at frame boundary preserve subframes verbatim: source_in
+        -- shifts by whole source units (samples for AUDIO), so the sub-unit
+        -- fractional component (master-clock ticks) is unchanged on both halves.
+        source_in_subframe    = original.source_in_subframe,
+        source_out_subframe   = original.source_out_subframe,
         frame_rate            = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
         enabled               = original.enabled,
         volume                = original.volume,
@@ -657,6 +696,10 @@ function ClipMutator.resolve_occlusions_multi(db, track_id, spans)
                         - frame_utils.timeline_to_source(
                             trim_right_frag, row_fps_num, row_fps_den,
                             get_seq_fps(original)),
+                    -- Frame-aligned split preserves subframes verbatim (whole
+                    -- source-unit shift; sub-unit ticks unchanged on both halves).
+                    source_in_subframe  = original.source_in_subframe,
+                    source_out_subframe = original.source_out_subframe,
                     frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
                     enabled = original.enabled,
                     volume = original.volume,
@@ -802,6 +845,9 @@ function ClipMutator.resolve_ripple(db, params)
                 duration = right_dur,
                 source_in = right_src_in,
                 source_out = require_source_out(original, "resolve_ripple"),
+                -- Frame-aligned split: subframes carry through verbatim on both halves.
+                source_in_subframe  = original.source_in_subframe,
+                source_out_subframe = original.source_out_subframe,
                 frame_rate = { fps_numerator = row_fps_num, fps_denominator = row_fps_den },
                 enabled = row.enabled,
                 volume = original.volume,
@@ -945,7 +991,8 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
                t.track_type,
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-               mr.media_id
+               mr.media_id,
+               c.source_in_subframe, c.source_out_subframe
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
@@ -1004,6 +1051,10 @@ local function load_clip_for_duplicate_plan(db, clip_id, sequence_id, seq_fps_nu
         source_sequence_kind = stmt:value(20),
         -- V13-resolved chain leaf (nil when nested is itself nested).
         media_id = stmt:value(23),
+        -- AUDIO non-NULL / VIDEO NULL per V11 FR-005; build_duplicated_clip
+        -- forwards verbatim to satisfy plan_insert's subframe contract.
+        source_in_subframe  = stmt:value(24),
+        source_out_subframe = stmt:value(25),
     }
     stmt:finalize()
     return clip
@@ -1062,6 +1113,10 @@ local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_
         duration              = clip.duration,
         source_in             = clip.source_in,
         source_out            = clip.source_out,
+        -- Duplicate carries the source-range identity verbatim (AUDIO needs
+        -- non-NULL subframes per V11 FR-005; VIDEO carries NULL).
+        source_in_subframe    = clip.source_in_subframe,
+        source_out_subframe   = clip.source_out_subframe,
         frame_rate            = clip.frame_rate,
         enabled               = clip.enabled,
         created_at            = now,
