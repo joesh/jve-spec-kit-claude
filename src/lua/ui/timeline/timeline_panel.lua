@@ -3249,6 +3249,14 @@ function M.get_open_tab_ids()
     return copy
 end
 
+--- Test-only introspection: which sequence_id currently owns the
+--- source-tab panel slot, or nil if no source tab is open. Mirrors the
+--- internal source_tab_seq_id state; used to verify the rekey-in-place
+--- invariant from integration tests that drive source_loaded_changed.
+function M._test_get_source_tab_seq_id()
+    return source_tab_seq_id
+end
+
 --- Single canonical timeline-view rebuild path. Reads from the model
 --- (`state.get_displayed_tab_id()`) and refreshes the timeline view's
 --- track headers, tab widget, scroll restore, and engine load to match.

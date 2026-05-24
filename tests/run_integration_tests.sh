@@ -126,7 +126,8 @@ for t in \
   test_reader_audio_only.lua \
   test_peak_cache_mtime_fractional.lua \
   test_peak_cache_coverage_regen.lua \
-  test_relink_tc_resync.lua
+  test_relink_tc_resync.lua \
+  test_source_tab_rekey_no_orphan.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
