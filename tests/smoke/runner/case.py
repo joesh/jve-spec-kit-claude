@@ -46,11 +46,23 @@ _singleton_fixtures: Optional[Fixtures] = None
 
 
 def _ensure_runner() -> tuple[JVERunner, Fixtures]:
-    """Start the singleton JVE on first call; return cached refs after."""
+    """Start the singleton JVE on first call; return cached refs after.
+
+    Launches JVE with the Anamnesis template as the startup project so
+    layout.lua takes the at-launch (open_and_init_project) path instead
+    of the welcome-dialog branch. Welcome blocks the main Lua thread
+    waiting for user action, which never comes in a headless test ―
+    everything in layout.lua *after* the welcome loop (panel widgets,
+    timeline_panel, the sequence_monitors record/source bind) never
+    runs, and per-test OpenProject swaps then bind transport but can't
+    chain through timeline_panel.load_sequence to bind record_engine.
+    Starting with the template skips welcome entirely.
+    """
     global _singleton_runner, _singleton_fixtures
     if _singleton_runner is None:
         _singleton_fixtures = Fixtures()
         _singleton_runner = JVERunner(
+            startup_project=Path("/tmp/jve_smoke/template.jvp"),
             stdout_log=Path("/tmp/jve_smoke") / "suite.log")
         _singleton_runner.start()
         _singleton_runner.foreground()

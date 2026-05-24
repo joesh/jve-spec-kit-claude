@@ -974,13 +974,26 @@ function M.init(sequence_id, project_id)
     -- qt_constants which legacy headless tests cannot satisfy; tests
     -- exercising the new transport path bootstrap qt_constants themselves
     -- before calling command_manager.init.
-    pcall(function()
+    -- pcall accommodates headless tests where transport.init's deps
+    -- (qt_constants, PlaybackEngine internals) aren't fully stubbed.
+    -- Log on failure so the runtime path's "transport refused to
+    -- bootstrap" mode is visible — the prior bare pcall hid this and
+    -- left record_engine.loaded_sequence_id nil with no breadcrumb.
+    -- A full no-pcall gate (e.g. on qt_constants presence) broke
+    -- legacy tests that relied on the pcall's partial-success state,
+    -- so the conservative move is "log + keep tolerating."
+    local ok_transport, transport_err = pcall(function()
         local transport = require("core.playback.transport")
         if transport.bound_project_id() ~= project_id then
             if transport.is_bootstrapped() then transport.shutdown() end
             transport.init(project_id)
         end
     end)
+    if not ok_transport then
+        log.warn("command_manager.init: transport.init pcall failed: %s "
+            .. "(project_id=%s) — record_engine won't bind",
+            tostring(transport_err), tostring(project_id))
+    end
 
     -- Keep timeline_state IDs initialized so selection persistence doesn't assert during headless tests.
     local Sequence = require("models.sequence")
