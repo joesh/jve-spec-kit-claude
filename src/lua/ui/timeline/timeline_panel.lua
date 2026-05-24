@@ -174,13 +174,19 @@ local tab_handler_seq = 0
 local tab_command_listener = nil
 local ensure_tab_for_sequence
 
--- Tracks the tab that source_loaded_changed AUTO-OPENED (FR-001b). On
--- the next source change, the previous auto-source tab is evicted so
--- the strip stays singleton-clean. Cleared when that tab is closed via
--- × or when the project changes. User-opened record tabs that happen
--- to point at a source-loaded master are NOT recorded here — we never
--- close those out from under the user.
-local auto_source_tab_id = nil
+-- The seq_id currently holding the source-kind panel tab, or nil if
+-- there is no source tab open. The strip's source tab is a singleton
+-- widget that reloads in place when the source master changes (A→B);
+-- on the panel side we mirror that singleton semantics by REKEYING
+-- the open_tabs entry (A's bag of widgets is re-pointed at B) instead
+-- of creating a new entry under key B. This keeps the invariant
+--   open_tabs[X].strip_tab.sequence_id == X
+-- so the C++ strip and the Lua-side open_tabs cannot drift out of
+-- sync. The earlier auto_source_tab_id close-on-prev heuristic was a
+-- patch over the missing invariant (destroyed the source widget every
+-- swap and left orphan tabs when the heuristic missed); rekey makes
+-- the orphan impossible by construction.
+local source_tab_seq_id = nil
 
 local function register_global_handler(name, callback)
     _G[name] = function(...)
@@ -854,8 +860,8 @@ local function close_tab(sequence_id)
 
     open_tabs[sequence_id] = nil
     remove_from_tab_order(sequence_id)
-    if auto_source_tab_id == sequence_id then
-        auto_source_tab_id = nil
+    if source_tab_seq_id == sequence_id then
+        source_tab_seq_id = nil
     end
 
     if current_sequence_before == sequence_id then
@@ -890,10 +896,74 @@ end
 -- Expose close_tab programmatically (for tests + any future script callers).
 M.close_tab = close_tab
 
+-- Push a new display name onto an existing tab entry's button when it
+-- differs from the cached name. Idempotent; both the rename branch of
+-- ensure_tab_for_sequence and rekey_source_tab go through this so the
+-- Qt SET_TEXT call site lives in exactly one place.
+local function update_tab_display_name(entry, new_name)
+    if new_name == entry.name then return end
+    qt_constants.PROPERTIES.SET_TEXT(entry.button, new_name)
+    entry.name = new_name
+end
+
+-- Move the existing source-tab panel entry from key old_id to key new_id.
+-- Mirrors the C++ TimelineTabStrip's source-singleton reload-in-place: the
+-- same container/buttons/handlers are re-pointed at the new master sequence
+-- instead of a new container being created. Handler closures dereference
+-- entry.seq_box.id so updating that field rebinds clicks/closes to new_id
+-- without recreating handlers. The downstream existing-branch in
+-- ensure_tab_for_sequence is the authoritative writer for source_tab_seq_id
+-- and the persisted source-tab setting; this function only reshapes the
+-- open_tabs map and tab_order.
+local function rekey_source_tab(old_id, new_id)
+    local entry = open_tabs[old_id]
+    assert(entry, string.format(
+        "rekey_source_tab: open_tabs[%s] missing — source_tab_seq_id "
+        .. "drifted from open_tabs", tostring(old_id)))
+    assert(entry.seq_box, "rekey_source_tab: entry missing seq_box — "
+        .. "handler-closure rebind requires per-entry seq_box")
+    assert(not open_tabs[new_id], string.format(
+        "rekey_source_tab: open_tabs[%s] already exists — caller must "
+        .. "resolve collision via close_tab before rekey", tostring(new_id)))
+    entry.seq_box.id = new_id
+    update_tab_display_name(entry, get_sequence_display_name(new_id))
+    for i, id in ipairs(tab_order) do
+        if id == old_id then tab_order[i] = new_id; break end
+    end
+    open_tabs[old_id] = nil
+    open_tabs[new_id] = entry
+end
+
+-- Restore the open_tabs[X].strip_tab.sequence_id == X invariant when the
+-- source master moved from source_tab_seq_id to new_seq_id. Two sub-cases:
+--   (a) open_tabs[new_seq_id] absent → rekey in place (preferred; no widget
+--       churn; common path for F-press across media types).
+--   (b) open_tabs[new_seq_id] present (user already had a record tab for
+--       this seq) → close the OLD source widget. The strip's source
+--       singleton has been reloaded in place to new_seq_id, so close_tab's
+--       guard (strip_tab.sequence_id == sequence_id) prevents it from
+--       touching the singleton; only panel-side Qt cleanup runs. The
+--       existing-branch repair downstream then promotes open_tabs[new_seq_id]
+--       to source kind.
+-- Must run BEFORE strip dispatch so the strip's reload never leaves an
+-- orphaned panel container behind, regardless of which code path drove
+-- the source change.
+local function reconcile_source_tab_swap(new_seq_id)
+    if not source_tab_seq_id or source_tab_seq_id == new_seq_id then return end
+    if open_tabs[new_seq_id] then
+        close_tab(source_tab_seq_id)
+    else
+        rekey_source_tab(source_tab_seq_id, new_seq_id)
+    end
+end
+
 ensure_tab_for_sequence = function(sequence_id)
     if not tab_bar_tabs_layout or not sequence_id or sequence_id == "" then
         return
     end
+
+    local is_source_request = (sequence_id == get_source_master_seq_id())
+    if is_source_request then reconcile_source_tab_swap(sequence_id) end
 
     -- Keep the TimelineTabStrip in sync on every call. Idempotent on the
     -- strip side: open_record_tab returns an existing tab for this seq if
@@ -902,7 +972,7 @@ ensure_tab_for_sequence = function(sequence_id)
     -- re-establishes the strip-side tab.
     local strip = timeline_state.get_tab_strip()
     local strip_tab
-    if sequence_id == get_source_master_seq_id() then
+    if is_source_request then
         strip_tab = strip:open_source_tab(sequence_id)
         -- Persist so the SourceTab kind survives an editor restart even
         -- before the source monitor reloads — see SOURCE_TAB_SETTING.
@@ -915,10 +985,8 @@ ensure_tab_for_sequence = function(sequence_id)
     local existing = open_tabs[sequence_id]
     if existing then
         existing.strip_tab = strip_tab  -- repair if drifted
-        if display_name ~= existing.name then
-            qt_constants.PROPERTIES.SET_TEXT(existing.button, display_name)
-            existing.name = display_name
-        end
+        update_tab_display_name(existing, display_name)
+        if is_source_request then source_tab_seq_id = sequence_id end
         return
     end
 
@@ -949,19 +1017,27 @@ ensure_tab_for_sequence = function(sequence_id)
     -- can live in a record tab; a nested can be the source tab). Both
     -- pointer-update entry points emit the appropriate signals; the
     -- displayed_tab_changed listener does the timeline-view rebuild.
+    --
+    -- The handler closures dereference seq_box.id rather than capturing
+    -- sequence_id directly so the source-tab singleton can be REKEYED
+    -- (rekey_source_tab) on a source master swap without recreating
+    -- handlers. rekey_source_tab mutates seq_box.id; both handlers
+    -- below see the new value on next invocation.
+    local seq_box = { id = sequence_id }
     local handler_name = register_tab_handler(function()
+        local sid = seq_box.id
         local current_displayed = state and state.get_displayed_tab_id and state.get_displayed_tab_id()
-        if current_displayed == sequence_id then return end   -- already displayed
-        if sequence_id == get_source_master_seq_id() then
-            timeline_state.switch_to_source_tab(sequence_id)
+        if current_displayed == sid then return end   -- already displayed
+        if sid == get_source_master_seq_id() then
+            timeline_state.switch_to_source_tab(sid)
         else
-            M.load_sequence(sequence_id)
+            M.load_sequence(sid)
         end
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(text_button, handler_name)
 
     local close_handler_name = register_tab_handler(function()
-        close_tab(sequence_id)
+        close_tab(seq_box.id)
     end)
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER(close_button, close_handler_name)
 
@@ -988,7 +1064,11 @@ ensure_tab_for_sequence = function(sequence_id)
         handler = handler_name,
         close_handler = close_handler_name,
         strip_tab = strip_tab,
+        seq_box = seq_box,  -- handler-closure dereferences this; updated by rekey_source_tab
     }
+    if strip_tab.kind == "source" then
+        source_tab_seq_id = sequence_id
+    end
     update_tab_scroll_arrows()
 end
 
@@ -1753,42 +1833,44 @@ end)
 
 Signals.connect("project_changed", function()
     source_tab_dismissed = false
-    auto_source_tab_id = nil
 end, 35)
 
--- Source monitor loaded a new master. Four responsibilities:
---   1. Enforce FR-001 source-tab singleton: if there's a tab pointing at
---      the previous source master AND no record-tab user has explicitly
---      opened that same seq_id (auto-source tracking), evict it.
---   2. Refresh tab styles (the source tab's identity changed).
---   3. Apply identity patch defaults if the active record has no patches yet.
---   4. FR-001b: auto-switch the displayed tab to the new source if the
+-- Source monitor loaded a new master. Three responsibilities:
+--   1. Refresh tab styles (the source tab's identity changed).
+--   2. Apply identity patch defaults if the active record has no patches yet
+--      (handled by sibling listeners on effective_source_changed).
+--   3. FR-001b: auto-switch the displayed tab to the new source if the
 --      user has not dismissed it this session. switch_to_source_tab
---      emits displayed_tab_changed; the displayed_tab_changed listener does the rebuild.
---
--- auto_source_tab_id tracks the tab that source_loaded_changed AUTO-OPENED
--- (FR-001b). User-opened record tabs are not in this var even if they
--- happen to point at a master that's also the source — we must not close
--- those out from under the user.
-Signals.connect("source_loaded_changed", function(new_master_seq_id, prev_seq_id)
-    if prev_seq_id and prev_seq_id ~= new_master_seq_id
-       and auto_source_tab_id == prev_seq_id
-       and open_tabs[prev_seq_id] then
-        close_tab(prev_seq_id)
-    end
-    if auto_source_tab_id and auto_source_tab_id ~= new_master_seq_id then
-        auto_source_tab_id = nil
-    end
-
-    local record_seq_id = state.get_sequence_id and state.get_sequence_id()
+--      emits displayed_tab_changed; the displayed_tab_changed listener
+--      drives rebuild_for_displayed_tab, which calls ensure_tab_for_sequence
+--      on the new master — and THAT is where the source-tab singleton is
+--      rekeyed (rekey_source_tab) from prev to new, preserving the panel
+--      widget and the open_tabs[X].strip_tab.sequence_id == X invariant.
+--      No explicit eviction needed here; the old close-on-prev block
+--      destroyed the source widget instead of reusing it (orphaned
+--      source-tab bug F-press across media types, 2026-05-23).
+Signals.connect("source_loaded_changed", function(new_master_seq_id, _prev_seq_id)
     -- Style update tracks DISPLAYED tab; pass that, not the active record.
     update_tab_styles(timeline_state.get_displayed_tab_id())
 
-    if new_master_seq_id and record_seq_id then
-        if not source_tab_dismissed then
-            auto_source_tab_id = new_master_seq_id
-            timeline_state.switch_to_source_tab(new_master_seq_id)
-        end
+    -- Source cleared (e.g. source viewer was reset, project closed). No
+    -- rekey target exists; the only way to preserve the invariant
+    -- open_tabs[X].strip_tab.sequence_id == X is to drop the source-tab
+    -- panel entry. close_tab unwinds Qt parenting, handlers, and clears
+    -- source_tab_seq_id. Falls through silently when no source tab is open.
+    if not new_master_seq_id or new_master_seq_id == "" then
+        if source_tab_seq_id then close_tab(source_tab_seq_id) end
+        return
+    end
+
+    -- Auto-switch the displayed tab to the new source. switch_to_source_tab
+    -- emits displayed_tab_changed; the displayed_tab_changed listener calls
+    -- rebuild_for_displayed_tab → ensure_tab_for_sequence(new_master_seq_id),
+    -- which is where the rekey-or-collision branch (above) restores the
+    -- panel invariant. No explicit eviction here.
+    local record_seq_id = state.get_sequence_id and state.get_sequence_id()
+    if record_seq_id and not source_tab_dismissed then
+        timeline_state.switch_to_source_tab(new_master_seq_id)
     end
 end)
 
@@ -3482,6 +3564,7 @@ function M.on_project_change()
     open_tabs = {}
     tab_order = {}
     track_button_refs = {}
+    source_tab_seq_id = nil
 end
 
 -- Register for project_changed signal
