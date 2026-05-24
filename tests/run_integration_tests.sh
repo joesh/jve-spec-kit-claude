@@ -139,7 +139,8 @@ for t in \
   test_match_frame_partial_and_offline.lua \
   test_go_to_next_prev_edit.lua \
   test_timeline_edit_navigation.lua \
-  test_go_to_edit_surfaces_playhead.lua
+  test_go_to_edit_surfaces_playhead.lua \
+  test_panel_maximize.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
