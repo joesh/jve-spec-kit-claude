@@ -1,184 +1,130 @@
 #!/usr/bin/env luajit
+--- MovePlayhead: duration-literal driven playhead movement.
+---
+--- Verifies the literal grammar (Nf / Ns, signed) + clamp behavior +
+--- error paths against the model layer (sequence.playhead_position).
+--- No mocks: MovePlayhead routes through core.playhead.set which
+--- writes the sequence row and clamps to start_timecode_frame.
 
--- Test MovePlayhead command: duration-literal based playhead movement
--- Uses real DB + real timeline_state. Mock only for panel_manager (Qt engine).
+require("test_env")
 
-require('test_env')
+local database       = require("core.database")
+local command_manager = require("core.command_manager")
+local Sequence       = require("models.sequence")
 
-_G.qt_create_single_shot_timer = function() end
-
--- Forward-declare mock_monitor
-local mock_monitor
-
-package.loaded["ui.panel_manager"] = {
-    get_active_sequence_monitor = function() return mock_monitor end,
-}
-
-local database = require('core.database')
-local command_manager = require('core.command_manager')
-local timeline_state = require('ui.timeline.timeline_state')
-local Signals = require('core.signals')
-
-local TEST_DB = "/tmp/jve/test_move_playhead_command.db"
-os.remove(TEST_DB)
-os.remove(TEST_DB .. "-wal")
-os.remove(TEST_DB .. "-shm")
-
-database.init(TEST_DB)
+local DB = "/tmp/jve/test_move_playhead_command.db"
+os.remove(DB); os.remove(DB .. "-wal"); os.remove(DB .. "-shm")
+assert(database.init(DB))
 local db = database.get_connection()
-db:exec(require('import_schema'))
+db:exec(require("import_schema"))
 
 local now = os.time()
-db:exec(string.format([[
+assert(db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-    VALUES ('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
+      VALUES ('proj', 'Test', 'resample',
+              '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}',
+              %d, %d);
     INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
         audio_sample_rate, width, height, view_start_frame, view_duration_frames,
-        playhead_frame, created_at, modified_at)
-    VALUES ('seq', 'proj', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080,
-        0, 500, 100, %d, %d);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1);
-]], now, now, now, now))
+        playhead_frame, start_timecode_frame, created_at, modified_at)
+      VALUES ('seq', 'proj', 'Seq', 'sequence', 24, 1, 48000, 1920, 1080,
+              0, 500, 100, 0, %d, %d);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled,
+        locked, muted, soloed, volume, pan)
+      VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now)))
 
--- Mock sequence monitor — justified: seek_to_frame requires Qt engine for decode
-local seeked_frame = nil
-local audio_frame = nil
+command_manager.init("seq", "proj")
 
-mock_monitor = {
-    sequence_id = "seq",
-    view_id = "timeline_monitor",
-    total_frames = 500,
-    sequence = { start_timecode_frame = 0 },
-    engine = {
-        fps_num = 24, fps_den = 1,
-        -- NOTE: get_position reads from engine state, which is updated by seek_to_frame.
-        -- This relies on playhead_changed signals firing synchronously.
-        get_position = function() return timeline_state.get_playhead_position() end,
-        is_playing = function() return false end,
-        stop = function() end,
-        seek = function() end,
-        play_frame_audio = function(_, f) audio_frame = f end,
-    },
-}
-function mock_monitor:seek_to_frame(frame)
-    seeked_frame = frame
-    timeline_state.set_playhead_position(math.max(0, math.floor(frame)))
+local function park(frame)
+    local seq = Sequence.load("seq")
+    seq.playhead_position = frame
+    seq:save()
 end
 
--- Connect mock monitor to playhead_changed signal (mirrors real SequenceMonitor)
-Signals.connect("playhead_changed", function(sequence_id, frame)
-    if mock_monitor.sequence_id == sequence_id and type(frame) == "number" then
-        mock_monitor:seek_to_frame(frame)
-    end
-end)
-
-command_manager.init('seq', 'proj')
-
-local function reset(frame)
-    seeked_frame = nil
-    audio_frame = nil
-    local f = frame or 100
-    timeline_state.set_playhead_position(f)
-    -- Sync the DB row too — the executor reads sequence.playhead_position
-    -- (via Sequence.load) for its current frame. In-memory timeline_state
-    -- alone won't seed it under the post-017 injection model.
-    local seq = require("models.sequence").load("seq")
-    seq.playhead_position = f
-    seq:save()
+local function playhead_in_db()
+    return Sequence.load("seq").playhead_position
 end
 
 local function exec(literal)
     return command_manager.execute("MovePlayhead", {
-        _positional = {literal},
+        _positional = { literal },
         project_id = "proj",
     })
 end
 
-print("=== MovePlayhead Command Tests ===")
+print("=== test_move_playhead_command.lua ===")
 
--- Test 1: "1f" from position 100 → seeks to 101
-print("Test 1: 1f forward from 100")
-reset(100)
-local result = exec("1f")
-assert(result.success or result == true, "MovePlayhead should succeed")
-assert(seeked_frame == 101,
-    string.format("Expected seek to 101, got %s", tostring(seeked_frame)))
--- Jog audio fires on transport.engine_for_target(); not exercised here.
--- Covered by 017 transport tests that bootstrap the transport singletons.
-local _ = audio_frame
+-- ── Frame literals ─────────────────────────────────────────────────────
+park(100)
+local r = exec("1f")
+assert(r.success, "1f must succeed")
+assert(playhead_in_db() == 101, string.format("100+1f → 101, got %s", playhead_in_db()))
+print("  PASS 1f from 100 → 101")
 
--- Test 2: "-1f" from position 100 → seeks to 99
-print("Test 2: -1f backward from 100")
-reset(100)
+park(100)
 exec("-1f")
-assert(seeked_frame == 99,
-    string.format("Expected seek to 99, got %s", tostring(seeked_frame)))
+assert(playhead_in_db() == 99, string.format("100-1f → 99, got %s", playhead_in_db()))
+print("  PASS -1f from 100 → 99")
 
--- Test 3: "1s" at 24fps from position 100 → seeks to 124
-print("Test 3: 1s at 24fps from 100")
-reset(100)
+-- ── Second literals (24fps → 24-frame step) ────────────────────────────
+park(100)
 exec("1s")
-assert(seeked_frame == 124,
-    string.format("Expected seek to 124, got %s", tostring(seeked_frame)))
+assert(playhead_in_db() == 124, string.format("100+1s at 24fps → 124, got %s", playhead_in_db()))
+print("  PASS 1s at 24fps from 100 → 124")
 
--- Test 4: "-1s" at 24fps from position 100 → seeks to 76
-print("Test 4: -1s at 24fps from 100")
-reset(100)
+park(100)
 exec("-1s")
-assert(seeked_frame == 76,
-    string.format("Expected seek to 76, got %s", tostring(seeked_frame)))
+assert(playhead_in_db() == 76, string.format("100-1s at 24fps → 76, got %s", playhead_in_db()))
+print("  PASS -1s at 24fps from 100 → 76")
 
--- Test 5: "30f" from position 0 → seeks to 30
-print("Test 5: 30f from 0")
-reset(0)
+park(0)
 exec("30f")
-assert(seeked_frame == 30,
-    string.format("Expected seek to 30, got %s", tostring(seeked_frame)))
+assert(playhead_in_db() == 30, string.format("0+30f → 30, got %s", playhead_in_db()))
+print("  PASS 30f from 0 → 30")
 
--- Test 6: Clamp: "-200f" from position 100 → seeks to 0 (not -100)
-print("Test 6: clamp -200f from 100 to 0")
-reset(100)
+-- ── Clamp at sequence start_timecode_frame (0) ─────────────────────────
+park(100)
 exec("-200f")
-assert(seeked_frame == 0,
-    string.format("Expected seek to 0 (clamped), got %s", tostring(seeked_frame)))
+assert(playhead_in_db() == 0, string.format(
+    "100-200f below start_timecode_frame must clamp to 0; got %s",
+    playhead_in_db()))
+print("  PASS -200f from 100 clamps to 0")
 
--- Test 7: Missing positional arg → error
-print("Test 7: missing positional arg errors")
-reset(100)
-local r7 = command_manager.execute("MovePlayhead", { _positional = {}, project_id = "proj" })
-assert(not r7.success, "Expected failure for missing positional arg")
+-- ── Error paths ────────────────────────────────────────────────────────
+park(100)
+local rm = command_manager.execute("MovePlayhead",
+    { _positional = {}, project_id = "proj" })
+assert(not rm.success, "missing positional arg must fail")
+print("  PASS missing positional arg → error")
 
--- Test 8: Invalid literal "abc" → error
-print("Test 8: invalid literal 'abc' errors")
-reset(100)
-local r8 = command_manager.execute("MovePlayhead", { _positional = {"abc"}, project_id = "proj" })
-assert(not r8.success, "Expected failure for invalid literal 'abc'")
+park(100)
+local ri = command_manager.execute("MovePlayhead",
+    { _positional = { "abc" }, project_id = "proj" })
+assert(not ri.success, "malformed literal 'abc' must fail")
+print("  PASS literal 'abc' → error")
 
--- Test 9: Unknown unit "1x" → error
-print("Test 9: unknown unit '1x' errors")
-reset(100)
-local r9 = command_manager.execute("MovePlayhead", { _positional = {"1x"}, project_id = "proj" })
-assert(not r9.success, "Expected failure for unknown unit '1x'")
+park(100)
+local ru = command_manager.execute("MovePlayhead",
+    { _positional = { "1x" }, project_id = "proj" })
+assert(not ru.success, "unknown unit '1x' must fail")
+print("  PASS unknown unit '1x' → error")
 
--- Test 10: Sequence with non-zero TC origin — backward step past the TC
--- origin must clamp to the TC origin (NOT to 0). Regression for the
--- source-viewer Shift+Back bug (TSO 2026-05-20): old `math.max(0, ...)`
--- clamp let MovePlayhead seek below a master's start_frame and trip the
--- engine's start-boundary assert.
-print("Test 10: TC-origin clamp (start_timecode_frame=2086474)")
+-- ── Non-zero TC origin: clamp must respect it (not 0) ──────────────────
+-- Regression for source-viewer Shift+Back (TSO 2026-05-20): old
+-- `math.max(0, ...)` clamp let MovePlayhead seek below a master's
+-- start_frame and trip the engine's start-boundary assert.
 do
-    local Sequence = require("models.sequence")
-    local s = Sequence.load("seq")
-    s.start_timecode_frame  = 2086474
-    s.playhead_position     = 2086474
-    s:save()
-    seeked_frame = nil
+    local seq = Sequence.load("seq")
+    seq.start_timecode_frame = 2086474
+    seq.playhead_position    = 2086474
+    seq:save()
+
     exec("-1f")
-    assert(seeked_frame == 2086474, string.format(
-        "MovePlayhead -1f at TC origin (2086474) must clamp to TC origin, "
-        .. "not 0 or below; got %s", tostring(seeked_frame)))
-    print("  ✓ clamp at TC origin (not 0)")
+    assert(playhead_in_db() == 2086474, string.format(
+        "-1f at start_timecode_frame=2086474 must clamp to 2086474 "
+        .. "(not 0 or below); got %s", playhead_in_db()))
+    print("  PASS clamp at non-zero TC origin")
 end
 
-print("✅ test_move_playhead_command.lua passed")
+print("\nPASS test_move_playhead_command.lua")
