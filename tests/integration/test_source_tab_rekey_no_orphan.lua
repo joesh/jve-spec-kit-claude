@@ -27,8 +27,6 @@ print("=== test_source_tab_rekey_no_orphan.lua ===")
 
 require("test_env")
 local database         = require("core.database")
-local panel_manager    = require("ui.panel_manager")
-local SequenceMonitor  = require("ui.sequence_monitor")
 local Signals          = require("core.signals")
 local timeline_state   = require("ui.timeline.timeline_state")
 
@@ -65,10 +63,8 @@ assert(db:exec(string.format([[
 -- (the panel reads source_monitor.get_loaded_master_seq_id() during
 -- ensure_tab_for_sequence to classify source vs record requests).
 -- ----------------------------------------------------------------------
-local source_monitor   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_monitor = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_monitor)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_monitor)
+local mons = ienv.setup_monitor_panels({ kinds = "both" })
+local source_monitor, timeline_monitor = mons.source, mons.timeline
 
 -- ----------------------------------------------------------------------
 -- Bring up the panel. project_id required; sequence_id seeds the active

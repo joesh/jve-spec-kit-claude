@@ -24,8 +24,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local timeline_state  = require("ui.timeline.timeline_state")
 local Sequence        = require("models.sequence")
 
@@ -127,10 +125,9 @@ for _, p in ipairs({ "/tmp/clip_a.mov", "/tmp/clip_b.mov", "/tmp/audio.wav" }) d
     f:close()
 end
 
--- Real source monitor + transport.
-local source_mon = SequenceMonitor.new({ view_id = "source_monitor" })
-panel_manager.register_sequence_monitor("source_monitor", source_mon)
-require("core.playback.transport").init("default_project")
+local source_mon = ienv.setup_monitor_panels({
+    kinds = "source", transport_project_id = "default_project",
+}).source
 
 command_manager.init("default_sequence", "default_project")
 

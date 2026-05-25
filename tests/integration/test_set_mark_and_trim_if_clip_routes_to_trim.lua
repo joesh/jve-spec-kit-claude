@@ -22,8 +22,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local Clip            = require("models.clip")
 local Sequence        = require("models.sequence")
 
@@ -67,15 +65,11 @@ assert(db:exec([[
 
 command_manager.init("rec", "proj")
 
--- ---------------------------------------------------------------------
--- Real SequenceMonitor for the source slot. Under --test we have full
--- C++ bindings; no widget mocks. focus_manager is already loaded (real
--- module); transport is bootstrapped by command_manager.init's pcall.
--- ---------------------------------------------------------------------
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
+-- Real SequenceMonitors for source + timeline slots. Under --test we
+-- have full C++ bindings; no widget mocks. focus_manager is loaded;
+-- transport is bootstrapped by command_manager.init's pcall.
+local mons = ienv.setup_monitor_panels({ kinds = "both" })
+local source_mon, timeline_mon = mons.source, mons.timeline
 
 local source_viewer = require("ui.source_viewer")
 local edit_mode     = require("core.edit_mode")

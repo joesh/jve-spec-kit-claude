@@ -28,8 +28,6 @@ print("=== test_source_viewer_load_clip.lua ===")
 require("test_env")
 
 local database        = require("core.database")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local selection_hub   = require("ui.selection_hub")
 local Signals         = require("core.signals")
 local Sequence        = require("models.sequence")
@@ -74,9 +72,9 @@ assert(db:exec([[
 
 -- Real source monitor + transport bootstrap (engine binds via the
 -- transport_ready listener — see sequence_monitor.lua:247).
-local source_mon = SequenceMonitor.new({ view_id = "source_monitor" })
-panel_manager.register_sequence_monitor("source_monitor", source_mon)
-require("core.playback.transport").init("proj_X")
+local source_mon = ienv.setup_monitor_panels({
+    kinds = "source", transport_project_id = "proj_X",
+}).source
 
 selection_hub._reset_for_tests()
 selection_hub.set_active_panel("source_monitor")

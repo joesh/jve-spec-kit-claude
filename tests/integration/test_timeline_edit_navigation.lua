@@ -24,9 +24,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
-local focus_manager   = require("ui.focus_manager")
 local timeline_state  = require("ui.timeline.timeline_state")
 local Sequence        = require("models.sequence")
 
@@ -79,16 +76,9 @@ assert(db:exec([[
 ]]))
 
 -- Real monitors + transport + focus.
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
-focus_manager.register_panel("source_monitor",   source_mon:get_widget(),
-    source_mon:get_title_widget(),   "Source")
-focus_manager.register_panel("timeline_monitor", timeline_mon:get_widget(),
-    timeline_mon:get_title_widget(), "Timeline")
-focus_manager.set_focused_panel("timeline_monitor")
-require("core.playback.transport").init("p")
+local timeline_mon = ienv.setup_monitor_panels({
+    kinds = "both", focus = "timeline_monitor", transport_project_id = "p",
+}).timeline
 
 command_manager.init("seq", "p")
 timeline_mon:load_sequence("seq")

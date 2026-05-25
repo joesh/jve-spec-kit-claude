@@ -19,8 +19,6 @@ print("=== test_source_viewer_signal.lua ===")
 require("test_env")
 
 local database        = require("core.database")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local Signals         = require("core.signals")
 
 -- ── DB: project + two master sequences ────────────────────────────────
@@ -57,17 +55,13 @@ assert(db:exec([[
         ('b_v1', 'master_B', 'V1', 'VIDEO', 1, 1);
 ]]))
 
--- Real source monitor. (timeline_monitor not needed by this test;
--- source_viewer.load_master_clip only reaches for source_monitor.)
-local source_mon = SequenceMonitor.new({ view_id = "source_monitor" })
-panel_manager.register_sequence_monitor("source_monitor", source_mon)
-
--- Bootstrap transport so the monitor's engine binds (transport_ready
--- listener at sequence_monitor.lua:247 wires self.engine to the source-
--- role engine). Without this, load_master_clip would trip a nil-engine
--- assert during SequenceMonitor:load_sequence.
-local transport = require("core.playback.transport")
-transport.init("test_project")
+-- Real source monitor + transport bootstrap. (timeline_monitor not
+-- needed by this test; source_viewer.load_master_clip only reaches for
+-- source_monitor. transport.init binds the source-role engine via the
+-- transport_ready listener at sequence_monitor.lua:247.)
+local source_mon = ienv.setup_monitor_panels({
+    kinds = "source", transport_project_id = "test_project",
+}).source
 
 -- Force fresh load of source_viewer with our registered monitor.
 package.loaded["ui.source_viewer"] = nil

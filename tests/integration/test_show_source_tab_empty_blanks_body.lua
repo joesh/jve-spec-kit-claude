@@ -17,8 +17,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local timeline_state  = require("ui.timeline.timeline_state")
 
 -- ---------------------------------------------------------------------
@@ -84,10 +82,8 @@ assert(db:exec(string.format([[
 
 -- Real monitors. source_mon.sequence_id stays nil throughout (the
 -- "empty source viewer" precondition).
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
+local mons = ienv.setup_monitor_panels({ kinds = "both" })
+local source_mon, timeline_mon = mons.source, mons.timeline
 assert(source_mon.sequence_id == nil,
     "fixture: source monitor starts empty (no master loaded)")
 

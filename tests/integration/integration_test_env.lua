@@ -28,6 +28,70 @@ function M.require_emp()
     return qt_constants.EMP
 end
 
+--- Stand up SequenceMonitor instances + the registration plumbing that
+-- production layout.lua does at startup, so panel-resolving commands
+-- (MatchFrame, GoToNextEdit, ShowSourceTab, SetMark+TrimIf, …) can find
+-- monitors in --test mode where layout.lua never runs.
+--
+-- Three shapes the existing tests use:
+--   source-only       — opts = { kinds = "source" }
+--   both monitors     — opts = { kinds = "both" }
+--   full panel wiring — opts = { kinds = "both", focus = "timeline_monitor",
+--                                transport_project_id = "p" }
+--
+-- @param opts table
+--   kinds (string): "source" | "timeline" | "both". Default "both".
+--   focus (string|nil): panel id to focus. When set, also calls
+--     focus_manager.register_panel for every created monitor (required
+--     for set_focused_panel to resolve). When nil/omitted, no focus
+--     wiring at all. Default nil.
+--   transport_project_id (string|nil): when set, calls
+--     transport.init(project_id). Default nil.
+-- @return table { source = sm_or_nil, timeline = tm_or_nil }
+function M.setup_monitor_panels(opts)
+    opts = opts or {}
+    local kinds = opts.kinds or "both"
+    assert(kinds == "source" or kinds == "timeline" or kinds == "both",
+        "setup_monitor_panels: kinds must be 'source', 'timeline', or 'both'")
+
+    local panel_manager   = require("ui.panel_manager")
+    local SequenceMonitor = require("ui.sequence_monitor")
+
+    local want_source   = (kinds == "source")   or (kinds == "both")
+    local want_timeline = (kinds == "timeline") or (kinds == "both")
+
+    local monitors = {}
+    if want_source then
+        monitors.source = SequenceMonitor.new({ view_id = "source_monitor" })
+        panel_manager.register_sequence_monitor("source_monitor", monitors.source)
+    end
+    if want_timeline then
+        monitors.timeline = SequenceMonitor.new({ view_id = "timeline_monitor" })
+        panel_manager.register_sequence_monitor("timeline_monitor", monitors.timeline)
+    end
+
+    if opts.focus then
+        local focus_manager = require("ui.focus_manager")
+        if monitors.source then
+            focus_manager.register_panel("source_monitor",
+                monitors.source:get_widget(),
+                monitors.source:get_title_widget(), "Source")
+        end
+        if monitors.timeline then
+            focus_manager.register_panel("timeline_monitor",
+                monitors.timeline:get_widget(),
+                monitors.timeline:get_title_widget(), "Timeline")
+        end
+        focus_manager.set_focused_panel(opts.focus)
+    end
+
+    if opts.transport_project_id then
+        require("core.playback.transport").init(opts.transport_project_id)
+    end
+
+    return monitors
+end
+
 --- Pump Qt events with brief sleeps until predicate fires or deadline passes.
 -- Wall-clock-bounded because PROCESS_EVENTS drains the queue and returns
 -- immediately; bare-spin loops without sleep don't give worker threads

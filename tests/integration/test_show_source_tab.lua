@@ -27,7 +27,6 @@ require("test_env")
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
 local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local timeline_state  = require("ui.timeline.timeline_state")
 local Signals         = require("core.signals")
 
@@ -61,10 +60,8 @@ assert(db:exec(string.format([[
 command_manager.init("rec_seq", "proj")
 
 -- Real monitors. source_monitor.sequence_id starts nil (no clip loaded).
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
+local mons = ienv.setup_monitor_panels({ kinds = "both" })
+local source_mon, timeline_mon = mons.source, mons.timeline
 
 local strip = timeline_state.get_tab_strip()
 

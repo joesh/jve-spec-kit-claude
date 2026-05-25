@@ -20,8 +20,6 @@ print("=== test_source_tab_and_viewer_set_transport_target.lua ===")
 require("test_env")
 
 local database        = require("core.database")
-local SequenceMonitor = require("ui.sequence_monitor")
-local panel_manager   = require("ui.panel_manager")
 local timeline_state  = require("ui.timeline.timeline_state")
 local transport       = require("core.playback.transport")
 local source_viewer   = require("ui.source_viewer")
@@ -53,23 +51,16 @@ assert(db:exec(string.format([[
       VALUES ('rv1', 'rec', 'V1', 'VIDEO', 1, 1);
 ]], now, now, now, now, now, now)))
 
--- Real monitors + real transport bootstrap. Layout normally
--- registers each monitor's widget with focus_manager so focus_panel
--- works; --test doesn't run layout, so we register inline. Without
--- this, source_viewer.load_master_clip's focus_panel("source_monitor")
--- call would warn-and-return and transport.get_target() would never
--- derive to "source".
-local focus_manager = require("ui.focus_manager")
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
-focus_manager.register_panel("source_monitor",   source_mon:get_widget(),
-    source_mon:get_title_widget(),   "Source")
-focus_manager.register_panel("timeline_monitor", timeline_mon:get_widget(),
-    timeline_mon:get_title_widget(), "Timeline")
-
-transport.init("p")
+-- Real monitors + focus registration + real transport. focus_manager.
+-- register_panel is required so source_viewer.load_master_clip's
+-- focus_panel("source_monitor") doesn't warn-and-return — without it
+-- transport.get_target() could never flip to "source". timeline_monitor
+-- as initial focus matches layout.lua's startup default; get_target()
+-- only flips to "source" on source_monitor focus or source-tab display,
+-- so the timeline default is equivalent to "no focus" for this test.
+ienv.setup_monitor_panels({
+    kinds = "both", focus = "timeline_monitor", transport_project_id = "p",
+})
 local src_engine = transport.engine_for_role("source")
 local rec_engine = transport.engine_for_role("record")
 

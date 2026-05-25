@@ -29,8 +29,6 @@ require("test_env")
 
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local panel_manager   = require("ui.panel_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
 local timeline_state  = require("ui.timeline.timeline_state")
 local Sequence        = require("models.sequence")
 local fs_utils        = require("core.fs_utils")
@@ -169,9 +167,9 @@ assert(db:exec(string.format([[
 ]], MISSING_PATH)))
 
 -- Real source monitor + transport bootstrap.
-local source_mon = SequenceMonitor.new({ view_id = "source_monitor" })
-panel_manager.register_sequence_monitor("source_monitor", source_mon)
-require("core.playback.transport").init("p")
+local source_mon = ienv.setup_monitor_panels({
+    kinds = "source", transport_project_id = "p",
+}).source
 
 command_manager.init("seq", "p")
 
