@@ -188,6 +188,12 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     },
     ("Cmd+Delete", ("timeline",)): {
         "l1": "CloseGap — L3 should assert selected gap's right-neighbor shifted left",
+        "l2": "Silent-pass under osascript keystroke delivery — macOS "
+              "swallows Cmd+Delete (system 'move to trash' affinity) "
+              "before it reaches JVE's QShortcut. Verified via fire-"
+              "counter detector. Real key-down on physical hardware "
+              "works; L2's synthesized delivery doesn't. Belongs in a "
+              "bespoke L3 driving via CGEventPost or direct dispatch.",
     },
     ("F9", ()): {
         "l1": "Insert — L3 should assert source clip inserted at playhead, downstream ripples",
@@ -199,10 +205,16 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     # test_keymap_timeline_zoom.py
     ("Shift+Cmd+Equal", ("timeline",)): {
         "l1": "TimelineZoomInAtMouse — L3 should assert zoom anchored on mouse pos",
+        "l2": "Requires tracked pointer-frame (set on mouse move over the "
+              "timeline). L2 batch never moves the mouse, so the command "
+              "asserts 'no pointer frame tracked'. Belongs in a bespoke "
+              "L3 that drives a synthetic pointer move first.",
     },
     # Cmd+Minus (TimelineZoomOut) covered by test_keymap_timeline_zoom.py
     ("Shift+Cmd+Minus", ("timeline",)): {
         "l1": "TimelineZoomOutAtMouse — L3 should assert zoom anchored on mouse pos",
+        "l2": "Requires tracked pointer-frame; same as Shift+Cmd+Equal "
+              "(TimelineZoomInAtMouse) — L2 batch can't provide one.",
     },
     # N (ToggleSnapping) covered by test_keymap_n_toggles_snapping.py
     ("Q", ("timeline",)): {

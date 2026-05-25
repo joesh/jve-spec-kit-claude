@@ -403,6 +403,51 @@ function Sequence:save()
     return ok
 end
 
+--- Return a sorted, deduplicated list of edit-point frames for this
+--- sequence. An edit point is any frame where timeline content changes
+--- shape — a clip's start, a clip's end, or the sequence's TC origin
+--- (the leftmost legal playhead). Used by Prev/Next-edit navigation.
+--- Seeding with start_timecode_frame matters: a sequence whose content
+--- begins at TC > 0 has no edit points below it, and navigating to
+--- frame 0 would land outside the content range.
+function Sequence:edit_points()
+    assert(self.id and self.id ~= "",
+        "Sequence:edit_points: invalid sequence (no id)")
+    assert(type(self.start_timecode_frame) == "number",
+        "Sequence:edit_points: start_timecode_frame must be a number")
+    local conn = resolve_db()
+    assert(conn, "Sequence:edit_points: no database connection")
+    local points = { self.start_timecode_frame }
+    local stmt = assert(conn:prepare([[
+        SELECT sequence_start_frame, duration_frames
+          FROM clips
+         WHERE owner_sequence_id = ?
+    ]]), "Sequence:edit_points: failed to prepare clips query")
+    stmt:bind_value(1, self.id)
+    assert(stmt:exec(), "Sequence:edit_points: clips query exec failed")
+    while stmt:next() do
+        local start = stmt:value(0)
+        local duration = stmt:value(1)
+        assert(type(start) == "number",
+            "Sequence:edit_points: clip sequence_start_frame is non-numeric")
+        assert(type(duration) == "number",
+            "Sequence:edit_points: clip duration_frames is non-numeric")
+        table.insert(points, start)
+        table.insert(points, start + duration)
+    end
+    stmt:finalize()
+    table.sort(points)
+    local unique = {}
+    local last = nil
+    for _, p in ipairs(points) do
+        if p ~= last then
+            table.insert(unique, p)
+            last = p
+        end
+    end
+    return unique
+end
+
 --- Lightweight scroll offset update — avoids full save overhead.
 -- Pass nil for either offset to leave it unchanged.
 function Sequence.update_scroll_offsets(seq_id, video_offset, audio_offset)

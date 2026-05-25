@@ -73,6 +73,27 @@ assert(db:exec([[
          NULL, NULL, 'resample', 1.0, 0),
         ('b', 'p', 'v1', 'mst', 'seq', 'B', 200, 150, 0, 150, 1, 0, 0,
          NULL, NULL, 'resample', 1.0, 0);
+
+    -- Second sequence with non-zero TC origin (89750, like Anamnesis).
+    -- Used by scenario 12 below to pin that Prev-from-inside-clip floors
+    -- at start_timecode_frame, never at 0 (which would be below the
+    -- sequence's content range and trip PlaybackEngine.seek's assert).
+    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator,
+        audio_sample_rate, width, height, view_start_frame, view_duration_frames,
+        playhead_frame, selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, start_timecode_frame, created_at, modified_at)
+      VALUES ('seq_tc', 'p', 'EditTC', 'sequence', 30, 1, 48000, 1920, 1080,
+              89750, 500, 89800, '[]', '[]', '[]', 0, 89750, 0, 0);
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
+      VALUES ('v1_tc', 'seq_tc', 'V1', 'VIDEO', 1, 1);
+    INSERT INTO clips (id, project_id, track_id, sequence_id, owner_sequence_id,
+        name, sequence_start_frame, duration_frames, source_in_frame,
+        source_out_frame, enabled, created_at, modified_at,
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        volume, playhead_frame)
+      VALUES
+        ('a_tc', 'p', 'v1_tc', 'mst', 'seq_tc', 'A_TC', 89800, 100, 0, 100, 1,
+         0, 0, NULL, NULL, 'resample', 1.0, 0);
 ]]))
 
 -- Real monitors + focus wiring + transport. focus_manager.register_panel
@@ -195,5 +216,34 @@ assert(prev_edit().success)
 assert(playhead_in_db() == 0, string.format(
     "round-trip 50 → 100 → 0; got %s", playhead_in_db()))
 print("  PASS round-trip lands on 0 (not 50)")
+
+-- ── 12: TC origin > 0 — Prev floors at start_timecode_frame, not 0 ────
+-- Regression: GoToPrevEdit seeded its edit-point list with `{0}`, so on
+-- a sequence whose content begins at start_timecode_frame=89750, a Prev
+-- from inside a clip walked to 0. That published playhead_changed(0),
+-- which trips PlaybackEngine.seek's "below start_frame" assert in every
+-- listener — a handler-failure storm, not a recoverable miss. The floor
+-- must be the sequence's TC origin. Asserting the resulting playhead is
+-- sufficient: a floor of 0 would mean playhead lands at 0 here, which
+-- this assertion catches directly.
+timeline_state.init("seq_tc", "p")  -- refresh clip cache for the new seq
+command_manager.activate_timeline_stack("seq_tc")
+timeline_mon:load_sequence("seq_tc")
+-- Park exactly at clip_a_tc.start so the only edit point < playhead
+-- is the seed (the sequence-floor point). Older code seeded with `{0}`,
+-- so this Prev would land on 0; correct code seeds with TC origin and
+-- lands on 89750.
+timeline_state.set_playhead_position(89800)
+local seq_tc = Sequence.load("seq_tc")
+seq_tc.playhead_position = 89800
+seq_tc:save()
+local r12 = command_manager.execute("GoToPrevEdit", { project_id = "p" })
+assert(r12.success, "GoToPrevEdit on seq_tc must succeed")
+local landed = Sequence.load("seq_tc").playhead_position
+assert(landed == 89750, string.format(
+    "Prev from clip start (89800) must floor at start_timecode_frame="
+    .. "89750, not 0 (below content range — trips PlaybackEngine seek "
+    .. "asserts). Got %s.", tostring(landed)))
+print("  PASS TC-origin sequence: Prev 89800 → 89750")
 
 print("\nPASS test_go_to_next_prev_edit.lua")

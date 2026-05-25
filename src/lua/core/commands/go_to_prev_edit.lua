@@ -13,38 +13,6 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local function collect_edit_points()
-        local clips = timeline_state.get_clips()
-
-        -- Collect edit points as integers
-        local points = {0}
-
-        for _, clip in ipairs(clips) do
-            local start = clip.sequence_start or clip.start_value
-            local duration = clip.duration or clip.duration_value
-
-            if type(start) == "number" then
-                table.insert(points, start)
-                if type(duration) == "number" then
-                    table.insert(points, start + duration)
-                end
-            end
-        end
-
-        -- Sort and deduplicate
-        table.sort(points)
-        local unique = {}
-        local last = nil
-        for _, p in ipairs(points) do
-            if p ~= last then
-                table.insert(unique, p)
-                last = p
-            end
-        end
-
-        return unique
-    end
-
     command_executors["GoToPrevEdit"] = function(command)
         local args = command:get_all_parameters()
 
@@ -61,10 +29,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return true
         end
 
-        -- Timeline: navigate to previous edit point
-        local points = collect_edit_points()
-        local playhead = timeline_state.get_playhead_position()
-        assert(type(playhead) == "number", "GoToPrevEdit: playhead must be integer frames")
+        -- Timeline: load everything from sv.sequence_id (the actual
+        -- write target). timeline_state reflects the displayed tab,
+        -- which may differ from sv.sequence_id (e.g., timeline focus
+        -- while source tab is displayed) — and would yield a target
+        -- frame outside sv's content range, tripping seek asserts in
+        -- every playhead_changed listener.
+        local Sequence = require("models.sequence")
+        local sequence = assert(Sequence.load(sv.sequence_id),
+            "GoToPrevEdit: sequence not found: " .. tostring(sv.sequence_id))
+        local points = sequence:edit_points()
+        local playhead = sequence.playhead_position
+        assert(type(playhead) == "number",
+            "GoToPrevEdit: playhead_position must be integer frames")
 
         local target = playhead
         for i = #points, 1, -1 do
@@ -84,10 +61,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if target ~= playhead then
-            -- Persist to model, emit signal, surface viewport (same as GoToStart/GoToEnd)
-            local Sequence = require("models.sequence")
-            local sequence = Sequence.load(sv.sequence_id)
-            assert(sequence, "GoToPrevEdit: sequence not found: " .. tostring(sv.sequence_id))
             sequence.playhead_position = target
             assert(sequence:save(), "GoToPrevEdit: failed to save")
             Signals.emit("playhead_changed", sv.sequence_id, target)
