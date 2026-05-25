@@ -123,6 +123,7 @@ for t in \
   test_inspector_set_value_undo.lua \
   test_inspector_focus_scroll.lua \
   test_peak_gen_admission.lua \
+  test_peak_gen_cancel_all_re_request.lua \
   test_reader_audio_only.lua \
   test_peak_cache_mtime_fractional.lua \
   test_peak_cache_coverage_regen.lua \

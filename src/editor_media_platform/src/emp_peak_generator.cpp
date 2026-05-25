@@ -108,6 +108,16 @@ void PeakGenerator::CancelAll()
         for (auto& [id, job] : m_jobs) {
             job->cancel_flag = true;
         }
+        // Erase the map entries so a subsequent RequestPeaks for the
+        // same media_id starts a fresh job at the caller-supplied
+        // output_path. RequestPeaks is idempotent on the
+        // {media_id : state != None} pair; leaving completed (or
+        // mid-finalize) jobs in m_jobs makes the next request silently
+        // skip and retain the OLD job's output_path. CancelPeaks
+        // already follows this policy for the single-id case — mirror
+        // it here. Workers holding a shared_ptr to a cancelled job
+        // keep it valid until they finish (no use-after-free).
+        m_jobs.clear();
         m_running_queue.clear();
         m_queued_pool.clear();
     }
