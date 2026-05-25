@@ -93,37 +93,69 @@ Cost: one file copy (~few MB) + one project-open (~tens of ms). That replaces a 
 
 ```python
 def key(self, combo):       # e.g. "Cmd+Z", "Shift+I"
-    # Atomic grab → press → (optionally) restore prior frontmost.
-    # Sandwiched in one osascript so the foreground swap and key
-    # delivery are as close to atomic as macOS allows. Without this,
-    # the user's concurrent keyboard input collides with smoke when
-    # they click back to their IDE between setUp's foreground() and
-    # the press — keys land in their app, not JVE.
     keystroke = _combo_to_osascript_keystroke(combo)
-    mode = os.environ.get("JVE_SMOKE_GRAB_KEYS", "restore")  # or "hold"
-    restore = (
-        'if priorName is not "JVEEditor" then '
-        '  set frontmost of (first process whose name is priorName) to true\n'
-        'end if'
-        if mode == "restore" else ""
-    )
-    subprocess.run(["osascript", "-e", f'''
-        tell application "System Events"
-            set priorName to name of first process whose frontmost is true
-            set frontmost of (first process whose unix id is {pid}) to true
-            delay 0.05
-            {keystroke}
-            delay 0.05
-            {restore}
-        end tell
-    '''], check=True)
+    subprocess.run(["osascript", "-e",
+                    f'tell application "System Events" to {keystroke}'],
+                   check=True)
 ```
 
 The runner does NOT need a CGEventPostToPid helper or `cliclick`; the bundle work makes the cheaper osascript path sufficient.
 
-**Coexistence with concurrent user input.** The per-press grab-press-restore (added 2026-05-25) lets the user keep working while smoke runs: each press blinks JVE frontmost for ~100 ms and restores the user's prior app. Set `JVE_SMOKE_GRAB_KEYS=hold` to skip the restore when running a long suite unattended (saves ~10 ms/press, user has to manually click back). True parallel-use without focus blink requires a VM (UTM); see [memory/feedback_smoke_tests_real_keypress_only.md] and [todo_l2_silent_pass_hole.md] for related architecture notes.
+**Coexistence with concurrent user input — two supported paths.** macOS keystrokes go to the OS-level frontmost app with no per-process targeting. Two collision directions matter:
+
+  1. **Test → user**: if anything other than JVE is frontmost when `key()` fires, the keystroke lands in the user's app (e.g., a Cmd+F press opens the user's IDE Find dialog).
+  2. **User → test**: if the user types while JVE is frontmost for a press, their keystroke is fed to JVE, potentially firing a different binding mid-test.
+
+We tried an in-process per-press grab-press-restore (commits 766fb954..e4ccd679, reverted 2026-05-25): single-osascript sandwich captured the prior frontmost, grabbed JVE, fired the keystroke, restored. Three sequential refinements (200 ms delays → 0 ms → asymmetric 0/20 ms with per-press capture) reduced overhead to ~3 s on a 138-keystroke suite. The remaining problems made it unusable: the restore worked for some target apps (Finder) but silently dropped for others (ghostty/terminal-class) without a clear pattern, and the residual focus blink was perceptually jarring even at 20-30 ms windows. The grab approach was a stopgap and is gone.
+
+The two supported execution environments are now:
+
+  * **Host, JVE frontmost, hands-off keyboard.** Best for ad-hoc single-test debugging — quick to spin up, no extra setup. The user must not touch the keyboard while smoke runs; if they do, their keys feed into JVE and may collide with the test under way. Run length should be bounded (one test, not a full suite) so the hands-off window stays short.
+  * **UTM macOS guest with captured keyboard.** Best for full suites or parallel use. JVE + runner live inside the guest; the host's keyboard input feeds the host's apps. The guest's keyboard capture (Ctrl+Option to release) means the user can flip in and out of the guest at will without collision. See the VM-guest runbook below.
+
+[memory/feedback_smoke_tests_real_keypress_only.md] documents why bypassing real keystrokes (in-process synthetic events, CGEventPostToPid) is not an option — Qt's QShortcut activation requires spontaneous events from a foregrounded source process.
 
 Menu invocation goes through `osascript` (`tell app "System Events" to click menu item ...`) when the test is asserting the menu surface itself rather than the keybinding.
+
+### UTM macOS guest runbook (isolated execution path)
+
+Setup is one-time. Once the guest is built and configured, the per-run loop is the same `make smoke` you'd run on the host — the guest just happens to be where it actually executes.
+
+**One-time guest setup.**
+
+1. **Install UTM on the host.** `brew install --cask utm` (or download from getutm.app).
+2. **Create the guest VM.** UTM → Create New → Virtualize → macOS → "Download a preinstalled image" picks the latest Apple-supplied IPSW from the gallery (no Apple-ID required). Allocate ≥6 GB RAM, ≥80 GB disk, ≥4 CPU cores; the JVE build is C++/Qt-heavy and constrained allocations make the inner build painful.
+3. **Boot, install macOS, create a user account.** Standard installer flow. Skip iCloud sign-in (not needed; reduces guest noise). Disable screen sleep so the guest doesn't lock mid-suite.
+4. **Inside the guest: install dev deps.**
+   ```bash
+   xcode-select --install       # CLI tools
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   brew install cmake qt6 ffmpeg luajit lua@5.1 python@3 ripgrep
+   brew install --cask ghostty  # or whatever terminal you use
+   ```
+5. **Inside the guest: grant Accessibility permission to the terminal.** System Settings → Privacy & Security → Accessibility → add ghostty (or Terminal.app). Same prerequisite as the host — the smoke runner shells out to `osascript`.
+6. **Host: enable an SMB share covering the repo.** System Settings → General → Sharing → File Sharing on → add `/Users/joe/Local/jve-spec-kit-claude` → set the SMB user/permissions. (Or share the whole `~/Local` if convenient.) Note the host's local network address (`hostname.local` or its IP).
+7. **Inside the guest: mount the share.** Finder → Go → Connect to Server → `smb://<host-name>.local/jve-spec-kit-claude` → mount under `/Volumes/jve-spec-kit-claude`. Symlink to a workable path inside the guest:
+   ```bash
+   ln -s /Volumes/jve-spec-kit-claude ~/jve
+   ```
+8. **Inside the guest: first build.**
+   ```bash
+   cd ~/jve
+   cmake -S . -B build && make -C build JVEEditor -j4
+   ```
+   The first build is the long part (~minutes); subsequent rebuilds touch only changed files. Expect to debug SMB-side filesystem quirks here (case sensitivity, lock files, etc.) — if they bite, switch to `rsync host → guest local clone` as the sync strategy.
+
+**Per-run loop (post-setup).**
+
+* Edit code on the host as usual; SMB makes the edits immediately visible to the guest.
+* Inside the guest terminal:
+  ```bash
+  cd ~/jve && make smoke
+  ```
+* Use the UTM guest window for runs you want to watch; capture-keyboard mode (Ctrl+Option to release) lets the guest fully own input without any chance of leakage to the host. Click anywhere outside the guest window OR hit Ctrl+Option to release the keyboard back to the host.
+
+**Why this works where the in-process grab didn't.** macOS keystroke routing is per-bootstrap-namespace. The guest's WindowServer has its own frontmost concept entirely independent of the host's; UTM's keyboard-capture API plugs the host's HID stream into the guest's input system only while the guest window is focused-and-captured. There is no shared global frontmost between host and guest, so collision is structurally impossible — not "small with mitigations" like the grab approach.
 
 ### Wire protocol
 
