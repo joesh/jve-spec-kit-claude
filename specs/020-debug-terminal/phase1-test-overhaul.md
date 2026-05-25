@@ -171,7 +171,7 @@ class JVESmokeSuite:
 
 If a test corrupts JVE state badly enough that the next `OpenProject` can't recover (assertion in a non-pcall'd panel handler, hung modal, etc.), the runner notices (eval times out or returns ERROR repeatedly) and respawns JVE. A single-test failure does not poison the rest of the suite.
 
-Timeout: 5 s per `eval` is generous (most return in < 50 ms). Three consecutive eval timeouts → respawn JVE + mark current test as failed.
+Timeout: 5 s per `eval` is generous (most return in < 50 ms). A single eval timeout → kill JVE immediately and mark the current test errored; the next test's `setUpClass`/`_ensure_runner` respawns a clean process. (Previously specified as "three consecutive timeouts"; revised 2026-05-25 because once an eval times out, the runner is in an unknown state — the pending Lua chunk may still complete and corrupt the next read's framing. One-shot kill is simpler and avoids the framing race; transient slowness is rare enough in practice that the lost retries cost nothing.)
 
 ---
 

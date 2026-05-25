@@ -48,6 +48,11 @@ _singleton_fixtures: Optional[Fixtures] = None
 def _ensure_runner() -> tuple[JVERunner, Fixtures]:
     """Start the singleton JVE on first call; return cached refs after.
 
+    Also respawns when the previously-cached runner has died (eval
+    timeout in a prior test triggered force-shutdown). Without this,
+    a single wedged test would cascade-error every subsequent test in
+    the suite because the dead singleton stayed cached forever.
+
     Launches JVE with the Anamnesis template as the startup project so
     layout.lua takes the at-launch (open_and_init_project) path instead
     of the welcome-dialog branch. Welcome blocks the main Lua thread
@@ -59,15 +64,18 @@ def _ensure_runner() -> tuple[JVERunner, Fixtures]:
     Starting with the template skips welcome entirely.
     """
     global _singleton_runner, _singleton_fixtures
+    if _singleton_runner is not None and not _singleton_runner.is_alive():
+        # Wedged in a prior test; drop the corpse so we respawn below.
+        _singleton_runner = None
     if _singleton_runner is None:
-        _singleton_fixtures = Fixtures()
+        if _singleton_fixtures is None:
+            _singleton_fixtures = Fixtures()
+            atexit.register(_singleton_shutdown)
         _singleton_runner = JVERunner(
             startup_project=Path("/tmp/jve_smoke/template.jvp"),
             stdout_log=Path("/tmp/jve_smoke") / "suite.log")
         _singleton_runner.start()
         _singleton_runner.foreground()
-        atexit.register(_singleton_shutdown)
-    assert _singleton_fixtures is not None  # set alongside _singleton_runner
     return _singleton_runner, _singleton_fixtures
 
 
@@ -94,7 +102,11 @@ class JVESmokeCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        cls._runner, cls._fixtures = _ensure_runner()
+        # Touch the singleton early so first-class bring-up cost lands
+        # in setUpClass instead of the first setUp. The singleton itself
+        # is re-fetched per setUp — if a prior test wedged JVE, the
+        # singleton was respawned and the cls-cached pointer is stale.
+        _ensure_runner()
 
     # No tearDownClass: the suite-wide runner is owned by atexit. Per-
     # class teardown would kill JVE between TestCase classes — defeats
@@ -102,11 +114,13 @@ class JVESmokeCase(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        assert self._runner is not None, "setUpClass did not run"
-        self.runner = self._runner
+        # Always re-resolve the runner: _ensure_runner returns the
+        # current live singleton, respawning if the prior test killed
+        # it via eval-timeout force-shutdown.
+        self.runner, self._fixtures_inst = _ensure_runner()
         # Per-test fresh project copy. Foreground again in case a prior
         # test stole focus (osascript dialogs, modals, etc.).
-        jvp = self._fixtures.fresh_copy(self.id())
+        jvp = self._fixtures_inst.fresh_copy(self.id())
         self.runner.open_project(jvp)
         self.runner.foreground()
 

@@ -140,6 +140,12 @@ class JVERunner:
 
         Raises JVEEvalError if the response is ``ERROR: …``. Raises
         JVERunnerError if the socket times out or JVE has died.
+
+        On socket timeout: the runner is now in an unknown state (the
+        Lua chunk may still be executing; future reads would mis-frame
+        on its delayed reply). We tear down the process so the next
+        setUp() must rebuild — fail loud, not silently misread the
+        next test's prompts.
         """
         if self._sock is None:
             raise JVERunnerError("JVERunner.eval: not started")
@@ -152,10 +158,43 @@ class JVERunner:
         line = lua.replace("\n", " ")
         self._sock.sendall(line.encode("utf-8") + b"\n")
 
-        reply = self._read_until_prompt()
+        try:
+            reply = self._read_until_prompt()
+        except socket.timeout:
+            self._force_shutdown_after_timeout()
+            raise JVERunnerError(
+                f"JVERunner.eval: socket timed out after {EVAL_TIMEOUT_S}s "
+                f"waiting for reply to {lua!r}; JVE killed (suite log: "
+                f"{self.stdout_log}). Subsequent tests will respawn JVE.")
         if reply.startswith("ERROR: "):
             raise JVEEvalError(reply[len("ERROR: "):], lua)
         return reply
+
+    def _force_shutdown_after_timeout(self) -> None:
+        """Kill the wedged JVE and clear all state so a caller-driven
+        respawn produces a clean runner. Called only from eval()'s
+        timeout path — never on the happy path."""
+        if self._sock is not None:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
+            self._sock = None
+        if self._proc is not None:
+            self._proc.kill()
+            try:
+                self._proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                pass
+            self._proc = None
+        try:
+            os.unlink(self.socket_path)
+        except FileNotFoundError:
+            pass
+        if self._log_fh is not None:
+            self._log_fh.close()
+            self._log_fh = None
+        self._read_buf = bytearray()
 
     def eval_int(self, lua: str) -> int:
         """Convenience: eval and parse as integer."""
