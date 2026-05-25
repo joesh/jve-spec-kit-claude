@@ -87,18 +87,19 @@ Cost: one file copy (~few MB) + one project-open (~tens of ms). That replaces a 
 
 ### Real keypress delivery
 
-**Why osascript keystroke won't work.** Empirically confirmed 2026-05-24: `osascript … keystroke` routes to whatever app is *frontmost*. When the smoke runner runs from a terminal, the terminal stays frontmost — even after `set frontmost of process "JVEEditor" to true`, the macOS user-focus model keeps the terminal active for whoever's typing in it. JVE never sees the events (0 KeyPress events delivered, verified via an in-process Qt event filter). Both the generic `keystroke "x"` and the per-process `tell process "JVEEditor" to keystroke "x"` variants drop on the floor.
+**macOS Accessibility prerequisite.** Whatever process spawns the runner (Terminal, iTerm, your IDE, ssh shell) needs to be granted **Accessibility** permission in *System Settings → Privacy & Security → Accessibility*. Without it macOS refuses the keystroke event with osascript error `1002` ("not allowed to send keystrokes"). The runner detects this and raises with the fix location, so the first run on a new machine surfaces the requirement immediately.
 
-**Concrete delivery: `build/bin/jve_postkey` + CGEventPostToPid.** A tiny C helper (`tests/smoke/runner/postkey.c`, built by CMake at `build/bin/jve_postkey`) calls `CGEventPostToPid(pid, event)` — the per-process variant that posts a real CGEvent into the target process's event queue regardless of frontmost. Real CGEvents trigger Qt's QShortcut machinery exactly like physical keystrokes. The runner shells out to it:
+**Delivery via `osascript keystroke` is sufficient** once JVE is a proper macOS .app bundle (see CMakeLists.txt `MACOSX_BUNDLE TRUE` + main.cpp `setActivationPolicy:Regular` + `activateIgnoringOtherApps:YES`). Pre-bundle, JVE was a raw binary at the default Prohibited policy; macOS refused to deliver synthetic events to it and `osascript … keystroke` dropped on the floor regardless of frontmost manipulation. Post-bundle, JVE is recognised as a foreground-policy app and the same osascript path delivers real OS-level events that fire Qt's QShortcuts exactly like physical keystrokes. Empirically verified 2026-05-24 via an in-process Qt KeyStateWatcher seeing the events.
 
 ```python
 def key(self, combo):       # e.g. "Cmd+Z", "Shift+I"
-    keycode, flags = _combo_to_postkey_args(combo)
-    subprocess.run([POSTKEY_BINARY, str(self._proc.pid),
-                    str(keycode), str(flags)], check=True)
+    keystroke = _combo_to_osascript_keystroke(combo)
+    subprocess.run(["osascript", "-e",
+                    f'tell application "System Events" to {keystroke}'],
+                   check=True)
 ```
 
-**macOS Accessibility prerequisite (one-time per machine).** CGEventPostToPid requires the *poster* process to have Accessibility permission. Grant it to `build/bin/jve_postkey` once via *System Settings → Privacy & Security → Accessibility → + → build/bin/jve_postkey*. The binary lives at a stable path inside the build tree so the grant persists across rebuilds. Without the grant, CGEventPostToPid silently drops events (the API returns void — no in-process way to detect the drop); symptom is L3 tests failing with "no observable effect" assertions.
+The runner does NOT need a CGEventPostToPid helper or `cliclick`; the bundle work makes the cheaper osascript path sufficient.
 
 Menu invocation goes through `osascript` (`tell app "System Events" to click menu item ...`) when the test is asserting the menu surface itself rather than the keybinding.
 

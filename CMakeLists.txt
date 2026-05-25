@@ -4,7 +4,7 @@ cmake_minimum_required(VERSION 3.22)
 project(JVEEditor 
     VERSION 1.0.0 
     DESCRIPTION "Hackable Script-Forward Video Editor"
-    LANGUAGES CXX C
+    LANGUAGES CXX
 )
 
 # C++ standard
@@ -258,22 +258,6 @@ target_include_directories(JVEEditor PUBLIC
 target_link_directories(JVEEditor PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
-
-# jve_postkey — tiny macOS helper that posts a CGEvent keystroke to a
-# specific PID. The smoke runner uses it to drive QShortcuts, because
-# macOS routes osascript keystrokes to the frontmost app (not to JVE)
-# and the runner can't take frontmost away from the terminal. Built as
-# a stable-path binary so Accessibility permission only has to be
-# granted once per machine (System Settings → Privacy & Security →
-# Accessibility → add build/bin/jve_postkey).
-if(APPLE)
-    add_executable(jve_postkey tests/smoke/runner/postkey.c)
-    set_target_properties(jve_postkey PROPERTIES LINKER_LANGUAGE C)
-    target_link_libraries(jve_postkey
-        "-framework ApplicationServices"
-        "-framework CoreFoundation"
-    )
-endif()
 
 # Testing
 enable_testing()

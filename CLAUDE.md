@@ -70,15 +70,14 @@ make clean          # Clean build artifacts
 open build/bin/JVEEditor.app
 
 # Smoke-runner Accessibility grant (one-time, macOS)
-# The L3 keypress smokes drive keys into JVE via build/bin/jve_postkey
-# (a tiny CGEventPostToPid helper) because macOS routes osascript
-# keystrokes to whatever app is *frontmost* — which is the terminal,
-# not JVE. CGEventPostToPid requires Accessibility permission for the
-# poster process. Grant it once:
-#   System Settings → Privacy & Security → Accessibility →
-#   + → /Users/.../jve-spec-kit-claude/build/bin/jve_postkey
-# Without this, CGEventPostToPid silently drops the events and L3
-# keypress smokes fail with "no observable effect" symptoms.
+# The L3 keypress smokes deliver keys via osascript `keystroke`. The
+# .app bundle + setActivationPolicy:Regular in main.cpp makes JVE a
+# proper foreground-policy app, so real OS-level synthetic events
+# route to it and fire QShortcuts. Whatever process invokes the
+# runner (Terminal/iTerm/your IDE) needs Accessibility permission:
+#   System Settings → Privacy & Security → Accessibility → + → <terminal>
+# Without it osascript returns error 1002 ("not allowed to send
+# keystrokes") — the runner surfaces this with the fix location.
 
 ## Dev Cycle — what to run after a change
 
