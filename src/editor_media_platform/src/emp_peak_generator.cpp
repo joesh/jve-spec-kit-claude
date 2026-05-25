@@ -400,12 +400,22 @@ static bool WriteOutputFile(const PeakBuffer& buf, const MediaFileInfo& info,
     header.version = PEAK_VERSION;
 
     struct stat st;
-    if (::stat(media_path.c_str(), &st) == 0) {
-        header.source_mtime = st.st_mtime;
-    } else {
-        JVE_LOG_WARN(Media, "PeakGenerator: stat failed for %s — mtime will be 0",
-            media_path.c_str());
+    if (::stat(media_path.c_str(), &st) != 0) {
+        // No silent fallback to mtime=0. The header's source_mtime is
+        // peak_cache.try_load_existing's freshness check; mtime=0 would
+        // never match a real media mtime, so the load would reject the
+        // file as stale and re-queue generation — and the same stat
+        // failure recurs on every retry, causing an infinite regen loop.
+        // Reach here only on a race (file deleted/renamed between
+        // InitJob's decoder open and now); fail the job loudly.
+        JVE_LOG_ERROR(Media,
+            "PeakGenerator::WriteOutputFile: stat failed for %s (errno=%d) "
+            "— refusing to write peak file with mtime=0 (would cause "
+            "infinite regen loop). Failing this job.",
+            media_path.c_str(), errno);
+        return false;
     }
+    header.source_mtime = st.st_mtime;
 
     header.sample_rate = static_cast<uint32_t>(info.audio_sample_rate);
     header.channels = static_cast<uint16_t>(info.audio_channels);
