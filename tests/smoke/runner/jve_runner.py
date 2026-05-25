@@ -34,6 +34,7 @@ from typing import Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "JVEEditor.app" / "Contents" / "MacOS" / "JVEEditor"
+POSTKEY_BINARY = REPO_ROOT / "build" / "bin" / "jve_postkey"
 DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
 EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", "5"))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))
@@ -265,36 +266,44 @@ class JVERunner:
                        capture_output=True, timeout=5)
 
     def key(self, combo: str) -> None:
-        """Deliver a single key press via osascript / System Events.
+        """Deliver a single key press to JVE via CGEventPostToPid (build/bin/
+        jve_postkey). ``combo`` is the same syntax as keymaps/default.jvekeys
+        — ``"I"``, ``"Cmd+Z"``, ``"Shift+F"``, ``"Grave"``.
 
-        ``combo`` is the same syntax as keymaps/default.jvekeys —
-        ``"I"``, ``"Cmd+Z"``, ``"Shift+F"``, ``"Grave"``. Modifiers are
-        normalized; the key is delivered as a real OS event to whatever
-        widget currently holds focus.
+        Why not osascript: osascript "keystroke" routes to whatever app
+        is *frontmost* — when the runner runs from a terminal, that's
+        the terminal (the OS keeps user-typed focus there even after
+        System Events 'set frontmost' on JVE). CGEventPostToPid targets
+        a specific PID so the event lands in JVE's event queue
+        regardless of frontmost. Real CGEvents trigger Qt's QShortcut
+        machinery exactly like physical keystrokes.
 
-        Requires the parent process (Terminal/iTerm/etc.) to have
-        Accessibility permission. Without it macOS returns error 1002
-        — "not allowed to send keystrokes". Surfaced as JVERunnerError
-        with the fix location.
+        Prereqs (one-time per machine):
+          - build/bin/jve_postkey exists (built by `make jve_postkey -j4`)
+          - User has granted Accessibility permission to jve_postkey:
+            System Settings → Privacy & Security → Accessibility →
+            add /path/to/repo/build/bin/jve_postkey.
+            Without this macOS silently drops the events (CGEventPostToPid
+            returns void — no way to detect the drop in code; test
+            failures with "no observable effect" are the symptom).
         """
-        keystroke = _combo_to_osascript_keystroke(combo)
+        if self._proc is None:
+            raise JVERunnerError("key: JVE not running")
+        if not POSTKEY_BINARY.exists():
+            raise JVERunnerError(
+                f"key: postkey helper not built at {POSTKEY_BINARY}. "
+                f"Run `make jve_postkey -j4`.")
+        keycode, flags = _combo_to_postkey_args(combo)
         result = subprocess.run(
-            ["osascript", "-e",
-             f'tell application "System Events" to {keystroke}'],
+            [str(POSTKEY_BINARY), str(self._proc.pid), str(keycode), str(flags)],
             capture_output=True, timeout=5)
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()
             raise JVERunnerError(
-                f"key({combo!r}) failed (osascript exit {result.returncode}): "
-                f"{stderr}\n"
-                f"  If the message is 'not allowed to send keystrokes' (1002):\n"
-                f"  grant the parent process (Terminal / iTerm / your IDE)\n"
-                f"  permission in System Settings → Privacy & Security →\n"
-                f"  Accessibility.")
+                f"key({combo!r}) postkey failed (exit {result.returncode}): "
+                f"{stderr}")
         # Settle — let Qt's event loop pick up the key + dispatch the
-        # QShortcut + run the Lua handler before the next eval. Short by
-        # design; bump per-test if a specific binding triggers a long
-        # synchronous command (rare).
+        # QShortcut + run the Lua handler before the next eval.
         time.sleep(0.05)
 
     def click(self, x: int, y: int, double: bool = False) -> None:
@@ -372,19 +381,9 @@ class JVERunner:
 # ─── helpers ────────────────────────────────────────────────────────────────
 
 
-# osascript keystroke command requires:
-#   keystroke "x" using {command down, shift down}    — printable + mods
-#   key code 36                                       — non-printable (Return)
-# We accept the TOML keymap syntax verbatim (with "+" separators).
-_MODIFIER_NAMES = {
-    "cmd":     "command down",
-    "ctrl":    "control down",
-    "alt":     "option down",
-    "opt":     "option down",
-    "shift":   "shift down",
-}
-# Non-printable keys → AppleScript key codes (US ANSI layout).
-# https://eastmanreference.com/complete-list-of-applescript-key-codes
+# Non-printable keys → macOS virtual key codes (US ANSI layout). Shared
+# by the postkey CGEvent path and the click() helper that still uses
+# osascript. Letter + digit codes live in _LETTER_DIGIT_CODES below.
 _KEY_CODES = {
     "return":     0x24,
     "enter":      0x4C,
@@ -418,51 +417,66 @@ _KEY_CODES = {
 }
 
 
-def _combo_to_osascript_keystroke(combo: str) -> str:
-    """Translate a keymap-format combo (``"Shift+F"``) to an osascript fragment.
+# macOS virtual key codes for letter + digit keys (in addition to the
+# named-key set in _KEY_CODES). Combined into one lookup for the
+# postkey path so the translator can return a single int.
+_LETTER_DIGIT_CODES = {
+    "a": 0x00, "s": 0x01, "d": 0x02, "f": 0x03, "h": 0x04, "g": 0x05,
+    "z": 0x06, "x": 0x07, "c": 0x08, "v": 0x09, "b": 0x0B, "q": 0x0C,
+    "w": 0x0D, "e": 0x0E, "r": 0x0F, "y": 0x10, "t": 0x11, "o": 0x1F,
+    "u": 0x20, "i": 0x22, "p": 0x23, "l": 0x25, "j": 0x26, "k": 0x28,
+    "n": 0x2D, "m": 0x2E,
+    "0": 0x1D, "1": 0x12, "2": 0x13, "3": 0x14, "4": 0x15,
+    "5": 0x17, "6": 0x16, "7": 0x1A, "8": 0x1C, "9": 0x19,
+}
 
-    Returns the right-hand side of ``tell application "System Events" to ...``,
-    e.g. ``keystroke "f" using {shift down}`` or ``key code 36``.
-    """
+# CGEventFlags bit positions (matching Quartz.framework).
+_CG_FLAG_SHIFT   = 1 << 17
+_CG_FLAG_CONTROL = 1 << 18
+_CG_FLAG_OPTION  = 1 << 19
+_CG_FLAG_COMMAND = 1 << 20
+_CG_FLAGS_BY_NAME = {
+    "shift":   _CG_FLAG_SHIFT,
+    "cmd":     _CG_FLAG_COMMAND,
+    "ctrl":    _CG_FLAG_CONTROL,
+    "control": _CG_FLAG_CONTROL,
+    "alt":     _CG_FLAG_OPTION,
+    "opt":     _CG_FLAG_OPTION,
+    "option":  _CG_FLAG_OPTION,
+    "meta":    _CG_FLAG_COMMAND,
+}
+
+
+def _combo_to_postkey_args(combo: str) -> tuple[int, int]:
+    """Translate a keymap-format combo to (keycode, cg_flags) for
+    build/bin/jve_postkey. Parallels _combo_to_osascript_keystroke
+    but returns ints suitable for CGEvent rather than an osascript
+    fragment."""
     parts = [p.strip() for p in combo.split("+")]
     if not parts or not parts[-1]:
         raise ValueError(f"empty combo: {combo!r}")
     key = parts[-1]
     mods = [p.lower() for p in parts[:-1]]
 
-    using_clauses = []
+    flags = 0
     for m in mods:
-        if m not in _MODIFIER_NAMES:
+        bit = _CG_FLAGS_BY_NAME.get(m)
+        if bit is None:
             raise ValueError(f"unknown modifier {m!r} in combo {combo!r}")
-        using_clauses.append(_MODIFIER_NAMES[m])
-    using = ""
-    if using_clauses:
-        using = " using {" + ", ".join(using_clauses) + "}"
+        flags |= bit
 
     key_lower = key.lower()
-    # Letter or digit: keystroke "x" — case derives from the shift modifier.
-    if len(key) == 1 and key.isprintable():
-        ch = key.lower()
-        return f'keystroke "{ch}"{using}'
-    # Tilde is the shifted form of Grave on US keyboards. The keymap
-    # spells the binding "Tilde" (not "Shift+Grave") because Qt's
-    # QKeySequence treats them as distinct codes (Qt::Key_AsciiTilde
-    # vs Qt::Key_QuoteLeft+Shift). Auto-add the shift modifier when
-    # delivering Tilde via osascript.
     if key_lower == "tilde":
-        shift_clause = "shift down"
-        if using:
-            # Insert shift into existing using-list rather than appending
-            # another using-clause.
-            if shift_clause not in using:
-                using = using[:-1] + f", {shift_clause}" + using[-1:]
-        else:
-            using = " using {" + shift_clause + "}"
-        return f'key code {_KEY_CODES["grave"]}{using}'
-    # Named key (Grave, Comma, Return, F1, ...): use key code.
+        # Tilde = shifted Grave on US keyboard (same convention as the
+        # osascript path).
+        return _KEY_CODES["grave"], flags | _CG_FLAG_SHIFT
+    if key_lower in _LETTER_DIGIT_CODES:
+        return _LETTER_DIGIT_CODES[key_lower], flags
     if key_lower in _KEY_CODES:
-        return f'key code {_KEY_CODES[key_lower]}{using}'
+        return _KEY_CODES[key_lower], flags
     raise ValueError(f"unknown key {key!r} in combo {combo!r}")
+
+
 
 
 def _unescape_repr_string(body: str) -> str:

@@ -69,6 +69,17 @@ make clean          # Clean build artifacts
 # or, for Finder/Dock launch with no args:
 open build/bin/JVEEditor.app
 
+# Smoke-runner Accessibility grant (one-time, macOS)
+# The L3 keypress smokes drive keys into JVE via build/bin/jve_postkey
+# (a tiny CGEventPostToPid helper) because macOS routes osascript
+# keystrokes to whatever app is *frontmost* — which is the terminal,
+# not JVE. CGEventPostToPid requires Accessibility permission for the
+# poster process. Grant it once:
+#   System Settings → Privacy & Security → Accessibility →
+#   + → /Users/.../jve-spec-kit-claude/build/bin/jve_postkey
+# Without this, CGEventPostToPid silently drops the events and L3
+# keypress smokes fail with "no observable effect" symptoms.
+
 ## Dev Cycle — what to run after a change
 
 Pick the single command that matches what you touched. The "final check" rows are mutually exclusive: running both in sequence is pure redundancy because `make -j4` already runs the full Lua suite.
