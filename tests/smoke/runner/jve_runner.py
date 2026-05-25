@@ -33,7 +33,7 @@ from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "JVEEditor"
+DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "JVEEditor.app" / "Contents" / "MacOS" / "JVEEditor"
 DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
 EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", "5"))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))

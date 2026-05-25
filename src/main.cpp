@@ -156,7 +156,16 @@ int main(int argc, char *argv[])
 
     QApplication app(argc, argv);
 
-    // Force dark mode on macOS — set on NSApp so all windows (including dialogs) inherit
+    // Force dark mode on macOS — set on NSApp so all windows (including dialogs) inherit.
+    // Also promote to a Regular (foreground, activatable) app and activate.
+    // The .app bundle + Info.plist gives macOS the metadata to grant
+    // foreground privileges, but direct-binary invocation from a terminal
+    // session bypasses LaunchServices, so the process stays at the default
+    // (Prohibited/Accessory) policy. setActivationPolicy:Regular + explicit
+    // activateIgnoringOtherApps is what makes the windowserver route
+    // synthetic keystrokes (osascript, smoke runner) to JVE's windows —
+    // without it, ghostty / Terminal stays frontmost and L3 keypress
+    // smokes route their X press to the wrong app.
 #ifdef Q_OS_MAC
     {
         id nsApp = ((id (*)(Class, SEL))objc_msgSend)(objc_getClass("NSApplication"), sel_getUid("sharedApplication"));
@@ -171,6 +180,11 @@ int main(int argc, char *argv[])
                     ((void (*)(id, SEL, id))objc_msgSend)(nsApp, sel_getUid("setAppearance:"), appearance);
                 }
             }
+            // NSApplicationActivationPolicyRegular = 0
+            ((void (*)(id, SEL, long))objc_msgSend)(
+                nsApp, sel_getUid("setActivationPolicy:"), 0);
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(
+                nsApp, sel_getUid("activateIgnoringOtherApps:"), YES);
         }
     }
 #endif

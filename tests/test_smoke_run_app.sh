@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/build/bin/JVEEditor"
+APP="$ROOT/build/bin/JVEEditor.app/Contents/MacOS/JVEEditor"
 WAIT_SECONDS="${JVE_SMOKE_WAIT_SECONDS:-2}"
 
 if [[ ! -x "$APP" ]]; then

@@ -65,7 +65,9 @@ make clean          # Clean build artifacts
 **When iterating on UI changes**: use `cd build && make JVEEditor -j4` to build just the executable (skips tests). Run full `make -j4` (from repo root) only when ready to validate everything.
 
 # Run the application
-./build/bin/JVEEditor      # Launches, shows 3-panel layout, timeline panel
+./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor    # Launches, shows 3-panel layout, timeline panel
+# or, for Finder/Dock launch with no args:
+open build/bin/JVEEditor.app
 
 ## Dev Cycle — what to run after a change
 
@@ -116,13 +118,13 @@ For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio
 
 ```bash
 # Run a test script with full C++ bindings available
-./build/bin/JVEEditor --test /tmp/my_test.lua
+./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua
 
 # With logging enabled
-JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua
+JVE_LOG=media:detail ./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua
 
 # Save output for analysis (don't re-run the editor for each grep)
-JVE_LOG=media:detail ./build/bin/JVEEditor --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
+JVE_LOG=media:detail ./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
 ```
 
 This is essential for:

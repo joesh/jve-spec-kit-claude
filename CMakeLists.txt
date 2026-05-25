@@ -222,13 +222,22 @@ target_include_directories(JVECore PUBLIC
 )
 
 # Main application executable
-add_executable(JVEEditor 
+add_executable(JVEEditor
     src/main.cpp
 )
 
-# Enable MOC for main executable
+# Enable MOC for main executable. On macOS we also bundle as a proper
+# .app so the windowserver grants it frontmost-app status — raw binaries
+# can't be foregrounded via System Events (the .app + Info.plist is
+# what tells macOS "this is a real foreground app"), which blocks every
+# osascript-driven keystroke test in the smoke suite.
 set_target_properties(JVEEditor PROPERTIES
     AUTOMOC ON
+    MACOSX_BUNDLE TRUE
+    MACOSX_BUNDLE_BUNDLE_NAME "JVEEditor"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "net.shapiro.JVEEditor"
+    MACOSX_BUNDLE_BUNDLE_VERSION "0.1.0"
+    MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
 )
 
 target_link_libraries(JVEEditor

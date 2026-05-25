@@ -21,36 +21,38 @@ std::string ResourcePaths::getApplicationDirectory() {
     
     // Start with Qt's application directory path
     std::string app_dir_path = QApplication::applicationDirPath().toStdString();
-    
-    // Check if src/lua directory exists relative to the executable  
-    std::string scripts_path = app_dir_path + "/src/lua";
-    if (pathExists(scripts_path)) {
-        cached_app_directory_ = app_dir_path;
-        app_directory_cached_ = true;
-        return cached_app_directory_;
+
+    // .app-bundle awareness (macOS dev builds): when the executable
+    // lives inside `JVEEditor.app/Contents/MacOS/`, Qt reports app_dir
+    // as that nested path. Walk back up to the bundle's parent
+    // directory before doing the upward `src/lua` search — otherwise
+    // the bundle's 3 extra path components push the repo root past the
+    // existing 2-level ceiling. Detect by literal substring; the
+    // ".app/Contents/MacOS" suffix is the macOS bundle convention.
+    QString qt_dir = QString::fromStdString(app_dir_path);
+    int bundle_idx = qt_dir.indexOf(".app/Contents/MacOS");
+    QString search_dir = (bundle_idx >= 0)
+        ? QFileInfo(qt_dir.left(bundle_idx + 4)).absolutePath()  // parent of .app
+        : qt_dir;
+
+    // Check up to N levels up from search_dir. 2 was enough for the
+    // bare-binary layout (build/bin/JVEEditor → repo root); kept at 2
+    // for the bundle case too since we already jumped past .app.
+    QString cursor = search_dir;
+    for (int i = 0; i <= 2; ++i) {
+        std::string candidate_dir = cursor.toStdString();
+        if (pathExists(candidate_dir + "/src/lua")) {
+            cached_app_directory_ = candidate_dir;
+            app_directory_cached_ = true;
+            return cached_app_directory_;
+        }
+        cursor = QFileInfo(cursor).absolutePath();
     }
-    
-    // Check one level up (for executables in build directories)
-    std::string parent_dir = QDir(QString::fromStdString(app_dir_path)).absolutePath().toStdString();
-    parent_dir = QFileInfo(QString::fromStdString(parent_dir)).absolutePath().toStdString();
-    scripts_path = parent_dir + "/src/lua";
-    if (pathExists(scripts_path)) {
-        cached_app_directory_ = parent_dir;
-        app_directory_cached_ = true;
-        return cached_app_directory_;
-    }
-    
-    // Check two levels up (for deeply nested build directories)
-    std::string grandparent_dir = QFileInfo(QString::fromStdString(parent_dir)).absolutePath().toStdString();
-    scripts_path = grandparent_dir + "/src/lua";
-    if (pathExists(scripts_path)) {
-        cached_app_directory_ = grandparent_dir;
-        app_directory_cached_ = true;
-        return cached_app_directory_;
-    }
-    
     // RULE 2.13: No fallbacks - src/lua directory is required for operation
-    std::string error_msg = "CRITICAL ERROR: Cannot locate required src/lua directory relative to executable: " + app_dir_path + " - fix installation or build configuration";
+    std::string error_msg = "CRITICAL ERROR: Cannot locate required src/lua "
+        "directory near executable: " + app_dir_path
+        + " (searched up to 2 levels from " + search_dir.toStdString()
+        + ") - fix installation or build configuration";
     std::cerr << error_msg << std::endl;
     throw std::runtime_error(error_msg);
     app_directory_cached_ = true;
