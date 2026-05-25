@@ -18,7 +18,7 @@ set -euo pipefail
 #   RUN_SLOW_TESTS=1 to include slow tests (test_tmb_bwf_offset)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARY="$ROOT_DIR/build/bin/JVEEditor"
+BINARY="$ROOT_DIR/build/bin/JVEEditor.app/Contents/MacOS/JVEEditor"
 INTEG_DIR="$ROOT_DIR/tests/integration"
 
 if [[ ! -x "$BINARY" ]]; then
@@ -142,7 +142,8 @@ for t in \
   test_go_to_edit_surfaces_playhead.lua \
   test_panel_maximize.lua \
   test_focus_manager.lua \
-  test_media_status_bg_probe.lua
+  test_media_status_bg_probe.lua \
+  test_playback_engine_filter.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
