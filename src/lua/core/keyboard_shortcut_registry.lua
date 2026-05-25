@@ -865,6 +865,22 @@ M._panel_containers = nil
 -- Handler counter for unique global function names
 local handler_counter = 0
 
+-- Monotonic fire counter — bumped by every shortcut-handler invocation
+-- (the Lua closure registered as `__jve_shortcut_N`). Used by the L2
+-- dispatch-no-crash smoke gate to assert a press actually reached the
+-- handler, not just "no crash logged" (which is also true when the key
+-- never arrived because of focus/activation/accessibility issues).
+-- Read via M.get_shortcut_fire_count(); cannot be reset (monotonic by
+-- design — callers diff before/after).
+local shortcut_fire_count = 0
+
+--- Number of QShortcut-handler invocations since process start.
+--- Monotonic; pre/post-press diff is the L2 "did this key actually
+--- fire" probe. See tests/smoke/cases/test_keymap_dispatch_no_crash.py.
+function M.get_shortcut_fire_count()
+    return shortcut_fire_count
+end
+
 --- Map TOML key names to QKeySequence-compatible strings.
 -- Most key names pass through unchanged (Space, Return, Delete, F1, etc.).
 -- Symbol keys need their character form for QKeySequence.
@@ -948,6 +964,7 @@ local function create_shortcut_handler(binding)
     local name = string.format("__jve_shortcut_%d", handler_counter)
 
     _G[name] = function()
+        shortcut_fire_count = shortcut_fire_count + 1
         assert(command_manager,
             string.format("shortcut handler %s: command_manager not set", binding.command_name))
 

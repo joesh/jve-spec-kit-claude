@@ -14,9 +14,12 @@ Two independent axes per binding:
     test (``tests/smoke/cases/test_keymap_dispatch_no_crash.py``)
     skips this binding. The string value is the reason. Bindings
     without an L2 entry get fired in the batch: focus the scope,
-    press the key, scrape the editor log for a fresh
-    ``LUA CALLBACK ERROR``. This catches Blade-class dispatch crashes
-    for every binding without per-binding fixture work.
+    press the key, then verify BOTH (a) no fresh
+    ``LUA CALLBACK ERROR`` appeared in the editor log, AND (b) the
+    QShortcut handler fire counter advanced. (b) was added
+    2026-05-25 — without it L2 false-greens on bindings the key
+    never reached (wrong frontmost, accessibility lapsed, scope
+    mismatch). See memory/todo_l2_silent_pass_hole.md.
 
 Spec 020 Phase 1 / commands.md "Cmd+B keyboard adapter" is the
 worked example for what an L3 behavioral test looks like. Picking
@@ -110,6 +113,11 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     # documents what L3 should assert when written.
     ("Cmd+S", ()): {
         "l1": "SaveProject — L3 should assert .jvp mtime advanced + sqlite valid",
+        "l2": "Cat A (unimplemented): no SaveProject executor registered. "
+              "SQLite/WAL auto-commits every mutation, so there's no "
+              "discrete save op yet; the binding is aspirational. L2 "
+              "would log 'No executor registered for command type: "
+              "SaveProject' on every press.",
     },
     # Cmd+Z / Cmd+Shift+Z covered by test_keymap_undo_redo.py
     ("Cmd+X", ("timeline",)): {

@@ -4,13 +4,23 @@ L2 dispatch-doesn't-crash gate — for every keymap binding that isn't
 binding's first scope, press the key, and assert the suite log gained
 no fresh dispatch-failure markers as a result.
 
-What this catches: the exact Blade-class regression that motivated
-this layer — a binding wired in the keymap whose SPEC required-args
-contract isn't satisfied at dispatch time, throwing a Lua callback
-error and silently no-op'ing the user's keypress. Any combination of
-keymap rebind, command SPEC change, command_manager auto-inject
-policy change, or QShortcut wiring change that breaks dispatch for
-any non-exempt binding fails this test.
+What this catches: two failure classes per binding —
+
+  1. Dispatch crash: the press reached the QShortcut handler but the
+     handler threw (Blade-class SPEC required-args miss, command
+     SPEC change, command_manager auto-inject regression, etc.).
+     Caught via forbidden log markers in the fresh slice.
+
+  2. Silent never-fire: the press did NOT reach the QShortcut
+     handler at all (JVE not frontmost, accessibility permission
+     lapsed, focus widget nil, scope mismatch, combo never
+     registered). Caught via QShortcut-handler fire-counter delta
+     (keyboard_shortcut_registry.get_shortcut_fire_count()) — if the
+     counter didn't advance for the press AND no crash logged, the
+     binding is silently broken. Added 2026-05-25 after sibling
+     Claude's instrumentation found L2 false-greening every X/I/O
+     press while osascript activation was failing; see
+     memory/todo_l2_silent_pass_hole.md.
 
 What this does NOT catch: behavioral correctness of the command
 (that's the per-binding L3 smoke's job). A binding that dispatches
@@ -230,6 +240,9 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
                     f"cascading error pattern that the last-pressed binding "
                     f"set off.")
             before = self._suite_log_size()
+            fires_before = self.eval_int(
+                "return require('core.keyboard_shortcut_registry')"
+                ".get_shortcut_fire_count()")
             try:
                 self.key(b.combo)
             except Exception as e:
@@ -241,7 +254,34 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
             time.sleep(SETTLE_AFTER_PRESS_S)
             new_bytes = self._suite_log_slice(before)
             markers_hit = self._scan_for_forbidden(new_bytes)
+            fires_after = self.eval_int(
+                "return require('core.keyboard_shortcut_registry')"
+                ".get_shortcut_fire_count()")
             pressed_count += 1
+            if fires_after == fires_before and not markers_hit:
+                # Positive-fire check (silent-pass guard, see
+                # memory/todo_l2_silent_pass_hole.md). "No crash log"
+                # alone gives false-green on bindings the key never
+                # reached — wrong frontmost app, accessibility lapsed,
+                # focus widget nil, scope mismatch. Asserting the
+                # QShortcut handler's monotonic fire counter advanced
+                # is the cheap positive signal that the press actually
+                # arrived. If a binding genuinely doesn't route through
+                # a QShortcut handler (none today, but possible
+                # future), this guard becomes a tripwire and the
+                # binding needs an l2-exempt entry.
+                failures.append(
+                    f"  {b!r} (focus={focus}): silent-pass — no crash "
+                    f"marker, but QShortcut handler fire count did not "
+                    f"advance ({fires_before} → {fires_after}). The key "
+                    f"never reached the handler. Likely causes (rank "
+                    f"order): JVE not frontmost (osascript activation "
+                    f"failing — check System Settings → Privacy & "
+                    f"Security → Automation for the parent terminal); "
+                    f"focus widget nil after focus_panel; binding scope "
+                    f"mismatch with the focused panel; combo never "
+                    f"registered as a QShortcut. See "
+                    f"memory/todo_l2_silent_pass_hole.md.")
             # Roll back any undoable mutation the press just made so
             # the next iteration's seed clip and frame remain valid.
             # No-op for non-undoable commands (Cmd+A, Cmd+1, marks
