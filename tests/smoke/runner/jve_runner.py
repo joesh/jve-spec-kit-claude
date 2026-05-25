@@ -263,7 +263,15 @@ class JVERunner:
                 f"  System Settings → Privacy & Security → Accessibility.")
         # Brief settle — activation is asynchronous in System Events.
         time.sleep(0.05)
-        if not os.environ.get("JVE_SMOKE_VISIBLE"):
+        # Tuck only on the host: hiding the window in the bottom-right
+        # corner lets the user keep working in their other apps. In a
+        # UTM guest the guest desktop is fully owned by the VM, so
+        # tucking is pointless (no "rest of the screen" to keep visible)
+        # and just makes JVE harder to see while debugging. Set
+        # JVE_SMOKE_IN_VM=1 in the guest's shell config to skip.
+        # JVE_SMOKE_VISIBLE=1 also skips (pre-existing flag for full-
+        # window visibility on the host).
+        if not os.environ.get("JVE_SMOKE_VISIBLE") and not os.environ.get("JVE_SMOKE_IN_VM"):
             self._tuck_window_bottom_right()
 
     def _tuck_window_bottom_right(self) -> None:

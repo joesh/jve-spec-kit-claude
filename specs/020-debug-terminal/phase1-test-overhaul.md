@@ -134,6 +134,8 @@ Setup is one-time. Once the guest is built and configured, the per-run loop is t
    brew install --cask ghostty  # or whatever terminal you use
    ```
 5. **Inside the guest: grant Accessibility permission to the terminal.** System Settings → Privacy & Security → Accessibility → add ghostty (or Terminal.app). Same prerequisite as the host — the smoke runner shells out to `osascript`.
+
+   Also set `JVE_SMOKE_IN_VM=1` in the guest's shell config (`~/.zshrc` or equivalent). This skips the host-only window-tuck that hides JVE in the bottom-right corner; inside the guest the whole desktop is the VM, so tucking is pointless and makes JVE harder to see while debugging.
 6. **Host: enable an SMB share covering the repo.** System Settings → General → Sharing → File Sharing on → add `/Users/joe/Local/jve-spec-kit-claude` → set the SMB user/permissions. (Or share the whole `~/Local` if convenient.) Note the host's local network address (`hostname.local` or its IP).
 7. **Inside the guest: mount the share.** Finder → Go → Connect to Server → `smb://<host-name>.local/jve-spec-kit-claude` → mount under `/Volumes/jve-spec-kit-claude`. Symlink to a workable path inside the guest:
    ```bash
