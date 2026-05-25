@@ -19,26 +19,14 @@
 -- or any other one-shot wiring that isn't also performed at production app
 -- startup. If production forgets to wire FS callbacks, this test must fail.
 
-local qt_constants = require("core.qt_constants")
+local ienv = require("integration.integration_test_env")
+ienv.require_emp()
+
 local media_status = require("core.media.media_status")
 local Signals      = require("core.signals")
-
-assert(type(qt_constants) == "table" and type(qt_constants.CONTROL) == "table"
-    and type(qt_constants.CONTROL.PROCESS_EVENTS) == "function",
-    "must run via JVEEditor --test (qt_constants not available)")
+local wait_until   = ienv.wait_until
 
 print("=== integration: fs watcher → media_status ===")
-
--- Pump Qt events until a predicate succeeds or a deadline passes.
-local function wait_until(predicate, timeout_s, label)
-    local deadline = os.time() + (timeout_s or 2)
-    while os.time() <= deadline do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-        if predicate() then return true end
-        os.execute("sleep 0.05")
-    end
-    error(string.format("timed out waiting for: %s", label or "predicate"))
-end
 
 -- Signal capture. media_status_changed = status flips; media_content_changed
 -- = in-place byte rewrite of an online file (status unchanged). Keep them

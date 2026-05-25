@@ -28,6 +28,29 @@ function M.require_emp()
     return qt_constants.EMP
 end
 
+--- Pump Qt events with brief sleeps until predicate fires or deadline passes.
+-- Wall-clock-bounded because PROCESS_EVENTS drains the queue and returns
+-- immediately; bare-spin loops without sleep don't give worker threads
+-- time to actually run. Used for QueuedConnection delivery, FS watcher
+-- callbacks, single-shot timers, etc.
+-- @param predicate function: returns true when done
+-- @param timeout_s number: wall-clock seconds (defaults to 5)
+-- @param label string: included in error message if timeout fires
+function M.wait_until(predicate, timeout_s, label)
+    assert(type(predicate) == "function",
+        "wait_until: predicate must be a function")
+    assert(type(qt_constants.CONTROL.PROCESS_EVENTS) == "function",
+        "wait_until: qt_constants.CONTROL.PROCESS_EVENTS unavailable")
+    local deadline = os.time() + (timeout_s or 5)
+    while os.time() <= deadline do
+        qt_constants.CONTROL.PROCESS_EVENTS()
+        if predicate() then return end
+        os.execute("sleep 0.05")
+    end
+    error(string.format("wait_until: timed out (%ds) waiting for: %s",
+        timeout_s or 5, label or "predicate"), 2)
+end
+
 --- Resolve a path under tests/fixtures/media/, assert file exists.
 -- @param relative string: filename relative to tests/fixtures/media/
 -- @return string: absolute path to the media file

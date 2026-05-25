@@ -10,53 +10,61 @@ local paths = require("core.file_browser_paths")
 
 local M = {}
 
+local function require_name(fn_name, name)
+    assert(name and name ~= "",
+        "file_browser." .. fn_name .. ": name is required")
+end
+
+-- Persist the parent directory of `file_path` under `name`. No-op if the
+-- dialog returned nil (user cancelled) or extract_dir can't derive a dir.
+local function persist_parent_dir(name, file_path)
+    if not file_path then return end
+    local extracted = paths.extract_dir(file_path)
+    if extracted then paths.persist_dir(name, extracted) end
+end
+
 function M.open_file(name, parent, title, filter, fallback_dir)
-    assert(name and name ~= "", "file_browser.open_file: name is required")
-    local dir = paths.get_dir(name, fallback_dir)
-    local result = qt_constants.FILE_DIALOG.OPEN_FILE(parent, title, filter, dir)
-    if result then
-        local extracted = paths.extract_dir(result)
-        if extracted then paths.persist_dir(name, extracted) end
-    end
+    require_name("open_file", name)
+    local result = qt_constants.FILE_DIALOG.OPEN_FILE(
+        parent, title, filter, paths.get_dir(name, fallback_dir))
+    persist_parent_dir(name, result)
     return result
 end
 
 function M.open_files(name, parent, title, filter, fallback_dir)
-    assert(name and name ~= "", "file_browser.open_files: name is required")
-    local dir = paths.get_dir(name, fallback_dir)
-    local result = qt_constants.FILE_DIALOG.OPEN_FILES(parent, title, filter, dir)
-    if result and type(result) == "table" and #result > 0 then
-        local extracted = paths.extract_dir(result[1])
-        if extracted then paths.persist_dir(name, extracted) end
+    require_name("open_files", name)
+    local result = qt_constants.FILE_DIALOG.OPEN_FILES(
+        parent, title, filter, paths.get_dir(name, fallback_dir))
+    if type(result) == "table" and #result > 0 then
+        persist_parent_dir(name, result[1])
     end
     return result
 end
 
 function M.open_directory(name, parent, title, fallback_dir)
-    assert(name and name ~= "", "file_browser.open_directory: name is required")
-    local dir = paths.get_dir(name, fallback_dir)
-    local result = qt_constants.FILE_DIALOG.OPEN_DIRECTORY(parent, title, dir)
+    require_name("open_directory", name)
+    local result = qt_constants.FILE_DIALOG.OPEN_DIRECTORY(
+        parent, title, paths.get_dir(name, fallback_dir))
+    -- Directory dialogs return the dir itself, not a file path inside it.
     if result and result ~= "" then paths.persist_dir(name, result) end
     return result
 end
 
 function M.save_file(name, parent, title, filter, fallback_dir, default_name)
-    assert(name and name ~= "", "file_browser.save_file: name is required")
+    require_name("save_file", name)
     local dir = paths.get_dir(name, fallback_dir)
     local initial_path = dir
     if default_name and default_name ~= "" then
         initial_path = (dir ~= "") and (dir .. "/" .. default_name) or default_name
     end
-    local result = qt_constants.FILE_DIALOG.SAVE_FILE(parent, title, filter, initial_path)
-    if result then
-        local extracted = paths.extract_dir(result)
-        if extracted then paths.persist_dir(name, extracted) end
-    end
+    local result = qt_constants.FILE_DIALOG.SAVE_FILE(
+        parent, title, filter, initial_path)
+    persist_parent_dir(name, result)
     return result
 end
 
 function M.get_last_directory(name)
-    assert(name and name ~= "", "file_browser.get_last_directory: name is required")
+    require_name("get_last_directory", name)
     return paths.get_dir(name)
 end
 

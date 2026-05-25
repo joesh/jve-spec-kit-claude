@@ -25,21 +25,7 @@ local media_status = require("core.media.media_status")
 local database     = require("core.database")
 local Signals      = require("core.signals")
 
--- Pump Qt events with brief sleeps until predicate fires or the deadline
--- passes. The probe thread opens files via FFmpeg, so wall-clock time is
--- the right unit — PROCESS_EVENTS returns immediately when the queue is
--- empty, so a bare-spin loop burns CPU without giving the worker time
--- to actually probe. Pattern lifted from fs_watcher_media_status.lua.
-local function wait_until(predicate, timeout_s, label)
-    local deadline = os.time() + (timeout_s or 5)
-    while os.time() <= deadline do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-        if predicate() then return end
-        os.execute("sleep 0.05")
-    end
-    error(string.format("wait_until: timed out (%ds) waiting for: %s",
-        timeout_s or 5, label))
-end
+local wait_until = ienv.wait_until
 
 local function seed_project(test_db_path)
     os.remove(test_db_path)
@@ -124,11 +110,9 @@ do
         "moved file error_code must be FileNotFound; got %s",
         tostring(moved_status.error_code)))
 
-    -- existing_file's pre-cache state matches reality (online), so it may
-    -- or may not have emitted a "changed" signal depending on whether the
-    -- probe sees any difference — but its post-probe state must remain
-    -- online. Pump a few more events to make sure its batch landed too.
-    for _ = 1, 50 do qt_constants.CONTROL.PROCESS_EVENTS() end
+    -- existing_file's pre-cache state matches reality (online), so it
+    -- doesn't emit a media_status_changed event. Its post-probe state
+    -- must remain online — the pre-probe cache value is the same.
     assert(media_status.get(existing_file).offline == false,
         "existing file must remain online after bg probe")
 
@@ -174,15 +158,15 @@ do
         -- Don't fire — we only care that scheduling occurred.
     end
 
-    -- Track final batch via media_status_changed... but if nothing changed,
-    -- no signal fires. Detect probe completion by polling the worker's
-    -- final batch — easiest proxy is to wait a bounded number of pumps
-    -- (the probe is sync for 2 small paths once the thread runs).
+    -- media_status emits "media_probe_complete" once the final batch
+    -- lands. Subscribe before starting so we don't miss a fast probe.
+    local probe_done = false
+    local done_sub = Signals.connect("media_probe_complete",
+        function() probe_done = true end)
     media_status.start_background_probe(nil)
-    -- Pump generously to ensure the worker has run and delivered its
-    -- batches. 200 attempts is far more than needed for 2 paths.
-    for _ = 1, 200 do qt_constants.CONTROL.PROCESS_EVENTS() end
-    media_status.cancel_background_probe()  -- joins the worker thread
+    wait_until(function() return probe_done end, 5,
+        "bg probe to complete")
+    Signals.disconnect(done_sub)
 
     _G.qt_create_single_shot_timer = saved_timer
 

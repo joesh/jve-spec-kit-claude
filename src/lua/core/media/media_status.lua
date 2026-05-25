@@ -625,6 +625,7 @@ function M.start_background_probe(active_sequence_id)
         if is_final then
             log.event("media_status: bg probe complete")
             M.persist_now()
+            Signals.emit("media_probe_complete")
         end
     end)
 end
