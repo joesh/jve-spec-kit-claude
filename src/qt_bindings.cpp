@@ -343,6 +343,8 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_widget_attribute); lua_setglobal(L, "qt_set_widget_attribute");
     lua_pushcfunction(L, lua_set_object_name); lua_setglobal(L, "qt_set_object_name");
     lua_pushcfunction(L, lua_set_widget_property); lua_setglobal(L, "qt_set_widget_property");
+    lua_pushcfunction(L, lua_get_widget_property); lua_setglobal(L, "qt_get_widget_property");
+    lua_pushcfunction(L, lua_widget_child_widget_count); lua_setglobal(L, "qt_widget_child_widget_count");
     lua_pushcfunction(L, lua_set_widget_contents_margins); lua_setglobal(L, "qt_set_widget_contents_margins");
     lua_pushcfunction(L, lua_set_widget_stylesheet); lua_setglobal(L, "qt_set_widget_stylesheet");
     lua_pushcfunction(L, lua_set_widget_cursor); lua_setglobal(L, "qt_set_widget_cursor");

@@ -515,6 +515,30 @@ int lua_set_widget_property(lua_State* L) {
     return 0;
 }
 
+int lua_get_widget_property(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!widget) return luaL_error(L, "qt_get_widget_property: widget required");
+    const char* name = luaL_checkstring(L, 2);
+    QVariant v = widget->property(name);
+    if (!v.isValid()) { lua_pushnil(L); return 1; }
+    lua_pushstring(L, v.toString().toUtf8().constData());
+    return 1;
+}
+
+// Count direct child QWidgets. Used by focus_manager regression tests to
+// prove no overlay widgets are added on focus change (overlays caused
+// macOS Metal occlusion before the focusBorderColor refactor).
+int lua_widget_child_widget_count(lua_State* L) {
+    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!widget) return luaL_error(L, "qt_widget_child_widget_count: widget required");
+    int n = 0;
+    for (QObject* child : widget->children()) {
+        if (qobject_cast<QWidget*>(child)) ++n;
+    }
+    lua_pushinteger(L, n);
+    return 1;
+}
+
 int lua_set_widget_contents_margins(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
     if (!widget) return luaL_error(L, "qt_set_widget_contents_margins: widget required");
