@@ -36,8 +36,13 @@ local TRAILING_ALIGNMENT_PX = metrics.TRAILING_ALIGNMENT_PX
 local content_to_header     = metrics.content_to_header
 M.metrics = metrics
 
--- Store references
-local state = nil
+-- Alias for timeline_state. Bound at module scope so file-scope signal
+-- listeners (and the panel-resolving commands that route through them)
+-- don't have to wait for M.create to run before `state.X` is callable.
+-- M.create previously rebound this; that rebinding is redundant (it's
+-- always the same module) and used to mask a load-order bug where
+-- `state` was nil if any code touched it before layout.lua wired panels.
+local state = timeline_state
 local video_view_ref = nil
 local audio_view_ref = nil
 local tab_order = {}
@@ -2271,8 +2276,6 @@ end
 function M.create(opts)
     log.event("Creating multi-view timeline panel...")
 
-    -- Initialize state
-    state = timeline_state
     local sequence_id = nil
     local project_id = nil
     if type(opts) == "table" then
