@@ -93,13 +93,35 @@ Cost: one file copy (~few MB) + one project-open (~tens of ms). That replaces a 
 
 ```python
 def key(self, combo):       # e.g. "Cmd+Z", "Shift+I"
+    # Atomic grab → press → (optionally) restore prior frontmost.
+    # Sandwiched in one osascript so the foreground swap and key
+    # delivery are as close to atomic as macOS allows. Without this,
+    # the user's concurrent keyboard input collides with smoke when
+    # they click back to their IDE between setUp's foreground() and
+    # the press — keys land in their app, not JVE.
     keystroke = _combo_to_osascript_keystroke(combo)
-    subprocess.run(["osascript", "-e",
-                    f'tell application "System Events" to {keystroke}'],
-                   check=True)
+    mode = os.environ.get("JVE_SMOKE_GRAB_KEYS", "restore")  # or "hold"
+    restore = (
+        'if priorName is not "JVEEditor" then '
+        '  set frontmost of (first process whose name is priorName) to true\n'
+        'end if'
+        if mode == "restore" else ""
+    )
+    subprocess.run(["osascript", "-e", f'''
+        tell application "System Events"
+            set priorName to name of first process whose frontmost is true
+            set frontmost of (first process whose unix id is {pid}) to true
+            delay 0.05
+            {keystroke}
+            delay 0.05
+            {restore}
+        end tell
+    '''], check=True)
 ```
 
 The runner does NOT need a CGEventPostToPid helper or `cliclick`; the bundle work makes the cheaper osascript path sufficient.
+
+**Coexistence with concurrent user input.** The per-press grab-press-restore (added 2026-05-25) lets the user keep working while smoke runs: each press blinks JVE frontmost for ~100 ms and restores the user's prior app. Set `JVE_SMOKE_GRAB_KEYS=hold` to skip the restore when running a long suite unattended (saves ~10 ms/press, user has to manually click back). True parallel-use without focus blink requires a VM (UTM); see [memory/feedback_smoke_tests_real_keypress_only.md] and [todo_l2_silent_pass_hole.md] for related architecture notes.
 
 Menu invocation goes through `osascript` (`tell app "System Events" to click menu item ...`) when the test is asserting the menu surface itself rather than the keybinding.
 

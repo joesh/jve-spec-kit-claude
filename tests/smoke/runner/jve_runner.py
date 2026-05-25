@@ -75,6 +75,13 @@ class JVERunner:
         self._sock: Optional[socket.socket] = None
         self._read_buf = bytearray()
         self._log_fh = None  # opened by start(), closed by shutdown()
+        # Captured once at start() — the user's foreground app at the
+        # moment we launch JVE. Every per-press restore returns to THIS
+        # name, not "whatever is frontmost right now" (the per-press
+        # capture races with the prior restore in tight L2 loops and
+        # accumulates JVE as the captured priorName, defeating the
+        # restore).
+        self._user_app_name: Optional[str] = None
 
     # ─── start / shutdown ──────────────────────────────────────────────
 
@@ -86,6 +93,29 @@ class JVERunner:
             raise JVERunnerError(
                 f"JVERunner.start: binary not found at {self.binary} — "
                 f"build with `cd build && make JVEEditor -j4`")
+
+        # Capture the user's foreground app BEFORE we launch JVE — this
+        # is the app key() restores to after every press. Doing it here
+        # (not per-press) avoids the race where a fast L2 loop's per-
+        # press capture sees JVEEditor still frontmost from the prior
+        # grab and accumulates JVE instead of returning to the user.
+        # Asserts on capture failure (NSF: don't silently degrade to
+        # hold-mode if the user expects restore-mode).
+        result = subprocess.run(
+            ["osascript", "-e",
+             'tell application "System Events" to get name of '
+             'first process whose frontmost is true'],
+            capture_output=True, timeout=5)
+        if result.returncode != 0:
+            raise JVERunnerError(
+                f"JVERunner.start: could not capture user's frontmost app "
+                f"(osascript exit {result.returncode}): "
+                f"{result.stderr.decode('utf-8', errors='replace').strip()}")
+        self._user_app_name = result.stdout.decode("utf-8").strip()
+        assert self._user_app_name and self._user_app_name != "JVEEditor", (
+            f"JVERunner.start: captured user app = {self._user_app_name!r}; "
+            f"expected a non-JVE app name. Did a prior runner leave JVE "
+            f"frontmost without restoring? Click somewhere else and retry.")
 
         # Stale socket from a prior crashed run — JVE itself unlinks before
         # bind, but cleaning here too is cheap insurance.
@@ -306,6 +336,14 @@ class JVERunner:
     def key(self, combo: str) -> None:
         """Deliver a single key press via osascript / System Events.
 
+        Sandwiches the press between a JVE-grab and (optionally) a
+        restore of the prior frontmost app, all in ONE osascript
+        invocation so the foreground swap → keystroke → restore is
+        as close to atomic as macOS lets us get. Without this, Joe's
+        keyboard input collides with smoke during parallel work — a
+        Cmd+F press lands in his Find dialog if he clicked back to
+        his IDE between this test's foreground() call and the press.
+
         ``combo`` is the same syntax as keymaps/default.jvekeys —
         ``"I"``, ``"Cmd+Z"``, ``"Shift+F"``, ``"Grave"``. osascript's
         ``keystroke`` posts a real OS-level key event into whichever
@@ -314,6 +352,15 @@ class JVERunner:
         IgnoringOtherApps in main.cpp register it as a proper
         foreground-policy macOS app. Real OS events trigger Qt's
         QShortcut machinery exactly like physical keystrokes.
+
+        Modes (env ``JVE_SMOKE_GRAB_KEYS``):
+          • ``restore`` (default) — record prior frontmost, grab JVE,
+            press, restore prior. Joe's foreground app blinks JVE for
+            ~100 ms per press but ends up back where it was.
+          • ``hold`` — grab JVE, press, leave JVE frontmost. Saves a
+            few ms per press; Joe has to manually click back. Use
+            when running long suites where you weren't going to touch
+            the computer anyway.
 
         Empirically verified 2026-05-24 (in-process Qt KeyStateWatcher
         sees the events). Pre-bundle, JVE was a raw binary at the
@@ -324,10 +371,47 @@ class JVERunner:
         Accessibility permission. Without it macOS returns error
         ``1002``; surfaced as ``JVERunnerError`` with the fix location.
         """
+        if self._proc is None:
+            raise JVERunnerError("JVERunner.key: process not started")
+        pid = self._proc.pid
         keystroke = _combo_to_osascript_keystroke(combo)
+        mode = os.environ.get("JVE_SMOKE_GRAB_KEYS", "restore").lower()
+        if mode not in ("restore", "hold"):
+            raise JVERunnerError(
+                f"JVE_SMOKE_GRAB_KEYS={mode!r}: must be 'restore' or 'hold'")
+
+        # Single osascript: one AppleScript interpreter sequences
+        # capture → grab → keystroke → (restore). subprocess overhead
+        # paid once, not three times; AppleScript-internal delays are
+        # shorter than Python-side sleeps between subprocess calls.
+        # "JVEEditor" guard avoids re-activating ourselves on restore
+        # if Joe was already in JVE.
+        # Cached user app from start() — never per-press. See start()
+        # for why per-press capture races and accumulates JVE.
+        assert self._user_app_name, "JVERunner.key: _user_app_name unset (start() didn't run?)"
+        if mode == "restore":
+            user_app = self._user_app_name.replace('"', '\\"')
+            restore_block = (
+                f'set frontmost of (first process whose name is "{user_app}") to true'
+            )
+        else:
+            restore_block = "-- mode=hold: leave JVE frontmost"
+        # 0.15s post-keystroke delay (was 0.05) gives the OS event
+        # queue time to deliver the key to JVE BEFORE we yank focus
+        # away in the restore step. macOS keystroke posting is sync
+        # at System Events but delivery to the target app's run loop
+        # is async — too short a delay races the restore.
+        script = (
+            'tell application "System Events"\n'
+            f'  set frontmost of (first process whose unix id is {pid}) to true\n'
+            '  delay 0.05\n'
+            f'  {keystroke}\n'
+            '  delay 0.15\n'
+            f'  {restore_block}\n'
+            'end tell\n'
+        )
         result = subprocess.run(
-            ["osascript", "-e",
-             f'tell application "System Events" to {keystroke}'],
+            ["osascript", "-e", script],
             capture_output=True, timeout=5)
         if result.returncode != 0:
             stderr = result.stderr.decode("utf-8", errors="replace").strip()

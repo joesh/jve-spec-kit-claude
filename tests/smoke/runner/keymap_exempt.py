@@ -298,8 +298,66 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
 }
 
 
+# ── Command-class L2 exemption ─────────────────────────────────────────
+# Some commands open a dialog / picker / external app NO MATTER WHICH
+# KEY invokes them. Listing every keybinding that maps to such a command
+# in EXEMPT above is fragile (one-key-equals-one-entry) and incomplete
+# (e.g., Cmd+G/Cmd+Shift+G → FindNext/FindPrevious behave like Cmd+F
+# when no prior search exists — they also open the Find dialog). The
+# right unit of exemption is the COMMAND, not the keystroke.
+#
+# Any binding whose ``command_name`` is in L2_EXEMPT_COMMANDS is skipped
+# by L2 (in addition to the per-(combo, scope) EXEMPT entries above).
+# Keep this list small and class-justified — every entry costs L2
+# coverage. Reason strings are surfaced in the L2 skip log.
+L2_EXEMPT_COMMANDS: dict[str, str] = {
+    # Opens a Qt dialog or native picker — modal, L2 batch can't recover
+    # if the dialog steals focus mid-loop.
+    "Find":                     "Opens modal Qt Find dialog",
+    "FindNext":                 "Opens Find dialog when no prior search",
+    "FindPrevious":             "Opens Find dialog when no prior search",
+    "NewProject":               "Opens new-project dialog",
+    "OpenProject":              "Opens native file picker",
+    "SaveProjectAs":            "Opens native file picker",
+    "ImportMedia":              "Opens native file picker",
+    "ShowRelinkDialog":         "Opens modal Qt relink dialog",
+    "ShowKeyboardCustomization": "Opens modal Qt keyboard-customization dialog",
+    # Launches external app — escapes JVE entirely.
+    "OpenUserManual":           "Launches system browser",
+    "ReportBug":                "Launches external email/issue tracker",
+    "RevealInFilesystem":       "Opens Finder window",
+    # OS-level transition — JVE blocks the L2 loop while macOS animates.
+    "ToggleFullscreenView":     "OS-level full-screen transition",
+    # Modal inline / TC-entry modes — subsequent keys land in a text widget,
+    # not in JVE's QShortcut layer.
+    "StartRename":              "Enters modal inline rename",
+    "GoToTimecode":             "Enters modal TC-entry",
+    "ToggleTimecodeFocus":      "Shifts focus into TC widget",
+    # Quits the app — L2 batch can't recover.
+    "Quit":                     "Quits JVE",
+    # Starts playback at non-zero rate — leaves engine playing across iterations.
+    "ShuttleReverse":           "Starts playback at -1×",
+    "ShuttleForward":           "Starts playback at +1×",
+    "TogglePlay":               "Monopolises the Lua thread; "
+                                "per-press Undo can't get a slot",
+}
+
+
 def _key(binding) -> tuple[str, tuple[str, ...]]:
     return (binding.combo, tuple(binding.scopes))
+
+
+def _command_name(binding) -> str:
+    """Pull the command name off a KeymapBinding. Asserts the attribute
+    is present — silently missing would mean class exemption skipped
+    for that binding without any signal (NSF violation)."""
+    # The attribute is `.command` (per coverage.KeymapBinding); the
+    # command string in default.jvekeys may carry args / scope tokens
+    # already stripped by the parser, but the command name is the first
+    # whitespace-separated token. Bare access — let AttributeError fire
+    # if the contract drifts so we notice immediately.
+    raw = binding.command
+    return raw.split()[0] if raw else raw
 
 
 def l1_exempt_reason(binding) -> Optional[str]:
@@ -312,9 +370,18 @@ def l1_exempt_reason(binding) -> Optional[str]:
 
 
 def l2_skip_reason(binding) -> Optional[str]:
-    """L2 press-all skip reason, or None if the binding is L2-safe
-    (i.e., the batch press-all test will fire this key)."""
+    """L2 press-all skip reason, or None if the binding is L2-safe.
+
+    Two-tier lookup: per-(combo, scope) entry in EXEMPT wins; falls
+    through to per-command-class entry in L2_EXEMPT_COMMANDS. The
+    class layer was added 2026-05-25 because Cmd+F-style entries
+    silently leaked their commands' behavior through alternate keys
+    (Cmd+G/Cmd+Shift+G opening the same Find dialog), polluting Joe's
+    foreground app during smoke runs."""
     e = EXEMPT.get(_key(binding))
-    if e is None:
-        return None
-    return e.get("l2")
+    if e is not None and "l2" in e:
+        return e["l2"]
+    class_reason = L2_EXEMPT_COMMANDS.get(_command_name(binding))
+    if class_reason is not None:
+        return f"command-class L2 exempt — {class_reason}"
+    return None
