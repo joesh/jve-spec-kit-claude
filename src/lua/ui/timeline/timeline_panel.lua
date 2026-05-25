@@ -3355,6 +3355,19 @@ function M.load_sequence(sequence_id)
     -- that's reserved for source/record tab swaps via activate_displayed.
     -- The timeline-view rebuild on the record-tab path is therefore explicit.
     state.init(sequence_id, project_id)
+
+    -- Make load_sequence's postcondition explicit: after this returns,
+    -- the record-role transport engine is bound to sequence_id. state.init
+    -- emits active_sequence_changed only on actual transitions (its
+    -- listener chain wants transition semantics), but bind_role_to_sequence
+    -- is engine-state plumbing — it needs to be consistent regardless of
+    -- whether the active id transitioned. Relying on the signal misbinds
+    -- on the OpenProject-swaps-to-same-sequence-id path (per-test jvp is
+    -- a copy of template; both share sequence_id; signal skips; engine
+    -- left torn down from project_changed's transport.shutdown). The call
+    -- is idempotent in transport.bind_role_to_sequence.
+    require("core.playback.transport").bind_role_to_sequence("record", sequence_id)
+
     zoom_to_fit_if_first_open(sequence)
     rebuild_for_displayed_tab()
 end
