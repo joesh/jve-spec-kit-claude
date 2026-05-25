@@ -141,7 +141,8 @@ for t in \
   test_timeline_edit_navigation.lua \
   test_go_to_edit_surfaces_playhead.lua \
   test_panel_maximize.lua \
-  test_focus_manager.lua
+  test_focus_manager.lua \
+  test_media_status_bg_probe.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
