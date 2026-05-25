@@ -143,7 +143,9 @@ for t in \
   test_panel_maximize.lua \
   test_focus_manager.lua \
   test_media_status_bg_probe.lua \
-  test_playback_engine_filter.lua
+  test_playback_engine_filter.lua \
+  test_playback_routes_to_displayed_tab.lua \
+  test_mark_routing.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
