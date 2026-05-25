@@ -57,31 +57,24 @@ function M.setup_monitor_panels(opts)
     local panel_manager   = require("ui.panel_manager")
     local SequenceMonitor = require("ui.sequence_monitor")
 
-    local want_source   = (kinds == "source")   or (kinds == "both")
-    local want_timeline = (kinds == "timeline") or (kinds == "both")
-
+    local function create(view_id)
+        local mon = SequenceMonitor.new({ view_id = view_id })
+        panel_manager.register_sequence_monitor(view_id, mon)
+        return mon
+    end
     local monitors = {}
-    if want_source then
-        monitors.source = SequenceMonitor.new({ view_id = "source_monitor" })
-        panel_manager.register_sequence_monitor("source_monitor", monitors.source)
-    end
-    if want_timeline then
-        monitors.timeline = SequenceMonitor.new({ view_id = "timeline_monitor" })
-        panel_manager.register_sequence_monitor("timeline_monitor", monitors.timeline)
-    end
+    if kinds == "source"   or kinds == "both" then monitors.source   = create("source_monitor")   end
+    if kinds == "timeline" or kinds == "both" then monitors.timeline = create("timeline_monitor") end
 
     if opts.focus then
         local focus_manager = require("ui.focus_manager")
-        if monitors.source then
-            focus_manager.register_panel("source_monitor",
-                monitors.source:get_widget(),
-                monitors.source:get_title_widget(), "Source")
+        local function register(view_id, monitor, label)
+            if not monitor then return end
+            focus_manager.register_panel(view_id,
+                monitor:get_widget(), monitor:get_title_widget(), label)
         end
-        if monitors.timeline then
-            focus_manager.register_panel("timeline_monitor",
-                monitors.timeline:get_widget(),
-                monitors.timeline:get_title_widget(), "Timeline")
-        end
+        register("source_monitor",   monitors.source,   "Source")
+        register("timeline_monitor", monitors.timeline, "Timeline")
         focus_manager.set_focused_panel(opts.focus)
     end
 
