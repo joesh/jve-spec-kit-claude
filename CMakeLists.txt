@@ -222,7 +222,7 @@ target_include_directories(JVECore PUBLIC
 )
 
 # Main application executable
-add_executable(JVEEditor
+add_executable(jve
     src/main.cpp
 )
 
@@ -231,16 +231,16 @@ add_executable(JVEEditor
 # can't be foregrounded via System Events (the .app + Info.plist is
 # what tells macOS "this is a real foreground app"), which blocks every
 # osascript-driven keystroke test in the smoke suite.
-set_target_properties(JVEEditor PROPERTIES
+set_target_properties(jve PROPERTIES
     AUTOMOC ON
     MACOSX_BUNDLE TRUE
-    MACOSX_BUNDLE_BUNDLE_NAME "JVEEditor"
-    MACOSX_BUNDLE_GUI_IDENTIFIER "net.shapiro.JVEEditor"
+    MACOSX_BUNDLE_BUNDLE_NAME "jve"
+    MACOSX_BUNDLE_GUI_IDENTIFIER "net.shapiro.jve"
     MACOSX_BUNDLE_BUNDLE_VERSION "0.1.0"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "0.1.0"
 )
 
-target_link_libraries(JVEEditor
+target_link_libraries(jve
     JVECore
     Qt6::Core
     Qt6::Widgets
@@ -250,12 +250,12 @@ target_link_libraries(JVEEditor
     ${LUAJIT_LIBRARIES}
 )
 
-target_include_directories(JVEEditor PUBLIC
+target_include_directories(jve PUBLIC
     ${CMAKE_SOURCE_DIR}/src
     ${LUAJIT_INCLUDE_DIRS}
 )
 
-target_link_directories(JVEEditor PRIVATE
+target_link_directories(jve PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
 
@@ -488,10 +488,10 @@ set_target_properties(test_tmb PROPERTIES
 add_test(NAME test_tmb COMMAND test_tmb)
 
 # Test targets:
-#   - Depend on JVEEditor (executable rebuilt if C++ changed — correctness).
+#   - Depend on jve (executable rebuilt if C++ changed — correctness).
 #   - Do NOT depend on each other via add_dependencies: custom targets have
 #     no stamp and re-run unconditionally, so chaining (binding_tests →
-#     lua_tests → JVEEditor) caused Lua tests to run 3× per `make` (~60s
+#     lua_tests → jve) caused Lua tests to run 3× per `make` (~60s
 #     wasted). Each layer now runs exactly once.
 #   - Fail-fast ordering across layers is NOT guaranteed by make -j — if
 #     that matters for a workflow, invoke targets sequentially or use ctest.
@@ -501,7 +501,7 @@ add_custom_target(lua_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running Lua test suite"
 )
-add_dependencies(lua_tests JVEEditor)
+add_dependencies(lua_tests jve)
 add_test(NAME lua_suite
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_lua_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -512,7 +512,7 @@ add_custom_target(binding_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running binding tests (Lua tests requiring C++ bindings)"
 )
-add_dependencies(binding_tests JVEEditor)
+add_dependencies(binding_tests jve)
 add_test(NAME binding_suite
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -523,7 +523,7 @@ add_custom_target(integration_tests
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running integration tests (real C++ EMP bindings)"
 )
-add_dependencies(integration_tests JVEEditor)
+add_dependencies(integration_tests jve)
 add_test(NAME integration_suite
     COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
