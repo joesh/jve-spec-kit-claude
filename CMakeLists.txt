@@ -259,6 +259,112 @@ target_link_directories(jve PRIVATE
     ${LUAJIT_LIBRARY_DIRS}
 )
 
+# Bundle runtime trees into jve.app/Contents/Resources so the .app is
+# self-contained for deployment (e.g. VM smoke runs). Layout in the
+# bundle mirrors the repo (src/lua, keymaps, resources) so existing
+# Lua resolvers (path_utils.resolve_repo_root, ResourcePaths) keep
+# working unchanged — they just see the bundle as the "repo root."
+# rsync (not cp) so incremental rebuilds only ship what changed.
+# Locate lxp.so (LuaExpat C module) at configure time so the bundle
+# rsync below can include it. lxp is required by core/menu_system.lua;
+# all other Lua module deps are vendored as pure Lua in src/lua/.
+# Search luarocks-local + homebrew + /usr/local locations; fail-fast
+# if missing rather than producing a broken bundle.
+find_file(LXP_SO lxp.so
+    PATHS
+        $ENV{HOME}/.luarocks/lib/lua/5.1
+        /opt/homebrew/lib/lua/5.1
+        /usr/local/lib/lua/5.1
+    NO_DEFAULT_PATH
+)
+if(NOT LXP_SO)
+    message(FATAL_ERROR
+        "lxp.so (LuaExpat C module) not found. Install with:\n"
+        "  luarocks --local install luaexpat")
+endif()
+message(STATUS "LuaExpat C module: ${LXP_SO}")
+
+# lxp.so links against libexpat.1.dylib at a hardcoded brew path
+# (/opt/homebrew/opt/expat/lib/...); bundle the dylib too and rewrite
+# the link so the .app runs on hosts without brew (e.g. VM guests).
+find_file(LIBEXPAT_DYLIB libexpat.1.dylib
+    PATHS
+        /opt/homebrew/opt/expat/lib
+        /usr/local/opt/expat/lib
+    NO_DEFAULT_PATH
+)
+if(NOT LIBEXPAT_DYLIB)
+    message(FATAL_ERROR
+        "libexpat.1.dylib not found. Install with:\n"
+        "  brew install expat")
+endif()
+message(STATUS "libexpat: ${LIBEXPAT_DYLIB}")
+
+# POST_BUILD bundling — runs only when jve is freshly linked. This is
+# the right phase for the lxp / libexpat dylib work: install_name_tool
+# rewrites + ad-hoc codesign only matter when the .app binary itself
+# is fresh (the dylibs become stable artifacts of the bundle). For
+# Lua-only edits the linker doesn't run, so we ALSO need an always-
+# fires rsync target below — see bundle_runtime_tree.
+add_custom_command(TARGET jve POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:jve>/../Frameworks"
+    # Lua C modules + Frameworks/libexpat. Always-copy (not
+    # copy_if_different) so each build starts with a virgin file —
+    # this makes the install_name_tool sequence deterministic and
+    # avoids the "rpath already exists" error that would otherwise
+    # force a silent `|| true` (an NSF-violating fallback).
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${LXP_SO}"
+        "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules/lxp.so"
+    COMMAND ${CMAKE_COMMAND} -E copy
+        "${LIBEXPAT_DYLIB}"
+        "$<TARGET_FILE_DIR:jve>/../Frameworks/libexpat.1.dylib"
+    COMMAND chmod u+w
+        "$<TARGET_FILE_DIR:jve>/../Frameworks/libexpat.1.dylib"
+        "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules/lxp.so"
+    COMMAND install_name_tool -id "@rpath/libexpat.1.dylib"
+        "$<TARGET_FILE_DIR:jve>/../Frameworks/libexpat.1.dylib"
+    COMMAND install_name_tool -change
+        "/opt/homebrew/opt/expat/lib/libexpat.1.dylib"
+        "@rpath/libexpat.1.dylib"
+        "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules/lxp.so"
+    COMMAND install_name_tool -add_rpath "@loader_path/../../Frameworks"
+        "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules/lxp.so"
+    # Re-sign ad-hoc — install_name_tool invalidates the original
+    # brew signatures, and macOS 15+ SIGKILLs the process on first
+    # dyld load when ANY page in the process is unsigned. Without
+    # this, jve crashes with CODESIGNING/Invalid Page (typically
+    # taking down a sibling Qt plugin like libqsvgicon).
+    COMMAND codesign --force --sign - --timestamp=none
+        "$<TARGET_FILE_DIR:jve>/../Frameworks/libexpat.1.dylib"
+    COMMAND codesign --force --sign - --timestamp=none
+        "$<TARGET_FILE_DIR:jve>/../Resources/lua_modules/lxp.so"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Bundling lua_modules + Frameworks/libexpat into jve.app"
+    VERBATIM
+)
+
+# Always-fires runtime-tree bundling: rsync src/lua + keymaps + resources
+# + menus.xml into Contents/Resources on every `make jve`. Without this,
+# Lua-only edits (no C++ recompile → no link → no POST_BUILD) would not
+# reach the bundled .app, and a developer iterating on Lua against the
+# bundled app would silently run stale code. rsync is incremental so
+# the wall cost on a no-change run is ~50 ms — acceptable for the
+# correctness guarantee. -R preserves the leading path component
+# (src/lua, not just lua) so path_utils.resolve_repo_root keeps working.
+add_custom_target(bundle_runtime_tree ALL
+    COMMAND rsync -aR --delete
+        src/lua keymaps resources menus.xml
+        "$<TARGET_FILE_DIR:jve>/../Resources/"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app"
+    VERBATIM
+)
+# Order: jve must be linked first (so Contents/MacOS exists for
+# $<TARGET_FILE_DIR:jve> to resolve), then rsync into Resources.
+add_dependencies(bundle_runtime_tree jve)
+
 # Testing
 enable_testing()
 

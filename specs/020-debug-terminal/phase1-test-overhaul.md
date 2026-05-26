@@ -119,7 +119,7 @@ Menu invocation goes through `osascript` (`tell app "System Events" to click men
 
 ### UTM macOS guest runbook (isolated execution path)
 
-Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The host builds (faster CPU, deps already present, no virtio/rsync cache hazards on the cmake tree); the host-built `.app` and runtime tree (Lua, keymaps, smoke runner) are pushed to the guest, and the guest just executes the smokes. This avoids duplicating the C++/Qt toolchain inside the guest and sidesteps an earlier path (2026-05-25) where guest-side cmake state got corrupted by stale shared-FS state.
+Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The host builds (faster CPU, deps already present, no virtio/rsync cache hazards on the cmake tree); the host-built **self-contained** `jve.app` is pushed to the guest, and the guest just executes the smokes. The `.app` carries everything JVE needs at runtime: Qt frameworks (via macdeployqt), `src/lua` + `keymaps` + `resources` bundled into `Contents/Resources/` by a CMake `POST_BUILD` rsync step, and the one required Lua C module (`lxp.so` / LuaExpat) copied into `Contents/Resources/lua_modules/` and added to `package.cpath` by `ResourcePaths::setupLuaPackagePaths`. Only the Python smoke runner and DRP fixtures are pushed alongside — they live outside the .app because they drive it, not because the app needs them. This avoids duplicating the C++/Qt toolchain inside the guest and sidesteps an earlier path (2026-05-25) where guest-side cmake state got corrupted by stale shared-FS state.
 
 **One-time guest setup.**
 
@@ -135,9 +135,9 @@ Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The 
    (`luajit` only if a smoke shells out to standalone Lua; in-process the bundled LuaJIT is fine. `python@3` is the smoke runner.)
 
    **Blackmagic RAW SDK** — required separately. `src/editor_media_platform/src/impl/braw_decode.cpp` hardcodes the dispatch path `/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries`, so the guest needs the same package installed in the same place. Download the Blackmagic RAW installer from blackmagicdesign.com (free; registration may be required) and run it inside the guest. Verify with `ls "/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries/BlackmagicRawAPI.framework"`. Without this, any smoke that touches a BRAW media file fails with a dispatch-load error.
-5. **Inside the guest: grant Accessibility permission to the terminal.** System Settings → Privacy & Security → Accessibility → add ghostty (or Terminal.app). Same prerequisite as the host — the smoke runner shells out to `osascript`.
+5. **Set `JVE_SMOKE_IN_VM=1` in the guest's shell config** (`~/.zshrc` or equivalent). This flag does two things in the guest, both of which depend on the "no competing apps on the guest desktop" invariant: (a) skips the host-only window-tuck that hides JVE in the bottom-right corner — tucking is pointless in the VM and just makes JVE harder to see; (b) skips the runner's `osascript "tell System Events to set frontmost"` foregrounding call, because `main.cpp`'s `activateIgnoringOtherApps:YES` already makes JVE frontmost at launch and nothing in the VM can steal focus from it.
 
-   Also set `JVE_SMOKE_IN_VM=1` in the guest's shell config (`~/.zshrc` or equivalent). This skips the host-only window-tuck that hides JVE in the bottom-right corner; inside the guest the whole desktop is the VM, so tucking is pointless and makes JVE harder to see while debugging.
+   The second point matters operationally: it means **no Accessibility permission is needed** in the guest. The host setup requires Accessibility for the terminal because the host has competing apps and the runner needs `System Events` to re-foreground; the guest does not. As a bonus, this lets the entire smoke suite run over `ssh` (sshd has no Accessibility and should never have it).
 6. **Host: enable Remote Login on the guest.** System Settings → General → Sharing → Remote Login ON. Note the guest's hostname (default `joes-virtual-machine.local`) and the bridge IP (`192.168.64.x`).
 7. **Host: generate an SSH key + push it to the guest.** One-time:
    ```bash
@@ -145,15 +145,15 @@ Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The 
    ssh-copy-id -i ~/.ssh/jve_vm.pub joe@joes-virtual-machine.local
    ```
    (Or paste the pubkey from `cat ~/.ssh/jve_vm.pub` into the guest's `~/.ssh/authorized_keys` — clipboard sharing makes this easy once you've installed UTM guest tools.)
-8. **First push from host.** Build on the host as usual, then push the bundle + runtime tree to the guest:
+8. **First push from host.** Build on the host as usual, then push the bundle + smoke runner to the guest:
    ```bash
    # On host:
-   make -j4                  # produces build/bin/jve.app (macdeployqt'd)
-   scripts/sync-to-vm.sh     # pushes .app + src/lua + keymaps + tests/smoke + DRP fixtures
+   make -j4                  # produces self-contained build/bin/jve.app
+   scripts/sync-to-vm.sh     # pushes .app + tests/smoke + DRP fixtures
    # In guest:
    cd ~/jve && python3 -m pytest tests/smoke/cases/
    ```
-   Per-edit loop is host-edit → host-build → `sync-to-vm.sh` → guest pytest. For Lua-only edits, `make jve -j4` is unnecessary — the `.app` doesn't need re-bundling because Lua is loaded from `src/lua/` at runtime, and `sync-to-vm.sh` ships the updated Lua directly.
+   Per-edit loop is host-edit → `make jve -j4` → `sync-to-vm.sh` → guest pytest. Lua-only edits still require `make jve -j4` because the CMake post-build rsync re-bundles `src/lua` into `jve.app/Contents/Resources/` — the .app being self-contained is the whole point, so there is no shortcut path that ships loose Lua to the guest.
 
    **Why rsync the artifact, not virtiofs/SMB the source?** UTM directory-share (virtiofs) and SMB both serve stale host-modified files to the guest in practice — virtiofs's cache=auto mode doesn't reliably invalidate on host writes (no cache=none knob exposed by Apple's `mount_virtiofs` or by UTM), and macOS's SMB client caches aggressively. Two iterations (2026-05-25) hit "host edit not visible in guest" stalls on both. rsync eliminates the shared-filesystem layer entirely. See `scripts/sync-to-vm.sh` for the exact includes/excludes.
 

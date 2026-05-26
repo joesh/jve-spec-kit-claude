@@ -33,9 +33,14 @@ all: configure
 build: configure
 	@$(MAKE) -C $(BUILD_DIR) --no-print-directory
 
-# Build just the jve executable (skips tests + lint). UI-iteration target.
+# Build just the jve executable + re-bundle its Resources (skips tests
+# + lint). UI-iteration target. Forwards to bundle_runtime_tree, which
+# transitively builds jve and then rsyncs src/lua + keymaps + resources
+# + menus.xml into the .app — so Lua-only edits actually reach the
+# bundled app on this fast path (POST_BUILD alone wouldn't fire when
+# nothing links).
 jve: configure
-	@$(MAKE) -C $(BUILD_DIR) jve --no-print-directory
+	@$(MAKE) -C $(BUILD_DIR) bundle_runtime_tree --no-print-directory
 
 # Clean build artifacts
 clean:

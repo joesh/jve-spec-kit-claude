@@ -7,12 +7,13 @@
 # self-contained .app + the runtime tree the runner needs.
 #
 # What gets pushed:
-#   - build/bin/jve.app     (host-built bundle; macdeployqt makes it
-#                                  self-contained, so Qt frameworks ride along)
-#   - src/lua/                    (loaded from disk at runtime)
-#   - keymaps/                    (TOML keybindings, loaded at runtime)
-#   - tests/smoke/                (runner + cases, executed on guest)
-#   - tests/fixtures/resolve/     (small DRP fixtures referenced by smokes)
+#   - build/bin/jve.app           (host-built, self-contained: Qt frameworks
+#                                  via macdeployqt, src/lua + keymaps +
+#                                  resources via CMake post-build bundling)
+#   - tests/smoke/                (Python runner + cases — lives outside
+#                                  the .app by design, drives it)
+#   - tests/fixtures/resolve/     (small DRP fixtures consumed by the
+#                                  template builder before smokes run)
 #
 # What's excluded:
 #   - .git/                       (guest doesn't need git)
@@ -30,6 +31,9 @@
 #   - Guest tree at ~/jve
 
 set -e
+set -o pipefail  # propagate failures from non-last pipeline commands (e.g. the
+                 # local tar in the tar | ssh tar push below). Without this a
+                 # silent local-tar failure would let the script claim success.
 
 HOST="${JVE_VM_HOST:-joes-virtual-machine.local}"
 USER="${JVE_VM_USER:-joe}"
@@ -54,6 +58,10 @@ fi
 SSH_OPTS="ssh -i $KEY -o StrictHostKeyChecking=accept-new"
 
 echo "→ runtime tree → $USER@$HOST:$GUEST_PATH"
+# cd into repo so --relative roots paths at repo-relative names.
+# (The `/./` marker trick is unreliable with -a; cd + relative paths
+# gives the same effect deterministically.)
+cd "$REPO_ROOT"
 rsync -az --delete \
     -e "$SSH_OPTS" \
     --relative \
@@ -61,18 +69,19 @@ rsync -az --delete \
     --exclude='*.pyc' \
     --exclude='.DS_Store' \
     -- \
-    "$REPO_ROOT/./src/lua" \
-    "$REPO_ROOT/./keymaps" \
-    "$REPO_ROOT/./tests/smoke" \
-    "$REPO_ROOT/./tests/fixtures/resolve" \
+    tests/smoke \
+    tests/fixtures/resolve \
     "$USER@$HOST:$GUEST_PATH/"
 
 echo "→ jve.app → $USER@$HOST:$GUEST_PATH/build/bin/"
-$SSH_OPTS "$USER@$HOST" "mkdir -p $GUEST_PATH/build/bin"
-rsync -az --delete \
-    -e "$SSH_OPTS" \
-    "$APP/" \
-    "$USER@$HOST:$GUEST_PATH/build/bin/jve.app/"
+# Use tar-over-ssh, not rsync, for the .app: macOS ships openrsync
+# (not GNU rsync), which dies mid-stream on codesign'd dylibs
+# inside a bundle (xattr handling). tar is simple, full-transfer
+# (not incremental — but the .app is small enough that doesn't matter),
+# and round-trips Apple xattrs correctly.
+$SSH_OPTS "$USER@$HOST" "mkdir -p $GUEST_PATH/build/bin && rm -rf $GUEST_PATH/build/bin/jve.app"
+tar -c -C "$(dirname "$APP")" "$(basename "$APP")" \
+    | $SSH_OPTS "$USER@$HOST" "tar -x -C $GUEST_PATH/build/bin"
 
 echo "✓ synced. Run smokes in guest with:"
 echo "    cd ~/jve && python3 -m pytest tests/smoke/cases/"

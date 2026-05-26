@@ -22,22 +22,30 @@ std::string ResourcePaths::getApplicationDirectory() {
     // Start with Qt's application directory path
     std::string app_dir_path = QApplication::applicationDirPath().toStdString();
 
-    // .app-bundle awareness (macOS dev builds): when the executable
-    // lives inside `jve.app/Contents/MacOS/`, Qt reports app_dir
-    // as that nested path. Walk back up to the bundle's parent
-    // directory before doing the upward `src/lua` search — otherwise
-    // the bundle's 3 extra path components push the repo root past the
-    // existing 2-level ceiling. Detect by literal substring; the
-    // ".app/Contents/MacOS" suffix is the macOS bundle convention.
     QString qt_dir = QString::fromStdString(app_dir_path);
     int bundle_idx = qt_dir.indexOf(".app/Contents/MacOS");
-    QString search_dir = (bundle_idx >= 0)
-        ? QFileInfo(qt_dir.left(bundle_idx + 4)).absolutePath()  // parent of .app
-        : qt_dir;
 
-    // Check up to N levels up from search_dir. 2 was enough for the
-    // bare-binary layout (build/bin/jve → repo root); kept at 2
-    // for the bundle case too since we already jumped past .app.
+    // Deployed-bundle layout: src/lua + keymaps + resources are bundled
+    // into jve.app/Contents/Resources/ at build time (see CMakeLists.txt
+    // post-build rsync). When that bundle layout is present, the
+    // .app is self-contained — no upward search required, no
+    // dependency on the repo tree. This is the production path.
+    if (bundle_idx >= 0) {
+        std::string resources_dir =
+            qt_dir.left(bundle_idx + 4).toStdString() + "/Contents/Resources";
+        if (pathExists(resources_dir + "/src/lua")) {
+            cached_app_directory_ = resources_dir;
+            app_directory_cached_ = true;
+            return cached_app_directory_;
+        }
+    }
+
+    // Dev-build fallback: bare-binary layout (build/bin/jve → repo root)
+    // or a not-yet-bundled .app sitting in the source tree. Walk up
+    // looking for src/lua. Bundle-case starts from the .app's parent.
+    QString search_dir = (bundle_idx >= 0)
+        ? QFileInfo(qt_dir.left(bundle_idx + 4)).absolutePath()
+        : qt_dir;
     QString cursor = search_dir;
     for (int i = 0; i <= 2; ++i) {
         std::string candidate_dir = cursor.toStdString();
@@ -69,31 +77,39 @@ std::string ResourcePaths::getScriptPath(const std::string& relative_path) {
 
 void ResourcePaths::setupLuaPackagePaths(lua_State* lua_state) {
     std::string scripts_dir = getScriptsDirectory();
-    
-    // Get current package.path
+    std::string app_dir = getApplicationDirectory();
+
     lua_getglobal(lua_state, "package");
+
+    // package.path — Lua sources. Prepend src/lua so vendored modules
+    // (dkjson, tinytoml, uuid, etc.) and project modules resolve.
     lua_getfield(lua_state, -1, "path");
-    std::string current_path;
-    if (lua_isstring(lua_state, -1)) {
-        current_path = lua_tostring(lua_state, -1);
-    }
-    lua_pop(lua_state, 1); // Remove path value
-    
-    // Add src/lua directory to package.path 
-    // The Lua modules use dotted notation like 'ui.inspector.view'
-    // So we need to add the src/lua directory to the path
-    std::string new_path = scripts_dir + "/?.lua;" + 
-                          scripts_dir + "/?/init.lua;";
-    if (!current_path.empty()) {
-        new_path += current_path;
-    }
-    
-    // Set the new package.path
+    std::string current_path = lua_isstring(lua_state, -1) ? lua_tostring(lua_state, -1) : "";
+    lua_pop(lua_state, 1);
+    std::string new_path = scripts_dir + "/?.lua;" + scripts_dir + "/?/init.lua;";
+    if (!current_path.empty()) new_path += current_path;
     lua_pushstring(lua_state, new_path.c_str());
     lua_setfield(lua_state, -2, "path");
-    lua_pop(lua_state, 1); // Remove package table
-    
-    qCDebug(jveResources, "Lua package path configured: %s", scripts_dir.c_str());
+
+    // package.cpath — Lua C modules. Prepend lua_modules/ (bundled by
+    // CMake POST_BUILD next to src/lua) so lxp.so and any future C
+    // modules load without a host-side luarocks install. Only present
+    // in bundled .app deployments; in dev raw-binary runs the dir
+    // may not exist and require('lxp') falls through to the system
+    // luarocks path (which dev machines have).
+    std::string modules_dir = app_dir + "/lua_modules";
+    lua_getfield(lua_state, -1, "cpath");
+    std::string current_cpath = lua_isstring(lua_state, -1) ? lua_tostring(lua_state, -1) : "";
+    lua_pop(lua_state, 1);
+    std::string new_cpath = modules_dir + "/?.so;";
+    if (!current_cpath.empty()) new_cpath += current_cpath;
+    lua_pushstring(lua_state, new_cpath.c_str());
+    lua_setfield(lua_state, -2, "cpath");
+
+    lua_pop(lua_state, 1); // package table
+
+    qCDebug(jveResources, "Lua package.path: %s", scripts_dir.c_str());
+    qCDebug(jveResources, "Lua package.cpath: %s", modules_dir.c_str());
 }
 
 bool ResourcePaths::pathExists(const std::string& path) {
