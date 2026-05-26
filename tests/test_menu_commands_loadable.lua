@@ -4,7 +4,7 @@
 -- Regression: OpenProject was unexecutable because it requires no_project_context
 -- but command_manager required active_project_id for all commands.
 
-require("test_env")
+local test_env = require("test_env")
 
 local pass_count = 0
 local fail_count = 0
@@ -25,8 +25,14 @@ print("\n=== Menu Commands Loadable Test ===")
 -- ---------------------------------------------------------------------------
 
 local function parse_menus_xml()
-    local repo_root = os.getenv("PWD"):match("(.*/jve%-spec%-kit%-claude)") or "/Users/joe/Local/jve-spec-kit-claude"
-    local xml_path = repo_root .. "/menus.xml"
+    -- Derive repo root from test_env (which uses debug.getinfo on its own
+    -- source path) — survives symlinks, alternate working dirs, and
+    -- running from a VM-guest mount where the host's absolute path is
+    -- not present. The pre-2026-05-25 PWD-match-with-host-path-fallback
+    -- broke in the UTM guest because PWD via ~/jve was /Users/joe/jve,
+    -- which doesn't contain "jve-spec-kit-claude" and fell through to
+    -- the hardcoded host path that doesn't exist in the guest.
+    local xml_path = test_env.resolve_repo_path("menus.xml")
 
     local f = io.open(xml_path, "r")
     if not f then

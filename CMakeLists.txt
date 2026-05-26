@@ -508,24 +508,28 @@ add_test(NAME lua_suite
 )
 
 add_custom_target(binding_tests
-    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
+    COMMAND ${CMAKE_COMMAND} -E env "JVE_BINARY=$<TARGET_FILE:jve>"
+            ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running binding tests (Lua tests requiring C++ bindings)"
 )
 add_dependencies(binding_tests jve)
 add_test(NAME binding_suite
-    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
+    COMMAND ${CMAKE_COMMAND} -E env "JVE_BINARY=$<TARGET_FILE:jve>"
+            ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
 add_custom_target(integration_tests
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
+    COMMAND ${CMAKE_COMMAND} -E env "JVE_BINARY=$<TARGET_FILE:jve>"
+            ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running integration tests (real C++ EMP bindings)"
 )
 add_dependencies(integration_tests jve)
 add_test(NAME integration_suite
-    COMMAND ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
+    COMMAND ${CMAKE_COMMAND} -E env "JVE_BINARY=$<TARGET_FILE:jve>"
+            ${CMAKE_SOURCE_DIR}/tests/run_integration_tests.sh
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 

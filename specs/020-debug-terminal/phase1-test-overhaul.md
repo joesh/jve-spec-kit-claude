@@ -43,7 +43,7 @@ The two practical tier boundaries:
 │  tests/smoke/runner/runner.py                                   │
 │  ────────────────────────────────                               │
 │  • Launches JVEEditor --control-socket /tmp/jve_test.sock once. │
-│  • Foregrounds via `osascript -e 'tell app "JVEEditor" to       │
+│  • Foregrounds via `osascript -e 'tell app "jve" to       │
 │    activate'` before any keypress test.                         │
 │  • For each test:                                               │
 │      1. socket.eval("OpenProject(<fresh Anamnesis copy>)")      │
@@ -119,41 +119,51 @@ Menu invocation goes through `osascript` (`tell app "System Events" to click men
 
 ### UTM macOS guest runbook (isolated execution path)
 
-Setup is one-time. Once the guest is built and configured, the per-run loop is the same `make smoke` you'd run on the host — the guest just happens to be where it actually executes.
+Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The host builds (faster CPU, deps already present, no virtio/rsync cache hazards on the cmake tree); the host-built `.app` and runtime tree (Lua, keymaps, smoke runner) are pushed to the guest, and the guest just executes the smokes. This avoids duplicating the C++/Qt toolchain inside the guest and sidesteps an earlier path (2026-05-25) where guest-side cmake state got corrupted by stale shared-FS state.
 
 **One-time guest setup.**
 
 1. **Install UTM on the host.** `brew install --cask utm` (or download from getutm.app).
-2. **Create the guest VM.** UTM → Create New → Virtualize → macOS → "Download a preinstalled image" picks the latest Apple-supplied IPSW from the gallery (no Apple-ID required). Allocate ≥6 GB RAM, ≥80 GB disk, ≥4 CPU cores; the JVE build is C++/Qt-heavy and constrained allocations make the inner build painful.
+2. **Create the guest VM.** UTM → Create New → Virtualize → macOS → "Download a preinstalled image" picks the latest Apple-supplied IPSW from the gallery (no Apple-ID required). Allocate ≥4 GB RAM, ≥40 GB disk, ≥2 CPU cores — runtime-only is far less demanding than the original build-in-guest plan.
 3. **Boot, install macOS, create a user account.** Standard installer flow. Skip iCloud sign-in (not needed; reduces guest noise). Disable screen sleep so the guest doesn't lock mid-suite.
-4. **Inside the guest: install dev deps.**
+4. **Inside the guest: install runtime deps only.** Self-contained `.app` (macdeployqt-bundled Qt frameworks) means no Qt/cmake/compiler in the guest:
    ```bash
-   xcode-select --install       # CLI tools
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   brew install cmake qt6 ffmpeg luajit lua@5.1 python@3 ripgrep
+   brew install python@3 luajit
    brew install --cask ghostty  # or whatever terminal you use
    ```
+   (`luajit` only if a smoke shells out to standalone Lua; in-process the bundled LuaJIT is fine. `python@3` is the smoke runner.)
+
+   **Blackmagic RAW SDK** — required separately. `src/editor_media_platform/src/impl/braw_decode.cpp` hardcodes the dispatch path `/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries`, so the guest needs the same package installed in the same place. Download the Blackmagic RAW installer from blackmagicdesign.com (free; registration may be required) and run it inside the guest. Verify with `ls "/Applications/Blackmagic RAW/Blackmagic RAW SDK/Mac/Libraries/BlackmagicRawAPI.framework"`. Without this, any smoke that touches a BRAW media file fails with a dispatch-load error.
 5. **Inside the guest: grant Accessibility permission to the terminal.** System Settings → Privacy & Security → Accessibility → add ghostty (or Terminal.app). Same prerequisite as the host — the smoke runner shells out to `osascript`.
 
    Also set `JVE_SMOKE_IN_VM=1` in the guest's shell config (`~/.zshrc` or equivalent). This skips the host-only window-tuck that hides JVE in the bottom-right corner; inside the guest the whole desktop is the VM, so tucking is pointless and makes JVE harder to see while debugging.
-6. **Host: enable an SMB share covering the repo.** System Settings → General → Sharing → File Sharing on → add `/Users/joe/Local/jve-spec-kit-claude` → set the SMB user/permissions. (Or share the whole `~/Local` if convenient.) Note the host's local network address (`hostname.local` or its IP).
-7. **Inside the guest: mount the share.** Finder → Go → Connect to Server → `smb://<host-name>.local/jve-spec-kit-claude` → mount under `/Volumes/jve-spec-kit-claude`. Symlink to a workable path inside the guest:
+6. **Host: enable Remote Login on the guest.** System Settings → General → Sharing → Remote Login ON. Note the guest's hostname (default `joes-virtual-machine.local`) and the bridge IP (`192.168.64.x`).
+7. **Host: generate an SSH key + push it to the guest.** One-time:
    ```bash
-   ln -s /Volumes/jve-spec-kit-claude ~/jve
+   ssh-keygen -t ed25519 -N '' -f ~/.ssh/jve_vm -C jve-vm-sync
+   ssh-copy-id -i ~/.ssh/jve_vm.pub joe@joes-virtual-machine.local
    ```
-8. **Inside the guest: first build.**
+   (Or paste the pubkey from `cat ~/.ssh/jve_vm.pub` into the guest's `~/.ssh/authorized_keys` — clipboard sharing makes this easy once you've installed UTM guest tools.)
+8. **First push from host.** Build on the host as usual, then push the bundle + runtime tree to the guest:
    ```bash
-   cd ~/jve
-   cmake -S . -B build && make -C build JVEEditor -j4
+   # On host:
+   make -j4                  # produces build/bin/jve.app (macdeployqt'd)
+   scripts/sync-to-vm.sh     # pushes .app + src/lua + keymaps + tests/smoke + DRP fixtures
+   # In guest:
+   cd ~/jve && python3 -m pytest tests/smoke/cases/
    ```
-   The first build is the long part (~minutes); subsequent rebuilds touch only changed files. Expect to debug SMB-side filesystem quirks here (case sensitivity, lock files, etc.) — if they bite, switch to `rsync host → guest local clone` as the sync strategy.
+   Per-edit loop is host-edit → host-build → `sync-to-vm.sh` → guest pytest. For Lua-only edits, `make jve -j4` is unnecessary — the `.app` doesn't need re-bundling because Lua is loaded from `src/lua/` at runtime, and `sync-to-vm.sh` ships the updated Lua directly.
+
+   **Why rsync the artifact, not virtiofs/SMB the source?** UTM directory-share (virtiofs) and SMB both serve stale host-modified files to the guest in practice — virtiofs's cache=auto mode doesn't reliably invalidate on host writes (no cache=none knob exposed by Apple's `mount_virtiofs` or by UTM), and macOS's SMB client caches aggressively. Two iterations (2026-05-25) hit "host edit not visible in guest" stalls on both. rsync eliminates the shared-filesystem layer entirely. See `scripts/sync-to-vm.sh` for the exact includes/excludes.
 
 **Per-run loop (post-setup).**
 
-* Edit code on the host as usual; SMB makes the edits immediately visible to the guest.
+* Edit code on the host as usual. Rebuild if C++ changed (`make jve -j4`); skip if Lua-only.
+* Push: `scripts/sync-to-vm.sh` from the host.
 * Inside the guest terminal:
   ```bash
-  cd ~/jve && make smoke
+  cd ~/jve && python3 -m pytest tests/smoke/cases/
   ```
 * Use the UTM guest window for runs you want to watch; capture-keyboard mode (Ctrl+Option to release) lets the guest fully own input without any chance of leakage to the host. Click anywhere outside the guest window OR hit Ctrl+Option to release the keyboard back to the host.
 

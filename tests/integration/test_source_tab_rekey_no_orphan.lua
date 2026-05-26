@@ -28,7 +28,6 @@ print("=== test_source_tab_rekey_no_orphan.lua ===")
 require("test_env")
 local database         = require("core.database")
 local Signals          = require("core.signals")
-local timeline_state   = require("ui.timeline.timeline_state")
 
 -- ----------------------------------------------------------------------
 -- Project DB: record sequence R + two masters M_A, M_B.
@@ -64,7 +63,7 @@ assert(db:exec(string.format([[
 -- ensure_tab_for_sequence to classify source vs record requests).
 -- ----------------------------------------------------------------------
 local mons = ienv.setup_monitor_panels({ kinds = "both" })
-local source_monitor, timeline_monitor = mons.source, mons.timeline
+local source_monitor = mons.source
 
 -- ----------------------------------------------------------------------
 -- Bring up the panel. project_id required; sequence_id seeds the active

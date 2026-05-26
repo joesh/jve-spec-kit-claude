@@ -2,7 +2,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP="$ROOT/build/bin/JVEEditor.app/Contents/MacOS/JVEEditor"
+# Honor BUILD_DIR override (matches the Makefile contract) so VM-guest
+# runs using `make BUILD_DIR=build-vm` find their build artifacts.
+BUILD_DIR="${BUILD_DIR:-build}"
+APP="$ROOT/$BUILD_DIR/bin/jve.app/Contents/MacOS/jve"
 WAIT_SECONDS="${JVE_SMOKE_WAIT_SECONDS:-2}"
 
 if [[ ! -x "$APP" ]]; then

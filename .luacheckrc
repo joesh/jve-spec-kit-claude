@@ -16,6 +16,8 @@ globals = {
     "qt_constants",
     "qt_set_focus",
     "qt_get_focus_widget",
+    "qt_get_widget_property",
+    "qt_widget_child_widget_count",
     "qt_set_widget_click_handler",
     "qt_set_button_click_handler",
     "qt_set_context_menu_handler",

@@ -68,8 +68,7 @@ command_manager.init("rec", "proj")
 -- Real SequenceMonitors for source + timeline slots. Under --test we
 -- have full C++ bindings; no widget mocks. focus_manager is loaded;
 -- transport is bootstrapped by command_manager.init's pcall.
-local mons = ienv.setup_monitor_panels({ kinds = "both" })
-local source_mon, timeline_mon = mons.source, mons.timeline
+ienv.setup_monitor_panels({ kinds = "both" })
 
 local source_viewer = require("ui.source_viewer")
 local edit_mode     = require("core.edit_mode")

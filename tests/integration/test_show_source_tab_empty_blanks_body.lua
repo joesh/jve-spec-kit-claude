@@ -83,7 +83,7 @@ assert(db:exec(string.format([[
 -- Real monitors. source_mon.sequence_id stays nil throughout (the
 -- "empty source viewer" precondition).
 local mons = ienv.setup_monitor_panels({ kinds = "both" })
-local source_mon, timeline_mon = mons.source, mons.timeline
+local source_mon = mons.source
 assert(source_mon.sequence_id == nil,
     "fixture: source monitor starts empty (no master loaded)")
 

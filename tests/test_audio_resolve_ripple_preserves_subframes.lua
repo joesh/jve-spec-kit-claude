@@ -8,7 +8,6 @@
 require("test_env")
 
 local database = require("core.database")
-local command_manager = require("core.command_manager")
 local clip_mutator = require("core.clip_mutator")
 local command_helper = require("core.command_helper")
 

@@ -18,7 +18,12 @@ set -euo pipefail
 #   RUN_SLOW_TESTS=1 to include slow tests (test_tmb_bwf_offset)
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BINARY="$ROOT_DIR/build/bin/JVEEditor.app/Contents/MacOS/JVEEditor"
+# Binary location: prefer JVE_BINARY (set by cmake via $<TARGET_FILE:JVEEditor>
+# in CMakeLists.txt's add_test invocation — always correct regardless of
+# build dir or bundle vs raw layout). Fall back to BUILD_DIR-derived path
+# for standalone script invocations.
+BUILD_DIR="${BUILD_DIR:-build}"
+BINARY="${JVE_BINARY:-$ROOT_DIR/$BUILD_DIR/bin/jve.app/Contents/MacOS/jve}"
 INTEG_DIR="$ROOT_DIR/tests/integration"
 
 if [[ ! -x "$BINARY" ]]; then

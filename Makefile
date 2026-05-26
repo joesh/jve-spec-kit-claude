@@ -4,7 +4,7 @@
 BUILD_DIR = build
 
 .PHONY: all build clean install help configure reconfigure luacheck nav-index test \
-        smoke smoke-coverage smoke-template
+        smoke smoke-coverage smoke-template jve
 
 # Default target: lint, build, and run all tests.
 #
@@ -27,10 +27,15 @@ all: configure
 	 rm -f .luacheck.log
 	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests --no-print-directory -j2
 	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
+	@python3 tests/smoke/runner/coverage.py --axis keymap
 
 # Build only (C++ compile + link, no tests, no lint)
 build: configure
 	@$(MAKE) -C $(BUILD_DIR) --no-print-directory
+
+# Build just the jve executable (skips tests + lint). UI-iteration target.
+jve: configure
+	@$(MAKE) -C $(BUILD_DIR) jve --no-print-directory
 
 # Clean build artifacts
 clean:

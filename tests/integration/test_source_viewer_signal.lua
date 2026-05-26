@@ -59,9 +59,9 @@ assert(db:exec([[
 -- needed by this test; source_viewer.load_master_clip only reaches for
 -- source_monitor. transport.init binds the source-role engine via the
 -- transport_ready listener at sequence_monitor.lua:247.)
-local source_mon = ienv.setup_monitor_panels({
+ienv.setup_monitor_panels({
     kinds = "source", transport_project_id = "test_project",
-}).source
+})
 
 -- Force fresh load of source_viewer with our registered monitor.
 package.loaded["ui.source_viewer"] = nil

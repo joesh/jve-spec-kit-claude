@@ -50,7 +50,7 @@ The debug terminal opens a Lua REPL over a Unix socket. An external test runner 
 
 ### Phase 1 — out of this spec; lifted to follow-up scope
 
-- **FR-101 (separate effort)** External test runner that foregrounds JVE via `osascript -e 'tell app "JVEEditor" to activate'`, delivers real OS-level key events (CGEventPost / cliclick / AppleScript / UI-TARS-style tool), then queries JVE state via the debug-terminal socket. Solves the QShortcut activation gap that drove this spec.
+- **FR-101 (separate effort)** External test runner that foregrounds JVE via `osascript -e 'tell app "jve" to activate'`, delivers real OS-level key events (CGEventPost / cliclick / AppleScript / UI-TARS-style tool), then queries JVE state via the debug-terminal socket. Solves the QShortcut activation gap that drove this spec.
 - **FR-102 (separate effort)** Test harness library (Python or shell) wrapping `socket → newline-framed → repr-parse` so binding tests look like ordinary scripts.
 - **FR-103 (separate effort)** A bundled `tools/jve-repl` interactive client (initial impl: `nc -U /path`; later: a real readline-enabled REPL with history).
 

@@ -103,7 +103,7 @@ assert(db:exec([[
 local mons = ienv.setup_monitor_panels({
     kinds = "both", focus = "timeline_monitor", transport_project_id = "p",
 })
-local source_mon, timeline_mon = mons.source, mons.timeline
+local timeline_mon = mons.timeline
 
 command_manager.init("seq", "p")
 

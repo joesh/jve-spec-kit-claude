@@ -33,7 +33,7 @@ from typing import Optional
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "JVEEditor.app" / "Contents" / "MacOS" / "JVEEditor"
+DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "jve.app" / "Contents" / "MacOS" / "jve"
 DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
 EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", "5"))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))
@@ -85,7 +85,7 @@ class JVERunner:
         if not self.binary.exists():
             raise JVERunnerError(
                 f"JVERunner.start: binary not found at {self.binary} — "
-                f"build with `cd build && make JVEEditor -j4`")
+                f"build with `cd build && make jve -j4`")
 
         # Stale socket from a prior crashed run — JVE itself unlinks before
         # bind, but cleaning here too is cheap insurance.
@@ -234,7 +234,7 @@ class JVERunner:
 
         We address the process via System Events + ``unix id``: the
         JVEEditor binary is not a ``.app`` bundle, so
-        ``tell application "JVEEditor" to activate`` fails to resolve.
+        ``tell application "jve" to activate`` fails to resolve.
         ``set frontmost of process whose unix id is <pid>`` is the
         ``.app``-less equivalent.
 

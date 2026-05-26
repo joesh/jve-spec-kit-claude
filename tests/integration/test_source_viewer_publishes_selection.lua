@@ -71,9 +71,9 @@ assert(db:exec([[
 ]]))
 
 -- Real source monitor + transport bootstrap.
-local source_mon = ienv.setup_monitor_panels({
+ienv.setup_monitor_panels({
     kinds = "source", transport_project_id = "proj_under_test",
-}).source
+})
 
 selection_hub._reset_for_tests()
 -- Inspector subscribes to the active panel; mirror that here so the
