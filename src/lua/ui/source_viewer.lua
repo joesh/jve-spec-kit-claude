@@ -390,10 +390,18 @@ end
 
 Signals.connect("sequence_content_changed", on_sequence_content_changed)
 
--- ─── Test helpers ──────────────────────────────────────────────────────────
-
-function M._reset_for_tests()
-    transition_to_neutral()
-end
+-- ─── project_changed: reset to neutral ─────────────────────────────────────
+-- Every other view (timeline_state, project_browser, sequence_monitor,
+-- inspector, fullscreen_viewer, edit_history_window) connects this signal
+-- and resets. Without it, source_viewer's _state survives across project
+-- swaps and keeps a stale live_clip_id pointing into the prior project —
+-- the next ClearMark*/SetMark* command checks should_skip_for_live_bound
+-- and silently no-ops on the new project because the stale mode is still
+-- "live_bound_clip". Caught by smoke-suite isolation: tests that don't
+-- touch source_viewer were failing after any test that entered live_bound
+-- mode because the per-test open_project never cleared sv state.
+Signals.connect("project_changed", function(_new_project_id)
+    M.unload()
+end, 50)
 
 return M
