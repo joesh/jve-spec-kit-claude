@@ -345,24 +345,57 @@ add_custom_command(TARGET jve POST_BUILD
     VERBATIM
 )
 
-# Always-fires runtime-tree bundling: rsync src/lua + keymaps + resources
+# Always-fires runtime-tree bundling: ship src/lua + keymaps + resources
 # + menus.xml into Contents/Resources on every `make jve`. Without this,
 # Lua-only edits (no C++ recompile → no link → no POST_BUILD) would not
 # reach the bundled .app, and a developer iterating on Lua against the
-# bundled app would silently run stale code. rsync is incremental so
-# the wall cost on a no-change run is ~50 ms — acceptable for the
-# correctness guarantee. -R preserves the leading path component
-# (src/lua, not just lua) so path_utils.resolve_repo_root keeps working.
-add_custom_target(bundle_runtime_tree ALL
-    COMMAND rsync -aR --delete
-        src/lua keymaps resources menus.xml
-        "$<TARGET_FILE_DIR:jve>/../Resources/"
-    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-    COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app"
-    VERBATIM
-)
+# bundled app would silently run stale code.
+#
+# JVE_BUNDLE_LUA selects how the runtime trees reach Contents/Resources:
+#   copy     (default) — rsync. Bundle is self-contained, portable to
+#              a VM / another machine without the repo. ~50ms incremental.
+#   symlink            — symlink each runtime tree into the bundle.
+#              Live Lua edits visible to the running .app immediately
+#              (after Lua module reload / app restart) with no build
+#              step. Bundle is NOT portable: copying it elsewhere yields
+#              dangling symlinks. Use for local dev only.
+set(JVE_BUNDLE_LUA "copy" CACHE STRING
+    "How to bundle src/lua + keymaps + resources into jve.app: 'copy' (portable) or 'symlink' (dev)")
+set_property(CACHE JVE_BUNDLE_LUA PROPERTY STRINGS copy symlink)
+if(NOT (JVE_BUNDLE_LUA STREQUAL "copy" OR JVE_BUNDLE_LUA STREQUAL "symlink"))
+    message(FATAL_ERROR
+        "Invalid JVE_BUNDLE_LUA='${JVE_BUNDLE_LUA}'. Must be 'copy' or 'symlink'.")
+endif()
+
+if(JVE_BUNDLE_LUA STREQUAL "symlink")
+    # ln -sfn handles the idempotent re-symlink. The initial conversion
+    # from a copy-mode bundle requires removing the existing directory
+    # (ln -sfn refuses to replace a directory with a symlink).
+    add_custom_target(bundle_runtime_tree ALL
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:jve>/../Resources/src"
+        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/src/lua' && ln -sfn '${CMAKE_SOURCE_DIR}/src/lua' '$<TARGET_FILE_DIR:jve>/../Resources/src/lua'"
+        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/keymaps' && ln -sfn '${CMAKE_SOURCE_DIR}/keymaps' '$<TARGET_FILE_DIR:jve>/../Resources/keymaps'"
+        COMMAND sh -c "rm -rf '$<TARGET_FILE_DIR:jve>/../Resources/resources' && ln -sfn '${CMAKE_SOURCE_DIR}/resources' '$<TARGET_FILE_DIR:jve>/../Resources/resources'"
+        COMMAND sh -c "rm -f  '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml' && ln -sfn '${CMAKE_SOURCE_DIR}/menus.xml' '$<TARGET_FILE_DIR:jve>/../Resources/menus.xml'"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Symlinking src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=symlink)"
+        VERBATIM
+    )
+else()
+    # rsync incremental copy. -R preserves the leading path component
+    # (src/lua, not just lua) so path_utils.resolve_repo_root keeps
+    # working. --delete removes stale entries left by previous builds.
+    add_custom_target(bundle_runtime_tree ALL
+        COMMAND rsync -aR --delete
+            src/lua keymaps resources menus.xml
+            "$<TARGET_FILE_DIR:jve>/../Resources/"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        COMMENT "Bundling src/lua + keymaps + resources + menus.xml into jve.app (JVE_BUNDLE_LUA=copy)"
+        VERBATIM
+    )
+endif()
 # Order: jve must be linked first (so Contents/MacOS exists for
-# $<TARGET_FILE_DIR:jve> to resolve), then rsync into Resources.
+# $<TARGET_FILE_DIR:jve> to resolve), then bundle into Resources.
 add_dependencies(bundle_runtime_tree jve)
 
 # Testing
