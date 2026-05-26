@@ -115,6 +115,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- clip); in that case we return nil and callers skip the edge. The
     -- cache is populated by build_clip_cache from timeline_state, which
     -- is authoritative — no DB fallback.
+    --
+    -- NSF defense (2026-05-26): distinguish "stale UI selection"
+    -- (legitimate — the clip is gone) from "cache desync" (the clip
+    -- exists in the active sequence but timeline_state's cache is
+    -- showing some other sequence's clips). The latter is the
+    -- silent-no-op bug class that motivated spec 022; without this
+    -- assert, BRE silently returns success with no mutation. Once 022
+    -- lands (per-tab cache), this assert can only fire if the caller
+    -- passes a truly nonexistent clip_id or one belonging to a
+    -- different sequence than ctx.sequence_id — both real bugs.
     local function fetch_base_clip(ctx, clip_id)
         local cached = ctx.base_clips[clip_id]
         if cached then
@@ -122,6 +132,22 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
         local clip = ctx.clip_lookup[clip_id]
         if not clip then
+            -- Probe the DB to distinguish stale-clip-id (graceful) from
+            -- cache-desync (loud). Use load_optional so a truly absent
+            -- clip returns nil without raising.
+            local db_clip = Clip.load_optional(clip_id)
+            if db_clip and db_clip.owner_sequence_id == ctx.sequence_id then
+                assert(false, string.format(
+                    "BatchRippleEdit: cache desync — clip %s exists in "
+                    .. "active sequence %s but is missing from "
+                    .. "timeline_state's clip cache. Likely cause: the "
+                    .. "displayed timeline tab is a different sequence "
+                    .. "(e.g., source viewer opened a master), which "
+                    .. "replaced the cache. See spec 022. Track id was "
+                    .. "%s.",
+                    tostring(clip_id), tostring(ctx.sequence_id),
+                    tostring(db_clip.track_id)))
+            end
             return nil
         end
         assert(clip.frame_rate and clip.frame_rate.fps_numerator and clip.frame_rate.fps_denominator,
@@ -2650,7 +2676,26 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         log.event("Batch ripple: processed %d edges, downstream shift %d frames",
             #ctx.edge_infos, ctx.downstream_shift_frames or 0)
 
-        return true
+        -- Surface the constraint outcome so callers can detect "edit
+        -- was clamped" (incl. clamped to 0 → silent no-op). Dry-run
+        -- exposes these via its preview payload to the renderer's
+        -- direct-executor path; the real path previously returned
+        -- bare `true` and command_manager dropped the second value —
+        -- callers going through cm.execute had no signal at all. NSF
+        -- violation that masked the media-floor silent no-op for
+        -- in-edge ripples on clips sitting at file frame 0 (and the
+        -- audio-TC unit-confusion variant tracked in
+        -- todo_019_media_tc_off_media).
+        --
+        -- Shape: top-level table fields. command_manager copies
+        -- non-standard fields from an exec_result table onto the
+        -- wrapper result (cm.lua:1869-1878), so callers read
+        -- `r.clamped_delta_frames` directly.
+        return {
+            success                = true,
+            requested_delta_frames = ctx.delta_frames,
+            clamped_delta_frames   = ctx.clamped_delta_frames,
+        }
     end
 
     command_executors["BatchRippleEdit"] = function(command)

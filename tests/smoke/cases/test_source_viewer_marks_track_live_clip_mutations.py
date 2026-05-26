@@ -38,18 +38,6 @@ from tests.smoke.runner.case import JVESmokeCase
 class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
     """External mutation to the live clip must refresh source viewer marks."""
 
-    # KNOWN-FAILING — blocked on BRE bug, not the signal-cascade premise.
-    # Investigated 2026-05-26: BRE's in-edge ripple silently no-ops on
-    # many clips even when its own dry-run reports clamped_delta_frames
-    # == requested delta. Per-clip behaviour: some clips ripple cleanly
-    # (src_in moves), some return success=true with the right clamp
-    # value but the DB writes never land. Selector-side fixes won't
-    # rescue this — the test correctly detects the no-op via line 124's
-    # assertNotEqual. Remove this decorator (and unexpectedSuccess will
-    # promote it to FAIL) once BRE is fixed.
-    # Tracked: memory/todo_test_source_viewer_marks_track_live_clip_-
-    # mutations.md + memory/todo_command_bypass_enforcement.md
-    @unittest.expectedFailure
     def test_in_edge_ripple_updates_source_viewer_effective_in(self) -> None:
         seq_id = self.eval_str(
             "local sid = require('core.playback.transport')"
@@ -58,46 +46,33 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             "       'record engine has no loaded sequence — fixture broken'); "
             "return sid")
 
-        # Find a media clip with all three kinds of headroom:
-        #   - source_in >= 10        — can walk source earlier by 5
-        #   - duration > 50          — non-trivial clip
-        #   - has a real prior clip on the same track (NOT the first
-        #     clip on its track) — BRE silent-no-ops on in-edge ripple
-        #     into the implicit pre-clip gap, so the test needs the
-        #     prior-clip-as-absorber path. (Per memory:
-        #     todo_test_source_viewer_marks_track_live_clip_mutations
-        #     calls out this exact trap — picking the first clip on
-        #     its track masquerades as "signal didn't fire" when
-        #     really BRE refused to do anything.)
-        # Group clips by track + sort by sequence_start so we can skip
-        # the first-on-track clip (where in-edge ripple silent-no-ops).
-        info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local tracks = {}; "
-            "for _, t in ipairs(ts.get_all_tracks() or {}) do tracks[t.id] = t end; "
-            "local by_track = {}; "
-            "for _, c in ipairs(ts.get_clips()) do "
-            "  if not c.is_gap then "
-            "    by_track[c.track_id] = by_track[c.track_id] or {}; "
-            "    table.insert(by_track[c.track_id], c); "
-            "  end "
-            "end; "
-            "for _, list in pairs(by_track) do "
-            "  table.sort(list, function(a,b) return (a.sequence_start or 0) < (b.sequence_start or 0) end); "
-            "end; "
-            "for _, list in pairs(by_track) do "
-            "  local t = tracks[list[1].track_id]; "
-            "  if t and t.track_type == 'VIDEO' then "
-            "    for i = 2, #list do "
-            "      local c = list[i]; "
-            "      if (c.duration or 0) > 50 and (c.source_in or 0) >= 10 then "
-            "        return string.format('%s|%s', c.id, c.track_id) "
-            "      end "
-            "    end "
-            "  end "
-            "end; "
-            "error('no non-first video clip with source headroom in fixture')")
-        clip_id, track_id = info.strip('"').split('|', 1)
+        # Hard-coded clip from the Anamnesis-gold-timeline fixture. The
+        # fixture is fixed (rebuilt deterministically from
+        # tests/fixtures/resolve/anamnesis-gold-timeline.drp), so the
+        # set of "BRE will actually move this on in-edge ripple -5"
+        # clips is also fixed. Picking arbitrarily here saves a
+        # whole-timeline dry-run scan per setUp.
+        #
+        # Why hard-coding matters: source_in >= N + duration > N looks
+        # like sufficient headroom but isn't — many clips silently
+        # clamp via `apply_media_limits` (either because the clip sits
+        # at file frame 0, or because of audio-TC unit confusion
+        # against video TC on multi-stream files; both root-caused in
+        # todo_019_media_tc_off_media). The canonical signal is BRE's
+        # own `result_data.clamped_delta_frames == requested_delta`.
+        #
+        # If the fixture changes and this clip disappears or becomes
+        # un-movable: re-run /tmp/bre_probe.py against the new
+        # template, pick any (mover=True, VIDEO, duration > 50,
+        # source_in > 100) clip, paste its ids here.
+        clip_id = "000d79cc-7aad-4df8-b4ca-0916ec8d990c"
+        track_id = "142f526f-a96a-47e3-9997-175a86af2082"
+        # Confirm the fixture still carries this clip (asserts loudly
+        # if the fixture was regenerated without updating these ids).
+        self.assertEqual(track_id, self.eval_str(
+            f"return tostring(require('models.clip').load('{clip_id}').track_id)"),
+            f"hard-coded clip {clip_id} not on hard-coded track {track_id} — "
+            f"fixture changed? regenerate per the comment above")
 
         # Load into source viewer in live-bound mode.
         self.eval(
@@ -106,6 +81,26 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
         self.assertEqual(clip_id, self.eval_str(
             "return tostring(require('ui.source_viewer').get_live_clip_id())"),
             "setUp: load_clip did not pin the clip in live-bound mode")
+
+        # WORKAROUND for the timeline_state cache-architecture smell
+        # (see specs/022-per-tab-timeline-cache/plan.md). After
+        # load_clip, `source_loaded_changed` fires →
+        # timeline_panel.lua:1789 listener auto-switches the displayed
+        # timeline tab to the source master. timeline_state then holds
+        # the source master's clip cache, while ctx.sequence_id below
+        # still points at the record (active) sequence. BRE's
+        # build_clip_cache reads from the displayed-keyed cache and
+        # finds no clip with id `clip_id` — its stale-clip-id graceful-
+        # skip path returns success=true with no mutation (the smoke
+        # bug that motivated 022). Switching back to the record tab
+        # restores the cache to the active sequence so BRE can find
+        # its target. This mirrors the real production flow ("load
+        # source, then click back to timeline to edit"). Remove this
+        # block once spec 022 lands per-tab caches — then BRE targeting
+        # active gets active's cache regardless of what's displayed.
+        self.eval(
+            "require('ui.timeline.timeline_state').switch_to_record_tab("
+            f"'{seq_id}')")
 
         before_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")
@@ -121,15 +116,26 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
         # External mutation: ripple the in-edge by -5 frames. This moves
         # the clip's source_in (in-edge ripple grows duration + walks
         # source_in earlier; sequence_start stays).
+        # Verify BRE actually applied the requested delta (didn't clamp).
+        # Reads top-level fields surfaced by the executor (see
+        # batch_ripple_edit.lua finalize_execution real-path). A
+        # clamped_delta_frames != requested signals the test picked an
+        # un-movable clip (see hard-coding rationale above).
         result_summary = self.eval_str(
             "local cm = require('core.command_manager'); "
             f"local r = cm.execute('BatchRippleEdit', {{ "
             f"sequence_id='{seq_id}', "
             f"edge_infos = {{ {{ clip_id='{clip_id}', edge_type='in', trim_type='ripple', track_id='{track_id}' }} }}, "
             "delta_frames = -5 }); "
-            "return tostring(r.success) .. ':' .. tostring(r.error_message or 'ok')")
-        self.assertTrue(result_summary.startswith('true:'),
+            "return tostring(r.success) "
+            "  .. '|err=' .. tostring(r.error_message or 'ok') "
+            "  .. '|req=' .. tostring(r.requested_delta_frames) "
+            "  .. '|clamp=' .. tostring(r.clamped_delta_frames)")
+        self.assertTrue(result_summary.startswith('true|'),
             f"BatchRippleEdit failed: {result_summary}")
+        self.assertIn("|req=-5|clamp=-5", result_summary, (
+            f"BRE clamped the requested delta away from -5 — selector "
+            f"picked an un-movable clip: {result_summary}"))
 
         after_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")
