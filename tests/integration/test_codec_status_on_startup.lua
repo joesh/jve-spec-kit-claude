@@ -3,7 +3,7 @@
 -- Regression: load_persisted ran after clips rendered, so ensure_clip_status
 -- found an empty cache → stamped clips online → blue instead of red.
 --
--- Run: ./build/bin/JVEEditor --test tests/integration/test_codec_status_on_startup.lua
+-- Run: ./build/bin/jve --test tests/integration/test_codec_status_on_startup.lua
 
 local ui = require("integration.ui_test_env")
 

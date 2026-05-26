@@ -21,7 +21,7 @@
 -- asserts that both entry points accept it without error.
 
 local EMP = qt_constants and qt_constants.EMP
-assert(EMP, "EMP bindings not available — run via: ./build/bin/JVEEditor --test this_script.lua")
+assert(EMP, "EMP bindings not available — run via: ./build/bin/jve --test this_script.lua")
 
 print("=== test_tmb_accepts_negative_speed_ratio.lua ===")
 

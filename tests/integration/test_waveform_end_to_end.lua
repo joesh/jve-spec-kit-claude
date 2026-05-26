@@ -5,7 +5,7 @@
 --
 -- If the click appears at the wrong pixel column, the coordinate chain is broken.
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration/test_waveform_end_to_end.lua
+-- Run via: ./build/bin/jve --test tests/integration/test_waveform_end_to_end.lua
 
 local env = require("integration.integration_test_env")
 local EMP = env.require_emp()

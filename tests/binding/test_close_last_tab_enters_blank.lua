@@ -13,7 +13,7 @@
 ---     on next launch.
 ---   * The project itself stays open — the editor is blank, not closed.
 ---
---- Runs inside ./build/bin/JVEEditor --test with full Qt + panels.
+--- Runs inside ./build/bin/jve --test with full Qt + panels.
 
 local ui = require("integration.ui_test_env")
 

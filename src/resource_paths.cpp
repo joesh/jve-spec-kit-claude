@@ -23,7 +23,7 @@ std::string ResourcePaths::getApplicationDirectory() {
     std::string app_dir_path = QApplication::applicationDirPath().toStdString();
 
     // .app-bundle awareness (macOS dev builds): when the executable
-    // lives inside `JVEEditor.app/Contents/MacOS/`, Qt reports app_dir
+    // lives inside `jve.app/Contents/MacOS/`, Qt reports app_dir
     // as that nested path. Walk back up to the bundle's parent
     // directory before doing the upward `src/lua` search — otherwise
     // the bundle's 3 extra path components push the repo root past the
@@ -36,7 +36,7 @@ std::string ResourcePaths::getApplicationDirectory() {
         : qt_dir;
 
     // Check up to N levels up from search_dir. 2 was enough for the
-    // bare-binary layout (build/bin/JVEEditor → repo root); kept at 2
+    // bare-binary layout (build/bin/jve → repo root); kept at 2
     // for the bundle case too since we already jumped past .app.
     QString cursor = search_dir;
     for (int i = 0; i <= 2; ++i) {

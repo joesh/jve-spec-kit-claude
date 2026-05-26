@@ -13,7 +13,7 @@
 -- Uses two fixtures with identical container/codec/dimensions but
 -- different visual content. Same path, different bytes.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_content_rewrite_invalidation.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_content_rewrite_invalidation.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

@@ -6,7 +6,7 @@
 --   3. Residual keys (Tab, Escape, arrows) work via post_key_event
 --   4. GlobalKeyFilter passes non-residual keys through (Lua handler returns false)
 --
--- Run: ./build/bin/JVEEditor --test tests/integration/test_keyboard_qshortcut_integration.lua
+-- Run: ./build/bin/jve --test tests/integration/test_keyboard_qshortcut_integration.lua
 
 local ui = require("integration.ui_test_env")
 

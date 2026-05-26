@@ -2,7 +2,7 @@
 -- Verifies that peak data returned by PEAK_QUERY matches actual decoded audio
 -- at the same source position.
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration/test_waveform_alignment.lua
+-- Run via: ./build/bin/jve --test tests/integration/test_waveform_alignment.lua
 --
 -- Uses a generated test tone (440Hz sine, 48kHz stereo, 2s) with known
 -- predictable peak values per 256-sample bin.

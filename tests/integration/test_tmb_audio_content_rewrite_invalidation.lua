@@ -9,7 +9,7 @@
 -- pull path re-serves bytes from the pre-swap file even though
 -- InvalidatePath fired.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_audio_content_rewrite_invalidation.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_audio_content_rewrite_invalidation.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

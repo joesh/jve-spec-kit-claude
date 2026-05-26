@@ -4,7 +4,7 @@
 --
 -- Mechanizes quickstart.md against a live JVEEditor process. Each step's
 -- "Expected" outcome is an assertion. Run with:
---   ./build/bin/JVEEditor --test tests/test_quickstart_015.lua
+--   ./build/bin/jve --test tests/test_quickstart_015.lua
 --
 -- Expected: FAIL on virtually every step today. This file defines the
 -- complete integration-level red-green target for Phase 3.3/3.4 work.

@@ -53,7 +53,7 @@ tests/
 - Location: `~/Documents/JVE Projects/Untitled Project.jvp` (SQLite)
 - **Before any DB access**: check for running JVEEditor process. If none, `rm` the `-shm` file (stale shared memory). Leave the `-wal` file — it will be replayed on next launch.
 ```bash
-pgrep -x JVEEditor || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-shm"
+pgrep -x jve || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-shm"
 ```
 
 ## Commands
@@ -62,12 +62,12 @@ make clean          # Clean build artifacts
 
 **NOTE** don't run make|grep. instead send output to a /tmp file and grep that. running make takes real time!
 
-**When iterating on UI changes**: use `cd build && make JVEEditor -j4` to build just the executable (skips tests). Run full `make -j4` (from repo root) only when ready to validate everything.
+**When iterating on UI changes**: use `cd build && make jve -j4` to build just the executable (skips tests). Run full `make -j4` (from repo root) only when ready to validate everything.
 
 # Run the application
-./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor    # Launches, shows 3-panel layout, timeline panel
+./build/bin/jve.app/Contents/MacOS/jve    # Launches, shows 3-panel layout, timeline panel
 # or, for Finder/Dock launch with no args:
-open build/bin/JVEEditor.app
+open build/bin/jve.app
 
 # Smoke-runner Accessibility grant (one-time, macOS)
 # The L3 keypress smokes deliver keys via osascript `keystroke`. The
@@ -86,12 +86,12 @@ Pick the single command that matches what you touched. The "final check" rows ar
 | What you touched | Iteration loop                                              | Final check                |
 |------------------|-------------------------------------------------------------|----------------------------|
 | Lua only         | `cd tests && luajit test_harness.lua test_thing.lua`        | `./tests/run_lua_tests_all.sh` |
-| C++ only         | `cd build && make JVEEditor -j4` (rebuilds binary, no tests) | `make -j4`                 |
+| C++ only         | `cd build && make jve -j4` (rebuilds binary, no tests) | `make -j4`                 |
 | Lua + C++        | one of the above per iteration                              | `make -j4`                 |
 
 `make -j4` runs everything (C++ compile, luacheck, full Lua suite, C++ tests, binding tests, integration tests). It is **never** correct to run `./tests/run_lua_tests_all.sh` *and* `make -j4` for the same change — `make -j4` already runs that script. Pick the one for your change class.
 
-`make JVEEditor -j4` is the one exception that skips tests — use it during rapid UI iteration where you'll exercise the editor manually. Final validation still goes through the right row above.
+`make jve -j4` is the one exception that skips tests — use it during rapid UI iteration where you'll exercise the editor manually. Final validation still goes through the right row above.
 
 Never run `make | grep` directly — `make` takes real wall time. Redirect to `/tmp` and grep the file:
 ```bash
@@ -128,13 +128,13 @@ For features that need real C++ bindings (Qt widgets, XML parser, EMP/TMB, audio
 
 ```bash
 # Run a test script with full C++ bindings available
-./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua
+./build/bin/jve.app/Contents/MacOS/jve --test /tmp/my_test.lua
 
 # With logging enabled
-JVE_LOG=media:detail ./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua
+JVE_LOG=media:detail ./build/bin/jve.app/Contents/MacOS/jve --test /tmp/my_test.lua
 
 # Save output for analysis (don't re-run the editor for each grep)
-JVE_LOG=media:detail ./build/bin/JVEEditor.app/Contents/MacOS/JVEEditor --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
+JVE_LOG=media:detail ./build/bin/jve.app/Contents/MacOS/jve --test /tmp/my_test.lua > /tmp/test_output.txt 2>&1
 ```
 
 This is essential for:

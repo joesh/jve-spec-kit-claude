@@ -11,12 +11,12 @@
 -- This test pins the externally-visible contract: closed handle errors on
 -- use; live handles stay independent.
 --
--- Run via: ./build/bin/JVEEditor --test tests/test_aop_sse_close_invalidates_handle.lua
+-- Run via: ./build/bin/jve --test tests/test_aop_sse_close_invalidates_handle.lua
 require('test_env')
 
 if not (qt_constants and qt_constants.AOP and qt_constants.SSE) then
     -- Qt bindings only exist inside the JVEEditor host process.
-    -- Run via: ./build/bin/JVEEditor --test tests/test_aop_sse_close_invalidates_handle.lua
+    -- Run via: ./build/bin/jve --test tests/test_aop_sse_close_invalidates_handle.lua
     print("✅ test_aop_sse_close_invalidates_handle.lua skipped (needs Qt bindings)")
     return
 end

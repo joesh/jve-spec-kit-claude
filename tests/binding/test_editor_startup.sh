@@ -10,7 +10,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-EDITOR="$REPO_ROOT/build/bin/JVEEditor"
+EDITOR="$REPO_ROOT/build/bin/jve"
 TEST_DB="/tmp/jve/test_editor_startup.jvp"
 
 echo "=== Editor Startup Smoke Test ==="

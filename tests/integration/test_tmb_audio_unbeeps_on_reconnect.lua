@@ -17,7 +17,7 @@
 -- (rebuild the clip list via RELOAD_ALL_CLIPS, or a finer-grained
 -- update); the test asserts the end behavior, not the mechanism.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_audio_unbeeps_on_reconnect.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_audio_unbeeps_on_reconnect.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

@@ -13,7 +13,7 @@
 --      offline=false (mirroring the FS watcher flip).
 --   3. Decode at the same frame → MUST return a real frame, not offline.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_restore_after_offline.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_restore_after_offline.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

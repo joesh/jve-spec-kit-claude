@@ -20,7 +20,7 @@
 --- which has its own coverage in test_keyboard_qshortcut_integration.lua.
 ---
 --- Run:
----   ./build/bin/JVEEditor --test tests/integration/test_floating_window_key_isolation.lua
+---   ./build/bin/jve --test tests/integration/test_floating_window_key_isolation.lua
 
 local ui = require("integration.ui_test_env")
 

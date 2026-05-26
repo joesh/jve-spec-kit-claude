@@ -16,7 +16,7 @@
 --   5. Assert fingerprints match — especially at late positions
 --      where cumulative drift would be largest
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration/test_peak_drift_regression.lua
+-- Run via: ./build/bin/jve --test tests/integration/test_peak_drift_regression.lua
 
 local env = require("integration.integration_test_env")
 local EMP = env.require_emp()

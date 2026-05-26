@@ -11,7 +11,7 @@
 --   4. PEAK_QUERY_PROGRESS returns nil after generation completes
 --   5. PEAK_QUERY_PROGRESS returns nil for unknown media_id
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration/test_progressive_peaks.lua
+-- Run via: ./build/bin/jve --test tests/integration/test_progressive_peaks.lua
 
 local env = require("integration.integration_test_env")
 local EMP = env.require_emp()

@@ -1,6 +1,6 @@
 -- Integration smoke test: Inspector mounts inside a fresh Qt container
 -- and its public API is reachable. Run via:
---   ./build/bin/JVEEditor --test tests/integration/inspector/smoke_inspector_launch.lua
+--   ./build/bin/jve --test tests/integration/inspector/smoke_inspector_launch.lua
 --
 -- --test mode boots C++ Qt bindings but does NOT run layout.lua (that
 -- only runs in full GUI mode). Each integration test owns its container.

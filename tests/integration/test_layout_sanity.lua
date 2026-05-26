@@ -7,7 +7,7 @@
 --   - Wrong sequence loaded at startup
 --   - All sequences loaded instead of just the active one
 --
--- Run: ./build/bin/JVEEditor --test tests/integration/test_layout_sanity.lua
+-- Run: ./build/bin/jve --test tests/integration/test_layout_sanity.lua
 
 local ui = require("integration.ui_test_env")
 

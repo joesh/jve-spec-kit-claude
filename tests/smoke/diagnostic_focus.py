@@ -29,7 +29,7 @@ Subsequent osascript keystrokes route to whatever IS a proper bundled
 foreground app (your terminal).
 
 If (a) is confirmed, two paths:
-  * bundle JVEEditor.app at build time (proper fix; touches CMake +
+  * bundle jve.app at build time (proper fix; touches CMake +
     needs an Info.plist),
   * switch the runner from osascript keystroke to CGEventPostToPid()
     (workaround; targets JVE's PID directly, bypasses front-app

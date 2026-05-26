@@ -9,7 +9,7 @@
 -- Uses a real fixture file from tests/fixtures/media/ with a known container TC.
 
 local EMP = qt_constants and qt_constants.EMP
-assert(EMP, "EMP bindings not available — run via: ./build/bin/JVEEditor --test this_script.lua")
+assert(EMP, "EMP bindings not available — run via: ./build/bin/jve --test this_script.lua")
 
 print("=== test_emp_tc_override.lua ===")
 

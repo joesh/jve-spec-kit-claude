@@ -15,7 +15,7 @@
 -- 1-second 440 Hz tone encoded with afconvert, which produces the same
 -- start_pts=2112 priming pattern as the real offending SFX library files.
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration/test_peak_gen_aac_early_eof.lua
+-- Run via: ./build/bin/jve --test tests/integration/test_peak_gen_aac_early_eof.lua
 
 local env = require("integration.integration_test_env")
 local EMP = env.require_emp()

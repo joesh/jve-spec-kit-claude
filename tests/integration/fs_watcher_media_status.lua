@@ -2,7 +2,7 @@
 -- genuine filesystem events (delete, rename, create, rewrite).
 --
 -- Runs inside JVEEditor via:
---   ./build/bin/JVEEditor --test tests/integration/fs_watcher_media_status.lua
+--   ./build/bin/jve --test tests/integration/fs_watcher_media_status.lua
 --
 -- Domain behaviors under test:
 --   * Real delete of a registered file flips cache to offline + emits signal.

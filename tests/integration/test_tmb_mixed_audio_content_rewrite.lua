@@ -9,7 +9,7 @@
 -- built on top of GetTrackAudio — different cache, different
 -- invariant, distinct test.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_mixed_audio_content_rewrite.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_mixed_audio_content_rewrite.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

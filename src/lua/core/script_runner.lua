@@ -6,7 +6,7 @@
 -- Scripts run in the app's Lua state with full access to modules.
 --
 -- Usage:
---   JVE_SCRIPT=/tmp/jve/script.lua ./build/bin/JVEEditor
+--   JVE_SCRIPT=/tmp/jve/script.lua ./build/bin/jve
 --
 -- Scripts can use:
 --   require("core.command_manager").execute("CommandName", {params})

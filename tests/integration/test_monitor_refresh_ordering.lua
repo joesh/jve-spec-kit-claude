@@ -14,7 +14,7 @@
 -- Signals fires lower-priority numbers first, so monitor priority
 -- MUST be strictly greater than engine priority.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_monitor_refresh_ordering.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_monitor_refresh_ordering.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

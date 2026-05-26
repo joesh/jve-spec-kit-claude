@@ -5,7 +5,7 @@
 --- A focused field below the viewport must be scrolled into view via
 --- the ensureWidgetVisible binding.
 ---
---- Runs inside ./build/bin/JVEEditor --test.
+--- Runs inside ./build/bin/jve --test.
 
 local qt_constants = require("core.qt_constants")
 

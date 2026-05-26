@@ -7,7 +7,7 @@
 --   1. Saved tab order [A, B, C] with B active → restore preserves [A, B, C]
 --   2. DeleteSequence closes tab and persists updated list
 --
--- Run: ./build/bin/JVEEditor --test tests/integration/test_tab_order_restore.lua
+-- Run: ./build/bin/jve --test tests/integration/test_tab_order_restore.lua
 
 local ui = require("integration.ui_test_env")
 

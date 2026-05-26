@@ -10,7 +10,7 @@
 --   * Zero/negative argument → JVE_ASSERT in AudioOutput::Open fires with
 --     the AopConfig field name.
 --
--- Run via: ./build/bin/JVEEditor --test tests/test_aop_open_rejects_invalid_config.lua
+-- Run via: ./build/bin/jve --test tests/test_aop_open_rejects_invalid_config.lua
 require("test_env")
 
 if not (qt_constants and qt_constants.AOP) then

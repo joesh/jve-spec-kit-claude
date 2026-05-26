@@ -10,7 +10,7 @@
 -- deletes the file, fires the status-flip signal, asks for the same
 -- frame, and asserts TMB does NOT serve the stale cached pixels.
 --
--- Runs via: ./build/bin/JVEEditor --test tests/integration/test_tmb_invalidate_on_offline_flip.lua
+-- Runs via: ./build/bin/jve --test tests/integration/test_tmb_invalidate_on_offline_flip.lua
 
 local ienv = require("integration.integration_test_env")
 local EMP  = ienv.require_emp()

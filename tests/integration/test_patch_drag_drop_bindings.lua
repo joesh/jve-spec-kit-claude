@@ -1,6 +1,6 @@
 -- 015 / FR-010, FR-010a — C++ binding smoke for patch drag-drop.
 --
--- Runs in --test mode: ./build/bin/JVEEditor --test tests/integration/test_patch_drag_drop_bindings.lua
+-- Runs in --test mode: ./build/bin/jve --test tests/integration/test_patch_drag_drop_bindings.lua
 --
 -- This is the integration counterpart to test_patch_drag_drop_dispatch.lua.
 -- That test covers Lua decision logic with stubs. THIS test covers the

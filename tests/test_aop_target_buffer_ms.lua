@@ -7,12 +7,12 @@
 -- canonical source — pump derives its target from AOP::TargetBufferMs().
 -- This test pins that contract: open with X, get X back.
 --
--- Run via: ./build/bin/JVEEditor --test tests/test_aop_target_buffer_ms.lua
+-- Run via: ./build/bin/jve --test tests/test_aop_target_buffer_ms.lua
 require('test_env')
 
 if not (qt_constants and qt_constants.AOP) then
     -- Qt bindings only exist inside the JVEEditor host process.
-    -- Run via: ./build/bin/JVEEditor --test tests/test_aop_target_buffer_ms.lua
+    -- Run via: ./build/bin/jve --test tests/test_aop_target_buffer_ms.lua
     print("✅ test_aop_target_buffer_ms.lua skipped (needs Qt bindings)")
     return
 end

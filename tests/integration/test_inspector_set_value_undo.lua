@@ -4,7 +4,7 @@
 --- (the model was reverted) and the clip must still be selected so
 --- the user can re-edit, redo, or carry on.
 ---
---- Runs inside ./build/bin/JVEEditor --test with full Qt + panels.
+--- Runs inside ./build/bin/jve --test with full Qt + panels.
 
 local ui = require("integration.ui_test_env")
 

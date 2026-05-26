@@ -5,7 +5,7 @@
 -- importer can read MediaRef pointers out of FieldsBlobs, the binding
 -- has to produce correct bytes.
 --
--- Run: ./build/bin/JVEEditor --test tests/integration/test_zstd_bindings.lua
+-- Run: ./build/bin/jve --test tests/integration/test_zstd_bindings.lua
 
 require("test_env")
 

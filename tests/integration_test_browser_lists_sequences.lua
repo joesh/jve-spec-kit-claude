@@ -1,6 +1,6 @@
 -- Integration regression for project_browser ↔ load_sequences contract.
 --
--- Run via: ./build/bin/JVEEditor --test tests/integration_test_browser_lists_sequences.lua
+-- Run via: ./build/bin/jve --test tests/integration_test_browser_lists_sequences.lua
 --
 -- Bug history (2026-05-13): project_browser.lua filtered with
 --   if not sequence.kind or sequence.kind == "timeline"

@@ -1,6 +1,6 @@
 --- Integration test for the F-key (MatchFrame) source-load user flow.
 --
--- Runs inside `./build/bin/JVEEditor --test`. Creates a project DB with
+-- Runs inside `./build/bin/jve --test`. Creates a project DB with
 -- a record sequence + a master sequence (media at non-zero TC origin
 -- like a typical camera-original file). Launches the full UI, then
 -- programmatically does what F does: load the master into the source
