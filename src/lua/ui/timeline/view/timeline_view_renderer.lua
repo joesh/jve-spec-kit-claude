@@ -194,9 +194,17 @@ local function stroke_outline_rect(view, x, y, w, h, color)
 end
 
 local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height)
-    if not clip or not clip.track_id or not start_value or not duration_value then
-        return
-    end
+    assert(clip, "draw_preview_outline: clip is required (caller must filter nil)")
+    assert(clip.track_id, "draw_preview_outline: clip.track_id missing (clip_id="
+        .. tostring(clip.id) .. "); model invariant violated")
+    assert(type(start_value) == "number",
+        "draw_preview_outline: start_value must be a number (clip_id=" .. tostring(clip.id) .. ")")
+    assert(type(duration_value) == "number",
+        "draw_preview_outline: duration_value must be a number (clip_id=" .. tostring(clip.id) .. ")")
+
+    -- Track layout may legitimately be absent during reflow / first-frame
+    -- races; silent skip matches the convention at every other callsite
+    -- of get_track_y_by_id in this renderer.
     local track_y = view.get_track_y_by_id(clip.track_id, height)
     if track_y < 0 then return end
     local track_height = view.get_track_visual_height(clip.track_id)
@@ -231,6 +239,24 @@ local function draw_preview_outline(view, clip, start_value, duration_value, sta
     stroke_outline_rect(view, visible_x, clip_y, visible_w, clip_height, PREVIEW_RECT_COLOR)
 end
 
+-- Boundary check: every preview entry produced by BRE / nudge / similar
+-- commands MUST carry new_start_value and new_duration. Asserting at the
+-- consumer surfaces producer contract violations loudly; the renderer
+-- never silently substitutes a default. Exposed on M as the named
+-- contract so both production and tests reference the same predicate.
+local function assert_affected_clip_entry(entry)
+    assert(type(entry) == "table",
+        "preview affected_clips: entry must be a table (got " .. type(entry) .. ")")
+    assert(entry.clip_id,
+        "preview affected_clips: entry missing clip_id")
+    assert(type(entry.new_start_value) == "number",
+        "preview affected_clips: entry missing new_start_value (clip_id="
+        .. tostring(entry.clip_id) .. "); producer contract violated")
+    assert(type(entry.new_duration) == "number",
+        "preview affected_clips: entry missing new_duration (clip_id="
+        .. tostring(entry.clip_id) .. "); producer contract violated")
+end
+
 -- Outline the clips whose edges the user is directly dragging (the
 -- gesture's manipulation target). Downstream clips that shift as a
 -- consequence of the ripple are NOT outlined here — they are
@@ -244,11 +270,11 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
 
     for _, entry in ipairs(affected or {}) do
         if not entry.is_gap then
+            assert_affected_clip_entry(entry)
             local clip = get_preview_clip(state_module, preview_clip_cache, entry)
             if clip then
-                local start_value = entry.new_start_value or clip.sequence_start
-                local duration_value = entry.new_duration or clip.duration
-                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height)
+                draw_preview_outline(view, clip, entry.new_start_value, entry.new_duration,
+                                     state_module, width, height)
             end
         end
     end
@@ -263,14 +289,13 @@ local function lower_bound_start_frames(clips, start_frames)
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
         local clip = clips[mid]
-        -- All coords are integer frames now
-        local clip_start = clip and clip.sequence_start
-        if type(clip_start) ~= "number" then
-            -- Defensive: if the index contains malformed entries, fall back to
-            -- scanning from the front rather than risking an infinite loop.
-            return 1
-        end
-        if clip_start < start_frames then
+        assert(clip, "lower_bound_start_frames: nil entry at index " .. mid
+            .. " of " .. #clips .. "; track clip index corrupt")
+        assert(type(clip.sequence_start) == "number",
+            "lower_bound_start_frames: clip.sequence_start must be a number at index "
+            .. mid .. " (clip_id=" .. tostring(clip.id) .. ", got "
+            .. type(clip.sequence_start) .. "); track clip index corrupt")
+        if clip.sequence_start < start_frames then
             lo = mid + 1
         else
             hi = mid
@@ -303,9 +328,15 @@ local function collect_shifted_runs_for_track(track_clips, block_start, delta_fr
     end
     for i = start_index, #track_clips do
         local clip = track_clips[i]
-        if clip and type(clip.sequence_start) == "number"
-            and type(clip.duration) == "number"
-            and clip.sequence_start >= block_start
+        assert(clip, "collect_shifted_runs_for_track: nil entry at index " .. i
+            .. "; track clip index corrupt")
+        assert(type(clip.sequence_start) == "number",
+            "collect_shifted_runs_for_track: clip.sequence_start must be a number (clip_id="
+            .. tostring(clip.id) .. "); track clip index corrupt")
+        assert(type(clip.duration) == "number",
+            "collect_shifted_runs_for_track: clip.duration must be a number (clip_id="
+            .. tostring(clip.id) .. "); track clip index corrupt")
+        if clip.sequence_start >= block_start
             and not clip.is_gap
             and not (clip.id and excluded[clip.id])
         then
@@ -1262,5 +1293,12 @@ function M.render(view)
     perf_log.detail("timeline_view.render: %.3fms viewport_start=%d duration=%d",
         (os.clock() - perf_t0) * 1000, viewport_start, viewport_duration)
 end
+
+-- Named contract boundaries. Exposed so producer-side tests can pin
+-- the contract directly without staging full preview-data through the
+-- renderer dispatch (which rebuilds preview_data via ensure_edge_preview
+-- on every render and would clobber a test fixture).
+M.assert_affected_clip_entry = assert_affected_clip_entry
+M.lower_bound_start_frames = lower_bound_start_frames
 
 return M

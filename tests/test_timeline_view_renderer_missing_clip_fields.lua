@@ -1,5 +1,12 @@
 #!/usr/bin/env luajit
--- Regression: timeline_view_renderer must not crash when clips are missing sequence_start/duration (Rational).
+-- Contract: a clip in the track index that is missing sequence_start /
+-- duration is a corrupt index — every clip is integer-coord today (see
+-- CLAUDE.md "All coords are integers"). The renderer MUST assert
+-- loudly rather than silently render nothing (NSF: no silent failures).
+--
+-- This test originally pinned the opposite (silent tolerance, dating
+-- to a Rational-coord migration era when these fields could legitimately
+-- be nil). That migration is complete; the legacy contract is gone.
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require("test_env")
@@ -93,6 +100,14 @@ local view = {
 local renderer = require("ui.timeline.view.timeline_view_renderer")
 
 local ok, err = pcall(renderer.render, view)
-assert(ok, "renderer.render raised error for missing clip fields: " .. tostring(err))
+assert(not ok,
+    "renderer.render must REJECT a track-clip index entry with nil "
+    .. "sequence_start (NSF: corrupt index must surface, not be silently "
+    .. "tolerated). The render call succeeded.")
+assert(tostring(err):find("sequence_start", 1, true),
+    "Assert must name the corrupt field. Got: " .. tostring(err))
+assert(tostring(err):find("clip_missing_fields", 1, true),
+    "Assert must name the offending clip id for actionable diagnostics. "
+    .. "Got: " .. tostring(err))
 
-print("✅ timeline_view_renderer tolerates clips missing sequence_start/duration")
+print("✅ timeline_view_renderer asserts on corrupt clip-index entries")
