@@ -36,10 +36,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "jve.app" / "Contents" / "MacOS" / "jve"
 DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
 # Default eval timeout. 5s is plenty on the host (warm cache, multi-core),
-# but the UTM guest is single-core with cold disk and per-test operations
-# like open_project routinely take longer. Bump the default when running
-# in-VM; JVE_SMOKE_EVAL_TIMEOUT still wins if explicitly set.
-_DEFAULT_EVAL_TIMEOUT = "15" if os.environ.get("JVE_SMOKE_IN_VM") else "5"
+# but the UTM guest is single-core with cold disk + cold Lua JIT and
+# per-test operations (open_project, plus the occasional Qt event-loop
+# spin) routinely take longer. 30s in-VM is the empirical floor — 15s
+# triggered mid-suite JVE respawns on ~5% of test transitions, which
+# poisoned downstream tests with a fresh-JVE that didn't match their
+# expected state. JVE_SMOKE_EVAL_TIMEOUT still wins if explicitly set.
+_DEFAULT_EVAL_TIMEOUT = "30" if os.environ.get("JVE_SMOKE_IN_VM") else "5"
 EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", _DEFAULT_EVAL_TIMEOUT))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))
 PROMPT = b"jve> "
