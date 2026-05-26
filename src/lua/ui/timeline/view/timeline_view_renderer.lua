@@ -265,50 +265,78 @@ local function lower_bound_start_frames(clips, start_frames)
     return lo
 end
 
---- Compute the bounding box (in frames) of all clips in a shift block on one track.
--- Returns min_start, max_end (both shifted by delta) or nil if no clips found.
--- This is the "opaque block" that shifts as a unit — the bounded edit region
--- only needs to know its extent, not its individual clips.
-local function compute_shift_block_bounds(track_clips, block_start, delta_frames, excluded)
-    local min_start = math.huge
-    local max_end = -math.huge
-    local found = false
+-- Coalescing threshold for downstream preview outlines, expressed as a
+-- fraction of the viewport's pixel width. Adjacent downstream clips on
+-- the same track whose pixel gap is below this threshold merge into one
+-- visual outline run — a giant bbox over the whole shift extent is
+-- mostly offscreen and uninformative; tight contours that follow the
+-- actual clips are what tells the user what's moving.
+local SHIFT_OUTLINE_COALESCE_FRACTION = 1 / 20
 
+--- Walk a track's clips and return the pixel x-intervals to outline.
+-- Inputs are already filtered for "this track is part of a shift
+-- block"; this function does the per-clip math: skip excluded/gaps,
+-- shift by delta, cull entirely offscreen, clip to viewport bounds,
+-- and return one {x_start, x_end} per surviving clip in left-to-right
+-- order.
+local function collect_shifted_runs_for_track(track_clips, block_start, delta_frames,
+                                              excluded, time_to_pixel,
+                                              width, viewport_start, viewport_end)
+    local runs = {}
     local start_index = lower_bound_start_frames(track_clips, block_start)
     if start_index > 1 then
         start_index = start_index - 1
     end
-
     for i = start_index, #track_clips do
         local clip = track_clips[i]
-        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
-            goto continue_bounds
+        if clip and type(clip.sequence_start) == "number"
+            and type(clip.duration) == "number"
+            and clip.sequence_start >= block_start
+            and not clip.is_gap
+            and not (clip.id and excluded[clip.id])
+        then
+            local shifted_start = clip.sequence_start + delta_frames
+            if shifted_start < 0 then shifted_start = 0 end
+            local shifted_end = shifted_start + clip.duration
+            -- Viewport cull (frame coords)
+            if shifted_end > viewport_start and shifted_start < viewport_end then
+                local x0 = time_to_pixel(shifted_start, width)
+                local x1 = time_to_pixel(shifted_end, width)
+                if x0 < 0 then x0 = 0 end
+                if x1 > width then x1 = width end
+                if x1 - x0 >= 1 then
+                    table.insert(runs, {x_start = x0, x_end = x1})
+                end
+            end
         end
-        if clip.sequence_start < block_start then
-            goto continue_bounds
-        end
-        if clip.is_gap then
-            goto continue_bounds
-        end
-        if clip.id and excluded[clip.id] then
-            goto continue_bounds
-        end
-
-        local shifted_start = clip.sequence_start + delta_frames
-        if shifted_start < 0 then shifted_start = 0 end
-        local shifted_end = shifted_start + clip.duration
-
-        if shifted_start < min_start then min_start = shifted_start end
-        if shifted_end > max_end then max_end = shifted_end end
-        found = true
-
-        ::continue_bounds::
     end
-
-    if not found then return nil, nil end
-    return min_start, max_end
+    return runs
 end
 
+--- Merge adjacent runs whose pixel gap is below the threshold. Runs are
+-- already in left-to-right order; a single linear pass suffices.
+local function coalesce_runs(runs, threshold_px)
+    if #runs == 0 then return runs end
+    local merged = {{x_start = runs[1].x_start, x_end = runs[1].x_end}}
+    for i = 2, #runs do
+        local last = merged[#merged]
+        local r = runs[i]
+        if (r.x_start - last.x_end) < threshold_px then
+            if r.x_end > last.x_end then last.x_end = r.x_end end
+        else
+            table.insert(merged, {x_start = r.x_start, x_end = r.x_end})
+        end
+    end
+    return merged
+end
+
+--- Outline downstream movers per track, tightly contoured.
+-- For each visible track that participates in a shift block, walk its
+-- downstream clips, cull what's offscreen, coalesce neighbors that are
+-- visually adjacent (gap < width × SHIFT_OUTLINE_COALESCE_FRACTION),
+-- and draw one 4-sided outline per coalesced run. This replaces the
+-- prior single-bbox-across-all-tracks approach which produced an
+-- outline that was mostly offscreen on long timelines.
 local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_duration, viewport_start, viewport_end)
     if not preview_data or type(preview_data.shift_blocks) ~= "table" or #preview_data.shift_blocks == 0 then
         return
@@ -337,20 +365,13 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
 
     -- Only the user's directly-dragged clips are excluded from the block.
     -- Every other downstream mover (whether represented in shifted_clips
-    -- or implicit in the bulk shift) participates in the bounding box.
+    -- or implicit in the bulk shift) participates in the contoured outlines.
     local excluded = {}
     for _, entry in ipairs(preview_data.affected_clips or {}) do
         if entry and entry.clip_id then excluded[entry.clip_id] = true end
     end
 
-    -- Compute bounding box across ALL tracks — one big outline for the
-    -- entire shift block, spanning from topmost to bottommost affected track.
-    local global_min_frames = math.huge
-    local global_max_frames = -math.huge
-    local min_track_y = math.huge
-    local max_track_bottom = -math.huge
-    local found_any = false
-
+    local threshold_px = width * SHIFT_OUTLINE_COALESCE_FRACTION
     local off_tracks = preview_data.off_tracks or {}
     local visible_tracks = view.filtered_tracks or {}
     for _, track in ipairs(visible_tracks) do
@@ -360,48 +381,34 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
                 local track_clips = state_module.get_track_clip_index(track_id) or {}
                 if #track_clips > 0 then
-                    local min_start, max_end = compute_shift_block_bounds(
-                        track_clips, block.start_frames, block.delta_frames, excluded)
-                    if min_start then
-                        if min_start < global_min_frames then global_min_frames = min_start end
-                        if max_end > global_max_frames then global_max_frames = max_end end
-
+                    local runs = collect_shifted_runs_for_track(
+                        track_clips, block.start_frames, block.delta_frames,
+                        excluded, state_module.time_to_pixel,
+                        width, viewport_start, viewport_end)
+                    local coalesced = coalesce_runs(runs, threshold_px)
+                    if #coalesced > 0 then
                         local ty = view.get_track_y_by_id(track_id, height)
                         local th = view.get_track_visual_height(track_id)
                         if ty >= 0 and th and th > 0 then
-                            if ty < min_track_y then min_track_y = ty end
-                            if ty + th > max_track_bottom then max_track_bottom = ty + th end
-                            found_any = true
+                            local clip_y = ty + 5
+                            local clip_h = th - 10
+                            if clip_h >= 1 then
+                                for _, run in ipairs(coalesced) do
+                                    local rw = run.x_end - run.x_start
+                                    if rw >= 1 then
+                                        timeline.add_rect(view.widget, run.x_start, clip_y, rw, 2, PREVIEW_RECT_COLOR)
+                                        timeline.add_rect(view.widget, run.x_start, clip_y + clip_h - 2, rw, 2, PREVIEW_RECT_COLOR)
+                                        timeline.add_rect(view.widget, run.x_start, clip_y, 2, clip_h, PREVIEW_RECT_COLOR)
+                                        timeline.add_rect(view.widget, run.x_start + rw - 2, clip_y, 2, clip_h, PREVIEW_RECT_COLOR)
+                                    end
+                                end
+                            end
                         end
                     end
                 end
             end
         end
     end
-
-    if not found_any then return end
-
-    -- Convert frame bounds to pixels
-    local start_px = state_module.time_to_pixel(global_min_frames, width)
-    local end_px = state_module.time_to_pixel(global_max_frames, width)
-
-    -- Viewport cull + clip
-    if start_px > width or end_px < 0 then return end
-    if start_px < 0 then start_px = 0 end
-    if end_px > width then end_px = width end
-
-    local block_width = end_px - start_px
-    if block_width < 1 then return end
-
-    local block_y = min_track_y + 5
-    local block_h = (max_track_bottom - min_track_y) - 10
-    if block_h < 1 then return end
-
-    -- One big outline around the entire shift block
-    timeline.add_rect(view.widget, start_px, block_y, block_width, 2, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, start_px, block_y + block_h - 2, block_width, 2, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, start_px, block_y, 2, block_h, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, start_px + block_width - 2, block_y, 2, block_h, PREVIEW_RECT_COLOR)
 end
 
 local function render_edge_handle(view, clip, normalized_edge, raw_edge_type, start_value, duration_value, color, state_module, width, height, viewport_duration)

@@ -161,22 +161,33 @@ for _, r in ipairs(drawn_rects) do
             .. "found stray side rect at x=%d y=%d w=%d h=%d", r.x, r.y, r.w, r.h))
 end
 
--- Domain assertion 2 (positive): there is at least one preview-color rect
--- whose vertical extent spans BOTH V1 and V2 tracks — that is the single
--- block outline encompassing all downstream movers across tracks.
-local found_multi_track_span = false
+-- Domain assertion 2 (positive): each track with a downstream mover gets
+-- its OWN per-track contoured outline (see test_timeline_ripple_preview_
+-- contoured_runs). The V2 downstream clip lives in V2's band, so a
+-- preview-color rect must exist that's confined to V2's band AND
+-- overlaps the clip's shifted x range. The outlines do NOT span tracks
+-- (that would create a giant offscreen-dominated bbox on real timelines).
+local function approx_within(value, low, high) return value >= low - 1 and value <= high + 1 end
+local v2_band_top, v2_band_bottom = V2_Y, V2_Y + TRACK_HEIGHT
+local v2_clip_left  = timeline_state.time_to_pixel(v2_downstream_shifted_start, width)
+local v2_clip_right = timeline_state.time_to_pixel(
+    v2_downstream_shifted_start + v2_downstream_duration, width)
+local found_v2_per_track_outline = false
 for _, r in ipairs(drawn_rects) do
     if r.color == PREVIEW_COLOR then
         local top, bottom = r.y, r.y + r.h
-        if top <= V1_Y + 10 and bottom >= V2_Y + TRACK_HEIGHT - 10 then
-            found_multi_track_span = true
-            break
+        local left, right = r.x, r.x + r.w
+        local contained_in_v2 = approx_within(top, v2_band_top, v2_band_bottom)
+                            and approx_within(bottom, v2_band_top, v2_band_bottom)
+        local overlaps_clip_x = left < v2_clip_right and right > v2_clip_left
+        if contained_in_v2 and overlaps_clip_x then
+            found_v2_per_track_outline = true; break
         end
     end
 end
-assert(found_multi_track_span,
-    "Expected a preview outline whose vertical span covers V1 through V2 — "
-    .. "the unified downstream block bounding box")
+assert(found_v2_per_track_outline,
+    "Expected a preview outline confined to V2's vertical band overlapping "
+    .. "the V2 downstream clip's shifted region — per-track contoured runs.")
 
 layout:cleanup()
-print("✅ Downstream non-active clips share one block outline; no per-clip outlines")
+print("✅ Downstream non-active clips: per-track contour, no per-clip outlines, no cross-track bbox")
