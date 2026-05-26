@@ -176,7 +176,24 @@ end
 
 local PREVIEW_RECT_COLOR = "#ffff00"
 
-local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
+-- Width of the bars used by stroke_outline_rect. Selection, preview, and
+-- shift-block outlines all share this; tweaking one place changes them all.
+local OUTLINE_THICKNESS = 2
+
+-- Stroke a 4-sided rectangular outline (top/bottom/left/right) using
+-- OUTLINE_THICKNESS-wide bars drawn INSIDE the bounds. Caller passes the
+-- full content rect; helper validates dimensions and emits nothing if the
+-- rect is too small to contain the bars meaningfully.
+local function stroke_outline_rect(view, x, y, w, h, color)
+    local t = OUTLINE_THICKNESS
+    if w < 1 or h < 1 then return end
+    timeline.add_rect(view.widget, x,         y,         w, t, color)
+    timeline.add_rect(view.widget, x,         y + h - t, w, t, color)
+    timeline.add_rect(view.widget, x,         y,         t, h, color)
+    timeline.add_rect(view.widget, x + w - t, y,         t, h, color)
+end
+
+local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height)
     if not clip or not clip.track_id or not start_value or not duration_value then
         return
     end
@@ -211,17 +228,14 @@ local function draw_preview_outline(view, clip, start_value, duration_value, sta
 
     local clip_y = track_y + 5
     local clip_height = track_height - 10
-    timeline.add_rect(view.widget, visible_x, clip_y, visible_w, 2, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, visible_x, clip_y + clip_height - 2, visible_w, 2, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, visible_x, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
-    timeline.add_rect(view.widget, visible_x + visible_w - 2, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
+    stroke_outline_rect(view, visible_x, clip_y, visible_w, clip_height, PREVIEW_RECT_COLOR)
 end
 
 -- Outline the clips whose edges the user is directly dragging (the
 -- gesture's manipulation target). Downstream clips that shift as a
 -- consequence of the ripple are NOT outlined here — they are
 -- represented as a single bounding block by render_shift_block_outlines.
-local function render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height, viewport_duration)
+local function render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height)
     if not preview_data then return end
     local affected = preview_data.affected_clips
     if not affected and preview_data.affected_clip then
@@ -234,7 +248,7 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
             if clip then
                 local start_value = entry.new_start_value or clip.sequence_start
                 local duration_value = entry.new_duration or clip.duration
-                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
+                draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height)
             end
         end
     end
@@ -330,6 +344,65 @@ local function coalesce_runs(runs, threshold_px)
     return merged
 end
 
+-- Partition preview_data.shift_blocks into (global, per_track) — a block
+-- with a track_id binds to that track; a block without one applies to
+-- every track that has no per-track override (the "global" fallback).
+local function partition_shift_blocks(shift_blocks)
+    local global_block = nil
+    local per_track = {}
+    for _, block in ipairs(shift_blocks) do
+        if type(block) == "table" then
+            if block.track_id then
+                per_track[block.track_id] = block
+            elseif not global_block then
+                global_block = block
+            end
+        end
+    end
+    return global_block, per_track
+end
+
+-- Build the {clip_id → true} set of clips that are user-directly-dragged
+-- and therefore handled by render_preview_rectangles, not by the shift
+-- block contour.
+local function build_excluded_clip_set(affected_clips)
+    local excluded = {}
+    for _, entry in ipairs(affected_clips or {}) do
+        if entry and entry.clip_id then excluded[entry.clip_id] = true end
+    end
+    return excluded
+end
+
+-- Draw the contoured outline for one track of one shift block. Returns
+-- nothing; emits zero or more outline rects via stroke_outline_rect.
+local function render_shift_block_for_track(view, track_id, block, excluded,
+                                            state_module, width,
+                                            viewport_start, viewport_end,
+                                            threshold_px, height)
+    local track_clips = state_module.get_track_clip_index(track_id) or {}
+    if #track_clips == 0 then return end
+
+    local runs = collect_shifted_runs_for_track(
+        track_clips, block.start_frames, block.delta_frames,
+        excluded, state_module.time_to_pixel,
+        width, viewport_start, viewport_end)
+    local coalesced = coalesce_runs(runs, threshold_px)
+    if #coalesced == 0 then return end
+
+    local ty = view.get_track_y_by_id(track_id, height)
+    local th = view.get_track_visual_height(track_id)
+    if ty < 0 or not th or th <= 0 then return end
+
+    local clip_y = ty + 5
+    local clip_h = th - 10
+    if clip_h < 1 then return end
+
+    for _, run in ipairs(coalesced) do
+        stroke_outline_rect(view, run.x_start, clip_y,
+                            run.x_end - run.x_start, clip_h, PREVIEW_RECT_COLOR)
+    end
+end
+
 --- Outline downstream movers per track, tightly contoured.
 -- For each visible track that participates in a shift block, walk its
 -- downstream clips, cull what's offscreen, coalesce neighbors that are
@@ -337,7 +410,7 @@ end
 -- and draw one 4-sided outline per coalesced run. This replaces the
 -- prior single-bbox-across-all-tracks approach which produced an
 -- outline that was mostly offscreen on long timelines.
-local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_duration, viewport_start, viewport_end)
+local function render_shift_block_outlines(view, preview_data, state_module, width, height, viewport_start, viewport_end)
     if not preview_data or type(preview_data.shift_blocks) ~= "table" or #preview_data.shift_blocks == 0 then
         return
     end
@@ -348,64 +421,22 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
         error("timeline_view_renderer: state_module.get_track_clip_index is required for shift block previews", 2)
     end
 
-    local global_block = nil
-    local per_track = {}
-    for _, block in ipairs(preview_data.shift_blocks) do
-        if type(block) == "table" then
-            if block.track_id then
-                per_track[block.track_id] = block
-            elseif not global_block then
-                global_block = block
-            end
-        end
-    end
-    if not global_block and not next(per_track) then
-        return
-    end
+    local global_block, per_track = partition_shift_blocks(preview_data.shift_blocks)
+    if not global_block and not next(per_track) then return end
 
-    -- Only the user's directly-dragged clips are excluded from the block.
-    -- Every other downstream mover (whether represented in shifted_clips
-    -- or implicit in the bulk shift) participates in the contoured outlines.
-    local excluded = {}
-    for _, entry in ipairs(preview_data.affected_clips or {}) do
-        if entry and entry.clip_id then excluded[entry.clip_id] = true end
-    end
-
+    local excluded = build_excluded_clip_set(preview_data.affected_clips)
     local threshold_px = width * SHIFT_OUTLINE_COALESCE_FRACTION
     local off_tracks = preview_data.off_tracks or {}
-    local visible_tracks = view.filtered_tracks or {}
-    for _, track in ipairs(visible_tracks) do
+
+    for _, track in ipairs(view.filtered_tracks or {}) do
         local track_id = track and track.id
         if track_id and not off_tracks[track_id] then
             local block = per_track[track_id] or global_block
             if block and block.start_frames and block.delta_frames and block.delta_frames ~= 0 then
-                local track_clips = state_module.get_track_clip_index(track_id) or {}
-                if #track_clips > 0 then
-                    local runs = collect_shifted_runs_for_track(
-                        track_clips, block.start_frames, block.delta_frames,
-                        excluded, state_module.time_to_pixel,
-                        width, viewport_start, viewport_end)
-                    local coalesced = coalesce_runs(runs, threshold_px)
-                    if #coalesced > 0 then
-                        local ty = view.get_track_y_by_id(track_id, height)
-                        local th = view.get_track_visual_height(track_id)
-                        if ty >= 0 and th and th > 0 then
-                            local clip_y = ty + 5
-                            local clip_h = th - 10
-                            if clip_h >= 1 then
-                                for _, run in ipairs(coalesced) do
-                                    local rw = run.x_end - run.x_start
-                                    if rw >= 1 then
-                                        timeline.add_rect(view.widget, run.x_start, clip_y, rw, 2, PREVIEW_RECT_COLOR)
-                                        timeline.add_rect(view.widget, run.x_start, clip_y + clip_h - 2, rw, 2, PREVIEW_RECT_COLOR)
-                                        timeline.add_rect(view.widget, run.x_start, clip_y, 2, clip_h, PREVIEW_RECT_COLOR)
-                                        timeline.add_rect(view.widget, run.x_start + rw - 2, clip_y, 2, clip_h, PREVIEW_RECT_COLOR)
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
+                render_shift_block_for_track(view, track_id, block, excluded,
+                                             state_module, width,
+                                             viewport_start, viewport_end,
+                                             threshold_px, height)
             end
         end
     end
@@ -875,20 +906,16 @@ function M.render(view)
         end
 
         local is_selected = selected_lookup[clip.id] == true
-        local outline_thickness = 2
 
         if is_selected or outline_only then
-            local outline_col = state_module.colors.clip_selected
-            timeline.add_rect(view.widget, visible_x, y, draw_width, outline_thickness, outline_col)
-            timeline.add_rect(view.widget, visible_x, y + clip_height - outline_thickness, draw_width, outline_thickness, outline_col)
-            timeline.add_rect(view.widget, visible_x, y, outline_thickness, clip_height, outline_col)
-            timeline.add_rect(view.widget, visible_x + draw_width - outline_thickness, y, outline_thickness, clip_height, outline_col)
+            stroke_outline_rect(view, visible_x, y, draw_width, clip_height,
+                                state_module.colors.clip_selected)
         elseif draw_width ~= clip_width or visible_x ~= x then
             -- Dash indicators for clipping
             local dash_height = math.min(clip_height, 12)
             local dash_col = state_module.colors.clip_selected
-            if x < 0 then timeline.add_rect(view.widget, 0, y + (clip_height - dash_height)/2, outline_thickness, dash_height, dash_col) end
-            if x + clip_width > width then timeline.add_rect(view.widget, width - outline_thickness, y + (clip_height - dash_height)/2, outline_thickness, dash_height, dash_col) end
+            if x < 0 then timeline.add_rect(view.widget, 0, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
+            if x + clip_width > width then timeline.add_rect(view.widget, width - OUTLINE_THICKNESS, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
         end
 
         if not outline_only and draw_width > 0 then
@@ -1066,14 +1093,13 @@ function M.render(view)
 
         local preview_data = edge_drag_state.preview_data
         if preview_data then
-            render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height, viewport_duration)
+            render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height)
             render_shift_block_outlines(
                 view,
                 preview_data,
                 state_module,
                 width,
                 height,
-                viewport_duration,
                 viewport_start,
                 viewport_end
             )
