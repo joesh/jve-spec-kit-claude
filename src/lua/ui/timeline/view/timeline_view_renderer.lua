@@ -135,21 +135,16 @@ local function build_preview_from_payload(payload)
         clamped_edges = payload.clamped_edges or {},
         edge_preview = payload.edge_preview
     }
+    -- Keep only non-gap affected entries — gaps are not the user's
+    -- direct gesture target visually, and downstream movers are
+    -- represented by the unified block bbox, not by per-clip outlines.
+    -- (Pre-block-bbox there was a fallback copying shifted_clips into
+    -- affected_clips so pure-gap drags still showed something; the
+    -- bbox makes that fallback obsolete and harmful — it caused every
+    -- downstream clip to get its own per-clip outline.)
     for _, entry in ipairs(affected_entries) do
         if not entry.is_gap then
             table.insert(preview.affected_clips, entry)
-        end
-    end
-    if (#preview.affected_clips == 0) and (#preview.shifted_clips > 0) then
-        for _, entry in ipairs(preview.shifted_clips) do
-            table.insert(preview.affected_clips, {
-                clip_id = entry.clip_id,
-                new_start_value = entry.new_start_value,
-                new_duration = entry.new_duration,
-                edge_type = entry.edge_type,
-                raw_edge_type = entry.raw_edge_type,
-                is_gap = false
-            })
         end
     end
     return preview
@@ -222,6 +217,10 @@ local function draw_preview_outline(view, clip, start_value, duration_value, sta
     timeline.add_rect(view.widget, visible_x + visible_w - 2, clip_y, 2, clip_height, PREVIEW_RECT_COLOR)
 end
 
+-- Outline the clips whose edges the user is directly dragging (the
+-- gesture's manipulation target). Downstream clips that shift as a
+-- consequence of the ripple are NOT outlined here — they are
+-- represented as a single bounding block by render_shift_block_outlines.
 local function render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height, viewport_duration)
     if not preview_data then return end
     local affected = preview_data.affected_clips
@@ -236,18 +235,6 @@ local function render_preview_rectangles(view, preview_data, preview_clip_cache,
                 local start_value = entry.new_start_value or clip.sequence_start
                 local duration_value = entry.new_duration or clip.duration
                 draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height, viewport_duration)
-            end
-        end
-    end
-
-    for _, shift in ipairs(preview_data.shifted_clips or {}) do
-        local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = shift.clip_id})
-        if clip and shift.new_start_value then
-            local existing_start = clip.sequence_start
-            local new_start = shift.new_start_value
-            -- All coords are now integers, simple comparison
-            if new_start ~= existing_start then
-                draw_preview_outline(view, clip, new_start, clip.duration, state_module, width, height, viewport_duration)
             end
         end
     end
@@ -348,11 +335,11 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
         return
     end
 
+    -- Only the user's directly-dragged clips are excluded from the block.
+    -- Every other downstream mover (whether represented in shifted_clips
+    -- or implicit in the bulk shift) participates in the bounding box.
     local excluded = {}
     for _, entry in ipairs(preview_data.affected_clips or {}) do
-        if entry and entry.clip_id then excluded[entry.clip_id] = true end
-    end
-    for _, entry in ipairs(preview_data.shifted_clips or {}) do
         if entry and entry.clip_id then excluded[entry.clip_id] = true end
     end
 

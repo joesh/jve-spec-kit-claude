@@ -92,8 +92,33 @@ timeline = original_timeline
 layout:cleanup()
 
 assert(ok, "Renderer threw error: " .. tostring(err))
-local preview = view.drag_state.preview_data or {}
-assert(#(preview.affected_clips or {}) >= 1,
-    "Clip should appear in affected_clips when dragging its edge")
-assert(#rects > 0, "Expected preview rectangles to be drawn")
-print("✅ Single clip with leading gap receives a preview outline when trimmed")
+
+-- Domain assertion: dragging the gap's OUT edge by -200 frames shrinks
+-- the gap, so v1_right shifts left from sequence_start=3500 to 3300.
+-- The preview must visually mark that downstream movement. Under the
+-- block-bbox contract (test_timeline_ripple_preview_single_block_outline)
+-- the visualization is the unified shift block — not a per-clip outline
+-- on the dragged gap itself (which would never make sense — the gap is
+-- empty space, not content the user can see).
+local shifted_start = clips.v1_right.sequence_start - 200
+local shifted_end   = shifted_start + clips.v1_right.duration
+local start_px = timeline_state.time_to_pixel(shifted_start, width)
+local end_px   = timeline_state.time_to_pixel(shifted_end, width)
+local v1_top, v1_bottom = 0, 150
+local function overlaps(rx, ry, rw, rh, ax, ay, aw, ah)
+    return rx < ax + aw and rx + rw > ax and ry < ay + ah and ry + rh > ay
+end
+local found = false
+for _, r in ipairs(rects) do
+    if r.color == "#ffff00"
+        and overlaps(r.x, r.y, r.w, r.h,
+                     start_px, v1_top, end_px - start_px, v1_bottom - v1_top) then
+        found = true; break
+    end
+end
+assert(found, string.format(
+    "Expected a preview-color rect intersecting v1_right's shifted region "
+    .. "(x=%d..%d, y=%d..%d) after gap OUT-edge ripple by -200",
+    start_px, end_px, v1_top, v1_bottom))
+
+print("✅ Gap OUT-edge ripple marks the downstream content via the block bbox")

@@ -137,18 +137,35 @@ if shifted_start_frames >= active_block.start_frames then
 end
 local shifted_px = timeline_state.time_to_pixel(shifted_start_frames, width)
 
+-- The downstream V2 mover is now enclosed by the single multi-track
+-- block outline (see test_timeline_ripple_preview_single_block_outline.lua).
+-- Assert that some preview-color rect intersects the V2 downstream
+-- clip's shifted region — i.e., the clip is visually marked by the
+-- preview, regardless of whether the mark is a per-clip outline or part
+-- of a larger enclosing block.
 local preview_color = "#ffff00"
 local v2_entry = view.track_layout_cache.by_id[tracks.v2.id]
+local shifted_end_px = timeline_state.time_to_pixel(
+    shifted_start_frames + downstream.duration, width)
+local v2_band_top    = v2_entry.y
+local v2_band_bottom = v2_entry.y + v2_entry.height
+local function rects_overlap(ax, ay, aw, ah, bx, by, bw, bh)
+    return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by
+end
 local found_preview_rect = false
 for _, rect in ipairs(drawn_rects) do
-    if rect.color == preview_color and rect.y >= v2_entry.y and rect.y <= (v2_entry.y + v2_entry.height) then
-        if math.abs(rect.x - shifted_px) <= 3 then
+    if rect.color == preview_color then
+        if rects_overlap(rect.x, rect.y, rect.w, rect.h,
+                         shifted_px, v2_band_top,
+                         shifted_end_px - shifted_px, v2_band_bottom - v2_band_top) then
             found_preview_rect = true
             break
         end
     end
 end
 assert(found_preview_rect,
-    string.format("Expected downstream preview outline near x=%d (shifted_start=%d)", shifted_px, shifted_start_frames))
+    string.format("Expected a preview-color rect intersecting the V2 downstream "
+        .. "clip's shifted region (x=%d..%d, y=%d..%d, shifted_start=%d)",
+        shifted_px, shifted_end_px, v2_band_top, v2_band_bottom, shifted_start_frames))
 
 print("✅ Downstream clips shift preview when gaps ripple across tracks")
