@@ -46,21 +46,45 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             "       'record engine has no loaded sequence — fixture broken'); "
             "return sid")
 
-        # Find an interior media clip with healthy source headroom so the
-        # ripple won't be blocked by the source floor.
+        # Find a media clip with all three kinds of headroom:
+        #   - source_in >= 10        — can walk source earlier by 5
+        #   - duration > 50          — non-trivial clip
+        #   - has a real prior clip on the same track (NOT the first
+        #     clip on its track) — BRE silent-no-ops on in-edge ripple
+        #     into the implicit pre-clip gap, so the test needs the
+        #     prior-clip-as-absorber path. (Per memory:
+        #     todo_test_source_viewer_marks_track_live_clip_mutations
+        #     calls out this exact trap — picking the first clip on
+        #     its track masquerades as "signal didn't fire" when
+        #     really BRE refused to do anything.)
+        # Group clips by track + sort by sequence_start so we can skip
+        # the first-on-track clip (where in-edge ripple silent-no-ops).
         info = self.eval(
             "local ts = require('ui.timeline.timeline_state'); "
             "local tracks = {}; "
             "for _, t in ipairs(ts.get_all_tracks() or {}) do tracks[t.id] = t end; "
+            "local by_track = {}; "
             "for _, c in ipairs(ts.get_clips()) do "
-            "  local t = tracks[c.track_id]; "
-            "  if not c.is_gap and t and t.track_type == 'VIDEO' "
-            "     and (c.duration or 0) > 50 "
-            "     and (c.source_in or 0) >= 10 then "
-            "    return string.format('%s|%s', c.id, c.track_id) "
+            "  if not c.is_gap then "
+            "    by_track[c.track_id] = by_track[c.track_id] or {}; "
+            "    table.insert(by_track[c.track_id], c); "
             "  end "
             "end; "
-            "error('no interior video clip with source headroom in fixture')")
+            "for _, list in pairs(by_track) do "
+            "  table.sort(list, function(a,b) return (a.sequence_start or 0) < (b.sequence_start or 0) end); "
+            "end; "
+            "for _, list in pairs(by_track) do "
+            "  local t = tracks[list[1].track_id]; "
+            "  if t and t.track_type == 'VIDEO' then "
+            "    for i = 2, #list do "
+            "      local c = list[i]; "
+            "      if (c.duration or 0) > 50 and (c.source_in or 0) >= 10 then "
+            "        return string.format('%s|%s', c.id, c.track_id) "
+            "      end "
+            "    end "
+            "  end "
+            "end; "
+            "error('no non-first video clip with source headroom in fixture')")
         clip_id, track_id = info.strip('"').split('|', 1)
 
         # Load into source viewer in live-bound mode.
