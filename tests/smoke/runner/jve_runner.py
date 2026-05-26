@@ -35,7 +35,12 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_BINARY = REPO_ROOT / "build" / "bin" / "jve.app" / "Contents" / "MacOS" / "jve"
 DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
-EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", "5"))
+# Default eval timeout. 5s is plenty on the host (warm cache, multi-core),
+# but the UTM guest is single-core with cold disk and per-test operations
+# like open_project routinely take longer. Bump the default when running
+# in-VM; JVE_SMOKE_EVAL_TIMEOUT still wins if explicitly set.
+_DEFAULT_EVAL_TIMEOUT = "15" if os.environ.get("JVE_SMOKE_IN_VM") else "5"
+EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", _DEFAULT_EVAL_TIMEOUT))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))
 PROMPT = b"jve> "
 
@@ -246,6 +251,17 @@ class JVERunner:
         """
         if self._proc is None:
             raise JVERunnerError("JVERunner.foreground: process not started")
+
+        # In-VM short-circuit: when JVE_SMOKE_IN_VM is set we know there
+        # are no competing apps on the guest desktop, and main.cpp's
+        # activateIgnoringOtherApps:YES has already made JVE frontmost
+        # at launch. Skipping the osascript path also lets us drive the
+        # whole suite over ssh — sshd doesn't have Accessibility
+        # permission and never should, so the System Events call would
+        # otherwise hard-fail every ssh-launched run.
+        if os.environ.get("JVE_SMOKE_IN_VM"):
+            return
+
         pid = self._proc.pid
         script = (
             f'tell application "System Events" '

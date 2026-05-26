@@ -87,11 +87,36 @@ def build(force: bool = False) -> Path:
             f"template build failed — scratch .jvp not produced at {scratch_jvp}. "
             f"See {fixtures.scratch_root / 'build_template.log'}")
 
+    # Checkpoint the WAL into the main file so the template is
+    # self-contained — case.py copies only the .jvp per test, and
+    # without this the per-test DB would be missing every row that
+    # the importer wrote (a pre-2026-05-25 bug: builder reported
+    # success while producing an empty template).
+    import sqlite3
+    conn = sqlite3.connect(str(scratch_jvp))
+    try:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    # Postcondition: at least one project row landed. NSF — fail
+    # loudly here, not three layers up when JVE rejects the empty DB.
+    conn = sqlite3.connect(str(scratch_jvp))
+    try:
+        count = conn.execute("SELECT count(*) FROM projects").fetchone()[0]
+    finally:
+        conn.close()
+    if count == 0:
+        raise SystemExit(
+            f"template build produced 0 projects — DRP import silently failed. "
+            f"See {fixtures.scratch_root / 'build_template.log'}")
+
     # Move into place.
     import shutil
     shutil.move(str(scratch_jvp), str(fixtures.template_path))
     _write_hash(fixtures.template_path, current_hash)
-    print(f"built template at {fixtures.template_path}")
+    print(f"built template at {fixtures.template_path} ({count} project(s))")
     return fixtures.template_path
 
 

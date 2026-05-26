@@ -191,7 +191,7 @@ def _smoke_mentions(needle: str) -> bool:
     return needle in _smoke_cases_text_cache()
 
 
-_smoke_text_cached: str | None = None
+_smoke_text_cached = None  # Optional[str]; bare None keeps PEP 604 out of runtime parse
 
 
 def _smoke_cases_text_cache() -> str:

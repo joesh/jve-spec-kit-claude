@@ -117,10 +117,10 @@ class JVESmokeCase(unittest.TestCase):
         # Always re-resolve the runner: _ensure_runner returns the
         # current live singleton, respawning if the prior test killed
         # it via eval-timeout force-shutdown.
-        self.runner, self._fixtures_inst = _ensure_runner()
+        self.runner, self._fixtures = _ensure_runner()
         # Per-test fresh project copy. Foreground again in case a prior
         # test stole focus (osascript dialogs, modals, etc.).
-        jvp = self._fixtures_inst.fresh_copy(self.id())
+        jvp = self._fixtures.fresh_copy(self.id())
         self.runner.open_project(jvp)
         self.runner.foreground()
 
