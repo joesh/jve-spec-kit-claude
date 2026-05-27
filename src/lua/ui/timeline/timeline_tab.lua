@@ -24,13 +24,10 @@ TimelineTab.__index = TimelineTab
 
 local VALID_KINDS = { record = true, source = true }
 
--- Empty-cache constructor. Phase 1.1 (spec 022): per-tab cache mirrors the
--- per-sequence fields that data.state holds today. Selection and drag are
--- NOT included — both remain global on timeline_state (selection is global
--- by design; drag because cross-timeline drags are supported). Phase 1.3
--- re-points clip/track indexes onto this cache; phase 1.4 dispatches
--- signals per-tab. Until those phases land nothing reads from .cache;
--- this is empty plumbing.
+-- Per-tab cache holds the per-sequence fields that the timeline view
+-- pulls from. Selection and drag stay global on timeline_state (selection
+-- by design; drag because cross-timeline drags are supported). Indexes
+-- rebuild lazily on first getter after indexes_dirty=true.
 local function fresh_cache()
     return {
         tracks = {},
@@ -44,12 +41,6 @@ local function fresh_cache()
         audio_scroll_offset = 0,
         video_audio_split_ratio = 0.5,
         playhead_position = 0,
-        -- Per-tab clip indexes (Phase 1.3a-i; spec 022). Mirrors the
-        -- module-level indexes in clip_state.lua but owned per-tab so
-        -- writes routed by sequence_id (1.3a-ii) hit the right cache.
-        -- Rebuilt lazily on first index getter when indexes_dirty=true;
-        -- load_from_database marks dirty so the freshly-loaded clips
-        -- index themselves on next access.
         clip_lookup = {},          -- clip_id → clip
         track_clip_index = {},     -- track_id → sorted clip list
         clip_track_positions = {}, -- clip_id → {list, index}
@@ -328,10 +319,8 @@ function TimelineTab:load_from_database()
     self.cache.playhead_position = seq.playhead_position
 end
 
--- Rebuild the per-tab indexes from cache.clips. Ties broken by clip id
--- for determinism. Mirrors clip_state.rebuild_clip_indexes shape so
--- 1.3a-ii can route apply_mutations writes through these without
--- changing the index semantics.
+-- Rebuild per-tab indexes from cache.clips. Ties broken by clip id
+-- for determinism.
 local function rebuild_indexes(cache)
     local lookup, track_index, positions = {}, {}, {}
     for _, clip in ipairs(cache.clips) do
@@ -369,9 +358,8 @@ local function ensure_indexes(self)
     if self.cache.indexes_dirty then rebuild_indexes(self.cache) end
 end
 
---- Mark per-tab indexes dirty. Callers that mutate cache.clips directly
---- (Phase 1.3a-ii apply_mutations will call this after each batch) must
---- invoke this so the next index getter triggers a lazy rebuild.
+--- Mark per-tab indexes dirty so the next getter rebuilds. Callers that
+--- mutate cache.clips directly must invoke this.
 function TimelineTab:invalidate_indexes()
     self.cache.indexes_dirty = true
 end
@@ -382,9 +370,8 @@ function TimelineTab:get_clip_by_id(clip_id)
     return self.cache.clip_lookup[clip_id]
 end
 
---- Return the internal sorted clip list for a track (read-only reference,
---- nil when track has no clips). Matches clip_state.get_track_clip_index
---- semantics so 1.3a-ii routing can swap callers without surprise.
+--- Internal sorted clip list for a track (read-only reference, nil when
+--- track has no clips). Matches clip_state.get_track_clip_index semantics.
 function TimelineTab:get_track_clip_index(track_id)
     if track_id == nil then return nil end
     ensure_indexes(self)
@@ -503,13 +490,8 @@ end
 
 --- Apply a mutations bucket to this tab's cache (cache.clips + indexes).
 --- Operates on cache ONLY — no signal emit, no persistence callback, no
---- selection update (those belong to the orchestrator that drives both
---- tab and global concerns; spec 022 Phase 1.3a-ii).
----
---- Bug-fix routing: timeline_state.apply_mutations dispatches by
---- mutations.sequence_id to the matching tab so writes to a non-displayed
---- active sequence land in the right cache instead of trashing the
---- displayed view. Order mirrors clip_state.apply_mutations:
+--- selection update (the orchestrator at timeline_state.apply_mutations
+--- handles those cross-cutting concerns). Order:
 --- updates → inserts → bulk_shifts → placements → deletes.
 function TimelineTab:apply_mutations(mutations)
     if type(mutations) ~= "table" then return false end
@@ -577,15 +559,12 @@ function TimelineTab:locate_neighbor(clip, offset)
     return info.list[i]
 end
 
--- Spec 022 Phase 1.3f: per-tab mutation snapshot for undo-group rollback.
--- Each tab carries its own stack so begin/commit/rollback target the
--- exact tab the active edit-target pointed to at begin time. Selection
--- is GLOBAL on data.state (cross-tab singleton), so the snapshot also
--- carries selection state — restoring the tab's clips alone would leave
--- selection pointing at stale clip objects.
---
--- Lazy require of data avoids a load-order coupling (timeline_state_data
--- doesn't depend on tabs; tabs grab data only when a snapshot fires).
+-- Per-tab mutation snapshot for undo-group rollback. Each tab carries its
+-- own stack so begin/commit/rollback target the tab the active edit-target
+-- pointed to at begin time. Selection is global on data.state, so the
+-- snapshot also carries selection — restoring clips alone would leave
+-- selection pointing at stale objects. Lazy require of data avoids a
+-- load-order coupling.
 
 local function ensure_snapshot_stack(self)
     if not self._mutation_snapshot_stack then
@@ -652,8 +631,7 @@ function TimelineTab:rollback_mutation_transaction()
     local data = require("ui.timeline.state.timeline_state_data")
 
     -- Restore cache.clips in place (preserves table identity so any
-    -- aliases — including data.state.clips for the displayed tab — keep
-    -- pointing at the same array).
+    -- held aliases keep pointing at the same array).
     local clips = self.cache.clips
     for i = #clips, 1, -1 do table.remove(clips, i) end
     for _, c in ipairs(snapshot.clips) do table.insert(clips, c) end

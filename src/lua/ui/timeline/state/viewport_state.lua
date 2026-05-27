@@ -7,9 +7,8 @@ local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local viewport_guard_count = 0
 
--- Spec 022 Phase 1.3f: content_length lives on the displayed tab's cache
--- (the per-tab cache architecture's source of truth for clip extent).
--- Empty when no tab displayed — a blank panel has zero extent.
+-- content_length lives on the displayed tab's cache (per-tab source of
+-- truth for clip extent). Zero when no tab displayed — blank panel.
 local function compute_sequence_content_length()
     local strip = strip_holder.get()
     if not strip then return 0 end

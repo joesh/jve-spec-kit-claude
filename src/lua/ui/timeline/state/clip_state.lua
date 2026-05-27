@@ -1,38 +1,21 @@
---- Clip state: in-memory clip collection for the active sequence.
---- Owns the clips list stored in timeline_state_data, plus per-track
---- clip-index caches for O(log n) lookup. apply_mutations consumes
---- the `__timeline_mutations` payload emitted by commands and patches
---- the in-memory cache in lock-step with the DB, avoiding a full
---- reload_clips on every edit. Gap clips are derived state —
---- recomputed by timeline_core_state, not stored in this module's
---- authoritative list.
----
---- @file clip_state.lua
+--- Clip state facade: read accessors + snapshot/rollback wrappers that
+--- delegate to the displayed (reads) or active record (snapshot) tab.
+--- Per-tab cache.clips is authoritative; gap clips are derived state
+--- recomputed by timeline_core_state.
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
 local log = require("core.logger").for_area("timeline")
 local strip_holder = require("ui.timeline.state.strip_holder")
 
--- Spec 022 Phase 1.3f: public read getters delegate to the displayed tab's
--- cache + per-tab indexes. The displayed tab is the authoritative model
--- for "what clips does the timeline view show?" (rule 3.0 MVC). The local
--- `clip_lookup`/`track_clip_index`/`clip_track_positions` indexes below
--- still serve the legacy apply_mutations + snapshot/rollback paths (1.3f
--- step 3/4 migrate those). data.state.clips remains aliased to displayed
--- tab cache.clips by sync_displayed_tab_from_data_state until step 6
--- deletes the field entirely.
+-- Public read getters delegate to the displayed tab's per-tab cache —
+-- the authoritative model for "what clips does the timeline view show?"
+-- (rule 3.0 MVC).
 local function displayed_tab()
     local strip = strip_holder.get()
     if not strip then return nil end
     return strip:get_displayed()
 end
-
--- Spec 022 Phase 1.3f: mutation snapshot stack lives PER-TAB on
--- TimelineTab. The facade fns below resolve the active record tab via
--- strip_holder and delegate. Active tab is the edit target — that's
--- where rollback applies, even when source tab is displayed (per the
--- original bug fix this spec exists to address).
 
 -- All coordinates are now integers. No Rational conversion needed.
 -- This function validates and normalizes clip coords from various sources.
@@ -90,12 +73,7 @@ end
 -- staleness via validate_clip_fresh. Snapshot/rollback also bump it.
 local state_version = 0
 
--- Spec 022 Phase 1.3f: invalidate the DISPLAYED tab's indexes. The
--- legacy module-level clip_lookup / track_clip_index / clip_indexes_dirty
--- variables are gone — public getters delegate to the tab's own indexes
--- (1.3f step 2). Snapshot/rollback callers also invoke this to mark the
--- displayed tab's index stale after they swap data.state.clips back to
--- a restored snapshot.
+-- Invalidate the displayed tab's clip indexes — next index getter rebuilds.
 function M.invalidate_indexes()
     local tab = displayed_tab()
     if tab then tab:invalidate_indexes() end
@@ -204,11 +182,8 @@ function M.get_content_end_frame()
     return max_end
 end
 
--- Spec 022 Phase 1.3f: hydrate a clip from SQL into a specific tab's cache.
--- Used by timeline_state.apply_mutations when an update references a clip
--- the tab cache hasn't seen yet (test fixtures pre-populating SQL; legacy
--- callsites that mutate without first hydrating). Preserves the same
--- assert-loud contract as hydrate_from_database.
+-- Hydrate a clip from SQL into the given tab's cache. Asserts on
+-- missing clip or sequence-id mismatch (no silent skip).
 function M.hydrate_into_tab(tab, clip_id, expected_sequence_id)
     assert(tab, "clip_state.hydrate_into_tab: tab required")
     assert(clip_id, "clip_state.hydrate_into_tab: clip_id required")
@@ -229,19 +204,12 @@ function M.hydrate_into_tab(tab, clip_id, expected_sequence_id)
     return clip
 end
 
--- Spec 022 Phase 1.3f: M.apply_mutations DELETED. timeline_state.apply_mutations
--- now orchestrates the full edit cycle (hydration + selection cleanup +
--- per-tab mutation via TimelineTab:apply_mutations + gap recompute +
--- version stamping + signal). The mutation engine lives on the tab.
-
 function M.get_version() return state_version end
 function M.inc_version() state_version = state_version + 1 end
 
--- Resolve the active edit-target tab via strip. Snapshot/rollback always
--- operate on this tab — the bug spec 022 was created to fix is exactly
--- "edit-target tab ≠ displayed tab" (source tab shown while user edits a
--- record sequence). Returns nil when no strip is set OR no active record
--- tab — both are valid pre-init / blank-project states.
+-- Snapshot/rollback always target the active record tab (the edit target),
+-- which can differ from the displayed tab when a source is shown. Returns
+-- nil for blank-project / pre-init states.
 local function active_record_tab()
     local strip = strip_holder.get()
     if not strip then return nil end

@@ -24,10 +24,9 @@ end
 
 local function fresh_state()
     return {
-        -- Spec 022 Phase 1.3f: tracks / clips / content_length live on
-        -- TimelineTab.cache (the per-tab cache architecture). Reads
-        -- come through strip:displayed_tracks() / displayed_clips() and
-        -- track_state / clip_state, both routing to the displayed tab.
+        -- tracks / clips / content_length live on TimelineTab.cache.
+        -- Reads come through strip:displayed_tracks() / displayed_clips()
+        -- and track_state / clip_state, all routing to the displayed tab.
         project_id = nil,
         sequence_id = nil,
 
@@ -110,10 +109,6 @@ function M.reset_state_preserve_listeners()
     -- readers pull via tab_strip:get_source_tab() then Sequence.load.
     notify_timer = nil
 end
-
--- Spec 022 Phase 1.3f: set_clips + update_content_length DELETED.
--- Clip data lives on TimelineTab.cache; content_length is maintained
--- in-place by recompute_gap_clips_for_tab / tab:apply_mutations.
 
 function M.add_listener(callback)
     table.insert(listeners, callback)

@@ -174,13 +174,10 @@ end
 -- `{[track_id]=true, ...}`: only strip + recompute gaps on those tracks
 -- — gaps on other tracks keep their existing IDs and positions, so edge
 -- selections pointing at those tracks' gaps stay valid without migration.
--- Spec 022 Phase 1.3f: clip cache lives on the tab. recompute operates
--- on tab.cache.clips in-place. Selection migration still touches the
--- global data.state.selected_edges (selection is cross-tab).
+-- recompute operates on tab.cache.clips in-place. Selection migration
+-- still touches global data.state.selected_edges (selection is cross-tab).
 
--- Compute the timeline content extent from a list of clips. Inlined here
--- so recompute_gap_clips_for_tab can refresh cache.content_length on any
--- tab without going through data.state.
+-- Compute the timeline content extent from a list of clips.
 local function compute_content_length_from(clip_list)
     local max_end = 0
     for _, c in ipairs(clip_list) do
@@ -192,13 +189,10 @@ local function compute_content_length_from(clip_list)
     return max_end
 end
 
--- Spec 022 Phase 1.3f: recompute gap clips on a specific tab's cache
--- in-place — preserves cache.clips table identity so the data.state.clips
--- alias (still live until step 6) stays valid for the displayed tab.
---
--- Operates on tab.cache.clips / tab.cache.tracks / tab.cache.sequence_frame_rate
--- only. data.state is touched solely for the global selection (selected_edges)
--- migrate-stale step, which is intentionally cross-cutting.
+-- Recompute gap clips on a specific tab's cache in-place — preserves
+-- cache.clips table identity so any held aliases stay valid. Operates on
+-- tab.cache.{clips,tracks,sequence_frame_rate}; the only data.state
+-- touch is migrating stale edge selections (cross-tab singleton).
 local function recompute_gap_clips_for_tab(tab, affected_track_ids)
     assert(tab, "recompute_gap_clips_for_tab: tab required")
     local cache = tab.cache
@@ -223,8 +217,7 @@ local function recompute_gap_clips_for_tab(tab, affected_track_ids)
 
     -- In-place rewrite: clear cache.clips, refill with kept, then let
     -- rebuild_gaps_for_tracks table.insert new gaps into the same table.
-    -- Preserves identity so data.state.clips (aliased while sync helper
-    -- exists) keeps pointing at the same array.
+    -- Preserves identity so held aliases keep pointing at the same array.
     for i = #clips, 1, -1 do table.remove(clips, i) end
     for _, c in ipairs(kept) do table.insert(clips, c) end
 
@@ -236,9 +229,8 @@ local function recompute_gap_clips_for_tab(tab, affected_track_ids)
     tab:invalidate_indexes()
 end
 
--- Legacy whole-displayed-tab recompute. Resolves displayed tab and
--- delegates to recompute_gap_clips_for_tab. Callers in this module
--- (load_displayed_sequence, reload_clips) migrate in step 5.
+-- Whole-displayed-tab recompute. Resolves displayed tab and delegates
+-- to recompute_gap_clips_for_tab.
 local function recompute_gap_clips(affected_track_ids)
     local strip = strip_holder.get()
     if not strip then return end
@@ -256,8 +248,7 @@ local function clamp_track_height(height)
     return clamped
 end
 
--- Spec 022 Phase 1.3f: read tracks from the displayed tab cache; nil
--- when no tab is displayed (caller treats nil as "nothing to persist").
+-- Read tracks from the displayed tab cache; empty when no tab displayed.
 local function displayed_tracks_or_empty()
     local strip = strip_holder.get()
     if not strip then return {} end
@@ -471,15 +462,12 @@ function M.persist_state_to_db(force)
     end
 end
 
--- Spec 022 Phase 1.3f: load_displayed_sequence is now a thin sync step.
--- The tab IS the model — tab:load_from_database (called by strip open
--- hooks in 1.2) populates cache.tracks / clips / viewport / scroll /
--- playhead / frame_rate / start_timecode_frame / track-heights. This
--- function ensures the tab cache is fresh, then mirrors it into data.state
--- (the legacy reader path — step 6 deletes data.state.clips/tracks
--- entirely; viewport/scroll/playhead stay there as displayed-singleton
--- view-state). Selection restore + viewport-fit still live here because
--- selection is global and viewport-fit reads sequence-row JSON.
+-- Thin sync step: the tab IS the model (cache populated by
+-- tab:load_from_database when the strip opens it; signal handlers +
+-- apply_mutations keep it fresh). This mirrors the per-sequence
+-- view-state fields (frame_rate, tc origin, viewport, scroll, playhead)
+-- into data.state for the displayed-singleton readers, restores
+-- selection (global, not per-tab), and runs viewport-fit.
 local function load_displayed_sequence(seq_id)
     assert(seq_id and seq_id ~= "",
         "load_displayed_sequence: seq_id required")
@@ -492,19 +480,15 @@ local function load_displayed_sequence(seq_id)
         .. "caller must update the strip pointer BEFORE calling this",
         tab and tab.sequence_id or "nil", tostring(seq_id)))
 
-    -- Spec 022 Phase 1.3f: do NOT re-hydrate here. The tab was loaded
-    -- when opened (strip:open_record_tab / open_source_tab call
-    -- tab:load_from_database), and signal handlers + apply_mutations
-    -- keep cache in sync afterward. Callers needing an explicit DB
-    -- refresh use core_state.reload_clips. Skipping the redundant
-    -- load_from_database is the perf-win for tab-switch (was ~32 ms/switch).
-
+    -- Do NOT re-hydrate here — the strip's open hooks already called
+    -- tab:load_from_database, and signal handlers keep it fresh.
+    -- Skipping the redundant load is the tab-switch perf win.
     local sequence = require("models.sequence").load(seq_id)
     assert(sequence, string.format(
         "load_displayed_sequence: failed to load seq_id=%s", tostring(seq_id)))
 
-    -- Mirror per-sequence view-state fields into data.state. clip/track
-    -- data lives ONLY on tab.cache (no data.state.clips/tracks anymore).
+    -- Mirror per-sequence view-state into data.state; clip/track data
+    -- lives only on tab.cache.
     data.state.sequence_frame_rate = tab.cache.sequence_frame_rate
     data.state.sequence_timecode_start_frame = tab.cache.sequence_timecode_start_frame
     data.sequence = sequence
@@ -708,9 +692,9 @@ function M.clear(prev_displayed_seq_id)
     persist_dirty = false
 
     data.state.sequence_id = nil
-    -- Spec 022 Phase 1.3f: tracks/clips live on tab caches only; the
-    -- strip's clear_displayed (run before us) already detached the
-    -- displayed pointer, so reads now return empty automatically.
+    -- Tracks/clips live on tab caches; the strip's clear_displayed (run
+    -- before us) already detached the displayed pointer, so reads return
+    -- empty automatically.
     data.state.selected_clips = {}
     data.state.selected_edges = {}
     data.state.selected_gaps = {}
@@ -786,10 +770,8 @@ function M.reload_clips(target_sequence_id, opts)
         return false
     end
 
-    -- Spec 022 Phase 1.3f: tab is the model. Re-hydrate the displayed
-    -- tab's cache from DB (load_from_database recomputes gaps inline),
-    -- then mirror cache.clips into data.state (alias still live until
-    -- step 6).
+    -- Tab is the model — re-hydrate the displayed tab's cache from DB
+    -- (load_from_database recomputes gaps inline).
     local strip = strip_holder.get()
     assert(strip, "reload_clips: no strip set")
     local displayed_tab = strip:get_displayed()
@@ -848,10 +830,8 @@ Signals.connect("source_loaded_changed", function(_new_seq_id, _prev_seq_id)
 end)
 
 -- Spec 022 / 1.4: signal handlers dispatch to all open tabs in the strip,
--- not just data.state. data.state still mirrors the displayed tab (until
--- 1.3b/c migrate readers off it) so we still update it — but non-displayed
--- tabs' caches must also stay current so the user sees correct state when
--- they switch to those tabs.
+-- not just the displayed one. Non-displayed tabs' caches must stay
+-- current so the user sees correct state when they switch.
 local function for_each_tab(fn)
     local strip = strip_holder.get()
     if not strip then return end
@@ -860,11 +840,9 @@ end
 
 -- Sync the in-memory track row when ToggleTrackPreference flips muted /
 -- soloed / locked / enabled. ToggleTrackPreference mutates a freshly-
--- loaded Track instance and writes the DB column; the renderer reads
--- from data.state.tracks (populated by load_displayed_sequence) and
--- without this sync the visual hash overlay / future per-row state
--- would only flip on next sequence load. Signal value is INTEGER 0/1
--- per toggle_track_preference; data.state.tracks stores booleans.
+-- loaded Track instance and writes the DB column; without this sync the
+-- displayed view's visual state would only flip on next sequence load.
+-- Signal value is INTEGER 0/1; cache.tracks stores booleans.
 Signals.connect("track_preference_changed", function(track_id, property, new_val)
     assert(type(track_id) == "string" and track_id ~= "",
         "track_preference_changed listener: track_id must be a non-empty string")
@@ -874,8 +852,8 @@ Signals.connect("track_preference_changed", function(track_id, property, new_val
         "track_preference_changed listener: new_val must be 0 or 1; got %s",
         tostring(new_val)))
     local val = (new_val == 1)
-    -- Spec 022 Phase 1.3f: walk every open tab's cache.tracks; notify
-    -- the displayed view when its track set was touched.
+    -- Walk every open tab's cache.tracks; notify the displayed view
+    -- when its track set was touched.
     local strip = strip_holder.get()
     local displayed_tab = strip and strip:get_displayed() or nil
     local displayed_touched = false
@@ -894,9 +872,9 @@ Signals.connect("track_preference_changed", function(track_id, property, new_val
 end)
 
 -- Update playhead when SetPlayhead command fires. SetPlayhead writes
--- per-sequence; we mirror to each tab's cache so the playhead is correct
--- when the user switches between tabs, and also to data.state when the
--- target IS displayed (legacy reader path).
+-- per-sequence; mirror to each tab's cache so the playhead is correct
+-- when the user switches between tabs, and to data.state when the target
+-- IS displayed (the displayed-singleton view-state mirror).
 Signals.connect("playhead_changed", function(sequence_id, frame)
     if type(frame) ~= "number" then return end
     for_each_tab(function(tab)
@@ -928,9 +906,8 @@ Signals.connect("media_status_changed", function(media_path, status)
         return touched
     end
 
-    -- Spec 022 Phase 1.3f: walk every open tab's cache.clips; track
-    -- whether the displayed tab's set was touched (drives the version
-    -- stamp + notify on the displayed view).
+    -- Walk every open tab's cache.clips; track whether the displayed
+    -- tab's set was touched (drives version stamp + notify).
     local strip = strip_holder.get()
     local displayed_tab = strip and strip:get_displayed() or nil
     local displayed_changed = false

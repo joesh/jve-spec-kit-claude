@@ -135,10 +135,9 @@ M.clear = function()
         core.persist_state_to_db(true)
     end
     tab_strip:clear_displayed()
-    -- Spec 022 Phase 1.3b: get_sequence_id reads from the strip's active
-    -- record. Clearing the displayed pointer alone leaves get_sequence_id
-    -- returning the stale id; views can't render blank (FR-005). Drop
-    -- both pointers so post-clear state is fully blank.
+    -- Drop both pointers so post-clear state is fully blank — leaving
+    -- active set leaves get_active_sequence_id returning a stale id and
+    -- views can't render blank (FR-005).
     tab_strip:clear_active_record()
     return core.clear(prev_seq_id)
 end
@@ -186,12 +185,12 @@ function M.activate_displayed(seq_id)
     return core.activate_displayed(seq_id, prev_seq_id)
 end
 
---- Close a tab and refresh body content if it was the displayed tab.
+--- Close a tab and refresh the timeline view if it was the displayed tab.
 --- The strip's close handler falls the displayed pointer back to a
 --- remaining tab (source-tab close → active record; record-tab close →
---- another record or source). The body must follow — otherwise the
---- strip says "displayed is X" while data.state.clips still holds Y's
---- content (TSO 2026-05-16: clicked × on source tab, body kept
+--- another record or source). The timeline view must follow — otherwise
+--- the strip says "displayed is X" while the timeline view still pulls
+--- Y's clips (TSO 2026-05-16: clicked × on source tab, view kept
 --- rendering master's V1 clip under the now-record-only strip).
 ---
 --- Does NOT touch the active pointer or open_tabs/Qt state — those are
@@ -231,14 +230,14 @@ function M.close_displayed_tab(seq_id)
             -- prev_seq_id. The public M.activate_displayed re-reads the
             -- strip for prev, which by now matches new_displayed (the
             -- strip already swapped), and core short-circuits on equal
-            -- prev/new — body never reloads.
+            -- prev/new — the timeline view never reloads.
             return core.activate_displayed(new_displayed.sequence_id, prev_seq_id)
         end
         -- Strip is empty after close (source-only configuration where the
-        -- user closes the lone source tab). The body MUST blank — without
-        -- this clear data.state.clips keeps the closed sequence's clips
-        -- under an empty strip (TSO 2026-05-17). MVC: no displayed →
-        -- model holds no clips → views render blank by pulling.
+        -- user closes the lone source tab). Clear so MVC pull yields no
+        -- clips and the timeline view renders blank (TSO 2026-05-17:
+        -- without this, closed sequence's clips stayed on screen under
+        -- an empty strip).
         --
         -- prev_seq_id is the sequence that JUST closed — pass it through so
         -- core.clear emits displayed_tab_cleared(prev_seq_id) and the
@@ -333,10 +332,9 @@ M.push_viewport_guard = viewport.push_viewport_guard
 M.pop_viewport_guard = viewport.pop_viewport_guard
 
 -- Tracks
--- Spec 022 Phase 1.3e: per-tab track/clip reads live on TimelineTabStrip
--- (displayed_tracks, displayed_clips, clip_by_id, clips_for_track,
--- track_clip_index, clips_at_time). Callers reach the strip via
--- timeline_state.get_tab_strip().
+-- Per-tab track/clip reads live on TimelineTabStrip (displayed_tracks,
+-- displayed_clips, clip_by_id, clips_for_track, track_clip_index,
+-- clips_at_time) — reach via timeline_state.get_tab_strip().
 M.get_video_tracks = tracks.get_video_tracks
 M.get_audio_tracks = tracks.get_audio_tracks
 M.get_track_height = tracks.get_height
@@ -398,13 +396,10 @@ local function collect_affected_track_ids(mutations)
     return affected, scope_is_known
 end
 
--- Resolve a mutation bucket's target tab via the strip. Per-sequence
--- routing (spec 022 Phase 1.3a-ii bug fix): writes go to the tab whose
--- sequence_id matches the mutation's target — not to data.state
--- (which carries only the DISPLAYED sequence's clips and crashes the
--- bulk_shift assert when target ≠ displayed). Returns nil when no tab
--- is open for the target sequence; the caller treats this as "DB write
--- already done; the next open will load_from_database fresh."
+-- Resolve a mutation bucket's target tab via the strip. Writes go to the
+-- tab whose sequence_id matches the mutation's target — never to "active"
+-- or "displayed". Returns nil when no tab is open for that sequence; the
+-- caller treats this as "DB write already done; next open hydrates fresh."
 local function resolve_target_tab(target_seq)
     local rec = tab_strip:find_record_tab_by_sequence_id(target_seq)
     if rec then return rec end
@@ -413,11 +408,9 @@ local function resolve_target_tab(target_seq)
     return nil
 end
 
--- Prune deleted clips from the global selection state. Selection lives on
--- data.state (it's a cross-tab singleton — one selection across the
--- editor); the per-tab cache mutate path leaves it alone. Spec 022 Phase
--- 1.3f: lifted out of clip_state.apply_mutations so both displayed and
--- non-displayed mutation paths share the same selection-cleanup contract.
+-- Prune deleted clips from the global selection state. Selection is a
+-- cross-tab singleton on data.state; per-tab cache mutate path leaves
+-- it alone, so this orchestration step handles it.
 local function prune_selection_for_deletes(deletes)
     if not deletes then return end
     for _, entry in ipairs(deletes) do
@@ -441,11 +434,9 @@ local function prune_selection_for_deletes(deletes)
     end
 end
 
--- Hydrate clips referenced by updates that aren't yet in the target tab's
--- cache. Mirrors the legacy clip_state.apply_mutations hydration path so
--- mutations addressed to clips the cache hasn't seen still apply (test
--- fixtures pre-populating SQL, etc.). Skips gap-id updates — gaps are
--- in-memory only and "missing gap" means "the gap was evicted" (legit).
+-- Hydrate any clips referenced by updates that aren't yet in the target
+-- tab's cache. Skips gap-id updates — gaps are in-memory only and
+-- "missing gap" means "the gap was evicted" (legitimate).
 local function hydrate_updates_for_tab(target_tab, updates)
     if not updates then return end
     for _, update in ipairs(updates) do
@@ -496,10 +487,9 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
         return true
     end
 
-    -- Spec 022 Phase 1.3f: unified orchestration — both displayed and
-    -- non-displayed targets follow the same path. Tab cache is the model;
-    -- this function provides cross-cutting concerns (selection cleanup,
-    -- gap recompute, version stamping, view-listener notify, signal).
+    -- Unified orchestration: tab cache is the model; this function adds
+    -- cross-cutting concerns (selection cleanup, gap recompute, version
+    -- stamping, view-listener notify, signal).
     local affected_tracks, scope_is_known = collect_affected_track_ids(mutations)
     hydrate_updates_for_tab(target_tab, mutations.updates)
     prune_selection_for_deletes(mutations.deletes)
@@ -531,16 +521,14 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
 end
 
 M.apply_mutations = apply_mutations
-M.update_clip = function() error("Use commands") end
-M.add_clip = function() error("Use commands") end
-M.remove_clip = function() error("Use commands") end
-M._internal_add_clip_from_command = function(clip)
-    if not clip then return false end
-    return apply_mutations({inserts = {clip}})
+M.update_clip = function()
+    error("timeline_state.update_clip: removed — route through command_manager.execute()")
 end
-M._internal_remove_clip_from_command = function(clip_id)
-    if not clip_id then return false end
-    return apply_mutations({deletes = {clip_id}})
+M.add_clip = function()
+    error("timeline_state.add_clip: removed — route through command_manager.execute()")
+end
+M.remove_clip = function()
+    error("timeline_state.remove_clip: removed — route through command_manager.execute()")
 end
 M.validate_clip_fresh = function(clip)
     if not clip then return false, "Nil clip" end
@@ -600,8 +588,8 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 
 -- Project/Sequence Accessors
 M.get_project_id = function() return data.state.project_id end
--- Spec 022 Phase 1.3e: active record sequence_id lives on
--- TimelineTabStrip. Callers use timeline_state.get_tab_strip():active_sequence_id().
+-- Active record sequence_id lives on TimelineTabStrip — use
+-- timeline_state.get_tab_strip():active_sequence_id().
 
 -- Tab / sequence pointer accessors (FR-005, data-model.md §3)
 --

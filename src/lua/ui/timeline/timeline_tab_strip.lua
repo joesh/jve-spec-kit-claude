@@ -152,10 +152,9 @@ function TimelineTabStrip:clear_displayed()
     self:_notify()
 end
 
---- Drop the active-record pointer. Spec 022 Phase 1.3b: get_sequence_id
---- delegates to the strip's active record, so M.clear must clear this
---- pointer too — otherwise post-clear callers see the stale sequence id
---- and views fail to render blank.
+--- Drop the active-record pointer. Callers that clear timeline state must
+--- clear this too — get_active_sequence_id delegates here, so a stale
+--- pointer leaks the prior sequence id and views fail to render blank.
 function TimelineTabStrip:clear_active_record()
     self.active_record_tab = nil
     self:_notify()
@@ -184,11 +183,9 @@ function TimelineTabStrip:get_active_record()
     return self.active_record_tab
 end
 
--- Spec 022 Phase 1.3c — ergonomic accessors callers use instead of the
--- legacy `timeline_state.get_sequence_id` / `get_clips` facade. Each one
--- pulls from the correct tab (active record for the edit target, displayed
--- for the rendered view). Return nil / {} when the relevant pointer is
--- unset; that's a valid model state (blank panel, project_changed), not
+-- Ergonomic accessors: each pulls from the correct tab (active record
+-- for the edit target, displayed for the rendered view). Returns nil/{}
+-- when the relevant pointer is unset — a valid blank-panel state, not
 -- a missing invariant.
 
 --- sequence_id of the active record tab (edit target — FR-005), or nil.

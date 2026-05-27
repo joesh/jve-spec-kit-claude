@@ -1,9 +1,7 @@
 --- Timeline Tracks State
--- Manages track list, layout, and properties.
---
--- Spec 022 Phase 1.3f: reads pull live from the displayed tab's cache via
--- the strip. Module-level state shrinks to "is layout dirty" — the track
--- list itself lives on the tab (rule 3.0 MVC: views pull from model).
+-- Manages track layout + properties. Reads pull live from the displayed
+-- tab's cache via the strip (rule 3.0 MVC). Module-level state is just
+-- the layout-dirty flag.
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local strip_holder = require("ui.timeline.state.strip_holder")
