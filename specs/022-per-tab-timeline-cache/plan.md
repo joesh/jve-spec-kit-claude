@@ -178,6 +178,28 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - Helper: `for_each_tab(fn)` iterates `strip.tabs` defensively (no-op when no strip).
 - Pinned by `test_timeline_signal_handlers_per_tab.lua`.
 
+### Phase 1.3f — Eliminate `data.state.clips`/`tracks` (IN FLIGHT)
+
+**Goal**: `data.state.clips` and `data.state.tracks` deleted. All clip/track data lives on tabs only. Reads route through `strip:displayed_*()`. Writes route through `target_tab:apply_mutations(...)` (where target tab is resolved via strip). `sync_displayed_tab_from_data_state` deleted. `apply_mutations` asymmetry deleted. `activate_displayed` collapses to a strip-pointer move — no DB reload. Architectural payoff: removes the last singleton-style mirror; user-facing tab switch inherits the sub-µs latency the strip-level swap already delivers.
+
+**Surface area** (post-1.3e survey): 54 hits across 4 modules
+- `src/lua/ui/timeline/state/clip_state.lua` — mutation engine + module-level indexes (lots of writes/reads)
+- `src/lua/ui/timeline/state/timeline_core_state.lua` — sequence load, gap recompute, signal handlers, snapshot/reload
+- `src/lua/ui/timeline/state/track_state.lua` — read-only accessors
+- `src/lua/ui/timeline/state/timeline_state_data.lua` — the field definition + `set_clips()`
+
+**Commit shape**:
+1. **track_state migration** — replace `data.state.tracks` reads with `strip:displayed_tracks()`. Pure read-side. No writes.
+2. **clip_state read migration** — replace `data.state.clips` reads with displayed tab cache. Delete module-level `clip_lookup`/`track_clip_index`/`clip_track_positions` — delegate to tab's own indexes (which already exist from 1.3a-i).
+3. **apply_mutations collapse** — `timeline_state.apply_mutations` always calls `target_tab:apply_mutations`. Selection cleanup + version stamping + gap recompute move to the orchestrator (parameterized by target tab). `clip_state.apply_mutations` becomes either a thin shim or is deleted entirely.
+4. **snapshot/rollback per-tab** — `tab:begin_mutation_transaction` / `tab:rollback_mutation_transaction` / `tab:commit_mutation_transaction`. `command_manager` calls them on the active edit-target tab. Module-level `mutation_snapshot_stack` in clip_state moves onto the tab (or is reorganized so each snapshot carries its target tab).
+5. **core_state migration** — `recompute_gap_clips(tab, affected)` takes a tab arg, operates on `tab.cache`. `load_displayed_sequence` writes to target tab cache instead of `data.state.*`. `reload_clips` → `displayed_tab:reload_from_database()`. `clear` drops cache via tab handoff, not `data.state.tracks = {}`.
+6. **delete the singleton** — remove `data.state.clips`, `data.state.tracks`, `data.set_clips`, `sync_displayed_tab_from_data_state`. `activate_displayed` collapses to a pointer move (no DB hit). Update `timeline_state_data.lua` to drop the fields.
+7. **verify perf** — re-run `test_timeline_tab_switch_perf.lua`; full path should drop from ~32 ms to sub-µs (inheriting the strip-level latency).
+
+**Out of scope for 1.3f**:
+- Per-sequence view-state (viewport_*, scroll_*, playhead_position, selection) staying in `data.state` is FINE — these are display-singleton state, not "clip data of the active sequence." They're already mirrored to tab cache by `load_from_database` and are pulled back at activate time. Whether to move them onto the tab in a future spec is a separate question.
+
 ### Phase 1.5 — Verify perf win (LANDED — split result)
 - Bench pinned by `tests/test_timeline_tab_switch_perf.lua` (2 record tabs × 3000 media clips → ~5999 cache entries each including derived gaps).
 - **Strip-level swap** (`strip:switch_active_record(tab)`): **0.03 µs/switch** — sub-microsecond. The per-tab cache architecture's perf claim is delivered. Pointer rebind only; zero DB hits, zero clip-list rebuild.

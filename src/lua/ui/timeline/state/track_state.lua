@@ -1,17 +1,33 @@
 --- Timeline Tracks State
--- Manages track list, layout, and properties
+-- Manages track list, layout, and properties.
+--
+-- Spec 022 Phase 1.3f: reads pull live from the displayed tab's cache via
+-- the strip. Module-level state shrinks to "is layout dirty" — the track
+-- list itself lives on the tab (rule 3.0 MVC: views pull from model).
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
+local strip_holder = require("ui.timeline.state.strip_holder")
 
 local track_layout_dirty = false
 
+-- Live read of the displayed tab's track list. Empty when no tab is
+-- displayed (project-blank or post-clear). NEVER nil — callers iterate
+-- without nil-guards.
+local function displayed_tracks()
+    local strip = strip_holder.get()
+    if not strip then return {} end
+    local displayed = strip:get_displayed()
+    if not displayed then return {} end
+    return displayed.cache.tracks
+end
+
 function M.get_all()
-    return data.state.tracks
+    return displayed_tracks()
 end
 
 function M.get_video_tracks()
     local result = {}
-    for _, track in ipairs(data.state.tracks) do
+    for _, track in ipairs(displayed_tracks()) do
         if track.track_type == "VIDEO" then table.insert(result, track) end
     end
     return result
@@ -19,7 +35,7 @@ end
 
 function M.get_audio_tracks()
     local result = {}
-    for _, track in ipairs(data.state.tracks) do
+    for _, track in ipairs(displayed_tracks()) do
         if track.track_type == "AUDIO" then table.insert(result, track) end
     end
     return result
@@ -30,12 +46,12 @@ end
 local function require_track(track_id, caller)
     assert(type(track_id) == "string" and track_id ~= "",
         caller .. ": track_id required")
-    for _, track in ipairs(data.state.tracks) do
+    for _, track in ipairs(displayed_tracks()) do
         if track.id == track_id then return track end
     end
     error(string.format(
         "%s: track %s not in state — caller is referencing a track that "
-        .. "does not exist on the active sequence", caller, track_id))
+        .. "does not exist on the displayed sequence", caller, track_id))
 end
 
 function M.get_height(track_id)
@@ -62,7 +78,7 @@ function M.clear_layout_dirty() track_layout_dirty = false end
 
 function M.get_primary_id(track_type)
     local type_upper = track_type:upper()
-    for _, track in ipairs(data.state.tracks) do
+    for _, track in ipairs(displayed_tracks()) do
         if track.track_type == type_upper then return track.id end
     end
     return nil
@@ -70,7 +86,7 @@ end
 
 function M.get_by_id(track_id)
     if not track_id then return nil end
-    for _, track in ipairs(data.state.tracks) do
+    for _, track in ipairs(displayed_tracks()) do
         if track.id == track_id then
             return track
         end

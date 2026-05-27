@@ -13,7 +13,17 @@ package.loaded["core.ui_constants"] = {
 
 -- timeline_state_data requires Rational — let it load naturally via test_env
 local data = require("ui.timeline.state.timeline_state_data")
+local strip_holder = require("ui.timeline.state.strip_holder")
 local track_state = require("ui.timeline.state.track_state")
+
+-- Spec 022 Phase 1.3f: track_state reads the displayed tab's cache.tracks
+-- via strip_holder. These unit tests install a minimal strip stub that
+-- exposes the fixture tracks list as the displayed tab's cache.
+local stub_displayed_tab = { cache = { tracks = {} } }
+local stub_strip = {
+    get_displayed = function() return stub_displayed_tab end,
+}
+strip_holder.set(stub_strip)
 
 local pass_count = 0
 local fail_count = 0
@@ -27,10 +37,10 @@ local function check(label, condition)
     end
 end
 
--- Helper: reset state and populate tracks
+-- Helper: reset state and populate the stubbed displayed tab's tracks.
 local function setup_tracks(tracks)
     data.reset()
-    data.state.tracks = tracks or {}
+    stub_displayed_tab.cache.tracks = tracks or {}
 end
 
 print("\n=== Track State Tests (T26) ===")
