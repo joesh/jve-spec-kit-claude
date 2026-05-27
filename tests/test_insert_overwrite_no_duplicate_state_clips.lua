@@ -80,10 +80,14 @@ assert(res.success, "Overwrite failed: " .. tostring(res.error_message))
 local clip_a = (cmd:get_parameter("created_clip_ids") or {})[1]
 assert(clip_a, "Overwrite did not produce created_clip_ids")
 
--- Count media (non-gap) clips for id in state.
+-- Count media (non-gap) clips for id in the displayed tab's cache.
+-- Spec 022 Phase 1.3f: state.clips lives on the per-tab cache; reads
+-- pull through the strip's displayed tab.
 local function count_media_clips_in_state(clip_id)
+    local strip = require("ui.timeline.state.strip_holder").get()
+    local cache_clips = strip:get_displayed().cache.clips
     local n = 0
-    for _, c in ipairs(tsdata.state.clips) do
+    for _, c in ipairs(cache_clips) do
         if not c.is_gap and c.id == clip_id then n = n + 1 end
     end
     return n

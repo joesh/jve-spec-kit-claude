@@ -2,16 +2,20 @@
 -- Manages viewport position, zoom, playhead, and pixel conversions
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
+local strip_holder = require("ui.timeline.state.strip_holder")
 local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local viewport_guard_count = 0
 
--- Read the cached content length. The scan happens once per clip-list
--- write inside data.update_content_length(); read path is O(1).
+-- Spec 022 Phase 1.3f: content_length lives on the displayed tab's cache
+-- (the per-tab cache architecture's source of truth for clip extent).
+-- Empty when no tab displayed — a blank panel has zero extent.
 local function compute_sequence_content_length()
-    assert(type(data.state.content_length) == "number",
-        "viewport_state.compute_sequence_content_length: data.state.content_length not initialized")
-    return data.state.content_length
+    local strip = strip_holder.get()
+    if not strip then return 0 end
+    local displayed = strip:get_displayed()
+    if not displayed then return 0 end
+    return displayed.cache.content_length
 end
 
 -- Helper: Calculate timeline extent (content + playhead + buffer) in frames.

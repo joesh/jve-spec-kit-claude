@@ -16,17 +16,22 @@ local data            = require("ui.timeline.state.timeline_state_data")
 require("ui.timeline.timeline_state")
 local strip_holder    = require("ui.timeline.state.strip_holder")
 
--- Stub strip: persist machinery reads displayed_sequence_id() — supply a
--- minimal table that satisfies it. Avoids dragging in full Sequence.load
+-- Stub strip: persist machinery reads displayed_sequence_id(); viewport_state
+-- (spec 022 Phase 1.3f) also reads displayed_tab.cache.content_length.
+-- Minimal stub carries both. Avoids dragging in full Sequence.load
 -- plumbing for a viewport-policy unit test.
-local function install_stub_strip(seq_id)
+local function install_stub_strip(seq_id, content_length)
     strip_holder.set({
-        get_displayed = function() return { sequence_id = seq_id } end,
+        get_displayed = function()
+            return {
+                sequence_id = seq_id,
+                cache = { content_length = content_length or 10000 },
+            }
+        end,
     })
 end
 
 local function reset_viewport(viewport_start, viewport_duration, playhead, content_end)
-    data.state.clips = { { sequence_start = 0, duration = content_end or 10000 } }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration
@@ -35,7 +40,7 @@ local function reset_viewport(viewport_start, viewport_duration, playhead, conte
     data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
     data.state.sequence_id = "test_seq"
     data.state.project_id = "test_proj"
-    install_stub_strip("test_seq")
+    install_stub_strip("test_seq", content_end or 10000)
 end
 
 local function make_cmd(mutations)

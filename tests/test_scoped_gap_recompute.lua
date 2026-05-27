@@ -83,10 +83,13 @@ local command_manager = require("core.command_manager")
 command_manager.init("seq1", "proj1")
 timeline_core_state.init("seq1", "proj1")
 
--- Collect current gap IDs on each track
+-- Collect current gap IDs on each track. Spec 022 Phase 1.3f: clips
+-- live on the displayed tab's cache.
+local strip_holder = require("ui.timeline.state.strip_holder")
 local function get_gap_ids_for_track(track_id)
     local ids = {}
-    for _, clip in ipairs(data.state.clips) do
+    local cache_clips = strip_holder.get():get_displayed().cache.clips
+    for _, clip in ipairs(cache_clips) do
         if clip.track_id == track_id and clip.is_gap == true then
             table.insert(ids, clip.id)
         end

@@ -49,14 +49,20 @@ print("=== timeline state fully resets on project change ===")
 
 -- Populate the timeline model with Project A's content.
 timeline_state.init(SEQ_A, PROJ_A)
-assert(#data.state.tracks > 0, "precondition: expected tracks loaded from Project A")
+-- Spec 022 Phase 1.3f: tracks/clips live on the displayed tab cache.
+local strip = timeline_state.get_tab_strip()
+local displayed_a = strip:get_displayed()
+assert(displayed_a and #displayed_a.cache.tracks > 0,
+    "precondition: expected tracks loaded into Project A's displayed tab cache")
 
 -- Simulate in-flight user state that ought to be gone after a project change.
-data.state.clips = {
-    { id = "c1", track_id = "tr-A", sequence_start = 0, duration = 100, clip_kind = "media" },
-    { id = "c2", track_id = "tr-A", sequence_start = 200, duration = 50, clip_kind = "media" },
-}
-data.state.selected_clips = { data.state.clips[1] }
+-- Inject directly into the displayed tab cache so the post-clear assertions
+-- prove the strip reset cleanly (no stale content).
+table.insert(displayed_a.cache.clips,
+    { id = "c1", track_id = "tr-A", sequence_start = 0, duration = 100, clip_kind = "media" })
+table.insert(displayed_a.cache.clips,
+    { id = "c2", track_id = "tr-A", sequence_start = 200, duration = 50, clip_kind = "media" })
+data.state.selected_clips = { displayed_a.cache.clips[1] }
 data.state.selected_edges = { { clip_id = "c1", edge_type = "out" } }
 data.state.playhead_position = 12345
 data.state.viewport_start_time = 500
@@ -80,10 +86,15 @@ assert(timeline_state.get_project_id() == nil,
 assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "after project_changed, sequence_id must be cleared; got "
     .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
-assert(#data.state.tracks == 0,
-    "after project_changed, tracks must be empty; got " .. #data.state.tracks)
-assert(#data.state.clips == 0,
-    "after project_changed, clips must be empty; got " .. #data.state.clips)
+-- Strip reset means no displayed tab → reads return empty. Spec 022 Phase
+-- 1.3f: tracks/clips live on tab cache, not data.state.
+local strip_after = timeline_state.get_tab_strip()
+assert(strip_after:get_displayed() == nil,
+    "after project_changed, strip must carry no displayed tab")
+assert(#strip_after:displayed_tracks() == 0,
+    "after project_changed, displayed tracks must be empty")
+assert(#strip_after:displayed_clips() == 0,
+    "after project_changed, displayed clips must be empty")
 assert(#data.state.selected_clips == 0,
     "after project_changed, selected_clips must be empty; got " .. #data.state.selected_clips)
 assert(#data.state.selected_edges == 0,

@@ -14,17 +14,21 @@ local data           = require("ui.timeline.state.timeline_state_data")
 require("ui.timeline.timeline_state")
 local strip_holder   = require("ui.timeline.state.strip_holder")
 
--- Stub strip: persist machinery only needs displayed_sequence_id(), so a
--- minimal table with the same shape as TimelineTabStrip's displayed_tab
--- pointer suffices. Avoids pulling in Sequence.load for this unit test.
-local function install_stub_strip(seq_id)
+-- Stub strip: persist machinery needs displayed_sequence_id(); viewport_state
+-- (1.3f) also reads displayed_tab.cache.content_length. Minimal stub
+-- carries both. Avoids pulling in Sequence.load for this unit test.
+local function install_stub_strip(seq_id, content_length)
     strip_holder.set({
-        get_displayed = function() return { sequence_id = seq_id } end,
+        get_displayed = function()
+            return {
+                sequence_id = seq_id,
+                cache = { content_length = content_length or 100000 },
+            }
+        end,
     })
 end
 
 local function reset(viewport_start, viewport_duration, playhead)
-    data.state.clips = { { sequence_start = 0, duration = 100000 } }
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration

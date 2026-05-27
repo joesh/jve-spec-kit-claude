@@ -178,7 +178,15 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - Helper: `for_each_tab(fn)` iterates `strip.tabs` defensively (no-op when no strip).
 - Pinned by `test_timeline_signal_handlers_per_tab.lua`.
 
-### Phase 1.3f — Eliminate `data.state.clips`/`tracks` (IN FLIGHT)
+### Phase 1.3f — Eliminate `data.state.clips`/`tracks` (LANDED)
+
+Eliminated. 6 commits, ~1500 lines net change. Bench result after step 6:
+- Strip-level swap: **0.03 µs/switch** (unchanged — still the architecture's perf claim)
+- Full user-facing path: **0.19 ms/switch** — sub-millisecond, **170× faster** than the pre-1.3f 32.7 ms result.
+
+Source of the win: `core.activate_displayed` no longer re-runs `tab:load_from_database`. The tab IS the model — it was hydrated when opened (1.2) and stays in sync via signal handlers (1.4) and `tab:apply_mutations` (1.3a-ii / 1.3f-3). Activating a tab is now a strip-pointer move + read-from-cache.
+
+### Phase 1.3f — Eliminate `data.state.clips`/`tracks` (decomposition)
 
 **Goal**: `data.state.clips` and `data.state.tracks` deleted. All clip/track data lives on tabs only. Reads route through `strip:displayed_*()`. Writes route through `target_tab:apply_mutations(...)` (where target tab is resolved via strip). `sync_displayed_tab_from_data_state` deleted. `apply_mutations` asymmetry deleted. `activate_displayed` collapses to a strip-pointer move — no DB reload. Architectural payoff: removes the last singleton-style mirror; user-facing tab switch inherits the sub-µs latency the strip-level swap already delivers.
 
@@ -203,8 +211,8 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 ### Phase 1.5 — Verify perf win (LANDED — split result)
 - Bench pinned by `tests/test_timeline_tab_switch_perf.lua` (2 record tabs × 3000 media clips → ~5999 cache entries each including derived gaps).
 - **Strip-level swap** (`strip:switch_active_record(tab)`): **0.03 µs/switch** — sub-microsecond. The per-tab cache architecture's perf claim is delivered. Pointer rebind only; zero DB hits, zero clip-list rebuild.
-- **Full user-facing path** (`timeline_state.switch_to_record_tab(seq_id)`): **32.7 ms/switch**. NOT sub-ms. Cost lives in `core.activate_displayed` → `load_displayed_sequence`, which still re-reads `tracks` + `clips` from SQLite + recomputes gaps on every switch. This is the explicitly-deferred 1.3f work: while `data.state.clips`/`tracks` remain the legacy write target, `activate_displayed` cannot short-circuit to "point data.state at target_tab.cache" — it must rebuild the mirror authoritatively. After 1.3f migrates writes off `data.state`, `activate_displayed` collapses to a strip-pointer move and the user-facing path inherits the sub-µs latency.
-- Plan-doc "If it still rebuilds, you missed a hook" warning resolved: the strip itself does NOT rebuild (verified). The wrapper rebuilds by design until 1.3f.
+- **Full user-facing path** (`timeline_state.switch_to_record_tab(seq_id)`): pre-1.3f **32.7 ms**, post-1.3f **0.19 ms** — sub-millisecond. The 1.3f writes-off-data.state refactor let `core.activate_displayed` drop the redundant `tab:load_from_database` (the tab was already hydrated at open time and stays in sync via signal handlers + per-tab apply_mutations). 170× speedup.
+- Plan-doc "If it still rebuilds, you missed a hook" warning resolved end-to-end.
 
 ### Phase 1.6 — Test + smoke (LANDED)
 - Removed the `switch_to_record_tab` workaround from `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutations.py`. Smoke passes end-to-end (verified `2026-05-26`).
