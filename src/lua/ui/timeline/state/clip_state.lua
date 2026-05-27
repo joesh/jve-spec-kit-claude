@@ -28,9 +28,11 @@ local function displayed_tab()
     return strip:get_displayed()
 end
 
--- Mutation transaction stack: snapshot in-memory clip state for undo group rollback.
--- Parallels the DB savepoint mechanism — begin/commit/rollback.
-local mutation_snapshot_stack = {}
+-- Spec 022 Phase 1.3f: mutation snapshot stack lives PER-TAB on
+-- TimelineTab. The facade fns below resolve the active record tab via
+-- strip_holder and delegate. Active tab is the edit target — that's
+-- where rollback applies, even when source tab is displayed (per the
+-- original bug fix this spec exists to address).
 
 -- All coordinates are now integers. No Rational conversion needed.
 -- This function validates and normalizes clip coords from various sources.
@@ -235,98 +237,56 @@ end
 function M.get_version() return state_version end
 function M.inc_version() state_version = state_version + 1 end
 
---- Whether any mutation snapshot is currently active on the stack.
+-- Resolve the active edit-target tab via strip. Snapshot/rollback always
+-- operate on this tab — the bug spec 022 was created to fix is exactly
+-- "edit-target tab ≠ displayed tab" (source tab shown while user edits a
+-- record sequence). Returns nil when no strip is set OR no active record
+-- tab — both are valid pre-init / blank-project states.
+local function active_record_tab()
+    local strip = strip_holder.get()
+    if not strip then return nil end
+    return strip:get_active_record()
+end
+
+--- Whether any mutation snapshot is currently active on the active tab.
 -- Used by command_manager.rollback_mutations to skip no-op rollbacks for
 -- commands that declared skip_clip_snapshot — they never pushed a snapshot,
 -- so there's nothing to pop.
 function M.has_active_mutation_snapshot()
-    return #mutation_snapshot_stack > 0
+    local tab = active_record_tab()
+    if not tab then return false end
+    return tab:has_active_mutation_snapshot()
 end
 
---- Snapshot current clip + selection state. Called by begin_undo_group.
+--- Snapshot current clip + selection state on the active record tab.
+--- No-op when there is no active record tab (e.g. unit tests that
+--- exercise command_manager without bootstrapping a timeline). Matches
+--- the strip's "blank panel returns empty" convention — no tab means
+--- nothing to snapshot, and commit/rollback in that state are also no-ops.
 function M.begin_mutation_transaction()
-    -- Shallow-clone each clip table (mutations modify fields in-place)
-    local clips_copy = {}
-    for i, clip in ipairs(data.state.clips) do
-        local copy = {}
-        for k, v in pairs(clip) do copy[k] = v end
-        clips_copy[i] = copy
-    end
-
-    -- Store selection as IDs (clip objects will be different after restore)
-    local selected_clip_ids = {}
-    for _, clip in ipairs(data.state.selected_clips or {}) do
-        table.insert(selected_clip_ids, clip.id)
-    end
-
-    -- Shallow-clone edge and gap selection (small tables, own data)
-    local edges_copy = {}
-    for i, edge in ipairs(data.state.selected_edges or {}) do
-        edges_copy[i] = {
-            clip_id = edge.clip_id,
-            edge_type = edge.edge_type,
-            trim_type = edge.trim_type,
-            track_id = edge.track_id,
-        }
-    end
-
-    local gaps_copy = {}
-    for i, gap in ipairs(data.state.selected_gaps or {}) do
-        local g = {}
-        for k, v in pairs(gap) do g[k] = v end
-        gaps_copy[i] = g
-    end
-
-    table.insert(mutation_snapshot_stack, {
-        clips = clips_copy,
-        selected_clip_ids = selected_clip_ids,
-        selected_edges = edges_copy,
-        selected_gaps = gaps_copy,
-    })
+    local tab = active_record_tab()
+    if not tab then return end
+    tab:begin_mutation_transaction()
 end
 
 --- Discard snapshot on successful undo group completion.
 function M.commit_mutation_transaction()
-    assert(#mutation_snapshot_stack > 0,
-        "clip_state.commit_mutation_transaction: no matching begin (stack empty)")
-    table.remove(mutation_snapshot_stack)
+    local tab = active_record_tab()
+    if not tab then return end
+    tab:commit_mutation_transaction()
 end
 
---- Restore clip + selection state from snapshot. Called by rollback_transaction.
+--- Restore clip + selection state from snapshot on the active record tab.
 function M.rollback_mutation_transaction()
-    assert(#mutation_snapshot_stack > 0,
-        "clip_state.rollback_mutation_transaction: no matching begin (stack empty)")
-
-    local snapshot = table.remove(mutation_snapshot_stack)
-
-    data.set_clips(snapshot.clips)
-
-    -- Rebuild selected_clips from IDs against restored clip objects
-    local id_lookup = {}
-    for _, clip in ipairs(snapshot.clips) do
-        id_lookup[clip.id] = clip
-    end
-    local restored_selection = {}
-    for _, id in ipairs(snapshot.selected_clip_ids) do
-        if id_lookup[id] then
-            table.insert(restored_selection, id_lookup[id])
-        end
-    end
-    data.state.selected_clips = restored_selection
-    data.state.selected_edges = snapshot.selected_edges
-    data.state.selected_gaps = snapshot.selected_gaps
-
-    M.invalidate_indexes()
+    local tab = active_record_tab()
+    if not tab then return end
+    tab:rollback_mutation_transaction()
     state_version = state_version + 1
-    for _, clip in ipairs(data.state.clips) do clip._version = state_version end
-    -- Spec 022 Phase 1.3b: facade reads come from displayed_tab.cache;
-    -- rollback rewrites data.state.clips out-of-band so the displayed
-    -- tab must be re-pointed at the restored array. Lazy require avoids
-    -- a circular dep with timeline_core_state (which requires clip_state).
-    local core_state = require("ui.timeline.state.timeline_core_state")
-    core_state.sync_displayed_tab_from_data_state()
+    local v = state_version
+    for _, c in ipairs(tab.cache.clips) do c._version = v end
     data.notify_listeners()
-    log.event("rollback_mutation_transaction: restored %d clips", #snapshot.clips)
+    log.event("rollback_mutation_transaction: restored %d clips on tab %s",
+        #tab.cache.clips, tostring(tab.sequence_id))
 end
 
 return M

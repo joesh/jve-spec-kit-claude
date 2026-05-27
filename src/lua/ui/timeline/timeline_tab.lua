@@ -577,4 +577,99 @@ function TimelineTab:locate_neighbor(clip, offset)
     return info.list[i]
 end
 
+-- Spec 022 Phase 1.3f: per-tab mutation snapshot for undo-group rollback.
+-- Each tab carries its own stack so begin/commit/rollback target the
+-- exact tab the active edit-target pointed to at begin time. Selection
+-- is GLOBAL on data.state (cross-tab singleton), so the snapshot also
+-- carries selection state — restoring the tab's clips alone would leave
+-- selection pointing at stale clip objects.
+--
+-- Lazy require of data avoids a load-order coupling (timeline_state_data
+-- doesn't depend on tabs; tabs grab data only when a snapshot fires).
+
+local function ensure_snapshot_stack(self)
+    if not self._mutation_snapshot_stack then
+        self._mutation_snapshot_stack = {}
+    end
+    return self._mutation_snapshot_stack
+end
+
+function TimelineTab:has_active_mutation_snapshot()
+    return self._mutation_snapshot_stack ~= nil and #self._mutation_snapshot_stack > 0
+end
+
+function TimelineTab:begin_mutation_transaction()
+    local data = require("ui.timeline.state.timeline_state_data")
+    local stack = ensure_snapshot_stack(self)
+    -- Shallow-clone each clip table — mutations modify fields in-place.
+    local clips_copy = {}
+    for i, clip in ipairs(self.cache.clips) do
+        local copy = {}
+        for k, v in pairs(clip) do copy[k] = v end
+        clips_copy[i] = copy
+    end
+    -- Selection lives on data.state (global); snapshot it here so rollback
+    -- can restore IDs against the restored clip objects.
+    local selected_clip_ids = {}
+    for _, clip in ipairs(data.state.selected_clips or {}) do
+        table.insert(selected_clip_ids, clip.id)
+    end
+    local edges_copy = {}
+    for i, edge in ipairs(data.state.selected_edges or {}) do
+        edges_copy[i] = {
+            clip_id = edge.clip_id,
+            edge_type = edge.edge_type,
+            trim_type = edge.trim_type,
+            track_id = edge.track_id,
+        }
+    end
+    local gaps_copy = {}
+    for i, gap in ipairs(data.state.selected_gaps or {}) do
+        local g = {}
+        for k, v in pairs(gap) do g[k] = v end
+        gaps_copy[i] = g
+    end
+    table.insert(stack, {
+        clips = clips_copy,
+        selected_clip_ids = selected_clip_ids,
+        selected_edges = edges_copy,
+        selected_gaps = gaps_copy,
+    })
+end
+
+function TimelineTab:commit_mutation_transaction()
+    local stack = self._mutation_snapshot_stack
+    assert(stack and #stack > 0,
+        "TimelineTab:commit_mutation_transaction: no matching begin (stack empty)")
+    table.remove(stack)
+end
+
+function TimelineTab:rollback_mutation_transaction()
+    local stack = self._mutation_snapshot_stack
+    assert(stack and #stack > 0,
+        "TimelineTab:rollback_mutation_transaction: no matching begin (stack empty)")
+    local snapshot = table.remove(stack)
+    local data = require("ui.timeline.state.timeline_state_data")
+
+    -- Restore cache.clips in place (preserves table identity so any
+    -- aliases — including data.state.clips for the displayed tab — keep
+    -- pointing at the same array).
+    local clips = self.cache.clips
+    for i = #clips, 1, -1 do table.remove(clips, i) end
+    for _, c in ipairs(snapshot.clips) do table.insert(clips, c) end
+
+    -- Rebuild selected_clips from IDs against the restored clip objects.
+    local id_lookup = {}
+    for _, clip in ipairs(snapshot.clips) do id_lookup[clip.id] = clip end
+    local restored_selection = {}
+    for _, id in ipairs(snapshot.selected_clip_ids) do
+        if id_lookup[id] then table.insert(restored_selection, id_lookup[id]) end
+    end
+    data.state.selected_clips = restored_selection
+    data.state.selected_edges = snapshot.selected_edges
+    data.state.selected_gaps = snapshot.selected_gaps
+
+    self:invalidate_indexes()
+end
+
 return TimelineTab
