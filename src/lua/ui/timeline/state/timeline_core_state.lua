@@ -40,6 +40,7 @@ local Signals = require("core.signals")
 local project_gen = require("core.project_generation")
 local strip_holder = require("ui.timeline.state.strip_holder")
 local gap_lifecycle = require("core.gap_lifecycle")
+local clip_geometry = require("ui.timeline.clip_geometry")
 local log = require("core.logger").for_area("timeline")
 
 local persist_timer = nil
@@ -85,29 +86,6 @@ local function partition_clips_for_recompute(clips, scoped, affected_track_ids)
         end
     end
     return kept, media_for_scope, old_gap_tracks
-end
-
--- Group media clips by track_id and sort each track's list by sequence_start
--- (ties broken by clip id for determinism).
-local function build_sorted_track_media(media_clips)
-    local track_clips = {}
-    for _, clip in ipairs(media_clips) do
-        local list = track_clips[clip.track_id]
-        if not list then
-            list = {}
-            track_clips[clip.track_id] = list
-        end
-        table.insert(list, clip)
-    end
-    for _, list in pairs(track_clips) do
-        table.sort(list, function(a, b)
-            if a.sequence_start == b.sequence_start then
-                return a.id < b.id
-            end
-            return a.sequence_start < b.sequence_start
-        end)
-    end
-    return track_clips
 end
 
 -- Rebuild gap clips for every in-scope track and append them to `clips`.
@@ -177,18 +155,6 @@ end
 -- recompute operates on tab.cache.clips in-place. Selection migration
 -- still touches global data.state.selected_edges (selection is cross-tab).
 
--- Compute the timeline content extent from a list of clips.
-local function compute_content_length_from(clip_list)
-    local max_end = 0
-    for _, c in ipairs(clip_list) do
-        if type(c.sequence_start) == "number" and type(c.duration) == "number" then
-            local e = c.sequence_start + c.duration
-            if e > max_end then max_end = e end
-        end
-    end
-    return max_end
-end
-
 -- Recompute gap clips on a specific tab's cache in-place — preserves
 -- cache.clips table identity so any held aliases stay valid. Operates on
 -- tab.cache.{clips,tracks,sequence_frame_rate}; the only data.state
@@ -221,11 +187,11 @@ local function recompute_gap_clips_for_tab(tab, affected_track_ids)
     for i = #clips, 1, -1 do table.remove(clips, i) end
     for _, c in ipairs(kept) do table.insert(clips, c) end
 
-    local track_clips = build_sorted_track_media(media_for_scope)
+    local track_clips = clip_geometry.group_and_sort_media_by_track(media_for_scope)
     local new_gaps_by_track =
         rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, clips)
     migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
-    cache.content_length = compute_content_length_from(clips)
+    cache.content_length = clip_geometry.compute_content_length(clips)
     tab:invalidate_indexes()
 end
 

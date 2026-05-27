@@ -7,6 +7,7 @@ local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
 local log = require("core.logger").for_area("timeline")
 local strip_holder = require("ui.timeline.state.strip_holder")
+local clip_geometry = require("ui.timeline.clip_geometry")
 
 -- Public read getters delegate to the displayed tab's per-tab cache —
 -- the authoritative model for "what clips does the timeline view show?"
@@ -15,57 +16,6 @@ local function displayed_tab()
     local strip = strip_holder.get()
     if not strip then return nil end
     return strip:get_displayed()
-end
-
--- All coordinates are now integers. No Rational conversion needed.
--- This function validates and normalizes clip coords from various sources.
-local function normalize_clip_integers(clip)
-    if not clip then return false end
-
-    -- Handle various field names from database/mutations
-    local sequence_start = clip.sequence_start or clip.start_value
-    local duration = clip.duration or clip.duration_value
-
-    -- Assert integer types
-    if type(sequence_start) ~= "number" then
-        clip._invalid = true
-        return false
-    end
-    if type(duration) ~= "number" or duration <= 0 then
-        clip._invalid = true
-        return false
-    end
-
-    -- Normalize field names
-    clip.sequence_start = sequence_start
-    clip.duration = duration
-
-    -- source_in/source_out: alias _value variants from mutations
-    if clip.source_in == nil and clip.source_in_value ~= nil then
-        clip.source_in = clip.source_in_value
-    end
-    if clip.source_out == nil and clip.source_out_value ~= nil then
-        clip.source_out = clip.source_out_value
-    end
-
-    -- source_in/source_out must be integers if present
-    if clip.source_in ~= nil then
-        assert(type(clip.source_in) == "number",
-            "clip_state: source_in must be integer, got " .. type(clip.source_in))
-    end
-    if clip.source_out ~= nil then
-        assert(type(clip.source_out) == "number",
-            "clip_state: source_out must be integer, got " .. type(clip.source_out))
-    end
-
-    -- frame_rate is single-shape (table form only) per the rename, but it
-    -- is NOT required by clip_state itself — this function only validates
-    -- integer coords. Consumers that actually need fps (source-mark math,
-    -- ripple delta conversion, undo) assert frame_rate at the point of
-    -- use (clip_mutator.get_row_fps, command_helper.require_rate).
-
-    clip._invalid = nil
-    return true
 end
 
 -- Module-level mutation counter. Bumped by timeline_state.apply_mutations
@@ -197,7 +147,7 @@ function M.hydrate_into_tab(tab, clip_id, expected_sequence_id)
             "clip_state.hydrate_into_tab: clip %s belongs to sequence %s, not %s",
             tostring(clip_id), tostring(clip.track_sequence_id), tostring(target_sequence)))
     end
-    normalize_clip_integers(clip)
+    clip_geometry.normalize_clip_integers(clip)
     clip._version = state_version
     table.insert(tab.cache.clips, clip)
     tab:invalidate_indexes()
