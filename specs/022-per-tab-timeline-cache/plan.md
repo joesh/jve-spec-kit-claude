@@ -132,9 +132,13 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - No fallback default args during migration. If you need a temporary scaffolding step, do the migration commit-by-commit (e.g., commit 2a: command callsites; commit 2b: view callsites; commit 2c: tests) rather than leaving `seq_id = seq_id or get_displayed_sequence_id()` in tree even briefly. Implicit-default arg patterns are explicitly forbidden by the project's no-fallback rule (2.13).
 - After Phase 1.3 lands, `timeline_state` itself shrinks to whatever non-per-tab cross-cutting concerns remain (drag state, last_pointer_frame, color constants). If nothing remains, delete the module.
 
-### Phase 1.4 — Signal handler dispatch
-- 9 handlers in `timeline_core_state.lua` (`playhead_changed`, `marks_changed`, `media_status_changed`, `track_preference_changed`, etc.). Most already carry seq_id in the signal payload. Update them to dispatch to the right tab's cache via `strip:find_record_tab_by_sequence_id(seq_id)` (or analogous).
-- `media_status_changed` walks every cached tab (offline state is global).
+### Phase 1.4 — Signal handler dispatch (LANDED)
+- `playhead_changed` mirrors the new frame to the matching tab's `cache.playhead_position` (per-sequence routing) AND updates `data.state.playhead_position` when target IS displayed (legacy reader path).
+- `track_preference_changed` updates the matching track on EVERY open tab's `cache.tracks` (track preferences are persisted per-track and apply across whichever tabs hold that track).
+- `media_status_changed` walks every open tab's `cache.clips` for clips referencing the changed media path (offline state is media-wide, not display-state) — plus `data.state.clips` for displayed reader compat.
+- `marks_changed` / `source_loaded_changed` unchanged: marks are pulled lazily via `tab:get_marks` (no cache invalidation needed).
+- Helper: `for_each_tab(fn)` iterates `strip.tabs` defensively (no-op when no strip).
+- Pinned by `test_timeline_signal_handlers_per_tab.lua`.
 
 ### Phase 1.5 — Verify perf win
 - Bench `switch_to_record_tab` between two ~3000-clip record tabs. Should be sub-millisecond. If it still rebuilds, you missed a hook.

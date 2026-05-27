@@ -832,6 +832,17 @@ Signals.connect("source_loaded_changed", function(_new_seq_id, _prev_seq_id)
     data.notify_listeners()
 end)
 
+-- Spec 022 / 1.4: signal handlers dispatch to all open tabs in the strip,
+-- not just data.state. data.state still mirrors the displayed tab (until
+-- 1.3b/c migrate readers off it) so we still update it — but non-displayed
+-- tabs' caches must also stay current so the user sees correct state when
+-- they switch to those tabs.
+local function for_each_tab(fn)
+    local strip = strip_holder.get()
+    if not strip then return end
+    for _, tab in ipairs(strip.tabs) do fn(tab) end
+end
+
 -- Sync the in-memory track row when ToggleTrackPreference flips muted /
 -- soloed / locked / enabled. ToggleTrackPreference mutates a freshly-
 -- loaded Track instance and writes the DB column; the renderer reads
@@ -847,40 +858,66 @@ Signals.connect("track_preference_changed", function(track_id, property, new_val
     assert(new_val == 0 or new_val == 1, string.format(
         "track_preference_changed listener: new_val must be 0 or 1; got %s",
         tostring(new_val)))
-    if not data.state.tracks then return end
-    for _, t in ipairs(data.state.tracks) do
-        if t.id == track_id then
-            t[property] = (new_val == 1)
-            data.notify_listeners()
-            return
+    local val = (new_val == 1)
+    local changed_data_state = false
+    if data.state.tracks then
+        for _, t in ipairs(data.state.tracks) do
+            if t.id == track_id then
+                t[property] = val
+                changed_data_state = true
+                break
+            end
         end
     end
+    for_each_tab(function(tab)
+        if tab.cache.tracks then
+            for _, t in ipairs(tab.cache.tracks) do
+                if t.id == track_id then t[property] = val; break end
+            end
+        end
+    end)
+    if changed_data_state then data.notify_listeners() end
 end)
 
--- Update playhead when SetPlayhead command fires.
--- The cached data.state.playhead_position is the DISPLAYED sequence's playhead
--- (the one the timeline view's ruler renders). SetPlayhead writes per-sequence, and
--- the active and displayed sequences may differ when the source tab is open.
+-- Update playhead when SetPlayhead command fires. SetPlayhead writes
+-- per-sequence; we mirror to each tab's cache so the playhead is correct
+-- when the user switches between tabs, and also to data.state when the
+-- target IS displayed (legacy reader path).
 Signals.connect("playhead_changed", function(sequence_id, frame)
-    if strip_holder.displayed_sequence_id() == sequence_id and type(frame) == "number" then
+    if type(frame) ~= "number" then return end
+    for_each_tab(function(tab)
+        if tab.sequence_id == sequence_id then
+            tab.cache.playhead_position = frame
+        end
+    end)
+    if strip_holder.displayed_sequence_id() == sequence_id then
         data.state.playhead_position = frame
         data.notify_listeners()
     end
 end)
 
 -- Reactive media status: when a media file changes status (online/offline/codec),
--- update all clips referencing that path and trigger re-render.
+-- update clips referencing that path on ALL open tabs and trigger re-render.
+-- Offline state is media-wide (a media file is offline for every clip across
+-- every open sequence), not display-state — so we walk every tab.
 Signals.connect("media_status_changed", function(media_path, status)
-    if not data.state.clips then return end
-    local changed = false
-    for _, clip in ipairs(data.state.clips) do
-        if clip.media_path == media_path then
-            clip.offline = status.offline
-            clip.error_code = status.error_code
-            changed = true
+    local function update_clips_for_media(clips_list)
+        if not clips_list then return false end
+        local touched = false
+        for _, clip in ipairs(clips_list) do
+            if clip.media_path == media_path then
+                clip.offline = status.offline
+                clip.error_code = status.error_code
+                touched = true
+            end
         end
+        return touched
     end
-    if changed then
+
+    local displayed_changed = update_clips_for_media(data.state.clips)
+    for_each_tab(function(tab) update_clips_for_media(tab.cache.clips) end)
+
+    if displayed_changed then
         clip_state.inc_version()
         for _, c in ipairs(data.state.clips) do c._version = clip_state.get_version() end
         data.notify_listeners()
