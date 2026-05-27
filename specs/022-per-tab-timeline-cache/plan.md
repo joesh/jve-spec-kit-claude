@@ -87,9 +87,11 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 ## How to attack it
 
 ### Phase 1.1 — Internal restructure (no public-API change)
-- Add `TimelineTab` fields for the data cache: `clips`, `tracks`, `viewport_*`, `playhead_position`, `selection_*`, etc. Most of what's currently in `data.state.*` is per-sequence and moves to `tab.*`.
-- Internally, `data.state.clips` becomes derived: `data.state.clips == strip:get_displayed_tab().clips` (until the rest of the migration completes).
-- Verify with `make -j4`. Nothing should observably change yet.
+- Add `tab.cache` namespace on `TimelineTab` carrying the per-sequence fields that `data.state` holds today: `tracks`, `clips` (media + derived gaps), `content_length`, `sequence_frame_rate`, `sequence_timecode_start_frame`, `viewport_start_time`, `viewport_duration`, `video_scroll_offset`, `audio_scroll_offset`, `video_audio_split_ratio`, `playhead_position`.
+- **Selection and drag state stay GLOBAL on `timeline_state`** — selection is global by design (the user has one selection across the whole editor) and drag is global because cross-timeline drags from one tab's view to another are supported. The original plan listed `selection_*` here; that was wrong and is now corrected per the existing per-tab listener docs in `timeline_tab.lua`.
+- `tab:load_from_database()` hydrates the cache: loads tracks, clips (media+gaps via `gap_lifecycle`), per-sequence view-state from the sequence row. Asserts every required field before touching `self.cache` so a missing invariant leaves the cache untouched (rule 1.14).
+- **Empty plumbing** — nothing in the codebase reads from `tab.cache` yet. The `data.state.clips == strip:get_displayed_tab().cache.clips` aliasing the original plan called for moves to Phase 1.3b (`timeline_state` accessors delegate to displayed tab) so that the bug-fix commit in 1.3a is the smallest possible change.
+- Verify: targeted test `test_timeline_tab_cache_load.lua` + existing `test_timeline_tab*.lua`. Nothing else changes observably yet.
 
 ### Phase 1.2 — Cache load/evict hooks
 - `TimelineTabStrip:open_record_tab` / `open_source_tab` → after creating the tab, populate its cache from DB. Reuse the existing `load_displayed_sequence` path scoped to that tab.

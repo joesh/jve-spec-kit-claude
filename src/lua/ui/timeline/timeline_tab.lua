@@ -24,6 +24,29 @@ TimelineTab.__index = TimelineTab
 
 local VALID_KINDS = { record = true, source = true }
 
+-- Empty-cache constructor. Phase 1.1 (spec 022): per-tab cache mirrors the
+-- per-sequence fields that data.state holds today. Selection and drag are
+-- NOT included — both remain global on timeline_state (selection is global
+-- by design; drag because cross-timeline drags are supported). Phase 1.3
+-- re-points clip/track indexes onto this cache; phase 1.4 dispatches
+-- signals per-tab. Until those phases land nothing reads from .cache;
+-- this is empty plumbing.
+local function fresh_cache()
+    return {
+        tracks = {},
+        clips = {},  -- media + derived gap clips
+        content_length = 0,
+        sequence_frame_rate = nil,
+        sequence_timecode_start_frame = 0,
+        viewport_start_time = 0,
+        viewport_duration = 0,
+        video_scroll_offset = 0,
+        audio_scroll_offset = 0,
+        video_audio_split_ratio = 0.5,
+        playhead_position = 0,
+    }
+end
+
 -- Resolve and assert that this tab's sequence exists, returning the loaded
 -- Sequence row. Every getter goes through this so consumers see fresh state.
 local function load_seq_strict(self, caller)
@@ -52,6 +75,7 @@ function TimelineTab.new(kind, sequence_id)
         id = uuid.generate(),
         kind = kind,
         sequence_id = sequence_id,
+        cache = fresh_cache(),
         _listeners = {},
         _next_listener_id = 1,
     }
@@ -142,10 +166,155 @@ function TimelineTab.deserialize(t)
         id = t.id,
         kind = t.kind,
         sequence_id = t.sequence_id,
+        cache = fresh_cache(),
         _listeners = {},
         _next_listener_id = 1,
     }
     return setmetatable(tab, TimelineTab)
+end
+
+-- Group media clips by track_id and sort each track's list by sequence_start
+-- (ties broken by clip id for determinism). Matches the ordering that
+-- gap_lifecycle expects and that core_state.recompute_gap_clips applies.
+local function group_and_sort_media_by_track(media_clips)
+    local by_track = {}
+    for _, c in ipairs(media_clips) do
+        assert(c.track_id and c.track_id ~= "", string.format(
+            "TimelineTab:load_from_database: clip %s missing track_id",
+            tostring(c.id)))
+        local list = by_track[c.track_id]
+        if not list then list = {}; by_track[c.track_id] = list end
+        table.insert(list, c)
+    end
+    for _, list in pairs(by_track) do
+        table.sort(list, function(a, b)
+            if a.sequence_start == b.sequence_start then return a.id < b.id end
+            return a.sequence_start < b.sequence_start
+        end)
+    end
+    return by_track
+end
+
+-- Compute derived gap clips for every track and return media+gaps merged.
+local function clips_with_derived_gaps(tracks, media_clips, seq_fr)
+    local gap_lifecycle = require("core.gap_lifecycle")
+    local by_track = group_and_sort_media_by_track(media_clips)
+    local merged = {}
+    for _, c in ipairs(media_clips) do table.insert(merged, c) end
+    for _, t in ipairs(tracks) do
+        local sorted = by_track[t.id] or {}
+        local gaps = gap_lifecycle.compute_gaps_for_track(t.id, sorted, seq_fr)
+        for _, g in ipairs(gaps) do table.insert(merged, g) end
+    end
+    return merged
+end
+
+local function compute_content_length(clips)
+    local max_end = 0
+    for _, c in ipairs(clips) do
+        if type(c.sequence_start) == "number" and type(c.duration) == "number" then
+            local e = c.sequence_start + c.duration
+            if e > max_end then max_end = e end
+        end
+    end
+    return max_end
+end
+
+-- Apply persisted track heights (or fall through to the schema default for
+-- tracks without a row in sequence_track_heights). Mutates the loaded
+-- track rows in place, matching the shape core_state.load_displayed_sequence
+-- materialises today.
+local function apply_persisted_track_heights(tracks, sequence_id)
+    local db = require("core.database")
+    if not db.load_sequence_track_heights then
+        local default_h = require("core.ui_constants").TIMELINE.TRACK_HEIGHT
+        assert(type(default_h) == "number" and default_h > 0,
+            "TimelineTab:load_from_database: ui_constants.TIMELINE.TRACK_HEIGHT missing")
+        for _, t in ipairs(tracks) do t.height = default_h end
+        return
+    end
+    local saved = db.load_sequence_track_heights(sequence_id)
+    local default_h = require("core.ui_constants").TIMELINE.TRACK_HEIGHT
+    assert(type(default_h) == "number" and default_h > 0,
+        "TimelineTab:load_from_database: ui_constants.TIMELINE.TRACK_HEIGHT missing")
+    for _, t in ipairs(tracks) do
+        local h = saved and saved[t.id]
+        if h then
+            assert(type(h) == "number", string.format(
+                "TimelineTab:load_from_database: track %s height must be a number",
+                tostring(t.id)))
+            local clamped = math.floor(h)
+            if clamped < 24 then clamped = 24 end
+            t.height = clamped
+        else
+            t.height = default_h
+        end
+    end
+end
+
+-- Validate every required sequence-row field BEFORE touching self.cache so
+-- a missing invariant leaves the cache untouched (rule 1.14: fail loudly,
+-- no half-state). Selection restore, viewport-fit, and other view-state
+-- decisions remain in core_state.load_displayed_sequence — those interact
+-- with the singleton data.state today and will move per-tab in later
+-- phases (1.4+) when the cache becomes the authoritative source.
+function TimelineTab:load_from_database()
+    local db = require("core.database")
+    local seq = Sequence.load(self.sequence_id)
+    assert(seq, string.format(
+        "TimelineTab:load_from_database: sequence_id=%s not found",
+        tostring(self.sequence_id)))
+    assert(type(seq.frame_rate) == "table",
+        string.format("TimelineTab:load_from_database: seq %s missing frame_rate table",
+            tostring(self.sequence_id)))
+    assert(seq.frame_rate.fps_numerator and seq.frame_rate.fps_denominator,
+        string.format("TimelineTab:load_from_database: seq %s has NULL frame rate",
+            tostring(self.sequence_id)))
+    assert(type(seq.start_timecode_frame) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing start_timecode_frame",
+        tostring(self.sequence_id)))
+    assert(type(seq.playhead_position) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing playhead_position",
+        tostring(self.sequence_id)))
+    assert(type(seq.viewport_start_time) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing viewport_start_time",
+        tostring(self.sequence_id)))
+    assert(type(seq.viewport_duration) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing viewport_duration",
+        tostring(self.sequence_id)))
+    assert(type(seq.video_scroll_offset) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing video_scroll_offset",
+        tostring(self.sequence_id)))
+    assert(type(seq.audio_scroll_offset) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing audio_scroll_offset",
+        tostring(self.sequence_id)))
+    assert(type(seq.video_audio_split_ratio) == "number", string.format(
+        "TimelineTab:load_from_database: seq %s missing video_audio_split_ratio",
+        tostring(self.sequence_id)))
+
+    local tracks = db.load_tracks(self.sequence_id)
+    apply_persisted_track_heights(tracks, self.sequence_id)
+
+    local media_clips
+    if seq:is_master() then
+        media_clips = db.load_master_virtual_clips(self.sequence_id)
+    else
+        media_clips = db.load_clips(self.sequence_id)
+    end
+
+    local merged_clips = clips_with_derived_gaps(tracks, media_clips, seq.frame_rate)
+
+    self.cache.tracks = tracks
+    self.cache.clips = merged_clips
+    self.cache.content_length = compute_content_length(merged_clips)
+    self.cache.sequence_frame_rate = seq.frame_rate
+    self.cache.sequence_timecode_start_frame = seq.start_timecode_frame
+    self.cache.viewport_start_time = seq.viewport_start_time
+    self.cache.viewport_duration = seq.viewport_duration
+    self.cache.video_scroll_offset = seq.video_scroll_offset
+    self.cache.audio_scroll_offset = seq.audio_scroll_offset
+    self.cache.video_audio_split_ratio = seq.video_audio_split_ratio
+    self.cache.playhead_position = seq.playhead_position
 end
 
 return TimelineTab
