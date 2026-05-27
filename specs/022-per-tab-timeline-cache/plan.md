@@ -219,11 +219,23 @@ Source of the win: `core.activate_displayed` no longer re-runs `tab:load_from_da
 - Memory cleanup: `todo_test_source_viewer_marks_track_live_clip_mutations.md` marked RESOLVED with root-cause explanation; MEMORY.md index updated.
 - New memory `project_per_tab_timeline_cache.md` documents the contract for future Claudes.
 
-### Phase 1.7 — Memory + spec updates
-- Update `~/.claude/projects/-Users-joe-Local-jve-spec-kit-claude/memory/todo_test_source_viewer_marks_track_live_clip_mutations.md` — mark resolved + delete TODO entry once the test passes without the workaround.
-- Write a new project memory documenting the per-tab cache contract.
-- Update this plan doc with a "Phase 1 complete" header noting what landed and what's deferred to Phase 2.
-- Add a one-line cross-reference to `specs/015-source-in-timeline/refactor-plan.md` pointing at 022.
+### Phase 1.7 — Memory + spec updates (LANDED)
+- `todo_test_source_viewer_marks_track_live_clip_mutations.md` marked RESOLVED.
+- `project_per_tab_timeline_cache.md` documents the per-tab cache contract.
+
+---
+
+## ✅ Phase 1 COMPLETE (2026-05-27)
+
+All 1.1–1.7 landed across ~25 commits (`f85ba434 … faf089d8`). Key results:
+
+- **Architecture**: `TimelineTab.cache.{clips,tracks,content_length,viewport,...}` is the sole source of truth for per-sequence display state. `data.state.clips` / `data.state.tracks` / `data.state.content_length` / `data.set_clips` / `data.update_content_length` are **deleted**. `clip_state.apply_mutations` is **deleted**; mutation engine lives on `TimelineTab:apply_mutations`. `sync_displayed_tab_from_data_state` is **deleted**. The displayed-vs-non-displayed asymmetry in `timeline_state.apply_mutations` is **collapsed to one path**. Snapshot/rollback is per-tab.
+- **Routing**: writes dispatch by `mutations.sequence_id` to the matching tab — the BRE bug spec 022 was created to fix is architecturally impossible.
+- **Perf**: tab switch went from **32.7 ms → 0.19 ms** (170× speedup, sub-millisecond). Strip-level swap is 0.03 µs. `core.activate_displayed` no longer calls `tab:load_from_database` — the tab is already hydrated at open time and stays in sync via signal handlers.
+- **Tests**: 844 Lua tests green. Smoke `test_source_viewer_marks_track_live_clip_mutations.py` passes without workaround.
+- **Test infrastructure**: `test_env.install_displayed_tab_stub({content_length=X})` for unit tests that need a strip without bootstrapping.
+
+**Deferred to Phase 2** (NOT scheduled): Panel / TabView / SequenceView renames + further consolidation. See "Long-term target" above.
 
 ## Files most likely to change
 
