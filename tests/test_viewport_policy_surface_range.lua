@@ -9,16 +9,23 @@ require('test_env')
 --      the left side of the viewport with a bit of padding.
 -- Pure behavior — no DB, no UI rendering. Uses viewport_state directly.
 
+-- Pre-require timeline_state so its module-load strip_holder.set runs
+-- BEFORE our stub install (spec 022 Phase 1.3f: viewport_state pulls
+-- content_length from displayed.cache via strip_holder).
+require("ui.timeline.timeline_state")
 local viewport_state = require("ui.timeline.state.viewport_state")
 local data = require("ui.timeline.state.timeline_state_data")
+local strip_holder = require("ui.timeline.state.strip_holder")
 
 local function reset(viewport_start, viewport_duration, playhead, content_end)
-    -- Minimal state wiring: clips list used only by compute_sequence_content_length
-    -- to derive the scroll floor/ceiling; we plant one sentinel clip reaching
-    -- content_end so the viewport can scroll freely up to content.
-    data.state.clips = {
-        { sequence_start = 0, duration = content_end },
-    }
+    -- Stub the displayed tab so compute_sequence_content_length sees the
+    -- desired extent — the viewport can scroll freely up to content_end.
+    strip_holder.set({
+        get_displayed = function()
+            return { sequence_id = "test_seq",
+                     cache = { content_length = content_end } }
+        end,
+    })
     data.state.playhead_position = playhead
     data.state.viewport_start_time = viewport_start
     data.state.viewport_duration = viewport_duration

@@ -11,9 +11,18 @@ require('test_env')
 local viewport_policy = require("ui.timeline.viewport_policy")
 local Signals = require("core.signals")
 local data = require("ui.timeline.state.timeline_state_data")
+-- Pre-require timeline_state so its module-load strip_holder.set runs
+-- BEFORE our stub install (spec 022 Phase 1.3f).
+require("ui.timeline.timeline_state")
+local strip_holder = require("ui.timeline.state.strip_holder")
 
 local function reset_viewport()
-    data.state.clips = { { sequence_start = 0, duration = 10000 } }
+    strip_holder.set({
+        get_displayed = function()
+            return { sequence_id = "test_seq",
+                     cache = { content_length = 10000 } }
+        end,
+    })
     data.state.playhead_position = 100
     data.state.viewport_start_time = 0
     data.state.viewport_duration = 1000

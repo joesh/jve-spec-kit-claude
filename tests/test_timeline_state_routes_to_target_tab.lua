@@ -110,10 +110,10 @@ assert(tabA:get_clip_by_id("a2").sequence_start == 500,
     "seqA tab cache untouched by seqB-targeted mutation")
 print("✓ non-target tab caches untouched")
 
--- ── DISPLAYED-TAB PATH (legacy mirror to data.state) ─────────────────────
--- Apply a bulk_shift to seqA (which IS displayed). This must update
--- both seqA's tab cache AND data.state.clips (the legacy read-side that
--- the renderer still uses until 1.3b lands).
+-- ── DISPLAYED-TAB PATH ───────────────────────────────────────────────────
+-- Apply a bulk_shift to seqA (which IS displayed). The mutation must
+-- land in seqA's tab cache, and the strip's displayed_clips() accessor
+-- (what views pull through) must reflect it.
 timeline_state.apply_mutations("seqA", {
     sequence_id = "seqA",
     bulk_shifts = {
@@ -133,7 +133,7 @@ for _, c in ipairs(all_clips) do
         break
     end
 end
-assert(found_a2_in_state, "data.state.clips still has a2 (displayed=seqA)")
-print("✓ displayed-tab mutation mirrored to data.state (legacy reader compat)")
+assert(found_a2_in_state, "strip:displayed_clips() must include a2 (displayed=seqA)")
+print("✓ displayed-tab mutation visible through strip:displayed_clips()")
 
 print("✅ test_timeline_state_routes_to_target_tab.lua passed")

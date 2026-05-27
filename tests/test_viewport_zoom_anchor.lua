@@ -17,16 +17,23 @@
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
 local data = require("ui.timeline.state.timeline_state_data")
+-- Pre-require timeline_state so its module-load strip_holder.set runs
+-- BEFORE our stub install (spec 022 Phase 1.3f).
+require("ui.timeline.timeline_state")
 local viewport_state = require("ui.timeline.state.viewport_state")
+local strip_holder = require("ui.timeline.state.strip_holder")
 
--- Baseline state used by every case. A large content extent so clamp never
--- interferes with the math we care about.
+-- Baseline state used by every case. Stub the displayed tab with a large
+-- content extent so the clamp never interferes with the zoom-anchor math.
 local function reset_state(start_time, duration, playhead)
     data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
     data.state.sequence_timecode_start_frame = 0
-    data.state.clips = {
-        { id = "bg", track_id = "t1", sequence_start = 0, duration = 100000 },
-    }
+    strip_holder.set({
+        get_displayed = function()
+            return { sequence_id = "test_seq",
+                     cache = { content_length = 100000 } }
+        end,
+    })
     data.state.viewport_start_time = start_time
     data.state.viewport_duration = duration
     data.state.playhead_position = playhead
