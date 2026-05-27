@@ -488,70 +488,53 @@ function M.persist_state_to_db(force)
     end
 end
 
---- Load tracks, clips, and view-state for `seq_id` into data.state and set
---- displayed_tab_id = seq_id. Reads tracks, clips, and the per-sequence
---- view fields (playhead, viewport, scroll, selection, marks, track
---- heights, frame_rate). Does NOT touch data.state.sequence_id (the
---- active edit target) or data.state.project_id — those are set only
---- by M.init and managed separately from the displayed pointer (FR-005).
+-- Spec 022 Phase 1.3f: load_displayed_sequence is now a thin sync step.
+-- The tab IS the model — tab:load_from_database (called by strip open
+-- hooks in 1.2) populates cache.tracks / clips / viewport / scroll /
+-- playhead / frame_rate / start_timecode_frame / track-heights. This
+-- function ensures the tab cache is fresh, then mirrors it into data.state
+-- (the legacy reader path — step 6 deletes data.state.clips/tracks
+-- entirely; viewport/scroll/playhead stay there as displayed-singleton
+-- view-state). Selection restore + viewport-fit still live here because
+-- selection is global and viewport-fit reads sequence-row JSON.
 local function load_displayed_sequence(seq_id)
     assert(seq_id and seq_id ~= "",
         "load_displayed_sequence: seq_id required")
-    -- Strip-authoritative (015 #6): the strip is the canonical store for
-    -- "which tab is displayed". Caller (timeline_state) has already
-    -- updated the strip pointer; we just load the sequence's view-state
-    -- into data.state below.
 
-    local Sequence = require("models.sequence")
-    local sequence = Sequence.load(seq_id)
+    local strip = strip_holder.get()
+    assert(strip, "load_displayed_sequence: no strip set")
+    local tab = strip:get_displayed()
+    assert(tab and tab.sequence_id == seq_id, string.format(
+        "load_displayed_sequence: strip displayed=%s, expected=%s — "
+        .. "caller must update the strip pointer BEFORE calling this",
+        tab and tab.sequence_id or "nil", tostring(seq_id)))
+
+    -- Re-hydrate from DB. tab:load_from_database is the canonical loader
+    -- (1.1/1.2); calling it here keeps load_displayed_sequence semantics
+    -- ("the displayed sequence is whatever's on disk RIGHT NOW") even
+    -- when the tab was opened earlier in the session.
+    tab:load_from_database()
+
+    local sequence = require("models.sequence").load(seq_id)
     assert(sequence, string.format(
         "load_displayed_sequence: failed to load seq_id=%s", tostring(seq_id)))
 
-    -- Validate every required field BEFORE any state mutation so a failed
-    -- invariant doesn't leave data.state half-rewritten (rule 1.14).
-    assert(sequence.project_id and sequence.project_id ~= "",
-        string.format("load_displayed_sequence: sequence missing project_id (seq_id=%s)", tostring(seq_id)))
-    assert(type(sequence.frame_rate) == "table",
-        string.format("load_displayed_sequence: sequence %s missing frame_rate table", tostring(seq_id)))
-    assert(sequence.frame_rate.fps_numerator and sequence.frame_rate.fps_denominator,
-        string.format("FATAL: Sequence %s has NULL frame rate in database", tostring(seq_id)))
-    assert(type(sequence.start_timecode_frame) == "number", string.format(
-        "load_displayed_sequence: sequence %s missing start_timecode_frame "
-        .. "(schema declares NOT NULL DEFAULT 0; Sequence.load asserts non-null — "
-        .. "if this fires, a caller bypassed both invariants)", tostring(seq_id)))
-
-    data.state.tracks = db.load_tracks(seq_id)
-    -- Body content source depends on sequence kind:
-    --   nested → real clips rows
-    --   master → synthesized virtual clips from media_refs (FR-007 source-tab content)
-    if sequence:is_master() then
-        data.set_clips(db.load_master_virtual_clips(seq_id))
-    else
-        data.set_clips(db.load_clips(seq_id))
-    end
-    clip_state.invalidate_indexes()
-    sync_displayed_tab_from_data_state()
-
-    data.state.sequence_frame_rate = sequence.frame_rate
-    data.state.sequence_timecode_start_frame = sequence.start_timecode_frame
+    -- Mirror tab cache into data.state. Step 6 deletes the .clips/.tracks
+    -- mirror; the view-state fields (frame_rate, viewport, scroll,
+    -- playhead) stay on data.state as displayed-singleton view state.
+    data.state.tracks = tab.cache.tracks
+    data.set_clips(tab.cache.clips)
+    data.state.sequence_frame_rate = tab.cache.sequence_frame_rate
+    data.state.sequence_timecode_start_frame = tab.cache.sequence_timecode_start_frame
     data.sequence = sequence
 
-    recompute_gap_clips()
-    clip_state.invalidate_indexes()
+    data.state.playhead_position = tab.cache.playhead_position
+    data.state.video_scroll_offset = tab.cache.video_scroll_offset
+    data.state.audio_scroll_offset = tab.cache.audio_scroll_offset
+    data.state.video_audio_split_ratio = tab.cache.video_audio_split_ratio
 
-    data.state.playhead_position = sequence.playhead_position
-    -- Schema enforces NOT NULL DEFAULT on all three; Sequence.load asserts
-    -- non-null at lines 197-203. No `or 0` / `or 0.5` defensive fallback.
-    assert(type(sequence.video_scroll_offset) == "number",
-        "load_displayed_sequence: video_scroll_offset must be number")
-    assert(type(sequence.audio_scroll_offset) == "number",
-        "load_displayed_sequence: audio_scroll_offset must be number")
-    assert(type(sequence.video_audio_split_ratio) == "number",
-        "load_displayed_sequence: video_audio_split_ratio must be number")
-    data.state.video_scroll_offset = sequence.video_scroll_offset
-    data.state.audio_scroll_offset = sequence.audio_scroll_offset
-    data.state.video_audio_split_ratio = sequence.video_audio_split_ratio
-
+    -- Selection restore (cross-cutting; lives on data.state). Resolve clip
+    -- objects via clip_state which now reads from the displayed tab cache.
     data.state.selected_clips = {}
     if sequence.selected_clip_ids_json and sequence.selected_clip_ids_json ~= "" then
         local ok, ids = pcall(json.decode, sequence.selected_clip_ids_json)
@@ -583,8 +566,8 @@ local function load_displayed_sequence(seq_id)
         end
     end
 
-    data.state.viewport_start_time = sequence.viewport_start_time
-    data.state.viewport_duration = sequence.viewport_duration
+    data.state.viewport_start_time = tab.cache.viewport_start_time
+    data.state.viewport_duration = tab.cache.viewport_duration
 
     -- Resilience: snap the viewport to fit content when the persisted
     -- viewport would render unusably. Two failure modes covered:
@@ -596,11 +579,11 @@ local function load_displayed_sequence(seq_id)
     --      real DBs have ended up with view_duration_frames in the
     --      billions, which technically intersects the content but
     --      renders it as a single pixel. Equally unusable.
-    local VIEWPORT_OVERSIZE_RATIO = 100   -- vd > content_extent * 100 ⇒ snap to fit
+    local VIEWPORT_OVERSIZE_RATIO = 100
 
     local function content_bounds()
         local min_start, max_end
-        for _, c in ipairs(data.state.clips) do
+        for _, c in ipairs(tab.cache.clips) do
             if not c.is_gap and c.sequence_start and c.duration then
                 local s, e = c.sequence_start, c.sequence_start + c.duration
                 if not min_start or s < min_start then min_start = s end
@@ -631,23 +614,17 @@ local function load_displayed_sequence(seq_id)
             min_start, max_end, data.state.sequence_timecode_start_frame)
         data.state.viewport_start_time = fit_start
         data.state.viewport_duration = fit_duration
-        -- Do NOT touch the playhead — viewport-fit is purely a view
-        -- adjustment. Moving the playhead on every activation snaps
-        -- the user away from where they were last parked.
+        tab.cache.viewport_start_time = fit_start
+        tab.cache.viewport_duration = fit_duration
     end
 
-    for _, track in ipairs(data.state.tracks) do
-        track.height = data.dimensions.default_track_height
-    end
-    if db.load_sequence_track_heights then
+    -- Persist track-height template for sequences without saved heights.
+    -- tab:load_from_database already applied saved-or-default heights;
+    -- this branch backfills the template when the sequence has none.
+    if db.load_sequence_track_heights and db.set_sequence_track_heights then
         local saved = db.load_sequence_track_heights(seq_id)
         local has_saved = type(saved) == "table" and next(saved) ~= nil
-        if has_saved then
-            for _, track in ipairs(data.state.tracks) do
-                local h = saved[track.id]
-                if h then track.height = clamp_track_height(h) end
-            end
-        elseif db.set_sequence_track_heights then
+        if not has_saved then
             db.set_sequence_track_heights(seq_id, build_track_height_map())
         end
     end
@@ -828,36 +805,22 @@ function M.reload_clips(target_sequence_id, opts)
         return false
     end
 
-    -- recompute_gap_clips will table.insert gaps into this list and
-    -- refresh content_length itself; raw assignment is fine here since
-    -- the cache is brought into sync by the recompute call below.
-    data.state.clips = db.load_clips(displayed)
-    recompute_gap_clips()
+    -- Spec 022 Phase 1.3f: tab is the model. Re-hydrate the displayed
+    -- tab's cache from DB (load_from_database recomputes gaps inline),
+    -- then mirror cache.clips into data.state (alias still live until
+    -- step 6).
+    local strip = strip_holder.get()
+    assert(strip, "reload_clips: no strip set")
+    local displayed_tab = strip:get_displayed()
+    assert(displayed_tab and displayed_tab.sequence_id == displayed,
+        "reload_clips: displayed tab does not match the displayed_sequence_id")
+    displayed_tab:load_from_database()
+    data.set_clips(displayed_tab.cache.clips)
+    data.state.tracks = displayed_tab.cache.tracks
     clip_state.invalidate_indexes()
 
-    -- Spec 022 / 1.3a-ii: also refresh the displayed tab's per-tab cache so
-    -- subsequent apply_mutations targeting this sequence see the freshly-
-    -- loaded clip set. Without this the tab cache stays stale relative to
-    -- data.state when callers (Insert command setup, test fixtures that
-    -- mutate the DB out-of-band then call reload_clips) refresh data.state
-    -- but never re-hydrate the matching tab. The hop through strip_holder
-    -- avoids importing timeline_state from a module it already imports.
-    local TimelineTabStrip = strip_holder.get()
-    if TimelineTabStrip then
-        local displayed_tab = TimelineTabStrip:get_displayed()
-        if displayed_tab and displayed_tab.sequence_id == displayed then
-            displayed_tab:load_from_database()
-        end
-    end
-
     -- Refresh selection objects so anyone holding the stale clip pointers
-    -- (renderer, inspectable caches) gets the freshly-loaded rows. We
-    -- intentionally do NOT re-fire the on_selection_changed callback —
-    -- the Inspector already re-pulls via the content_changed signal
-    -- (see ui/inspector/change_listeners.lua), and an extra selection
-    -- emit during a mutation-driven reload was empirically (TSO
-    -- 2026-04-21) breaking downstream because earlier code nil'd the
-    -- callback here, silencing every subsequent user selection click.
+    -- (renderer, inspectable caches) gets the freshly-loaded rows.
     if #data.state.selected_clips > 0 then
         local refreshed = {}
         for _, c in ipairs(data.state.selected_clips) do
@@ -868,7 +831,7 @@ function M.reload_clips(target_sequence_id, opts)
     end
 
     clip_state.inc_version()
-    for _, c in ipairs(data.state.clips) do c._version = clip_state.get_version() end
+    for _, c in ipairs(displayed_tab.cache.clips) do c._version = clip_state.get_version() end
 
     local adjusted = selection_state.normalize_edge_selection()
     if adjusted then M.persist_state_to_db() end
