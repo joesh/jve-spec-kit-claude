@@ -104,7 +104,16 @@ function M.init(sequence_id, project_id)
         .. "and use activate_displayed/switch_to_source_tab to show a master.",
         sequence_id, tostring(seq.name)))
     local rec_tab = tab_strip:find_record_tab_by_sequence_id(sequence_id)
-        or tab_strip:open_record_tab(sequence_id)
+    if rec_tab then
+        -- Existing tab may be stale: same sequence_id can map to a different
+        -- DB row after a project re-open (tests share a process across
+        -- multiple DBs without firing project_changed). Refresh the cache
+        -- here for the same reason core.init reloads data.state — the
+        -- model on disk just changed.
+        rec_tab:load_from_database()
+    else
+        rec_tab = tab_strip:open_record_tab(sequence_id)
+    end
     tab_strip:switch_active_record(rec_tab)
     return core.init(sequence_id, project_id)
 end
@@ -389,45 +398,88 @@ local function collect_affected_track_ids(mutations)
     return affected, scope_is_known
 end
 
-local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
-    local mutations = sequence_or_mutations
-    local callback = maybe_mutations
+-- Resolve a mutation bucket's target tab via the strip. Per-sequence
+-- routing (spec 022 Phase 1.3a-ii bug fix): writes go to the tab whose
+-- sequence_id matches the mutation's target — not to data.state
+-- (which carries only the DISPLAYED sequence's clips and crashes the
+-- bulk_shift assert when target ≠ displayed). Returns nil when no tab
+-- is open for the target sequence; the caller treats this as "DB write
+-- already done; the next open will load_from_database fresh."
+local function resolve_target_tab(target_seq)
+    local rec = tab_strip:find_record_tab_by_sequence_id(target_seq)
+    if rec then return rec end
+    local src = tab_strip:get_source_tab()
+    if src and src.sequence_id == target_seq then return src end
+    return nil
+end
 
-    -- Two supported call shapes:
-    --   apply_mutations(mutations, callback)
-    --   apply_mutations(sequence_id, mutations, callback)
-    -- The 3-arg form is what command_manager uses when it has a target
-    -- sequence in hand; the 2-arg form is the direct call from in-state code.
+local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
+    local target_seq, mutations, callback
     if type(sequence_or_mutations) == "string" or type(sequence_or_mutations) == "number" then
-        mutations = maybe_mutations
-        callback = persist_callback
+        target_seq = sequence_or_mutations
+        mutations  = maybe_mutations
+        callback   = persist_callback
+    else
+        mutations = sequence_or_mutations
+        callback  = maybe_mutations
     end
 
     assert(type(mutations) == "table",
         "timeline_state.apply_mutations: mutations must be a table, got " .. type(mutations))
 
-    local affected_tracks, scope_is_known =
-        collect_affected_track_ids(mutations)
+    -- Target sequence_id MUST be derivable — either the 3-arg form or
+    -- mutations.sequence_id. Rule 2.13: no fallback to "active" / "displayed".
+    -- command_manager already asserts mutations.sequence_id at its boundary;
+    -- this reaffirms the contract at the timeline_state layer.
+    if not target_seq then target_seq = mutations.sequence_id end
+    assert(target_seq and target_seq ~= "", string.format(
+        "timeline_state.apply_mutations: target sequence_id required "
+        .. "(pass as first arg or set mutations.sequence_id); got %s",
+        tostring(target_seq)))
 
-    local changed = clips.apply_mutations(mutations, callback)
-
-    -- Gaps are derived state — always recomputed, never mutated directly.
-    -- Scope the recompute to only the affected tracks when we can identify
-    -- all of them; fall back to a full recompute if any track was
-    -- unidentifiable (e.g., a delete referenced a clip not in the lookup).
-    if changed then
-        local core_state = require("ui.timeline.state.timeline_core_state")
-        assert(core_state.recompute_gap_clips,
-            "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
-        if scope_is_known and next(affected_tracks) ~= nil then
-            core_state.recompute_gap_clips(affected_tracks)
-        else
-            core_state.recompute_gap_clips()
-        end
-        clips.invalidate_indexes()
+    local target_tab = resolve_target_tab(target_seq)
+    -- No open tab for the target sequence: the DB write happened already
+    -- (executor + command_helper.apply_mutations). When the user opens or
+    -- displays this sequence, tab:load_from_database hydrates the cache
+    -- fresh. Treat as applied so command_manager's safety-net reload
+    -- doesn't fire. Signal still emits so cross-cutting subscribers
+    -- (inspector, mutation generation bump) see the event.
+    if not target_tab then
+        Signals.emit("timeline_mutations_applied", mutations, true)
+        return true
     end
-    Signals.emit("timeline_mutations_applied", mutations, changed)
-    return changed
+
+    -- Per-tab cache write (the bug fix). Updates the target tab's own
+    -- clip_lookup / track_clip_index / clip_track_positions — so
+    -- non-displayed targets no longer crash the bulk_shift assert by
+    -- looking up tracks in the displayed view's cache.
+    local tab_changed = target_tab:apply_mutations(mutations)
+
+    -- Displayed-tab legacy mirror to data.state. The renderer / selection /
+    -- gap-recompute machinery still reads from data.state today; 1.3b
+    -- migrates readers off it, after which this branch collapses.
+    if target_tab == tab_strip:get_displayed() then
+        local affected_tracks, scope_is_known = collect_affected_track_ids(mutations)
+        local state_changed = clips.apply_mutations(mutations, callback)
+        if state_changed then
+            local core_state = require("ui.timeline.state.timeline_core_state")
+            assert(core_state.recompute_gap_clips,
+                "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
+            if scope_is_known and next(affected_tracks) ~= nil then
+                core_state.recompute_gap_clips(affected_tracks)
+            else
+                core_state.recompute_gap_clips()
+            end
+            clips.invalidate_indexes()
+        end
+        Signals.emit("timeline_mutations_applied", mutations, state_changed)
+        return state_changed
+    end
+
+    -- Non-displayed target: data.state stays put (the displayed view
+    -- didn't change). Tab cache is warm for when user switches to it.
+    Signals.emit("timeline_mutations_applied", mutations, tab_changed)
+    return tab_changed
 end
 
 M.apply_mutations = apply_mutations

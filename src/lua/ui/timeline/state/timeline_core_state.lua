@@ -762,6 +762,21 @@ function M.reload_clips(target_sequence_id, opts)
     recompute_gap_clips()
     clip_state.invalidate_indexes()
 
+    -- Spec 022 / 1.3a-ii: also refresh the displayed tab's per-tab cache so
+    -- subsequent apply_mutations targeting this sequence see the freshly-
+    -- loaded clip set. Without this the tab cache stays stale relative to
+    -- data.state when callers (Insert command setup, test fixtures that
+    -- mutate the DB out-of-band then call reload_clips) refresh data.state
+    -- but never re-hydrate the matching tab. The hop through strip_holder
+    -- avoids importing timeline_state from a module it already imports.
+    local TimelineTabStrip = strip_holder.get()
+    if TimelineTabStrip then
+        local displayed_tab = TimelineTabStrip:get_displayed()
+        if displayed_tab and displayed_tab.sequence_id == displayed then
+            displayed_tab:load_from_database()
+        end
+    end
+
     -- Refresh selection objects so anyone holding the stale clip pointers
     -- (renderer, inspectable caches) gets the freshly-loaded rows. We
     -- intentionally do NOT re-fire the on_selection_changed callback —

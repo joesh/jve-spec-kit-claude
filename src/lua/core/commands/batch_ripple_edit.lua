@@ -525,14 +525,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     }
 
     local function build_clip_cache(ctx)
+        -- Spec 022 / 1.3a-ii: read from the ACTIVE record tab's per-tab
+        -- cache, not timeline_state's display-tied accessors. The displayed
+        -- tab may be a master sequence (source viewer) while the edit
+        -- targets the active record — reading via the displayed cache
+        -- caused the "cache desync" assert that motivated this spec.
         local timeline_state = package.loaded["ui.timeline.timeline_state"]
-        assert(timeline_state
-            and timeline_state.get_sequence_id
-            and timeline_state.get_sequence_id() == ctx.sequence_id
-            and timeline_state.get_all_tracks
-            and timeline_state.get_track_clip_index,
-            string.format("build_clip_cache: timeline_state must be active for sequence %s",
-                tostring(ctx.sequence_id)))
+        assert(timeline_state and timeline_state.get_tab_strip,
+            "build_clip_cache: timeline_state.get_tab_strip not available")
+        local strip = timeline_state.get_tab_strip()
+        local active_tab = strip and strip:find_record_tab_by_sequence_id(ctx.sequence_id)
+        assert(active_tab, string.format(
+            "build_clip_cache: no open record tab for active sequence %s "
+            .. "(strip must hold a tab for the edit target). spec 022.",
+            tostring(ctx.sequence_id)))
 
         ctx.all_clips = {}
         ctx.clip_lookup = {}
@@ -549,15 +555,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         ctx.shared_clip_snapshots = {}
         ctx.shared_track_clip_lists = {}
 
-        for _, track in ipairs(timeline_state.get_all_tracks()) do
+        for _, track in ipairs(active_tab.cache.tracks) do
             assert(track.id and track.id ~= "",
-                "build_clip_cache: timeline_state returned track with empty id")
+                "build_clip_cache: active tab cache returned track with empty id")
             -- get_track_clip_index returns nil for tracks with no clips.
             -- Coerce to an empty list so EVERY known track has an entry
             -- in track_clip_map — downstream code can then `assert(map[id])`
             -- (cache invariant) and treat empty-list as "no clips here"
             -- without conflating it with "unknown track".
-            local track_clips = timeline_state.get_track_clip_index(track.id) or {}
+            local track_clips = active_tab:get_track_clip_index(track.id) or {}
             ctx.track_clip_map[track.id] = track_clips
             ctx.shared_track_clip_lists[track.id] = {
                 list   = track_clips,

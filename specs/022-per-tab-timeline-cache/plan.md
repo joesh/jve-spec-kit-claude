@@ -107,12 +107,15 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - `load_from_database` marks indexes dirty so freshly-loaded clips re-index on next access.
 - No writer routes through these yet — that's 1.3a-ii.
 
-### Phase 1.3a-ii — Route apply_mutations through target-tab indexes (BUG FIX)
+### Phase 1.3a-ii — Route apply_mutations through target-tab indexes (BUG FIX — LANDED)
 - `timeline_state.apply_mutations(sequence_id, mutations, callback)` resolves target tab via `strip:find_record_tab_by_sequence_id(sequence_id)` (or `get_source_tab()` if matching source).
-- Writes go to the target tab's `cache.clips` + indexes — not `data.state` globally.
-- When target IS displayed: `data.state.clips` aliasing keeps legacy readers in sync until 1.3b lands.
-- When target is NOT displayed (e.g., BRE on record while source displayed): writes land in the record's tab cache; data.state untouched. User switching to record sees the result via the tab's already-up-to-date cache instead of a reload.
-- This is the BRE silent-no-op / cross-tab-edit bug fix. Pinned by smoke `test_source_viewer_marks_track_live_clip_mutations.py` once 1.6 removes its workaround.
+- Target tab's `cache.clips` + indexes mutated via new `tab:apply_mutations(mutations)`.
+- When target IS displayed: also call legacy `clips.apply_mutations(mutations, callback)` to mirror to `data.state` (the legacy reader path; collapses in 1.3b/c).
+- When target is NOT displayed: writes land in the record's tab cache only; `data.state` untouched (correct — displayed view unchanged).
+- No-tab-open case: skip (return true). Treats DB write as authoritative; next tab open hydrates fresh.
+- **Read-side fix for BRE specifically** (`batch_ripple_edit.lua::build_clip_cache`): reads from `strip:find_record_tab_by_sequence_id(ctx.sequence_id).cache` instead of `timeline_state.get_all_tracks` / `get_track_clip_index` (display-tied). This fixed the long-standing "cache desync" assert pinned by `test_clip_occlusion.lua Test 4` (memory todo cleared).
+- **Hydration coherence**: `timeline_state.init` re-hydrates an existing same-id tab (handles tests sharing one process across multiple DBs). `core_state.reload_clips` re-hydrates the displayed tab when it refreshes data.state.
+- Pinned by `test_timeline_tab_apply_mutations.lua` (cache half) and `test_timeline_state_routes_to_target_tab.lua` (dispatch half). 842 Lua tests green.
 
 ### Phase 1.3 — Migrate readers to tab methods
 - Delete `timeline_state.get_clips()`, `get_all_tracks()`, `get_track_clip_index(track_id)`, `get_sequence_id()`. Replace every callsite with `tab:get_*()` on a tab obtained via the strip:

@@ -391,6 +391,180 @@ function TimelineTab:get_track_clip_index(track_id)
     return self.cache.track_clip_index[track_id]
 end
 
+-- Validate + normalize integer coords on a clip-shaped row. Mirrors
+-- clip_state.normalize_clip_integers's contract: sequence_start and
+-- duration must be present and numeric; source_in/out asserted numeric
+-- when present. Returns true on success, false on invalid.
+local function normalize_clip_integers(clip)
+    if not clip then return false end
+    local sequence_start = clip.sequence_start or clip.start_value
+    local duration = clip.duration or clip.duration_value
+    if type(sequence_start) ~= "number" then return false end
+    if type(duration) ~= "number" or duration <= 0 then return false end
+    clip.sequence_start = sequence_start
+    clip.duration = duration
+    if clip.source_in == nil and clip.source_in_value ~= nil then
+        clip.source_in = clip.source_in_value
+    end
+    if clip.source_out == nil and clip.source_out_value ~= nil then
+        clip.source_out = clip.source_out_value
+    end
+    if clip.source_in ~= nil then
+        assert(type(clip.source_in) == "number", string.format(
+            "TimelineTab: clip %s source_in must be number", tostring(clip.id)))
+    end
+    if clip.source_out ~= nil then
+        assert(type(clip.source_out) == "number", string.format(
+            "TimelineTab: clip %s source_out must be number", tostring(clip.id)))
+    end
+    return true
+end
+
+local function recompute_content_length(cache)
+    cache.content_length = compute_content_length(cache.clips)
+end
+
+-- Apply a bulk_shift bucket to a single track's sorted clip list in cache.
+-- Output invariant pinned by clip_state's original assert: a non-zero
+-- shift MUST find at least one clip at or past start_frame. Zero rows
+-- means either a producer bug (emitted against dead track/stale
+-- position) or cache divergence — both crash with context (NSF).
+local function apply_bulk_shift_to_cache(cache, shift)
+    assert(type(shift) == "table",
+        "TimelineTab:apply_mutations: bulk_shift entry must be a table")
+    assert(shift.track_id and shift.track_id ~= "",
+        "TimelineTab:apply_mutations: bulk_shift missing track_id")
+    assert(type(shift.shift_frames) == "number",
+        "TimelineTab:apply_mutations: bulk_shift missing numeric shift_frames")
+    assert(type(shift.start_frame) == "number",
+        "TimelineTab:apply_mutations: bulk_shift missing numeric start_frame")
+    if shift.shift_frames == 0 then return false end
+    local list = cache.track_clip_index[shift.track_id] or {}
+    local shifted = 0
+    for _, clip in ipairs(list) do
+        if type(clip.sequence_start) == "number"
+            and clip.sequence_start >= shift.start_frame then
+            clip.sequence_start = clip.sequence_start + shift.shift_frames
+            shifted = shifted + 1
+        end
+    end
+    assert(shifted > 0, string.format(
+        "TimelineTab:apply_mutations: bulk_shift for track %s at start_frame %d "
+        .. "with delta %d affected zero clips (track has %d clips in tab cache)",
+        tostring(shift.track_id), shift.start_frame, shift.shift_frames, #list))
+    return true
+end
+
+local function apply_update_to_cache(cache, update)
+    local clip_id = update.clip_id or update.id
+    if not clip_id then return false end
+    local clip = cache.clip_lookup[clip_id]
+    if not clip then return false end
+    local changed = false
+    if update.track_id and update.track_id ~= clip.track_id then
+        clip.track_id = update.track_id; changed = true
+    end
+    if update.frame_rate then
+        assert(update.frame_rate.fps_numerator and update.frame_rate.fps_denominator,
+            string.format("TimelineTab:apply_mutations: malformed frame_rate for clip %s",
+                tostring(clip.id)))
+        clip.frame_rate = update.frame_rate
+    end
+    if update.start_value and update.start_value ~= clip.sequence_start then
+        assert(type(update.start_value) == "number",
+            "TimelineTab:apply_mutations: start_value must be integer")
+        clip.sequence_start = update.start_value; changed = true
+    end
+    if update.duration_value and update.duration_value ~= clip.duration then
+        assert(type(update.duration_value) == "number",
+            "TimelineTab:apply_mutations: duration_value must be integer")
+        clip.duration = update.duration_value; changed = true
+    end
+    if update.source_in_value and update.source_in_value ~= clip.source_in then
+        assert(type(update.source_in_value) == "number",
+            "TimelineTab:apply_mutations: source_in_value must be integer")
+        clip.source_in = update.source_in_value; changed = true
+    end
+    if update.source_out_value and update.source_out_value ~= clip.source_out then
+        assert(type(update.source_out_value) == "number",
+            "TimelineTab:apply_mutations: source_out_value must be integer")
+        clip.source_out = update.source_out_value; changed = true
+    end
+    if update.enabled ~= nil and update.enabled ~= clip.enabled then
+        clip.enabled = update.enabled and true or false; changed = true
+    end
+    if update.name ~= nil and update.name ~= clip.name then
+        clip.name = update.name
+        if update.name ~= "" then clip.label = update.name end
+        changed = true
+    end
+    return changed
+end
+
+--- Apply a mutations bucket to this tab's cache (cache.clips + indexes).
+--- Operates on cache ONLY — no signal emit, no persistence callback, no
+--- selection update (those belong to the orchestrator that drives both
+--- tab and global concerns; spec 022 Phase 1.3a-ii).
+---
+--- Bug-fix routing: timeline_state.apply_mutations dispatches by
+--- mutations.sequence_id to the matching tab so writes to a non-displayed
+--- active sequence land in the right cache instead of trashing the
+--- displayed view. Order mirrors clip_state.apply_mutations:
+--- updates → inserts → bulk_shifts → placements → deletes.
+function TimelineTab:apply_mutations(mutations)
+    if type(mutations) ~= "table" then return false end
+    local changed = false
+    local cache = self.cache
+
+    -- Updates must run against fresh indexes so clip_lookup is populated.
+    ensure_indexes(self)
+    if mutations.updates then
+        for _, update in ipairs(mutations.updates) do
+            if apply_update_to_cache(cache, update) then changed = true end
+        end
+    end
+
+    local function apply_insert_list(list)
+        if not list then return end
+        for _, clip in ipairs(list) do
+            if normalize_clip_integers(clip) then
+                table.insert(cache.clips, clip)
+                changed = true
+            end
+        end
+    end
+
+    apply_insert_list(mutations.inserts)
+    if changed then self:invalidate_indexes(); ensure_indexes(self) end
+
+    if mutations.bulk_shifts then
+        ensure_indexes(self)
+        for _, shift in ipairs(mutations.bulk_shifts) do
+            if apply_bulk_shift_to_cache(cache, shift) then changed = true end
+        end
+    end
+
+    apply_insert_list(mutations.placements)
+
+    if mutations.deletes then
+        for _, entry in ipairs(mutations.deletes) do
+            local clip_id = type(entry) == "table" and entry.clip_id or entry
+            for i = #cache.clips, 1, -1 do
+                if cache.clips[i].id == clip_id then
+                    table.remove(cache.clips, i)
+                    changed = true
+                end
+            end
+        end
+    end
+
+    if changed then
+        self:invalidate_indexes()
+        recompute_content_length(cache)
+    end
+    return changed
+end
+
 function TimelineTab:locate_neighbor(clip, offset)
     if not (clip and clip.id) then return nil end
     assert(type(offset) == "number",
