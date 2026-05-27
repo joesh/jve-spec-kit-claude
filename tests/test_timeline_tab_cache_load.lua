@@ -88,26 +88,24 @@ local fix_ok, fix_err = db:exec(string.format([[
 ]], now, now, now, now))
 assert(fix_ok, "fixture clips insert failed: " .. tostring(fix_err))
 
--- ── 1. cache exists at construction with empty defaults ───────────────────
+-- ── 1. fresh cache has empty containers; per-sequence fields are nil
+--      until load_from_database (no made-up defaults — rule 2.13).
 local tab = TimelineTab.new("record", "seqA")
 assert(tab.cache, "tab.cache table must exist at construction")
 assert(type(tab.cache.tracks) == "table" and #tab.cache.tracks == 0,
-    "cache.tracks starts empty")
+    "cache.tracks starts as an empty table")
 assert(type(tab.cache.clips) == "table" and #tab.cache.clips == 0,
-    "cache.clips starts empty")
-assert(tab.cache.content_length == 0, "cache.content_length starts at 0")
-assert(tab.cache.sequence_frame_rate == nil,
-    "cache.sequence_frame_rate is nil until load_from_database")
-assert(tab.cache.playhead_position == 0, "cache.playhead_position starts at 0")
-assert(tab.cache.viewport_start_time == 0, "cache.viewport_start_time starts at 0")
-assert(tab.cache.viewport_duration == 0, "cache.viewport_duration starts at 0")
-assert(tab.cache.video_scroll_offset == 0, "cache.video_scroll_offset starts at 0")
-assert(tab.cache.audio_scroll_offset == 0, "cache.audio_scroll_offset starts at 0")
-assert(tab.cache.video_audio_split_ratio == 0.5,
-    "cache.video_audio_split_ratio starts at 0.5")
-assert(tab.cache.sequence_timecode_start_frame == 0,
-    "cache.sequence_timecode_start_frame starts at 0")
-print("✓ cache exists at construction with empty defaults")
+    "cache.clips starts as an empty table")
+for _, field in ipairs({
+    "content_length", "sequence_frame_rate", "sequence_timecode_start_frame",
+    "playhead_position", "viewport_start_time", "viewport_duration",
+    "video_scroll_offset", "audio_scroll_offset", "video_audio_split_ratio",
+}) do
+    assert(tab.cache[field] == nil, string.format(
+        "cache.%s must be nil until load_from_database (got %s)",
+        field, tostring(tab.cache[field])))
+end
+print("✓ fresh cache has empty containers; per-sequence fields nil until load")
 
 -- ── 2. load_from_database populates cache from DB ─────────────────────────
 tab:load_from_database()

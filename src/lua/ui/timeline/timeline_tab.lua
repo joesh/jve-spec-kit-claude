@@ -25,26 +25,19 @@ TimelineTab.__index = TimelineTab
 
 local VALID_KINDS = { record = true, source = true }
 
--- Per-tab cache holds the per-sequence fields that the timeline view
--- pulls from. Selection and drag stay global on timeline_state (selection
--- by design; drag because cross-timeline drags are supported). Indexes
--- rebuild lazily on first getter after indexes_dirty=true.
+-- Per-tab cache. Per-sequence fields (viewport, scroll, playhead,
+-- content_length, frame_rate, tc origin) are intentionally nil/unset
+-- until load_from_database runs — first read on an unloaded tab fails
+-- loudly rather than serving made-up defaults (rule 2.13).
+-- Container fields stay initialized so iteration over an unloaded tab
+-- yields empty (matches the "blank panel" semantics).
 local function fresh_cache()
     return {
         tracks = {},
-        clips = {},  -- media + derived gap clips
-        content_length = 0,
-        sequence_frame_rate = nil,
-        sequence_timecode_start_frame = 0,
-        viewport_start_time = 0,
-        viewport_duration = 0,
-        video_scroll_offset = 0,
-        audio_scroll_offset = 0,
-        video_audio_split_ratio = 0.5,
-        playhead_position = 0,
-        clip_lookup = {},          -- clip_id → clip
-        track_clip_index = {},     -- track_id → sorted clip list
-        clip_track_positions = {}, -- clip_id → {list, index}
+        clips = {},
+        clip_lookup = {},
+        track_clip_index = {},
+        clip_track_positions = {},
         indexes_dirty = true,
     }
 end
