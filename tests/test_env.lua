@@ -434,16 +434,22 @@ function M.make_strip_stub(spec)
     }
 end
 
---- Spec 022 Phase 1.3f helper. Install a strip with a single fake
---- displayed tab whose `cache.clips` and `cache.tracks` the test can
---- mutate directly. Replaces the legacy `data.state.clips = {...}`
---- pattern in pure-unit tests of clip_state / track_state / similar.
----
---- Returns the cache table; the test populates `cache.clips = {...}`,
---- `cache.tracks = {...}`, optionally calls `cache.invalidate()` after
---- mutating in place. Indexes are rebuilt lazily on getter calls.
-function M.install_displayed_tab_stub()
-    local cache = { clips = {}, tracks = {}, dirty = true }
+--- Install a strip with a single fake displayed tab. The returned cache
+--- table mirrors the per-tab cache shape (clips, tracks, indexes,
+--- content_length) — tests mutate it directly. Pre-requires
+--- `ui.timeline.timeline_state` so its module-load `strip_holder.set(...)`
+--- can't later clobber this stub. Optional `opts.content_length` seeds
+--- `cache.content_length` for viewport-policy tests that don't populate
+--- clips.
+function M.install_displayed_tab_stub(opts)
+    require("ui.timeline.timeline_state")
+    opts = opts or {}
+    local cache = {
+        clips = {},
+        tracks = {},
+        content_length = opts.content_length or 0,
+        dirty = true,
+    }
     local function rebuild()
         cache._lookup = {}
         cache._by_track = {}

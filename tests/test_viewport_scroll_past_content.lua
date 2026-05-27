@@ -13,20 +13,10 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
+local test_env = require("test_env")
 local data = require("ui.timeline.state.timeline_state_data")
--- Pre-require timeline_state so its module-load `strip_holder.set(...)`
--- with a fresh strip happens BEFORE we install the stub. Otherwise our
--- stub gets clobbered the first time viewport_state pulls the strip.
-require("ui.timeline.timeline_state")
 local viewport_state = require("ui.timeline.state.viewport_state")
-local strip_holder = require("ui.timeline.state.strip_holder")
 
--- Spec 022 Phase 1.3f: viewport_state.compute_sequence_content_length reads
--- displayed.cache.content_length, not data.state.clips. Compute content_end
--- from the longest clip's reach (mirrors what timeline_core_state.compute_
--- content_length_from would have produced from data.state.clips) and stub
--- the strip so the floor/ceiling clamps see the same extent the prod path
--- would.
 local function content_end_from_clips(clips)
     local max_end = 0
     for _, c in ipairs(clips or {}) do
@@ -36,22 +26,15 @@ local function content_end_from_clips(clips)
     return max_end
 end
 
-local function install_stub_strip(content_end)
-    strip_holder.set({
-        get_displayed = function()
-            return { sequence_id = "test_seq",
-                     cache = { content_length = content_end or 0 } }
-        end,
-    })
-end
-
 local function reset(opts)
     data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
     data.state.viewport_start_time = opts.start
     data.state.viewport_duration = opts.duration
     data.state.playhead_position = 0
     data.state.sequence_timecode_start_frame = 0
-    install_stub_strip(content_end_from_clips(opts.clips))
+    test_env.install_displayed_tab_stub({
+        content_length = content_end_from_clips(opts.clips),
+    })
 end
 
 -- =============================================================================
