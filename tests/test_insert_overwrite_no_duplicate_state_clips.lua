@@ -27,11 +27,10 @@ local Command = require('command')
 local Sequence = require('models.sequence')
 local Media = require('models.media')
 -- Load the facade so command_manager's state init wires the per-module
--- instance the DB mutation path writes into. We then read the raw state
--- table directly to bypass get_clips's index rebuild (the rebuild would
--- filter the fields we care about).
+-- instance the DB mutation path writes into. Spec 022 Phase 1.3f: state
+-- lives on the displayed tab's cache; we read it directly to bypass
+-- get_clips's index rebuild.
 require('ui.timeline.timeline_state')
-local tsdata = require('ui.timeline.state.timeline_state_data')
 local test_env = require('test_env')
 
 local DB_PATH = "/tmp/jve/test_insert_overwrite_no_duplicate.db"

@@ -14,7 +14,6 @@ require("test_env")
 
 local database = require("core.database")
 local timeline_core_state = require("ui.timeline.state.timeline_core_state")
-local data = require("ui.timeline.state.timeline_state_data")
 -- Setup: create a DB with 2 tracks, clips on each
 local db_path = "/tmp/jve/test_scoped_gap_recompute.db"
 os.remove(db_path)
