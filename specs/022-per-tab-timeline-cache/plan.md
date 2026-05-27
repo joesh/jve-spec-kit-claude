@@ -237,6 +237,18 @@ All 1.1–1.7 landed across ~25 commits (`f85ba434 … faf089d8`). Key results:
 
 **Deferred to Phase 2** (NOT scheduled): Panel / TabView / SequenceView renames + further consolidation. See "Long-term target" above.
 
+### Post-Phase-1 audit cleanup (2026-05-27)
+
+Multi-file audit triggered the following non-architectural follow-ups (all landed):
+
+- DRY: lifted `group_and_sort_media_by_track` / `compute_content_length` / `normalize_clip_integers` (three near-identical copies across `timeline_tab`, `timeline_core_state`, `clip_state`) into new `src/lua/ui/timeline/clip_geometry.lua`. Net −74 LOC. The unused `_invalid` clip mark in clip_state's version is gone.
+- Ownership boundary: selection snapshot moved OUT of `TimelineTab` (was reaching up into `data.state.selected_{clips,edges,gaps}`) and INTO the `clip_state` facade. TimelineTab now snapshots only its own `cache.clips`; the facade orchestrates clip-restore + selection-restore in lockstep. Asserts catch begin/commit/rollback imbalance.
+- Comment cleanup: stripped "Spec 022 Phase 1.3X step N" history-breadcrumbs from 8 files (git log is the historical record).
+- Test infrastructure: `test_env.install_displayed_tab_stub({content_length=X})` replaces 4 inline duck-type strip stubs in viewport tests.
+- Banned-jargon: "body" → "timeline view" in `close_displayed_tab` doc-comments.
+- Dead code: deleted unused `M._internal_add_clip_from_command` / `M._internal_remove_clip_from_command` (zero callers).
+- Bare `error("Use commands")` now carries function name + actionable hint (rule 1.14).
+
 ## Files most likely to change
 
 - `src/lua/ui/timeline/timeline_tab.lua` — expanded with cache fields

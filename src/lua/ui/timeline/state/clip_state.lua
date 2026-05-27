@@ -176,15 +176,53 @@ function M.has_active_mutation_snapshot()
     return tab:has_active_mutation_snapshot()
 end
 
---- Snapshot current clip + selection state on the active record tab.
---- No-op when there is no active record tab (e.g. unit tests that
---- exercise command_manager without bootstrapping a timeline). Matches
---- the strip's "blank panel returns empty" convention — no tab means
---- nothing to snapshot, and commit/rollback in that state are also no-ops.
+-- Selection snapshot stack — global, cross-tab. Depth tracks the same
+-- begin/commit/rollback boundary as the tab's clip snapshot stack;
+-- skipped in lockstep when no active record tab exists.
+local selection_snapshot_stack = {}
+
+local function snapshot_global_selection()
+    local clip_ids = {}
+    for _, clip in ipairs(data.state.selected_clips or {}) do
+        table.insert(clip_ids, clip.id)
+    end
+    local edges = {}
+    for i, edge in ipairs(data.state.selected_edges or {}) do
+        edges[i] = {
+            clip_id = edge.clip_id, edge_type = edge.edge_type,
+            trim_type = edge.trim_type, track_id = edge.track_id,
+        }
+    end
+    local gaps = {}
+    for i, gap in ipairs(data.state.selected_gaps or {}) do
+        local g = {}
+        for k, v in pairs(gap) do g[k] = v end
+        gaps[i] = g
+    end
+    return { clip_ids = clip_ids, edges = edges, gaps = gaps }
+end
+
+local function restore_global_selection(snap, restored_clips)
+    local id_lookup = {}
+    for _, clip in ipairs(restored_clips) do id_lookup[clip.id] = clip end
+    local restored = {}
+    for _, id in ipairs(snap.clip_ids) do
+        if id_lookup[id] then table.insert(restored, id_lookup[id]) end
+    end
+    data.state.selected_clips = restored
+    data.state.selected_edges = snap.edges
+    data.state.selected_gaps = snap.gaps
+end
+
+--- Snapshot current clip cache + global selection at the active record tab.
+--- No-op when there is no active record tab (unit tests that exercise
+--- command_manager without bootstrapping a timeline) — commit/rollback
+--- skip in lockstep so the selection stack stays balanced.
 function M.begin_mutation_transaction()
     local tab = active_record_tab()
     if not tab then return end
     tab:begin_mutation_transaction()
+    table.insert(selection_snapshot_stack, snapshot_global_selection())
 end
 
 --- Discard snapshot on successful undo group completion.
@@ -192,13 +230,20 @@ function M.commit_mutation_transaction()
     local tab = active_record_tab()
     if not tab then return end
     tab:commit_mutation_transaction()
+    assert(#selection_snapshot_stack > 0,
+        "clip_state.commit_mutation_transaction: selection stack empty (paired begin missing)")
+    table.remove(selection_snapshot_stack)
 end
 
---- Restore clip + selection state from snapshot on the active record tab.
+--- Restore clip cache + global selection from the snapshot.
 function M.rollback_mutation_transaction()
     local tab = active_record_tab()
     if not tab then return end
-    tab:rollback_mutation_transaction()
+    local restored_clips = tab:rollback_mutation_transaction()
+    assert(#selection_snapshot_stack > 0,
+        "clip_state.rollback_mutation_transaction: selection stack empty (paired begin missing)")
+    local sel = table.remove(selection_snapshot_stack)
+    restore_global_selection(sel, restored_clips)
     state_version = state_version + 1
     local v = state_version
     for _, c in ipairs(tab.cache.clips) do c._version = v end
