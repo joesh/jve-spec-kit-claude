@@ -18,11 +18,14 @@ require("test_env")
 
 local clip_state = require("ui.timeline.state.clip_state")
 local data = require("ui.timeline.state.timeline_state_data")
+local test_env = require("test_env")
+
+local cache = test_env.install_displayed_tab_stub()
 
 local function reset_with_clip(opts)
     data.reset()
     data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-    data.state.clips = {
+    cache.clips = {
         {
             id = opts.id or "c1",
             track_id = opts.track_id or "v1",
@@ -31,7 +34,7 @@ local function reset_with_clip(opts)
             enabled = true,
         },
     }
-    clip_state.invalidate_indexes()
+    cache.invalidate()
 end
 
 local function ids_at(time)
@@ -83,11 +86,11 @@ assert(#at_before == 0, "clip must not be present before its IN edge")
 -- on the same track" case.
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.clips = {
+cache.clips = {
     { id = "a", track_id = "v1", sequence_start = 50,  duration = 10, enabled = true },
     { id = "b", track_id = "v1", sequence_start = 60,  duration = 10, enabled = true },
 }
-clip_state.invalidate_indexes()
+cache.invalidate()
 
 local at_60 = ids_at(60)
 assert(#at_60 == 1 and at_60[1] == "b",
@@ -101,11 +104,11 @@ assert(#at_60 == 1 and at_60[1] == "b",
 -- so the video-trumps-audio rule in pick_best_clip can do its job.
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.clips = {
+cache.clips = {
     { id = "video", track_id = "v1", sequence_start = 200, duration = 24, enabled = true },
     { id = "audio", track_id = "a1", sequence_start = 199, duration = 26, enabled = true },
 }
-clip_state.invalidate_indexes()
+cache.invalidate()
 
 local first_frame = ids_at(200)
 local has_video, has_audio = false, false

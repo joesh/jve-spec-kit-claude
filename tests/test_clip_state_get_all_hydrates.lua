@@ -6,10 +6,12 @@ require("test_env")
 
 local clip_state = require("ui.timeline.state.clip_state")
 local data = require("ui.timeline.state.timeline_state_data")
+local test_env = require("test_env")
 
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.clips = {
+local cache = test_env.install_displayed_tab_stub()
+cache.clips = {
     {
         id = "c1",
         track_id = "v1",
@@ -18,6 +20,7 @@ data.state.clips = {
         enabled = true,
     }
 }
+cache.invalidate()
 
 local clips = clip_state.get_all()
 assert(#clips == 1, "expected one clip")

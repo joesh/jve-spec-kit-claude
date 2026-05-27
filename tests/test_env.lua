@@ -434,6 +434,61 @@ function M.make_strip_stub(spec)
     }
 end
 
+--- Spec 022 Phase 1.3f helper. Install a strip with a single fake
+--- displayed tab whose `cache.clips` and `cache.tracks` the test can
+--- mutate directly. Replaces the legacy `data.state.clips = {...}`
+--- pattern in pure-unit tests of clip_state / track_state / similar.
+---
+--- Returns the cache table; the test populates `cache.clips = {...}`,
+--- `cache.tracks = {...}`, optionally calls `cache.invalidate()` after
+--- mutating in place. Indexes are rebuilt lazily on getter calls.
+function M.install_displayed_tab_stub()
+    local cache = { clips = {}, tracks = {}, dirty = true }
+    local function rebuild()
+        cache._lookup = {}
+        cache._by_track = {}
+        cache._positions = {}
+        for _, c in ipairs(cache.clips) do
+            if c.id then cache._lookup[c.id] = c end
+            if c.track_id then
+                cache._by_track[c.track_id] = cache._by_track[c.track_id] or {}
+                table.insert(cache._by_track[c.track_id], c)
+            end
+        end
+        for _, list in pairs(cache._by_track) do
+            table.sort(list, function(a, b)
+                if a.sequence_start == b.sequence_start then return a.id < b.id end
+                return a.sequence_start < b.sequence_start
+            end)
+            for i, c in ipairs(list) do
+                cache._positions[c.id] = { list = list, index = i }
+            end
+        end
+        cache.dirty = false
+    end
+    local function ensure() if cache.dirty then rebuild() end end
+    function cache.invalidate() cache.dirty = true end
+    local tab = {
+        cache = cache,
+        get_clip_by_id = function(_, id) ensure(); return cache._lookup[id] end,
+        get_track_clip_index = function(_, tid)
+            ensure(); return cache._by_track[tid]
+        end,
+        locate_neighbor = function(_, clip, offset)
+            ensure()
+            local info = cache._positions[clip.id]
+            if not info then return nil end
+            local i = info.index + offset
+            if i < 1 or i > #info.list then return nil end
+            return info.list[i]
+        end,
+        invalidate_indexes = function(_) cache.dirty = true end,
+    }
+    local strip = { get_displayed = function() return tab end }
+    require("ui.timeline.state.strip_holder").set(strip)
+    return cache
+end
+
 function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, duration_frames, media_id)
     -- V13: a "masterclip" is a kind='master' sequence containing one or more
     -- media_refs. Sequence.ensure_master does the right thing — assert TC

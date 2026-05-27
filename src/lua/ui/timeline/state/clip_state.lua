@@ -12,6 +12,21 @@ local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local db = require("core.database")
 local log = require("core.logger").for_area("timeline")
+local strip_holder = require("ui.timeline.state.strip_holder")
+
+-- Spec 022 Phase 1.3f: public read getters delegate to the displayed tab's
+-- cache + per-tab indexes. The displayed tab is the authoritative model
+-- for "what clips does the timeline view show?" (rule 3.0 MVC). The local
+-- `clip_lookup`/`track_clip_index`/`clip_track_positions` indexes below
+-- still serve the legacy apply_mutations + snapshot/rollback paths (1.3f
+-- step 3/4 migrate those). data.state.clips remains aliased to displayed
+-- tab cache.clips by sync_displayed_tab_from_data_state until step 6
+-- deletes the field entirely.
+local function displayed_tab()
+    local strip = strip_holder.get()
+    if not strip then return nil end
+    return strip:get_displayed()
+end
 
 -- Mutation transaction stack: snapshot in-memory clip state for undo group rollback.
 -- Parallels the DB savepoint mechanism — begin/commit/rollback.
@@ -68,10 +83,12 @@ local function normalize_clip_integers(clip)
     return true
 end
 
--- Indices
+-- Legacy module-level indexes used by apply_mutations + snapshot/rollback.
+-- Public read getters (get_by_id, locate_neighbor, get_track_clip_index)
+-- migrated to the displayed tab's own indexes in 1.3f step 2; these
+-- mirror-indexes survive until step 3/4 migrate the write side too.
 local clip_lookup = {}
 local track_clip_index = {}
-local clip_track_positions = {}
 local clip_indexes_dirty = true
 local state_version = 0
 local needs_normalization = true
@@ -79,7 +96,6 @@ local needs_normalization = true
 local function rebuild_clip_indexes()
     clip_lookup = {}
     track_clip_index = {}
-    clip_track_positions = {}
 
     local normalized = {}
     for _, clip in ipairs(data.state.clips) do
@@ -112,11 +128,6 @@ local function rebuild_clip_indexes()
             end
             return a_start < b_start
         end)
-        for index, clip in ipairs(list) do
-            if clip.id then
-                clip_track_positions[clip.id] = {list = list, index = index}
-            end
-        end
     end
 
     clip_indexes_dirty = false
@@ -134,20 +145,26 @@ function M.invalidate_indexes()
 end
 
 function M.get_all()
+    -- Keep legacy indexes warm for apply_mutations/snapshot until 1.3f
+    -- step 3/4 migrate those paths off the module-level cache.
     ensure_clip_indexes()
-    return data.state.clips
+    local tab = displayed_tab()
+    if not tab then return {} end
+    return tab.cache.clips
 end
 
 function M.get_by_id(clip_id)
     if not clip_id then return nil end
-    ensure_clip_indexes()
-    return clip_lookup[clip_id]
+    local tab = displayed_tab()
+    if not tab then return nil end
+    return tab:get_clip_by_id(clip_id)
 end
 
 function M.get_for_track(track_id)
     if not track_id then return {} end
-    ensure_clip_indexes()
-    local list = track_clip_index[track_id]
+    local tab = displayed_tab()
+    if not tab then return {} end
+    local list = tab:get_track_clip_index(track_id)
     if not list then return {} end
     -- Return copy to prevent modification of internal index
     local copy = {}
@@ -158,13 +175,20 @@ end
 -- Return the internal sorted clip list for a track (read-only reference).
 function M.get_track_clip_index(track_id)
     if not track_id then return nil end
-    ensure_clip_indexes()
-    return track_clip_index[track_id]
+    local tab = displayed_tab()
+    if not tab then return nil end
+    return tab:get_track_clip_index(track_id)
 end
 
 -- Return all clips that span the given time (integer frame).
 function M.get_at_time(time_value, candidate_clips)
-    local clips = candidate_clips or data.state.clips
+    local clips
+    if candidate_clips then
+        clips = candidate_clips
+    else
+        local tab = displayed_tab()
+        clips = tab and tab.cache.clips or nil
+    end
     if not clips or #clips == 0 then
         return {}
     end
@@ -200,18 +224,16 @@ end
 
 function M.locate_neighbor(clip, offset)
     if not clip or not clip.id then return nil end
-    ensure_clip_indexes()
-    local info = clip_track_positions[clip.id]
-    if not info then return nil end
-    local neighbor_index = info.index + offset
-    if neighbor_index < 1 or neighbor_index > #info.list then return nil end
-    return info.list[neighbor_index]
+    local tab = displayed_tab()
+    if not tab then return nil end
+    return tab:locate_neighbor(clip, offset)
 end
 
 --- Return the last frame occupied by any clip on any track.
 --- Returns 0 for an empty timeline.
 function M.get_content_end_frame()
-    local clips = data.state.clips
+    local tab = displayed_tab()
+    local clips = tab and tab.cache.clips or nil
     if not clips or #clips == 0 then return 0 end
 
     local max_end = 0

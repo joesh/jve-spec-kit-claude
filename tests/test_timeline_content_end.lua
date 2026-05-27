@@ -21,16 +21,19 @@ print("\n=== B5: Timeline content end detection ===")
 
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
+local test_env = require("test_env")
 
 -- Set sequence rate
 data.state.sequence_frame_rate = {fps_numerator = 24, fps_denominator = 1}
 
+local cache = test_env.install_displayed_tab_stub()
+
 -- ─── Test 1: Empty timeline → content end is 0 ───
 print("\n--- empty timeline → content end is 0 ---")
 do
-    data.state.clips = {}
-    data.state.tracks = {}
-    clip_state.invalidate_indexes()
+    cache.clips = {}
+    cache.tracks = {}
+    cache.invalidate()
 
     local end_frame = clip_state.get_content_end_frame()
     check("empty timeline → 0", end_frame == 0)
@@ -39,7 +42,7 @@ end
 -- ─── Test 2: Single clip → content end is clip start + duration ───
 print("\n--- single clip → correct end ---")
 do
-    data.state.clips = {
+    cache.clips = {
         {
             id = "c1", track_id = "t1",
             sequence_start = 0, duration = 100,
@@ -47,8 +50,8 @@ do
             fps_numerator = 24, fps_denominator = 1,
         },
     }
-    data.state.tracks = {{id = "t1"}}
-    clip_state.invalidate_indexes()
+    cache.tracks = {{id = "t1"}}
+    cache.invalidate()
 
     local end_frame = clip_state.get_content_end_frame()
     check("single clip → 100", end_frame == 100)
@@ -57,7 +60,7 @@ end
 -- ─── Test 3: Two tracks, different ends → max wins ───
 print("\n--- two tracks → max end ---")
 do
-    data.state.clips = {
+    cache.clips = {
         {
             id = "c1", track_id = "t1",
             sequence_start = 0, duration = 100,
@@ -71,8 +74,8 @@ do
             fps_numerator = 24, fps_denominator = 1,
         },
     }
-    data.state.tracks = {{id = "t1"}, {id = "t2"}}
-    clip_state.invalidate_indexes()
+    cache.tracks = {{id = "t1"}, {id = "t2"}}
+    cache.invalidate()
 
     local end_frame = clip_state.get_content_end_frame()
     check("two tracks → 250", end_frame == 250)
@@ -81,7 +84,7 @@ end
 -- ─── Test 4: Clip with Rational values ───
 print("\n--- Rational clip values → correct end ---")
 do
-    data.state.clips = {
+    cache.clips = {
         {
             id = "c1", track_id = "t1",
             sequence_start = 10,
@@ -91,8 +94,8 @@ do
             fps_numerator = 24, fps_denominator = 1,
         },
     }
-    data.state.tracks = {{id = "t1"}}
-    clip_state.invalidate_indexes()
+    cache.tracks = {{id = "t1"}}
+    cache.invalidate()
 
     local end_frame = clip_state.get_content_end_frame()
     check("Rational clip → 100", end_frame == 100)

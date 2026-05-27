@@ -13,16 +13,18 @@ require("test_env")
 
 local data = require("ui.timeline.state.timeline_state_data")
 local clip_state = require("ui.timeline.state.clip_state")
+local test_env = require("test_env")
 
 data.reset()
 data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
 
-data.state.tracks = {
+local cache = test_env.install_displayed_tab_stub()
+cache.tracks = {
     { id = "v1", track_type = "VIDEO" },
 }
 
 -- Clips use plain integer frames
-data.state.clips = {
+cache.clips = {
     {
         id = "c1",
         track_id = "v1",
@@ -34,7 +36,7 @@ data.state.clips = {
     },
 }
 
-clip_state.invalidate_indexes()
+cache.invalidate()
 local indexed = clip_state.get_track_clip_index("v1")
 assert(indexed and #indexed == 1, "expected one indexed clip")
 
