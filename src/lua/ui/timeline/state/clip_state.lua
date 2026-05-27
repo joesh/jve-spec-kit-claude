@@ -83,71 +83,23 @@ local function normalize_clip_integers(clip)
     return true
 end
 
--- Legacy module-level indexes used by apply_mutations + snapshot/rollback.
--- Public read getters (get_by_id, locate_neighbor, get_track_clip_index)
--- migrated to the displayed tab's own indexes in 1.3f step 2; these
--- mirror-indexes survive until step 3/4 migrate the write side too.
-local clip_lookup = {}
-local track_clip_index = {}
-local clip_indexes_dirty = true
+-- Module-level mutation counter. Bumped by timeline_state.apply_mutations
+-- after every change so consumers holding per-clip `_version` can detect
+-- staleness via validate_clip_fresh. Snapshot/rollback also bump it.
 local state_version = 0
-local needs_normalization = true
 
-local function rebuild_clip_indexes()
-    clip_lookup = {}
-    track_clip_index = {}
-
-    local normalized = {}
-    for _, clip in ipairs(data.state.clips) do
-        if normalize_clip_integers(clip) and clip.id then
-            table.insert(normalized, clip)
-            clip_lookup[clip.id] = clip
-            if clip.track_id then
-                local list = track_clip_index[clip.track_id]
-                if not list then
-                    list = {}
-                    track_clip_index[clip.track_id] = list
-                end
-                table.insert(list, clip)
-            end
-        end
-    end
-    data.set_clips(normalized)
-
-    for _, list in pairs(track_clip_index) do
-        table.sort(list, function(a, b)
-            assert(type(a.sequence_start) == "number",
-                "clip_state: clip missing integer sequence_start in sort (id=" .. tostring(a.id) .. ")")
-            assert(type(b.sequence_start) == "number",
-                "clip_state: clip missing integer sequence_start in sort (id=" .. tostring(b.id) .. ")")
-            local a_start = a.sequence_start
-            local b_start = b.sequence_start
-            if a_start == b_start then
-                assert(a.id and b.id, "clip_state: clip missing id in sort")
-                return a.id < b.id
-            end
-            return a_start < b_start
-        end)
-    end
-
-    clip_indexes_dirty = false
-    needs_normalization = false
-end
-
-local function ensure_clip_indexes()
-    if needs_normalization or clip_indexes_dirty then
-        rebuild_clip_indexes()
-    end
-end
-
+-- Spec 022 Phase 1.3f: invalidate the DISPLAYED tab's indexes. The
+-- legacy module-level clip_lookup / track_clip_index / clip_indexes_dirty
+-- variables are gone — public getters delegate to the tab's own indexes
+-- (1.3f step 2). Snapshot/rollback callers also invoke this to mark the
+-- displayed tab's index stale after they swap data.state.clips back to
+-- a restored snapshot.
 function M.invalidate_indexes()
-    clip_indexes_dirty = true
+    local tab = displayed_tab()
+    if tab then tab:invalidate_indexes() end
 end
 
 function M.get_all()
-    -- Keep legacy indexes warm for apply_mutations/snapshot until 1.3f
-    -- step 3/4 migrate those paths off the module-level cache.
-    ensure_clip_indexes()
     local tab = displayed_tab()
     if not tab then return {} end
     return tab.cache.clips
@@ -250,261 +202,35 @@ function M.get_content_end_frame()
     return max_end
 end
 
-function M.hydrate_from_database(clip_id, expected_sequence_id)
-    assert(clip_id, "clip_state.hydrate_from_database: clip_id is required")
-    assert(db and db.load_clip_entry, "clip_state.hydrate_from_database: database module missing load_clip_entry")
+-- Spec 022 Phase 1.3f: hydrate a clip from SQL into a specific tab's cache.
+-- Used by timeline_state.apply_mutations when an update references a clip
+-- the tab cache hasn't seen yet (test fixtures pre-populating SQL; legacy
+-- callsites that mutate without first hydrating). Preserves the same
+-- assert-loud contract as hydrate_from_database.
+function M.hydrate_into_tab(tab, clip_id, expected_sequence_id)
+    assert(tab, "clip_state.hydrate_into_tab: tab required")
+    assert(clip_id, "clip_state.hydrate_into_tab: clip_id required")
     local clip = db.load_clip_entry(clip_id)
     if not clip then
-        error("clip_state.hydrate_from_database: clip not found in database: " .. tostring(clip_id))
+        error("clip_state.hydrate_into_tab: clip not found in database: " .. tostring(clip_id))
     end
-
-    local target_sequence = expected_sequence_id or data.state.sequence_id
+    local target_sequence = expected_sequence_id or tab.sequence_id
     if target_sequence and clip.track_sequence_id and clip.track_sequence_id ~= target_sequence then
-        error(string.format("clip_state.hydrate_from_database: clip %s belongs to sequence %s, not %s",
+        error(string.format(
+            "clip_state.hydrate_into_tab: clip %s belongs to sequence %s, not %s",
             tostring(clip_id), tostring(clip.track_sequence_id), tostring(target_sequence)))
     end
-
     normalize_clip_integers(clip)
     clip._version = state_version
-    table.insert(data.state.clips, clip)
-    needs_normalization = true
+    table.insert(tab.cache.clips, clip)
+    tab:invalidate_indexes()
     return clip
 end
 
--- Mutation Application Logic
-function M.apply_mutations(mutations, persist_callback)
-    if not mutations then return false end
-    local changed = false
-    local deleted_lookup = {}
-    local needs_resort = false
-
-    --- Apply in-memory bulk_shift mutations.
-    -- Canonical shape: { track_id, shift_frames, start_frame }. Every
-    -- clip on the named track with sequence_start >= start_frame gets
-    -- shifted by shift_frames. Mirrors the SQL path in
-    -- command_helper.apply_mutations so DB and in-memory stay in sync.
-    local function apply_bulk_shifts()
-        if not mutations.bulk_shifts then
-            return
-        end
-        ensure_clip_indexes()
-
-        for _, shift in ipairs(mutations.bulk_shifts) do
-            assert(type(shift) == "table",
-                "clip_state.apply_mutations: bulk_shift entry must be a table")
-            assert(shift.track_id and shift.track_id ~= "",
-                "clip_state.apply_mutations: bulk_shift missing track_id")
-            assert(type(shift.shift_frames) == "number",
-                "clip_state.apply_mutations: bulk_shift missing numeric shift_frames")
-            assert(type(shift.start_frame) == "number",
-                "clip_state.apply_mutations: bulk_shift missing numeric start_frame")
-
-            if shift.shift_frames ~= 0 then
-                local list = track_clip_index[shift.track_id] or {}
-                local shifted = 0
-                for _, clip in ipairs(list) do
-                    if type(clip.sequence_start) == "number"
-                        and clip.sequence_start >= shift.start_frame then
-                        clip.sequence_start = clip.sequence_start + shift.shift_frames
-                        shifted = shifted + 1
-                        changed = true
-                    end
-                end
-                -- Output invariant: a non-zero shift emitted by any
-                -- producer MUST find at least one clip on the target
-                -- track at or past start_frame. The producer computes
-                -- start_frame from a clip it just looked up on that
-                -- track, so zero affected rows means either (a) the
-                -- producer emitted against a dead track or stale
-                -- position, or (b) clip_state diverged from the DB
-                -- state between the SQL apply and this in-memory sync.
-                -- Both are bugs — crash with context rather than
-                -- silently dropping the edit.
-                assert(shifted > 0, string.format(
-                    "clip_state.apply_mutations: bulk_shift for track %s "
-                    .. "at start_frame %d with delta %d affected zero clips "
-                    .. "(track has %d clips)",
-                    tostring(shift.track_id), shift.start_frame,
-                    shift.shift_frames, #list))
-            end
-        end
-    end
-    
-    --- Apply order matches the natural three-phase domain flow used by
-    -- Insert (split → bulk_shift → place into cleared space):
-    --
-    --   1. updates    — trim the left half of any straddling clip the split
-    --                   cut into two, plus any pre-Insert bounds rewrites.
-    --   2. inserts    — materialize the split right-halves at their PRE-shift
-    --                   positions so step 3's predicate finds them. Also any
-    --                   inserts from non-Insert callers that don't need a
-    --                   ripple at all.
-    --   3. bulk_shifts — ripple all clips at/past the cut frame forward by
-    --                    the inserted duration. Pre-existing downstream
-    --                    clips and the just-inserted split right-halves
-    --                    both shift here.
-    --   4. placements — the actual new clips Insert is placing into the
-    --                   cleared space at the cut frame. They land at the
-    --                   FINAL position; bulk_shift has already run and
-    --                   does not touch them.
-    --   5. deletes    — last so any earlier step that reads bounds sees the
-    --                   clip before it disappears.
-    local function apply_inserts(list)
-        if not list then return end
-        for _, clip in ipairs(list) do
-            if normalize_clip_integers(clip) then
-                table.insert(data.state.clips, clip)
-                changed = true
-            end
-        end
-        M.invalidate_indexes()
-    end
-
-    local function apply_deletes()
-        if not mutations.deletes then return end
-        for _, entry in ipairs(mutations.deletes) do
-            -- Entries are either raw clip_id strings (legacy/minimal) or
-            -- records {clip_id, track_id, sequence_start, duration} that
-            -- the viewport policy uses to derive the change region.
-            local clip_id = type(entry) == "table" and entry.clip_id or entry
-            -- Remove ALL occurrences (duplicates can exist from nested command mutations)
-            for i = #data.state.clips, 1, -1 do
-                if data.state.clips[i].id == clip_id then
-                    table.remove(data.state.clips, i)
-                    needs_normalization = true
-                    deleted_lookup[clip_id] = true
-                    changed = true
-                end
-            end
-            -- Also remove from selection to keep selection consistent with clip list
-            if data.state.selected_clips then
-                for i = #data.state.selected_clips, 1, -1 do
-                    local sel = data.state.selected_clips[i]
-                    if sel and sel.id == clip_id then
-                        table.remove(data.state.selected_clips, i)
-                    end
-                end
-            end
-            if data.state.selected_edges then
-                for i = #data.state.selected_edges, 1, -1 do
-                    local edge = data.state.selected_edges[i]
-                    if edge and edge.clip_id == clip_id then
-                        table.remove(data.state.selected_edges, i)
-                    end
-                end
-            end
-        end
-        M.invalidate_indexes()
-    end
-
-    local function apply_updates()
-    if mutations.updates and #mutations.updates > 0 then
-        ensure_clip_indexes()
-        for _, update in ipairs(mutations.updates) do
-            local clip_id = update.clip_id or update.id
-            if clip_id then
-                local clip = clip_lookup[clip_id]
-                if not clip then
-                    -- V13: gap clips live only in memory, never in DB. A
-                    -- mutation update that targets a gap that has been
-                    -- evicted from the in-memory cache simply has no
-                    -- corresponding row to load. Skip rather than hydrate.
-                    if update.is_gap or (type(clip_id) == "string" and clip_id:sub(1,4) == "gap_") then
-                        goto continue_update
-                    end
-                    clip = M.hydrate_from_database(clip_id, update.track_sequence_id)
-                    if clip then needs_resort = true; changed = true end
-                end
-
-                if clip then
-                    if update.track_id and update.track_id ~= clip.track_id then
-                        clip.track_id = update.track_id
-                        needs_resort = true; changed = true
-                    end
-                    -- Apply frame_rate from update (metadata, not used for coord conversion)
-                    if update.frame_rate then
-                        assert(update.frame_rate.fps_numerator
-                            and update.frame_rate.fps_denominator,
-                            string.format("clip_state.apply_mutations: malformed frame_rate for clip %s",
-                                tostring(clip.id)))
-                        clip.frame_rate = update.frame_rate
-                    end
-                    -- All values are now integers - direct assignment
-                    if update.start_value and update.start_value ~= clip.sequence_start then
-                        assert(type(update.start_value) == "number",
-                            "clip_state.apply_mutations: start_value must be integer")
-                        clip.sequence_start = update.start_value
-                        needs_resort = true; changed = true
-                    end
-                    if update.duration_value and update.duration_value ~= clip.duration then
-                        assert(type(update.duration_value) == "number",
-                            "clip_state.apply_mutations: duration_value must be integer")
-                        clip.duration = update.duration_value
-                        changed = true
-                    end
-                    if update.source_in_value and update.source_in_value ~= clip.source_in then
-                        assert(type(update.source_in_value) == "number",
-                            "clip_state.apply_mutations: source_in_value must be integer")
-                        clip.source_in = update.source_in_value
-                        changed = true
-                    end
-                    if update.source_out_value and update.source_out_value ~= clip.source_out then
-                        assert(type(update.source_out_value) == "number",
-                            "clip_state.apply_mutations: source_out_value must be integer")
-                        clip.source_out = update.source_out_value
-                        changed = true
-                    end
-                    if update.enabled ~= nil and update.enabled ~= clip.enabled then
-                        clip.enabled = update.enabled and true or false
-                        changed = true
-                    end
-                    if update.name ~= nil and update.name ~= clip.name then
-                        clip.name = update.name
-                        -- clip.label is a derived-state cache set at
-                        -- DB-load time (core/database.lua:384-391:
-                        -- clip.name → media_name → filename). The
-                        -- timeline renderer reads `clip.label or
-                        -- clip.name or clip.id` with clip.label taking
-                        -- precedence, so a stale label masks the real
-                        -- name. Keep the cache in sync when name
-                        -- changes: non-empty name wins; empty name
-                        -- leaves clip.label so the existing
-                        -- media_name/filename fallback still shows
-                        -- (Clip.load's derivation: label = name if
-                        -- non-empty, else media_name, else filename).
-                        if update.name ~= "" then
-                            clip.label = update.name
-                        end
-                        changed = true
-                    end
-                elseif not deleted_lookup[clip_id] then
-                    -- Record failure
-                    -- missing clip; ignore (caller may hydrate later)
-                    return false
-                end
-            end
-            ::continue_update::
-        end
-        if needs_resort then M.invalidate_indexes() end
-    end
-    end
-
-    -- Sequenced execution: split → bulk_shift → place → delete (see
-    -- block comment above apply_inserts for full rationale).
-    apply_updates()
-    apply_inserts(mutations.inserts)
-    apply_bulk_shifts()
-    apply_inserts(mutations.placements)
-    apply_deletes()
-
-    if changed then
-        state_version = state_version + 1
-        for _, clip in ipairs(data.state.clips) do clip._version = state_version end
-        if persist_callback then persist_callback() end
-        data.notify_listeners()
-    end
-    return changed
-end
+-- Spec 022 Phase 1.3f: M.apply_mutations DELETED. timeline_state.apply_mutations
+-- now orchestrates the full edit cycle (hydration + selection cleanup +
+-- per-tab mutation via TimelineTab:apply_mutations + gap recompute +
+-- version stamping + signal). The mutation engine lives on the tab.
 
 function M.get_version() return state_version end
 function M.inc_version() state_version = state_version + 1 end

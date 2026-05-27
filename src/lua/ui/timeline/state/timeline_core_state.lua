@@ -192,34 +192,82 @@ local function sync_displayed_tab_from_data_state()
     displayed:invalidate_indexes()
 end
 
-local function recompute_gap_clips(affected_track_ids)
-    local clips = data.state.clips
-    local tracks = data.state.tracks
+-- Compute the timeline content extent from a list of clips. Inlined here
+-- so recompute_gap_clips_for_tab can refresh cache.content_length on any
+-- tab without going through data.state.
+local function compute_content_length_from(clip_list)
+    local max_end = 0
+    for _, c in ipairs(clip_list) do
+        if type(c.sequence_start) == "number" and type(c.duration) == "number" then
+            local e = c.sequence_start + c.duration
+            if e > max_end then max_end = e end
+        end
+    end
+    return max_end
+end
+
+-- Spec 022 Phase 1.3f: recompute gap clips on a specific tab's cache
+-- in-place — preserves cache.clips table identity so the data.state.clips
+-- alias (still live until step 6) stays valid for the displayed tab.
+--
+-- Operates on tab.cache.clips / tab.cache.tracks / tab.cache.sequence_frame_rate
+-- only. data.state is touched solely for the global selection (selected_edges)
+-- migrate-stale step, which is intentionally cross-cutting.
+local function recompute_gap_clips_for_tab(tab, affected_track_ids)
+    assert(tab, "recompute_gap_clips_for_tab: tab required")
+    local cache = tab.cache
+    local clips = cache.clips
+    local tracks = cache.tracks
     if not clips or not tracks or #tracks == 0 then return end
 
-    local seq_fr = data.state.sequence_frame_rate
-    -- sequence_frame_rate may not be set during early init before sequence load.
-    -- Only assert when we have an active sequence — otherwise silent skip is correct.
+    local seq_fr = cache.sequence_frame_rate
     if not seq_fr then
-        assert(not data.state.sequence_id or data.state.sequence_id == "",
-            "recompute_gap_clips: sequence_frame_rate is nil but sequence_id is set")
-        return
+        -- An open tab without a frame rate means load_from_database hasn't
+        -- run or the sequence row was corrupt. The lifecycle invariant
+        -- (1.2) says every tab returned by strip:open_*_tab has populated
+        -- cache. Anything else is a bug — fail loud.
+        error(string.format(
+            "recompute_gap_clips_for_tab: tab %s has no sequence_frame_rate "
+            .. "(load_from_database invariant broken)", tostring(tab.sequence_id)))
     end
 
     local scoped = type(affected_track_ids) == "table"
     local kept, media_for_scope, old_gap_tracks =
         partition_clips_for_recompute(clips, scoped, affected_track_ids)
-    -- Assign the kept set first; rebuild_gaps_for_tracks then table.inserts
-    -- gap rows into the same table in place, so we refresh the cached
-    -- content_length AFTER both have run.
-    data.state.clips = kept
+
+    -- In-place rewrite: clear cache.clips, refill with kept, then let
+    -- rebuild_gaps_for_tracks table.insert new gaps into the same table.
+    -- Preserves identity so data.state.clips (aliased while sync helper
+    -- exists) keeps pointing at the same array.
+    for i = #clips, 1, -1 do table.remove(clips, i) end
+    for _, c in ipairs(kept) do table.insert(clips, c) end
 
     local track_clips = build_sorted_track_media(media_for_scope)
     local new_gaps_by_track =
-        rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, kept)
+        rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, clips)
     migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
-    data.update_content_length()
-    sync_displayed_tab_from_data_state()
+    cache.content_length = compute_content_length_from(clips)
+    tab:invalidate_indexes()
+
+    -- Until step 6 deletes data.state.clips entirely, keep the displayed
+    -- tab's view-state mirror in sync. content_length on data.state is
+    -- consumed by the renderer/scrollbar; reassign for that path.
+    local strip = strip_holder.get()
+    if strip and strip:get_displayed() == tab then
+        data.state.clips = clips  -- preserve alias identity
+        data.update_content_length()
+    end
+end
+
+-- Legacy whole-displayed-tab recompute. Resolves displayed tab and
+-- delegates to recompute_gap_clips_for_tab. Callers in this module
+-- (load_displayed_sequence, reload_clips) migrate in step 5.
+local function recompute_gap_clips(affected_track_ids)
+    local strip = strip_holder.get()
+    if not strip then return end
+    local displayed = strip:get_displayed()
+    if not displayed then return end
+    recompute_gap_clips_for_tab(displayed, affected_track_ids)
 end
 
 -- Expose sync helper to siblings (timeline_state.apply_mutations after the
@@ -962,5 +1010,6 @@ Signals.connect("media_changed", function(_changed_media_ids)
 end)
 
 M.recompute_gap_clips = recompute_gap_clips
+M.recompute_gap_clips_for_tab = recompute_gap_clips_for_tab
 
 return M

@@ -413,6 +413,53 @@ local function resolve_target_tab(target_seq)
     return nil
 end
 
+-- Prune deleted clips from the global selection state. Selection lives on
+-- data.state (it's a cross-tab singleton — one selection across the
+-- editor); the per-tab cache mutate path leaves it alone. Spec 022 Phase
+-- 1.3f: lifted out of clip_state.apply_mutations so both displayed and
+-- non-displayed mutation paths share the same selection-cleanup contract.
+local function prune_selection_for_deletes(deletes)
+    if not deletes then return end
+    for _, entry in ipairs(deletes) do
+        local clip_id = type(entry) == "table" and entry.clip_id or entry
+        if data.state.selected_clips then
+            for i = #data.state.selected_clips, 1, -1 do
+                local sel = data.state.selected_clips[i]
+                if sel and sel.id == clip_id then
+                    table.remove(data.state.selected_clips, i)
+                end
+            end
+        end
+        if data.state.selected_edges then
+            for i = #data.state.selected_edges, 1, -1 do
+                local edge = data.state.selected_edges[i]
+                if edge and edge.clip_id == clip_id then
+                    table.remove(data.state.selected_edges, i)
+                end
+            end
+        end
+    end
+end
+
+-- Hydrate clips referenced by updates that aren't yet in the target tab's
+-- cache. Mirrors the legacy clip_state.apply_mutations hydration path so
+-- mutations addressed to clips the cache hasn't seen still apply (test
+-- fixtures pre-populating SQL, etc.). Skips gap-id updates — gaps are
+-- in-memory only and "missing gap" means "the gap was evicted" (legit).
+local function hydrate_updates_for_tab(target_tab, updates)
+    if not updates then return end
+    for _, update in ipairs(updates) do
+        local clip_id = update.clip_id or update.id
+        if clip_id then
+            local is_gap = update.is_gap
+                or (type(clip_id) == "string" and clip_id:sub(1, 4) == "gap_")
+            if not is_gap and not target_tab:get_clip_by_id(clip_id) then
+                clips.hydrate_into_tab(target_tab, clip_id, update.track_sequence_id)
+            end
+        end
+    end
+end
+
 local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_callback)
     local target_seq, mutations, callback
     if type(sequence_or_mutations) == "string" or type(sequence_or_mutations) == "number" then
@@ -449,43 +496,38 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
         return true
     end
 
-    -- Per-tab cache write (the bug fix). Only the non-displayed branch
-    -- below needs this: when target == displayed, the legacy clip_state
-    -- mirror writes data.state.clips and core_state.recompute_gap_clips
-    -- syncs that array onto displayed.cache.clips by reference (Phase 1.3b).
-    -- Calling tab:apply_mutations here as well would mutate the shared
-    -- array twice — bulk_shifts in particular would clamp to zero on the
-    -- second pass and trip the NSF assert. Non-displayed targets keep the
-    -- per-tab write below (the BRE bug-fix path).
+    -- Spec 022 Phase 1.3f: unified orchestration — both displayed and
+    -- non-displayed targets follow the same path. Tab cache is the model;
+    -- this function provides cross-cutting concerns (selection cleanup,
+    -- gap recompute, version stamping, view-listener notify, signal).
+    local affected_tracks, scope_is_known = collect_affected_track_ids(mutations)
+    hydrate_updates_for_tab(target_tab, mutations.updates)
+    prune_selection_for_deletes(mutations.deletes)
 
-    -- Displayed-tab legacy mirror to data.state. The renderer / selection /
-    -- gap-recompute machinery still reads from data.state today; 1.3b
-    -- migrates readers off it, after which this branch collapses.
-    if target_tab == tab_strip:get_displayed() then
-        local affected_tracks, scope_is_known = collect_affected_track_ids(mutations)
-        local state_changed = clips.apply_mutations(mutations, callback)
-        if state_changed then
-            local core_state = require("ui.timeline.state.timeline_core_state")
-            assert(core_state.recompute_gap_clips,
-                "timeline_state.apply_mutations: core_state.recompute_gap_clips must exist")
-            if scope_is_known and next(affected_tracks) ~= nil then
-                core_state.recompute_gap_clips(affected_tracks)
-            else
-                core_state.recompute_gap_clips()
-            end
-            clips.invalidate_indexes()
+    local changed = target_tab:apply_mutations(mutations)
+    if changed then
+        local core_state = require("ui.timeline.state.timeline_core_state")
+        if scope_is_known and next(affected_tracks) ~= nil then
+            core_state.recompute_gap_clips_for_tab(target_tab, affected_tracks)
+        else
+            core_state.recompute_gap_clips_for_tab(target_tab)
         end
-        Signals.emit("timeline_mutations_applied", mutations, state_changed)
-        return state_changed
+        -- Version stamping: validate_clip_fresh checks per-clip _version
+        -- against the module-level counter. Stamping unconditionally on
+        -- the changed tab keeps any held clip reference detectable as
+        -- stale by handlers reading from non-target tabs after this.
+        clips.inc_version()
+        local v = clips.get_version()
+        for _, c in ipairs(target_tab.cache.clips) do c._version = v end
+        if callback then callback() end
+        -- Notify view listeners only when the displayed cache changed.
+        -- Non-displayed mutations don't visually change the timeline.
+        if target_tab == tab_strip:get_displayed() then
+            data.notify_listeners()
+        end
     end
-
-    -- Non-displayed target: data.state stays put (the displayed view
-    -- didn't change). Mutate THIS tab's cache directly — the BRE bug-fix
-    -- path. The displayed branch above skips this because the legacy
-    -- mirror + sync handle it; here there's no legacy mirror to lean on.
-    local tab_changed = target_tab:apply_mutations(mutations)
-    Signals.emit("timeline_mutations_applied", mutations, tab_changed)
-    return tab_changed
+    Signals.emit("timeline_mutations_applied", mutations, changed)
+    return changed
 end
 
 M.apply_mutations = apply_mutations
