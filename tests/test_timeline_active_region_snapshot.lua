@@ -59,6 +59,7 @@ local state = {
         error("get_clips() must not be used by TimelineActiveRegion", 2)
     end
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local edges = {
     {clip_id = "c", edge_type = "out", trim_type = "ripple"},

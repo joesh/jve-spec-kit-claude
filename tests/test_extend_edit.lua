@@ -309,9 +309,11 @@ do
     clip_store["gap_t1_50"] = gap_clip
     -- Gap clips resolve via timeline_state.get_clip_by_id per the 005
     -- gap-as-clip refactor; ExtendEdit reaches there for gap_* ids.
-    package.loaded["ui.timeline.timeline_state"] = {
+    local ts_mock_1 = {
         get_clip_by_id = function(id) return id == "gap_t1_50" and gap_clip or nil end,
     }
+    require("test_env").attach_strip_to_state_mock(ts_mock_1)
+    package.loaded["ui.timeline.timeline_state"] = ts_mock_1
 
     local cmd = Command.create("ExtendEdit", "p1")
     cmd:set_parameters({
@@ -356,7 +358,7 @@ do
         track_id = "trackA",
     }
 
-    package.loaded["ui.timeline.timeline_state"] = {
+    local ts_mock_2 = {
         get_selected_edges = function()
             return {{ clip_id = "c_sel", edge_type = "out", trim_type = "ripple" }}
         end,
@@ -364,6 +366,8 @@ do
             return {{ id = "c_sel", track_id = "trackA" }}
         end,
     }
+    require("test_env").attach_strip_to_state_mock(ts_mock_2)
+    package.loaded["ui.timeline.timeline_state"] = ts_mock_2
 
     local cmd = Command.create("ExtendEdit", "p1")
     cmd:set_parameters({
@@ -391,12 +395,14 @@ do
     -- selection model and the timeline clip set must agree; a mismatch
     -- is a bug somewhere upstream and silently dropping it would mask
     -- that bug. Surface it loudly with the offending clip_id.
-    package.loaded["ui.timeline.timeline_state"] = {
+    local ts_mock_3 = {
         get_selected_edges = function()
             return {{ clip_id = "ghost_clip", edge_type = "out", trim_type = "ripple" }}
         end,
         get_clips = function() return {} end,
     }
+    require("test_env").attach_strip_to_state_mock(ts_mock_3)
+    package.loaded["ui.timeline.timeline_state"] = ts_mock_3
 
     local cmd = Command.create("ExtendEdit", "p1")
     cmd:set_parameters({
@@ -414,10 +420,12 @@ end
 print("\n--- ExtendEdit: empty selection is a no-op ---")
 do
     ripple_calls = {}
-    package.loaded["ui.timeline.timeline_state"] = {
+    local ts_mock_4 = {
         get_selected_edges = function() return {} end,
         get_clips = function() return {} end,
     }
+    require("test_env").attach_strip_to_state_mock(ts_mock_4)
+    package.loaded["ui.timeline.timeline_state"] = ts_mock_4
 
     local cmd = Command.create("ExtendEdit", "p1")
     cmd:set_parameters({

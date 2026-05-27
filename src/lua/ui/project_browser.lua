@@ -254,7 +254,7 @@ end
 local function sequence_defaults()
     local timeline_panel = M.timeline_panel
     local timeline_state_module = timeline_panel and timeline_panel.get_state and timeline_panel.get_state()
-    local sequence_id = timeline_state_module and timeline_state_module.get_sequence_id and timeline_state_module.get_sequence_id()
+    local sequence_id = timeline_state_module and timeline_state_module.get_tab_strip():active_sequence_id()
     assert(sequence_id and sequence_id ~= "", "project_browser.sequence_defaults: no active sequence_id to derive defaults from")
     local record = db.load_sequence_record(sequence_id)
     assert(record, string.format("project_browser.sequence_defaults: failed to load sequence record for %s", sequence_id))

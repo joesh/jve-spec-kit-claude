@@ -47,7 +47,7 @@ class TestNudgeBoundaryClamp(JVESmokeCase):
         # the timeline's lower bound. If the Anamnesis fixture has none
         # (unlikely; gold-timeline does), the test is moot — surface that.
         boundary_clip_id = self.eval_str(
-            "local clips = require('ui.timeline.timeline_state').get_clips(); "
+            "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             f"local boundary = {start_tc}; "
             "for _, c in ipairs(clips) do "
             "  if c.sequence_start == boundary then return c.id end "

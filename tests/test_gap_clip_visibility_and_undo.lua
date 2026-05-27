@@ -29,7 +29,7 @@ local tracks = layout.tracks
 
 -- Verify gaps exist in clip list (prerequisite for all tests)
 local gap1_id = layout:gap_id("v1", 500)
-local gap1 = ts.get_clip_by_id(gap1_id)
+local gap1 = ts.get_tab_strip():clip_by_id(gap1_id)
 assert(gap1 and gap1.is_gap == true, "Gap clip should exist at 500")
 
 -- ─────────────────────────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ print("  ✓ No gap clips rendered")
 -- ─────────────────────────────────────────────────────────────────────────
 print("--- Test 2: Gap clips in index but filtered by find_clip_under_cursor ---")
 
-local track_clip_index = ts.get_track_clip_index(tracks.v1.id)
+local track_clip_index = ts.get_tab_strip():track_clip_index(tracks.v1.id)
 assert(track_clip_index, "track clip index should exist")
 
 -- Verify gap clip IS in the raw index (this is expected — gap clips live in the list)
@@ -146,7 +146,7 @@ assert(cursor_hit ~= nil and cursor_hit.is_gap == true,
 -- get_clips_for_track returns gap clips. Any code that iterates
 -- track clips to find a clip at a position WILL hit gap clips unless
 -- it filters clip_kind=="gap". Verify the data-level exposure.
-local track_clips_for_v1 = ts.get_clips_for_track(tracks.v1.id)
+local track_clips_for_v1 = ts.get_tab_strip():clips_for_track(tracks.v1.id)
 local gap_spans_600 = false
 for _, c in ipairs(track_clips_for_v1) do
     if c.is_gap == true and c.sequence_start <= 600
@@ -159,7 +159,7 @@ assert(gap_spans_600,
     "A gap clip spanning frame 600 must exist in get_clips_for_track (prerequisite)")
 
 -- get_clips_at_time (used by playback, MatchFrame, etc.) must NOT return gap clips
-local at_600 = ts.get_clips_at_time(600)
+local at_600 = ts.get_tab_strip():clips_at_time(600)
 for _, c in ipairs(at_600) do
     assert(c.clip_kind ~= "gap",
         string.format("get_clips_at_time must skip gap clips (got %s)", c.id))

@@ -73,6 +73,7 @@ local state = {
     get_all_tracks = function() return {{id = "v1", track_type = "VIDEO"}} end,
     get_clips = load_clips
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local view = {
     state = state,

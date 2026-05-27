@@ -38,7 +38,7 @@ function M.create(widget, state_module, track_filter_fn, options)
 
     function view.update_layout_cache(widget_height)
         view.filtered_tracks = {}
-        local all = state_module.get_all_tracks()
+        local all = state_module.get_tab_strip():displayed_tracks()
         for _, t in ipairs(all) do
             if track_filter_fn(t) then table.insert(view.filtered_tracks, t) end
         end

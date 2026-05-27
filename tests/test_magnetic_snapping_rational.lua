@@ -37,6 +37,7 @@ local state = {
         }
     end
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 -- Integer target at frame 24 should snap to clip_a in edge
 local target = 24

@@ -92,6 +92,7 @@ local state = {
     get_active_edge_drag_state = function() return nil end,
     get_active_clip_drag_state = function() return nil end,
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local view = {
     widget = {},

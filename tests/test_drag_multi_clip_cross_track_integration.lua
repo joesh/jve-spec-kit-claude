@@ -86,6 +86,7 @@ local state = {
     end,
     get_clips = load_clips
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local view = {
     state = state,

@@ -27,6 +27,7 @@ local state = {
         playhead = "#ffffff",
     }
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local prev_clip = {
     id = "clip_anchor",

@@ -62,12 +62,6 @@ local function stub_timeline_state()
     timeline_state.get_playhead_position = function() return 0 end
     timeline_state.get_sequence_frame_rate = function() return {fps_numerator=30, fps_denominator=1} end
     timeline_state.reload_clips = function() return true end
-    timeline_state.get_clip_by_id = function(id)
-        return require("models.clip").load(id, db)
-    end
-    timeline_state.get_clips = function()
-        return require("core.database").load_clips("default_sequence")
-    end
     timeline_state.describe_track_neighbors = require("ui.timeline.timeline_state").describe_track_neighbors
 
     timeline_state.get_selected_clips = function() return {} end

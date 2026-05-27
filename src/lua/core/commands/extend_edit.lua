@@ -33,7 +33,7 @@ local function gather_edge_infos_from_selection()
     local ts = require("ui.timeline.timeline_state")
     local selected_edges = ts.get_selected_edges()
     if not selected_edges or #selected_edges == 0 then return {} end
-    return edge_decoration.decorate(selected_edges, ts.get_clips(), "ExtendEdit")
+    return edge_decoration.decorate(selected_edges, ts.get_tab_strip():displayed_clips(), "ExtendEdit")
 end
 
 function M.register(command_executors, command_undoers, _db, _set_last_error)
@@ -70,7 +70,7 @@ function M.register(command_executors, command_undoers, _db, _set_last_error)
             -- Gap clips live in timeline_state only (in-memory, never
             -- persisted per the 005 gap-as-clip refactor). timeline_state
             -- is necessarily loaded — selected_edges came from it.
-            clip = require("ui.timeline.timeline_state").get_clip_by_id(lead_edge.clip_id)
+            clip = require("ui.timeline.timeline_state").get_tab_strip():clip_by_id(lead_edge.clip_id)
         else
             clip = Clip.load(lead_edge.clip_id)
         end

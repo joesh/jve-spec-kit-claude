@@ -39,7 +39,7 @@ class TestShiftFLoadsClipInSourceViewer(JVESmokeCase):
         # boundary ambiguity at clip edges where multiple clips may
         # claim the same frame).
         info = self.eval(
-            "local clips = require('ui.timeline.timeline_state').get_clips(); "
+            "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             "for _, c in ipairs(clips) do "
             "  if c.duration >= 10 then "
             "    return string.format('%s|%d', c.id, c.sequence_start + 5) "

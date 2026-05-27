@@ -24,32 +24,16 @@ function M.handle_release(view, drag_state, modifiers)
         local delta_frames = drag_state.delta_frames
         assert(type(delta_frames) == "number", "timeline_view_drag_handler: delta_frames must be integer")
         -- alt-copy semantics are tracked on drag_state for potential future use.
-        local active_seq = state_module.get_sequence_id()
+        local active_seq = state_module.get_tab_strip():active_sequence_id()
         local active_proj = state_module.get_project_id()
         local clips = drag_state.clips or {}
 
         -- Reload clip snapshots via stable lookup (avoid scanning thousands of clips).
         local current_clips = {}
-        if state_module.get_clip_by_id then
-            for _, drag_clip in ipairs(clips) do
-                local clip = drag_clip and drag_clip.id and state_module.get_clip_by_id(drag_clip.id) or nil
-                if clip then
-                    table.insert(current_clips, clip)
-                end
-            end
-        else
-            local all_clips = state_module.get_clips()
-            local clip_lookup = {}
-            for _, clip in ipairs(all_clips) do
-                if clip and clip.id then
-                    clip_lookup[clip.id] = clip
-                end
-            end
-            for _, drag_clip in ipairs(clips) do
-                local clip = drag_clip and drag_clip.id and clip_lookup[drag_clip.id] or nil
-                if clip then
-                    table.insert(current_clips, clip)
-                end
+        for _, drag_clip in ipairs(clips) do
+            local clip = drag_clip and drag_clip.id and state_module.get_tab_strip():clip_by_id(drag_clip.id) or nil
+            if clip then
+                table.insert(current_clips, clip)
             end
         end
         if #current_clips == 0 then
@@ -57,7 +41,7 @@ function M.handle_release(view, drag_state, modifiers)
             goto cleanup
         end
 
-        local all_tracks = state_module.get_all_tracks()
+        local all_tracks = state_module.get_tab_strip():displayed_tracks()
         local track_index_lookup = {}
         for idx, track in ipairs(all_tracks or {}) do
             track_index_lookup[track.id] = idx
@@ -218,7 +202,7 @@ function M.handle_release(view, drag_state, modifiers)
         end
 
     elseif drag_type == "edges" then
-        local active_seq = state_module.get_sequence_id()
+        local active_seq = state_module.get_tab_strip():active_sequence_id()
         local active_proj = state_module.get_project_id()
         local edges = drag_state.edges or {}
         local lead_edge = drag_state.lead_edge
@@ -244,14 +228,14 @@ function M.handle_release(view, drag_state, modifiers)
             track_by_clip = {}
             for _, edge in ipairs(edges) do
                 if edge and edge.clip_id and not track_by_clip[edge.clip_id] then
-                    local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(edge.clip_id) or nil
+                    local clip = state_module.get_tab_strip():clip_by_id(edge.clip_id) or nil
                     if clip and clip.track_id then
                         track_by_clip[edge.clip_id] = clip.track_id
                     end
                 end
             end
             if lead_edge and lead_edge.clip_id and not track_by_clip[lead_edge.clip_id] then
-                local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(lead_edge.clip_id) or nil
+                local clip = state_module.get_tab_strip():clip_by_id(lead_edge.clip_id) or nil
                 if clip and clip.track_id then
                     track_by_clip[lead_edge.clip_id] = clip.track_id
                 end

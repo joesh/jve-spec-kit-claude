@@ -130,8 +130,8 @@ function M.register(executors, undoers, db)
         -- so undo can restore it if the user switches to the imported sequence.
         if not args.pre_import_sequence_id then
             local ts_ok, ts = pcall(require, 'ui.timeline.timeline_state')
-            if ts_ok and ts and ts.get_sequence_id then
-                local active = ts.get_sequence_id()
+            if ts_ok and ts then
+                local active = ts.get_tab_strip():active_sequence_id()
                 assert(active and active ~= "",
                     "ImportFCP7XML: timeline_state loaded but has no active sequence — "
                     .. "cannot capture pre_import_sequence_id for undo safety")

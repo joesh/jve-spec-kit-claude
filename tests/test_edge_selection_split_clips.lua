@@ -82,22 +82,10 @@ ClipLink.create_link_group({
 -- Initialize command manager
 command_manager.init("seq1", "proj1")
 
--- Mock timeline_state for the Split wrapper to find clips at playhead
-local all_test_clips = {
-    { id = "clip_video", track_id = "trk_v", sequence_start = 0, duration = 1000 },
-    { id = "clip_audio", track_id = "trk_a", sequence_start = 0, duration = 1000 },
-}
-
+-- Mock timeline_state state for the Blade wrapper. The Blade command reads
+-- clips from the real DB rows we inserted above; only playhead + selection
+-- need stubbing here.
 timeline_state.get_playhead_position = function() return 500 end
-timeline_state.get_clips_at_time = function(time)
-    local result = {}
-    for _, clip in ipairs(all_test_clips) do
-        if clip.sequence_start <= time and (clip.sequence_start + clip.duration) > time then
-            table.insert(result, clip)
-        end
-    end
-    return result
-end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_project_id = function() return "proj1" end
 
@@ -160,18 +148,10 @@ local mock_clips = {
 
 timeline_state.get_selected_edges = function() return mock_edges end
 timeline_state.set_edge_selection = function(edges) mock_edges = edges or {} end
-timeline_state.get_clip_by_id = function(clip_id)
-    for _, clip in ipairs(mock_clips) do
-        if clip.id == clip_id then return clip end
-    end
-    return nil
-end
-timeline_state.get_clips_for_track = function(track_id)
-    local track_clips = {}
-    for _, clip in ipairs(mock_clips) do
-        if clip.track_id == track_id then table.insert(track_clips, clip) end
-    end
-    return track_clips
+-- 022/1.3e: re-wire strip to expose the second-scenario mock_clips set
+-- (the linked-split test uses a different clip layout than the first).
+timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({ displayed_clips = mock_clips })
 end
 
 -- Test: Select edge on second video clip and expand to linked

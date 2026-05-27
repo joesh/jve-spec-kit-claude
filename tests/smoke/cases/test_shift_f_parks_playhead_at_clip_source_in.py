@@ -69,7 +69,7 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
     def _find_media_clip(self) -> tuple[str, int, int, str, str]:
         """Return (clip_id, source_in, sequence_start, src_seq_id, rec_seq_id)."""
         info = self.eval(
-            "local clips = require('ui.timeline.timeline_state').get_clips(); "
+            "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             "local picked "
             "for _, c in ipairs(clips) do "
             "  if not c.is_gap "

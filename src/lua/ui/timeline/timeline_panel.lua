@@ -696,7 +696,7 @@ function M.handle_drop_on_blank_timeline(payload)
     assert(project_id and project_id ~= "",
         "timeline_panel.handle_drop_on_blank_timeline: no project open")
 
-    local active_seq = state.get_sequence_id()
+    local active_seq = state.get_tab_strip():active_sequence_id()
     assert(not active_seq or active_seq == "",
         "timeline_panel.handle_drop_on_blank_timeline: must run in the "
             .. "no-active-sequence state; got active sequence "
@@ -782,7 +782,7 @@ local function close_tab(sequence_id)
     -- which sets data.state.sequence_id = nil — if we read current_sequence
     -- after that, the active-closing branch below misfires (nil != seq_id)
     -- and unload_sequence never runs, leaving last_open_sequence_id stale.
-    local current_sequence_before = state.get_sequence_id and state.get_sequence_id()
+    local current_sequence_before = state.get_tab_strip():active_sequence_id()
 
     if tab.strip_tab.sequence_id == sequence_id then
         if tab.strip_tab.kind == "source" then
@@ -1037,7 +1037,7 @@ end
 -- close any tabs opened for the about-to-be-deleted sequences, and if the
 -- currently active sequence was among them, switch to a surviving one.
 local function close_created_tabs_on_undo(created_sequence_ids)
-    local active = state.get_sequence_id and state.get_sequence_id() or nil
+    local active = state.get_tab_strip():active_sequence_id() or nil
     local active_deleted = false
     for _, sequence_id in ipairs(created_sequence_ids) do
         if open_tabs[sequence_id] then
@@ -1100,7 +1100,7 @@ local function handle_tab_command_event(event)
 
         if event.event == "execute" or event.event == "redo" then
             if not open_tabs[sequence_id] then return end
-            local active = state.get_sequence_id and state.get_sequence_id() or nil
+            local active = state.get_tab_strip():active_sequence_id() or nil
             -- If deleting the only open tab, switch to another sequence first
             -- so close_tab doesn't try to recreate a tab for a deleted sequence
             if active == sequence_id and #tab_order <= 1 then
@@ -1516,7 +1516,7 @@ local function rerender_all_src_btns()
     local effective_source = require("core.effective_source")
     local src_seq = effective_source.get()
     if not src_seq then return end  -- spec §2b-i: no source ⇒ no btns
-    local rec_seq = state.get_sequence_id()
+    local rec_seq = state.get_tab_strip():active_sequence_id()
     if not rec_seq or rec_seq == "" then return end
     local Patch = require("models.patch")
     local entries = Patch.source_routing_for_rec(rec_seq, src_seq)
@@ -1805,7 +1805,7 @@ Signals.connect("source_loaded_changed", function(new_master_seq_id, _prev_seq_i
     -- rebuild_for_displayed_tab → ensure_tab_for_sequence(new_master_seq_id),
     -- which is where the rekey-or-collision branch (above) restores the
     -- panel invariant. No explicit eviction here.
-    local record_seq_id = state.get_sequence_id and state.get_sequence_id()
+    local record_seq_id = state.get_tab_strip():active_sequence_id()
     if record_seq_id and not source_tab_dismissed then
         timeline_state.switch_to_source_tab(new_master_seq_id)
     end
@@ -1828,12 +1828,12 @@ end)
 -- on both; both reads come from current state, not the signal payload,
 -- so the handler is symmetric.
 local function reseed_and_rerender_src_btns()
-    -- state.get_sequence_id is wired during init; if it isn't, the signal
+    -- strip:active_sequence_id is wired during init; if it isn't, the signal
     -- has fired before the panel is set up — that's a startup-order bug
     -- and we want the stack trace, not a silent skip. rerender_all_src_btns
-    -- already calls state.get_sequence_id() without a guard for the same
+    -- already calls state.get_tab_strip():active_sequence_id() without a guard for the same
     -- reason.
-    local record_seq_id = state.get_sequence_id()
+    local record_seq_id = state.get_tab_strip():active_sequence_id()
     local source_seq_id = require("core.effective_source").get()
     -- Both ids may legitimately be nil before any project is open or any
     -- source is loaded; that's the "hide src-btns" branch (spec §2b-i)
@@ -1876,7 +1876,7 @@ local function build_track_header_row(track, track_type, header_color)
     local is_source_tab = displayed_kind == "source"
 
     -- state.get_track_height asserts when the track is unknown; the
-    -- track here came from state.get_all_tracks so the call is safe.
+    -- track here came from strip:displayed_tracks so the call is safe.
     -- DEFAULT_TRACK_HEIGHT is returned for tracks that exist but have
     -- never been resized (legitimate "unset" semantic on a known row).
     local track_height = state.get_track_height(track.id)
@@ -1904,7 +1904,7 @@ local function build_track_header_row(track, track_type, header_color)
     local captured_track_id = track.id
 
     local src_btn, rec_btn, lock_btn, sync_btn = nil, nil, nil, nil
-    local seq_id = state.get_sequence_id()
+    local seq_id = state.get_tab_strip():active_sequence_id()
 
     if not is_source_tab then
         src_btn = qt_constants.WIDGET.CREATE_BUTTON("—")
@@ -2692,7 +2692,7 @@ function M.create(opts)
         -- Execute SelectRectangle command (handles Cmd→toggle, time/track intersection)
         command_manager.execute_interactive("SelectRectangle", {
             project_id = state.get_project_id(),
-            sequence_id = state.get_sequence_id(),
+            sequence_id = state.get_tab_strip():active_sequence_id(),
             time_start = time_start,
             time_end = time_end,
             track_ids = intersecting_track_ids,
@@ -2921,7 +2921,7 @@ function M.create(opts)
     log.event("Multi-view timeline panel created successfully")
 
     -- No initial tab when opening in the no-active-sequence state (feature 010).
-    local initial_sequence_id = state.get_sequence_id and state.get_sequence_id() or nil
+    local initial_sequence_id = state.get_tab_strip():active_sequence_id() or nil
     if initial_sequence_id and initial_sequence_id ~= "" then
         ensure_tab_for_sequence(initial_sequence_id)
         -- At bootstrap the displayed and active are the same record sequence,
@@ -3005,7 +3005,7 @@ function M.create(opts)
     state.add_listener(function()
         local pending = M._pending_scroll_restore
         if not pending then return end
-        if state.get_sequence_id() ~= pending.seq_id then
+        if state.get_tab_strip():active_sequence_id() ~= pending.seq_id then
             M._pending_scroll_restore = nil
             return
         end
@@ -3063,7 +3063,7 @@ local function zoom_to_fit_if_first_open(sequence)
         return  -- user has a saved viewport
     end
 
-    local clips = state.get_clips()
+    local clips = state.get_tab_strip():displayed_clips()
     if not clips or #clips == 0 then
         return
     end
@@ -3330,7 +3330,7 @@ function M.load_sequence(sequence_id)
     -- regression). The "check active only" form short-circuited case
     -- (b) — Joe's tab-click regression today, where clicking the active
     -- record tab while the source tab was displayed did nothing.
-    local current_active    = state.get_sequence_id and state.get_sequence_id()
+    local current_active    = state.get_tab_strip():active_sequence_id()
     local current_displayed = state.get_displayed_tab_id
         and state.get_displayed_tab_id()
     if current_active == sequence_id and open_tabs[sequence_id] then

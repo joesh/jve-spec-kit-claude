@@ -67,6 +67,7 @@ local state = {
     debug_record_track_layout = function() end,
     debug_record_clip_layout = function() end,
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local view = {
     widget = {},

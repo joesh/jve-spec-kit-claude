@@ -108,7 +108,7 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
             "  end "
             "end; "
             "local picked; "
-            "for _, c in ipairs(ts.get_clips()) do "
+            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
             "  if armed[c.track_id] and not c.is_gap "
             "     and type(c.duration) == 'number' and c.duration > 48 then "
             "    picked = c; break "

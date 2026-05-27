@@ -55,7 +55,7 @@ class TestNudgeSelectionKeys(JVESmokeCase):
         # Storing in self for the test methods to compare against.
         self._seq_id = seq_id
         self._clip_id = self.eval_str(
-            f"local c = require('ui.timeline.timeline_state').get_clips()[{INTERIOR_CLIP_INDEX}]; "
+            f"local c = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips()[{INTERIOR_CLIP_INDEX}]; "
             "assert(c, 'fixture has fewer than INTERIOR_CLIP_INDEX clips'); "
             "return c.id")
         self._start_before = self.eval_int(

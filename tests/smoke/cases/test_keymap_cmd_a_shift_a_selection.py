@@ -43,7 +43,7 @@ class TestCmdASelectAllAndDeselectAll(JVESmokeCase):
     def _non_gap_clip_count(self) -> int:
         return self.eval_int(
             "local n = 0; "
-            "for _, c in ipairs(require('ui.timeline.timeline_state').get_clips()) do "
+            "for _, c in ipairs(require('ui.timeline.timeline_state').get_tab_strip():displayed_clips()) do "
             "  if not c.is_gap then n = n + 1 end "
             "end; return n")
 

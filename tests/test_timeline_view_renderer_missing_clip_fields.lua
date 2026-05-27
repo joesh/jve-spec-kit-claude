@@ -63,6 +63,7 @@ local state = {
     debug_begin_layout_capture = function() end,
     debug_record_track_layout = function() end,
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 state.get_track_clip_index = function(track_id)
     if track_id ~= "v1" then

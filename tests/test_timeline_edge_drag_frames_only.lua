@@ -55,12 +55,6 @@ local mock_edges = {}
 -- Mock timeline_state module for SelectEdges command
 timeline_state.get_selected_edges = function() return mock_edges end
 timeline_state.set_edge_selection = function(edges) mock_edges = edges or {} end
-timeline_state.get_clip_by_id = function(clip_id)
-    for _, clip in ipairs(clips) do
-        if clip.id == clip_id then return clip end
-    end
-    return nil
-end
 
 local function new_state()
     local state = {}
@@ -103,6 +97,7 @@ local function new_state()
     state.get_project_id = function() return "proj1" end
     state.get_sequence_id = function() return "seq1" end
 
+    require("test_env").attach_strip_to_state_mock(state)
     return state
 end
 

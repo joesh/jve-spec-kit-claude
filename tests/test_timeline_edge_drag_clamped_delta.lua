@@ -28,6 +28,7 @@ local state = {
     get_sequence_frame_rate = function() return {fps_numerator = 24, fps_denominator = 1} end,
     get_clip_by_id = function() return {track_id = "track_v1"} end
 }
+require("test_env").attach_strip_to_state_mock(state)
 
 local view = {
     widget = {},

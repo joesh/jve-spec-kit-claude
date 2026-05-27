@@ -14,7 +14,7 @@ local function get_candidate_clips(state, opts)
             return opts.clip_snapshot.clips
         end
     end
-    return state.get_clips()
+    return state.get_tab_strip():displayed_clips()
 end
 
 -- Find all potential snap points in the timeline

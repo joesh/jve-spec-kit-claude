@@ -333,19 +333,10 @@ M.push_viewport_guard = viewport.push_viewport_guard
 M.pop_viewport_guard = viewport.pop_viewport_guard
 
 -- Tracks
--- Spec 022 Phase 1.3b: get_all_tracks delegates to the displayed tab's
--- cache. The strip is the source of truth for "what is the timeline
--- view rendering"; the tab cache is hydrated by load_from_database on
--- open + reload_clips. data.state.tracks is still mirrored by the
--- legacy load path but no longer read by the facade.
--- Returns empty list when no tab is displayed (project_changed reset,
--- blank panel) so callers iterating with ipairs are safe (rule 1.14:
--- empty is a valid model state, not a missing invariant).
-M.get_all_tracks = function()
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return {} end
-    return displayed.cache.tracks
-end
+-- Spec 022 Phase 1.3e: per-tab track/clip reads live on TimelineTabStrip
+-- (displayed_tracks, displayed_clips, clip_by_id, clips_for_track,
+-- track_clip_index, clips_at_time). Callers reach the strip via
+-- timeline_state.get_tab_strip().
 M.get_video_tracks = tracks.get_video_tracks
 M.get_audio_tracks = tracks.get_audio_tracks
 M.get_track_height = tracks.get_height
@@ -367,47 +358,7 @@ M.get_primary_track_id = tracks.get_primary_id
 M.get_default_video_track_id = function() return tracks.get_primary_id("VIDEO") end
 M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") end
 
--- Clips
--- Spec 022 Phase 1.3b: clip read accessors delegate to the displayed
--- tab's cache. Tab cache is the authoritative read source; data.state
--- writes still happen via the legacy mirror in apply_mutations but are
--- no longer read by the facade. Returns empty list / nil when no tab is
--- displayed — that's a valid model state (blank panel), not a missing
--- invariant.
-M.get_clips = function()
-    assert(not M.__forbid_get_clips, "timeline_state.get_clips is forbidden in this context (renderer should use clip indices)")
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return {} end
-    return displayed.cache.clips
-end
-M.get_clip_by_id = function(clip_id)
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return nil end
-    return displayed:get_clip_by_id(clip_id)
-end
-M.get_clips_for_track = function(track_id)
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return {} end
-    local list = displayed:get_track_clip_index(track_id)
-    if not list then return {} end
-    local copy = {}
-    for _, c in ipairs(list) do table.insert(copy, c) end
-    return copy
-end
-M.get_track_clip_index = function(track_id)
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return nil end
-    return displayed:get_track_clip_index(track_id)
-end
-M.get_clips_at_time = function(time_value, candidate_clips)
-    -- Allow caller-supplied clip list (legacy callers pre-passing a filtered
-    -- set). Default candidate list is the displayed tab's cache.clips.
-    if candidate_clips == nil then
-        local displayed = tab_strip:get_displayed()
-        candidate_clips = displayed and displayed.cache.clips or {}
-    end
-    return clips.get_at_time(time_value, candidate_clips)
-end
+-- Clips: read accessors live on TimelineTabStrip (see Tracks comment above).
 -- Derive the set of track_ids touched by a mutation payload. Updates,
 -- inserts, and bulk_shifts carry track_id directly. Deletes carry only
 -- clip_id, so resolve via clip_lookup before clip_state removes the row.
@@ -607,14 +558,8 @@ M.normalize_edge_selection = selection.normalize_edge_selection
 
 -- Project/Sequence Accessors
 M.get_project_id = function() return data.state.project_id end
--- Spec 022 Phase 1.3b: get_sequence_id returns the active record tab's
--- sequence_id (the edit target — FR-005). Strip is source of truth.
--- Returns nil when no record tab is active (project_changed reset, blank
--- panel) — that's a valid model state, not a missing invariant.
-M.get_sequence_id = function()
-    local active = tab_strip:get_active_record()
-    return active and active.sequence_id or nil
-end
+-- Spec 022 Phase 1.3e: active record sequence_id lives on
+-- TimelineTabStrip. Callers use timeline_state.get_tab_strip():active_sequence_id().
 
 -- Tab / sequence pointer accessors (FR-005, data-model.md §3)
 --

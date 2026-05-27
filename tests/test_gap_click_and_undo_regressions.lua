@@ -26,7 +26,7 @@ local tracks = layout.tracks
 
 -- Gap is at [500, 1000] on track_v1
 local gap_id = layout:gap_id("v1", 500)
-local gap_clip = ts.get_clip_by_id(gap_id)
+local gap_clip = ts.get_tab_strip():clip_by_id(gap_id)
 -- V13: gaps are in-memory, marked .is_gap=true (no V8 clip_kind discriminator).
 assert(gap_clip and gap_clip.is_gap == true, "Gap clip should exist at 500")
 

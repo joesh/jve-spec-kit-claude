@@ -81,14 +81,13 @@ timeline_state.set_selection = function(clips)
     mock_selection = clips
 end
 
-timeline_state.get_clip_by_id = function(clip_id)
-    for _, clip in ipairs(mock_clips) do
-        if clip.id == clip_id then return clip end
-    end
-    return nil
-end
 
 timeline_state.clear_edge_selection = function() end
+-- 022/1.3e: expose mock_clips via the strip API so src reads through
+-- timeline_state.get_tab_strip():displayed_clips() find them.
+timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({ displayed_clips = mock_clips })
+end
 
 -- Clear any existing selection
 mock_selection = {}

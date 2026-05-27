@@ -429,7 +429,7 @@ end
 --- Check that in-memory clips match the DB for a given sequence.
 local function check_clips_match_db(ts, db, sequence_id, result)
     -- Get in-memory clips (media only — gaps are derived)
-    local mem_clips = ts.get_clips()
+    local mem_clips = ts.get_tab_strip():displayed_clips()
     if not mem_clips then
         fail(result, "TIMELINE_NO_CLIPS: get_clips() returned nil")
         return
@@ -502,7 +502,7 @@ end
 
 --- Check gap clip invariants on all tracks in the sequence.
 local function check_gap_invariants(ts, result)
-    local clips = ts.get_clips()
+    local clips = ts.get_tab_strip():displayed_clips()
     if not clips then return end
 
     -- Group clips by track
@@ -628,7 +628,7 @@ local function check_selection_consistency(ts, result)
     -- Selected clips should exist in the clip list
     local selected = ts.get_selected_clips and ts.get_selected_clips()
     if selected and #selected > 0 then
-        local clips = ts.get_clips()
+        local clips = ts.get_tab_strip():displayed_clips()
         if clips then
             local clip_ids = {}
             for _, clip in ipairs(clips) do
@@ -648,7 +648,7 @@ local function check_selection_consistency(ts, result)
     -- Selected edges should reference existing clips
     local edges = ts.get_selected_edges and ts.get_selected_edges()
     if edges and #edges > 0 then
-        local clips = ts.get_clips()
+        local clips = ts.get_tab_strip():displayed_clips()
         if clips then
             local clip_ids = {}
             for _, clip in ipairs(clips) do

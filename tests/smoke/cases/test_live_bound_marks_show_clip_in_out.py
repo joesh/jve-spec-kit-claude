@@ -45,7 +45,7 @@ class TestLiveBoundMarksShowClipInOut(JVESmokeCase):
 
         # Pick any interior media clip with non-zero source range.
         info = self.eval(
-            "local clips = require('ui.timeline.timeline_state').get_clips(); "
+            "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             "for _, c in ipairs(clips) do "
             "  if not c.is_gap "
             "     and type(c.source_in) == 'number' "

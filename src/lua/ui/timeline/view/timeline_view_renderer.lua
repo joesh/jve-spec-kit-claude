@@ -165,8 +165,8 @@ local function get_preview_clip(state_module, preview_clip_cache, preview_entry)
     if clip then
         return clip
     end
-    if state_module and state_module.get_clip_by_id then
-        clip = state_module.get_clip_by_id(preview_entry.clip_id)
+    if state_module then
+        clip = state_module.get_tab_strip():clip_by_id(preview_entry.clip_id)
         if clip then
             return clip
         end
@@ -410,7 +410,7 @@ local function render_shift_block_for_track(view, track_id, block, excluded,
                                             state_module, width,
                                             viewport_start, viewport_end,
                                             threshold_px, height)
-    local track_clips = state_module.get_track_clip_index(track_id) or {}
+    local track_clips = state_module.get_tab_strip():track_clip_index(track_id) or {}
     if #track_clips == 0 then return end
 
     local runs = collect_shifted_runs_for_track(
@@ -448,9 +448,7 @@ local function render_shift_block_outlines(view, preview_data, state_module, wid
     if type(viewport_start) ~= "number" or type(viewport_end) ~= "number" then
         return
     end
-    if not (state_module and state_module.get_track_clip_index) then
-        error("timeline_view_renderer: state_module.get_track_clip_index is required for shift block previews", 2)
-    end
+    assert(state_module, "timeline_view_renderer: state_module required for shift block previews")
 
     local global_block, per_track = partition_shift_blocks(preview_data.shift_blocks)
     if not global_block and not next(per_track) then return end
@@ -536,7 +534,7 @@ local function ensure_edge_preview(drag_state, state_module)
         return
     end
 
-    local sequence_id = state_module.get_sequence_id and state_module.get_sequence_id()
+    local sequence_id = state_module.get_tab_strip():active_sequence_id()
     local project_id = state_module.get_project_id and state_module.get_project_id()
     if not sequence_id or sequence_id == "" or not project_id or project_id == "" then
         clear_preview_state()
@@ -579,8 +577,8 @@ local function ensure_edge_preview(drag_state, state_module)
         local resolved_track_id = edge.track_id
         if not resolved_track_id and edge.clip_id then
             resolved_track_id = clip_track_lookup[edge.clip_id]
-            if not resolved_track_id and state_module.get_clip_by_id then
-                local clip = state_module.get_clip_by_id(edge.clip_id)
+            if not resolved_track_id then
+                local clip = state_module.get_tab_strip():clip_by_id(edge.clip_id)
                 resolved_track_id = clip and clip.track_id
             end
         end
@@ -649,7 +647,7 @@ end
 
 local function get_track_with_offset(state_module, track_id, offset)
     if not offset or offset == 0 then return track_id end
-    local tracks = state_module.get_all_tracks()
+    local tracks = state_module.get_tab_strip():displayed_tracks()
     local original_index = nil
     for i, track in ipairs(tracks) do
         if track.id == track_id then original_index = i; break end
@@ -689,7 +687,7 @@ local function compute_clip_drag_track_hint(view, drag_state, height, state_modu
         if c.track_id ~= drag_state.clips[1].track_id then multi = true; break end
     end
 
-    local tracks = state_module.get_all_tracks()
+    local tracks = state_module.get_tab_strip():displayed_tracks()
     local anchor_idx, target_idx
     for i, t in ipairs(tracks) do
         if t.id == anchor_clip.track_id then anchor_idx = i end
@@ -956,10 +954,6 @@ function M.render(view)
     end
 
     local function draw_visible_clips()
-        if not state_module.get_track_clip_index then
-            error("timeline_view_renderer: state_module.get_track_clip_index is required", 2)
-        end
-
         -- All coords are integer frames
         assert(type(viewport_start) == "number" and type(viewport_end) == "number",
             "timeline_view_renderer: viewport frames are required")
@@ -968,7 +962,7 @@ function M.render(view)
             local track_id = track and track.id
             local track_layout = track_id and layout_by_id and layout_by_id[track_id] or nil
             if track_id and track_layout and track_layout.y < height and (track_layout.y + track_layout.height) > 0 then
-                local track_clips = state_module.get_track_clip_index(track_id)
+                local track_clips = state_module.get_tab_strip():track_clip_index(track_id)
                 if track_clips and #track_clips > 0 then
                     local start_index = lower_bound_start_frames(track_clips, viewport_start)
                     if start_index > 1 then
@@ -1002,20 +996,18 @@ function M.render(view)
 
     local function render_base_clips()
         -- Base rendering must never fall back to scanning all clips.
-        -- Guard by temporarily overriding get_clips during the base pass.
-        if type(state_module.get_clips) == "function" then
-            local original_get_clips = state_module.get_clips
-            state_module.get_clips = function()
-                error("timeline_view_renderer: get_clips is forbidden for base rendering; use get_track_clip_index(track_id)", 2)
-            end
-            local ok, err = pcall(draw_visible_clips)
-            state_module.get_clips = original_get_clips
-            if not ok then
-                error(err, 2)
-            end
-            return
+        -- Guard by temporarily overriding the strip's displayed_clips
+        -- during the base pass.
+        local strip = state_module.get_tab_strip()
+        local original = strip.displayed_clips
+        strip.displayed_clips = function()
+            error("timeline_view_renderer: strip:displayed_clips is forbidden for base rendering; use strip:track_clip_index(track_id)", 2)
         end
-        draw_visible_clips()
+        local ok, err = pcall(draw_visible_clips)
+        strip.displayed_clips = original
+        if not ok then
+            error(err, 2)
+        end
     end
 
     render_base_clips()

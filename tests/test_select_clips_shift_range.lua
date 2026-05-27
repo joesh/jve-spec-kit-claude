@@ -57,10 +57,6 @@ local mock_selection = {}
 
 timeline_state.get_selected_clips = function() return mock_selection end
 timeline_state.set_selection = function(clips) mock_selection = clips end
-timeline_state.get_clip_by_id = function(clip_id)
-    for _, c in ipairs(mock_clips) do if c.id == clip_id then return c end end
-    return nil
-end
 -- 022/1.3c: src reads clips via strip — patch get_tab_strip.
 timeline_state.get_tab_strip = function()
     return require("test_env").make_strip_stub({ displayed_clips = mock_clips })

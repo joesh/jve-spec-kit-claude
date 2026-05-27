@@ -170,8 +170,8 @@ function M.reload_timeline(sequence_id)
         return
     end
     local target_sequence = sequence_id
-    if (not target_sequence or target_sequence == "") and timeline_state_mod.get_sequence_id then
-        target_sequence = timeline_state_mod.get_sequence_id()
+    if not target_sequence or target_sequence == "" then
+        target_sequence = timeline_state_mod.get_tab_strip():active_sequence_id()
     end
     if target_sequence and target_sequence ~= "" then
         timeline_state_mod.reload_clips(target_sequence)

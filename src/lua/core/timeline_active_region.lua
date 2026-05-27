@@ -105,7 +105,7 @@ function M.compute_for_edge_drag(state_module, edges, opts)
 
     for _, edge in ipairs(edges) do
         assert(edge and edge.clip_id, "TimelineActiveRegion.compute_for_edge_drag: edge.clip_id required")
-        local clip = state_module.get_clip_by_id and state_module.get_clip_by_id(edge.clip_id) or nil
+        local clip = state_module.get_tab_strip():clip_by_id(edge.clip_id) or nil
         assert(clip, "TimelineActiveRegion.compute_for_edge_drag: missing clip for edge " .. tostring(edge.clip_id))
         assert(clip.track_id, "TimelineActiveRegion.compute_for_edge_drag: clip missing track_id " .. tostring(edge.clip_id))
         assert(type(clip.sequence_start) == "number" and type(clip.duration) == "number",
@@ -126,7 +126,7 @@ function M.compute_for_edge_drag(state_module, edges, opts)
             any_ripple = true
         end
 
-        local track_clips = state_module.get_track_clip_index and state_module.get_track_clip_index(clip.track_id) or nil
+        local track_clips = state_module.get_tab_strip():track_clip_index(clip.track_id) or nil
         if track_clips and #track_clips > 0 and point then
             local idx = binary_search_first_start_on_or_after(track_clips, point)
             local prev_clip = (idx > 1) and track_clips[idx - 1] or nil
@@ -166,9 +166,8 @@ function M.build_snapshot_for_region(state_module, region)
     local start_frames = region.interaction_start_frames
     local end_frames = region.interaction_end_frames
 
-    assert(state_module.get_all_tracks, "TimelineActiveRegion.build_snapshot_for_region: state_module.get_all_tracks required")
-    assert(state_module.get_track_clip_index, "TimelineActiveRegion.build_snapshot_for_region: state_module.get_track_clip_index required")
-    local tracks = state_module.get_all_tracks()
+    assert(state_module and state_module.get_tab_strip, "TimelineActiveRegion.build_snapshot_for_region: state_module with strip API required")
+    local tracks = state_module.get_tab_strip():displayed_tracks()
     local clips = {}
     local clip_lookup = {}
     local clip_track_lookup = {}
@@ -194,7 +193,7 @@ function M.build_snapshot_for_region(state_module, region)
     for _, track in ipairs(tracks) do
         local track_id = track and track.id
         if track_id then
-            local track_clips = state_module.get_track_clip_index(track_id)
+            local track_clips = state_module.get_tab_strip():track_clip_index(track_id)
             if track_clips and #track_clips > 0 then
                 local idx = binary_search_first_start_on_or_after(track_clips, start_frames)
 

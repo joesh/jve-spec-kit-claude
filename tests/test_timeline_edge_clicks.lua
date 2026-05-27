@@ -54,9 +54,6 @@ timeline_state.set_edge_selection = function(edges)
         table.insert(mock_edges, clone_edge(edge))
     end
 end
-timeline_state.get_clip_by_id = function(clip_id)
-    return { id = clip_id, track_id = "track_v1" }
-end
 
 local function new_state(clips)
     local state = {
@@ -119,6 +116,7 @@ local function new_state(clips)
     state.get_project_id = function() return "proj1" end
     state.get_sequence_id = function() return "seq1" end
 
+    require("test_env").attach_strip_to_state_mock(state)
     return state
 end
 

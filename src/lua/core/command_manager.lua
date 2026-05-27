@@ -271,7 +271,7 @@ local function apply_command_mutations(cmd)
     local ts = require('ui.timeline.timeline_state')
     if not ts.apply_mutations then return false end
     local fallback_seq = extract_sequence_id(cmd)
-    local active_seq = ts.get_sequence_id and ts.get_sequence_id() or nil
+    local active_seq = ts.get_tab_strip():active_sequence_id() or nil
 
     -- timeline_state holds exactly one active sequence's clip cache.
     -- Mutations addressed to a DIFFERENT sequence are valid — two cases:

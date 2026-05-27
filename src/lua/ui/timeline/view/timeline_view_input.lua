@@ -68,16 +68,12 @@ end
 -- the timeline view package.
 local function find_clip_under_cursor(view, x, y, width, height)
     local state = view.state
-    if not state.get_track_clip_index then
-        error("timeline_view_input: state.get_track_clip_index is required", 2)
-    end
-
     local track_id = view.get_track_id_at_y(y, height)
     if not track_id then
         return nil
     end
 
-    local track_clips = state.get_track_clip_index(track_id)
+    local track_clips = state.get_tab_strip():track_clip_index(track_id)
     if not track_clips or #track_clips == 0 then
         return nil
     end
@@ -134,11 +130,7 @@ end
 
 local function find_gap_at_time(view, track_id, time_frame)
     if not track_id or type(time_frame) ~= "number" then return nil end
-    local state = view.state
-    if not state.get_track_clip_index then
-        error("timeline_view_input: state.get_track_clip_index is required", 2)
-    end
-    local clips_on_track = state.get_track_clip_index(track_id)
+    local state = view.state    local clips_on_track = state.get_tab_strip():track_clip_index(track_id)
     if not clips_on_track or #clips_on_track == 0 then
         return nil
     end
@@ -259,11 +251,7 @@ end
 -- Scan the requested track for clips near the cursor and return whichever edges
 -- fall inside the configured trim zone. Returns nil when no handles are within range.
 local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
-    if not track_id then return nil end
-    if not state.get_track_clip_index then
-        error("timeline_view_input: state.get_track_clip_index is required", 2)
-    end
-    local track_clips = state.get_track_clip_index(track_id)
+    if not track_id then return nil end    local track_clips = state.get_tab_strip():track_clip_index(track_id)
     if not track_clips or #track_clips == 0 then return nil end
     return edge_picker.pick_edges(track_clips, cursor_x, viewport_width, {
         edge_zone = ui_constants.TIMELINE.EDGE_ZONE_PX,
@@ -318,7 +306,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         if not is_selected then
             command_manager.execute_interactive("SelectClips", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
                 target_clip_ids = { clicked_clip.id },
             })
             selected_clips = state.get_selected_clips and state.get_selected_clips() or {}
@@ -342,7 +330,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
             handler = function()
                 local result = command_manager.execute_interactive("RevealInFilesystem", {
                     project_id = state.get_project_id(),
-                    sequence_id = state.get_sequence_id(),
+                    sequence_id = state.get_tab_strip():active_sequence_id(),
                     source = "timeline",
                 })
                 if result and not result.success then
@@ -358,7 +346,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         handler = function()
             command_manager.execute_interactive("MatchFrame", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
             })
         end
     })
@@ -373,7 +361,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         handler = function()
             command_manager.execute_interactive("SplitClip", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
             })
         end
     })
@@ -385,7 +373,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         handler = function()
             command_manager.execute_interactive("DeleteClip", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
             })
         end
     })
@@ -397,7 +385,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         handler = function()
             command_manager.execute_interactive("RippleDeleteSelection", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
             })
         end
     })
@@ -411,7 +399,7 @@ local function show_clip_context_menu(view, x, y, clicked_clip, event)
         handler = function()
             command_manager.execute_interactive("ToggleClipEnabled", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
             })
         end
     })
@@ -501,7 +489,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             -- Execute SelectEdges command (handles Option→linked, Cmd/Shift→toggle)
             command_manager.execute_interactive("SelectEdges", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
                 target_edges = target_edges,
                 modifiers = modifiers,
             })
@@ -530,7 +518,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             -- Execute SelectClips command (handles Option→linked, Cmd→toggle)
             command_manager.execute_interactive("SelectClips", {
                 project_id = state.get_project_id(),
-                sequence_id = state.get_sequence_id(),
+                sequence_id = state.get_tab_strip():active_sequence_id(),
                 target_clip_ids = { clicked_clip.id },
                 modifiers = modifiers,
             })
@@ -620,7 +608,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     if not (view.potential_drag.modifiers and view.potential_drag.modifiers.command) then
                         command_manager.execute_interactive("DeselectAll", {
                             project_id = state.get_project_id(),
-                            sequence_id = state.get_sequence_id(),
+                            sequence_id = state.get_tab_strip():active_sequence_id(),
                         })
                     end
                     if view.on_drag_start then
@@ -657,7 +645,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 
                 if view.drag_state.type == "edges" then
                     for _, edge in ipairs(view.drag_state.edges) do
-                        local c = state.get_clip_by_id and state.get_clip_by_id(edge.clip_id) or nil
+                        local c = state.get_tab_strip():clip_by_id(edge.clip_id) or nil
                         if c and c.sequence_start and c.duration then
                             if edge.edge_type == "in" then edge.original_time = c.sequence_start
                             elseif edge.edge_type == "out" then edge.original_time = c.sequence_start + c.duration
@@ -802,7 +790,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 -- Click on gap without dragging → select gap
                 command_manager.execute_interactive("SelectGaps", {
                     project_id = state.get_project_id(),
-                    sequence_id = state.get_sequence_id(),
+                    sequence_id = state.get_tab_strip():active_sequence_id(),
                     target_gaps = { pd.gap },
                     modifiers = { command = pd.modifiers and pd.modifiers.command or false },
                 })
@@ -811,7 +799,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 if not (pd.modifiers and pd.modifiers.command) then
                     command_manager.execute_interactive("DeselectAll", {
                         project_id = state.get_project_id(),
-                        sequence_id = state.get_sequence_id(),
+                        sequence_id = state.get_tab_strip():active_sequence_id(),
                     })
                 end
             end

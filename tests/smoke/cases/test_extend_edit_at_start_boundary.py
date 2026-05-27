@@ -55,7 +55,7 @@ class TestExtendEditBoundary(JVESmokeCase):
         # (so source-floor isn't the binding constraint — we want to
         # verify the SEQUENCE-floor is enforced).
         info = self.eval(
-            "local clips = require('ui.timeline.timeline_state').get_clips(); "
+            "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             f"for _, c in ipairs(clips) do "
             f"  if c.sequence_start > {start_tc} "
             f"     and c.sequence_start < {start_tc} + 500 "

@@ -47,7 +47,7 @@ class TestFMatchFrame(JVESmokeCase):
             ".record_engine.loaded_sequence_id; "
             "assert(rec_seq, 'record engine has no loaded sequence'); "
             "local picked; "
-            "for _, c in ipairs(ts.get_clips()) do "
+            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
             "  if not c.is_gap "
             "     and type(c.duration) == 'number' and c.duration > 48 "
             "     and c.sequence_id and c.sequence_id ~= '' then "

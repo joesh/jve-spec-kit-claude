@@ -344,6 +344,49 @@ end
 -- also expose `get_tab_strip()` returning a strip with `active_sequence_id`
 -- / `displayed_clips` methods (the new src-side API). This helper builds
 -- a minimal strip stub from a plain spec table so test mocks stay readable.
+--- Attach a `get_tab_strip()` method to an existing state-mock table that
+--- maps the legacy `get_X` mocks onto the strip-method names src now uses.
+--- Use this in tests that build a fake `state` table inline with old
+--- get_clip_by_id / get_clips / get_all_tracks methods — calling this
+--- exposes the same data through the new strip API without rewriting
+--- the whole mock.
+function M.attach_strip_to_state_mock(state)
+    state.get_tab_strip = function()
+        return {
+            active_sequence_id = function()
+                return state.get_sequence_id and state.get_sequence_id() or nil
+            end,
+            displayed_clips    = function()
+                return state.get_clips and state.get_clips() or {}
+            end,
+            displayed_tracks   = function()
+                return state.get_all_tracks and state.get_all_tracks() or {}
+            end,
+            clip_by_id         = function(_, id)
+                if state.get_clip_by_id then return state.get_clip_by_id(id) end
+                -- Derive from get_clips when the mock only exposes the list
+                -- (mirrors src code that used to fall back to a full scan).
+                if state.get_clips then
+                    for _, c in ipairs(state.get_clips()) do
+                        if c.id == id then return c end
+                    end
+                end
+                return nil
+            end,
+            clips_for_track    = function(_, tid)
+                return state.get_clips_for_track and state.get_clips_for_track(tid) or {}
+            end,
+            track_clip_index   = function(_, tid)
+                return state.get_track_clip_index and state.get_track_clip_index(tid) or nil
+            end,
+            clips_at_time      = function(_, t, c)
+                return state.get_clips_at_time and state.get_clips_at_time(t, c) or {}
+            end,
+        }
+    end
+    return state
+end
+
 --   { active_sequence_id = "seqA", displayed_clips = {...},
 --     displayed_tracks = {...}, clip_by_id = {[id]=clip, ...},
 --     clips_for_track = {[track_id]={clip,...}, ...},
@@ -352,23 +395,37 @@ end
 function M.make_strip_stub(spec)
     spec = spec or {}
     local clip_lookup = spec.clip_by_id or {}
-    if not spec.clip_by_id and spec.displayed_clips then
-        -- Derive lookup from the clip list so tests that only supply
-        -- displayed_clips automatically get clip_by_id() too.
-        for _, c in ipairs(spec.displayed_clips) do
-            if c.id then clip_lookup[c.id] = c end
+    local clips_by_track = spec.clips_for_track
+    if spec.displayed_clips then
+        -- Derive per-id and per-track indexes from the clip list so tests
+        -- that only supply displayed_clips get clip_by_id / clips_for_track
+        -- / track_clip_index for free.
+        if not spec.clip_by_id then
+            for _, c in ipairs(spec.displayed_clips) do
+                if c.id then clip_lookup[c.id] = c end
+            end
+        end
+        if not clips_by_track then
+            clips_by_track = {}
+            for _, c in ipairs(spec.displayed_clips) do
+                if c.track_id then
+                    clips_by_track[c.track_id] = clips_by_track[c.track_id] or {}
+                    table.insert(clips_by_track[c.track_id], c)
+                end
+            end
         end
     end
+    clips_by_track = clips_by_track or {}
     return {
         active_sequence_id = function() return spec.active_sequence_id end,
         displayed_clips    = function() return spec.displayed_clips or {} end,
         displayed_tracks   = function() return spec.displayed_tracks or {} end,
         clip_by_id         = function(_, id) return clip_lookup[id] end,
         clips_for_track    = function(_, track_id)
-            return (spec.clips_for_track or {})[track_id] or {}
+            return clips_by_track[track_id] or {}
         end,
         track_clip_index   = function(_, track_id)
-            return (spec.track_clip_index or spec.clips_for_track or {})[track_id]
+            return (spec.track_clip_index or clips_by_track)[track_id]
         end,
         clips_at_time      = function(_, t, candidates)
             if spec.clips_at_time then return spec.clips_at_time(t, candidates) end

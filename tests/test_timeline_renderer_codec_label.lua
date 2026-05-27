@@ -25,7 +25,8 @@ _G.timeline = {
 local seq_rate = { fps_numerator = 24, fps_denominator = 1 }
 
 local function make_state(clips_by_track)
-    return {
+    local state
+    state = {
         colors = {
             mark_range_fill = "#000",
             grid_line = "#000",
@@ -71,6 +72,8 @@ local function make_state(clips_by_track)
             return clips_by_track[track_id] or {}
         end,
     }
+    require("test_env").attach_strip_to_state_mock(state)
+    return state
 end
 
 local function make_view(state_mod)

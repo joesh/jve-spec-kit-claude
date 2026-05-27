@@ -114,7 +114,7 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
             "  end "
             "end; "
             "local picked = {}; "
-            "for _, c in ipairs(ts.get_clips()) do "
+            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
             "  if armed[c.track_id] and not c.is_gap "
             "     and type(c.sequence_start) == 'number' "
             "     and type(c.duration) == 'number' "
@@ -169,7 +169,7 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
             "  if t.autoselect and not t.locked then armed[t.id] = true end "
             "end; "
             "local armed_clips = {}; "
-            "for _, c in ipairs(ts.get_clips()) do "
+            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
             "  if armed[c.track_id] and not c.is_gap "
             "     and type(c.sequence_start) == 'number' "
             "     and type(c.duration) == 'number' then "
@@ -262,7 +262,7 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
         # write through).
         return self.eval_int(
             "local n = 0; "
-            "for _, c in ipairs(require('ui.timeline.timeline_state').get_clips()) do "
+            "for _, c in ipairs(require('ui.timeline.timeline_state').get_tab_strip():displayed_clips()) do "
             f"  if c.track_id == '{track_id}' and not c.is_gap then n = n + 1 end "
             "end; return n")
 
