@@ -50,6 +50,7 @@ function TimelineTabStrip:open_record_tab(sequence_id)
     end
 
     local tab = TimelineTab.new("record", sequence_id)
+    tab:load_from_database()
     table.insert(self.tabs, tab)
     -- First record tab auto-becomes active + displayed so consumers
     -- (ruler, scrollbar, renderer) have a tab to pull from at startup.
@@ -100,11 +101,13 @@ function TimelineTabStrip:open_source_tab(sequence_id)
         -- Singleton: reload in place so listener subscriptions survive
         -- (UI components rely on continuity per F1 reload semantics).
         self.source_tab:reload(sequence_id)
+        self.source_tab:load_from_database()
         self:_notify()
         return self.source_tab
     end
 
     local tab = TimelineTab.new("source", sequence_id)
+    tab:load_from_database()
     table.insert(self.tabs, 1, tab)  -- always first per spec F1
     self.source_tab = tab
     self:_notify()

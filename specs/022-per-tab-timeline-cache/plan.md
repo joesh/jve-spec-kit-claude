@@ -94,9 +94,12 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - Verify: targeted test `test_timeline_tab_cache_load.lua` + existing `test_timeline_tab*.lua`. Nothing else changes observably yet.
 
 ### Phase 1.2 — Cache load/evict hooks
-- `TimelineTabStrip:open_record_tab` / `open_source_tab` → after creating the tab, populate its cache from DB. Reuse the existing `load_displayed_sequence` path scoped to that tab.
+- `TimelineTabStrip:open_record_tab` → after `TimelineTab.new`, call `tab:load_from_database()`. Idempotent re-open returns the cached object untouched (a re-click is not a reload).
+- `TimelineTabStrip:open_source_tab` → both new and singleton-reload paths call `tab:load_from_database()`.
 - `TimelineTabStrip:close_record_tab` / `close_source_tab` → no explicit eviction needed; the tab goes out of scope, GC collects.
 - `project_changed` listener → drop all tabs (existing reset path).
+- `TimelineTabStrip.deserialize` does NOT hydrate today — strip persistence is a Phase 2 concern. When Phase 2 wires the DB-backed strip, deserialize will need to call `tab:load_from_database()` for each reconstructed tab. Tracked under Phase 2.
+- Lifecycle invariant pinned by `test_timeline_tab_strip_loads_cache.lua`: **every tab returned by `strip:open_*_tab` has a populated cache.** Later phases (1.3a re-pointing) rely on this so the BRE bug-fix commit can read from `strip:get_active_tab().cache` unconditionally.
 
 ### Phase 1.3 — Migrate readers to tab methods
 - Delete `timeline_state.get_clips()`, `get_all_tracks()`, `get_track_clip_index(track_id)`, `get_sequence_id()`. Replace every callsite with `tab:get_*()` on a tab obtained via the strip:
