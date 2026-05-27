@@ -316,7 +316,7 @@ function M.register(executors, undoers, db)
                     string.format("ImportFCP7XML redo: undo_active_sequence_id %s not found in recreated sequences",
                         tostring(undo_active_seq)))
             else
-                local active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+                local active_seq = timeline_state.get_tab_strip():active_sequence_id()
                 if active_seq then
                     for _, seq_id in ipairs(create_result.sequence_ids) do
                         if seq_id == active_seq then
@@ -354,7 +354,7 @@ function M.register(executors, undoers, db)
         -- IMPORTANT: If timeline_state is viewing this sequence, capture from its cache
         -- (not the database) because the user's zoom might not be persisted yet.
         local sequence_view_states = {}
-        local active_timeline_seq = timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        local active_timeline_seq = timeline_state and timeline_state.get_tab_strip():active_sequence_id()
 
         for _, seq_id in ipairs(sequence_ids) do
             local view_state = nil
@@ -498,7 +498,7 @@ function M.register(executors, undoers, db)
 
         -- Restore timeline to pre-import sequence if viewing a deleted one
         if timeline_state then
-            local active_sequence = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            local active_sequence = timeline_state.get_tab_strip():active_sequence_id()
             local deleted_set = {}
             for _, seq_id in ipairs(sequence_ids) do
                 deleted_set[seq_id] = true

@@ -492,9 +492,11 @@ do
     }
     package.loaded["ui.timeline.state.selection_state"] = mock_selection_state
 
-    -- timeline_state with get_sequence_id returning nil → bypass_persist=true
+    -- timeline_state with strip returning nil active_sequence_id → bypass_persist=true (022/1.3c)
     local mock_timeline = {
-        get_sequence_id = function() return nil end,
+        get_tab_strip = function()
+            return require("test_env").make_strip_stub({})
+        end,
         set_selection = function() error("should not be called") end,
         set_gap_selection = function() end,
     }

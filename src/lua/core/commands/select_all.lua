@@ -47,12 +47,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         if args.dry_run then
-            return true, {total_clips = #(timeline_state.get_clips())}
+            return true, {total_clips = #(timeline_state.get_tab_strip():displayed_clips())}
         end
 
         -- Filter out gap clips — they're derived state, not selectable for clip operations
         local media_clips = {}
-        for _, clip in ipairs(timeline_state.get_clips()) do
+        for _, clip in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
             if not clip.is_gap then
                 media_clips[#media_clips + 1] = clip
             end

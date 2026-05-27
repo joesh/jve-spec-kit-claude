@@ -2052,7 +2052,7 @@ function M._execute_body(command_or_name, params)
             if not skip_timeline_reload then
                  local reload_sequence_id = extract_sequence_id(command)
                  local applied_mutations = false
-                 local timeline_active_seq = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+                 local timeline_active_seq = timeline_state.get_tab_strip():active_sequence_id()
                  if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
                      -- Tests/headless command execution may run without timeline UI bootstrap; initialize on demand.
                      timeline_state.init(reload_sequence_id, command.project_id)

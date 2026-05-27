@@ -71,7 +71,7 @@ function M.resolve_timeline_sequence_id(args, track_id, command)
     -- Fall back to timeline_state
     if not sequence_id or sequence_id == "" then
         local timeline_state = get_timeline_state()
-        sequence_id = timeline_state and timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        sequence_id = timeline_state and timeline_state.get_tab_strip():active_sequence_id()
     end
 
     if sequence_id and sequence_id ~= "" and command then
@@ -91,7 +91,7 @@ function M.resolve_sequence_id(args, track_id, command)
     if not sequence_id or sequence_id == "" then
         local timeline_state = get_timeline_state()
         if timeline_state then
-            sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+            sequence_id = timeline_state.get_tab_strip():active_sequence_id()
         end
     end
 

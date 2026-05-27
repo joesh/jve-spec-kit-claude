@@ -34,7 +34,11 @@ local mock_clips = {
 
 local mock_selection = {}
 
-timeline_state.get_clips = function() return mock_clips end
+-- 022/1.3c: src reads clips via strip — patch get_tab_strip to return a
+-- stub strip surfacing mock_clips through the new displayed_clips API.
+timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({ displayed_clips = mock_clips })
+end
 timeline_state.get_selected_clips = function() return mock_selection end
 timeline_state.set_selection = function(clips) mock_selection = clips or {} end
 

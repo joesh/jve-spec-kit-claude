@@ -61,7 +61,10 @@ timeline_state.get_clip_by_id = function(clip_id)
     for _, c in ipairs(mock_clips) do if c.id == clip_id then return c end end
     return nil
 end
-timeline_state.get_clips = function() return mock_clips end
+-- 022/1.3c: src reads clips via strip — patch get_tab_strip.
+timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({ displayed_clips = mock_clips })
+end
 timeline_state.get_track_by_id = function(track_id) return mock_tracks[track_id] end
 timeline_state.get_track_index = function(track_id)
     return mock_tracks[track_id] and mock_tracks[track_id].track_index

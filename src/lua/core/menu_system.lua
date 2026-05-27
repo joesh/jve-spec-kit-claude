@@ -332,7 +332,7 @@ end
 -- user that nothing can be done to the timeline.
 update_per_sequence_actions = function()
     local timeline_state = require("ui.timeline.timeline_state")
-    local seq_id = timeline_state.get_sequence_id()
+    local seq_id = timeline_state.get_tab_strip():active_sequence_id()
     local has_active_sequence = seq_id ~= nil and seq_id ~= ""
     for _, command_name in ipairs(PER_SEQUENCE_COMMAND_NAMES) do
         set_actions_enabled_for_command(command_name, has_active_sequence)

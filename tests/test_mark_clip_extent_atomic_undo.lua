@@ -43,10 +43,12 @@ command_manager.init("s", "p")
 -- Minimal timeline_state stub: one video clip at [120, 360) with playhead inside.
 package.loaded["ui.timeline.timeline_state"] = {
     get_playhead_position = function() return 200 end,
-    get_clips = function()
-        return { { id = "c1", track_id = "v1", sequence_start = 120, duration = 240 } }
+    get_tab_strip = function()
+        return require("test_env").make_strip_stub({
+            active_sequence_id = "s",
+            displayed_clips = { { id = "c1", track_id = "v1", sequence_start = 120, duration = 240 } },
+        })
     end,
-    get_sequence_id   = function() return "s" end,
     get_project_id    = function() return "p" end,
     get_track_by_id   = function() return { track_type = "VIDEO", track_index = 1 } end,
     get_track_index   = function() return 1 end,

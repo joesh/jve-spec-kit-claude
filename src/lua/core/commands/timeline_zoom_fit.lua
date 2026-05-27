@@ -62,7 +62,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local saved_duration = timeline_state.get_viewport_duration()
 
         -- Compute fit bounds from media clips only (gaps are filler, not content)
-        local clips = timeline_state.get_clips()
+        local clips = timeline_state.get_tab_strip():displayed_clips()
         local min_start, max_end = nil, nil
 
         for _, clip in ipairs(clips) do

@@ -156,14 +156,18 @@ cmd = mock_command()
 result = clip_edit_helper.resolve_sequence_id({}, "trk_v1", cmd)
 check("sequence_id from track", result == "seq1")
 
--- 2c. Fallback to timeline_state
-mock_timeline_state.get_sequence_id = function() return "seq_from_ts" end
+-- 2c. Fallback to timeline_state (via tab strip — 022 1.3c)
+mock_timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({ active_sequence_id = "seq_from_ts" })
+end
 cmd = mock_command()
 result = clip_edit_helper.resolve_sequence_id({}, nil, cmd)
 check("sequence_id from timeline_state", result == "seq_from_ts")
 
--- 2d. All nil → nil
-mock_timeline_state.get_sequence_id = nil
+-- 2d. All nil → nil (strip returns nil active sequence)
+mock_timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({})
+end
 result = clip_edit_helper.resolve_sequence_id({}, nil, nil)
 check("sequence_id all nil → nil", result == nil)
 

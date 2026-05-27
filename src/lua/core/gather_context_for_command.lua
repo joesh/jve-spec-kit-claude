@@ -179,7 +179,7 @@ function M.gather_edit_context(options)
 
     -- Get sequence info
     local sequence_id = assert(
-        timeline_state.get_sequence_id and timeline_state.get_sequence_id(),
+        timeline_state.get_tab_strip():active_sequence_id(),
         "gather_context: missing active sequence_id"
     )
     local project_id = assert(

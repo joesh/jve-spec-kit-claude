@@ -30,7 +30,7 @@ local function find_clips_in_range(time_start, time_end, track_ids)
     end
 
     local matching = {}
-    for _, clip in ipairs(timeline_state.get_clips()) do
+    for _, clip in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         -- Skip gap clips — they're derived state, not selectable for clip operations
         if not clip.is_gap and track_set[clip.track_id] then
             local clip_end = clip.sequence_start + clip.duration

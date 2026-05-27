@@ -89,7 +89,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 local anchor_type = selection_anchor.track_type
 
                 -- Find all clips in the box
-                local all_clips = timeline_state.get_clips()
+                local all_clips = timeline_state.get_tab_strip():displayed_clips()
                 local new_selection = {}
                 for _, clip in ipairs(all_clips) do
                     local clip_end = clip.sequence_start + clip.duration

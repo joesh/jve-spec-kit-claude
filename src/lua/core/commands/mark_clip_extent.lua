@@ -25,7 +25,7 @@ local SPEC = {
 -- playhead. Asserts on malformed clip/track data — those are bugs, not
 -- "no clip here" situations.
 local function pick_clip_under_playhead(timeline_state, playhead)
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local best_clip, best_priority
 
     for _, clip in ipairs(clips) do

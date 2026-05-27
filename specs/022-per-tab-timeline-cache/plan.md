@@ -140,6 +140,13 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - Pinned by `test_timeline_state_reads_from_displayed_tab.lua` — injects a clip directly into `tab.cache` (bypassing `data.state`) and confirms the facade reflects it.
 - Followups: 1.3c (migrate src callsites to call strip directly), 1.3d (tests), 1.3e (delete facade + `data.state.clips/tracks`). Sync hops disappear in 1.3e.
 
+### Phase 1.3c — Migrate src callsites to strip methods (LANDED)
+- Added `TimelineTabStrip:active_sequence_id()` and `:displayed_clips()` ergonomic accessors. Callers now name intent (active vs displayed) at the callsite instead of relying on facade convention.
+- Migrated 17 src files (40 callsites) from `timeline_state.get_sequence_id()` / `get_clips()` to `timeline_state.get_tab_strip():active_sequence_id()` / `:displayed_clips()`. Notable: `delete_selection.lua` (8 sites collapsed via replace_all), `command_helper.lua`, `gather_context_for_command.lua`, `paste.lua`, etc.
+- Defensive `timeline_state.get_X and timeline_state.get_X()` chains dropped — those guarded against an undefined facade method that never could be undefined; their removal is a real code-quality gain.
+- Test stubs that mocked timeline_state with bare `get_sequence_id` / `get_clips` updated to expose `get_tab_strip` returning a strip stub. Added `test_env.make_strip_stub({active_sequence_id=..., displayed_clips=...})` helper so the migration stays readable. 9 test files updated.
+- Facade fns (`get_sequence_id`, `get_clips`, `get_all_tracks`, `get_track_clip_index`) still exist; 1.3e deletes them.
+
 ### Phase 1.4 — Signal handler dispatch (LANDED)
 - `playhead_changed` mirrors the new frame to the matching tab's `cache.playhead_position` (per-sequence routing) AND updates `data.state.playhead_position` when target IS displayed (legacy reader path).
 - `track_preference_changed` updates the matching track on EVERY open tab's `cache.tracks` (track preferences are persisted per-track and apply across whichever tabs hold that track).

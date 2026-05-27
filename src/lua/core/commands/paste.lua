@@ -59,7 +59,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         -- Resolve sequence and project
         local timeline_state = require("ui.timeline.timeline_state")
         local sequence_id = args.sequence_id
-            or (timeline_state.get_sequence_id and timeline_state.get_sequence_id())
+            or timeline_state.get_tab_strip():active_sequence_id()
         assert(sequence_id and sequence_id ~= "", "Paste: missing sequence_id")
         command:set_parameter("sequence_id", sequence_id)
 

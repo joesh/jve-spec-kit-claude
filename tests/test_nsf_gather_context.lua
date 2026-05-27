@@ -74,7 +74,9 @@ local function test_gather_context_asserts_on_missing_video_dimensions()
     }
     -- Mock timeline_state
     local mock_timeline_state = {
-        get_sequence_id = function() return sequence_id end,
+        get_tab_strip = function()
+            return require("test_env").make_strip_stub({ active_sequence_id = sequence_id })
+        end,
         get_project_id = function() return project_id end,
         get_playhead_position = function() return 0 end,
     }
@@ -174,7 +176,9 @@ local function test_gather_context_valid_video_only_media()
 
     -- Mock timeline_state
     local mock_timeline_state = {
-        get_sequence_id = function() return sequence_id end,
+        get_tab_strip = function()
+            return require("test_env").make_strip_stub({ active_sequence_id = sequence_id })
+        end,
         get_project_id = function() return project_id end,
         get_playhead_position = function() return 0 end,
         get_video_tracks = function() return video_tracks end,

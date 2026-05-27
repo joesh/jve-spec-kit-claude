@@ -46,7 +46,10 @@ local stub_state = {
 package.loaded["ui.timeline.timeline_state"] = {
     get_selected_edges = function() return stub_state.selected_edges end,
     get_selected_clips = function() return stub_state.selected_clips end,
-    get_clips = function() return stub_state.clips end,
+    -- 022/1.3c: src reads clips via strip.
+    get_tab_strip = function()
+        return require("test_env").make_strip_stub({ displayed_clips = stub_state.clips })
+    end,
 }
 
 -- Register the executor under test.

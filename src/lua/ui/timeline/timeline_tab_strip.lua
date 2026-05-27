@@ -184,6 +184,28 @@ function TimelineTabStrip:get_active_record()
     return self.active_record_tab
 end
 
+-- Spec 022 Phase 1.3c — ergonomic accessors callers use instead of the
+-- legacy `timeline_state.get_sequence_id` / `get_clips` facade. Each one
+-- pulls from the correct tab (active record for the edit target, displayed
+-- for the rendered view). Return nil / {} when the relevant pointer is
+-- unset; that's a valid model state (blank panel, project_changed), not
+-- a missing invariant.
+
+--- sequence_id of the active record tab (edit target — FR-005), or nil.
+function TimelineTabStrip:active_sequence_id()
+    local active = self.active_record_tab
+    return active and active.sequence_id or nil
+end
+
+--- Live clip list of the displayed tab (media + derived gaps). Returns
+--- the cache's own table by reference — callers must not mutate it.
+--- Empty list when no tab is displayed.
+function TimelineTabStrip:displayed_clips()
+    local displayed = self.displayed_tab
+    if not displayed then return {} end
+    return displayed.cache.clips
+end
+
 function TimelineTabStrip:get_source_tab()
     return self.source_tab
 end

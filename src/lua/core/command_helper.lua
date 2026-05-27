@@ -75,8 +75,10 @@ function M.resolve_active_sequence_id(sequence_id_param, timeline_state)
     if sequence_id_param and sequence_id_param ~= "" then
         return sequence_id_param
     end
-    if timeline_state and type(timeline_state.get_sequence_id) == "function" then
-        local ok, seq = pcall(timeline_state.get_sequence_id)
+    if timeline_state and timeline_state.get_tab_strip then
+        local ok, seq = pcall(function()
+            return timeline_state.get_tab_strip():active_sequence_id()
+        end)
         if ok and seq and seq ~= "" then
             return seq
         end

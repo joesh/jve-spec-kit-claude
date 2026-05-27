@@ -59,9 +59,7 @@ local function copy_mark_range()
         "copy_mark_range: sequence fps_denominator missing or invalid: " .. tostring(seq_fps_den))
     local seq_rate = seq_fps_num / seq_fps_den
 
-    assert(timeline_state.get_clips,
-        "copy_mark_range: timeline_state.get_clips not available")
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local clip_payloads = {}
 
     for _, clip in ipairs(all_clips) do
@@ -134,7 +132,7 @@ local function copy_mark_range()
     local payload = {
         kind = "timeline_clips",
         project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil,
-        sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil,
+        sequence_id = timeline_state.get_tab_strip():active_sequence_id(),
         reference_start_frame = mark_in,
         clips = clip_payloads,
         count = #clip_payloads,
@@ -224,7 +222,7 @@ local function copy_timeline_selection()
     local payload = {
         kind = "timeline_clips",
         project_id = (timeline_state.get_project_id and timeline_state.get_project_id()) or nil,
-        sequence_id = (timeline_state.get_sequence_id and timeline_state.get_sequence_id()) or nil,
+        sequence_id = timeline_state.get_tab_strip():active_sequence_id(),
         reference_start_frame = earliest_start_frame,
         clips = clip_payloads,
         count = #clip_payloads

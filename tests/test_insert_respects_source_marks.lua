@@ -72,7 +72,9 @@ local gather_context = require("core.gather_context_for_command")
 
 -- For this test, we use gather_edit_context with a mock timeline_state
 local mock_timeline_state = {
-    get_sequence_id = function() return "seq1" end,
+    get_tab_strip = function()
+        return require("test_env").make_strip_stub({ active_sequence_id = "seq1" })
+    end,
     get_project_id = function() return "proj1" end,
     get_playhead_position = function() return 0 end,
 }

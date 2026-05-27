@@ -190,11 +190,12 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json, 
     local Clip = require('models.clip')
     local selection_state = require("ui.timeline.state.selection_state")
     expected_missing = expected_missing or {}
-    -- Only bypass persistence when using the real timeline_state module and it has not been initialized
-    -- with an active sequence. Test stubs often omit get_sequence_id entirely.
+    -- Bypass persistence when no active sequence (test stubs without a strip,
+    -- or pre-init headless state). 022/1.3c: read active record via strip.
     local bypass_persist = false
-    if type(timeline_state.get_sequence_id) == "function" then
-        local seq = timeline_state.get_sequence_id()
+    local strip = timeline_state.get_tab_strip and timeline_state.get_tab_strip()
+    if strip then
+        local seq = strip:active_sequence_id()
         bypass_persist = (not seq or seq == "")
     end
 

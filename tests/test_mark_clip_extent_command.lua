@@ -55,8 +55,12 @@ local test_tracks = {}
 
 local timeline_state_stub = {
     get_playhead_position = function() return test_playhead end,
-    get_clips = function() return test_clips end,
-    get_sequence_id = function() return "seq1" end,
+    get_tab_strip = function()
+        return require("test_env").make_strip_stub({
+            active_sequence_id = "seq1",
+            displayed_clips = test_clips,
+        })
+    end,
     get_track_by_id = function(track_id) return test_tracks[track_id] end,
     get_track_index = function(track_id)
         local t = test_tracks[track_id]

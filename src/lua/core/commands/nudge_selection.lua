@@ -49,7 +49,7 @@ function M.register(command_executors, command_undoers, _db, _set_last_error)
 
         if selected_edges and #selected_edges > 0 then
             local edge_infos = edge_decoration.decorate(
-                selected_edges, timeline_state.get_clips(), "NudgeSelection")
+                selected_edges, timeline_state.get_tab_strip():displayed_clips(), "NudgeSelection")
             local result = command_manager.execute("BatchRippleEdit", {
                 edge_infos   = edge_infos,
                 delta_frames = delta,

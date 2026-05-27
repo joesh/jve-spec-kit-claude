@@ -360,7 +360,7 @@ end
 
 local function normalize_timeline_selection(clips)
     local project_id = timeline_state.get_project_id and timeline_state.get_project_id() or nil
-    local sequence_id = timeline_state.get_sequence_id and timeline_state.get_sequence_id() or nil
+    local sequence_id = timeline_state.get_tab_strip():active_sequence_id()
     assert(project_id and project_id ~= "", "timeline_panel.normalize_timeline_selection: missing active project_id")
     assert(sequence_id and sequence_id ~= "", "timeline_panel.normalize_timeline_selection: missing active sequence_id")
 
@@ -2301,7 +2301,7 @@ function M.create(opts)
     -- present sequence_id; the boundary handles the absent-sequence case by
     -- broadcasting an empty selection so the inspector clears.
     local function broadcast_selection(selected_clips)
-        local sid = timeline_state.get_sequence_id and timeline_state.get_sequence_id()
+        local sid = timeline_state.get_tab_strip():active_sequence_id()
         if not (sid and sid ~= "") then
             selection_hub.update_selection("timeline", {})
             return
@@ -3532,7 +3532,7 @@ Signals.connect("project_changed", M.on_project_change, 50)
 
 function M:navigate_to_clip(clip_id)
     assert(clip_id, "timeline_panel:navigate_to_clip: clip_id required")
-    local clips = timeline_state.get_clips and timeline_state.get_clips() or {}
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     for _, clip in ipairs(clips) do
         if clip.id == clip_id then
             local frame = clip.sequence_start_frame or clip.sequence_start or 0
@@ -3554,7 +3554,7 @@ function M:select_clips(clip_ids)
 end
 
 function M:get_clips()
-    local raw = timeline_state.get_clips and timeline_state.get_clips() or {}
+    local raw = timeline_state.get_tab_strip():displayed_clips()
     local clips = {}
     for _, clip in ipairs(raw) do
         clips[#clips + 1] = {

@@ -339,6 +339,20 @@ end
 -- @param duration_frames number: Duration in frames
 -- @param media_id string|nil: Optional media_id for clip
 -- @return string: masterclip sequence ID
+-- Spec 022 Phase 1.3c test helper. Tests that mock timeline_state and
+-- previously exposed `get_sequence_id` / `get_clips` directly must now
+-- also expose `get_tab_strip()` returning a strip with `active_sequence_id`
+-- / `displayed_clips` methods (the new src-side API). This helper builds
+-- a minimal strip stub from a plain spec table so test mocks stay readable.
+--   { active_sequence_id = "seqA", displayed_clips = {...} }
+function M.make_strip_stub(spec)
+    spec = spec or {}
+    return {
+        active_sequence_id = function() return spec.active_sequence_id end,
+        displayed_clips    = function() return spec.displayed_clips or {} end,
+    }
+end
+
 function M.create_test_masterclip_sequence(project_id, name, fps_num, fps_den, duration_frames, media_id)
     -- V13: a "masterclip" is a kind='master' sequence containing one or more
     -- media_refs. Sequence.ensure_master does the right thing — assert TC

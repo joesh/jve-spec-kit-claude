@@ -37,8 +37,7 @@ local function delete_mark_range(timeline_state, command_manager, ripple)
     if not (mark_in and mark_out and mark_out > mark_in) then
         return false
     end
-    local sequence_id = timeline_state.get_sequence_id
-        and timeline_state.get_sequence_id()
+    local sequence_id = timeline_state.get_tab_strip():active_sequence_id()
     assert(sequence_id, "DeleteSelection: missing sequence_id for mark-based delete")
     local project_id = timeline_state.get_project_id
         and timeline_state.get_project_id()
@@ -79,9 +78,7 @@ local function ripple_delete_selected(timeline_state, command_manager, selected_
     local clip_ids = selected_clip_ids(selected_clips)
     if #clip_ids == 0 then return false end
     local params = { clip_ids = clip_ids }
-    if timeline_state.get_sequence_id then
-        params.sequence_id = timeline_state.get_sequence_id()
-    end
+    params.sequence_id = timeline_state.get_tab_strip():active_sequence_id()
     if timeline_state.get_project_id then
         params.project_id = timeline_state.get_project_id()
     end
@@ -98,8 +95,7 @@ end
 -- selected) would be confusing and non-atomic.
 local function delete_selected_clips(timeline_state, command_manager, selected_clips)
     if not selected_clips or #selected_clips == 0 then return false end
-    local active_sequence_id = timeline_state.get_sequence_id
-        and timeline_state.get_sequence_id()
+    local active_sequence_id = timeline_state.get_tab_strip():active_sequence_id()
     local project_id = timeline_state.get_project_id
         and timeline_state.get_project_id()
     assert(project_id and project_id ~= "", "DeleteSelection: missing active project_id")
@@ -159,9 +155,7 @@ local function ripple_delete_selected_gap(timeline_state, command_manager)
         gap_start    = gap.start_value,
         gap_duration = gap.duration,
     }
-    if timeline_state.get_sequence_id then
-        params.sequence_id = timeline_state.get_sequence_id()
-    end
+    params.sequence_id = timeline_state.get_tab_strip():active_sequence_id()
     if timeline_state.get_project_id then
         params.project_id = timeline_state.get_project_id()
     end
