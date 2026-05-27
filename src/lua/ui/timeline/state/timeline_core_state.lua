@@ -174,6 +174,24 @@ end
 -- `{[track_id]=true, ...}`: only strip + recompute gaps on those tracks
 -- — gaps on other tracks keep their existing IDs and positions, so edge
 -- selections pointing at those tracks' gaps stay valid without migration.
+-- Spec 022 Phase 1.3b: legacy data.state.clips / data.state.tracks writers
+-- (recompute_gap_clips, load_displayed_sequence, reload_clips, rollback)
+-- must propagate to the displayed tab's cache so facade readers (which now
+-- pull from tab.cache) see the same values. The tab cache holds the
+-- references by identity, so this is a pointer assignment + index
+-- invalidation, not a copy. Source of truth contract during the migration:
+-- displayed_tab.cache.clips IS data.state.clips (same table); facade reads
+-- come from tab; legacy modules continue to write through data.state.
+local function sync_displayed_tab_from_data_state()
+    local strip = strip_holder.get()
+    if not strip then return end
+    local displayed = strip:get_displayed()
+    if not displayed then return end
+    displayed.cache.clips = data.state.clips
+    displayed.cache.tracks = data.state.tracks
+    displayed:invalidate_indexes()
+end
+
 local function recompute_gap_clips(affected_track_ids)
     local clips = data.state.clips
     local tracks = data.state.tracks
@@ -201,7 +219,13 @@ local function recompute_gap_clips(affected_track_ids)
         rebuild_gaps_for_tracks(tracks, track_clips, scoped, affected_track_ids, seq_fr, kept)
     migrate_stale_edge_selections(old_gap_tracks, new_gaps_by_track)
     data.update_content_length()
+    sync_displayed_tab_from_data_state()
 end
+
+-- Expose sync helper to siblings (timeline_state.apply_mutations after the
+-- legacy clip_state mirror, and any other future legacy writer that wants
+-- explicit sync). Helper is no-op when no displayed tab is set.
+M.sync_displayed_tab_from_data_state = sync_displayed_tab_from_data_state
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 
@@ -458,6 +482,7 @@ local function load_displayed_sequence(seq_id)
         data.set_clips(db.load_clips(seq_id))
     end
     clip_state.invalidate_indexes()
+    sync_displayed_tab_from_data_state()
 
     data.state.sequence_frame_rate = sequence.frame_rate
     data.state.sequence_timecode_start_frame = sequence.start_timecode_frame

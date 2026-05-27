@@ -571,6 +571,12 @@ function M.rollback_mutation_transaction()
     M.invalidate_indexes()
     state_version = state_version + 1
     for _, clip in ipairs(data.state.clips) do clip._version = state_version end
+    -- Spec 022 Phase 1.3b: facade reads come from displayed_tab.cache;
+    -- rollback rewrites data.state.clips out-of-band so the displayed
+    -- tab must be re-pointed at the restored array. Lazy require avoids
+    -- a circular dep with timeline_core_state (which requires clip_state).
+    local core_state = require("ui.timeline.state.timeline_core_state")
+    core_state.sync_displayed_tab_from_data_state()
     data.notify_listeners()
     log.event("rollback_mutation_transaction: restored %d clips", #snapshot.clips)
 end

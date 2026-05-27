@@ -152,6 +152,15 @@ function TimelineTabStrip:clear_displayed()
     self:_notify()
 end
 
+--- Drop the active-record pointer. Spec 022 Phase 1.3b: get_sequence_id
+--- delegates to the strip's active record, so M.clear must clear this
+--- pointer too — otherwise post-clear callers see the stale sequence id
+--- and views fail to render blank.
+function TimelineTabStrip:clear_active_record()
+    self.active_record_tab = nil
+    self:_notify()
+end
+
 --- Switch the active record tab. Per spec FR-004: clicking a Record tab
 --- updates BOTH pointers (displayed becomes that tab AND active becomes that
 --- sequence). The argument MUST be a record tab — switching active to source

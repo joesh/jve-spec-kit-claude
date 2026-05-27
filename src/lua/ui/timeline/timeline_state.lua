@@ -135,6 +135,11 @@ M.clear = function()
         core.persist_state_to_db(true)
     end
     tab_strip:clear_displayed()
+    -- Spec 022 Phase 1.3b: get_sequence_id reads from the strip's active
+    -- record. Clearing the displayed pointer alone leaves get_sequence_id
+    -- returning the stale id; views can't render blank (FR-005). Drop
+    -- both pointers so post-clear state is fully blank.
+    tab_strip:clear_active_record()
     return core.clear(prev_seq_id)
 end
 M.set_project_id = core.set_project_id
@@ -328,7 +333,19 @@ M.push_viewport_guard = viewport.push_viewport_guard
 M.pop_viewport_guard = viewport.pop_viewport_guard
 
 -- Tracks
-M.get_all_tracks = tracks.get_all
+-- Spec 022 Phase 1.3b: get_all_tracks delegates to the displayed tab's
+-- cache. The strip is the source of truth for "what is the timeline
+-- view rendering"; the tab cache is hydrated by load_from_database on
+-- open + reload_clips. data.state.tracks is still mirrored by the
+-- legacy load path but no longer read by the facade.
+-- Returns empty list when no tab is displayed (project_changed reset,
+-- blank panel) so callers iterating with ipairs are safe (rule 1.14:
+-- empty is a valid model state, not a missing invariant).
+M.get_all_tracks = function()
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return {} end
+    return displayed.cache.tracks
+end
 M.get_video_tracks = tracks.get_video_tracks
 M.get_audio_tracks = tracks.get_audio_tracks
 M.get_track_height = tracks.get_height
@@ -351,14 +368,46 @@ M.get_default_video_track_id = function() return tracks.get_primary_id("VIDEO") 
 M.get_default_audio_track_id = function() return tracks.get_primary_id("AUDIO") end
 
 -- Clips
+-- Spec 022 Phase 1.3b: clip read accessors delegate to the displayed
+-- tab's cache. Tab cache is the authoritative read source; data.state
+-- writes still happen via the legacy mirror in apply_mutations but are
+-- no longer read by the facade. Returns empty list / nil when no tab is
+-- displayed — that's a valid model state (blank panel), not a missing
+-- invariant.
 M.get_clips = function()
     assert(not M.__forbid_get_clips, "timeline_state.get_clips is forbidden in this context (renderer should use clip indices)")
-    return clips.get_all()
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return {} end
+    return displayed.cache.clips
 end
-M.get_clip_by_id = clips.get_by_id
-M.get_clips_for_track = clips.get_for_track
-M.get_track_clip_index = clips.get_track_clip_index
-M.get_clips_at_time = clips.get_at_time
+M.get_clip_by_id = function(clip_id)
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return nil end
+    return displayed:get_clip_by_id(clip_id)
+end
+M.get_clips_for_track = function(track_id)
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return {} end
+    local list = displayed:get_track_clip_index(track_id)
+    if not list then return {} end
+    local copy = {}
+    for _, c in ipairs(list) do table.insert(copy, c) end
+    return copy
+end
+M.get_track_clip_index = function(track_id)
+    local displayed = tab_strip:get_displayed()
+    if not displayed then return nil end
+    return displayed:get_track_clip_index(track_id)
+end
+M.get_clips_at_time = function(time_value, candidate_clips)
+    -- Allow caller-supplied clip list (legacy callers pre-passing a filtered
+    -- set). Default candidate list is the displayed tab's cache.clips.
+    if candidate_clips == nil then
+        local displayed = tab_strip:get_displayed()
+        candidate_clips = displayed and displayed.cache.clips or {}
+    end
+    return clips.get_at_time(time_value, candidate_clips)
+end
 -- Derive the set of track_ids touched by a mutation payload. Updates,
 -- inserts, and bulk_shifts carry track_id directly. Deletes carry only
 -- clip_id, so resolve via clip_lookup before clip_state removes the row.
@@ -449,11 +498,15 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
         return true
     end
 
-    -- Per-tab cache write (the bug fix). Updates the target tab's own
-    -- clip_lookup / track_clip_index / clip_track_positions — so
-    -- non-displayed targets no longer crash the bulk_shift assert by
-    -- looking up tracks in the displayed view's cache.
-    local tab_changed = target_tab:apply_mutations(mutations)
+    -- Per-tab cache write (the bug fix). Only the non-displayed branch
+    -- below needs this: when target == displayed, the legacy clip_state
+    -- mirror writes data.state.clips and core_state.recompute_gap_clips
+    -- syncs that array onto displayed.cache.clips by reference (Phase 1.3b).
+    -- Calling tab:apply_mutations here as well would mutate the shared
+    -- array twice — bulk_shifts in particular would clamp to zero on the
+    -- second pass and trip the NSF assert. Non-displayed targets keep the
+    -- per-tab write below (the BRE bug-fix path).
+    local tab_changed = false
 
     -- Displayed-tab legacy mirror to data.state. The renderer / selection /
     -- gap-recompute machinery still reads from data.state today; 1.3b
@@ -477,7 +530,10 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     end
 
     -- Non-displayed target: data.state stays put (the displayed view
-    -- didn't change). Tab cache is warm for when user switches to it.
+    -- didn't change). Mutate THIS tab's cache directly — the BRE bug-fix
+    -- path. The displayed branch above skips this because the legacy
+    -- mirror + sync handle it; here there's no legacy mirror to lean on.
+    tab_changed = target_tab:apply_mutations(mutations)
     Signals.emit("timeline_mutations_applied", mutations, tab_changed)
     return tab_changed
 end
@@ -550,9 +606,16 @@ M.clear_gap_selection = function() selection.set_gap_selection({}) end
 M.set_on_selection_changed = selection.set_on_selection_changed
 M.normalize_edge_selection = selection.normalize_edge_selection
 
--- Project/Sequence Accessors (Proxied from data state)
+-- Project/Sequence Accessors
 M.get_project_id = function() return data.state.project_id end
-M.get_sequence_id = function() return data.state.sequence_id end
+-- Spec 022 Phase 1.3b: get_sequence_id returns the active record tab's
+-- sequence_id (the edit target — FR-005). Strip is source of truth.
+-- Returns nil when no record tab is active (project_changed reset, blank
+-- panel) — that's a valid model state, not a missing invariant.
+M.get_sequence_id = function()
+    local active = tab_strip:get_active_record()
+    return active and active.sequence_id or nil
+end
 
 -- Tab / sequence pointer accessors (FR-005, data-model.md §3)
 --
