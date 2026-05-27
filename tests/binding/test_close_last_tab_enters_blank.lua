@@ -5,7 +5,7 @@
 ---
 --- Domain behavior under test (no code-tracing):
 ---   * After the close, the timeline panel must have zero open tabs.
----   * timeline_state.get_sequence_id() must be nil (view will pull blank).
+---   * timeline_state.get_tab_strip():active_sequence_id() must be nil (view will pull blank).
 ---   * The project settings that drive re-open must persist the blank state:
 ---       last_open_sequence_id == "" (or absent)
 ---       open_sequence_ids == []  (empty array, not nil)
@@ -39,9 +39,9 @@ local open_before = timeline_panel.get_open_tab_ids()
 assert(#open_before == 1 and open_before[1] == seq_id,
     "pre-condition: expected single tab for seq " .. seq_id
     .. "; got " .. table.concat(open_before, ","))
-assert(timeline_state.get_sequence_id() == seq_id,
+assert(timeline_state.get_tab_strip():active_sequence_id() == seq_id,
     "pre-condition: active sequence should be " .. seq_id
-    .. "; got " .. tostring(timeline_state.get_sequence_id()))
+    .. "; got " .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 
 -- Close the only tab.
 timeline_panel.close_tab(seq_id)
@@ -53,10 +53,10 @@ assert(#open_after == 0,
     .. #open_after .. " (" .. table.concat(open_after, ",") .. ")")
 
 -- Post-condition 2: active-sequence state is blank.
-assert(timeline_state.get_sequence_id() == nil,
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "after closing the last tab, get_sequence_id() must be nil so the "
     .. "timeline view renders blank; got "
-    .. tostring(timeline_state.get_sequence_id()))
+    .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 
 -- Post-condition 3: persisted tab state reflects the blank state.
 local persisted_active = database.get_project_setting(project_id, "last_open_sequence_id")

@@ -131,9 +131,9 @@ local source_mon = ienv.setup_monitor_panels({
 
 command_manager.init("default_sequence", "default_project")
 
-local clip_v1 = timeline_state.get_clip_by_id("clip_v1")
-local clip_v2 = timeline_state.get_clip_by_id("clip_v2")
-local clip_a1 = timeline_state.get_clip_by_id("clip_a1")
+local clip_v1 = timeline_state.get_tab_strip():clip_by_id("clip_v1")
+local clip_v2 = timeline_state.get_tab_strip():clip_by_id("clip_v2")
+local clip_a1 = timeline_state.get_tab_strip():clip_by_id("clip_a1")
 assert(clip_v1 and clip_v2 and clip_a1, "fixture: clips must load from DB")
 
 local function exec_match_frame()

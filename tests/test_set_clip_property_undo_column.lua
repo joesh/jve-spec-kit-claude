@@ -103,7 +103,7 @@ command_manager.init("seq1", "p1")
 
 -- Sanity: clip starts with duration 120.
 local function get_cached_duration()
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == "c1" then return c.duration end
     end
     return nil
@@ -164,7 +164,7 @@ name_cmd:set_parameter("property_type", "STRING")
 assert(command_manager.execute(name_cmd).success, "name execute failed")
 
 local function get_cached_name()
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == "c1" then return c.name end
     end
     return nil
@@ -188,7 +188,7 @@ assert(get_cached_name() == "Original", string.format(
 print("Check 5: round-trip every column-backed field")
 
 local function get_cached_field(field)
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == "c1" then return c[field] end
     end
     return nil

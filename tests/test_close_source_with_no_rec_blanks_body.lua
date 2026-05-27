@@ -80,7 +80,7 @@ core_state.activate_displayed("master_a039", nil)
 assert(timeline_state.get_displayed_tab_id() == "master_a039",
     "fixture: source tab must be the displayed tab")
 do
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local virtual = 0
     for _, c in ipairs(clips) do
         if c.is_master_virtual then virtual = virtual + 1 end
@@ -101,7 +101,7 @@ assert(timeline_state.get_displayed_tab_id() == nil, string.format(
     tostring(timeline_state.get_displayed_tab_id())))
 
 do
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     assert(#clips == 0, string.format(
         "after close: body must be empty (no displayed sequence), got %d "
         .. "clips. Strip is empty but data.state.clips still holds the "

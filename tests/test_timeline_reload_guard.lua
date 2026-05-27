@@ -41,15 +41,15 @@ assert(conn:exec(SCHEMA_SQL))
 assert(conn:exec(DATA_SQL))
 
 assert(timeline_state.init("seq_a"))
-assert(timeline_state.get_sequence_id() == "seq_a", "expected active sequence to remain seq_a after init")
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seq_a", "expected active sequence to remain seq_a after init")
 
 local reload_result = timeline_state.reload_clips("seq_b")
 assert(reload_result == false, "reload_clips should skip when sequence_id differs")
-assert(timeline_state.get_sequence_id() == "seq_a", "reload_clips should not switch active sequence")
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seq_a", "reload_clips should not switch active sequence")
 
 local same_result = timeline_state.reload_clips("seq_a")
 assert(same_result == true, "reload_clips should succeed for active sequence")
-assert(timeline_state.get_sequence_id() == "seq_a", "active sequence should remain seq_a after valid reload")
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seq_a", "active sequence should remain seq_a after valid reload")
 
 os.remove(tmp_db)
 print("✅ timeline reload guard test passed")

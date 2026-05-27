@@ -29,7 +29,7 @@ local gap_id = layout:gap_id("v1", 1500)
 timeline_core_state.init(layout.sequence_id)
 
 -- Verify gap clip exists
-local gap_clip = timeline_state.get_clip_by_id(gap_id)
+local gap_clip = timeline_state.get_tab_strip():clip_by_id(gap_id)
 assert(gap_clip, "Gap clip should exist at position 1500 on V1")
 
 -- Execute a ripple with gap + media edges

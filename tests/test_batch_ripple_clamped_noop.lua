@@ -65,7 +65,6 @@ timeline_state.get_selected_edges = function() return {} end
 timeline_state.set_playhead_position = function(_) end
 timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_project_id = function() return "default_project" end
-timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function(_) end
 timeline_state.consume_mutation_failure = function() return nil end
 timeline_state.apply_mutations = function(_, _) return true end

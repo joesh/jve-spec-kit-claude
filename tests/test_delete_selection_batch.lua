@@ -131,9 +131,9 @@ timeline_state.reload_clips("seq")
 assert(count_timeline_clips(conn) == 3, "precondition: 3 clips")
 
 -- Select all three clips (simulating Cmd+A then Delete)
-local c1 = timeline_state.get_clip_by_id("c1")
-local c2 = timeline_state.get_clip_by_id("c2")
-local c3 = timeline_state.get_clip_by_id("c3")
+local c1 = timeline_state.get_tab_strip():clip_by_id("c1")
+local c2 = timeline_state.get_tab_strip():clip_by_id("c2")
+local c3 = timeline_state.get_tab_strip():clip_by_id("c3")
 assert(c1 and c2 and c3, "all clips should be loaded in timeline_state")
 timeline_state.set_selection({c1, c2, c3})
 
@@ -199,8 +199,8 @@ timeline_state.reload_clips("seq")
 assert(count_timeline_clips(conn) == 4, "precondition: 4 clips")
 
 -- Select only d1 and d3 (leaving d2 and d4 untouched)
-local d1 = timeline_state.get_clip_by_id("d1")
-local d3 = timeline_state.get_clip_by_id("d3")
+local d1 = timeline_state.get_tab_strip():clip_by_id("d1")
+local d3 = timeline_state.get_tab_strip():clip_by_id("d3")
 assert(d1 and d3, "d1 and d3 should be loaded")
 timeline_state.set_selection({d1, d3})
 

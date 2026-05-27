@@ -72,7 +72,7 @@ local imported_sequence_id = created_sequence_ids[1]
 -- Switch timeline_state to imported sequence (simulating user clicking on it)
 timeline_state.init(imported_sequence_id, "default_project")
 command_manager.activate_timeline_stack(imported_sequence_id)
-assert(timeline_state.get_sequence_id() == imported_sequence_id,
+assert(timeline_state.get_tab_strip():active_sequence_id() == imported_sequence_id,
     "Precondition: timeline should be viewing imported sequence")
 
 -- Track reloads via signal
@@ -86,13 +86,13 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, undo_result.error_message or "Undo failed")
 
 -- KEY ASSERTION: timeline_state must NOT point at the deleted sequence
-assert(timeline_state.get_sequence_id() ~= imported_sequence_id,
+assert(timeline_state.get_tab_strip():active_sequence_id() ~= imported_sequence_id,
     string.format("BUG: timeline_state still pointing at deleted sequence %s", imported_sequence_id))
 
 -- It should be back on the pre-import sequence
-assert(timeline_state.get_sequence_id() == "default_sequence",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "default_sequence",
     string.format("Expected default_sequence after undo, got %s",
-        tostring(timeline_state.get_sequence_id())))
+        tostring(timeline_state.get_tab_strip():active_sequence_id())))
 
 Signals.disconnect(reload_conn)
 

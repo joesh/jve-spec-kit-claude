@@ -129,7 +129,7 @@ assert(command_manager.can_undo(),
 -- Switch to seqB (simulates user clicking a different timeline tab).
 timeline_state.init("seqB", "p1")
 command_manager.init("seqB", "p1")
-assert(timeline_state.get_sequence_id() == "seqB",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seqB",
     "precondition: active sequence should be seqB after switch")
 
 -- ----------------------------------------------------------------------

@@ -77,9 +77,9 @@ Signals.emit("project_changed", "prj-B")
 assert(timeline_state.get_project_id() == nil,
     "after project_changed, project_id must be cleared; got "
     .. tostring(timeline_state.get_project_id()))
-assert(timeline_state.get_sequence_id() == nil,
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "after project_changed, sequence_id must be cleared; got "
-    .. tostring(timeline_state.get_sequence_id()))
+    .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 assert(#data.state.tracks == 0,
     "after project_changed, tracks must be empty; got " .. #data.state.tracks)
 assert(#data.state.clips == 0,

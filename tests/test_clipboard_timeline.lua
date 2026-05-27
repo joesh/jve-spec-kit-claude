@@ -199,7 +199,7 @@ insert_clip({
 })
 
 -- Copy the clip
-local orig = timeline_state.get_clip_by_id(resolve_clip_id("orig"))
+local orig = timeline_state.get_tab_strip():clip_by_id(resolve_clip_id("orig"))
 assert(orig, "orig should exist in timeline_state")
 timeline_state.set_selection({orig})
 focus_manager.set_focused_panel("timeline")
@@ -284,7 +284,7 @@ insert_clip({
 })
 
 -- Copy clip_b
-local cb = timeline_state.get_clip_by_id(resolve_clip_id("clip_b"))
+local cb = timeline_state.get_tab_strip():clip_by_id(resolve_clip_id("clip_b"))
 assert(cb, "clip_b should exist")
 timeline_state.set_selection({cb})
 focus_manager.set_focused_panel("timeline")
@@ -335,7 +335,7 @@ insert_clip({
 local baseline_tail = get_clip_start_frame("d_tail")
 
 -- Copy d_src, paste far away
-local d_src = timeline_state.get_clip_by_id(resolve_clip_id("d_src"))
+local d_src = timeline_state.get_tab_strip():clip_by_id(resolve_clip_id("d_src"))
 assert(d_src)
 timeline_state.set_selection({d_src})
 focus_manager.set_focused_panel("timeline")
@@ -375,7 +375,7 @@ insert_clip({
     source_out = 110,
 })
 
-local cut_c = timeline_state.get_clip_by_id(resolve_clip_id("cut_clip"))
+local cut_c = timeline_state.get_tab_strip():clip_by_id(resolve_clip_id("cut_clip"))
 assert(cut_c)
 timeline_state.set_selection({cut_c})
 

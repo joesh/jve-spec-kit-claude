@@ -96,7 +96,7 @@ end
 
 -- Verify clip exists in timeline cache before delete
 local function find_clip_in_cache(clip_id)
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == clip_id then return true end
     end
     return false

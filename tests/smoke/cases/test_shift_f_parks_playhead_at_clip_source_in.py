@@ -45,7 +45,7 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
     def setUp(self) -> None:
         super().setUp()
         # The smoke runner is a long-lived singleton — prior tests may
-        # have left the source tab displayed. `timeline_state.get_clips()`
+        # have left the source tab displayed. `timeline_state.get_tab_strip():displayed_clips()`
         # is keyed on the displayed sequence, so we must put the
         # timeline on the record tab before sampling (otherwise we'd
         # pick a master clip whose `source_in == sequence_start` and

@@ -112,7 +112,7 @@ timeline_state.init("seq1", "p1")
 
 -- Sanity: timeline_state should now cache the clip with name="Original".
 local cached = nil
-for _, c in ipairs(timeline_state.get_clips()) do
+for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
     if c.id == "c1" then cached = c end
 end
 assert(cached, "setup: expected timeline_state to cache clip c1")
@@ -155,7 +155,7 @@ assert(db_name == "asdf", "DB name mismatch: " .. tostring(db_name))
 -- ----------------------------------------------------------------------
 print("Check 2: timeline_state cache reflects new name")
 local patched = nil
-for _, c in ipairs(timeline_state.get_clips()) do
+for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
     if c.id == "c1" then patched = c end
 end
 assert(patched, "timeline_state should still cache clip c1")

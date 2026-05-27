@@ -123,7 +123,7 @@ timeline_state.apply_mutations("seqA", {
 assert(tabA:get_clip_by_id("a2").sequence_start == 750,
     "displayed seqA tab cache updated by mutation")
 -- data.state should also reflect (legacy mirror).
-local all_clips = timeline_state.get_clips()
+local all_clips = timeline_state.get_tab_strip():displayed_clips()
 local found_a2_in_state = false
 for _, c in ipairs(all_clips) do
     if c.id == "a2" then

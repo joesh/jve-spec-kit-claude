@@ -147,6 +147,15 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - Test stubs that mocked timeline_state with bare `get_sequence_id` / `get_clips` updated to expose `get_tab_strip` returning a strip stub. Added `test_env.make_strip_stub({active_sequence_id=..., displayed_clips=...})` helper so the migration stays readable. 9 test files updated.
 - Facade fns (`get_sequence_id`, `get_clips`, `get_all_tracks`, `get_track_clip_index`) still exist; 1.3e deletes them.
 
+### Phase 1.3d — Migrate test callsites to strip methods (LANDED)
+- Added strip ergonomic accessors mirroring the remaining facade reads: `displayed_tracks()`, `clip_by_id(id)`, `clips_for_track(id)`, `track_clip_index(id)`, `clips_at_time(t, candidates)`. Same nil/{} semantics as `displayed_clips` (no displayed tab = blank panel, valid model state).
+- Extended `test_env.make_strip_stub` to accept matching keys (`displayed_tracks`, `clip_by_id`, `clips_for_track`, `track_clip_index`, `clips_at_time`); auto-derives `clip_by_id` lookup from `displayed_clips` when not explicitly provided.
+- Mechanical perl-pass migrated ~124 test callsites in 68 files (`timeline_state.get_X(...)` → `timeline_state.get_tab_strip():X(...)`).
+- Caught a 1.3c miss: 12 src callsites in `command_state.lua`, `command_helper.lua`, `clipboard_actions.lua`, `ripple_delete_selection.lua`, `select_clips.lua`, `select_edges.lua` were still calling the facade. Migrated them and dropped their defensive nil-guards / pcall wrappers (strip API is total — empty list / nil returns rather than raising).
+- `test_blade_command.lua` rewrote its DB-direct `get_clips_at_time` stub as a `get_tab_strip` stub passing `clips_at_time = db_clips_at_time`; the rest of the file's stub-facade overrides are now dead-but-harmless writes to unused keys (1.3e cleans them up).
+- Removed 18 single-line dead stub assignments (`timeline_state.get_sequence_id = function() return "..." end`); 12 multi-line dead stubs remain in 8 files for 1.3e to delete.
+- Facade fns in `timeline_state.lua` are now unreachable from src and tests — they exist only as orphan delegates kept temporarily so 1.3e is a clean grep-and-delete.
+
 ### Phase 1.4 — Signal handler dispatch (LANDED)
 - `playhead_changed` mirrors the new frame to the matching tab's `cache.playhead_position` (per-sequence routing) AND updates `data.state.playhead_position` when target IS displayed (legacy reader path).
 - `track_preference_changed` updates the matching track on EVERY open tab's `cache.tracks` (track preferences are persisted per-track and apply across whichever tabs hold that track).

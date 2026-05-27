@@ -48,7 +48,7 @@ local strip = timeline_state.get_tab_strip()
 local tabA = strip:find_record_tab_by_sequence_id("seqA")
 
 -- ── get_all_tracks reads from displayed tab ──────────────────────────────
-local facade_tracks = timeline_state.get_all_tracks()
+local facade_tracks = timeline_state.get_tab_strip():displayed_tracks()
 assert(facade_tracks and #facade_tracks > 0,
     "facade get_all_tracks returns the displayed tab's tracks (got empty)")
 assert(facade_tracks == tabA.cache.tracks, string.format(
@@ -69,7 +69,7 @@ local synthetic = {
 table.insert(tabA.cache.clips, synthetic)
 tabA:invalidate_indexes()
 
-local facade_clips = timeline_state.get_clips()
+local facade_clips = timeline_state.get_tab_strip():displayed_clips()
 local found = false
 for _, c in ipairs(facade_clips) do
     if c.id == "synth-clip-1" then found = true; break end
@@ -81,7 +81,7 @@ assert(found, string.format(
 print("✓ get_clips returns displayed tab cache.clips")
 
 -- ── get_track_clip_index reads from displayed tab ────────────────────────
-local idx = timeline_state.get_track_clip_index("tA")
+local idx = timeline_state.get_tab_strip():track_clip_index("tA")
 assert(idx, "facade get_track_clip_index returns the tab's per-track index")
 local found_synth_in_index = false
 for _, c in ipairs(idx) do
@@ -112,15 +112,15 @@ db:exec([[
 local source_tab = strip:open_source_tab("master1")
 strip:switch_displayed(source_tab)
 
-assert(timeline_state.get_sequence_id() == "seqA", string.format(
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seqA", string.format(
     "get_sequence_id must return ACTIVE record (seqA) even when displayed "
     .. "is the source master; got %s",
-    tostring(timeline_state.get_sequence_id())))
+    tostring(timeline_state.get_tab_strip():active_sequence_id())))
 print("✓ get_sequence_id returns active record, not displayed master")
 
 -- After display swap, facade clip/track reads must follow the displayed
 -- tab — they now point at the source master's cache.
-local source_tracks = timeline_state.get_all_tracks()
+local source_tracks = timeline_state.get_tab_strip():displayed_tracks()
 assert(source_tracks == source_tab.cache.tracks,
     "facade get_all_tracks now returns source tab cache.tracks after display swap")
 print("✓ get_all_tracks follows display swap to source tab")

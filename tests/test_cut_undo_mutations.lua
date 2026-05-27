@@ -71,7 +71,7 @@ local cmd_obj = Command.deserialize(r.result_data)
 local created = cmd_obj.parameters.created_clip_ids
 local new_clip_id = created and created[1]
 assert(new_clip_id, "Insert should record created_clip_ids[1]")
-local clip = timeline_state.get_clip_by_id(new_clip_id)
+local clip = timeline_state.get_tab_strip():clip_by_id(new_clip_id)
 assert(clip, "Inserted clip must be in timeline cache")
 local original_start = clip.sequence_start
 local original_duration = clip.duration
@@ -103,7 +103,7 @@ assert(not reload_called,
     "Cut undoer must produce __timeline_mutations, not rely on reload_clips fallback")
 
 -- Verify clip was restored in the UI cache via mutations
-local restored = timeline_state.get_clip_by_id(new_clip_id)
+local restored = timeline_state.get_tab_strip():clip_by_id(new_clip_id)
 assert(restored, "Inserted clip must be back in timeline cache after undo")
 
 assert(restored.sequence_start == original_start,

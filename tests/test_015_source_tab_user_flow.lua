@@ -99,7 +99,7 @@ local function viewport_intersects_any_clip()
     local vs = timeline_state.get_viewport_start_time()
     local vd = timeline_state.get_viewport_duration()
     local ve = vs + vd
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if not c.is_gap then
             local cs, ce = c.sequence_start, c.sequence_start + c.duration
             if cs < ve and ce > vs then return true, vs, ve, cs, ce end
@@ -127,7 +127,7 @@ check("displayed is record",
     timeline_state.get_displayed_tab_id() == "rec",
     "got " .. tostring(timeline_state.get_displayed_tab_id()))
 check("timeline view has no real clips initially (record was empty)",
-    #timeline_state.get_clips() == 0, "record has " .. #timeline_state.get_clips() .. " clips")
+    #timeline_state.get_tab_strip():displayed_clips() == 0, "record has " .. #timeline_state.get_tab_strip():displayed_clips() .. " clips")
 
 -- ── Activate master A as displayed (source tab equivalent) ────────────
 print("-- activate master A as displayed --")
@@ -142,7 +142,7 @@ check("active is STILL record (FR-005)",
     "got " .. tostring(timeline_state.get_active_sequence_id()))
 
 -- Master A has 2 media_refs (V + A) → 2 virtual clips on activation.
-local clips = timeline_state.get_clips()
+local clips = timeline_state.get_tab_strip():displayed_clips()
 local virtual_count = 0
 for _, c in ipairs(clips) do
     if c.is_master_virtual then virtual_count = virtual_count + 1 end
@@ -207,7 +207,7 @@ check("active is STILL record (FR-005)",
     timeline_state.get_active_sequence_id() == "rec",
     "got " .. tostring(timeline_state.get_active_sequence_id()))
 
-local clips_b = timeline_state.get_clips()
+local clips_b = timeline_state.get_tab_strip():displayed_clips()
 local virtual_b = 0
 for _, c in ipairs(clips_b) do
     if c.is_master_virtual then virtual_b = virtual_b + 1 end
@@ -243,7 +243,7 @@ check("record's persisted playhead is < 1,000,000 frames (sanity)",
         tostring(rec_after.playhead_position)))
 
 -- Switching back removes virtual clips (record is empty in this fixture).
-local clips_back = timeline_state.get_clips()
+local clips_back = timeline_state.get_tab_strip():displayed_clips()
 local still_virtual = 0
 for _, c in ipairs(clips_back) do
     if c.is_master_virtual then still_virtual = still_virtual + 1 end

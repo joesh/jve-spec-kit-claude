@@ -28,13 +28,13 @@ local function resolve_clip_entry(entry)
     if type(entry) == "table" and entry.sequence_start and entry.track_id then
         return entry
     end
-    if type(entry) == "table" and entry.id and timeline_state.get_clip_by_id then
-        local clip = timeline_state.get_clip_by_id(entry.id)
+    if type(entry) == "table" and entry.id then
+        local clip = timeline_state.get_tab_strip():clip_by_id(entry.id)
         assert(clip, "clipboard_actions.resolve_clip_entry: clip not found by id " .. tostring(entry.id))
         return clip
     end
-    if type(entry) == "string" and timeline_state.get_clip_by_id then
-        local clip = timeline_state.get_clip_by_id(entry)
+    if type(entry) == "string" then
+        local clip = timeline_state.get_tab_strip():clip_by_id(entry)
         assert(clip, "clipboard_actions.resolve_clip_entry: clip not found by id " .. tostring(entry))
         return clip
     end

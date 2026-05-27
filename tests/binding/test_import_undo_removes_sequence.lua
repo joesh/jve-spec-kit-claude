@@ -13,8 +13,6 @@ local timeline_state = require("ui.timeline.timeline_state")
 local Command = require("command")
 
 local function stub_timeline_state()
-    local current_sequence_id = "default_sequence"
-
     timeline_state.capture_viewport = function()
         return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
     end
@@ -30,12 +28,7 @@ local function stub_timeline_state()
     timeline_state.get_playhead_position = function() return 0 end
     timeline_state.get_sequence_frame_rate = function() return 30 end
     timeline_state.get_project_id = function() return "default_project" end
-    timeline_state.get_sequence_id = function() return current_sequence_id end
-    timeline_state.reload_clips = function(sequence_id)
-        if sequence_id and sequence_id ~= "" then
-            current_sequence_id = sequence_id
-        end
-    end
+    timeline_state.reload_clips = function(_sequence_id) end
 end
 
 local function exec(db, sql)

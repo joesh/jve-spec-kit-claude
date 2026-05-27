@@ -98,10 +98,8 @@ timeline_state.get_clips_at_time = function(time)
     end
     return result
 end
-timeline_state.get_clips = function() return all_test_clips end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_project_id = function() return "proj1" end
-timeline_state.get_sequence_id = function() return "seq1" end
 
 -- Split both clips using the interactive Split command (links second halves)
 print("--- Setup: Split both clips at frame 500 using Split wrapper ---")

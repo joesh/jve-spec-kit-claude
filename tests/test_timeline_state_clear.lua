@@ -56,16 +56,16 @@ print("=== timeline_state.clear() contract ===")
 
 -- 1. After init → clear, sequence reference is gone, project identity survives.
 timeline_state.init(SEQ_A, PROJ)
-assert(timeline_state.get_sequence_id() == SEQ_A,
+assert(timeline_state.get_tab_strip():active_sequence_id() == SEQ_A,
     "precondition: get_sequence_id should return the initialised sequence")
 assert(timeline_state.get_project_id() == PROJ,
     "precondition: get_project_id should return the initialised project")
 
 timeline_state.clear()
 
-assert(timeline_state.get_sequence_id() == nil,
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "after clear(), get_sequence_id must return nil so views render blank; "
-    .. "got " .. tostring(timeline_state.get_sequence_id()))
+    .. "got " .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 assert(timeline_state.get_project_id() == PROJ,
     "clear() must not drop the project identity; got "
     .. tostring(timeline_state.get_project_id()))
@@ -73,9 +73,9 @@ print("  OK: clear leaves project intact, removes sequence reference")
 
 -- 2. Re-entering a sequence after clear uses the same init() path.
 timeline_state.init(SEQ_B, PROJ)
-assert(timeline_state.get_sequence_id() == SEQ_B,
+assert(timeline_state.get_tab_strip():active_sequence_id() == SEQ_B,
     "after init following clear, get_sequence_id must return the new sequence; "
-    .. "got " .. tostring(timeline_state.get_sequence_id()))
+    .. "got " .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 print("  OK: init() after clear() re-enters active-sequence state")
 
 -- 3. Listeners registered before clear must fire when clear runs, so consumers
@@ -93,7 +93,7 @@ print("  OK: listeners are notified on clear")
 -- 4. Repeat clear() remains a no-op — idempotent for cascading delete flows.
 timeline_state.clear()
 timeline_state.clear()
-assert(timeline_state.get_sequence_id() == nil,
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "repeated clear() must remain a no-op after the first clear")
 print("  OK: clear() is idempotent")
 

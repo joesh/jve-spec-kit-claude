@@ -58,7 +58,6 @@ fix:finalize()
 
 -- Stub timeline_state for nudge command
 timeline_state.get_project_id = function() return layout.project_id end
-timeline_state.get_sequence_id = function() return layout.sequence_id end
 timeline_state.reload_clips = function() end
 timeline_state.set_playhead_position = function() end
 timeline_state.capture_viewport = function()

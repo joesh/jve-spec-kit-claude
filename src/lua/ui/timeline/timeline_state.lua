@@ -506,7 +506,6 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     -- array twice — bulk_shifts in particular would clamp to zero on the
     -- second pass and trip the NSF assert. Non-displayed targets keep the
     -- per-tab write below (the BRE bug-fix path).
-    local tab_changed = false
 
     -- Displayed-tab legacy mirror to data.state. The renderer / selection /
     -- gap-recompute machinery still reads from data.state today; 1.3b
@@ -533,7 +532,7 @@ local function apply_mutations(sequence_or_mutations, maybe_mutations, persist_c
     -- didn't change). Mutate THIS tab's cache directly — the BRE bug-fix
     -- path. The displayed branch above skips this because the legacy
     -- mirror + sync handle it; here there's no legacy mirror to lean on.
-    tab_changed = target_tab:apply_mutations(mutations)
+    local tab_changed = target_tab:apply_mutations(mutations)
     Signals.emit("timeline_mutations_applied", mutations, tab_changed)
     return tab_changed
 end

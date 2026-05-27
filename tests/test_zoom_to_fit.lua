@@ -69,7 +69,7 @@ cmd:set_parameter("sequence_start_frame", 100)
 local r = command_manager.execute(cmd)
 assert(r and r.success, "Insert failed: " .. tostring(r and r.error_message))
 
-local clip_a = timeline_state.get_clip_by_id("clip_a")
+local clip_a = timeline_state.get_tab_strip():clip_by_id("clip_a")
 assert(clip_a, "clip_a must exist")
 local content_start = clip_a.sequence_start
 local content_end = content_start + clip_a.duration
@@ -144,7 +144,7 @@ print("  PASS: bad inputs assert with actionable messages")
 print("\nTest 3: Gap clips don't inflate bounds")
 
 -- V2 has no media — only gap clips. These should NOT affect zoom-to-fit.
-local all_clips = timeline_state.get_clips()
+local all_clips = timeline_state.get_tab_strip():displayed_clips()
 local gap_count = 0
 for _, c in ipairs(all_clips) do
     if c.clip_kind == "gap" then gap_count = gap_count + 1 end

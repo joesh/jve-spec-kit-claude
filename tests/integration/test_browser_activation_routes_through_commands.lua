@@ -2,7 +2,7 @@
 -- / OpenSequenceInTimeline (019 T006). Replaces a call-spy test that stubbed
 -- source_viewer + timeline_panel + focus_manager to record dispatch
 -- invocations. Real bindings observe via the actual state these commands
--- mutate: source_monitor.sequence_id, timeline_state.get_sequence_id(),
+-- mutate: source_monitor.sequence_id, timeline_state.get_tab_strip():active_sequence_id(),
 -- focus_manager.get_focused_panel().
 --
 -- Contracts under test:
@@ -94,7 +94,7 @@ print("  PASS source_monitor.sequence_id = master_clip")
 print("-- (2) OpenSequenceInTimeline --")
 timeline_state.init("seq_other", "proj_X")
 focus_manager.set_focused_panel("project_browser")
-assert(timeline_state.get_sequence_id() == "seq_other",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seq_other",
     "fixture: timeline_state must start on seq_other before scenario 2")
 
 local r2 = command_manager.execute_interactive("OpenSequenceInTimeline", {
@@ -103,9 +103,9 @@ local r2 = command_manager.execute_interactive("OpenSequenceInTimeline", {
 })
 assert(r2 and r2.success, "OpenSequenceInTimeline must succeed: "
     .. tostring(r2 and r2.error_message))
-assert(timeline_state.get_sequence_id() == "seq_main", string.format(
+assert(timeline_state.get_tab_strip():active_sequence_id() == "seq_main", string.format(
     "timeline_state must target seq_main after dispatch; got %s",
-    tostring(timeline_state.get_sequence_id())))
+    tostring(timeline_state.get_tab_strip():active_sequence_id())))
 assert(focus_manager.get_focused_panel() == "timeline", string.format(
     "OpenSequenceInTimeline must focus timeline panel; got %s",
     tostring(focus_manager.get_focused_panel())))

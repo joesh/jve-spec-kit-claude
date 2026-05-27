@@ -93,7 +93,7 @@ local function render_label(clip)
 end
 
 local function get_cached_clip()
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == "c1" then return c end
     end
     return nil

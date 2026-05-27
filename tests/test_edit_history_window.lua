@@ -101,7 +101,7 @@ insert_clip(conn2, "c1", 0, 100)
 timeline_state.reload_clips("seq")
 
 -- Execute a single undoable command
-local c1 = timeline_state.get_clip_by_id("c1")
+local c1 = timeline_state.get_tab_strip():clip_by_id("c1")
 assert(c1, "c1 should exist")
 timeline_state.set_selection({c1})
 local result = command_manager.execute("DeleteSelection", {
@@ -236,7 +236,7 @@ insert_clip(conn7, "b2", 200, 200, "v1")
 timeline_state.reload_clips("seq")
 
 -- Command A: delete b1
-local b1 = timeline_state.get_clip_by_id("b1")
+local b1 = timeline_state.get_tab_strip():clip_by_id("b1")
 assert(b1, "b1 should exist")
 timeline_state.set_selection({b1})
 result = command_manager.execute("DeleteSelection", {
@@ -246,7 +246,7 @@ assert(result.success, "delete b1 should succeed")
 
 -- Command B: delete b2
 timeline_state.reload_clips("seq")
-local b2 = timeline_state.get_clip_by_id("b2")
+local b2 = timeline_state.get_tab_strip():clip_by_id("b2")
 assert(b2, "b2 should exist after deleting b1")
 timeline_state.set_selection({b2})
 result = command_manager.execute("DeleteSelection", {
@@ -260,7 +260,7 @@ assert(undo7.success, "undo b2 should succeed")
 
 -- Command C: delete b2 again (creates new branch from A)
 timeline_state.reload_clips("seq")
-b2 = timeline_state.get_clip_by_id("b2")
+b2 = timeline_state.get_tab_strip():clip_by_id("b2")
 assert(b2, "b2 should reappear after undo")
 timeline_state.set_selection({b2})
 result = command_manager.execute("DeleteSelection", {

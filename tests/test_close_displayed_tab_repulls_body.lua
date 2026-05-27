@@ -89,7 +89,7 @@ assert(timeline_state.get_displayed_tab_id() == "rec",
 
 -- Verify rec's body content: 1 real clip.
 do
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local real = 0
     for _, c in ipairs(clips) do
         if not c.is_gap then real = real + 1 end
@@ -104,7 +104,7 @@ timeline_state.activate_displayed("master_a038")
 assert(timeline_state.get_displayed_tab_id() == "master_a038",
     "after activate: displayed must be master_a038")
 do
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local virtual = 0
     for _, c in ipairs(clips) do
         if c.is_master_virtual then virtual = virtual + 1 end
@@ -124,7 +124,7 @@ assert(timeline_state.get_displayed_tab_id() == "rec", string.format(
     tostring(timeline_state.get_displayed_tab_id())))
 
 do
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local real, virtual = 0, 0
     for _, c in ipairs(clips) do
         if c.is_master_virtual then virtual = virtual + 1

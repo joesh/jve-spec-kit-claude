@@ -72,7 +72,7 @@ assert(clip_id ~= nil and clip_id ~= "", "clip create failed")
 timeline_state.reload_clips(seq_id)
 ui.pump(50)
 
-local loaded = assert(timeline_state.get_clip_by_id(clip_id),
+local loaded = assert(timeline_state.get_tab_strip():clip_by_id(clip_id),
     "clip not loaded into timeline_state")
 assert(loaded.name == ORIGINAL, "clip name setup mismatch")
 
@@ -118,7 +118,7 @@ local ok, err = clip_insp:set("name", { value = EDITED, property_type = "STRING"
 assert(ok, "ClipInspectable:set failed: " .. tostring(err))
 ui.pump(50)
 
-assert(timeline_state.get_clip_by_id(clip_id).name == EDITED,
+assert(timeline_state.get_tab_strip():clip_by_id(clip_id).name == EDITED,
     "model must reflect the edit")
 assert_selected("after ClipInspectable:set")
 
@@ -131,18 +131,18 @@ assert(undo_result.success,
     "undo failed: " .. tostring(undo_result.error_message))
 ui.pump(50)
 
-assert(timeline_state.get_clip_by_id(clip_id).name == ORIGINAL,
+assert(timeline_state.get_tab_strip():clip_by_id(clip_id).name == ORIGINAL,
     "model must revert on undo")
 assert_selected("after undo")
 
 -- In production the undo's selection-restore broadcast rebuilds the
 -- inspector's inspectables from the current clip refs. Mirror that here.
-assert(inspectable_for(timeline_state.get_clip_by_id(clip_id)):get("name") == ORIGINAL,
+assert(inspectable_for(timeline_state.get_tab_strip():clip_by_id(clip_id)):get("name") == ORIGINAL,
     "fresh inspectable must report the reverted value")
 
 -- An inspectable held across content_changed (not rebuilt) must drop
 -- metadata_overrides on refresh() so the model wins on subsequent reads.
-local stale = inspectable_for(timeline_state.get_clip_by_id(clip_id))
+local stale = inspectable_for(timeline_state.get_tab_strip():clip_by_id(clip_id))
 stale.metadata_overrides["name"] = "ShadowValue"
 assert(stale:get("name") == "ShadowValue",
     "pre-condition: override should shadow before refresh")

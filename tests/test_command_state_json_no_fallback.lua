@@ -71,8 +71,8 @@ command_manager.init('seq1', 'proj1')
 if timeline_state.reload_clips then timeline_state.reload_clips("seq1") end
 
 -- Select clips via real timeline_state
-local c1 = timeline_state.get_clip_by_id("clip1")
-local c2 = timeline_state.get_clip_by_id("clip2")
+local c1 = timeline_state.get_tab_strip():clip_by_id("clip1")
+local c2 = timeline_state.get_tab_strip():clip_by_id("clip2")
 assert(c1, "clip1 should exist in timeline cache")
 assert(c2, "clip2 should exist in timeline cache")
 timeline_state.set_selection({c1, c2})

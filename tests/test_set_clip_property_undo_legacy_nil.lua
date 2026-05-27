@@ -158,7 +158,7 @@ assert(undo_result.success, string.format(
 -- ----------------------------------------------------------------------
 print("Check 2: clip.duration remains 156 (current value retained)")
 local function get_cached_duration()
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == "c1" then return c.duration end
     end
     return nil

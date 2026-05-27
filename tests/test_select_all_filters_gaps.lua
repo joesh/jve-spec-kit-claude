@@ -64,7 +64,7 @@ INSERT INTO clips (id, project_id, track_id, sequence_id, owner_sequence_id, nam
 command_manager.init('seq1', 'proj1')
 
 -- Verify gaps were generated (gap between clip_a and clip_b)
-local all_clips = timeline_state.get_clips()
+local all_clips = timeline_state.get_tab_strip():displayed_clips()
 local gap_count = 0
 local media_count = 0
 for _, c in ipairs(all_clips) do

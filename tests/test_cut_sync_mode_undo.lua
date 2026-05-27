@@ -42,7 +42,7 @@ print("=== test_cut_sync_mode_undo.lua ===")
 -- The UI renders from clip_state, NOT from the DB — this catches bugs
 -- where DB is correct but the renderer sees stale/wrong data.
 local function inmem_clips_on_track(track_id)
-    local list = timeline_state.get_track_clip_index(track_id) or {}
+    local list = timeline_state.get_tab_strip():track_clip_index(track_id) or {}
     local out = {}
     for _, c in ipairs(list) do
         if not c.is_gap then

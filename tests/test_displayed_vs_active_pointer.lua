@@ -111,7 +111,7 @@ assert(timeline_state.get_active_sequence_id() == "rec1", string.format(
 assert(timeline_state.get_displayed_tab_id() == "rec1", string.format(
     "FAIL: displayed_tab_id=%s, expected rec1",
     tostring(timeline_state.get_displayed_tab_id())))
-assert(timeline_state.get_sequence_id() == "rec1",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "rec1",
     "FAIL: get_sequence_id() backward-compat alias must still work")
 print("  active=rec1, displayed=rec1 — OK")
 
@@ -206,7 +206,7 @@ timeline_state.switch_to_source_tab("src_seq")
 
 assert(timeline_state.get_displayed_tab_id() == "src_seq",
     "FAIL: precondition — source tab should be displayed")
-assert(timeline_state.get_sequence_id() == "rec1",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "rec1",
     "FAIL: get_sequence_id() must return Record seq while Source tab is displayed")
 assert(timeline_state.get_active_sequence_id() == "rec1",
     "FAIL: get_active_sequence_id() must return Record seq while Source tab is displayed")

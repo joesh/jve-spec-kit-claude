@@ -95,9 +95,9 @@ assert(not replay_invoked, "Undoing ImportFCP7XML should skip replay_events")
 
 -- Timeline should have been refreshed (init counts as a reload in terms of data freshness)
 -- With the real state, undo calls timeline_state.init(pre_import_seq) which fully reloads
-assert(timeline_state.get_sequence_id() == "default_sequence",
+assert(timeline_state.get_tab_strip():active_sequence_id() == "default_sequence",
     string.format("Timeline should restore to default sequence after undo (got %s)",
-        tostring(timeline_state.get_sequence_id())))
+        tostring(timeline_state.get_tab_strip():active_sequence_id())))
 
 Signals.disconnect(reload_conn)
 

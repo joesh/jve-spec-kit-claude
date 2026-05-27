@@ -160,7 +160,7 @@ end
 -- Returns clip_a (left), clip_b (right), or nil if none found.
 local function find_adjacent_pair(track_id, min_headroom)
     min_headroom = min_headroom or 10
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local track_clips = {}
     for _, c in ipairs(clips) do
         if c.track_id == track_id and not c.is_gap then
@@ -200,7 +200,7 @@ end
 
 --- Find two clips separated by a gap on a track.
 local function find_gapped_pair(track_id)
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     local track_clips = {}
     for _, c in ipairs(clips) do
         if c.track_id == track_id and not c.is_gap then
@@ -238,7 +238,7 @@ run_test("roll_on_v1_doesnt_shift_downstream", function()
     assert(clip_a and clip_b, "No adjacent clip pair found on V1")
 
     -- Find a downstream clip to verify it doesn't move
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
@@ -307,7 +307,7 @@ run_test("roll_on_audio_doesnt_shift_downstream", function()
     assert(clip_a and clip_b, "No adjacent clip pair found on A3")
 
     -- Find downstream
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == A3_TRACK and not c.is_gap
@@ -365,7 +365,7 @@ run_test("ripple_on_v1_shifts_downstream", function()
     local clip_a, clip_b = find_adjacent_pair(V1_TRACK)
     assert(clip_a and clip_b, "No adjacent clip pair on V1")
 
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
@@ -419,7 +419,7 @@ run_test("roll_vs_ripple_produce_different_results", function()
     local clip_a, clip_b = find_adjacent_pair(V1_TRACK)
     assert(clip_a and clip_b, "No adjacent pair on V1")
 
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local downstream = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap
@@ -554,7 +554,7 @@ end)
 
 run_test("split_clip_preserves_coverage", function()
     -- Find a clip long enough to split
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local target = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap and c.duration > 10 then
@@ -600,7 +600,7 @@ end)
 -- =========================================================================
 
 run_test("toggle_clip_enabled", function()
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     local target = nil
     for _, c in ipairs(all_clips) do
         if c.track_id == V1_TRACK and not c.is_gap then
@@ -638,7 +638,7 @@ end)
 -- =========================================================================
 
 run_test("nudge_clip_position", function()
-    local all_clips = timeline_state.get_clips()
+    local all_clips = timeline_state.get_tab_strip():displayed_clips()
     -- Find a clip that's NOT at position 0 (so we can nudge left)
     local target = nil
     for _, c in ipairs(all_clips) do

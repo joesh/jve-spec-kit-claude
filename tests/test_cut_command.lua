@@ -117,8 +117,8 @@ end
 print("=== Cut Command Tests ===\n")
 
 -- Test 1: Cut deletes selected clips
-local clip_a = timeline_state.get_clip_by_id("clip_a")
-local clip_c = timeline_state.get_clip_by_id("clip_c")
+local clip_a = timeline_state.get_tab_strip():clip_by_id("clip_a")
+local clip_c = timeline_state.get_tab_strip():clip_by_id("clip_c")
 assert(clip_a, "clip_a should exist in timeline cache")
 assert(clip_c, "clip_c should exist in timeline cache")
 timeline_state.set_selection({clip_a, clip_c})

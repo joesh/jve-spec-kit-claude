@@ -296,9 +296,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         local active_sequence_id = command_helper.resolve_active_sequence_id(nil, timeline_state)
-        local timeline_track_cache_allowed = timeline_state
-            and timeline_state.get_clips_for_track
-            and active_sequence_id
+        local timeline_track_cache_allowed = active_sequence_id
             and active_sequence_id == sequence_id
 
         for _, track_id in ipairs(track_ids) do
@@ -356,8 +354,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
                 local processed = false
                 if timeline_track_cache_allowed then
-                    local ok, track_clips = pcall(timeline_state.get_clips_for_track, track_id)
-                    if ok and track_clips and #track_clips > 0 then
+                    local track_clips = timeline_state.get_tab_strip():clips_for_track(track_id)
+                    if track_clips and #track_clips > 0 then
                         processed = true
                         for _, entry in ipairs(track_clips) do
                             if not deleted_lookup[entry.id] then

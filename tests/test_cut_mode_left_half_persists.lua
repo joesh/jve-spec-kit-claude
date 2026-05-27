@@ -133,7 +133,7 @@ print(string.format("  V1 right half OK: id=%s ts=%d dur=%d", right_id, right_ts
 -- hydrate it from the source clip.
 local timeline_state = require("ui.timeline.timeline_state")
 local right_in_state
-for _, c in ipairs(timeline_state.get_track_clip_index("trk_v1") or {}) do
+for _, c in ipairs(timeline_state.get_tab_strip():track_clip_index("trk_v1") or {}) do
     if c.id == right_id then right_in_state = c; break end
 end
 assert(right_in_state, "FAIL: V1 right half missing from clip_state")

@@ -136,7 +136,7 @@ print("✓ 1. No selection → all clips at playhead")
 
 -- Helper: get clip object from timeline state by ID
 local function get_ts_clip(clip_id)
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if c.id == clip_id then return c end
     end
     error("clip not found in timeline state: " .. clip_id)

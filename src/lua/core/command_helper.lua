@@ -100,13 +100,13 @@ function M.resolve_clips_at_playhead()
     local target_clips
 
     if selected and #selected > 0 then
-        target_clips = timeline_state.get_clips_at_time(playhead, selected)
+        target_clips = timeline_state.get_tab_strip():clips_at_time(playhead, selected)
         if #target_clips == 0 then
             -- Selection doesn't intersect playhead — fall back to all clips
-            target_clips = timeline_state.get_clips_at_time(playhead)
+            target_clips = timeline_state.get_tab_strip():clips_at_time(playhead)
         end
     else
-        target_clips = timeline_state.get_clips_at_time(playhead)
+        target_clips = timeline_state.get_tab_strip():clips_at_time(playhead)
     end
 
     return target_clips, playhead

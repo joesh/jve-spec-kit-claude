@@ -26,7 +26,7 @@ layout:init_timeline_state()
 -- Gap clip ID: gap_<track_id>_0
 local gap_id = layout:gap_id("v1", 0)
 -- Verify gap clip exists in timeline state
-local gap_clip = timeline_state.get_clip_by_id(gap_id)
+local gap_clip = timeline_state.get_tab_strip():clip_by_id(gap_id)
 assert(gap_clip, "Gap clip should exist after deleting v1_left")
 
 local width, height = 1600, 320

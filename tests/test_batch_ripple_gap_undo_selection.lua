@@ -29,7 +29,6 @@ timeline_state.normalize_edge_selection = function(edges) return edges end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.get_selected_edges = function() return current_edges or {} end
 timeline_state.get_project_id = function() return "default_project" end
-timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.get_sequence_frame_rate = function() return {fps_numerator = 30, fps_denominator = 1} end
 timeline_state.reload_clips = function() end
 timeline_state.consume_mutation_failure = function() return nil end

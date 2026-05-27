@@ -206,6 +206,55 @@ function TimelineTabStrip:displayed_clips()
     return displayed.cache.clips
 end
 
+--- Live track list of the displayed tab. Empty list when no tab is displayed.
+function TimelineTabStrip:displayed_tracks()
+    local displayed = self.displayed_tab
+    if not displayed then return {} end
+    return displayed.cache.tracks
+end
+
+--- Clip lookup on the displayed tab. Returns nil if no tab displayed or
+--- clip not present.
+function TimelineTabStrip:clip_by_id(clip_id)
+    local displayed = self.displayed_tab
+    if not displayed then return nil end
+    return displayed:get_clip_by_id(clip_id)
+end
+
+--- Per-track clip list (sorted) for the displayed tab. Returns a COPY so
+--- callers may iterate/sort safely. Empty list when no tab displayed or
+--- track has no clips.
+function TimelineTabStrip:clips_for_track(track_id)
+    local displayed = self.displayed_tab
+    if not displayed then return {} end
+    local list = displayed:get_track_clip_index(track_id)
+    if not list then return {} end
+    local copy = {}
+    for _, c in ipairs(list) do table.insert(copy, c) end
+    return copy
+end
+
+--- Raw per-track clip index (sorted clip list, table reference — do NOT mutate).
+--- Returns nil when no tab displayed or track is unknown.
+function TimelineTabStrip:track_clip_index(track_id)
+    local displayed = self.displayed_tab
+    if not displayed then return nil end
+    return displayed:get_track_clip_index(track_id)
+end
+
+--- Clips on the displayed tab that span the given timeline position. When
+--- candidate_clips is supplied, filter only those (callers pre-narrow the
+--- search set, e.g. to a selection). Empty list when no tab is displayed.
+function TimelineTabStrip:clips_at_time(time_value, candidate_clips)
+    if candidate_clips == nil then
+        local displayed = self.displayed_tab
+        if not displayed then return {} end
+        candidate_clips = displayed.cache.clips
+    end
+    local clips = require("ui.timeline.state.clip_state")
+    return clips.get_at_time(time_value, candidate_clips)
+end
+
 function TimelineTabStrip:get_source_tab()
     return self.source_tab
 end

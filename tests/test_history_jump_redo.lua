@@ -76,7 +76,7 @@ local new_clip_id = cmd_obj.parameters.created_clip_ids
 assert(new_clip_id, "Insert should record created_clip_ids[1]")
 
 -- Select the clip and Cut it (recorded as command seq=2+)
-local clip = timeline_state.get_clip_by_id(new_clip_id)
+local clip = timeline_state.get_tab_strip():clip_by_id(new_clip_id)
 assert(clip, "Inserted clip must be in timeline cache")
 timeline_state.set_selection({clip})
 

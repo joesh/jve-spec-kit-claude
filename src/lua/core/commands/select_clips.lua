@@ -69,7 +69,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         end
 
         -- Resolve the target clip (for anchor tracking and Shift range)
-        local target_clip = target_ids[1] and timeline_state.get_clip_by_id(target_ids[1])
+        local target_clip = target_ids[1] and timeline_state.get_tab_strip():clip_by_id(target_ids[1])
 
         -- Shift modifier: range select (box from anchor to target)
         if modifiers.shift and selection_anchor and target_clip then
@@ -157,7 +157,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 -- Add target clips that aren't already selected
                 for _, id in ipairs(target_ids) do
                     if not current_set[id] then
-                        local clip = timeline_state.get_clip_by_id(id)
+                        local clip = timeline_state.get_tab_strip():clip_by_id(id)
                         if clip then
                             table.insert(new_selection, clip)
                         end
@@ -171,7 +171,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             else
                 -- Replace selection with targets
                 for _, id in ipairs(target_ids) do
-                    local clip = timeline_state.get_clip_by_id(id)
+                    local clip = timeline_state.get_tab_strip():clip_by_id(id)
                     if clip then
                         table.insert(new_selection, clip)
                     end

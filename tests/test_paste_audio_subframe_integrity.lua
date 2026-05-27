@@ -109,7 +109,6 @@ local orig = {
 }
 timeline_state.get_selected_clips = function() return { orig } end
 timeline_state.get_project_id     = function() return "proj" end
-timeline_state.get_sequence_id    = function() return "seq" end
 timeline_state.get_mark_in        = function() return nil end
 timeline_state.get_mark_out       = function() return nil end
 focus_manager.set_focused_panel("timeline")

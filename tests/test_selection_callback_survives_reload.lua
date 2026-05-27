@@ -85,7 +85,7 @@ selection_state.set_on_selection_changed(function(selected_clips)
 end)
 
 -- Baseline: selecting a clip broadcasts its id.
-local clips = timeline_state.get_clips()
+local clips = timeline_state.get_tab_strip():displayed_clips()
 local c1 = nil
 local c2 = nil
 for _, c in ipairs(clips) do

@@ -56,7 +56,6 @@ assert(db:exec(seed))
 
 -- Minimal timeline_state stubs (command_manager expects these callbacks)
 timeline_state.get_project_id = function() return "default_project" end
-timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.reload_clips = function() end
 timeline_state.set_playhead_position = function(_) end
 timeline_state.capture_viewport = function() return {start_value = 0, duration_value = 3000, timebase_type = "video_frames", timebase_rate = 1000.0} end

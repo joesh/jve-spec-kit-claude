@@ -54,12 +54,12 @@ local cm = command_manager
 -- Capture pre-group in-memory state
 ----------------------------------------------------------------
 
-local clip_a_before = timeline_state.get_clip_by_id("clip_a")
+local clip_a_before = timeline_state.get_tab_strip():clip_by_id("clip_a")
 assert(clip_a_before, "clip_a must exist in timeline_state")
 assert(clip_a_before.sequence_start == 100,
     string.format("clip_a initial start must be 100, got %s", tostring(clip_a_before.sequence_start)))
 
-local clip_b_before = timeline_state.get_clip_by_id("clip_b")
+local clip_b_before = timeline_state.get_tab_strip():clip_by_id("clip_b")
 assert(clip_b_before, "clip_b must exist in timeline_state")
 assert(clip_b_before.sequence_start == 700,
     string.format("clip_b initial start must be 700, got %s", tostring(clip_b_before.sequence_start)))
@@ -80,7 +80,7 @@ local nudge_result = cm.execute("Nudge", {
 assert(nudge_result.success, "Nudge must succeed: " .. tostring(nudge_result.error_message))
 
 -- Verify in-memory mutation was applied (clip_a moved)
-local clip_a_mid = timeline_state.get_clip_by_id("clip_a")
+local clip_a_mid = timeline_state.get_tab_strip():clip_by_id("clip_a")
 assert(clip_a_mid.sequence_start == 150,
     string.format("After nudge, clip_a should be at 150, got %s", tostring(clip_a_mid.sequence_start)))
 
@@ -104,14 +104,14 @@ cm.end_undo_group()
 -- Verify: in-memory state restored to pre-group state
 ----------------------------------------------------------------
 
-local clip_a_after = timeline_state.get_clip_by_id("clip_a")
+local clip_a_after = timeline_state.get_tab_strip():clip_by_id("clip_a")
 assert(clip_a_after, "clip_a must still exist after rollback")
 assert(clip_a_after.sequence_start == 100,
     string.format(
         "MUTATION ROLLBACK: clip_a must be at original 100 after group failure, got %s (DB/memory divergence!)",
         tostring(clip_a_after.sequence_start)))
 
-local clip_b_after = timeline_state.get_clip_by_id("clip_b")
+local clip_b_after = timeline_state.get_tab_strip():clip_by_id("clip_b")
 assert(clip_b_after, "clip_b must still exist after rollback")
 assert(clip_b_after.sequence_start == 700,
     string.format("clip_b must remain at 700 after group failure, got %s", tostring(clip_b_after.sequence_start)))
@@ -138,7 +138,7 @@ local post_result = cm.execute("Nudge", {
 })
 assert(post_result.success, "Command after rollback must succeed: " .. tostring(post_result.error_message))
 
-local clip_b_post = timeline_state.get_clip_by_id("clip_b")
+local clip_b_post = timeline_state.get_tab_strip():clip_by_id("clip_b")
 assert(clip_b_post.sequence_start == 725,
     string.format("clip_b should be at 725 after post-rollback nudge, got %s", tostring(clip_b_post.sequence_start)))
 
@@ -148,7 +148,7 @@ assert(cm.can_undo() == true, "can_undo() must be true after post-rollback comma
 local undo_result = cm.undo()
 assert(undo_result.success, "Undo after rollback must succeed")
 
-local clip_b_undone = timeline_state.get_clip_by_id("clip_b")
+local clip_b_undone = timeline_state.get_tab_strip():clip_by_id("clip_b")
 assert(clip_b_undone.sequence_start == 700,
     string.format("clip_b must return to 700 after undo, got %s", tostring(clip_b_undone.sequence_start)))
 

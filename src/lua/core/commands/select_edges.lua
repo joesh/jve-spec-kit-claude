@@ -110,7 +110,7 @@ local function expand_to_linked_edges(edges, db)
         end
 
         -- Get the clip to find its linked clips
-        local clip = timeline_state.get_clip_by_id(edge.clip_id)
+        local clip = timeline_state.get_tab_strip():clip_by_id(edge.clip_id)
         if not clip then
             goto continue_edge
         end
@@ -131,10 +131,10 @@ local function expand_to_linked_edges(edges, db)
         -- For each linked clip, "replay" the same boundary selection on its track
         for _, link_info in ipairs(link_group) do
             if link_info.enabled and link_info.clip_id ~= edge.clip_id then
-                local linked_clip = timeline_state.get_clip_by_id(link_info.clip_id)
+                local linked_clip = timeline_state.get_tab_strip():clip_by_id(link_info.clip_id)
                 if linked_clip and linked_clip.track_id then
                     -- Get all clips on the linked clip's track
-                    local track_clips = timeline_state.get_clips_for_track(linked_clip.track_id)
+                    local track_clips = timeline_state.get_tab_strip():clips_for_track(linked_clip.track_id)
                     if track_clips and #track_clips > 0 then
                         -- Use the core boundary selection function
                         local result = edge_picker.select_boundary_edges(

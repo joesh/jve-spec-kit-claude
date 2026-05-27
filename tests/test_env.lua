@@ -344,12 +344,36 @@ end
 -- also expose `get_tab_strip()` returning a strip with `active_sequence_id`
 -- / `displayed_clips` methods (the new src-side API). This helper builds
 -- a minimal strip stub from a plain spec table so test mocks stay readable.
---   { active_sequence_id = "seqA", displayed_clips = {...} }
+--   { active_sequence_id = "seqA", displayed_clips = {...},
+--     displayed_tracks = {...}, clip_by_id = {[id]=clip, ...},
+--     clips_for_track = {[track_id]={clip,...}, ...},
+--     track_clip_index = {[track_id]={clip,...}, ...},
+--     clips_at_time = function(t, candidates) return {...} end }
 function M.make_strip_stub(spec)
     spec = spec or {}
+    local clip_lookup = spec.clip_by_id or {}
+    if not spec.clip_by_id and spec.displayed_clips then
+        -- Derive lookup from the clip list so tests that only supply
+        -- displayed_clips automatically get clip_by_id() too.
+        for _, c in ipairs(spec.displayed_clips) do
+            if c.id then clip_lookup[c.id] = c end
+        end
+    end
     return {
         active_sequence_id = function() return spec.active_sequence_id end,
         displayed_clips    = function() return spec.displayed_clips or {} end,
+        displayed_tracks   = function() return spec.displayed_tracks or {} end,
+        clip_by_id         = function(_, id) return clip_lookup[id] end,
+        clips_for_track    = function(_, track_id)
+            return (spec.clips_for_track or {})[track_id] or {}
+        end,
+        track_clip_index   = function(_, track_id)
+            return (spec.track_clip_index or spec.clips_for_track or {})[track_id]
+        end,
+        clips_at_time      = function(_, t, candidates)
+            if spec.clips_at_time then return spec.clips_at_time(t, candidates) end
+            return {}
+        end,
     }
 end
 

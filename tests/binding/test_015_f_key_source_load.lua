@@ -154,7 +154,7 @@ check("strip contains the record tab", has_record_tab, "")
 check("strip contains the master/source tab", has_master_tab, "")
 
 -- The timeline view must show master content — virtual clips synthesized from media_refs.
-local view_clips = timeline_state.get_clips()
+local view_clips = timeline_state.get_tab_strip():displayed_clips()
 local virtuals = 0
 for _, c in ipairs(view_clips) do if c.is_master_virtual then virtuals = virtuals + 1 end end
 check("timeline view shows 2 virtual clips (V + A media_refs)",

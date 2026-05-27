@@ -133,11 +133,11 @@ print("-- (c) activating a master tab populates the timeline view from media_ref
 local cmd_mgr = require("core.command_manager")
 cmd_mgr.init("rec", "proj")
 timeline_state.init("rec", "proj")
-assert(#timeline_state.get_clips() == 0,
+assert(#timeline_state.get_tab_strip():displayed_clips() == 0,
     "setup: record sequence has no clips initially")
 
 timeline_state.activate_displayed("mst_a")
-local view_clips = timeline_state.get_clips()
+local view_clips = timeline_state.get_tab_strip():displayed_clips()
 local virtual_count = 0
 for _, c in ipairs(view_clips) do
     if c.is_master_virtual then virtual_count = virtual_count + 1 end
@@ -150,7 +150,7 @@ print("  master tab timeline view shows media_refs as virtual clips — OK")
 -- ── (d) Switching back to record loads real clip rows again ──
 print("-- (d) switching back to record restores record-tab content --")
 timeline_state.activate_displayed("rec")
-local back_clips = timeline_state.get_clips()
+local back_clips = timeline_state.get_tab_strip():displayed_clips()
 for _, c in ipairs(back_clips) do
     assert(not c.is_master_virtual,
         "FAIL: record tab timeline view must not contain virtual master clips")

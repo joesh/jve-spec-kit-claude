@@ -108,7 +108,7 @@ r = command_manager.execute("RenameItem", {
 assert(r and r.success, "RenameItem failed: " .. tostring(r and r.error_message))
 
 -- Verify the rename took effect in the cache
-local renamed_clip = timeline_state.get_clip_by_id(clip_a_id)
+local renamed_clip = timeline_state.get_tab_strip():clip_by_id(clip_a_id)
 assert(renamed_clip, "clip_a must still be in cache after rename")
 assert(renamed_clip.name == "Renamed MC",
     string.format("clip name should be 'Renamed MC', got '%s'", tostring(renamed_clip.name)))
@@ -120,7 +120,7 @@ reset_reload_tracking()
 r = command_manager.undo()
 assert(r and r.success, "Undo RenameItem failed: " .. tostring(r and r.error_message))
 
-local reverted_clip = timeline_state.get_clip_by_id(clip_a_id)
+local reverted_clip = timeline_state.get_tab_strip():clip_by_id(clip_a_id)
 assert(reverted_clip, "clip_a must still be in cache after undo rename")
 
 assert_no_reload("RenameItem undoer")
@@ -144,7 +144,7 @@ r = command_manager.execute("DeleteMasterClip", {
 assert(r and r.success, "DeleteMasterClip failed: " .. tostring(r and r.error_message))
 
 -- clip_a should be gone from cache
-local deleted = timeline_state.get_clip_by_id(clip_a_id)
+local deleted = timeline_state.get_tab_strip():clip_by_id(clip_a_id)
 assert(not deleted, "clip_a should be deleted from cache")
 
 assert_no_reload("DeleteMasterClip executor")
@@ -155,7 +155,7 @@ r = command_manager.undo()
 assert(r and r.success, "Undo DeleteMasterClip failed: " .. tostring(r and r.error_message))
 
 -- clip_a should be back
-local restored = timeline_state.get_clip_by_id(clip_a_id)
+local restored = timeline_state.get_tab_strip():clip_by_id(clip_a_id)
 assert(restored, "clip_a must be back in cache after undo")
 
 assert_no_reload("DeleteMasterClip undoer")

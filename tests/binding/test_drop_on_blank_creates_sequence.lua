@@ -68,14 +68,14 @@ local clip3 = seed_clip("mC", "third_shot.mov", 60)
 
 -- Enter the no-active-sequence state by closing the only tab.
 timeline_panel.close_tab(seed_seq_id)
-assert(timeline_state.get_sequence_id() == nil,
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil,
     "pre: close_tab must leave state in no-active-sequence; got "
-        .. tostring(timeline_state.get_sequence_id()))
+        .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 
 -- ── Case A: drop 3 clips → one new sequence with the compound name ────
 timeline_panel.handle_drop_on_blank_timeline({ clips = { clip1, clip2, clip3 } })
 
-local active_seq_id = timeline_state.get_sequence_id()
+local active_seq_id = timeline_state.get_tab_strip():active_sequence_id()
 assert(active_seq_id and active_seq_id ~= "",
     "post-drop: a new sequence must be active; got "
         .. tostring(active_seq_id))
@@ -113,7 +113,7 @@ assert(v1_media_clips[1].sequence_start == 0
 -- ── Case B: drop ONE existing sequence → opens as tab, no new sequence ──
 -- Return to the blank state.
 timeline_panel.close_tab(active_seq_id)
-assert(timeline_state.get_sequence_id() == nil, "pre-case-B: must be blank again")
+assert(timeline_state.get_tab_strip():active_sequence_id() == nil, "pre-case-B: must be blank again")
 
 local function count_timeline_sequences()
     local stmt = assert(database.get_connection():prepare(
@@ -132,9 +132,9 @@ timeline_panel.handle_drop_on_blank_timeline({
     sequences = { { id = seed_seq_id } },
 })
 
-assert(timeline_state.get_sequence_id() == seed_seq_id,
+assert(timeline_state.get_tab_strip():active_sequence_id() == seed_seq_id,
     "post-case-B: dropped sequence must be active; got "
-        .. tostring(timeline_state.get_sequence_id()))
+        .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
 
 local sequence_count_after = count_timeline_sequences()
 assert(sequence_count_after == sequence_count_before,

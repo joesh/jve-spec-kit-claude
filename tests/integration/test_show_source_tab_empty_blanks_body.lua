@@ -99,7 +99,7 @@ local function reset_to_rec_displayed()
     assert(timeline_state.get_displayed_tab_id() == "rec",
         "fixture: rec must be displayed before invoking command")
     local real = 0
-    for _, c in ipairs(timeline_state.get_clips()) do
+    for _, c in ipairs(timeline_state.get_tab_strip():displayed_clips()) do
         if not c.is_gap then real = real + 1 end
     end
     assert(real == 1, string.format(
@@ -112,7 +112,7 @@ local function assert_blank_after(label)
         "%s: must NOT auto-seed a random master into source_monitor; "
         .. "got sequence_id=%s", label, tostring(source_mon.sequence_id)))
     -- Timeline body blanked (same state as close-last-tab).
-    local clips = timeline_state.get_clips()
+    local clips = timeline_state.get_tab_strip():displayed_clips()
     assert(#clips == 0, string.format(
         "%s: timeline must be blank after empty-source command; got %d clips",
         label, #clips))

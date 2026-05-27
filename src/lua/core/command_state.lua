@@ -206,10 +206,8 @@ function M.restore_selection_from_serialized(clips_json, edges_json, gaps_json, 
     -- Gap clips are in-memory only — look up in timeline_state
     local is_gap = type(clip_id) == "string" and clip_id:find("^gap_")
     if is_gap then
-        if timeline_state.get_clip_by_id then
-            local clip = timeline_state.get_clip_by_id(clip_id)
-            if clip then return clip end
-        end
+        local clip = timeline_state.get_tab_strip():clip_by_id(clip_id)
+        if clip then return clip end
         log.warn("Failed to restore selection for gap clip %s (not in timeline_state)", tostring(clip_id))
         return nil
     end

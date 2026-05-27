@@ -77,7 +77,7 @@ assert(#selected == 2,
 -- Test 2: DeselectAll clears selection
 print("Test 2: DeselectAll clears selection")
 -- Ensure some selection exists first
-timeline_state.set_selection(timeline_state.get_clips())
+timeline_state.set_selection(timeline_state.get_tab_strip():displayed_clips())
 result = command_manager.execute("DeselectAll", { project_id = "default_project" })
 assert(result.success, "DeselectAll should succeed: " .. tostring(result.error_message))
 selected = timeline_state.get_selected_clips()

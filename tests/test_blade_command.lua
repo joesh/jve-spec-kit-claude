@@ -130,7 +130,6 @@ command_manager.init('default_sequence', 'default_project')
 -- Stub timeline state
 timeline_state.get_playhead_position = function() return 0 end
 timeline_state.get_sequence_frame_rate = function() return {fps_numerator=30, fps_denominator=1} end
-timeline_state.get_sequence_id = function() return "default_sequence" end
 timeline_state.get_project_id = function() return "default_project" end
 timeline_state.reload_clips = function(_) end
 
@@ -169,13 +168,13 @@ reset_clips()
 timeline_state.set_selection({})
 timeline_state.set_playhead_position(1000) -- 1000ms = 30 frames
 
--- Stub get_clips_at_time to return mock clips with ID and MS start/dur for test logic (before DB reload?)
--- Wait, execute_batch_split takes clip_ids.
--- get_clips_at_time queries DB/state.
--- I need a real implementation of get_clips_at_time or a better stub.
-timeline_state.get_clips_at_time = function(time_ms, allowed)
+-- 022/1.3d: src code that used to consult timeline_state.get_clips_at_time
+-- now reads via strip:clips_at_time. We stub get_tab_strip to return a
+-- strip-stub whose clips_at_time runs the same DB-backed lookup. Tests
+-- on this file haven't grown the cache hydration plumbing yet, so a
+-- DB-direct query keeps the test independent of the per-tab cache wiring.
+local function db_clips_at_time(time_ms, allowed)
     local results = {}
-    -- Check DB directly
     local conn = database.get_connection()
     local q = conn:prepare("SELECT id, sequence_start_frame, duration_frames FROM clips")
     if q:exec() then
@@ -188,7 +187,6 @@ timeline_state.get_clips_at_time = function(time_ms, allowed)
         end
     end
     q:finalize()
-    -- Apply selection filter if needed (logic skipped for simplicity if allowed is used later)
     if allowed and #allowed > 0 then
         local filtered = {}
         for _, c in ipairs(results) do
@@ -200,8 +198,14 @@ timeline_state.get_clips_at_time = function(time_ms, allowed)
     end
     return results
 end
+timeline_state.get_tab_strip = function()
+    return require("test_env").make_strip_stub({
+        active_sequence_id = "default_sequence",
+        clips_at_time = db_clips_at_time,
+    })
+end
 
-local targets = timeline_state.get_clips_at_time(1000)
+local targets = timeline_state.get_tab_strip():clips_at_time(1000)
 assert(#targets == 2, "Expected two clips under playhead (A and C)")
 local before_count = clip_count()
 execute_batch_split(1000, targets)
@@ -218,7 +222,7 @@ assert(clip_exists_at('track_v2', 1000), "Second segment of clip_c should exist"
 reset_clips()
 timeline_state.set_selection({{id = 'clip_a'}})
 timeline_state.set_playhead_position(1000)
-local selected_targets = timeline_state.get_clips_at_time(1000, {'clip_a'})
+local selected_targets = timeline_state.get_tab_strip():clips_at_time(1000, {'clip_a'})
 assert(#selected_targets == 1, "Only selected clip should be targeted")
 before_count = clip_count()
 execute_batch_split(1000, selected_targets)

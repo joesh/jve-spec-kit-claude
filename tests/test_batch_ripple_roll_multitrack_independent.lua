@@ -66,7 +66,6 @@ timeline_state.pop_viewport_guard = function() end
 timeline_state.get_selected_clips = function() return {} end
 timeline_state.set_selection = function() end
 timeline_state.clear_selection = function() end
-timeline_state.get_sequence_id = function() return "seq" end
 timeline_state.get_project_id = function() return "proj" end
 
 command_manager.init("seq", "proj")

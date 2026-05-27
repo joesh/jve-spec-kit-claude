@@ -26,7 +26,7 @@ assert(clip_to_split, "Expected clip from default layout")
 
 -- Get initial duration from in-memory state
 local clip_id = clip_to_split.id
-local clips_before = timeline_state.get_clips()
+local clips_before = timeline_state.get_tab_strip():displayed_clips()
 local clip_before = nil
 for _, c in ipairs(clips_before) do
     if c.id == clip_id then
@@ -54,7 +54,7 @@ local split_result = command_manager.execute("SplitClip", {
 assert(split_result.success, "SplitClip should succeed: " .. (split_result.error_message or ""))
 
 -- Verify clip was split - original clip now has shorter duration
-local clips_after_split = timeline_state.get_clips()
+local clips_after_split = timeline_state.get_tab_strip():displayed_clips()
 local clip_after_split = nil
 for _, c in ipairs(clips_after_split) do
     if c.id == clip_id then
@@ -74,7 +74,7 @@ local undo_result = command_manager.undo()
 assert(undo_result.success, "Undo should succeed: " .. (undo_result.error_message or ""))
 
 -- REGRESSION: The in-memory clip should have duration restored
-local clips_after_undo = timeline_state.get_clips()
+local clips_after_undo = timeline_state.get_tab_strip():displayed_clips()
 local clip_after_undo = nil
 for _, c in ipairs(clips_after_undo) do
     if c.id == clip_id then
