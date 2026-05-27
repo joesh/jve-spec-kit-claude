@@ -227,64 +227,73 @@ end
 -- decisions remain in core_state.load_displayed_sequence — those interact
 -- with the singleton data.state today and will move per-tab in later
 -- phases (1.4+) when the cache becomes the authoritative source.
+-- Numeric fields required on the sequence row for a load. Frame rate is
+-- validated separately (table, not scalar).
+local REQUIRED_SEQ_NUMERIC_FIELDS = {
+    "start_timecode_frame", "playhead_position",
+    "viewport_start_time", "viewport_duration",
+    "video_scroll_offset", "audio_scroll_offset",
+    "video_audio_split_ratio",
+}
+
+-- Sequence-row fields that copy 1:1 into the tab cache under the same name.
+-- start_timecode_frame is the odd one out — it lands at
+-- cache.sequence_timecode_start_frame and is set explicitly below.
+local SEQ_TO_CACHE_PASSTHROUGH = {
+    "playhead_position",
+    "viewport_start_time", "viewport_duration",
+    "video_scroll_offset", "audio_scroll_offset", "video_audio_split_ratio",
+}
+
+-- Per FR-load: every field listed must be present and numeric on the
+-- sequence row before we touch self.cache. Asserts at the boundary (1.14)
+-- so a corrupt sequence row crashes loudly here instead of producing
+-- half-state downstream.
+local function assert_sequence_row_loadable(seq, sequence_id)
+    assert(type(seq.frame_rate) == "table", string.format(
+        "TimelineTab:load_from_database: seq %s missing frame_rate table",
+        tostring(sequence_id)))
+    assert(seq.frame_rate.fps_numerator and seq.frame_rate.fps_denominator,
+        string.format("TimelineTab:load_from_database: seq %s has NULL frame rate",
+            tostring(sequence_id)))
+    for _, field in ipairs(REQUIRED_SEQ_NUMERIC_FIELDS) do
+        assert(type(seq[field]) == "number", string.format(
+            "TimelineTab:load_from_database: seq %s missing %s",
+            tostring(sequence_id), field))
+    end
+end
+
+local function load_media_clips(db, seq)
+    if seq:is_master() then
+        return db.load_master_virtual_clips(seq.id)
+    end
+    return db.load_clips(seq.id)
+end
+
 function TimelineTab:load_from_database()
     local db = require("core.database")
     local seq = Sequence.load(self.sequence_id)
     assert(seq, string.format(
         "TimelineTab:load_from_database: sequence_id=%s not found",
         tostring(self.sequence_id)))
-    assert(type(seq.frame_rate) == "table",
-        string.format("TimelineTab:load_from_database: seq %s missing frame_rate table",
-            tostring(self.sequence_id)))
-    assert(seq.frame_rate.fps_numerator and seq.frame_rate.fps_denominator,
-        string.format("TimelineTab:load_from_database: seq %s has NULL frame rate",
-            tostring(self.sequence_id)))
-    assert(type(seq.start_timecode_frame) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing start_timecode_frame",
-        tostring(self.sequence_id)))
-    assert(type(seq.playhead_position) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing playhead_position",
-        tostring(self.sequence_id)))
-    assert(type(seq.viewport_start_time) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing viewport_start_time",
-        tostring(self.sequence_id)))
-    assert(type(seq.viewport_duration) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing viewport_duration",
-        tostring(self.sequence_id)))
-    assert(type(seq.video_scroll_offset) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing video_scroll_offset",
-        tostring(self.sequence_id)))
-    assert(type(seq.audio_scroll_offset) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing audio_scroll_offset",
-        tostring(self.sequence_id)))
-    assert(type(seq.video_audio_split_ratio) == "number", string.format(
-        "TimelineTab:load_from_database: seq %s missing video_audio_split_ratio",
-        tostring(self.sequence_id)))
+    assert_sequence_row_loadable(seq, self.sequence_id)
 
     local tracks = db.load_tracks(self.sequence_id)
     apply_persisted_track_heights(tracks, self.sequence_id)
 
-    local media_clips
-    if seq:is_master() then
-        media_clips = db.load_master_virtual_clips(self.sequence_id)
-    else
-        media_clips = db.load_clips(self.sequence_id)
-    end
-
+    local media_clips = load_media_clips(db, seq)
     local merged_clips = clips_with_derived_gaps(tracks, media_clips, seq.frame_rate)
 
-    self.cache.tracks = tracks
-    self.cache.clips = merged_clips
-    self.cache.content_length = clip_geometry.compute_content_length(merged_clips)
-    self.cache.indexes_dirty = true
-    self.cache.sequence_frame_rate = seq.frame_rate
-    self.cache.sequence_timecode_start_frame = seq.start_timecode_frame
-    self.cache.viewport_start_time = seq.viewport_start_time
-    self.cache.viewport_duration = seq.viewport_duration
-    self.cache.video_scroll_offset = seq.video_scroll_offset
-    self.cache.audio_scroll_offset = seq.audio_scroll_offset
-    self.cache.video_audio_split_ratio = seq.video_audio_split_ratio
-    self.cache.playhead_position = seq.playhead_position
+    local cache = self.cache
+    cache.tracks = tracks
+    cache.clips = merged_clips
+    cache.content_length = clip_geometry.compute_content_length(merged_clips)
+    cache.indexes_dirty = true
+    cache.sequence_frame_rate = seq.frame_rate
+    cache.sequence_timecode_start_frame = seq.start_timecode_frame
+    for _, field in ipairs(SEQ_TO_CACHE_PASSTHROUGH) do
+        cache[field] = seq[field]
+    end
 end
 
 -- Rebuild per-tab indexes from cache.clips. Ties broken by clip id
@@ -381,11 +390,36 @@ local function apply_bulk_shift_to_cache(cache, shift)
     return true
 end
 
+-- Mutation update_*_value → clip field, asserted numeric. Next time
+-- an integer field is added to a mutation payload it's a one-line
+-- table entry, not another if-block.
+local NUMERIC_UPDATE_FIELDS = {
+    { src = "start_value",       dst = "sequence_start" },
+    { src = "duration_value",    dst = "duration" },
+    { src = "source_in_value",   dst = "source_in" },
+    { src = "source_out_value",  dst = "source_out" },
+}
+
+local function apply_numeric_updates(clip, update)
+    local changed = false
+    for _, f in ipairs(NUMERIC_UPDATE_FIELDS) do
+        local v = update[f.src]
+        if v and v ~= clip[f.dst] then
+            assert(type(v) == "number", string.format(
+                "TimelineTab:apply_mutations: %s must be integer", f.src))
+            clip[f.dst] = v
+            changed = true
+        end
+    end
+    return changed
+end
+
 local function apply_update_to_cache(cache, update)
     local clip_id = update.clip_id or update.id
     if not clip_id then return false end
     local clip = cache.clip_lookup[clip_id]
     if not clip then return false end
+
     local changed = false
     if update.track_id and update.track_id ~= clip.track_id then
         clip.track_id = update.track_id; changed = true
@@ -396,26 +430,7 @@ local function apply_update_to_cache(cache, update)
                 tostring(clip.id)))
         clip.frame_rate = update.frame_rate
     end
-    if update.start_value and update.start_value ~= clip.sequence_start then
-        assert(type(update.start_value) == "number",
-            "TimelineTab:apply_mutations: start_value must be integer")
-        clip.sequence_start = update.start_value; changed = true
-    end
-    if update.duration_value and update.duration_value ~= clip.duration then
-        assert(type(update.duration_value) == "number",
-            "TimelineTab:apply_mutations: duration_value must be integer")
-        clip.duration = update.duration_value; changed = true
-    end
-    if update.source_in_value and update.source_in_value ~= clip.source_in then
-        assert(type(update.source_in_value) == "number",
-            "TimelineTab:apply_mutations: source_in_value must be integer")
-        clip.source_in = update.source_in_value; changed = true
-    end
-    if update.source_out_value and update.source_out_value ~= clip.source_out then
-        assert(type(update.source_out_value) == "number",
-            "TimelineTab:apply_mutations: source_out_value must be integer")
-        clip.source_out = update.source_out_value; changed = true
-    end
+    if apply_numeric_updates(clip, update) then changed = true end
     if update.enabled ~= nil and update.enabled ~= clip.enabled then
         clip.enabled = update.enabled and true or false; changed = true
     end
