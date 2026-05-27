@@ -143,9 +143,10 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 ### Phase 1.5 — Verify perf win
 - Bench `switch_to_record_tab` between two ~3000-clip record tabs. Should be sub-millisecond. If it still rebuilds, you missed a hook.
 
-### Phase 1.6 — Test + smoke
-- Remove the `switch_to_record_tab` workaround from `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutations.py`.
-- Run full smoke + full `make -j4`.
+### Phase 1.6 — Test + smoke (LANDED)
+- Removed the `switch_to_record_tab` workaround from `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutations.py`. Smoke passes end-to-end (verified `2026-05-26`).
+- Memory cleanup: `todo_test_source_viewer_marks_track_live_clip_mutations.md` marked RESOLVED with root-cause explanation; MEMORY.md index updated.
+- New memory `project_per_tab_timeline_cache.md` documents the contract for future Claudes.
 
 ### Phase 1.7 — Memory + spec updates
 - Update `~/.claude/projects/-Users-joe-Local-jve-spec-kit-claude/memory/todo_test_source_viewer_marks_track_live_clip_mutations.md` — mark resolved + delete TODO entry once the test passes without the workaround.

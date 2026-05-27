@@ -82,26 +82,12 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             "return tostring(require('ui.source_viewer').get_live_clip_id())"),
             "setUp: load_clip did not pin the clip in live-bound mode")
 
-        # WORKAROUND for the timeline_state cache-architecture smell
-        # (see specs/022-per-tab-timeline-cache/plan.md). After
-        # load_clip, `source_loaded_changed` fires →
-        # timeline_panel.lua:1789 listener auto-switches the displayed
-        # timeline tab to the source master. timeline_state then holds
-        # the source master's clip cache, while ctx.sequence_id below
-        # still points at the record (active) sequence. BRE's
-        # build_clip_cache reads from the displayed-keyed cache and
-        # finds no clip with id `clip_id` — its stale-clip-id graceful-
-        # skip path returns success=true with no mutation (the smoke
-        # bug that motivated 022). Switching back to the record tab
-        # restores the cache to the active sequence so BRE can find
-        # its target. This mirrors the real production flow ("load
-        # source, then click back to timeline to edit"). Remove this
-        # block once spec 022 lands per-tab caches — then BRE targeting
-        # active gets active's cache regardless of what's displayed.
-        self.eval(
-            "require('ui.timeline.timeline_state').switch_to_record_tab("
-            f"'{seq_id}')")
-
+        # spec 022 / 1.3a-ii: no workaround needed. BRE's build_clip_cache
+        # reads from the ACTIVE record tab's per-tab cache directly via
+        # strip:find_record_tab_by_sequence_id(ctx.sequence_id), so the
+        # edit lands correctly even while the displayed tab is the source
+        # master (this test's setup loads a clip into source viewer, which
+        # auto-switches displayed to the master).
         before_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")
         before_effective = self.eval_str(
