@@ -101,6 +101,19 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - `TimelineTabStrip.deserialize` does NOT hydrate today — strip persistence is a Phase 2 concern. When Phase 2 wires the DB-backed strip, deserialize will need to call `tab:load_from_database()` for each reconstructed tab. Tracked under Phase 2.
 - Lifecycle invariant pinned by `test_timeline_tab_strip_loads_cache.lua`: **every tab returned by `strip:open_*_tab` has a populated cache.** Later phases (1.3a re-pointing) rely on this so the BRE bug-fix commit can read from `strip:get_active_tab().cache` unconditionally.
 
+### Phase 1.3a-i — Per-tab index infrastructure (empty plumbing)
+- TimelineTab.cache gains `clip_lookup`, `track_clip_index`, `clip_track_positions`, `indexes_dirty` fields parallel to clip_state.lua's module-level vars.
+- `tab:get_clip_by_id`, `tab:get_track_clip_index`, `tab:locate_neighbor`, `tab:invalidate_indexes` methods. Lazy rebuild on first index getter when dirty.
+- `load_from_database` marks indexes dirty so freshly-loaded clips re-index on next access.
+- No writer routes through these yet — that's 1.3a-ii.
+
+### Phase 1.3a-ii — Route apply_mutations through target-tab indexes (BUG FIX)
+- `timeline_state.apply_mutations(sequence_id, mutations, callback)` resolves target tab via `strip:find_record_tab_by_sequence_id(sequence_id)` (or `get_source_tab()` if matching source).
+- Writes go to the target tab's `cache.clips` + indexes — not `data.state` globally.
+- When target IS displayed: `data.state.clips` aliasing keeps legacy readers in sync until 1.3b lands.
+- When target is NOT displayed (e.g., BRE on record while source displayed): writes land in the record's tab cache; data.state untouched. User switching to record sees the result via the tab's already-up-to-date cache instead of a reload.
+- This is the BRE silent-no-op / cross-tab-edit bug fix. Pinned by smoke `test_source_viewer_marks_track_live_clip_mutations.py` once 1.6 removes its workaround.
+
 ### Phase 1.3 — Migrate readers to tab methods
 - Delete `timeline_state.get_clips()`, `get_all_tracks()`, `get_track_clip_index(track_id)`, `get_sequence_id()`. Replace every callsite with `tab:get_*()` on a tab obtained via the strip:
   ```lua

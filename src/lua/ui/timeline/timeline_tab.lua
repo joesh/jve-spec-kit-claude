@@ -44,6 +44,16 @@ local function fresh_cache()
         audio_scroll_offset = 0,
         video_audio_split_ratio = 0.5,
         playhead_position = 0,
+        -- Per-tab clip indexes (Phase 1.3a-i; spec 022). Mirrors the
+        -- module-level indexes in clip_state.lua but owned per-tab so
+        -- writes routed by sequence_id (1.3a-ii) hit the right cache.
+        -- Rebuilt lazily on first index getter when indexes_dirty=true;
+        -- load_from_database marks dirty so the freshly-loaded clips
+        -- index themselves on next access.
+        clip_lookup = {},          -- clip_id → clip
+        track_clip_index = {},     -- track_id → sorted clip list
+        clip_track_positions = {}, -- clip_id → {list, index}
+        indexes_dirty = true,
     }
 end
 
@@ -307,6 +317,7 @@ function TimelineTab:load_from_database()
     self.cache.tracks = tracks
     self.cache.clips = merged_clips
     self.cache.content_length = compute_content_length(merged_clips)
+    self.cache.indexes_dirty = true
     self.cache.sequence_frame_rate = seq.frame_rate
     self.cache.sequence_timecode_start_frame = seq.start_timecode_frame
     self.cache.viewport_start_time = seq.viewport_start_time
@@ -315,6 +326,81 @@ function TimelineTab:load_from_database()
     self.cache.audio_scroll_offset = seq.audio_scroll_offset
     self.cache.video_audio_split_ratio = seq.video_audio_split_ratio
     self.cache.playhead_position = seq.playhead_position
+end
+
+-- Rebuild the per-tab indexes from cache.clips. Ties broken by clip id
+-- for determinism. Mirrors clip_state.rebuild_clip_indexes shape so
+-- 1.3a-ii can route apply_mutations writes through these without
+-- changing the index semantics.
+local function rebuild_indexes(cache)
+    local lookup, track_index, positions = {}, {}, {}
+    for _, clip in ipairs(cache.clips) do
+        if clip.id then
+            lookup[clip.id] = clip
+            if clip.track_id then
+                local list = track_index[clip.track_id]
+                if not list then list = {}; track_index[clip.track_id] = list end
+                table.insert(list, clip)
+            end
+        end
+    end
+    for _, list in pairs(track_index) do
+        table.sort(list, function(a, b)
+            assert(type(a.sequence_start) == "number", string.format(
+                "TimelineTab: clip %s missing sequence_start", tostring(a.id)))
+            assert(type(b.sequence_start) == "number", string.format(
+                "TimelineTab: clip %s missing sequence_start", tostring(b.id)))
+            if a.sequence_start == b.sequence_start then
+                return a.id < b.id
+            end
+            return a.sequence_start < b.sequence_start
+        end)
+        for i, clip in ipairs(list) do
+            positions[clip.id] = { list = list, index = i }
+        end
+    end
+    cache.clip_lookup = lookup
+    cache.track_clip_index = track_index
+    cache.clip_track_positions = positions
+    cache.indexes_dirty = false
+end
+
+local function ensure_indexes(self)
+    if self.cache.indexes_dirty then rebuild_indexes(self.cache) end
+end
+
+--- Mark per-tab indexes dirty. Callers that mutate cache.clips directly
+--- (Phase 1.3a-ii apply_mutations will call this after each batch) must
+--- invoke this so the next index getter triggers a lazy rebuild.
+function TimelineTab:invalidate_indexes()
+    self.cache.indexes_dirty = true
+end
+
+function TimelineTab:get_clip_by_id(clip_id)
+    if clip_id == nil then return nil end
+    ensure_indexes(self)
+    return self.cache.clip_lookup[clip_id]
+end
+
+--- Return the internal sorted clip list for a track (read-only reference,
+--- nil when track has no clips). Matches clip_state.get_track_clip_index
+--- semantics so 1.3a-ii routing can swap callers without surprise.
+function TimelineTab:get_track_clip_index(track_id)
+    if track_id == nil then return nil end
+    ensure_indexes(self)
+    return self.cache.track_clip_index[track_id]
+end
+
+function TimelineTab:locate_neighbor(clip, offset)
+    if not (clip and clip.id) then return nil end
+    assert(type(offset) == "number",
+        "TimelineTab:locate_neighbor: offset must be a number")
+    ensure_indexes(self)
+    local info = self.cache.clip_track_positions[clip.id]
+    if not info then return nil end
+    local i = info.index + offset
+    if i < 1 or i > #info.list then return nil end
+    return info.list[i]
 end
 
 return TimelineTab
