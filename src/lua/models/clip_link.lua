@@ -383,4 +383,59 @@ function M.delete_link_group(link_group_id, db)
     stmt:finalize()
 end
 
+--- Capture raw clip_links rows for a clip before it's deleted, so the
+-- cascading FK delete can be reversed on undo. Returns a list of
+-- { link_group_id, role, time_offset, enabled } — sufficient to re-INSERT
+-- via `restore_rows` after the clip itself is re-created. Empty list when
+-- the clip has no link rows. The autoincrement `id` is NOT captured: the
+-- restored row gets a new pk (link_group_id+clip_id+role is the logical
+-- identity; see test_undo_property's SORT_KEYS / LEDGER_EXCLUSIONS).
+function M.capture_for_clip(clip_id, db)
+    assert(type(clip_id) == "string" and clip_id ~= "",
+        "clip_link.capture_for_clip: clip_id required")
+    db = db or database.get_connection()
+    local stmt = assert(db:prepare(
+        "SELECT link_group_id, role, time_offset, enabled FROM clip_links WHERE clip_id = ?"),
+        "clip_link.capture_for_clip: prepare failed")
+    stmt:bind_value(1, clip_id)
+    local rows = {}
+    if stmt:exec() then
+        while stmt:next() do
+            rows[#rows + 1] = {
+                link_group_id = stmt:value(0),
+                clip_id       = clip_id,
+                role          = stmt:value(1),
+                time_offset   = stmt:value(2),
+                enabled       = stmt:value(3),
+            }
+        end
+    end
+    stmt:finalize()
+    return rows
+end
+
+--- Re-INSERT raw clip_links rows previously captured by `capture_for_clip`.
+-- Used by command undoers after Clip.create restores the parent row.
+function M.restore_rows(rows, db)
+    assert(type(rows) == "table", "clip_link.restore_rows: rows must be a list")
+    if #rows == 0 then return end
+    db = db or database.get_connection()
+    local stmt = assert(db:prepare([[
+        INSERT INTO clip_links (link_group_id, clip_id, role, time_offset, enabled)
+        VALUES (?, ?, ?, ?, ?)
+    ]]), "clip_link.restore_rows: prepare failed")
+    for _, r in ipairs(rows) do
+        stmt:reset()
+        stmt:bind_value(1, r.link_group_id)
+        stmt:bind_value(2, r.clip_id)
+        stmt:bind_value(3, r.role)
+        stmt:bind_value(4, r.time_offset)
+        stmt:bind_value(5, r.enabled)
+        assert(stmt:exec(), string.format(
+            "clip_link.restore_rows: INSERT failed for clip=%s group=%s",
+            tostring(r.clip_id), tostring(r.link_group_id)))
+    end
+    stmt:finalize()
+end
+
 return M

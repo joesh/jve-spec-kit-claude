@@ -156,3 +156,31 @@ Extended id_pool to Blade + ExtractRange (→ TrimHead).
 Harness (seed=42): 25 → 2. P3 redo idempotence 100% across all commands.
 Remaining 2 P2 findings are random-history interactions (duration_frames drift +
 clip row count) — separate investigation.
+
+## Audit pass 19e (2026-05-28)
+
+Cascade-deleted clip_link rows now restored on undo.
+
+- **`clip_link.capture_for_clip(clip_id, db)` / `restore_rows(rows, db)`** —
+  raw-row capture + replay helpers. Captures `(link_group_id, role,
+  time_offset, enabled)`, drops autoincrement `id` (logical identity is the
+  tuple, see test_undo_property's SORT_KEYS).
+- **`_place_shared.occlude_full_cover(e)`** captures BEFORE `Clip.delete_by_ids`
+  (FK ON DELETE CASCADE wipes them otherwise). Stashes `e.captured_links`.
+- **Overwrite undoer** asserts `d.captured_links` is a table and calls
+  `ClipLink.restore_rows` after `Clip.create`. Removes the "re-link is a
+  future enhancement" comment.
+- **`command_helper.apply_mutations` / `restore_deleted_clip_revert`** —
+  same pattern at the generic mutation pipeline. Every `clip_mutator`
+  delete (resolve_occlusions, resolve_ripple, etc.) captures its links
+  pre-cascade; revert restores after re-INSERT. Covers MoveClipToTrack,
+  ExtractRange (→ TrimHead/DeleteSelection/Cut with marks), LiftRange,
+  Paste, OverwriteTrimEdge, BatchRippleEdit.
+- **`Clip.find_overlapping_on_track` SELECT** added `master_audio_track_id` —
+  was silently dropped, undo restored linked-stem clips with that column nil.
+  Overwrite undoer passes it through.
+
+Harness (seed=42, uuid pre-seeded for reproducibility): runs 38, 42, 45 cleared.
+Two end-state findings remain at run=15 (MoveClipToTrack at undo #4) and run=30
+(TrimHead at undo #5) — deeper cross-command interaction in cumulative
+execute→undo of 10-command random histories. Separate investigation.

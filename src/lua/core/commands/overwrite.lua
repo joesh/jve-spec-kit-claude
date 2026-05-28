@@ -22,6 +22,7 @@
 local M = {}
 
 local Clip            = require("models.clip")
+local ClipLink        = require("models.clip_link")
 local Sequence        = require("models.sequence")
 local Track           = require("models.track")
 local place_shared    = require("core.commands._place_shared")
@@ -275,9 +276,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         -- Re-insert fully-deleted clips. Uses Clip.create's V13 path with
-        -- the original id so link-group / override rows referencing the
-        -- clip id remain valid (but link_group on the deleted row did
-        -- already cascade — re-link is a future enhancement if needed).
+        -- the original id so any external references survive. clip_link
+        -- rows captured pre-delete (see _place_shared.occlude_full_cover)
+        -- are re-inserted afterwards to undo the FK cascade.
         for _, cap in pairs(occluded) do
             for _, d in ipairs(cap.deleted) do
                 -- 018 FR-015: restore round-trips subframe from captured row.
@@ -295,6 +296,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     source_in_subframe    = d.source_in_subframe,
                     source_out_subframe   = d.source_out_subframe,
                     master_layer_track_id = d.master_layer_track_id,
+                    master_audio_track_id = d.master_audio_track_id,
                     fps_mismatch_policy   = d.fps_mismatch_policy,
                     enabled               = d.enabled,
                     volume                = d.volume,
@@ -302,6 +304,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     mark_out_frame        = d.mark_out_frame,
                     playhead_frame        = d.playhead_frame,
                 })
+                assert(type(d.captured_links) == "table", string.format(
+                    "Overwrite.undo: deleted clip %s missing captured_links — "
+                    .. "executor must call occlude_full_cover which captures pre-cascade",
+                    tostring(d.id)))
+                ClipLink.restore_rows(d.captured_links)
             end
         end
 

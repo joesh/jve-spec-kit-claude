@@ -691,7 +691,12 @@ end
 -- keeps the dispatcher's accumulator code uniform.
 
 local function occlude_full_cover(e)
+    -- Capture clip_link rows BEFORE delete — FK ON DELETE CASCADE wipes
+    -- them in the same statement otherwise, and the undoer has nothing to
+    -- restore. Stash on the deleted row so the executor can persist it.
+    local link_rows = clip_link.capture_for_clip(e.id)
     Clip.delete_by_ids({ e.id })
+    e.captured_links = link_rows
     return { deleted = e }
 end
 

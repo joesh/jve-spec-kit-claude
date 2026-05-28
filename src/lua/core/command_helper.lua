@@ -925,6 +925,14 @@ function M.apply_mutations(db, mutations)
                 return false, "Failed to execute UPDATE for clip " .. tostring(mut.clip_id) .. ": " .. tostring(err or "unknown")
             end
         elseif mut.type == "delete" then
+            -- Capture clip_link rows BEFORE the DELETE — the FK ON DELETE
+            -- CASCADE wipes them in the same statement otherwise, and
+            -- revert_mutations would have nothing to restore. Stash on
+            -- mut.previous so the persisted mutation carries them.
+            if mut.previous then
+                mut.previous.captured_links =
+                    require("models.clip_link").capture_for_clip(mut.clip_id, db)
+            end
             local stmt, stmt_err = ensure_delete_stmt()
             if not stmt then
                 finalize_all_stmts()
@@ -1294,6 +1302,14 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     stmt:finalize()
     if not ok then
         return false, "Failed to execute undo delete: " .. (db:last_error() or "")
+    end
+
+    -- Restore clip_link rows that the original DELETE cascade-removed.
+    -- apply_mutations captured them onto prev.captured_links before the
+    -- delete; replay here re-creates the parent-side rows. May be nil for
+    -- old-shape mutations persisted before the capture site landed.
+    if prev.captured_links then
+        require("models.clip_link").restore_rows(prev.captured_links, db)
     end
 
     if command then

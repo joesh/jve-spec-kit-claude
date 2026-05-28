@@ -27,11 +27,13 @@ require("test_env")
 local command_manager = require("core.command_manager")
 local database = require("core.database")
 local ripple_layout = require("tests.helpers.ripple_layout")
-local Sequence = require("models.sequence")
-
 -- Deterministic seed. On failure we print this so the run is reproducible.
 local SEED = tonumber(os.getenv("JVE_UNDO_PROP_SEED")) or 42
 math.randomseed(SEED)
+-- uuid.lua self-seeds with os.time+os.clock on first call, which clobbers
+-- our SEED and breaks reproducibility. Force-seed uuid so a fixed SEED
+-- produces a fixed run.
+require("uuid").seed(SEED)
 
 -- =========================================================================
 -- DB SNAPSHOT
@@ -617,11 +619,16 @@ local function run_property_2(layout, db)
     print(string.format("Property 2: random N-command undo-all (%d runs, N=%d)",
         PROP2_RUNS, PROP2_LEN))
     local fails = 0
+    local diagnose = os.getenv("JVE_UNDO_PROP_DIAGNOSE") == "1"
     for run = 1, PROP2_RUNS do
         local pre = snapshot_db(db)
         local executed_log = {}
         local executed_count = 0
         local attempts = 0
+        -- Per-step snapshots when diagnosing: snaps[i] = state BEFORE
+        -- executing command i. snaps[1] == pre. Undo of command i should
+        -- restore state to snaps[i].
+        local snaps = diagnose and { pre } or nil
         while executed_count < PROP2_LEN and attempts < PROP2_LEN * 6 do
             attempts = attempts + 1
             local gen_name = GEN_ORDER[math.random(#GEN_ORDER)]
@@ -629,6 +636,7 @@ local function run_property_2(layout, db)
             if outcome == "ok" then
                 executed_count = executed_count + 1
                 executed_log[#executed_log + 1] = label
+                if diagnose then snaps[#snaps + 1] = snapshot_db(db) end
             end
         end
         if executed_count == 0 then
@@ -645,6 +653,19 @@ local function run_property_2(layout, db)
                     undo_failed = true
                     fails = fails + 1
                     break
+                end
+                if diagnose then
+                    -- undo i removes the i-th-from-end command, so after
+                    -- this undo state should match snaps[executed_count - i + 1].
+                    local expected_idx = executed_count - i + 1
+                    local now = snapshot_db(db)
+                    local d = diff_snapshots(snaps[expected_idx], now)
+                    if d then
+                        local offending = executed_log[expected_idx]
+                        io.stderr:write(string.format(
+                            "[diagnose] run=%d undo #%d (rolling back %s) — diverges: %s\n",
+                            run, i, tostring(offending), d))
+                    end
                 end
             end
             if not undo_failed then
