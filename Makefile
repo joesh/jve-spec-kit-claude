@@ -4,7 +4,7 @@
 BUILD_DIR = build
 
 .PHONY: all build clean install help configure reconfigure luacheck nav-index test \
-        smoke smoke-coverage smoke-template jve lint
+        smoke smoke-coverage smoke-template jve lint scan
 
 # Default target: lint, build, and run all tests.
 #
@@ -64,6 +64,12 @@ luacheck:
 lint:
 	@scripts/lint_anti_patterns.sh --all
 
+# Clang static analyzer (scan-build). Slow (~10 min); run before merging
+# substantial C++ changes, NOT in the per-edit loop. Uses isolated build-scan/
+# tree so the normal build/ remains incremental. Exits 1 if issues found.
+scan:
+	@scripts/run_scan_build.sh
+
 # ---- Smoke (spec 020 Phase 1) ----
 # Long-lived JVE + external Python runner. See
 # specs/020-debug-terminal/phase1-test-overhaul.md.
@@ -110,6 +116,7 @@ help:
 	@echo "  reconfigure  - Force CMake reconfiguration"
 	@echo "  luacheck     - Run Lua lint (luacheck) across src/tests"
 	@echo "  lint         - Anti-pattern lint (R001-R0NN; scripts/lint_anti_patterns.md)"
+	@echo "  scan         - clang static analyzer (scan-build); slow, pre-merge only"
 	@echo "  nav-index    - Generate navigation indexes (ctags, symbols.json, commands.json)"
 	@echo "  smoke        - Run smoke suite (long-lived JVE + Python runner)"
 	@echo "  smoke-template - (Re)build Anamnesis .jvp template smoke tests copy from"

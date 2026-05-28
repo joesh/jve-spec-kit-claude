@@ -608,6 +608,7 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
             // after a read failure, so the next call must seek rather than
             // trust last_decode_pts.
             have_decode_pos = false;
+            frame_pool->release(frame_entry.data, frame_entry.size);
             return impl::ffmpeg_error(ret, "av_read_frame (qtrle)");
         }
 
@@ -627,6 +628,7 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
             // fmt_ctx already advanced past this packet; bookkeeping is now
             // out of sync. Force seek on next call.
             have_decode_pos = false;
+            frame_pool->release(frame_entry.data, frame_entry.size);
             return decode_result.error();
         }
 
@@ -649,6 +651,7 @@ static Result<std::shared_ptr<Frame>> decode_qtrle(
         // matched. Either way, fmt_ctx is now in a state that doesn't match
         // last_decode_pts — force a seek on the next call.
         have_decode_pos = false;
+        frame_pool->release(frame_entry.data, frame_entry.size);
         return Error::internal("qtrle: no frame found at target time");
     }
 

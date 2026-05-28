@@ -93,6 +93,8 @@ Pick the single command that matches what you touched. The "final check" rows ar
 
 `make jve -j4` is the one exception that skips tests — use it during rapid UI iteration where you'll exercise the editor manually. Final validation still goes through the right row above.
 
+`make scan` runs the clang static analyzer (scan-build) on the C++ build into an isolated `build-scan/` tree. Slow (~5–10 min). Run before merging substantial C++ changes; **not** in the per-edit loop. Findings + HTML report path are printed at the end; exits non-zero if issues exist.
+
 Never run `make | grep` directly — `make` takes real wall time. Redirect to `/tmp` and grep the file:
 ```bash
 make -j4 > /tmp/make.log 2>&1; grep -E "warning:|error:|FAILED" /tmp/make.log
