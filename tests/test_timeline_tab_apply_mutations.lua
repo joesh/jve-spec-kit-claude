@@ -61,7 +61,7 @@ assert(c1_before.duration == 200, "fixture: c1 starts at duration 200")
 local changed = tab:apply_mutations({
     sequence_id = "seq",
     updates = {
-        { clip_id = "c1", duration_value = 250 },
+        { clip_id = "c1", duration = 250 },
     },
 })
 assert(changed, "apply_mutations returns true when something changed")

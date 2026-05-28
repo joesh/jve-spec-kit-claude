@@ -39,24 +39,17 @@ function M.compute_content_length(clips)
     return max_end
 end
 
---- Validate + normalize integer coords on a clip-shaped row. Accepts the
---- `_value` variants emitted by mutations and aliases them onto the
---- canonical field names. Returns true on success, false on invalid shape.
+--- Validate integer coords on a clip-shaped row. Post-M4-real rename
+--- (2026-05-27), mutation payloads use the same canonical field names
+--- as clip rows — no `_value` aliases to bridge.
+--- Returns true on success, false on invalid sequence_start/duration.
 --- Asserts (loud, with clip id) on present-but-non-numeric source_in/out.
 function M.normalize_clip_integers(clip)
     if not clip then return false end
-    local sequence_start = clip.sequence_start or clip.start_value
-    local duration = clip.duration or clip.duration_value
+    local sequence_start = clip.sequence_start
+    local duration = clip.duration
     if type(sequence_start) ~= "number" then return false end
     if type(duration) ~= "number" or duration <= 0 then return false end
-    clip.sequence_start = sequence_start
-    clip.duration = duration
-    if clip.source_in == nil and clip.source_in_value ~= nil then
-        clip.source_in = clip.source_in_value
-    end
-    if clip.source_out == nil and clip.source_out_value ~= nil then
-        clip.source_out = clip.source_out_value
-    end
     if clip.source_in ~= nil then
         assert(type(clip.source_in) == "number", string.format(
             "clip_geometry: clip %s source_in must be number", tostring(clip.id)))

@@ -27,13 +27,15 @@ local log = require("core.logger").for_area("commands")
 -- don't touch timeline rendering (volume, mark_in/out, offline, …), so
 -- the executor / undoer skip mutation emission for them — the
 -- safety-net reload in command_manager handles those lazily.
+-- Post-M4-real (2026-05-27) mutation payload uses canonical clip-row
+-- names — the property_name IS the mutation key for numeric fields.
 local MUTATION_KEY = {
     name           = "name",
     enabled        = "enabled",
-    sequence_start = "start_value",
-    duration       = "duration_value",
-    source_in      = "source_in_value",
-    source_out     = "source_out_value",
+    sequence_start = "sequence_start",
+    duration       = "duration",
+    source_in      = "source_in",
+    source_out     = "source_out",
 }
 
 -- Clip columns backed by NOT-NULL / CHECK constraints in schema.sql.

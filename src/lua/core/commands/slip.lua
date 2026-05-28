@@ -92,11 +92,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             sequence_id = args.sequence_id,
             inserts = {}, deletes = {},
             updates = { {
-                clip_id          = args.clip_id,
-                start_value      = fresh.sequence_start_frame,
-                duration_value   = fresh.duration_frames,
-                source_in_value  = fresh.source_in_frame,
-                source_out_value = fresh.source_out_frame,
+                clip_id        = args.clip_id,
+                sequence_start = fresh.sequence_start_frame,
+                duration       = fresh.duration_frames,
+                source_in      = fresh.source_in_frame,
+                source_out     = fresh.source_out_frame,
             } },
         })
         return true

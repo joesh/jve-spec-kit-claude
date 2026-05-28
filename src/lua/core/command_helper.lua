@@ -222,15 +222,17 @@ function M.clip_update_payload(source, fallback_sequence_id)
     assert(type(source.source_in) == "number", string.format("clip_update_payload: source_in must be integer for clip %s", tostring(source.id)))
     assert(type(source.source_out) == "number", string.format("clip_update_payload: source_out must be integer for clip %s", tostring(source.id)))
 
-    -- Use _value suffix field names that apply_mutations expects
+    -- Mutation-payload shape matches clip-row shape (M4-real rename,
+    -- 2026-05-27): the canonical names sequence_start / duration /
+    -- source_in / source_out replace the pre-Rational-era _value suffix.
     return {
         clip_id = source.id,
         track_id = source.track_id,
         track_sequence_id = track_sequence_id,
-        start_value = source.sequence_start,
-        duration_value = source.duration,
-        source_in_value = source.source_in,
-        source_out_value = source.source_out,
+        sequence_start = source.sequence_start,
+        duration = source.duration,
+        source_in = source.source_in,
+        source_out = source.source_out,
         frame_rate = frame_rate,
         enabled = source.enabled ~= false
     }
@@ -293,8 +295,8 @@ function M.add_update_mutation(command, sequence_id, update)
     local function validate_update(entry)
         assert(entry.clip_id, "add_update_mutation: missing clip_id")
         -- Must have at least one updatable field — reject bare {clip_id = "..."} payloads
-        local has_field = entry.start_value or entry.duration_value or entry.track_id
-            or entry.source_in_value or entry.source_out_value
+        local has_field = entry.sequence_start or entry.duration or entry.track_id
+            or entry.source_in or entry.source_out
             or entry.enabled ~= nil or entry.name ~= nil
         if not has_field then
             error(string.format(
@@ -418,10 +420,10 @@ function M.report_planner_mutations(command, sequence_id, mutations)
             M.add_insert_mutation(command, sequence_id, {
                 id                    = mut.clip_id,
                 track_id              = mut.track_id,
-                start_value           = mut.sequence_start_frame,
-                duration_value        = mut.duration_frames,
-                source_in_value       = mut.source_in_frame,
-                source_out_value      = mut.source_out_frame,
+                sequence_start        = mut.sequence_start_frame,
+                duration              = mut.duration_frames,
+                source_in             = mut.source_in_frame,
+                source_out            = mut.source_out_frame,
                 name                  = mut.name,
                 sequence_id           = mut.sequence_id,
                 master_layer_track_id = mut.master_layer_track_id,
@@ -437,10 +439,10 @@ function M.report_planner_mutations(command, sequence_id, mutations)
             M.add_update_mutation(command, sequence_id, {
                 clip_id          = mut.clip_id,
                 track_id         = mut.track_id,
-                start_value      = mut.sequence_start_frame,
-                duration_value   = mut.duration_frames,
-                source_in_value  = mut.source_in_frame,
-                source_out_value = mut.source_out_frame,
+                sequence_start   = mut.sequence_start_frame,
+                duration         = mut.duration_frames,
+                source_in        = mut.source_in_frame,
+                source_out       = mut.source_out_frame,
             })
         elseif mut.type == "delete" then
             M.add_delete_mutation(command, sequence_id, mut.clip_id)
@@ -1221,10 +1223,10 @@ local function apply_update_revert(db, mut, command, sequence_id)
         M.add_update_mutation(command, sequence_id, {
             clip_id          = prev.id,
             track_id         = prev.track_id,
-            start_value      = ts,
-            duration_value   = dur,
-            source_in_value  = src_in,
-            source_out_value = src_out,
+            sequence_start   = ts,
+            duration         = dur,
+            source_in        = src_in,
+            source_out       = src_out,
             fps_numerator    = fps_num,
             fps_denominator  = fps_den,
             enabled          = prev.enabled,
@@ -1299,10 +1301,10 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
             id                 = prev.id,
             track_id           = prev.track_id,
             sequence_id = nested_id,
-            start_value        = ts,
-            duration_value     = dur,
-            source_in_value    = src_in,
-            source_out_value   = src_out,
+            sequence_start     = ts,
+            duration           = dur,
+            source_in          = src_in,
+            source_out         = src_out,
             enabled            = prev.enabled,
             name               = prev.name,
             volume             = prev.volume,

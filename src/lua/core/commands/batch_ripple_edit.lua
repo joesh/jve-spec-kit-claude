@@ -2420,10 +2420,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 command_helper.add_update_mutation(ctx.command, seq_id, {
                     clip_id = mut.clip_id,
                     track_id = mut.track_id,
-                    start_value = mut.sequence_start_frame,
-                    duration_value = mut.duration_frames,
-                    source_in_value = mut.source_in_frame,
-                    source_out_value = mut.source_out_frame,
+                    sequence_start = mut.sequence_start_frame,
+                    duration = mut.duration_frames,
+                    source_in = mut.source_in_frame,
+                    source_out = mut.source_out_frame,
                     enabled = (mut.enabled == 1) or (mut.enabled == true),
                 })
             elseif mut.type == "delete" then

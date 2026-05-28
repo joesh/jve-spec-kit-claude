@@ -131,12 +131,13 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("__timeline_mutations", {
             sequence_id = args.sequence_id,
             inserts = { {
-                clip_id              = new.id,
-                track_id             = new.track_id,
-                sequence_start_value = new.sequence_start_frame,
-                duration_value       = new.duration_frames,
-                source_in_value      = new.source_in_frame,
-                source_out_value     = new.source_out_frame,
+                id             = new.id,
+                clip_id        = new.id,
+                track_id       = new.track_id,
+                sequence_start = new.sequence_start_frame,
+                duration       = new.duration_frames,
+                source_in      = new.source_in_frame,
+                source_out     = new.source_out_frame,
             } },
             deletes = {}, updates = {},
         })

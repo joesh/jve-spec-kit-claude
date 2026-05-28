@@ -231,10 +231,8 @@ local function build_insert_mutation_entry(clip_id)
         owner_sequence_id     = clip.owner_sequence_id,
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
-        sequence_id    = clip.sequence_id,
-        start_value           = clip.sequence_start,
+        sequence_id           = clip.sequence_id,
         sequence_start        = clip.sequence_start,
-        duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
         source_out            = clip.source_out,
@@ -271,7 +269,6 @@ local function build_executor_mutation_bucket(args, result)
             -- DB row is at POST-shift position (ripple ran after split).
             -- Emit at PRE-shift so the bucket's bulk_shift moves it to the
             -- final position in-memory, mirroring the DB sequence.
-            entry.start_value    = entry.start_value    - track_shift
             entry.sequence_start = entry.sequence_start - track_shift
             bucket.inserts[#bucket.inserts + 1] = entry
         end
@@ -280,13 +277,13 @@ local function build_executor_mutation_bucket(args, result)
             assert(row, "Insert: could not re-read trimmed left-half "
                 .. tostring(tr.id))
             bucket.updates[#bucket.updates + 1] = {
-                clip_id          = row.id,
-                id               = row.id,
-                track_id         = row.track_id,
-                start_value      = row.sequence_start_frame,
-                duration_value   = row.duration_frames,
-                source_in_value  = row.source_in_frame,
-                source_out_value = row.source_out_frame,
+                clip_id        = row.id,
+                id             = row.id,
+                track_id       = row.track_id,
+                sequence_start = row.sequence_start_frame,
+                duration       = row.duration_frames,
+                source_in      = row.source_in_frame,
+                source_out     = row.source_out_frame,
             }
         end
     end
@@ -333,12 +330,12 @@ local function build_undo_mutation_bucket(args, created_ids, rippled, splits)
         end
         for _, tr in ipairs(cap.trimmed) do
             bucket.updates[#bucket.updates + 1] = {
-                clip_id          = tr.id,
-                id               = tr.id,
-                start_value      = tr.prior.sequence_start_frame,
-                duration_value   = tr.prior.duration_frames,
-                source_in_value  = tr.prior.source_in_frame,
-                source_out_value = tr.prior.source_out_frame,
+                clip_id        = tr.id,
+                id             = tr.id,
+                sequence_start = tr.prior.sequence_start_frame,
+                duration       = tr.prior.duration_frames,
+                source_in      = tr.prior.source_in_frame,
+                source_out     = tr.prior.source_out_frame,
             }
         end
     end

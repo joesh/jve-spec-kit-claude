@@ -383,24 +383,21 @@ local function apply_bulk_shift_to_cache(cache, shift)
     return true
 end
 
--- Mutation update_*_value → clip field, asserted numeric. Next time
--- an integer field is added to a mutation payload it's a one-line
--- table entry, not another if-block.
+-- Mutation payload + clip-row use the SAME canonical names post-M4-real
+-- (2026-05-27 rename). Next numeric field on the payload is a one-line
+-- addition to NUMERIC_UPDATE_FIELDS, not another if-block.
 local NUMERIC_UPDATE_FIELDS = {
-    { src = "start_value",       dst = "sequence_start" },
-    { src = "duration_value",    dst = "duration" },
-    { src = "source_in_value",   dst = "source_in" },
-    { src = "source_out_value",  dst = "source_out" },
+    "sequence_start", "duration", "source_in", "source_out",
 }
 
 local function apply_numeric_updates(clip, update)
     local changed = false
-    for _, f in ipairs(NUMERIC_UPDATE_FIELDS) do
-        local v = update[f.src]
-        if v and v ~= clip[f.dst] then
+    for _, field in ipairs(NUMERIC_UPDATE_FIELDS) do
+        local v = update[field]
+        if v and v ~= clip[field] then
             assert(type(v) == "number", string.format(
-                "TimelineTab:apply_mutations: %s must be integer", f.src))
-            clip[f.dst] = v
+                "TimelineTab:apply_mutations: %s must be integer", field))
+            clip[field] = v
             changed = true
         end
     end

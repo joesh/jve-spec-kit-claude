@@ -162,10 +162,8 @@ local function build_insert_mutation_entry(clip_id)
         owner_sequence_id     = clip.owner_sequence_id,
         track_sequence_id     = clip.owner_sequence_id,
         track_id              = clip.track_id,
-        sequence_id    = clip.sequence_id,
-        start_value           = clip.sequence_start,
+        sequence_id           = clip.sequence_id,
         sequence_start        = clip.sequence_start,
-        duration_value        = clip.duration,
         duration              = clip.duration,
         source_in             = clip.source_in,
         source_out            = clip.source_out,
@@ -217,11 +215,11 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             for _, tr in ipairs(cap.trimmed) do
                 local fresh = Clip.load_v13_row(tr.id)
                 bucket.updates[#bucket.updates + 1] = {
-                    clip_id          = tr.id,
-                    start_value      = fresh.sequence_start_frame,
-                    duration_value   = fresh.duration_frames,
-                    source_in_value  = fresh.source_in_frame,
-                    source_out_value = fresh.source_out_frame,
+                    clip_id        = tr.id,
+                    sequence_start = fresh.sequence_start_frame,
+                    duration       = fresh.duration_frames,
+                    source_in      = fresh.source_in_frame,
+                    source_out     = fresh.source_out_frame,
                 }
             end
             for _, new_id in ipairs(cap.split_new_ids) do
@@ -333,10 +331,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                             owner_sequence_id   = row.owner_sequence_id,
                             track_sequence_id   = row.owner_sequence_id,
                             track_id            = row.track_id,
-                            sequence_id  = row.sequence_id,
-                            start_value         = row.sequence_start_frame,
+                            sequence_id         = row.sequence_id,
                             sequence_start      = row.sequence_start_frame,
-                            duration_value      = row.duration_frames,
                             duration            = row.duration_frames,
                             source_in           = row.source_in_frame,
                             source_out          = row.source_out_frame,
