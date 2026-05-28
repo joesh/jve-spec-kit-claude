@@ -290,15 +290,33 @@ int lua_get_tree_selected_index(lua_State* L) {
     return 1;
 }
 
+static void collectTreeItemsRecursive(QTreeWidgetItem* item, QList<QTreeWidgetItem*>& out) {
+    out.append(item);
+    for (int i = 0; i < item->childCount(); ++i) {
+        collectTreeItemsRecursive(item->child(i), out);
+    }
+}
+
 int lua_clear_tree(lua_State* L) {
     QTreeWidget* tree = get_widget<QTreeWidget>(L, 1);
     if (tree) {
+        // Drop this tree's items from the ID maps BEFORE tree->clear() deletes
+        // them, otherwise stale callbacks (queued click, deferred refresh) that
+        // hold pre-clear item IDs would dereference freed QTreeWidgetItem
+        // pointers via getTreeItemById. g_nextTreeItemId is monotonic so IDs
+        // don't recycle, but the dangling-pointer hazard is real.
+        QList<QTreeWidgetItem*> owned;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            collectTreeItemsRecursive(tree->topLevelItem(i), owned);
+        }
+        for (QTreeWidgetItem* item : owned) {
+            auto it = g_treeItemReverseMap.constFind(item);
+            if (it != g_treeItemReverseMap.constEnd()) {
+                g_treeItemMap.remove(it.value());
+                g_treeItemReverseMap.erase(it);
+            }
+        }
         tree->clear();
-        // Note: Clearing tree invalidates pointers in g_treeItemMap.
-        // Ideally we should clean them up, but map keys are IDs, values are pointers.
-        // Pointers becoming dangling is risky if we access them later by old ID.
-        // For now, we rely on IDs being unique and hopefully not reused or accessed after clear.
-        // Proper fix: iterate items and remove from map, or clear map if we know this is the only tree.
     }
     return 0;
 }
