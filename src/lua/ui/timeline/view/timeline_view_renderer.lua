@@ -795,6 +795,204 @@ local function render_lock_overlay(view, layout_by_index, width, height)
     end
 end
 
+-- Render one clip instance into the timeline view. The render_ctx
+-- bundles the per-frame captures the closure used to take from its
+-- enclosing scope: view, state_module, pixel dimensions, the layout
+-- index, and the per-id selection lookup. `outline_only` is used by
+-- the clip-drag preview path which draws just the selection outline
+-- at the cursor position over the base render.
+local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_duration, outline_only)
+    if not clip or not render_track_id or not clip_start or not clip_duration then
+        return
+    end
+    if clip_duration <= 0 then return end
+    local layout_by_id = ctx.layout_by_id
+    local track_layout = layout_by_id and layout_by_id[render_track_id]
+    if not track_layout then return end
+
+    local view, state_module = ctx.view, ctx.state_module
+    local width, height = ctx.width, ctx.height
+    local selected_lookup = ctx.selected_lookup
+
+    local y = track_layout.y
+    local track_height = track_layout.height
+    local clip_end = clip_start + clip_duration
+    local x = state_module.time_to_pixel(clip_start, width)
+    local clip_end_px = state_module.time_to_pixel(clip_end, width)
+    y = y + 5
+    local clip_width = clip_end_px - x
+    local clip_height = track_height - 10
+
+    local visible_x = x
+    local visible_width = clip_width
+    if visible_x < 0 then
+        visible_width = visible_width + visible_x
+        visible_x = 0
+    end
+    if visible_x + visible_width > width then
+        visible_width = width - visible_x
+    end
+
+    if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
+        return
+    end
+    if visible_width < 1 then return end
+
+    local draw_width = visible_width
+    local clip_enabled = clip.enabled ~= false
+
+    media_status.ensure_clip_status(clip)
+
+    local is_audio = (track_layout.track_type == "AUDIO")
+    local body_color, text_color
+    local label_prefix = ""
+    if clip.offline then
+        body_color = is_audio and state_module.colors.clip_audio_offline or state_module.colors.clip_video_offline
+        text_color = state_module.colors.clip_offline_text
+        local is_codec = (clip.error_code == "Unsupported" or clip.error_code == "DecodeFailed")
+        label_prefix = is_codec and "CODEC UNAVAIL - " or "OFFLINE - "
+        -- Offline + disabled: dim the bright red so the clip reads
+        -- as "not participating in the cut right now" rather than
+        -- demanding attention. Standard NLE convention.
+        if not clip_enabled then
+            body_color = color_utils.dim_hex(body_color, 0.5)
+            text_color = color_utils.dim_hex(text_color, 0.7)
+        end
+    elseif clip_enabled then
+        body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
+        text_color = state_module.colors.text
+    else
+        body_color = is_audio and state_module.colors.clip_audio_disabled or state_module.colors.clip_video_disabled
+        text_color = state_module.colors.clip_disabled_text
+    end
+    if not body_color then body_color = state_module.colors.clip end
+
+    if not outline_only then
+        timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
+
+        local has_waveform = false
+        local label_visible = true
+
+        if is_audio and not clip.offline
+                and track_state.get_waveform_enabled(render_track_id)
+                and (clip.resolved_media and clip.resolved_media.id) and draw_width > 1 and clip_width > 0 then
+            local vis_src_in, vis_src_out = waveform_utils.visible_source_range(
+                clip.source_in, clip.source_out, x, visible_x, clip_width, draw_width)
+
+            -- Reverse clips: vis_src_in > vis_src_out. Peak cache wants
+            -- forward-ordered [start, end]; normalize for the query and
+            -- set reversed so the renderer draws peaks right-to-left.
+            local reversed = vis_src_in > vis_src_out
+            local peak_start = reversed and vis_src_out or vis_src_in
+            local peak_end = reversed and vis_src_in or vis_src_out
+
+            local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
+                (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, draw_width)
+            if peaks and count > 0 then
+                local samples_per_pixel = (peak_end - peak_start) / draw_width
+                local mip_level = peak_constants.select_level(samples_per_pixel)
+                local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
+                log_waveform_range_anomalies((clip.resolved_media and clip.resolved_media.id),
+                    peak_start, peak_end, actual_start, actual_end, max_drift)
+
+                local wave_col = waveform_color.derive(body_color)
+                local wave_y_offset, wave_height, lbl_vis =
+                    waveform_layout.compute(clip_height)
+                label_visible = lbl_vis
+                timeline.add_waveform(view.widget, visible_x, y + wave_y_offset,
+                    draw_width, wave_height, peaks, count, wave_col, reversed)
+                has_waveform = true
+            end
+        end
+
+        local label_padding = 10
+        local max_label_width = visible_width - label_padding
+        if max_label_width > 35 then
+            -- Audio clips store source_in/source_out in SAMPLES; the raw
+            -- shortfall in samples displayed as "Nf" reads as video
+            -- frames. display_rate (= sequence fps) rescales the delta
+            -- into timeline-frame units for both audio and video.
+            local rate = state_module.get_sequence_frame_rate
+                and state_module.get_sequence_frame_rate()
+            local display_rate
+            if rate and rate.fps_numerator and rate.fps_denominator
+                and rate.fps_denominator > 0 then
+                display_rate = rate.fps_numerator / rate.fps_denominator
+            end
+            local label_suffix = offline_note.short_suffix(
+                clip.offline_note, clip.source_in, clip.source_out,
+                display_rate)
+            local display_label = truncate_label(
+                label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
+                max_label_width)
+            if display_label ~= "" and label_visible then
+                local label_baseline
+                if has_waveform then
+                    label_baseline = y + clip_height - 4
+                else
+                    label_baseline = y + math.min(clip_height - 10, 22)
+                end
+                timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
+            end
+        end
+    end
+
+    local is_selected = selected_lookup[clip.id] == true
+
+    if is_selected or outline_only then
+        stroke_outline_rect(view, visible_x, y, draw_width, clip_height,
+                            state_module.colors.clip_selected)
+    elseif draw_width ~= clip_width or visible_x ~= x then
+        local dash_height = math.min(clip_height, 12)
+        local dash_col = state_module.colors.clip_selected
+        if x < 0 then timeline.add_rect(view.widget, 0, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
+        if x + clip_width > width then timeline.add_rect(view.widget, width - OUTLINE_THICKNESS, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
+    end
+
+    if not outline_only and draw_width > 0 then
+        local boundary_col = state_module.colors.clip_boundary or "#1a1a1a"
+        timeline.add_rect(view.widget, visible_x + draw_width - 1, y, 1, clip_height, boundary_col)
+    end
+end
+
+-- Iterate every visible track and draw its clips. Uses the per-track
+-- index (track_clip_index) — never bulk-scans displayed_clips (which
+-- the strip's forbid_bulk_clip_read scope enforces). The visible-window
+-- slice via lower_bound_start_frames skips clips entirely before the
+-- viewport in one binary-search step, with a back-off by 1 to catch a
+-- clip whose start is upstream of the viewport but whose end is inside.
+local function draw_visible_clips(ctx, viewport_start, viewport_end)
+    assert(type(viewport_start) == "number" and type(viewport_end) == "number",
+        "timeline_view_renderer: viewport frames are required")
+    local view, state_module = ctx.view, ctx.state_module
+    local layout_by_id = ctx.layout_by_id
+
+    for _, track in ipairs(view.filtered_tracks) do
+        local track_id = track and track.id
+        local track_layout = track_id and layout_by_id and layout_by_id[track_id] or nil
+        if track_id and track_layout and track_layout.y < ctx.height and (track_layout.y + track_layout.height) > 0 then
+            local track_clips = state_module.get_tab_strip():track_clip_index(track_id)
+            if track_clips and #track_clips > 0 then
+                local start_index = lower_bound_start_frames(track_clips, viewport_start)
+                if start_index > 1 then start_index = start_index - 1 end
+                for i = start_index, #track_clips do
+                    local clip = track_clips[i]
+                    if clip and type(clip.sequence_start) == "number"
+                            and type(clip.duration) == "number"
+                            and not clip.is_gap then
+                        local clip_start = clip.sequence_start
+                        if clip_start >= viewport_end then break end
+                        local clip_end = clip_start + clip.duration
+                        if clip_end > viewport_start then
+                            draw_clip_instance(ctx, clip, track_id, clip_start, clip.duration, false)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Mark In/Out range highlight.
 --
 -- Open-ended mark range domain rule (mirrored in monitor_mark_bar.lua;
@@ -863,239 +1061,24 @@ function M.render(view)
         end
     end
 
-    local layout_by_id = view.track_layout_cache.by_id
-
-    local function draw_clip_instance(clip, render_track_id, clip_start, clip_duration, outline_only)
-        if not clip or not render_track_id or not clip_start or not clip_duration then
-            return
-        end
-        -- All coords are integer frames
-        if clip_duration <= 0 then
-            return
-        end
-        local track_layout = layout_by_id and layout_by_id[render_track_id]
-        if not track_layout then
-            return
-        end
-
-        local y = track_layout.y
-        local track_height = track_layout.height
-        local clip_end = clip_start + clip_duration
-        local x = state_module.time_to_pixel(clip_start, width)
-        local clip_end_px = state_module.time_to_pixel(clip_end, width)
-        y = y + 5
-        local clip_width = clip_end_px - x
-        local clip_height = track_height - 10
-
-        local visible_x = x
-        local visible_width = clip_width
-        if visible_x < 0 then
-            visible_width = visible_width + visible_x
-            visible_x = 0
-        end
-        if visible_x + visible_width > width then
-            visible_width = width - visible_x
-        end
-
-        if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
-            return
-        end
-        if visible_width < 1 then
-            return
-        end
-
-        local draw_width = visible_width
-        local clip_enabled = clip.enabled ~= false
-
-        -- Stamp clip with cached media status (pure reader — no probing)
-        media_status.ensure_clip_status(clip)
-
-        -- Resolve colors
-        local is_audio = (track_layout.track_type == "AUDIO")
-        local body_color, text_color
-        local label_prefix = ""
-        if clip.offline then
-            body_color = is_audio and state_module.colors.clip_audio_offline or state_module.colors.clip_video_offline
-            text_color = state_module.colors.clip_offline_text
-            local is_codec = (clip.error_code == "Unsupported" or clip.error_code == "DecodeFailed")
-            label_prefix = is_codec and "CODEC UNAVAIL - " or "OFFLINE - "
-            -- Offline-AND-disabled: dim the bright red so the clip
-            -- reads as "not participating in the cut right now"
-            -- instead of demanding attention. Matches the standard
-            -- NLE convention where disabled clips draw dimmed.
-            if not clip_enabled then
-                body_color = color_utils.dim_hex(body_color, 0.5)
-                text_color = color_utils.dim_hex(text_color, 0.7)
-            end
-        elseif clip_enabled then
-            body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
-            text_color = state_module.colors.text
-        else
-            body_color = is_audio and state_module.colors.clip_audio_disabled or state_module.colors.clip_video_disabled
-            text_color = state_module.colors.clip_disabled_text
-        end
-        if not body_color then body_color = state_module.colors.clip end
-
-        if not outline_only then
-            timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
-
-            -- waveform_layout.compute() decides label vs full-body waveform
-            -- based on clip height (LABEL_RESERVE + MIN_WAVE_HEIGHT live in
-            -- that module). Without this the wave gets squashed against the
-            -- top of small audio clips.
-            local has_waveform = false
-            local label_visible = true
-
-            -- Waveform display (audio clips only, when enabled and peaks available).
-            -- Required-data invariants (source_in/source_out presence, non-zero range)
-            -- are enforced by waveform_utils.visible_source_range via asserts —
-            -- surfacing a bug is preferable to a silent skip.
-            if is_audio and not clip.offline
-                    and track_state.get_waveform_enabled(render_track_id)
-                    and (clip.resolved_media and clip.resolved_media.id) and draw_width > 1 and clip_width > 0 then
-                local vis_src_in, vis_src_out = waveform_utils.visible_source_range(
-                    clip.source_in, clip.source_out, x, visible_x, clip_width, draw_width)
-
-                -- Reverse clips: vis_src_in > vis_src_out. Peak cache always expects
-                -- forward-ordered [start, end] sample range; normalize for the query
-                -- and set reversed flag so the renderer draws peaks right-to-left.
-                -- waveform_utils asserts non-zero source range, so vis_src_in ~=
-                -- vis_src_out here and peak_end > peak_start is guaranteed.
-                local reversed = vis_src_in > vis_src_out
-                local peak_start = reversed and vis_src_out or vis_src_in
-                local peak_end = reversed and vis_src_in or vis_src_out
-
-                local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
-                    (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, draw_width)
-                -- peaks == nil is legitimate: peak generation is async, peaks may
-                -- not yet be available for a freshly-loaded media.
-                if peaks and count > 0 then
-                    -- Drift threshold scales with mipmap level — at higher
-                    -- levels (1024/2048 spp), legitimate bin-alignment drift
-                    -- is larger.
-                    local samples_per_pixel = (peak_end - peak_start) / draw_width
-                    local mip_level = peak_constants.select_level(samples_per_pixel)
-                    local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
-                    log_waveform_range_anomalies((clip.resolved_media and clip.resolved_media.id),
-                        peak_start, peak_end, actual_start, actual_end, max_drift)
-
-                    local wave_col = waveform_color.derive(body_color)
-                    local wave_y_offset, wave_height, lbl_vis =
-                        waveform_layout.compute(clip_height)
-                    label_visible = lbl_vis
-                    timeline.add_waveform(view.widget, visible_x, y + wave_y_offset,
-                        draw_width, wave_height, peaks, count, wave_col, reversed)
-                    has_waveform = true
-                end
-            end
-
-            -- Text label: at bottom of clip if waveform present, else original position
-            local label_padding = 10
-            local max_label_width = visible_width - label_padding
-            if max_label_width > 35 then
-                -- Append shortfall suffix when the clip's media has a
-                -- partial_coverage offline_note AND this clip actually
-                -- sticks out past what the candidate covers. Empty
-                -- string for the common (no-note / fully-covered) case.
-                --
-                -- Audio clips store source_in/source_out in SAMPLES at
-                -- the media's sample rate (e.g. 48000). A raw shortfall
-                -- of 1524 samples displayed as "1524f" on the timeline
-                -- is misleading — the 'f' reads as video frames.
-                -- display_rate = sequence fps rescales the delta into
-                -- timeline-frame units for both audio and video.
-                -- Use the injected state_module (not a fresh require) so
-                -- tests can substitute a mock. state_module.get_sequence_frame_rate
-                -- returns nil in some test stubs — guarded below.
-                local rate = state_module.get_sequence_frame_rate
-                    and state_module.get_sequence_frame_rate()
-                local display_rate
-                if rate and rate.fps_numerator and rate.fps_denominator
-                    and rate.fps_denominator > 0 then
-                    display_rate = rate.fps_numerator / rate.fps_denominator
-                end
-                local label_suffix = offline_note.short_suffix(
-                    clip.offline_note, clip.source_in, clip.source_out,
-                    display_rate)
-                local display_label = truncate_label(
-                    label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
-                    max_label_width)
-                if display_label ~= "" and label_visible then
-                    local label_baseline
-                    if has_waveform then
-                        label_baseline = y + clip_height - 4
-                    else
-                        label_baseline = y + math.min(clip_height - 10, 22)
-                    end
-                    timeline.add_text(view.widget, visible_x + 5, label_baseline, display_label, text_color)
-                end
-            end
-        end
-
-        local is_selected = selected_lookup[clip.id] == true
-
-        if is_selected or outline_only then
-            stroke_outline_rect(view, visible_x, y, draw_width, clip_height,
-                                state_module.colors.clip_selected)
-        elseif draw_width ~= clip_width or visible_x ~= x then
-            -- Dash indicators for clipping
-            local dash_height = math.min(clip_height, 12)
-            local dash_col = state_module.colors.clip_selected
-            if x < 0 then timeline.add_rect(view.widget, 0, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
-            if x + clip_width > width then timeline.add_rect(view.widget, width - OUTLINE_THICKNESS, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
-        end
-
-        if not outline_only and draw_width > 0 then
-            local boundary_col = state_module.colors.clip_boundary or "#1a1a1a"
-            timeline.add_rect(view.widget, visible_x + draw_width - 1, y, 1, clip_height, boundary_col)
-        end
-    end
-
-    local function draw_visible_clips()
-        -- All coords are integer frames
-        assert(type(viewport_start) == "number" and type(viewport_end) == "number",
-            "timeline_view_renderer: viewport frames are required")
-
-        for _, track in ipairs(view.filtered_tracks) do
-            local track_id = track and track.id
-            local track_layout = track_id and layout_by_id and layout_by_id[track_id] or nil
-            if track_id and track_layout and track_layout.y < height and (track_layout.y + track_layout.height) > 0 then
-                local track_clips = state_module.get_tab_strip():track_clip_index(track_id)
-                if track_clips and #track_clips > 0 then
-                    local start_index = lower_bound_start_frames(track_clips, viewport_start)
-                    if start_index > 1 then
-                        start_index = start_index - 1
-                    end
-                    for i = start_index, #track_clips do
-                        local clip = track_clips[i]
-                        if not clip or type(clip.sequence_start) ~= "number" or type(clip.duration) ~= "number" then
-                            goto continue_clip
-                        end
-                        -- Gap clips are invisible (empty space) — don't render
-                        if clip.is_gap then
-                            goto continue_clip
-                        end
-                        local clip_start = clip.sequence_start
-                        if clip_start >= viewport_end then
-                            break
-                        end
-                        local clip_end = clip_start + clip.duration
-                        if clip_end <= viewport_start then
-                            goto continue_clip
-                        end
-
-                        draw_clip_instance(clip, track_id, clip.sequence_start, clip.duration, false)
-                        ::continue_clip::
-                    end
-                end
-            end
-        end
-    end
+    -- Per-frame capture bundle for the file-level draw helpers.
+    -- Avoids 6-parameter signatures on draw_clip_instance /
+    -- draw_visible_clips while keeping them testable in isolation.
+    local render_ctx = {
+        view = view,
+        state_module = state_module,
+        width = width,
+        height = height,
+        layout_by_id = view.track_layout_cache.by_id,
+        selected_lookup = selected_lookup,
+    }
 
     -- Base rendering must never bulk-scan all clips — per-track iteration
     -- via track_clip_index is the contract. forbid_bulk_clip_read flips a
     -- flag on the strip; displayed_clips() asserts on it.
-    state_module.get_tab_strip():forbid_bulk_clip_read(draw_visible_clips)
+    state_module.get_tab_strip():forbid_bulk_clip_read(function()
+        draw_visible_clips(render_ctx, viewport_start, viewport_end)
+    end)
 
     render_selected_gaps_overlay(view, state_module, width, height)
 
@@ -1139,7 +1122,7 @@ function M.render(view)
                 end
 
                 local start_value = clip.sequence_start + delta_frames
-                draw_clip_instance(clip, render_track_id, start_value, clip.duration, true)
+                draw_clip_instance(render_ctx, clip, render_track_id, start_value, clip.duration, true)
             end
         end
     end
