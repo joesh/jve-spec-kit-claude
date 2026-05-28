@@ -119,12 +119,22 @@ int lua_set_scroll_area_v_scroll(lua_State* L) {
 }
 
 int lua_set_scroll_area_viewport_margins(lua_State* L) {
-    LuaScrollArea* sa = static_cast<LuaScrollArea*>(static_cast<QWidget*>(lua_to_widget(L, 1)));
+    // qobject_cast to QScrollArea validates the runtime type via Qt's
+    // metaobject (LuaScrollArea has no Q_OBJECT — it's a thin trampoline
+    // subclass that adds no fields/vtable, only widens visibility of
+    // setViewportMargins). The static_cast to LuaScrollArea afterwards is
+    // safe BECAUSE of that layout-identity. Same defense-in-depth as
+    // lua_set_layout's pass-11 fix, adapted for a non-Q_OBJECT subclass.
+    void* widget_ptr = lua_to_widget(L, 1);
+    QScrollArea* qsa = widget_ptr
+        ? qobject_cast<QScrollArea*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)))
+        : nullptr;
+    LuaScrollArea* sa = static_cast<LuaScrollArea*>(qsa);
     int left = luaL_checkinteger(L, 2);
     int top = luaL_checkinteger(L, 3);
     int right = luaL_checkinteger(L, 4);
     int bottom = luaL_checkinteger(L, 5);
-    
+
     if (sa) {
         sa->setViewportMargins(left, top, right, bottom);
         lua_pushboolean(L, 1);

@@ -1709,6 +1709,21 @@ local function refresh_track_button_styles()
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — NOT A LEAK.
+--
+-- The Signals.connect calls from here down to the end of this block run
+-- ONCE at module-load time (Lua caches `require`), not once per project or
+-- per panel-create. They are intentional process-lifetime listeners, same
+-- shape as the `project_changed` connects documented in CLAUDE.md. Past
+-- audits (pass 15c) flagged these as "stacking on project switch" — that
+-- analysis is incorrect; they do not stack.
+--
+-- DO NOT add Signals.disconnect calls in M.on_project_change for these.
+-- If you need a per-project listener, add it inside M.create() (which DOES
+-- run per project) and track its connection id for cleanup.
+-- ----------------------------------------------------------------------------
+
 -- MVC: update button styles when track state changes externally (undo/redo)
 Signals.connect("track_mix_changed", refresh_track_button_styles)
 

@@ -74,15 +74,26 @@ local function populate_tree(tree, clips, filter_column, filter_operator, filter
         end
         if show then
             idx = idx + 1
+            -- All clip columns below are schema NOT NULL (see schema.sql:
+            -- name, track_id, source_in_frame, source_out_frame,
+            -- sequence_start_frame, duration_frames). Asserting here means
+            -- a missing field is a contract violation upstream, not a 0/""
+            -- that we silently render in the index dialog.
+            assert(clip.name, "timeline_index: clip.name missing (NOT NULL)")
+            assert(clip.track_id, "timeline_index: clip.track_id missing (NOT NULL)")
+            assert(clip.source_in_frame, "timeline_index: clip.source_in_frame missing (NOT NULL)")
+            assert(clip.source_out_frame, "timeline_index: clip.source_out_frame missing (NOT NULL)")
+            assert(clip.sequence_start_frame, "timeline_index: clip.sequence_start_frame missing (NOT NULL)")
+            assert(clip.duration_frames, "timeline_index: clip.duration_frames missing (NOT NULL)")
             qt.CONTROL.ADD_TREE_ITEM(tree, {
                 tostring(idx),
-                clip.name or "",
-                clip.track_id or "",
-                tostring(clip.source_in_frame or 0),
-                tostring(clip.source_out_frame or 0),
-                tostring(clip.sequence_start_frame or 0),
-                tostring((clip.sequence_start_frame or 0) + (clip.duration_frames or 0)),
-                tostring(clip.duration_frames or 0),
+                clip.name,
+                clip.track_id,
+                tostring(clip.source_in_frame),
+                tostring(clip.source_out_frame),
+                tostring(clip.sequence_start_frame),
+                tostring(clip.sequence_start_frame + clip.duration_frames),
+                tostring(clip.duration_frames),
             })
             displayed[idx] = clip
         end

@@ -87,7 +87,11 @@ int lua_set_shortcut_enabled(lua_State* L) {
 int lua_delete_shortcut(lua_State* L) {
     QShortcut* shortcut = get_widget<QShortcut>(L, 1);
     if (shortcut) {
-        delete shortcut;
+        // deleteLater: an activated() handler may still be on the call
+        // stack when Lua decides to drop the shortcut (e.g. handler
+        // unbinds itself). Raw delete would yank the object out from
+        // under Qt's event dispatch and corrupt iteration.
+        shortcut->deleteLater();
     }
     return 0;
 }

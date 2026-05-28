@@ -2545,10 +2545,18 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- at the ripple boundary: prefer a gap clip that contains the
     -- boundary frame, otherwise fall back to the nearest media clip.
     local function anchor_clip_id_for_propagated_track(track_clips, boundary_frames, raw_edge_type)
+        -- Half-open occupancy: clip covers [sequence_start, sequence_start+duration).
+        -- A gap ending exactly AT boundary_frames does NOT contain it — the
+        -- frame at the end-exclusive boundary belongs to the next clip.
+        -- Use strict `>` to match the sibling find_gap_at_boundary
+        -- (line ~1038), which gets the same containment test right.
+        -- Pre-fix used `>=`, which mis-selected an upstream gap whose
+        -- right edge sits on the boundary instead of falling through to
+        -- pick_gap_anchor_clip_id for the correct neighbor.
         for _, c in ipairs(track_clips) do
             if c.is_gap
                 and c.sequence_start <= boundary_frames
-                and (c.sequence_start + c.duration) >= boundary_frames then
+                and (c.sequence_start + c.duration) > boundary_frames then
                 return c.id
             end
         end

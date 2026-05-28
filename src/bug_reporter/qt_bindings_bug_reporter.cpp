@@ -352,13 +352,20 @@ static int lua_post_mouse_event(lua_State* L) {
     QPoint globalPos(x, y);
     QPoint localPos = widget->mapFromGlobal(globalPos);
 
-    // Create and post event
+    // Create and post event. QMouseEvent's 5th arg `buttons` is the bitmask
+    // of all currently-held buttons (for chording / drag-with-second-button
+    // scenarios); the 4th `button` is just the one that triggered this event.
+    // Synthetic events posted from the bug-reporter test harness drive a
+    // single button at a time, so `buttons = button` is the correct bitmask
+    // for those flows. If we ever post multi-button events, take a bitmask
+    // here instead of mirroring `button`.
+    Qt::MouseButtons buttons = QFlags<Qt::MouseButton>(button);
     QMouseEvent* event = new QMouseEvent(
         eventType,
         localPos,
         globalPos,
         button,
-        button,  // buttons (for now, same as button)
+        buttons,
         modifiers
     );
 

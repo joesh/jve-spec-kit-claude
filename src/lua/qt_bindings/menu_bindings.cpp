@@ -98,6 +98,13 @@ int lua_connect_menu_action(lua_State* L) {
             jve_handle_lua_callback_error(L, "menu.action_triggered");
         }
     });
+
+    // Unref the captured callback when the QAction is destroyed so the
+    // Lua registry entry doesn't leak for the lifetime of the lua_State.
+    // QAction is parented to its QMenu and gets deleted with it.
+    QObject::connect(action, &QObject::destroyed, [L, callback_ref]() {
+        luaL_unref(L, LUA_REGISTRYINDEX, callback_ref);
+    });
     return 0;
 }
 

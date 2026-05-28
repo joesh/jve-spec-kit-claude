@@ -766,6 +766,20 @@ function M.reload_clips(target_sequence_id, opts)
     return true
 end
 
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — NOT A LEAK.
+--
+-- Every Signals.connect from here to end-of-file runs ONCE when this module
+-- is `require`d (Lua caches modules), not per project switch and not per
+-- timeline_state init. They are intentional process-lifetime listeners.
+-- Past audits (pass 15c) flagged them as "no matching disconnect" — that
+-- analysis is incorrect; they don't need disconnects.
+--
+-- DO NOT move these inside a function or add Signals.disconnect calls
+-- somewhere "for safety". Per-project state lives on `data.state` and is
+-- cleared by core.reset_for_project_change(), not by tearing down listeners.
+-- ----------------------------------------------------------------------------
+
 -- Re-read marks from DB when a mark command executes (or undoes)
 Signals.connect("marks_changed", function(sequence_id)
     if data.sequence and data.state.sequence_id == sequence_id then
