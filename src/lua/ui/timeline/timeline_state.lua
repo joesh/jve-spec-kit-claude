@@ -816,7 +816,13 @@ M.get_video_audio_split_ratio = function()
 end
 M.set_video_audio_split_ratio = function(ratio)
     local cache = strip_holder.displayed_cache()
-    if not cache then return end
+    if not cache then
+        -- Same rationale as set_video_scroll_offset: legitimate transient
+        -- during tab close / project switch. Logged so the drop is
+        -- observable in JVE_LOG=ui:event.
+        log.event("set_video_audio_split_ratio: no displayed cache; dropping ratio=%s", tostring(ratio))
+        return
+    end
     cache.video_audio_split_ratio = math.max(0.05, math.min(0.95, ratio))
     core.persist_state_to_db()
 end

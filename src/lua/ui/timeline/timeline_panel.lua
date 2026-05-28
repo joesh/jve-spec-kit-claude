@@ -3598,10 +3598,18 @@ function M:get_clips()
                 "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing volume")
             assert(type(clip.track_id) == "string" and clip.track_id ~= "",
                 "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing track_id")
+            assert(type(clip.name) == "string",
+                "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing name")
+            -- codec is a media-table field; the timeline-clip query
+            -- (database.lua load_clips) joins to media only for name /
+            -- file_path / offline_note. No codec on timeline clips —
+            -- consumers (sift / find_dialog) read absence as "no codec
+            -- column for this row" and skip codec-filtering it. No
+            -- fabricated "" — that would silently filter out as
+            -- "codec equals empty string" instead of "codec unknown."
             clips[#clips + 1] = {
                 id = clip.id,
-                name = clip.name or "",
-                codec = clip.codec or "",
+                name = clip.name,
                 duration_frames = clip.duration,
                 enabled = clip.enabled ~= false,
                 volume = clip.volume,
