@@ -70,6 +70,30 @@ static std::unordered_map<void*, std::shared_ptr<emp::PcmChunk>> g_pcm_chunks;
 static std::unordered_map<void*, std::shared_ptr<emp::TimelineMediaBuffer>> g_tmb_instances;
 static std::unordered_map<void*, std::unique_ptr<PlaybackController>> g_playback_controllers;
 
+// Lua callback refs held by C++ owners (PlaybackController, GPUVideoSurface).
+// Each setter that previously did `luaL_ref(...)` straight into a captured
+// lambda leaked the prior ref on replace/clear. These maps track the live
+// ref so it can be unref'd when the callback is replaced, cleared, or the
+// owning controller is destroyed (PLAYBACK.CLOSE / __gc).
+//
+// Keyed by raw owner pointer because each controller/surface owns exactly
+// one slot per callback type. SURFACE_ON_READY (one-shot) does not need a
+// map — its lambda unrefs itself on first fire.
+static std::unordered_map<PlaybackController*, int> g_position_cb_refs;
+static std::unordered_map<PlaybackController*, int> g_clip_provider_refs;
+static std::unordered_map<PlaybackController*, int> g_clip_transition_refs;
+static std::unordered_map<GPUVideoSurface*,    int> g_surface_error_refs;
+
+template <typename Map, typename Key>
+static void replace_cb_ref(lua_State* L, Map& map, Key key, int new_ref) {
+    auto it = map.find(key);
+    if (it != map.end()) {
+        luaL_unref(L, LUA_REGISTRYINDEX, it->second);
+        map.erase(it);
+    }
+    if (new_ref != LUA_NOREF) map.emplace(key, new_ref);
+}
+
 // Helper: Push EMP error to Lua (nil, { code=string, msg=string })
 void push_emp_error(lua_State* L, const emp::Error& err) {
     lua_pushnil(L);
@@ -1485,6 +1509,9 @@ static int lua_emp_surface_on_ready(lua_State* L) {
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
     lua_State* main_L = L;
 
+    // One-shot: unref after firing so the registry entry doesn't leak for
+    // the lifetime of the surface. (If the surface is destroyed before it
+    // becomes ready, the ref is unreachable — bounded one-per-call leak.)
     gpu_surface->setReadyCallback([main_L, ref]() {
         lua_rawgeti(main_L, LUA_REGISTRYINDEX, ref);
         if (lua_isfunction(main_L, -1)) {
@@ -1495,6 +1522,7 @@ static int lua_emp_surface_on_ready(lua_State* L) {
         } else {
             jve_discard_non_function_handler(main_L, "<registry ref>", "emp.surface_on_ready");
         }
+        luaL_unref(main_L, LUA_REGISTRYINDEX, ref);
     });
 
     return 0;
@@ -1517,6 +1545,7 @@ static int lua_emp_surface_on_error(lua_State* L) {
 
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replace_cb_ref(L, g_surface_error_refs, gpu_surface, ref);
     lua_State* main_L = L;
 
     gpu_surface->setErrorCallback([main_L, ref](const std::string& error) {
@@ -1610,17 +1639,31 @@ static int lua_playback_create(lua_State* L) {
     return 1;
 }
 
+// Unref every Lua callback ref this controller is holding, then drop the
+// controller from the owning map. Called from both PLAYBACK.CLOSE (explicit
+// teardown) and __gc (Lua-side userdata collected). Idempotent: the controller
+// may already be gone if CLOSE ran before __gc.
+static void release_playback_controller(lua_State* L, void* key) {
+    auto it = g_playback_controllers.find(key);
+    if (it == g_playback_controllers.end()) return;
+    PlaybackController* pc = it->second.get();
+    replace_cb_ref(L, g_position_cb_refs,    pc, LUA_NOREF);
+    replace_cb_ref(L, g_clip_provider_refs,  pc, LUA_NOREF);
+    replace_cb_ref(L, g_clip_transition_refs, pc, LUA_NOREF);
+    g_playback_controllers.erase(it);
+}
+
 // PLAYBACK.CLOSE(controller)
 static int lua_playback_close(lua_State* L) {
     void* key = get_map_key(L, 1, PLAYBACK_CONTROLLER_METATABLE);
-    g_playback_controllers.erase(key);
+    release_playback_controller(L, key);
     return 0;
 }
 
 // PLAYBACK __gc metamethod
 static int lua_playback_gc(lua_State* L) {
     void* key = get_map_key(L, 1, PLAYBACK_CONTROLLER_METATABLE);
-    g_playback_controllers.erase(key);
+    release_playback_controller(L, key);
     return 0;
 }
 
@@ -1756,17 +1799,16 @@ static int lua_playback_set_position_callback(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
     if (lua_isnil(L, 2)) {
+        replace_cb_ref(L, g_position_cb_refs, controller, LUA_NOREF);
         controller->SetPositionCallback(nullptr);
         return 0;
     }
 
     luaL_checktype(L, 2, LUA_TFUNCTION);
 
-    // Store the Lua state and create a reference to the callback function
-    // Note: This is a simplification. In production, we'd need a more robust
-    // callback system with proper ref management.
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replace_cb_ref(L, g_position_cb_refs, controller, ref);
     lua_State* main_L = L;
 
     controller->SetPositionCallback([main_L, ref](int64_t frame, bool stopped) {
@@ -1793,6 +1835,7 @@ static int lua_playback_set_clip_provider(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
     if (lua_isnil(L, 2)) {
+        replace_cb_ref(L, g_clip_provider_refs, controller, LUA_NOREF);
         controller->SetClipProvider(nullptr);
         return 0;
     }
@@ -1801,6 +1844,7 @@ static int lua_playback_set_clip_provider(lua_State* L) {
 
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replace_cb_ref(L, g_clip_provider_refs, controller, ref);
     lua_State* main_L = L;
 
     controller->SetClipProvider([main_L, ref](int64_t from, int64_t to, emp::TrackType type) {
@@ -1899,6 +1943,7 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
     auto* controller = get_playback_controller(L, 1);
 
     if (lua_isnil(L, 2)) {
+        replace_cb_ref(L, g_clip_transition_refs, controller, LUA_NOREF);
         controller->SetClipTransitionCallback(nullptr);
         return 0;
     }
@@ -1907,6 +1952,7 @@ static int lua_playback_set_clip_transition_callback(lua_State* L) {
 
     lua_pushvalue(L, 2);
     int ref = luaL_ref(L, LUA_REGISTRYINDEX);
+    replace_cb_ref(L, g_clip_transition_refs, controller, ref);
     lua_State* main_L = L;
 
     controller->SetClipTransitionCallback([main_L, ref](
