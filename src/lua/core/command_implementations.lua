@@ -9,7 +9,7 @@ local M = {}
 
 -- The list of per-command modules under core.commands.
 local command_modules = {
-    "add_clip_to_track", "add_clips_to_sequence", "add_track", "batch_ripple_edit",
+    "add_clips_to_sequence", "add_track", "batch_ripple_edit",
     "conform_sequence",
     "create_project", "create_sequence", "cut", "delete_bin", "delete_clip",
     "delete_master_clip", "delete_sequence", "deselect_all", "duplicate_master_clip",

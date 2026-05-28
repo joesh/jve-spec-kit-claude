@@ -84,7 +84,7 @@ Independent of tab refactor; can run in parallel branch and merge. Recommend doi
 - Fix `set_patch.lua:70` `change_type` bug (currently falls through to "updated" when enabled is nil).
 - Drop palette code from `set_patch.lua:25-34` and `Patch.create` color column — palette is out-of-scope per spec.
 - Fold `source_routing_view_pref.lua` and `source_routing_view_state.lua` into one module (one preference + one modifier toggle doesn't need two files).
-- Decide on `add_clip_to_track.lua`: fold into Insert/Overwrite or document why it's separate.
+- ~~Decide on `add_clip_to_track.lua`~~ — DELETED 2026-05-28: had zero non-test callers; relied on `undoable=false` + FK CASCADE as a backdoor for "track lifetime governs clip lifetime". Test rewritten against the Insert path the user actually walks.
 - Delete dead drag code (commit 9e32b801 mentioned this; sweep again).
 
 ### Phase 7 — Decompose `timeline_panel.lua`

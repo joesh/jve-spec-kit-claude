@@ -77,7 +77,7 @@ assert(db:exec([[
     INSERT INTO patches
         (id, sequence_id, track_type, source_shape,
          source_track_index, record_track_index, enabled, created_at)
-    VALUES ('p_a1', 'rec_seq', 'AUDIO', 8, 1, 1, 1, 0)
+    VALUES ('p_a1', 'rec_seq', 'AUDIO', 1, 1, 1, 1, 0)
 ]]), "FAIL: patches table missing — schema migration T025 not applied")
 
 assert(db:exec([[
@@ -103,11 +103,66 @@ assert(db:exec([[
 
 print("  patches inserted — schema OK")
 
+-- Source media + clips on src_seq A4/A5/A8. Insert reads source_sequence_id's
+-- clips and routes them via patches onto rec_seq's matching record_track_index.
+-- Patches A4/A5/A8 → record indices 4/5/8 that don't exist yet on rec_seq, so
+-- Insert auto-creates those tracks AND places these routed clips on them. Undo
+-- must remove clips first (AddClipsToSequence undoer) and then the now-empty
+-- auto-tracks (Insert undoer + strict Track.delete) — the proper user-walkable
+-- replacement for the deleted AddClipToTrack backdoor test.
+db:exec(string.format([[
+    INSERT INTO media
+        (id, project_id, name, file_path, duration_frames,
+         fps_numerator, fps_denominator, audio_channels, audio_sample_rate,
+         metadata, created_at, modified_at)
+    VALUES ('src_media', 'proj', 'src_audio', '/tmp/src_audio.wav', 1000, 24, 1,
+            1, 48000,
+            '{"start_tc_audio_samples":0,"start_tc_audio_rate":48000}',
+            %d, %d)
+]], now, now))
+
+local Sequence = require('models.sequence')
+local Clip     = require('models.clip')
+local master_seq_id = Sequence.ensure_master('src_media', 'proj')
+local sub_in, sub_out = Clip.subframe_defaults_for(db, 'src_a4')
+for _, src_track in ipairs({"src_a4", "src_a5", "src_a8"}) do
+    Clip.create({
+        id                    = "src_clip_" .. src_track,
+        project_id            = 'proj',
+        owner_sequence_id     = 'src_seq',
+        track_id              = src_track,
+        sequence_id           = master_seq_id,
+        name                  = "src clip " .. src_track,
+        sequence_start_frame  = 0,
+        duration_frames       = 100,
+        source_in_frame       = 0,
+        source_out_frame      = 100,
+        source_in_subframe    = sub_in,
+        source_out_subframe   = sub_out,
+        fps_mismatch_policy   = "resample",
+        enabled               = true,
+        volume                = 1.0,
+        playhead_frame        = 0,
+        created_at            = now,
+        modified_at           = now,
+    })
+end
+
 command_manager.init("rec_seq", "proj")
 
 local function count_audio_tracks()
     local s = db:prepare(
         "SELECT COUNT(*) FROM tracks WHERE sequence_id='rec_seq' AND track_type='AUDIO'")
+    assert(s); s:exec(); s:next(); local n = s:value(0); s:finalize(); return n
+end
+
+local function count_rec_clips_on_auto_tracks()
+    -- Clips on rec_seq tracks of index >= 4 (the auto-created ones).
+    local s = db:prepare([[
+        SELECT COUNT(*) FROM clips c
+        JOIN tracks t ON t.id = c.track_id
+        WHERE t.sequence_id = 'rec_seq' AND t.track_type = 'AUDIO' AND t.track_index >= 4
+    ]])
     assert(s); s:exec(); s:next(); local n = s:value(0); s:finalize(); return n
 end
 
@@ -132,6 +187,17 @@ assert(after == 8, string.format(
     "FAIL: expected 8 audio tracks after Insert (got %d) — T042 (auto-create) not implemented",
     after))
 print(string.format("  audio tracks after Insert: %d — OK", after))
+
+-- Routed clips: src_seq's clips on src_a4/a5/a8 must have been placed on
+-- rec_seq's matching auto-created tracks via patches.
+-- Insert places 1 clip per audio destination track for each contained source
+-- medium (channel-routed via patches). With 5 auto-tracks (A4..A8), expect 5
+-- routed clips landing on them — this is what exercises the
+-- clip-then-track undo ordering Track.delete now enforces.
+local routed = count_rec_clips_on_auto_tracks()
+assert(routed == 5, string.format(
+    "FAIL: expected 5 routed clips on auto-created tracks (one per A4..A8), got %d", routed))
+print(string.format("  routed clips on auto-tracks: %d — OK", routed))
 
 -- Auto-created tracks must default to sync_mode='ripple', muted=0, soloed=0, locked=0.
 local s = db:prepare([[
@@ -163,47 +229,21 @@ for _, t in ipairs(created) do
 end
 print("  auto-created tracks: sync_mode=ripple, muted/soloed/locked=0 — OK")
 
--- ── FR-021d: no audio-track-type enforcement — mono/stereo/5.1 all accepted ─
--- Find the first auto-created track (audio index=4).
-local st = db:prepare(
-    "SELECT id FROM tracks WHERE sequence_id='rec_seq' AND track_type='AUDIO' AND track_index=4")
-assert(st); st:exec(); st:next()
-local auto_track_id = st:value(0); st:finalize()
-assert(auto_track_id, "auto-created A4 track not found")
-
-for _, ch in ipairs({1, 2, 6}) do
-    local mid = "med_ch" .. ch
-    assert(db:exec(string.format([[
-        INSERT OR IGNORE INTO media
-            (id, project_id, name, file_path, duration_frames,
-             fps_numerator, fps_denominator, audio_channels, audio_sample_rate,
-             metadata, created_at, modified_at)
-        VALUES ('%s', 'proj', 'C%d', '/tmp/c_ch%d.wav', 1000, 24, 1, %d, 48000,
-                '{"start_tc_audio_samples":0,"start_tc_audio_rate":48000}',
-                %d, %d)
-    ]], mid, ch, ch, ch, now, now)), "media INSERT failed for ch=" .. ch)
-
-    local r2 = command_manager.execute("AddClipToTrack", {
-        sequence_id          = "rec_seq",
-        project_id           = "proj",
-        track_id             = auto_track_id,
-        media_id             = mid,
-        sequence_start_frame = (ch - 1) * 20,
-        duration_frames      = 20,
-        source_in_frame      = 0,
-    })
-    assert(r2 and r2.success, string.format(
-        "FAIL: %d-ch clip rejected on auto-created track (FR-021d violation)", ch))
-end
-print("  mono/stereo/5.1 clips accepted on auto-created track — FR-021d OK")
+-- FR-021d (no audio-track-type enforcement: mono/stereo/5.1 all accepted) was
+-- previously verified here via AddClipToTrack — deleted 2026-05-28 because the
+-- primitive had no UI path. See todo_fr021d_channel_acceptance_coverage.md.
 
 -- ── Undo: one Cmd-Z reverts edit AND removes auto-created tracks ──────────────
 command_manager.undo()
+local after_undo_clips = count_rec_clips_on_auto_tracks()
+assert(after_undo_clips == 0, string.format(
+    "FAIL: after undo expected 0 routed clips, got %d — clips must undo before tracks",
+    after_undo_clips))
 local after_undo = count_audio_tracks()
 assert(after_undo == 3, string.format(
     "FAIL: after undo expected 3 audio tracks, got %d — auto-created tracks must undo with edit",
     after_undo))
-print(string.format("  after undo: %d audio tracks — auto-created tracks removed — OK",
-    after_undo))
+print(string.format("  after undo: %d clips, %d audio tracks — all auto-cleanup OK",
+    after_undo_clips, after_undo))
 
 print("\n✅ test_auto_create_record_track.lua passed")
