@@ -18,15 +18,21 @@ int lua_create_splitter(lua_State* L) {
 }
 
 int lua_set_layout(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-    QLayout* layout = static_cast<QLayout*>(lua_to_widget(L, 2)); // Cast via QWidget* first is unsafe if layouts aren't widgets in our system
-    // Note: In Qt, QLayout is NOT a QWidget. Our Lua system treats everything as "widget" userdata.
-    // We need to check if the userdata is actually a QLayout.
-    
-    // Correct cast:
-    // The lua_to_widget returns a void*. We need to know if it's a QLayout.
-    // For now, assume the userdata system holds QLayout* pointers correctly.
-    
+    // QLayout and QWidget both inherit QObject (single inheritance), so the
+    // void* returned by lua_to_widget can be reinterpreted as QObject* without
+    // offset adjustment. qobject_cast then uses Qt's metaobject system to
+    // verify the actual runtime type — guards against a QWidget userdata
+    // being passed where a QLayout is expected (which previously corrupted
+    // setLayout via an unchecked static_cast).
+    void* widget_ptr = lua_to_widget(L, 1);
+    void* layout_ptr = lua_to_widget(L, 2);
+    QWidget* widget = widget_ptr
+        ? qobject_cast<QWidget*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)))
+        : nullptr;
+    QLayout* layout = layout_ptr
+        ? qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(layout_ptr)))
+        : nullptr;
+
     if (widget && layout) {
         widget->setLayout(layout);
         lua_pushboolean(L, 1);
