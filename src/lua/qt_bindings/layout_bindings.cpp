@@ -245,9 +245,18 @@ int lua_add_layout_to_layout(lua_State* L) {
 }
 
 // Set layout on a widget (for group boxes, etc.)
+// Same defense-in-depth as lua_set_layout (pass 11): qobject_cast both sides
+// so a swapped widget/layout userdata or a stale destroyed QObject is caught
+// at the metaobject layer instead of corrupting setLayout via a bad pointer.
 int lua_set_widget_layout(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-    QLayout* layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(lua_to_widget(L, 2))));
+    void* widget_ptr = lua_to_widget(L, 1);
+    void* layout_ptr = lua_to_widget(L, 2);
+    QWidget* widget = widget_ptr
+        ? qobject_cast<QWidget*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)))
+        : nullptr;
+    QLayout* layout = layout_ptr
+        ? qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(layout_ptr)))
+        : nullptr;
 
     if (widget && layout) {
         widget->setLayout(layout);

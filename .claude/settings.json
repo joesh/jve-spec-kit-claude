@@ -51,6 +51,10 @@
           {
             "type": "command",
             "command": "/Users/joe/Local/jve-spec-kit-claude/.claude/hooks/audit_reminder.sh"
+          },
+          {
+            "type": "command",
+            "command": "/Users/joe/Local/jve-spec-kit-claude/.claude/hooks/lint_anti_patterns_post_edit.sh"
           }
         ]
       }
