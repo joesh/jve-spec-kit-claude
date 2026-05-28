@@ -382,6 +382,11 @@ function M.attach_strip_to_state_mock(state)
             clips_at_time      = function(_, t, c)
                 return state.get_clips_at_time and state.get_clips_at_time(t, c) or {}
             end,
+            forbid_bulk_clip_read = function(_, fn)
+                -- Stub passthrough — production strip uses this scope to
+                -- assert displayed_clips() isn't called during base render.
+                fn()
+            end,
         }
     end
     return state
@@ -431,6 +436,7 @@ function M.make_strip_stub(spec)
             if spec.clips_at_time then return spec.clips_at_time(t, candidates) end
             return {}
         end,
+        forbid_bulk_clip_read = function(_, fn) fn() end,
     }
 end
 

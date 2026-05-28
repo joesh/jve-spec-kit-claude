@@ -443,52 +443,66 @@ end
 --- selection update (the orchestrator at timeline_state.apply_mutations
 --- handles those cross-cutting concerns). Order:
 --- updates → inserts → bulk_shifts → placements → deletes.
-function TimelineTab:apply_mutations(mutations)
-    if type(mutations) ~= "table" then return false end
+local function apply_updates(cache, updates)
+    if not updates then return false end
     local changed = false
-    local cache = self.cache
+    for _, update in ipairs(updates) do
+        if apply_update_to_cache(cache, update) then changed = true end
+    end
+    return changed
+end
 
-    -- Updates must run against fresh indexes so clip_lookup is populated.
-    ensure_indexes(self)
-    if mutations.updates then
-        for _, update in ipairs(mutations.updates) do
-            if apply_update_to_cache(cache, update) then changed = true end
+local function apply_inserts(cache, list)
+    if not list then return false end
+    local changed = false
+    for _, clip in ipairs(list) do
+        if clip_geometry.normalize_clip_integers(clip) then
+            table.insert(cache.clips, clip)
+            changed = true
         end
     end
+    return changed
+end
 
-    local function apply_insert_list(list)
-        if not list then return end
-        for _, clip in ipairs(list) do
-            if clip_geometry.normalize_clip_integers(clip) then
-                table.insert(cache.clips, clip)
+local function apply_bulk_shifts(cache, shifts)
+    if not shifts then return false end
+    local changed = false
+    for _, shift in ipairs(shifts) do
+        if apply_bulk_shift_to_cache(cache, shift) then changed = true end
+    end
+    return changed
+end
+
+local function apply_deletes(cache, deletes)
+    if not deletes then return false end
+    local changed = false
+    for _, entry in ipairs(deletes) do
+        local clip_id = type(entry) == "table" and entry.clip_id or entry
+        for i = #cache.clips, 1, -1 do
+            if cache.clips[i].id == clip_id then
+                table.remove(cache.clips, i)
                 changed = true
             end
         end
     end
+    return changed
+end
 
-    apply_insert_list(mutations.inserts)
+function TimelineTab:apply_mutations(mutations)
+    if type(mutations) ~= "table" then return false end
+    local cache = self.cache
+    local changed = false
+
+    -- Updates must run against fresh indexes so clip_lookup is populated.
+    ensure_indexes(self)
+    if apply_updates(cache, mutations.updates) then changed = true end
+
+    if apply_inserts(cache, mutations.inserts) then changed = true end
     if changed then self:invalidate_indexes(); ensure_indexes(self) end
 
-    if mutations.bulk_shifts then
-        ensure_indexes(self)
-        for _, shift in ipairs(mutations.bulk_shifts) do
-            if apply_bulk_shift_to_cache(cache, shift) then changed = true end
-        end
-    end
-
-    apply_insert_list(mutations.placements)
-
-    if mutations.deletes then
-        for _, entry in ipairs(mutations.deletes) do
-            local clip_id = type(entry) == "table" and entry.clip_id or entry
-            for i = #cache.clips, 1, -1 do
-                if cache.clips[i].id == clip_id then
-                    table.remove(cache.clips, i)
-                    changed = true
-                end
-            end
-        end
-    end
+    if apply_bulk_shifts(cache, mutations.bulk_shifts) then changed = true end
+    if apply_inserts(cache, mutations.placements) then changed = true end
+    if apply_deletes(cache, mutations.deletes) then changed = true end
 
     if changed then
         self:invalidate_indexes()

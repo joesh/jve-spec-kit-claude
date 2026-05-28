@@ -994,23 +994,10 @@ function M.render(view)
         end
     end
 
-    local function render_base_clips()
-        -- Base rendering must never fall back to scanning all clips.
-        -- Guard by temporarily overriding the strip's displayed_clips
-        -- during the base pass.
-        local strip = state_module.get_tab_strip()
-        local original = strip.displayed_clips
-        strip.displayed_clips = function()
-            error("timeline_view_renderer: strip:displayed_clips is forbidden for base rendering; use strip:track_clip_index(track_id)", 2)
-        end
-        local ok, err = pcall(draw_visible_clips)
-        strip.displayed_clips = original
-        if not ok then
-            error(err, 2)
-        end
-    end
-
-    render_base_clips()
+    -- Base rendering must never bulk-scan all clips — per-track iteration
+    -- via track_clip_index is the contract. forbid_bulk_clip_read flips a
+    -- flag on the strip; displayed_clips() asserts on it.
+    state_module.get_tab_strip():forbid_bulk_clip_read(draw_visible_clips)
 
     -- Draw Selected Gaps
     local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}

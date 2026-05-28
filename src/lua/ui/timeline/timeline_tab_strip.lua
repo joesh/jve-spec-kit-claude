@@ -197,10 +197,28 @@ end
 --- Live clip list of the displayed tab (media + derived gaps). Returns
 --- the cache's own table by reference — callers must not mutate it.
 --- Empty list when no tab is displayed.
+--- Asserts inside a `forbid_bulk_clip_read` scope (renderer base pass
+--- must go through track_clip_index, not bulk-scan all clips).
 function TimelineTabStrip:displayed_clips()
+    assert(not self._bulk_clip_read_forbidden,
+        "TimelineTabStrip:displayed_clips forbidden in this scope — "
+        .. "use track_clip_index(track_id) for per-track iteration")
     local displayed = self.displayed_tab
     if not displayed then return {} end
     return displayed.cache.clips
+end
+
+--- Run fn() with displayed_clips() guarded against bulk reads. Used by
+--- the renderer base pass to enforce per-track iteration (rule 1.14
+--- fail-fast). Unwinds the flag on both success and error.
+function TimelineTabStrip:forbid_bulk_clip_read(fn)
+    assert(not self._bulk_clip_read_forbidden,
+        "TimelineTabStrip:forbid_bulk_clip_read: already inside a "
+        .. "forbid scope (nested calls would re-clear the flag on exit)")
+    self._bulk_clip_read_forbidden = true
+    local ok, err = pcall(fn)
+    self._bulk_clip_read_forbidden = false
+    if not ok then error(err, 2) end
 end
 
 --- Live track list of the displayed tab. Empty list when no tab is displayed.
