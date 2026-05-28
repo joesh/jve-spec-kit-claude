@@ -103,10 +103,16 @@ function M.format_timecode(time_obj, frame_rate, opts)
     local total_frames
     local sign = ""
 
-    local drop_frame = false
     local separator = ":"
     if type(opts) == "table" then
-        drop_frame = opts.drop_frame or false
+        -- Drop-frame timecode math is not implemented. The function was
+        -- previously emitting NDF values with the DF separator (`;`) when
+        -- drop_frame=true, producing a string that looked like DF TC but
+        -- carried NDF values — a silent lie. Fail loudly until real DF
+        -- math (frame-renumbering for 29.97/59.94 drop) lands. See
+        -- todo_drop_frame_timecode.md for the work needed.
+        assert(not opts.drop_frame,
+            "frame_utils.format_timecode: drop_frame=true requested but DF math is not implemented")
         separator = opts.separator or separator
     end
 
@@ -121,7 +127,7 @@ function M.format_timecode(time_obj, frame_rate, opts)
         total_frames = 0
     end
 
-    -- Standard NLE Timecode math (Non-Drop for now)
+    -- Standard NLE non-drop timecode math (drop-frame asserted out above)
     -- Rate calculation:
     -- 24/1 -> 24
     -- 30000/1001 -> 29.97 -> 30 (NDF)
@@ -141,8 +147,8 @@ function M.format_timecode(time_obj, frame_rate, opts)
     local seconds = math.floor(remaining / fps)
     local frames = remaining % fps
 
-    local sep = drop_frame and ";" or separator
-    return string.format("%s%02d%s%02d%s%02d%s%02d", sign, hours, sep, minutes, sep, seconds, sep, frames)
+    return string.format("%s%02d%s%02d%s%02d%s%02d",
+        sign, hours, separator, minutes, separator, seconds, separator, frames)
 end
 
 -- Parse a timecode string into a Rational time using the provided frame rate.
