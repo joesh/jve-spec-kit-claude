@@ -1620,6 +1620,15 @@ end
 --- Shift a specific set of clips by `delta` frames. Used by undo to reverse
 --- a previous ripple without re-querying (the insertion point's new clips
 --- would otherwise be swept in). `delta` may be negative.
+---
+--- Order matters: trg_prevent_video_overlap_update fires per-row, so an
+--- intermediate state where a row's NEW range touches another
+--- (still-unshifted) row in the same batch raises VIDEO_OVERLAP and the
+--- whole shift aborts. Mirror `ripple_track_forward`'s rule but derive
+--- direction from `delta` (which carries the OPPOSITE sign of the
+--- original ripple when called from an undoer — so the caller's
+--- execute-time order is the wrong order for undo). Sort internally by
+--- current sequence_start_frame so callers don't have to think about it.
 function M.shift_many_by(clip_ids, delta)
     assert(type(clip_ids) == "table",
         "Clip.shift_many_by: clip_ids table required")
@@ -1629,6 +1638,29 @@ function M.shift_many_by(clip_ids, delta)
 
     local db = require("core.database").get_connection()
     require("core.track_lock_guard").assert_clips_writable(db, clip_ids)
+
+    -- delta > 0 → process highest-start first (DESC): each clip moves
+    --   right into the slot the next-higher clip has just vacated.
+    -- delta < 0 → process lowest-start first (ASC): symmetric.
+    local rows = {}
+    local sel = db:prepare(
+        "SELECT sequence_start_frame FROM clips WHERE id = ?")
+    assert(sel, "Clip.shift_many_by: select prepare failed")
+    for _, cid in ipairs(clip_ids) do
+        sel:bind_value(1, cid)
+        assert(sel:exec(), "Clip.shift_many_by: select exec failed")
+        assert(sel:next(), string.format(
+            "Clip.shift_many_by: clip %s not found", tostring(cid)))
+        rows[#rows + 1] = { id = cid, start = sel:value(0) }
+        sel:reset()
+    end
+    sel:finalize()
+    if delta > 0 then
+        table.sort(rows, function(a, b) return a.start > b.start end)
+    else
+        table.sort(rows, function(a, b) return a.start < b.start end)
+    end
+
     local upd = db:prepare([[
         UPDATE clips
         SET sequence_start_frame = sequence_start_frame + ?,
@@ -1636,11 +1668,11 @@ function M.shift_many_by(clip_ids, delta)
         WHERE id = ?
     ]])
     assert(upd, "Clip.shift_many_by: prepare failed")
-    for _, cid in ipairs(clip_ids) do
+    for _, r in ipairs(rows) do
         upd:bind_value(1, delta)
-        upd:bind_value(2, cid)
+        upd:bind_value(2, r.id)
         assert(upd:exec(),
-            "Clip.shift_many_by: exec failed for " .. tostring(cid))
+            "Clip.shift_many_by: exec failed for " .. tostring(r.id))
         upd:reset()
     end
     upd:finalize()
