@@ -587,7 +587,7 @@ local function normalize_command(command_or_name, params)
 		-- Script callers must pass it explicitly to avoid silently targeting the wrong project.
 		-- Commands with no_project_context can run without a project_id.
 		if origin == "ui" and (not params.project_id or params.project_id == "") then
-			params.project_id = active_project_id or ""
+			params.project_id = active_project_id
 		end
 		if not no_project_context and not (params.project_id and params.project_id ~= "") then
 			return nil, bug_result("execute(command_name, params): params.project_id is required")
@@ -2211,9 +2211,11 @@ function M:list_history_entries()
     local group_last = {}    -- gid → highest seq
     local group_count = {}   -- gid → member count
     for _, cmd in ipairs(commands) do
+        assert(type(cmd.sequence_number) == "number",
+            "list_history_entries: cmd.sequence_number must be number (commands.sequence_number is NOT NULL)")
         local gid = cmd.undo_group_id
         if gid then
-            local seq = cmd.sequence_number or 0
+            local seq = cmd.sequence_number
             if not group_first[gid] or seq < group_first[gid] then
                 group_first[gid] = seq
             end
@@ -2229,7 +2231,7 @@ function M:list_history_entries()
     local visible_seq_for = {}  -- maps any seq → visible representative seq
 
     for _, cmd in ipairs(commands) do
-        local seq = cmd.sequence_number or 0
+        local seq = cmd.sequence_number
         local gid = cmd.undo_group_id
         local count = gid and group_count[gid] or 1
 

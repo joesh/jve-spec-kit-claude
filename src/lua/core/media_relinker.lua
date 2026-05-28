@@ -698,8 +698,7 @@ function M.check_extent_containment(extent_start, extent_end, probe_result, stor
     return abs_start >= cand_start and abs_end <= cand_end
 end
 
--- Backward compat shim: check_clip_containment delegates to check_extent_containment
--- using the clip's source_in/source_out as the extent.
+-- Clip-shaped adapter over check_extent_containment: unpacks source_in/source_out.
 function M.check_clip_containment(clip, probe_result, stored_rate, tc_remap_offset)
     return M.check_extent_containment(
         clip.source_in, clip.source_out, probe_result, stored_rate, tc_remap_offset)

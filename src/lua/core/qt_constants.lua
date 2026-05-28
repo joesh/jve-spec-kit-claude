@@ -67,33 +67,12 @@ if qt_constants then
 
     -- Control Functions - add click handler support
     qt_constants.CONTROL = qt_constants.CONTROL or {}
-    if not qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER then
-        print("DEBUG qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER missing")
-    end
     qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER = qt_constants.CONTROL.SET_BUTTON_CLICK_HANDLER or require_global_function("qt_set_button_click_handler")
-    if not qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER then
-        print("DEBUG qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER missing")
-    end
     qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER = qt_constants.CONTROL.SET_WIDGET_CLICK_HANDLER or require_global_function("qt_set_widget_click_handler")
-    if not qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER then
-        print("DEBUG qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER missing")
-    end
     qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER = qt_constants.CONTROL.SET_CONTEXT_MENU_HANDLER or require_global_function("qt_set_context_menu_handler")
-    if not qt_constants.CONTROL.SET_TREE_ITEM_ICON then
-        print("DEBUG qt_constants.CONTROL.SET_TREE_ITEM_ICON missing")
-    end
     qt_constants.CONTROL.SET_TREE_ITEM_ICON = qt_constants.CONTROL.SET_TREE_ITEM_ICON or require_global_function("qt_set_tree_item_icon")
-    if not qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER then
-        print("DEBUG qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER missing")
-    end
     qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER = qt_constants.CONTROL.SET_TREE_DOUBLE_CLICK_HANDLER or require_global_function("qt_set_tree_item_double_click_handler")
-    if not qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER then
-        print("DEBUG qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER missing")
-    end
     qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER = qt_constants.CONTROL.SET_TREE_SELECTION_HANDLER or require_global_function("qt_set_tree_selection_handler")
-    if not qt_constants.CONTROL.SET_TREE_SELECTION_MODE then
-        print("DEBUG qt_constants.CONTROL.SET_TREE_SELECTION_MODE missing")
-    end
     qt_constants.CONTROL.SET_TREE_SELECTION_MODE = qt_constants.CONTROL.SET_TREE_SELECTION_MODE or require_global_function("qt_set_tree_selection_mode")
     qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK = qt_constants.CONTROL.SET_TREE_EXPANDS_ON_DOUBLE_CLICK or require_global_function("qt_set_tree_expands_on_double_click")
     qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE = qt_constants.CONTROL.SET_TREE_DRAG_DROP_MODE or require_global_function("qt_set_tree_drag_drop_mode")

@@ -39,7 +39,9 @@ local playhead_changed_conn = nil
 -- contexts (where no sequence_monitor exists).
 local function sync_engines_on_playhead_changed(seq_id, frame)
     if not M.is_bootstrapped() then return end
-    if type(frame) ~= "number" then return end
+    assert(type(frame) == "number", string.format(
+        "transport.sync_engines_on_playhead_changed: frame must be number, got %s (seq_id=%s)",
+        type(frame), tostring(seq_id)))
     for _, engine in ipairs({ M.source_engine, M.record_engine }) do
         if engine and engine.loaded_sequence_id == seq_id then
             if engine:is_playing() then engine:stop() end
