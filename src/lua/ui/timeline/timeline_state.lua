@@ -440,13 +440,14 @@ end
 local function hydrate_updates_for_tab(target_tab, updates)
     if not updates then return end
     for _, update in ipairs(updates) do
-        local clip_id = update.clip_id or update.id
-        if clip_id then
-            local is_gap = update.is_gap
-                or (type(clip_id) == "string" and clip_id:sub(1, 4) == "gap_")
-            if not is_gap and not target_tab:get_clip_by_id(clip_id) then
-                clips.hydrate_into_tab(target_tab, clip_id, update.track_sequence_id)
-            end
+        assert(update.clip_id, "hydrate_updates_for_tab: update payload "
+            .. "missing clip_id — every producer (add_update_mutation, "
+            .. "blade/split_clip mutation_entry) must set it")
+        local clip_id = update.clip_id
+        local is_gap = update.is_gap
+            or (type(clip_id) == "string" and clip_id:sub(1, 4) == "gap_")
+        if not is_gap and not target_tab:get_clip_by_id(clip_id) then
+            clips.hydrate_into_tab(target_tab, clip_id, update.track_sequence_id)
         end
     end
 end

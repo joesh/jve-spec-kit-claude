@@ -408,8 +408,11 @@ local function apply_numeric_updates(clip, update)
 end
 
 local function apply_update_to_cache(cache, update)
-    local clip_id = update.clip_id or update.id
-    if not clip_id then return false end
+    assert(update.clip_id, "TimelineTab.apply_update_to_cache: update "
+        .. "payload missing clip_id — every producer "
+        .. "(add_update_mutation, blade/split_clip mutation_entry) "
+        .. "must set it")
+    local clip_id = update.clip_id
     local clip = cache.clip_lookup[clip_id]
     if not clip then return false end
 

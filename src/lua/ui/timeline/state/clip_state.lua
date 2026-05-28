@@ -11,7 +11,9 @@ local clip_geometry = require("ui.timeline.clip_geometry")
 
 -- Public read getters delegate to the displayed tab's per-tab cache —
 -- the authoritative model for "what clips does the timeline view show?"
--- (rule 3.0 MVC).
+-- (rule 3.0 MVC). Returns nil for all blank-display states: no strip yet,
+-- strip with zero tabs, OR strip with tabs but no displayed pointer
+-- (legitimate transient state during clear_displayed / close_displayed_tab).
 local function displayed_tab()
     local strip = strip_holder.get()
     if not strip then return nil end

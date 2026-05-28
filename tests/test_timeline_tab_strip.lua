@@ -215,6 +215,15 @@ end
 assert(restored_rec_a, "rec_a tab found in restored strip")
 assert(restored_rec_a.kind == "record" and restored_rec_a.sequence_id == "rec1",
     "tab identity preserved across serialize/deserialize")
+
+-- Restored tabs must arrive with populated caches — otherwise the first
+-- reader hits nil per-sequence fields (e0e5512b removed the silent defaults).
+-- sequence_frame_rate is a table after load_from_database, nil before.
+for _, t in ipairs(restored.tabs) do
+    assert(type(t.cache.sequence_frame_rate) == "table",
+        string.format("deserialized tab %s must have its cache loaded "
+            .. "from DB, not just empty containers", t.id))
+end
 print("✓ serialize/deserialize round trip preserves tabs + pointers + identity")
 
 -- deserialize asserts on dangling pointer

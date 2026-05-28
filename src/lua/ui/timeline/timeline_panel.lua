@@ -790,10 +790,11 @@ local function close_tab(sequence_id)
             -- doesn't resurrect this seq as a SourceTab.
             set_persisted_source_tab_seq_id(nil)
         end
-        -- Delegate strip close + body re-pull (if displayed) to the state
-        -- layer. close_displayed_tab handles the asymmetry where the
-        -- closed tab WAS displayed but was NOT active (source-tab case)
-        -- by calling activate_displayed on the new displayed sequence.
+        -- Delegate strip close + timeline-view re-pull (if displayed) to
+        -- the state layer. close_displayed_tab handles the asymmetry
+        -- where the closed tab WAS displayed but was NOT active
+        -- (source-tab case) by calling activate_displayed on the new
+        -- displayed sequence.
         timeline_state.close_displayed_tab(sequence_id)
     end
 
@@ -812,14 +813,14 @@ local function close_tab(sequence_id)
             M.unload_sequence()
         end
     else
-        -- close_displayed_tab already refreshed the body if the closed
-        -- tab was displayed. Tab styling tracks DISPLAYED, not active.
+        -- close_displayed_tab already refreshed the timeline view if the
+        -- closed tab was displayed. Tab styling tracks DISPLAYED, not active.
         update_tab_styles(timeline_state.get_displayed_tab_id())
     end
     update_tab_scroll_arrows()
     persist_open_tabs()
 
-    -- Reclaim keyboard focus on the timeline body. When a tab's close
+    -- Reclaim keyboard focus on the timeline view. When a tab's close
     -- button widget is destroyed, Qt's default focus-fallback lands on
     -- the next-in-tab-order widget — for this layout that's the
     -- timecode entry (TSO 2026-05-17). After a close the user is back
@@ -3224,10 +3225,11 @@ local function rebuild_for_displayed_tab()
         qt_suspend_scroll_area_anchor(M.header_video_scroll, true)
     end
 
-    -- Body data (tracks, clips, view-state) was already loaded into
-    -- data.state by core.activate_displayed before displayed_tab_changed
-    -- fired. This function does widget-level rebuild only — pull from
-    -- data.state which already reflects displayed_tab_id (MVC rule 3.0).
+    -- Timeline-view data (tracks, clips, view-state) lives on the
+    -- displayed TimelineTab's cache, hydrated by strip:open_record_tab /
+    -- open_source_tab before displayed_tab_changed fired. This function
+    -- does widget-level rebuild only — pull from the displayed tab via
+    -- the strip (MVC rule 3.0).
     if M.header_video_scroll and M.header_audio_scroll then
         local new_video_container = select(1, create_video_headers())
         qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_video_scroll, new_video_container)
@@ -3279,7 +3281,7 @@ local function rebuild_for_displayed_tab()
     -- does not load any monitor.
 end
 
--- Body-rebuild listener: any pointer transition (record→record,
+-- Timeline-view-rebuild listener: any pointer transition (record→record,
 -- record→source, source→record) flows through here. NOTE: outgoing
 -- scroll persistence happens BEFORE the strip swap (timeline_state's
 -- switch_to_*_tab wrappers call persist_scroll_offsets first) — doing

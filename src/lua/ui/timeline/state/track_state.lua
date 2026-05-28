@@ -8,9 +8,10 @@ local strip_holder = require("ui.timeline.state.strip_holder")
 
 local track_layout_dirty = false
 
--- Live read of the displayed tab's track list. Empty when no tab is
--- displayed (project-blank or post-clear). NEVER nil — callers iterate
--- without nil-guards.
+-- Live read of the displayed tab's track list. Empty for all blank-display
+-- states (no strip, no tabs, or tabs without a displayed pointer — the
+-- latter is a legitimate transient during clear_displayed / close).
+-- NEVER nil — callers iterate without nil-guards.
 local function displayed_tracks()
     local strip = strip_holder.get()
     if not strip then return {} end

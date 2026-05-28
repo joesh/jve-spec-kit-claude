@@ -1066,8 +1066,9 @@ end
 -- Master sequences hold no `clips` rows — their playable content lives in
 -- `media_refs` (each row is one continuous span of a media file pinned at
 -- the file's TC origin on a master track). The timeline view renders
--- from `data.state.clips`, so to show a master in the timeline view we
--- synthesize one clip-shaped row per media_ref. FR-007 is the consumer.
+-- from the displayed TimelineTab's `cache.clips`, so to show a master in
+-- the timeline view we synthesize one clip-shaped row per media_ref.
+-- FR-007 is the consumer.
 --
 -- The synthesized rows are NOT persisted, NOT mutable through any clip
 -- command path, and carry id="mref:<media_ref_id>" so they're trivially

@@ -47,7 +47,10 @@ local SAVEPOINT = "split_clip_atomic"
 -- and _value variants (for clip_state.apply_mutations update checks).
 local function mutation_entry(row)
     return {
+        -- Update consumers key by clip_id; insert consumers key by id.
+        -- Same row → both fields. See blade.lua for the matching pattern.
         id                    = row.id,
+        clip_id               = row.id,
         owner_sequence_id     = row.owner_sequence_id,
         track_sequence_id     = row.owner_sequence_id,
         track_id              = row.track_id,

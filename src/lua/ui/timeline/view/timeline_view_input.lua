@@ -130,7 +130,8 @@ end
 
 local function find_gap_at_time(view, track_id, time_frame)
     if not track_id or type(time_frame) ~= "number" then return nil end
-    local state = view.state    local clips_on_track = state.get_tab_strip():track_clip_index(track_id)
+    local state = view.state
+    local clips_on_track = state.get_tab_strip():track_clip_index(track_id)
     if not clips_on_track or #clips_on_track == 0 then
         return nil
     end
@@ -251,7 +252,8 @@ end
 -- Scan the requested track for clips near the cursor and return whichever edges
 -- fall inside the configured trim zone. Returns nil when no handles are within range.
 local function pick_edges_for_track(state, track_id, cursor_x, viewport_width)
-    if not track_id then return nil end    local track_clips = state.get_tab_strip():track_clip_index(track_id)
+    if not track_id then return nil end
+    local track_clips = state.get_tab_strip():track_clip_index(track_id)
     if not track_clips or #track_clips == 0 then return nil end
     return edge_picker.pick_edges(track_clips, cursor_x, viewport_width, {
         edge_zone = ui_constants.TIMELINE.EDGE_ZONE_PX,

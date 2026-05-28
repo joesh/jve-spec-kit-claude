@@ -314,6 +314,11 @@ function TimelineTabStrip.deserialize(t)
 
     for _, serialized_tab in ipairs(t.tabs) do
         local tab = TimelineTab.deserialize(serialized_tab)
+        -- Match the open_*_tab path: constructor builds empty containers,
+        -- caller hydrates the cache from the DB. Without this the tab
+        -- arrives with nil per-sequence fields and the first reader (ruler,
+        -- viewport, renderer) asserts.
+        tab:load_from_database()
         table.insert(strip.tabs, tab)
         if tab.kind == "source" then
             assert(strip.source_tab == nil,

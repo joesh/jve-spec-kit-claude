@@ -42,7 +42,11 @@ local SAVEPOINT = "blade_atomic"
 --- uniformly.
 local function mutation_entry(row)
     return {
+        -- Update consumers (timeline_tab.apply_update_to_cache,
+        -- hydrate_updates_for_tab) key by clip_id; insert consumers
+        -- (apply_inserts_to_cache) key by id. Same row → both fields.
         id                    = row.id,
+        clip_id               = row.id,
         owner_sequence_id     = row.owner_sequence_id,
         track_sequence_id     = row.owner_sequence_id,
         track_id              = row.track_id,

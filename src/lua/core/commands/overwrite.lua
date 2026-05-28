@@ -327,7 +327,9 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     local row = Clip.load_v13_row(tr.id)
                     if row then
                         bucket.updates[#bucket.updates + 1] = {
+                            -- Update consumers key by clip_id; insert by id.
                             id                  = row.id,
+                            clip_id             = row.id,
                             owner_sequence_id   = row.owner_sequence_id,
                             track_sequence_id   = row.owner_sequence_id,
                             track_id            = row.track_id,
