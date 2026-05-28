@@ -56,8 +56,9 @@ function M.show_dialog(parent_window)
     -- -----------------------------------------------------------------------
     -- Location row
     -- -----------------------------------------------------------------------
-    local home = os.getenv("HOME") or ""
-    local default_location = home ~= "" and (home .. "/Documents/JVE Projects") or ""
+    local home = os.getenv("HOME")
+    assert(home and home ~= "", "new_project: HOME must be set")
+    local default_location = home .. "/Documents/JVE Projects"
 
     local loc_layout = qt.LAYOUT.CREATE_HBOX()
     local loc_label = qt.WIDGET.CREATE_LABEL("Location:")

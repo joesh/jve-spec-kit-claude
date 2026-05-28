@@ -303,7 +303,7 @@ end
 --- Schedule a debounced persist (coalesces rapid status changes).
 local function schedule_persist()
     if persist_timer_active then return end
-    if type(qt_create_single_shot_timer) ~= "function" then return end
+    if type(qt_create_single_shot_timer) ~= "function" then return end  -- lint-allow: R004 Qt binding may not be wired in pure-Lua test harnesses
     persist_timer_active = true
     qt_create_single_shot_timer(PERSIST_DEBOUNCE_MS, function()
         persist_timer_active = false
@@ -703,6 +703,12 @@ function M.reprobe_media_ids(media_ids)
     end
 end
 
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — intentional process-lifetime listeners.
+-- All connects below run once per `require` and survive across project
+-- swaps; project_changed handler resets per-project cache on the same
+-- dispatch. NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 -- Priority 30: prime cache before view refresh handlers (default 100).
 Signals.connect("media_changed", M.reprobe_media_ids, 30)
 

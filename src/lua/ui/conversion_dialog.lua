@@ -26,8 +26,8 @@ local log = require("core.logger").for_area("media")
 --- Read the directory from ~/.jve/last_project_path for default save location.
 -- @return string: directory path, or ~/Documents/JVE Projects as fallback
 local function get_default_dir()
-    local home = os.getenv("HOME") or ""
-    if home == "" then return "" end
+    local home = os.getenv("HOME")
+    assert(home and home ~= "", "conversion_dialog.get_default_dir: HOME must be set")
 
     local f = io.open(home .. "/.jve/last_project_path", "r")
     if f then

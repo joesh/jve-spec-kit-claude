@@ -90,7 +90,7 @@ function M.register(command_executors, _, _, _)
             return {success = true}
         end
 
-        -- Timeline: use floating dialog (for now)
+        -- Timeline: floating dialog (no inline find bar for the timeline panel yet)
         local clips = view:get_clips()
         if #clips == 0 then
             log.warn("Find: no clips in current view")

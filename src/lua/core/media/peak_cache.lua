@@ -142,7 +142,7 @@ local poll_timer_active = false
 
 local function start_completion_poll()
     if poll_timer_active then return end
-    if type(qt_create_single_shot_timer) ~= "function" then return end
+    if type(qt_create_single_shot_timer) ~= "function" then return end  -- lint-allow: R004 Qt binding may not be wired in pure-Lua test harnesses
 
     local function poll()
         poll_timer_active = false
@@ -513,6 +513,6 @@ end, 15)
 -- Refresh peaks for any media whose row changed (path, TC, etc).
 -- Priority 35 puts us after media_status (30) so its offline-status
 -- cache is fresh before we decide whether to request new peak gen.
-Signals.connect("media_changed", M.handle_media_changed, 35)
+Signals.connect("media_changed", M.handle_media_changed, 35)  -- lint-allow: R009 process-lifetime peak-refresh listener
 
 return M

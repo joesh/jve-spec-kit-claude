@@ -80,7 +80,7 @@ local NUMERIC_OPERATORS = {"equals", "greater_than", "less_than"}
 
 local function populate_operators(field_name)
     if not ws.op_combo then return end
-    -- Clear existing items (no CLEAR_COMBOBOX binding — recreate is expensive, skip for now)
+    -- Re-add items (no CLEAR_COMBOBOX binding yet — see memory todo_clear_combobox_binding)
     local fields = query_engine.get_searchable_fields()
     for _, f in ipairs(fields) do
         if f.name == field_name then

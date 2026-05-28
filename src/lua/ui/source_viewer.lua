@@ -388,6 +388,11 @@ local function on_sequence_content_changed(changed_seq_id)
     return refresh_live_bound(changed_seq_id)
 end
 
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — intentional process-lifetime listeners.
+-- All connects below run once per `require`. project_changed handler resets
+-- per-project state. NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 Signals.connect("sequence_content_changed", on_sequence_content_changed)
 
 -- ─── project_changed: reset to neutral ─────────────────────────────────────

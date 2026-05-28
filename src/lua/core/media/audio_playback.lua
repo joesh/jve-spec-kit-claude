@@ -280,7 +280,7 @@ local function send_mix_params_to_tmb()
     for _, track in ipairs(M._mix_params) do
         local vol
         if any_solo then
-            vol = track.soloed and track.volume or 0
+            vol = track.soloed and track.volume or 0  -- lint-allow: R010 Lua ternary (soloed ? volume : 0), not a missing-data fallback
         else
             vol = track.muted and 0 or track.volume
         end

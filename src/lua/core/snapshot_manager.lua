@@ -149,10 +149,13 @@ local function build_snapshot_payload(db, sequence_id, clips)
         assert(type(clip.sequence_start) == "number", string.format(
             "snapshot_manager.build_snapshot_payload: clip %s sequence_start must be integer", tostring(clip.id)))
 
+        assert(clip.name and clip.name ~= "", string.format(
+            "snapshot_manager.build_snapshot_payload: clip %s name is schema NOT NULL; got nil/empty",
+            tostring(clip.id)))
         table.insert(clip_data, {
             id = clip.id,
             track_type = clip.track_type,
-            name = clip.name or "",
+            name = clip.name,
             project_id = clip.project_id,
             track_id = clip.track_id,
             owner_sequence_id = clip.owner_sequence_id,

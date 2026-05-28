@@ -259,8 +259,8 @@ local function build_media_infos(media_list, widgets)
             media_start_tc_value = tc.value,
             media_start_tc_rate = tc.rate,
             media_file_original_tc = file_orig_tc,
-            width = media.width or 0,
-            height = media.height or 0,
+            width = media.width or 0,   -- lint-allow: R010 media.width CHECK(NULL OR >0) — nullable for audio-only
+            height = media.height or 0,  -- lint-allow: R010 media.height CHECK(NULL OR >0) — nullable for audio-only
             source_extent_start = extent_start,
             source_extent_end   = extent_end,
         }

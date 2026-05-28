@@ -137,7 +137,11 @@ local function on_selection_changed(_items, panel_id)
     recompute_and_emit()
 end
 
--- Subscribe at module load. Lua's require cache makes this run once.
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECT — intentional process-lifetime listener.
+-- Lua's `require` cache makes this run once; selection_hub listener is the
+-- same shape. NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 Signals.connect("source_loaded_changed", on_source_loaded_changed)
 selection_hub.register_listener(on_selection_changed)
 

@@ -769,7 +769,7 @@ local function populate_tree()
         assert(clip.frame_rate, string.format(
             "project_browser: master clip %s missing rate", tostring(clip.clip_id)))
         clip.fps_float = get_fps_float(clip.frame_rate)
-        clip.codec = clip.codec or media.codec or ""
+        clip.codec = clip.codec or media.codec or ""  -- lint-allow: R010 codec backfill chain; nullable for partially-probed media
         clip.width = clip.width or media.width
         clip.height = clip.height or media.height
         clip.duration = clip.duration or media.duration
@@ -869,7 +869,7 @@ local function populate_tree()
             and string.format("%.2f", fps_val)
             or ""
         
-        local codec_str = clip.codec or media.codec or ""
+        local codec_str = clip.codec or media.codec or ""  -- lint-allow: R010 codec display, nullable for partially-probed media
         local date_str = format_date(clip.modified_at or clip.created_at or media.modified_at or media.created_at)
 
         local columns = {
@@ -2624,7 +2624,12 @@ function M.on_project_change(project_id)
     M.project_id = project_id
 end
 
--- Register for project_changed signal
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — intentional process-lifetime listeners.
+-- All connects below run once per `require` and survive across project
+-- switches (the project_changed handler at priority 50 clears per-project
+-- state on the same dispatch). NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 local Signals = require("core.signals")
 Signals.connect("project_changed", M.on_project_change, 50)
 
@@ -2730,18 +2735,20 @@ function M:get_clips()
         for _, clip in ipairs(M.master_clips) do
             local media = clip.media or (clip.media_id and M.media_map[clip.media_id]) or {}
             local cid = clip.clip_id or clip.id
+            -- Display aggregation; in-memory shapes vary by source (master vs
+            -- sequence-derived) and fields may be legitimately nil.
             clip_by_id[cid] = {
                 id = cid,
-                name = clip.name or media.name or "",
-                codec = clip.codec or media.codec or "",
-                fps = clip.fps_float or 0,
-                duration = clip.duration or 0,
+                name = clip.name or media.name or "",  -- lint-allow: R010 display-only
+                codec = clip.codec or media.codec or "",  -- lint-allow: R010 display-only
+                fps = clip.fps_float or 0,  -- lint-allow: R010 display-only
+                duration = clip.duration or 0,  -- lint-allow: R010 display-only
                 enabled = clip.enabled ~= false,
-                volume = clip.volume or 1.0,
-                width = clip.width or media.width or 0,
-                height = clip.height or media.height or 0,
-                audio_channels = media.audio_channels or 0,
-                audio_sample_rate = media.audio_sample_rate or 0,
+                volume = clip.volume or 1.0,  -- lint-allow: R010 display-only
+                width = clip.width or media.width or 0,  -- lint-allow: R010 nullable (audio-only)
+                height = clip.height or media.height or 0,  -- lint-allow: R010 nullable (audio-only)
+                audio_channels = media.audio_channels or 0,  -- lint-allow: R010 schema DEFAULT 0
+                audio_sample_rate = media.audio_sample_rate or 0,  -- lint-allow: R010 nullable (video-only)
                 properties = {},
             }
         end

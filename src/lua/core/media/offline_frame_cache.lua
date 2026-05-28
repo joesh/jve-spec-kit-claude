@@ -274,6 +274,6 @@ Signals.connect("project_changed", M.clear, 15)
 -- A file's bytes changed on disk: any composited offline frame built
 -- from the old bytes (e.g. codec-hint text derived from the old probe)
 -- is now stale.
-Signals.connect("media_content_changed", M.invalidate, 15)
+Signals.connect("media_content_changed", M.invalidate, 15)  -- lint-allow: R009 process-lifetime cache-invalidation listener
 
 return M

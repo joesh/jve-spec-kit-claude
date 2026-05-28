@@ -1025,7 +1025,8 @@ end
 function M.on_project_change()
     core.reset_for_project_change()
     -- Each project gets a fresh tab strip. Phase 2b will populate it from
-    -- the project's persisted `open_sequence_ids`; for now we just reset.
+    -- the project's persisted `open_sequence_ids`; until then we reset
+    -- (see memory todo_tab_strip_persistence_phase_2b).
     tab_strip = TimelineTabStrip.new()
     strip_holder.set(tab_strip)
 end
@@ -1048,6 +1049,12 @@ assert(type(core.persist_state_to_db) == "function",
     "timeline_state: timeline_core_state.persist_state_to_db is required " ..
     "for the project_will_change pre-switch handler (feature 014). " ..
     "If this function was renamed/removed, update both modules together.")
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — intentional process-lifetime listeners.
+-- All connects below run once per `require` and survive across project
+-- swaps. The project_changed handler resets per-project state on the
+-- same dispatch. NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 Signals.connect("project_will_change", function(outgoing_id)
     if not outgoing_id or outgoing_id == "" then return end
     core.persist_state_to_db(true)

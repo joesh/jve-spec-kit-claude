@@ -178,7 +178,8 @@ end
 local function resolve_welcome_action(action, parent_dialog)
     local file_browser = require("core.file_browser")
     local new_project_cmd = require("core.commands.new_project")
-    local home = os.getenv("HOME") or ""
+    local home = os.getenv("HOME")
+    assert(home and home ~= "", "resolve_welcome_action: HOME must be set")
 
     if action.action == "open" then
         return action.path

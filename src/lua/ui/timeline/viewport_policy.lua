@@ -89,7 +89,8 @@ end
 -- Walk a single bucket ({sequence_id, inserts, updates, deletes}) and
 -- fold every mutation into bounds + tracks.
 local function fold_bucket(bucket, bounds, tracks)
-    if type(bucket) ~= "table" then return end
+    assert(type(bucket) == "table",
+        "viewport_policy.fold_bucket: bucket must be a table {sequence_id, inserts, updates, deletes}")
     for _, rec in ipairs(bucket.inserts or {}) do fold_mutation("insert", rec, bounds, tracks) end
     for _, rec in ipairs(bucket.updates or {}) do fold_mutation("update", rec, bounds, tracks) end
     for _, rec in ipairs(bucket.deletes or {}) do fold_mutation("delete", rec, bounds, tracks) end

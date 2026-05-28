@@ -77,7 +77,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             if not sequence then
                 return false, "RenameItem: Sequence not found"
             end
-            local previous_name = sequence.name or ""
+            assert(sequence.name and sequence.name ~= "",
+                "RenameItem: sequences.name is schema NOT NULL; got nil/empty")
+            local previous_name = sequence.name
             if previous_name == new_name then
                 return true, previous_name
             end

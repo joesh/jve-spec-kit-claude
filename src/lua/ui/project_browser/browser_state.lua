@@ -56,8 +56,8 @@ local function normalize_master_clip(item, context)
     -- All coords are integer frames
     local duration = clip.duration or (media and media.duration)
     assert(type(duration) == "number", string.format("browser_state.normalize_master_clip: duration must be integer for clip %s", tostring(clip.clip_id or item.clip_id)))
-    local source_in = clip.source_in or 0
-    local source_out = clip.source_out or duration
+    local source_in = clip.source_in or 0  -- lint-allow: R010 in-memory master shape; missing source_in == start of media
+    local source_out = clip.source_out or duration  -- lint-allow: R010 missing source_out == full duration
     assert(type(source_in) == "number", "browser_state.normalize_master_clip: source_in must be integer")
     assert(type(source_out) == "number", "browser_state.normalize_master_clip: source_out must be integer")
 

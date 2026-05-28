@@ -7,11 +7,10 @@
 --
 -- Resolution policy:
 --   - `bin_id` — generated UUID, fresh per press.
---   - `parent_id` — nil (top-level bin). Future enhancement could
---     read the currently-selected bin from the project browser and
---     create the new bin as its child; for now top-level is the
---     conservative default and matches the user's likely intent
---     (Avid Cmd+Shift+N also creates top-level bins).
+--   - `parent_id` — nil (top-level bin). Conservative default matching
+--     the user's likely intent — Avid Cmd+Shift+N also creates top-level
+--     bins. A future "create-under-selected-bin" enhancement would read
+--     the project browser's current selection here.
 --   - `name` — left nil so NewBin's default ("New Bin") applies.
 --
 -- This adapter is undoable=false: the nested NewBin call owns the

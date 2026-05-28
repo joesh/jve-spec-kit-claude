@@ -402,7 +402,7 @@ function PlaybackEngine:_persist_playhead()
     -- Legacy tests stub the Sequence module without update_playhead; in
     -- that environment there's no DB to persist to, so skip rather than
     -- crash. Production callers always carry the real Model.
-    if type(Sequence.update_playhead) ~= "function" then return end
+    if type(Sequence.update_playhead) ~= "function" then return end  -- lint-allow: R004 legacy-test stub gate; production carries real Model
     Sequence.update_playhead(self.loaded_sequence_id, math.floor(self._position))
 end
 

@@ -699,9 +699,10 @@ function M.parse_prproj_file(prproj_path, progress_cb)
         open_timeline_names[#open_timeline_names + 1] = tl.name
     end
 
-    -- Fill in media_start_time from ZeroPoint (if media has TC)
-    -- Premiere stores TC origin in the Sequence's ZeroPoint, not per-media.
-    -- Skip for now — media_start_time is optional.
+    -- ZeroPoint-derived media_start_time is left nil — Premiere stores TC
+    -- origin per-Sequence (not per-media), so backfilling requires
+    -- traversing each containing Sequence. Tracked in memory
+    -- todo_prproj_media_tc_seeding; the field is optional downstream.
 
     report(90, "Done parsing")
 

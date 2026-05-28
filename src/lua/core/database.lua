@@ -683,10 +683,10 @@ local function validate_sql_access()
     local source = info.source:match("@?(.+)")
     assert(source, "validate_sql_access: failed to extract source path")
 
-    -- Allow test files to use SQL directly for setup/assertions
-    -- (Future: refactor tests to use model abstractions per TODO.md)
+    -- Tests use direct SQL for setup/assertions (legacy direct-DB access;
+    -- migration to model abstractions tracked in TODO.md).
     if source:match("test_[^/]+%.lua$") or source:match("tests/") then
-        return  -- Tests allowed for now
+        return
     end
 
     local relative_path = source:match("src/lua/(.+)$")

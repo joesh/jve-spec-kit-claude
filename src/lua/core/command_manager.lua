@@ -1524,7 +1524,8 @@ end
 -- purpose (ImportMedia, undo/redo replay, etc.). Playhead injection is
 -- governed by SPEC.args.playhead regardless.
 local function inject_context(command_type, params, opts)
-    if type(command_type) ~= "string" then return end
+    assert(type(command_type) == "string",
+        "command_manager.inject_context: command_type must be a string")
 
     local spec = registry.get_spec(command_type)
     if not spec then return end

@@ -191,6 +191,12 @@ end
 
 local Signals = require("core.signals")
 
+-- ----------------------------------------------------------------------------
+-- MODULE-LEVEL SIGNAL CONNECTS — intentional process-lifetime listeners.
+-- All connects below run once per `require` and survive across project
+-- swaps; the project_changed handler tears down per-project resources on
+-- the same dispatch. NOT A LEAK; do not add disconnects.
+-- ----------------------------------------------------------------------------
 Signals.connect("displayed_tab_cleared", function(prev_seq_id)
     assert(type(prev_seq_id) == "string" and prev_seq_id ~= "",
         "transport displayed_tab_cleared listener: prev_seq_id required "

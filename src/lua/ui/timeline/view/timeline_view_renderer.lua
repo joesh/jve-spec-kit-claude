@@ -923,7 +923,7 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
                 clip.offline_note, clip.source_in, clip.source_out,
                 display_rate)
             local display_label = truncate_label(
-                label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,
+                label_prefix .. (clip.label or clip.name or clip.id or "") .. label_suffix,  -- lint-allow: R010 display label fallback chain; gap clips have no label/name
                 max_label_width)
             if display_label ~= "" and label_visible then
                 local label_baseline

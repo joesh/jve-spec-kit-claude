@@ -88,16 +88,23 @@ lint_lua() {
             "silent type-check return hides contract violations; assert instead, or annotate with lint-allow + reason"
     done < <(grep -nE 'if\s+type\([^)]+\)\s*~=\s*"[a-z]+"\s*then\s+return\s+end' "$f" 2>/dev/null)
 
-    # R009: module-level (column-0) Signals.connect needs an explicit
-    # "intentional process-lifetime" comment block above it, OR
-    # `lint-allow: R009 reason` on the connect line. Without that, the
-    # next audit agent will re-flag it as a leak (pass 15c FP shape).
-    # Skip if the file has a top-of-file `MODULE-LEVEL SIGNAL CONNECTS`
-    # banner — that immunizes the whole file.
+    # R009: module-level (column-0) Signals.connect to a signal OTHER than
+    # `project_changed` needs an explicit "intentional process-lifetime"
+    # comment block above it, OR `lint-allow: R009 reason` on the connect
+    # line. Without that, the next audit agent will re-flag it as a leak
+    # (pass 15c FP shape). `project_changed` is skipped because CLAUDE.md
+    # documents it as the canonical process-lifetime signal.
+    # Whole-file immunization: a top-of-file `MODULE-LEVEL SIGNAL CONNECTS`
+    # banner skips the rule for the entire file.
     if ! grep -qE 'MODULE-LEVEL SIGNAL CONNECTS|NOT A LEAK' "$f" 2>/dev/null; then
         while IFS=: read -r ln _; do
             [ -z "$ln" ] && continue
-            # Scan ~10 lines above for an immunization marker. If found, skip.
+            local connect_line
+            connect_line=$(awk -v n="$ln" 'NR==n' "$f" 2>/dev/null)
+            # Skip project_changed (documented intentional pattern).
+            if echo "$connect_line" | grep -qE 'Signals\.connect\(\s*"project_changed"'; then
+                continue
+            fi
             local start=$((ln - 10))
             [ "$start" -lt 1 ] && start=1
             local above
@@ -106,7 +113,7 @@ lint_lua() {
                 continue
             fi
             emit "$f" "$ln" R009 \
-                "module-level Signals.connect without an immunization comment — future audits will mis-flag as leak; add MODULE-LEVEL block or lint-allow: R009 reason"
+                "module-level Signals.connect (non-project_changed) without an immunization comment — future audits will mis-flag as leak; add MODULE-LEVEL block or lint-allow: R009 reason"
         done < <(grep -nE '^Signals\.connect\(' "$f" 2>/dev/null)
     fi
 

@@ -406,8 +406,9 @@ function M.register(executors, undoers, db, set_last_error)
             end
 
             -- Show file picker dialog (accepts .jvp native, .drp Resolve archive)
-            local home = os.getenv("HOME") or ""
-            local default_dir = home ~= "" and (home .. "/Documents/JVE Projects") or ""
+            local home = os.getenv("HOME")
+            assert(home and home ~= "", "open_project: HOME must be set")
+            local default_dir = home .. "/Documents/JVE Projects"
             project_path = file_browser.open_file(
                 "open_project", main_window,
                 "Open Project",

@@ -1077,7 +1077,8 @@ local function handle_tab_command_event(event)
 
     if command.type == "ImportFCP7XML" then
         local created_sequence_ids = command_param(command, "created_sequence_ids")
-        if type(created_sequence_ids) ~= "table" then return end
+        assert(type(created_sequence_ids) == "table",
+            "timeline_panel on_command_executed: ImportFCP7XML must carry created_sequence_ids table")
 
         if event.event == "undo" then
             close_created_tabs_on_undo(created_sequence_ids)
@@ -1092,7 +1093,8 @@ local function handle_tab_command_event(event)
 
     if command.type == "ImportResolveTimeline" then
         local created_sequence_ids = command_param(command, "created_sequence_ids")
-        if type(created_sequence_ids) ~= "table" then return end
+        assert(type(created_sequence_ids) == "table",
+            "timeline_panel on_command_executed: ImportResolveTimeline must carry created_sequence_ids table")
 
         if event.event == "undo" then
             close_created_tabs_on_undo(created_sequence_ids)

@@ -228,9 +228,10 @@ function M.create(widget, config)
             local delta_frames = M.compute_wheel_frame_delta(
                 delta_x, width, state.viewport_duration)
             if delta_frames == 0 then return true end
-            -- Gesture → command mapping. Static for now; will move to a
+            -- Gesture → command mapping. Hardcoded; will move to a
             -- config table when the trackpad/mouse editor lands (analog
-            -- of the keyboard editor). Opt = pan the displayed viewport
+            -- of the keyboard editor — see memory todo_gesture_command_editor).
+            -- Opt = pan the displayed viewport
             -- range; everything else = scrub the playhead. Both go
             -- through command_manager so the future editor can rebind
             -- the gesture to any other command.
