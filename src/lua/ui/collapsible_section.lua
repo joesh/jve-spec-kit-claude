@@ -21,7 +21,8 @@ function CollapsibleSection.new(title, expanded, parent_widget)
 
     -- State
     self.title = title
-    self.expanded = expanded ~= nil and expanded or true  -- Default to expanded for now
+    if expanded == nil then expanded = true end
+    self.expanded = expanded
     self.bypassed = false
     self.section_enabled = true  -- Default to enabled (red dot)
 
