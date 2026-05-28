@@ -24,17 +24,16 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
     local valid_clips = {}
     local target_idx = nil
     for _, clip in ipairs(track_clips) do
-        local start_val = clip.sequence_start or clip.start_value
-        local dur_val = clip.duration or clip.duration_value
-        if type(start_val) == "number" and type(dur_val) == "number" and dur_val > 0 then
-            local entry = {
-                id = clip.id,
-                track_id = clip.track_id,
-                sequence_start = start_val,
-                duration = dur_val
-            }
-            table.insert(valid_clips, entry)
-        end
+        assert(type(clip.sequence_start) == "number",
+            "select_boundary_edges: clip missing sequence_start (clip_id=" .. tostring(clip.id) .. ")")
+        assert(type(clip.duration) == "number" and clip.duration > 0,
+            "select_boundary_edges: clip missing positive duration (clip_id=" .. tostring(clip.id) .. ")")
+        table.insert(valid_clips, {
+            id = clip.id,
+            track_id = clip.track_id,
+            sequence_start = clip.sequence_start,
+            duration = clip.duration,
+        })
     end
 
     table.sort(valid_clips, function(a, b)
@@ -136,15 +135,13 @@ function M.select_boundary_edges(track_clips, target_clip, side, click_type)
     return {edges = edges, boundary_time = boundary_time}
 end
 
--- Validate clip has integer bounds
-local function validate_bounds(clip)
-    if not clip then return nil end
-    local start_val = clip.sequence_start or clip.start_value
-    local dur_val = clip.duration or clip.duration_value
-    if type(start_val) ~= "number" or type(dur_val) ~= "number" or dur_val <= 0 then
-        return nil
-    end
-    return start_val, dur_val
+-- Assert clip carries the canonical integer bounds. Producers (DB hydrate,
+-- mutation apply) normalize these; a missing field is a producer bug.
+local function assert_clip_bounds(clip)
+    assert(type(clip.sequence_start) == "number",
+        "edge_picker: clip missing sequence_start (clip_id=" .. tostring(clip.id) .. ")")
+    assert(type(clip.duration) == "number" and clip.duration > 0,
+        "edge_picker: clip missing positive duration (clip_id=" .. tostring(clip.id) .. ")")
 end
 
 -- Build boundary map for a single track. Each boundary holds the left/right edge
@@ -155,12 +152,8 @@ function M.build_boundaries(track_clips, time_to_pixel, viewport_width)
 
     local valid_clips = {}
     for _, clip in ipairs(track_clips) do
-        local start_val, dur_val = validate_bounds(clip)
-        if start_val and dur_val then
-            clip.sequence_start = start_val
-            clip.duration = dur_val
-            table.insert(valid_clips, clip)
-        end
+        assert_clip_bounds(clip)
+        table.insert(valid_clips, clip)
     end
 
     table.sort(valid_clips, function(a, b)

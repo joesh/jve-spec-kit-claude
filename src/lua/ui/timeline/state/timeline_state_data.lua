@@ -58,8 +58,6 @@ local function fresh_state()
 
         -- Interaction
         dragging_playhead = false,
-        dragging_clip = nil,
-        drag_selecting = false,
         drag_select_start_value = 0,
 
         -- Active edge drag (shared across timeline panes; not persisted)

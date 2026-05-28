@@ -664,8 +664,6 @@ function M.clear(prev_displayed_seq_id)
     data.state.selected_gaps = {}
 
     data.state.dragging_playhead = false
-    data.state.dragging_clip = nil
-    data.state.drag_selecting = false
     data.state.active_edge_drag_state = nil
 
     -- Per-sequence playhead lives on tab.cache (H1). On clear(), the

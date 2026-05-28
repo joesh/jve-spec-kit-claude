@@ -73,7 +73,7 @@ function M.parse_from_query(query, project_id)
         command = {
             id = query:value(0),
             parent_id = query:value(1),
-            sequence_number = query:value(2) or 0,
+            sequence_number = query:value(2),
             type = query:value(3),
             parameters = args_table,
             parent_sequence_number = query:value(5),
@@ -109,7 +109,7 @@ function M.parse_from_query(query, project_id)
             id = query:value(0),
             type = query:value(1),
             parameters = args_table,
-            sequence_number = query:value(3) or 0,
+            sequence_number = query:value(3),
             parent_sequence_number = query:value(4),
             pre_hash = query:value(5) or "",
             post_hash = query:value(6) or "",
@@ -376,7 +376,7 @@ function M.load_filtered_history_branch(seq_cursor, global_cursor, sequence_id)
 
     -- Sort by sequence_number ASC
     table.sort(commands, function(a, b)
-        return (a.sequence_number or 0) < (b.sequence_number or 0)
+        return a.sequence_number < b.sequence_number
     end)
 
     -- Prepend provenance if present

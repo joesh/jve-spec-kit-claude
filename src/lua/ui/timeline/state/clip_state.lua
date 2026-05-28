@@ -81,27 +81,21 @@ function M.get_at_time(time_value, candidate_clips)
 
     local matches = {}
     for _, clip in ipairs(clips) do
-        local start_val = clip.sequence_start or clip.start_value
-        local duration_val = clip.duration or clip.duration_value
-
-        if type(start_val) ~= "number" or type(duration_val) ~= "number" or duration_val <= 0 then
-            goto continue_clip
-        end
-
         -- Skip gap clips — callers need media clips under playhead
-        if clip.is_gap then
-            goto continue_clip
+        if not clip.is_gap then
+            assert(type(clip.sequence_start) == "number",
+                "clip_state.get_at_time: clip missing sequence_start (clip_id=" .. tostring(clip.id) .. ")")
+            assert(type(clip.duration) == "number" and clip.duration > 0,
+                "clip_state.get_at_time: clip missing positive duration (clip_id=" .. tostring(clip.id) .. ")")
+            -- Half-open [start, start+duration): clip owns its IN edge (first
+            -- frame), the next clip / empty space owns the OUT boundary. NLE
+            -- convention — also avoids two clips claiming the same boundary
+            -- frame at edits.
+            local clip_end = clip.sequence_start + clip.duration
+            if time_value >= clip.sequence_start and time_value < clip_end then
+                table.insert(matches, clip)
+            end
         end
-
-        -- Half-open [start, start+duration): clip owns its IN edge (first
-        -- frame), the next clip / empty space owns the OUT boundary. NLE
-        -- convention — also avoids two clips claiming the same boundary
-        -- frame at edits.
-        local clip_end = start_val + duration_val
-        if time_value >= start_val and time_value < clip_end then
-            table.insert(matches, clip)
-        end
-        ::continue_clip::
     end
     return matches
 end
@@ -122,13 +116,13 @@ function M.get_content_end_frame()
 
     local max_end = 0
     for _, clip in ipairs(clips) do
-        local start_val = clip.sequence_start or clip.start_value
-        local duration_val = clip.duration or clip.duration_value
-        if type(start_val) == "number" and type(duration_val) == "number" then
-            local clip_end = start_val + duration_val
-            if clip_end > max_end then
-                max_end = clip_end
-            end
+        assert(type(clip.sequence_start) == "number",
+            "clip_state.get_content_end_frame: clip missing sequence_start (clip_id=" .. tostring(clip.id) .. ")")
+        assert(type(clip.duration) == "number",
+            "clip_state.get_content_end_frame: clip missing duration (clip_id=" .. tostring(clip.id) .. ")")
+        local clip_end = clip.sequence_start + clip.duration
+        if clip_end > max_end then
+            max_end = clip_end
         end
     end
     return max_end
