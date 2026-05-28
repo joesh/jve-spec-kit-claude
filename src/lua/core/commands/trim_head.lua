@@ -17,7 +17,7 @@ local SPEC = {
         sequence_id = { required = true },
         trim_frame = {},  -- playhead frame in owner timebase (derived from playhead if omitted)
     },
-    persisted = {},
+    persisted = { "prior_playhead" },
 }
 
 local function set_playhead(sequence_id, frame)
@@ -71,6 +71,16 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         log.event("TrimHead: extract [%d, %d) across %d clip(s)",
             earliest_start, trim_frame, #clip_ids)
 
+        -- Capture pre-trim playhead so undo restores the user's position,
+        -- not the trim target. trim_frame is the trim edge (== playhead
+        -- when derived from selection), but if it was passed explicitly it
+        -- can differ from where the user actually had the playhead.
+        do
+            local seq = Sequence.load(args.sequence_id)
+            assert(seq, "TrimHead: sequence not found: " .. tostring(args.sequence_id))
+            command:set_parameter("prior_playhead", seq.playhead_position)
+        end
+
         local result = command_manager.execute("ExtractRange", {
             mark_in = earliest_start,
             mark_out = trim_frame,
@@ -92,7 +102,8 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
     -- Restore playhead to pre-trim position.
     command_undoers["TrimHead"] = function(command)
         local args = command:get_all_parameters()
-        set_playhead(args.sequence_id, args.trim_frame)
+        assert(args.prior_playhead, "TrimHead undo: prior_playhead missing — was capture performed?")
+        set_playhead(args.sequence_id, args.prior_playhead)
         return true
     end
 

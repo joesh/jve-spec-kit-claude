@@ -127,6 +127,30 @@ lint_lua() {
             "or 0/or \"\" on schema accessor (clip/track/sequence/media.X) — most columns are NOT NULL; assert or annotate lint-allow: R010 reason"
     done < <(grep -nE '\b(clip|track|sequence|media)\.[a-z_]+\s+or\s+(0|""|\{\})' "$f" 2>/dev/null \
         | grep -vE ':\s*--')
+
+    # R011: sqlite prepare/finalize parity. Pass 17d found 2 real leaks in
+    # snapshot_manager.lua where `db:prepare(...)` returned without a paired
+    # `:finalize()` on every exit path. File-level count check catches the
+    # gross mismatch; per-prepare control-flow analysis is out of shell scope.
+    # Skip files where prepares legitimately escape (e.g. cached statement maps);
+    # those must use `-- lint-allow: R011 reason` on the prepare line.
+    local preps fins
+    preps=$(grep -cE '\bdb:prepare\b' "$f" 2>/dev/null)
+    fins=$(grep -cE ':finalize\(\)' "$f" 2>/dev/null)
+    [ -z "$preps" ] && preps=0
+    [ -z "$fins" ] && fins=0
+    if [ "$preps" -gt 0 ] && [ "$fins" -lt "$preps" ]; then
+        local first
+        first=$(grep -nE '\bdb:prepare\b' "$f" 2>/dev/null | head -1 | cut -d: -f1)
+        if [ -n "$first" ]; then
+            local first_line
+            first_line=$(awk -v n="$first" 'NR==n' "$f" 2>/dev/null)
+            if ! echo "$first_line" | grep -qE 'lint-allow:\s*R011'; then
+                emit "$f" "$first" R011 \
+                    "file has $preps db:prepare but only $fins :finalize() — leaks statements on at least one exit path; pair every prepare with finalize on every return/error path"
+            fi
+        fi
+    fi
 }
 
 lint_cpp() {

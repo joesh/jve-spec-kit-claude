@@ -813,7 +813,7 @@ function M.apply_mutations(db, mutations)
         if update_stmt then
             return update_stmt
         end
-        update_stmt = db:prepare([[
+        update_stmt = db:prepare([[ -- lint-allow: R011 cached prepared statement (process-lifetime upvalue, reused via bind+reset)
             UPDATE clips
             SET track_id = ?, sequence_start_frame = ?, duration_frames = ?, source_in_frame = ?, source_out_frame = ?, enabled = ?, modified_at = ?
             WHERE id = ?

@@ -22,6 +22,7 @@ QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));  // lint-allow: R005 in
 | **R008** | C++ | Comment containing the R002 markers | Same Claude-tell pattern; C++ variant. | Pass 10, Pass 14 |
 | **R009** | Lua | Column-0 `Signals.connect(...)` without an immunization comment above (`MODULE-LEVEL`, `NOT A LEAK`, `intentional process-lifetime`) | Pass 15c spent agent cycles re-flagging module-level connects as leaks. The fix is a comment block that immunizes — this rule enforces that the block exists so the FP doesn't recur. | Pass 15 |
 | **R010** | Lua | `clip.X or 0`, `track.X or ""`, `sequence.X or {}`, `media.X or 0` | Most clip/track/sequence/media columns are schema NOT NULL; the fallback silently masks contract violations (passes 6, 13, 15d). Annotate per-line if the field is genuinely nullable. | Pass 15 |
+| **R011** | Lua | File has more `db:prepare(...)` than `:finalize()` calls | sqlite prepared statements leak when an early-return / nil-result path skips finalize. Pass 17d found 2 such leaks in `snapshot_manager.lua` (load_snapshot nil-return; create_snapshot success-return). Annotate the first prepare line if statements are intentionally cached (process-lifetime upvalues) or mutex if/else preps where only one branch runs per call. | Pass 17d |
 
 ## How rules are wired
 

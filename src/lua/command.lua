@@ -100,7 +100,7 @@ function M.load_history()
     local db = database.get_connection()
     assert(db, "Command.load_history: no database connection")
 
-    local query = db:prepare([[
+    local query = db:prepare([[ -- lint-allow: R011 mutex if/else prepares + dual-exit finalizes balance at runtime
         SELECT * FROM commands
         WHERE command_type NOT LIKE 'Undo%'
         ORDER BY sequence_number ASC

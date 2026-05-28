@@ -397,6 +397,7 @@ function M.create_snapshot(db, sequence_id, sequence_number, clips)
     query:bind_value(5, os.time())
 
     assert(query:exec(), "snapshot_manager.create_snapshot: Failed to insert snapshot")
+    query:finalize()
 
     log.event("Snapshot created at sequence %d", sequence_number)
     return true
@@ -425,12 +426,14 @@ function M.load_snapshot(db, sequence_id)
     query:bind_value(1, sequence_id)
 
     if not query:exec() or not query:next() then
+        query:finalize()
         log.event("No snapshot found for sequence: %s", sequence_id)
         return nil
     end
 
     local sequence_number = query:value(0)
     local clips_json = query:value(1)
+    query:finalize()
 
     log.event("Loading snapshot from sequence %d", sequence_number)
 

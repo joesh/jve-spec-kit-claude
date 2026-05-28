@@ -413,6 +413,12 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         local rippled     = args.rippled_capture
         local occluded    = args.occluded_capture
 
+        -- Wrap multi-phase undo (delete → unshift → uncarve) in a savepoint
+        -- so a mid-undo failure (e.g. Clip.create raising on a stale row)
+        -- doesn't leave the timeline half-unwound.
+        assert(database.savepoint(SAVEPOINT),
+            "AddClipsToSequence undo: savepoint failed")
+        local ok, err = pcall(function()
         -- 1. Delete the newly-created clips (clip_links FK cascades).
         Clip.delete_by_ids(created_ids)
 
@@ -477,6 +483,14 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                 Signals.emit("playhead_changed", args.sequence_id, args.prior_playhead)
             end
         end
+        end)
+        if not ok then
+            database.rollback_to_savepoint(SAVEPOINT)
+            database.release_savepoint(SAVEPOINT)
+            error(err, 0)
+        end
+        assert(database.release_savepoint(SAVEPOINT),
+            "AddClipsToSequence undo: release savepoint failed")
 
         return true
     end
