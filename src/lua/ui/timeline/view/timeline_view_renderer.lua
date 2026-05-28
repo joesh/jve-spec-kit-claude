@@ -1027,106 +1027,41 @@ local function render_mark_overlay(view, state_module, width, height, viewport_s
     timeline.add_rect(view.widget, start_x, 0, region_width, height, state_module.colors.mark_range_fill)
 end
 
-function M.render(view)
-    if not view.widget then return end
-    local perf_t0 = os.clock()
+-- Build the per-frame render context. Captures viewport state, mark
+-- frames, layout cache, selection lookup, and the resolved drag states
+-- so phase helpers can each take a single `ctx` arg (rule 2.5 — top-level
+-- M.render reads as an algorithm, phases handle the dirty work).
+--
+-- Owns the clip vs edge drag-state resolution: prefer this view's local
+-- drag_state when it owns the gesture; otherwise consult the shared
+-- state so the non-owning pane (video↔audio) still renders previews.
+local function build_render_ctx(view)
     local state_module = view.state
     local width, height = timeline.get_dimensions(view.widget)
 
     state_module.debug_begin_layout_capture(view.debug_id, width, height)
-    timeline.clear_commands(view.widget)
 
-    -- Viewport state (all integer frames)
-    local viewport_start = state_module.get_viewport_start_time()
+    local viewport_start    = state_module.get_viewport_start_time()
     local viewport_duration = state_module.get_viewport_duration()
-    local viewport_end = viewport_start + viewport_duration
-    local playhead_position = state_module.get_playhead_position()
+    local viewport_end      = viewport_start + viewport_duration
+
     assert(state_module.get_display_mark_in,
         "timeline_view_renderer: state_module missing get_display_mark_in — timeline_state required")
     assert(state_module.get_display_mark_out,
         "timeline_view_renderer: state_module missing get_display_mark_out — timeline_state required")
-    local mark_in  = state_module.get_display_mark_in()
-    local mark_out = state_module.get_display_mark_out()
 
-    -- Compute layout
-    view.update_layout_cache(height) -- Call layout logic on view object
+    view.update_layout_cache(height)
 
-    local layout_cache = view.track_layout_cache
-    local layout_by_index = layout_cache.by_index
-    render_track_backgrounds(view, state_module, layout_by_index, width, height)
-
-    local selected_clips = state_module.get_selected_clips()
     local selected_lookup = {}
-    for _, sel in ipairs(selected_clips) do
-        if sel and sel.id then
-            selected_lookup[sel.id] = true
-        end
+    for _, sel in ipairs(state_module.get_selected_clips()) do
+        if sel and sel.id then selected_lookup[sel.id] = true end
     end
 
-    -- Per-frame capture bundle for the file-level draw helpers.
-    -- Avoids 6-parameter signatures on draw_clip_instance /
-    -- draw_visible_clips while keeping them testable in isolation.
-    local render_ctx = {
-        view = view,
-        state_module = state_module,
-        width = width,
-        height = height,
-        layout_by_id = view.track_layout_cache.by_id,
-        selected_lookup = selected_lookup,
-    }
-
-    -- Base rendering must never bulk-scan all clips — per-track iteration
-    -- via track_clip_index is the contract. forbid_bulk_clip_read flips a
-    -- flag on the strip; displayed_clips() asserts on it.
-    state_module.get_tab_strip():forbid_bulk_clip_read(function()
-        draw_visible_clips(render_ctx, viewport_start, viewport_end)
-    end)
-
-    render_selected_gaps_overlay(view, state_module, width, height)
-
-    -- Drag Previews (clip drag)
-    -- Use local drag_state if this view owns the drag, otherwise fall back to
-    -- the shared state so both panes (video + audio) render previews.
-    local clip_drag_state = nil
-    local clip_drag_owns = false
+    local clip_drag_state, clip_drag_owns = nil, false
     if view.drag_state and view.drag_state.type == "clips" then
-        clip_drag_state = view.drag_state
-        clip_drag_owns = true
+        clip_drag_state, clip_drag_owns = view.drag_state, true
     elseif state_module.get_active_clip_drag_state then
         clip_drag_state = state_module.get_active_clip_drag_state()
-    end
-
-    if clip_drag_state and clip_drag_state.type == "clips" then
-        assert(type(clip_drag_state.delta_frames) == "number",
-            "timeline_view_renderer: clip drag state missing delta_frames")
-        local delta_frames = clip_drag_state.delta_frames
-        local preview_target_id, preview_track_offset
-
-        if clip_drag_owns then
-            -- Owning pane: resolve cursor Y → target track → offset
-            preview_target_id, preview_track_offset =
-                compute_clip_drag_track_hint(view, clip_drag_state, height, state_module)
-            -- Share offset so non-owning pane can use it
-            clip_drag_state._preview_track_offset = preview_track_offset
-        else
-            -- Non-owning pane: same offset in global track-index space
-            -- (matches what drag_handler applies on release)
-            preview_track_offset = clip_drag_state._preview_track_offset
-        end
-
-        for _, clip in ipairs(clip_drag_state.clips) do
-            if clip and clip.id then
-                local render_track_id = clip.track_id
-                if preview_track_offset then
-                    render_track_id = get_track_with_offset(state_module, render_track_id, preview_track_offset)
-                elseif preview_target_id then
-                    render_track_id = preview_target_id
-                end
-
-                local start_value = clip.sequence_start + delta_frames
-                draw_clip_instance(render_ctx, clip, render_track_id, start_value, clip.duration, true)
-            end
-        end
     end
 
     local edge_drag_state = nil
@@ -1136,146 +1071,202 @@ function M.render(view)
         edge_drag_state = state_module.get_active_edge_drag_state()
     end
 
-    local dragging_edges = edge_drag_state and edge_drag_state.type == "edges"
-    local preview_clip_cache = {}
-    -- All deltas are integer frames
-    local edge_delta = 0
-    local edges_to_render = state_module.get_selected_edges() or {}
+    return {
+        view              = view,
+        state_module      = state_module,
+        width             = width,
+        height            = height,
+        layout_by_index   = view.track_layout_cache.by_index,
+        layout_by_id      = view.track_layout_cache.by_id,
+        selected_lookup   = selected_lookup,
+        viewport_start    = viewport_start,
+        viewport_duration = viewport_duration,
+        viewport_end      = viewport_end,
+        playhead_position = state_module.get_playhead_position(),
+        mark_in           = state_module.get_display_mark_in(),
+        mark_out          = state_module.get_display_mark_out(),
+        clip_drag_state   = clip_drag_state,
+        clip_drag_owns    = clip_drag_owns,
+        edge_drag_state   = edge_drag_state,
+        dragging_edges    = edge_drag_state and edge_drag_state.type == "edges",
+        perf_t0           = os.clock(),
+    }
+end
 
-    if dragging_edges then
-        ensure_edge_preview(edge_drag_state, state_module)
+-- Phase: clip-drag preview overlay. Iterates the dragged clips and
+-- draws outline-only copies at the cursor's target track + delta.
+local function render_clip_drag_preview(ctx)
+    local cd = ctx.clip_drag_state
+    if not cd or cd.type ~= "clips" then return end
+    assert(type(cd.delta_frames) == "number",
+        "timeline_view_renderer: clip drag state missing delta_frames")
+
+    local preview_target_id, preview_track_offset
+    if ctx.clip_drag_owns then
+        -- Owning pane: resolve cursor Y → target track → offset, then
+        -- share offset with the non-owning pane.
+        preview_target_id, preview_track_offset =
+            compute_clip_drag_track_hint(ctx.view, cd, ctx.height, ctx.state_module)
+        cd._preview_track_offset = preview_track_offset
+    else
+        -- Non-owning pane: reuse the owning pane's offset in global
+        -- track-index space (matches what drag_handler applies on release).
+        preview_track_offset = cd._preview_track_offset
+    end
+
+    for _, clip in ipairs(cd.clips) do
+        if clip and clip.id then
+            local render_track_id = clip.track_id
+            if preview_track_offset then
+                render_track_id = get_track_with_offset(ctx.state_module, render_track_id, preview_track_offset)
+            elseif preview_target_id then
+                render_track_id = preview_target_id
+            end
+            local start_value = clip.sequence_start + cd.delta_frames
+            draw_clip_instance(ctx, clip, render_track_id, start_value, clip.duration, true)
+        end
+    end
+end
+
+-- Sub-phase: edge handles during an active drag — read preview_data
+-- for clamped/applied deltas + per-edge limiter colors.
+local function render_edge_handles_during_drag(ctx, edge_drag_state, preview_clip_cache)
+    local preview_data = assert(edge_drag_state and edge_drag_state.preview_data,
+        "timeline_view_renderer: missing preview_data")
+    local edge_preview = preview_data.edge_preview
+    assert(type(edge_preview) == "table"
+            and type(edge_preview.edges) == "table"
+            and #edge_preview.edges > 0,
+        "timeline_view_renderer: missing edge_preview.edges")
+
+    for _, entry in ipairs(edge_preview.edges) do
+        if type(entry) == "table" and entry.clip_id and entry.raw_edge_type and entry.normalized_edge then
+            local clip = get_preview_clip(ctx.state_module, preview_clip_cache, {clip_id = entry.clip_id})
+            if clip then
+                local applied_delta = tonumber(entry.applied_delta_frames) or 0
+                local start_value, duration_value, normalized_edge =
+                    edge_drag_renderer.compute_preview_geometry(
+                        clip, entry.normalized_edge, applied_delta, entry.raw_edge_type)
+                if start_value and duration_value then
+                    local color = (entry.is_limiter and ctx.state_module.colors.edge_selected_limit)
+                        or ctx.state_module.colors.edge_selected_available
+                    if entry.is_implied then
+                        color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
+                    end
+                    render_edge_handle(ctx.view, clip, normalized_edge, entry.raw_edge_type,
+                        start_value, duration_value, color,
+                        ctx.state_module, ctx.width, ctx.height, ctx.viewport_duration)
+                end
+            end
+        end
+    end
+end
+
+-- Sub-phase: static edge handles when no drag is active — selection
+-- rendering at zero delta with default available color.
+local function render_static_edge_handles(ctx, edges_to_render, edge_delta, edge_drag_state, preview_clip_cache)
+    local previews = edge_drag_renderer.build_preview_edges(
+        edges_to_render, edge_delta, {},
+        ctx.state_module.colors,
+        (edge_drag_state and edge_drag_state.lead_edge) or nil)
+
+    for _, p in ipairs(previews) do
+        local clip = get_preview_clip(ctx.state_module, preview_clip_cache, p)
+        if clip then
+            local start_value, duration_value, normalized_edge =
+                edge_drag_renderer.compute_preview_geometry(
+                    clip, p.edge_type, p.delta, p.raw_edge_type)
+            if start_value and duration_value then
+                local color = p.color or ctx.state_module.colors.edge_selected_available
+                render_edge_handle(ctx.view, clip, normalized_edge, p.raw_edge_type,
+                    start_value, duration_value, color,
+                    ctx.state_module, ctx.width, ctx.height, ctx.viewport_duration)
+            end
+        end
+    end
+end
+
+-- Phase: edge-drag preview overlay. Drives the drag-state preview
+-- rectangles + shift-block outlines when active, then renders the
+-- edge handles themselves (drag or static branch).
+local function render_edge_drag_preview(ctx)
+    local edge_drag_state = ctx.edge_drag_state
+    local preview_clip_cache = {}
+    local edge_delta = 0
+    local edges_to_render = ctx.state_module.get_selected_edges() or {}
+
+    if ctx.dragging_edges then
+        ensure_edge_preview(edge_drag_state, ctx.state_module)
         local requested_delta = assert_integer(edge_drag_state.delta_frames, "render: edge delta_frames")
         local clamped_delta = assert_integer(edge_drag_state.preview_clamped_delta_frames, "render: clamped_delta_frames")
-        if clamped_delta then
-            edge_delta = clamped_delta
-        elseif requested_delta then
-            edge_delta = requested_delta
-        end
+        edge_delta = clamped_delta or requested_delta or 0
         edges_to_render = edge_drag_state.edges or edges_to_render
 
         local preview_data = edge_drag_state.preview_data
         if preview_data then
-            render_preview_rectangles(view, preview_data, preview_clip_cache, state_module, width, height)
-            render_shift_block_outlines(
-                view,
-                preview_data,
-                state_module,
-                width,
-                height,
-                viewport_start,
-                viewport_end
-            )
+            render_preview_rectangles(ctx.view, preview_data, preview_clip_cache,
+                ctx.state_module, ctx.width, ctx.height)
+            render_shift_block_outlines(ctx.view, preview_data, ctx.state_module,
+                ctx.width, ctx.height, ctx.viewport_start, ctx.viewport_end)
         end
     end
 
     if edges_to_render and #edges_to_render > 0 then
-        if dragging_edges then
-            local preview_data = assert(edge_drag_state and edge_drag_state.preview_data, "timeline_view_renderer: missing preview_data")
-            local edge_preview = preview_data.edge_preview
-            assert(type(edge_preview) == "table"
-                    and type(edge_preview.edges) == "table"
-                    and #edge_preview.edges > 0,
-                "timeline_view_renderer: missing edge_preview.edges")
-
-            for _, entry in ipairs(edge_preview.edges) do
-                if type(entry) == "table" and entry.clip_id and entry.raw_edge_type and entry.normalized_edge then
-                    local clip = get_preview_clip(state_module, preview_clip_cache, {clip_id = entry.clip_id})
-                    if clip then
-                        -- All deltas are integer frames
-                        local applied_delta = tonumber(entry.applied_delta_frames) or 0
-                        local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
-                            clip,
-                            entry.normalized_edge,
-                            applied_delta,
-                            entry.raw_edge_type
-                        )
-                        if start_value and duration_value then
-                            local color = (entry.is_limiter and state_module.colors.edge_selected_limit)
-                                or state_module.colors.edge_selected_available
-                            if entry.is_implied then
-                                color = color_utils.dim_hex(color, IMPLIED_EDGE_DIM_FACTOR)
-                            end
-                            render_edge_handle(
-                                view,
-                                clip,
-                                normalized_edge,
-                                entry.raw_edge_type,
-                                start_value,
-                                duration_value,
-                                color,
-                                state_module,
-                                width,
-                                height,
-                                viewport_duration
-                            )
-                        end
-                    end
-                end
-            end
+        if ctx.dragging_edges then
+            render_edge_handles_during_drag(ctx, edge_drag_state, preview_clip_cache)
         else
-            local previews = edge_drag_renderer.build_preview_edges(
-                edges_to_render,
-                edge_delta,
-                {},
-                state_module.colors,
-                (edge_drag_state and edge_drag_state.lead_edge) or nil
-            )
-            for _, p in ipairs(previews) do
-                local clip = get_preview_clip(state_module, preview_clip_cache, p)
-                if clip then
-                    local start_value, duration_value, normalized_edge = edge_drag_renderer.compute_preview_geometry(
-                        clip,
-                        p.edge_type,
-                        p.delta,
-                        p.raw_edge_type
-                    )
-                    if start_value and duration_value then
-                        local color = p.color or state_module.colors.edge_selected_available
-                        render_edge_handle(
-                            view,
-                            clip,
-                            normalized_edge,
-                            p.raw_edge_type,
-                            start_value,
-                            duration_value,
-                            color,
-                            state_module,
-                            width,
-                            height,
-                            viewport_duration
-                        )
-                    end
-                end
-            end
+            render_static_edge_handles(ctx, edges_to_render, edge_delta, edge_drag_state, preview_clip_cache)
         end
     end
+end
 
-    render_lock_overlay(view, layout_by_index, width, height)
-    render_mark_overlay(view, state_module, width, height, viewport_start, viewport_end, mark_in, mark_out)
+-- Phase: playhead vertical line. Skipped when offscreen.
+local function render_playhead(ctx)
+    if ctx.playhead_position < ctx.viewport_start
+        or ctx.playhead_position > ctx.viewport_end then return end
+    local px = ctx.state_module.time_to_pixel(ctx.playhead_position, ctx.width)
+    log.detail("TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
+        ctx.view.debug_id or "?", ctx.width, px, ctx.playhead_position)
+    timeline.add_line(ctx.view.widget, px, 0, px, ctx.height,
+        ctx.state_module.colors.playhead, 2)
+end
 
-    -- Playhead
-    if playhead_position >= viewport_start and playhead_position <= viewport_end then
-        local px = state_module.time_to_pixel(playhead_position, width)
+-- Phase: snap indicator line during edge drag when the drag is snapped.
+local function render_snap_indicator(ctx)
+    local eds = ctx.edge_drag_state
+    if not (eds and eds.snap_info and eds.snap_info.snapped) then return end
+    local st = eds.snap_info.snap_point.time
+    if st < ctx.viewport_start or st > ctx.viewport_end then return end
+    local sx = ctx.state_module.time_to_pixel(st, ctx.width)
+    timeline.add_line(ctx.view.widget, sx, 0, sx, ctx.height, 0x00FFFF, 2)
+end
 
-        -- DEBUG: Log timeline view width and playhead position
-        log.detail("TIMELINE[%s]: width=%d playhead_x=%d playhead_frames=%d",
-            view.debug_id or "?", width, px, playhead_position)
+function M.render(view)
+    if not view.widget then return end
+    local ctx = build_render_ctx(view)
 
-        timeline.add_line(view.widget, px, 0, px, height, state_module.colors.playhead, 2)
-    end
+    timeline.clear_commands(view.widget)
+    render_track_backgrounds(view, ctx.state_module, ctx.layout_by_index, ctx.width, ctx.height)
 
-    -- Snap Indicator
-    if edge_drag_state and edge_drag_state.snap_info and edge_drag_state.snap_info.snapped then
-        local st = edge_drag_state.snap_info.snap_point.time
-        if st >= viewport_start and st <= viewport_end then
-            local sx = state_module.time_to_pixel(st, width)
-            timeline.add_line(view.widget, sx, 0, sx, height, 0x00FFFF, 2)
-        end
-    end
+    -- Base rendering must never bulk-scan all clips — per-track iteration
+    -- via track_clip_index is the contract. forbid_bulk_clip_read flips a
+    -- flag on the strip; displayed_clips() asserts on it.
+    ctx.state_module.get_tab_strip():forbid_bulk_clip_read(function()
+        draw_visible_clips(ctx, ctx.viewport_start, ctx.viewport_end)
+    end)
+
+    render_selected_gaps_overlay(view, ctx.state_module, ctx.width, ctx.height)
+    render_clip_drag_preview(ctx)
+    render_edge_drag_preview(ctx)
+    render_lock_overlay(view, ctx.layout_by_index, ctx.width, ctx.height)
+    render_mark_overlay(view, ctx.state_module, ctx.width, ctx.height,
+        ctx.viewport_start, ctx.viewport_end, ctx.mark_in, ctx.mark_out)
+    render_playhead(ctx)
+    render_snap_indicator(ctx)
 
     timeline.update(view.widget)
     perf_log.detail("timeline_view.render: %.3fms viewport_start=%d duration=%d",
-        (os.clock() - perf_t0) * 1000, viewport_start, viewport_duration)
+        (os.clock() - ctx.perf_t0) * 1000, ctx.viewport_start, ctx.viewport_duration)
 end
 
 -- Named contract boundaries. Exposed so producer-side tests can pin
