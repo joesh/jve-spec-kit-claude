@@ -842,7 +842,9 @@ end)
 -- target IS the displayed sequence (per-tab cache is the authoritative
 -- store post-H1 — no singleton mirror to write).
 Signals.connect("playhead_changed", function(sequence_id, frame)
-    if type(frame) ~= "number" then return end
+    assert(type(frame) == "number", string.format(
+        "playhead_changed handler: frame must be integer, got %s (sequence_id=%s) — emitter bug",
+        type(frame), tostring(sequence_id)))
     for_each_tab(function(tab)
         if tab.sequence_id == sequence_id then
             tab.cache.playhead_position = frame

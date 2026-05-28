@@ -40,93 +40,54 @@ function M.parse_from_query(query, project_id)
         return nil
     end
 
-    local column_count = 0
-    if query.record then
-        local rec = query:record()
-        if rec and rec.count then
-            column_count = rec:count()
+    -- All callers issue `SELECT * FROM commands` (21 cols, schema order).
+    -- A legacy `< 17 cols` branch existed for an early explicit-column-list
+    -- variant of get_command_at_sequence that no longer exists (load_at_sequence
+    -- now builds the command inline). Removed when audit pass 5 confirmed
+    -- zero reachable callers.
+    local args_json = query:value(4)
+    local args_table = {}
+    if args_json and args_json ~= "" then
+        local ok, decoded = pcall(json.decode, args_json)
+        if ok and type(decoded) == "table" then
+            args_table = decoded
         end
     end
-    local command
 
-    -- Two supported layouts:
-    -- 1) SELECT * FROM commands (schema order)
-    -- 2) Explicit column list from command_manager.get_command_at_sequence
-    if column_count >= 17 then
-        local args_json = query:value(4)
-        local args_table = {}
-        if args_json and args_json ~= "" then
-            local ok, decoded = pcall(json.decode, args_json)
-            if ok and type(decoded) == "table" then
-                args_table = decoded
-            end
-        end
-
-        -- Schema column order: id(0), parent_id(1), sequence_number(2),
-        -- command_type(3), command_args(4), parent_sequence_number(5),
-        -- undo_group_id(6), pre_hash(7), post_hash(8), timestamp(9),
-        -- playhead_value(10), playhead_rate(11), playhead_value_post(12),
-        -- playhead_rate_post(13), selected_clip_ids(14), selected_edge_infos(15),
-        -- selected_gap_infos(16), selected_clip_ids_pre(17),
-        -- selected_edge_infos_pre(18), selected_gap_infos_pre(19),
-        -- sequence_id(20)
-        command = {
-            id = query:value(0),
-            parent_id = query:value(1),
-            sequence_number = query:value(2),
-            type = query:value(3),
-            parameters = args_table,
-            parent_sequence_number = query:value(5),
-            undo_group_id = query:value(6),
-            pre_hash = query:value(7) or "",
-            post_hash = query:value(8) or "",
-            created_at = query:value(9) or os.time(),
-            executed_at = query:value(9),
-            playhead_value = query:value(10),
-            playhead_rate = query:value(11),
-            playhead_value_post = query:value(12),
-            playhead_rate_post = query:value(13),
-            selected_clip_ids = query:value(14),
-            selected_edge_infos = query:value(15),
-            selected_gap_infos = query:value(16),
-            selected_clip_ids_pre = query:value(17),
-            selected_edge_infos_pre = query:value(18),
-            selected_gap_infos_pre = query:value(19),
-            sequence_id = query:value(20),
-        }
-        command.project_id = project_id or args_table.project_id
-    else
-        local args_json = query:value(2)
-        local args_table = {}
-        if args_json and args_json ~= "" then
-            local ok, decoded = pcall(json.decode, args_json)
-            if ok and type(decoded) == "table" then
-                args_table = decoded
-            end
-        end
-
-        command = {
-            id = query:value(0),
-            type = query:value(1),
-            parameters = args_table,
-            sequence_number = query:value(3),
-            parent_sequence_number = query:value(4),
-            pre_hash = query:value(5) or "",
-            post_hash = query:value(6) or "",
-            created_at = query:value(7) or os.time(),
-            executed_at = query:value(7),
-            playhead_value = query:value(8),
-            playhead_rate = query:value(9),
-            selected_clip_ids = query:value(10),
-            selected_edge_infos = query:value(11),
-            selected_gap_infos = query:value(12),
-            selected_clip_ids_pre = query:value(13),
-            selected_edge_infos_pre = query:value(14),
-            selected_gap_infos_pre = query:value(15),
-            status = query:value(16) or "Created"
-        }
-        command.project_id = project_id or args_table.project_id
-    end
+    -- Schema column order: id(0), parent_id(1), sequence_number(2),
+    -- command_type(3), command_args(4), parent_sequence_number(5),
+    -- undo_group_id(6), pre_hash(7), post_hash(8), timestamp(9),
+    -- playhead_value(10), playhead_rate(11), playhead_value_post(12),
+    -- playhead_rate_post(13), selected_clip_ids(14), selected_edge_infos(15),
+    -- selected_gap_infos(16), selected_clip_ids_pre(17),
+    -- selected_edge_infos_pre(18), selected_gap_infos_pre(19),
+    -- sequence_id(20). timestamp + sequence_number are schema NOT NULL —
+    -- no fallback needed (rule 2.13).
+    local command = {
+        id = query:value(0),
+        parent_id = query:value(1),
+        sequence_number = query:value(2),
+        type = query:value(3),
+        parameters = args_table,
+        parent_sequence_number = query:value(5),
+        undo_group_id = query:value(6),
+        pre_hash = query:value(7) or "",
+        post_hash = query:value(8) or "",
+        created_at = query:value(9),
+        executed_at = query:value(9),
+        playhead_value = query:value(10),
+        playhead_rate = query:value(11),
+        playhead_value_post = query:value(12),
+        playhead_rate_post = query:value(13),
+        selected_clip_ids = query:value(14),
+        selected_edge_infos = query:value(15),
+        selected_gap_infos = query:value(16),
+        selected_clip_ids_pre = query:value(17),
+        selected_edge_infos_pre = query:value(18),
+        selected_gap_infos_pre = query:value(19),
+        sequence_id = query:value(20),
+    }
+    command.project_id = project_id or args_table.project_id
 
     setmetatable(command, {__index = M})
     return command
@@ -436,13 +397,13 @@ function M.load_at_sequence(seq_num, project_id)
         id = query:value(0),
         type = query:value(1),
         project_id = project_id,
-        sequence_number = query:value(3) or 0,
+        sequence_number = query:value(3),
         parent_sequence_number = query:value(4),
         status = "Executed",
         parameters = params,
         pre_hash = query:value(5) or "",
         post_hash = query:value(6) or "",
-        created_at = query:value(7) or os.time(),
+        created_at = query:value(7),
         executed_at = query:value(7),
         playhead_value = query:value(8),
         playhead_rate = query:value(9),
@@ -519,7 +480,11 @@ function M.load_parent_tree()
     local exists = {}
     if query:exec() then
         while query:next() do
-            local seq = query:value(0) or 0
+            local seq = query:value(0)
+            -- Coerce NULL parent (root commands) → 0 sentinel. The chain-walk
+            -- loops in command_manager (collect_ancestors_into / build_chain_from)
+            -- terminate on seq == 0; this is contract, not a fallback. Do NOT
+            -- remove the `or 0` here.
             local parent = query:value(1) or 0
             parent_of[seq] = parent
             exists[seq] = true

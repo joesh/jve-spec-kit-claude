@@ -469,10 +469,11 @@ local function apply_inserts(cache, list)
     if not list then return false end
     local changed = false
     for _, clip in ipairs(list) do
-        if clip_geometry.normalize_clip_integers(clip) then
-            table.insert(cache.clips, clip)
-            changed = true
-        end
+        -- normalize_clip_integers asserts on producer-bug clips (post audit
+        -- pass 5: was a boolean-skip that silently dropped invalid inserts).
+        clip_geometry.normalize_clip_integers(clip)
+        table.insert(cache.clips, clip)
+        changed = true
     end
     return changed
 end

@@ -38,14 +38,15 @@
 
 local M = {}
 
-local Clip         = require("models.clip")
-local Sequence     = require("models.sequence")
-local Track        = require("models.track")
-local clip_link    = require("models.clip_link")
-local place_shared = require("core.commands._place_shared")
-local database     = require("core.database")
-local uuid         = require("uuid")
-local log          = require("core.logger").for_area("commands")
+local Clip           = require("models.clip")
+local Sequence       = require("models.sequence")
+local Track          = require("models.track")
+local clip_link      = require("models.clip_link")
+local place_shared   = require("core.commands._place_shared")
+local mutation_entry = require("core.commands._mutation_entry")
+local database       = require("core.database")
+local uuid           = require("uuid")
+local log            = require("core.logger").for_area("commands")
 
 local SAVEPOINT = "add_clips_to_sequence_atomic"
 
@@ -355,27 +356,8 @@ local function build_executor_mutation_bucket(sequence_id, result)
         bulk_shifts = {},
     }
     for _, cid in ipairs(result.created_clip_ids) do
-        local clip = Clip.load(cid)
-        if clip then
-            bucket.inserts[#bucket.inserts + 1] = {
-                id                    = clip.id,
-                owner_sequence_id     = clip.owner_sequence_id,
-                track_sequence_id     = clip.owner_sequence_id,
-                track_id              = clip.track_id,
-                sequence_id           = clip.sequence_id,
-                sequence_start        = clip.sequence_start,
-                duration              = clip.duration,
-                source_in             = clip.source_in,
-                source_out            = clip.source_out,
-                master_layer_track_id = clip.master_layer_track_id,
-                fps_mismatch_policy   = clip.fps_mismatch_policy,
-                frame_rate            = clip.frame_rate,
-                name                  = clip.name,
-                enabled               = clip.enabled,
-                volume                = clip.volume,
-                playhead_frame        = clip.playhead_frame,
-            }
-        end
+        bucket.inserts[#bucket.inserts + 1] =
+            mutation_entry.build_insert_entry(cid, "AddClipsToSequence")
     end
     for track_id, rip in pairs(result.carve.rippled) do
         bucket.bulk_shifts[#bucket.bulk_shifts + 1] = {

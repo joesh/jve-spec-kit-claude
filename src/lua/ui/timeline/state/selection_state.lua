@@ -174,9 +174,16 @@ end
 
 local function gaps_equal(a, b)
     if not a or not b or a.track_id ~= b.track_id then return false end
-    -- All gap coords are now integers
-    if (a.start_value or 0) ~= (b.start_value or 0) then return false end
-    if (a.duration or a.duration_value or 0) ~= (b.duration or b.duration_value or 0) then return false end
+    -- Gap rows carry canonical `start_value` (gaps use this name, NOT
+    -- `sequence_start` — clips' field) and `duration` (integer frames).
+    -- Producers: command_state, delete_selection. Missing field is a
+    -- producer bug — assert rather than silently compare-equal at 0.
+    assert(type(a.start_value) == "number" and type(b.start_value) == "number",
+        "gaps_equal: gap start_value must be integer frame (producer bug)")
+    assert(type(a.duration) == "number" and type(b.duration) == "number",
+        "gaps_equal: gap duration must be integer frame (producer bug)")
+    if a.start_value ~= b.start_value then return false end
+    if a.duration ~= b.duration then return false end
     return true
 end
 

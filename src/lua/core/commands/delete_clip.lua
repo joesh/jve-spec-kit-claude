@@ -24,10 +24,11 @@
 
 local M = {}
 
-local Clip     = require("models.clip")
-local ClipLink = require("models.clip_link")
-local database = require("core.database")
-local log      = require("core.logger").for_area("commands")
+local Clip            = require("models.clip")
+local ClipLink        = require("models.clip_link")
+local database        = require("core.database")
+local log             = require("core.logger").for_area("commands")
+local mutation_entry  = require("core.commands._mutation_entry")
 
 local SAVEPOINT = "delete_clip_atomic"
 
@@ -153,10 +154,15 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             deletes     = {},
             bulk_shifts = {},
         }
+        -- Re-read each restored clip from the DB to produce a full
+        -- canonical entry for apply_inserts. An id-only stub was the old
+        -- shape; consumer (normalize_clip_integers) now asserts on
+        -- missing sequence_start (pre-audit-pass-5 silently skipped,
+        -- leaving the cache stale relative to the DB).
         for _, captured in ipairs(prior) do
-            bucket.inserts[#bucket.inserts + 1] = {
-                id = captured.row and captured.row.id or captured.id,
-            }
+            local clip_id = captured.row and captured.row.id or captured.id
+            bucket.inserts[#bucket.inserts + 1] =
+                mutation_entry.build_insert_entry(clip_id, "Undo DeleteClip")
         end
         command:set_parameter("__timeline_mutations", bucket)
 

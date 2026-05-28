@@ -3122,4 +3122,8 @@ function M.end_undo_group()
     end
 end
 
+-- Internal helper exposed for the white-box invariant test
+-- (test_capture_displayed_playhead_invariant.lua). Not for production use.
+M._test_capture_displayed_playhead = capture_displayed_playhead
+
 return M

@@ -179,51 +179,44 @@ print("\n--- 3. parse_from_query ---")
 cmd = Command.parse_from_query(nil, "proj1")
 check("parse_from_query(nil) → nil", cmd == nil)
 
--- 3b. Layout 2 (<17 cols) with valid JSON params
+-- Layout 1 (schema order, `SELECT *`) is the sole supported shape post
+-- audit pass 5 (the legacy <17-col branch had zero callers; deleted).
+-- Layout-2 specific cases removed with the branch.
+
+-- Layout 1 with invalid JSON → graceful (empty params), type preserved.
 local q = mock_query({
-    [0] = "cmd_id_1",     -- id
-    [1] = "InsertClip",   -- command_type
-    [2] = '{"clip_id":"c1","track_id":"t1"}',  -- command_args JSON
-    [3] = 1,              -- sequence_number
-    [4] = 0,              -- parent_sequence_number
-    [5] = "hash_pre",     -- pre_hash
-    [6] = "hash_post",    -- post_hash
-    [7] = 1000,           -- timestamp / executed_at
-    [8] = 50,             -- playhead_value
-    [9] = 24,             -- playhead_rate
-}, 12)
-
-cmd = Command.parse_from_query(q, "proj1")
-check("parse layout2 → command", cmd ~= nil)
-check("parse layout2 id", cmd.id == "cmd_id_1")
-check("parse layout2 type", cmd.type == "InsertClip")
-check("parse layout2 params.clip_id", cmd.parameters.clip_id == "c1")
-check("parse layout2 project_id from arg", cmd.project_id == "proj1")
-check("parse layout2 playhead_value", cmd.playhead_value == 50)
-
--- 3c. Layout 2 with invalid JSON → graceful (empty params)
-q = mock_query({
     [0] = "cmd_id_2",
-    [1] = "DeleteClip",
-    [2] = "{corrupted###",
-    [3] = 2,
-}, 12)
-
+    [1] = nil,                 -- parent_id
+    [2] = 2,                   -- sequence_number
+    [3] = "DeleteClip",        -- command_type
+    [4] = "{corrupted###",     -- command_args (bad)
+    [5] = nil,                 -- parent_sequence_number
+    [6] = nil,                 -- undo_group_id
+    [7] = "",                  -- pre_hash
+    [8] = "",                  -- post_hash
+    [9] = 1000,                -- timestamp
+}, 21)
 cmd = Command.parse_from_query(q, "proj1")
 check("parse bad JSON → command (not nil)", cmd ~= nil)
 check("parse bad JSON → empty params", next(cmd.parameters) == nil)
 check("parse bad JSON → type preserved", cmd.type == "DeleteClip")
 
--- 3d. Layout 2 with empty JSON string → empty params
+-- Layout 1 with empty JSON string → empty params; project_id resolves
+-- from args_table when the function arg is nil.
 q = mock_query({
     [0] = "cmd_id_3",
-    [1] = "NudgeClip",
-    [2] = "",
-    [3] = 3,
-}, 10)
-
+    [1] = nil,
+    [2] = 3,
+    [3] = "NudgeClip",
+    [4] = '{"project_id":"proj_from_args"}',
+    [5] = nil,
+    [6] = nil,
+    [7] = "",
+    [8] = "",
+    [9] = 1000,
+}, 21)
 cmd = Command.parse_from_query(q, nil)
-check("parse empty JSON → empty params", next(cmd.parameters) == nil)
+check("parse layout1 project_id fallback from args (bad-JSON path)", cmd.project_id == "proj_from_args")
 
 -- 3e. Layout 1 (17+ cols) with valid JSON — matches schema column order
 q = mock_query({
@@ -256,14 +249,19 @@ check("parse layout1 params.position", cmd.parameters.position == 42)
 check("parse layout1 parent_id", cmd.parent_id == "parent_1")
 check("parse layout1 playhead_value", cmd.playhead_value == 99)
 
--- 3f. project_id fallback: nil arg → uses args_table.project_id
+-- 3f. project_id fallback: nil arg → uses args_table.project_id (layout 1).
 q = mock_query({
     [0] = "cmd_id_5",
-    [1] = "TestCmd",
-    [2] = '{"project_id":"from_args"}',
-    [3] = 1,
-}, 10)
-
+    [1] = nil,
+    [2] = 1,
+    [3] = "TestCmd",
+    [4] = '{"project_id":"from_args"}',
+    [5] = nil,
+    [6] = nil,
+    [7] = "",
+    [8] = "",
+    [9] = 1000,
+}, 21)
 cmd = Command.parse_from_query(q, nil)
 check("parse project_id fallback from args", cmd.project_id == "from_args")
 

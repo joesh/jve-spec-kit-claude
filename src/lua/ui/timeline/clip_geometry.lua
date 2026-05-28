@@ -27,29 +27,38 @@ function M.group_and_sort_media_by_track(media_clips)
     return by_track
 end
 
---- Last frame occupied by any clip in the list (0 for empty / all-invalid).
+--- Last frame occupied by any clip in the list (0 for empty list).
+--- Asserts canonical integer coords — any non-number on a clip-shaped row
+--- is a producer bug (loader, mutation apply, importer). Silent skip would
+--- corrupt scrollbar bounds + viewport policy with no diagnostic (rule 1.14).
 function M.compute_content_length(clips)
     local max_end = 0
     for _, c in ipairs(clips) do
-        if type(c.sequence_start) == "number" and type(c.duration) == "number" then
-            local e = c.sequence_start + c.duration
-            if e > max_end then max_end = e end
-        end
+        assert(type(c.sequence_start) == "number", string.format(
+            "clip_geometry.compute_content_length: clip %s missing sequence_start",
+            tostring(c.id)))
+        assert(type(c.duration) == "number", string.format(
+            "clip_geometry.compute_content_length: clip %s missing duration",
+            tostring(c.id)))
+        local e = c.sequence_start + c.duration
+        if e > max_end then max_end = e end
     end
     return max_end
 end
 
---- Validate integer coords on a clip-shaped row. Post-M4-real rename
---- (2026-05-27), mutation payloads use the same canonical field names
---- as clip rows — no `_value` aliases to bridge.
---- Returns true on success, false on invalid sequence_start/duration.
---- Asserts (loud, with clip id) on present-but-non-numeric source_in/out.
+--- Assert canonical integer coords on a clip-shaped row. Post-M4-real
+--- (2026-05-27), mutation payloads use the same canonical field names as
+--- clip rows — no `_value` aliases to bridge. Any missing/invalid coord
+--- is a producer bug; previous boolean-return-on-skip silently dropped
+--- clips from apply_inserts, masking real bugs (rule 1.14 / 2.13 / 2.32).
 function M.normalize_clip_integers(clip)
-    if not clip then return false end
-    local sequence_start = clip.sequence_start
-    local duration = clip.duration
-    if type(sequence_start) ~= "number" then return false end
-    if type(duration) ~= "number" or duration <= 0 then return false end
+    assert(clip, "clip_geometry.normalize_clip_integers: clip required")
+    assert(type(clip.sequence_start) == "number", string.format(
+        "clip_geometry: clip %s sequence_start must be number, got %s",
+        tostring(clip.id), type(clip.sequence_start)))
+    assert(type(clip.duration) == "number" and clip.duration > 0, string.format(
+        "clip_geometry: clip %s duration must be positive number, got %s",
+        tostring(clip.id), tostring(clip.duration)))
     if clip.source_in ~= nil then
         assert(type(clip.source_in) == "number", string.format(
             "clip_geometry: clip %s source_in must be number", tostring(clip.id)))
@@ -58,7 +67,6 @@ function M.normalize_clip_integers(clip)
         assert(type(clip.source_out) == "number", string.format(
             "clip_geometry: clip %s source_out must be number", tostring(clip.id)))
     end
-    return true
 end
 
 return M

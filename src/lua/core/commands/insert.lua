@@ -21,11 +21,12 @@
 
 local M = {}
 
-local Clip          = require("models.clip")
-local Sequence      = require("models.sequence")
-local Track         = require("models.track")
-local place_shared  = require("core.commands._place_shared")
-local log           = require("core.logger").for_area("commands")
+local Clip            = require("models.clip")
+local Sequence        = require("models.sequence")
+local Track           = require("models.track")
+local place_shared    = require("core.commands._place_shared")
+local mutation_entry  = require("core.commands._mutation_entry")
+local log             = require("core.logger").for_area("commands")
 
 -- M.execute — pure-logic entry point. Args and return shape documented below.
 function M.execute(args)
@@ -220,30 +221,7 @@ local function build_executed_mutations(result)
 end
 
 local function build_insert_mutation_entry(clip_id)
-    -- Clip.load (not load_v13_row) so the in-memory mutation carries the
-    -- joined frame_rate from the nested sequence row. Consumers that
-    -- read clip.frame_rate (batch_ripple_edit's fetch_base_clip etc.)
-    -- require it.
-    local clip = Clip.load(clip_id)
-    assert(clip, "Insert: could not re-read inserted clip " .. tostring(clip_id))
-    return {
-        id                    = clip.id,
-        owner_sequence_id     = clip.owner_sequence_id,
-        track_sequence_id     = clip.owner_sequence_id,
-        track_id              = clip.track_id,
-        sequence_id           = clip.sequence_id,
-        sequence_start        = clip.sequence_start,
-        duration              = clip.duration,
-        source_in             = clip.source_in,
-        source_out            = clip.source_out,
-        master_layer_track_id = clip.master_layer_track_id,
-        fps_mismatch_policy   = clip.fps_mismatch_policy,
-        frame_rate            = clip.frame_rate,
-        name                  = clip.name,
-        enabled               = clip.enabled,
-        volume                = clip.volume,
-        playhead_frame        = clip.playhead_frame,
-    }
+    return mutation_entry.build_insert_entry(clip_id, "Insert")
 end
 
 -- Build the post-execute __timeline_mutations bucket. Mirrors the natural
