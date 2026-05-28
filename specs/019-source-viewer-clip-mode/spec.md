@@ -68,6 +68,21 @@ The inspector already handles `item_type="clip"` (clip schema) and `item_type="s
 
 The inspector branches on `item_type` exactly as it already does.
 
+### Open-ended mark range (display contract)
+
+A user can set only one of mark-in / mark-out; the highlighted range is still well-defined. Both display surfaces — timeline ruler (`render_mark_overlay` in `ui/timeline/view/timeline_view_renderer.lua`) and monitor mark bar (`ui/monitor_mark_bar.lua`) — apply the same domain rule:
+
+| mark_in | mark_out | rendered range |
+|---|---|---|
+| present | present | `[mark_in, mark_out)` |
+| present | nil     | `[mark_in, end-of-domain)` |
+| nil     | present | `[start-of-domain, mark_out)` |
+| nil     | nil     | nothing (early return) |
+
+"End-of-domain" and "start-of-domain" are per-surface: the timeline ruler uses the viewport (range clipped to what's visible), the monitor mark bar uses the loaded clip's `[start_frame, total_frames)`. The `or 0` / `or viewport_end` / `or total_frames` expressions in those two functions are **the surface's domain floor / ceiling, not silent fallbacks per rule 2.13**. Removing them would mis-render a single-ended mark as an empty range. Pinned by the two existing mark-display test paths (the live-bound retrim smoke `tests/smoke/cases/test_live_bound_marks_show_clip_in_out.py` for the source side; ruler test coverage for the timeline side).
+
+This rule is referenced by both renderer comments, so future Claudes touching either site land in the same model. Adding a third mark surface MUST adopt the same rule.
+
 ---
 
 ## ⚡ Quick Guidelines

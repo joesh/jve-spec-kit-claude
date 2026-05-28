@@ -795,8 +795,22 @@ local function render_lock_overlay(view, layout_by_index, width, height)
     end
 end
 
--- Mark In/Out range highlight. Implicit boundary: 0 if mark_in nil,
--- viewport_end if mark_out nil (the domain rule, not a fallback).
+-- Mark In/Out range highlight.
+--
+-- Open-ended mark range domain rule (mirrored in monitor_mark_bar.lua;
+-- both surfaces draw the same range). A user can set only one of mark
+-- in / mark out and the range is well-defined:
+--   • mark_in present, mark_out nil  → range is [mark_in, end-of-domain)
+--   • mark_in nil, mark_out present  → range is [start-of-domain, mark_out)
+--   • both present                   → range is [mark_in, mark_out)
+--   • neither present                → no range (early-return above)
+--
+-- "End-of-domain" / "start-of-domain" depend on which surface is drawing:
+-- the timeline renderer uses the viewport (mark range clipped to what's
+-- visible), the monitor mark bar uses the loaded clip's [start_frame,
+-- total_frames). The `or 0` / `or viewport_end` below are the domain
+-- floor / ceiling for THIS surface — NOT silent fallbacks per rule 2.13.
+-- Removing them would mis-render single-ended marks as empty ranges.
 local function render_mark_overlay(view, state_module, width, height, viewport_start, viewport_end, mark_in, mark_out)
     if not mark_in and not mark_out then return end
     local eff_in = mark_in or 0

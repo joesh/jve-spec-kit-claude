@@ -127,7 +127,14 @@ function M.create(widget, config)
         local mark_in = get_mark_in()
         local mark_out = get_mark_out()
 
-        -- Mark range fill (implicit boundary: start_frame if mark_in nil, total_frames if mark_out nil)
+        -- Mark range fill. Open-ended mark range domain rule (see
+        -- timeline_view_renderer.render_mark_overlay for the full
+        -- exposition; both surfaces use the same rule):
+        --   mark_in present, mark_out nil  → [mark_in, total_frames)
+        --   mark_in nil, mark_out present  → [start_frame, mark_out)
+        --   both present                   → [mark_in, mark_out)
+        -- The `or` fallbacks below are this surface's start/end-of-
+        -- domain floor/ceiling, NOT silent defaults per rule 2.13.
         if mark_in or mark_out then
             local eff_in = mark_in or (state.start_frame or 0)
             local eff_out = mark_out or state.total_frames
