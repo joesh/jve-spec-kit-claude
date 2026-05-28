@@ -25,6 +25,7 @@ local Clip            = require("models.clip")
 local Sequence        = require("models.sequence")
 local Track           = require("models.track")
 local place_shared    = require("core.commands._place_shared")
+local id_pool         = require("core.commands._id_pool")
 local mutation_entry  = require("core.commands._mutation_entry")
 local log             = require("core.logger").for_area("commands")
 
@@ -48,9 +49,10 @@ function M.execute(args)
     require("models.patch").ensure_identity_for_source(
         args.sequence_id, args.source_sequence_id)
 
+    -- plan_placement seeds clip/link_group/track pools from args.* (or
+    -- reuses pools the wrapper pre-attached so auto_create + plan-time
+    -- track creation share the same pool consumption sequence).
     local plan = place_shared.plan_placement(args)
-    -- Carry preset_ids through redo so created_clip_ids stays stable.
-    plan.preset_ids = args.created_clip_ids
 
     -- A clip strictly straddling the insertion frame is split into a left
     -- half ending at start_frame and a right half starting at start_frame
@@ -66,10 +68,27 @@ function M.execute(args)
     -- shares it.
     local target_track_ids = place_shared.iter_target_track_ids(plan)
 
+    -- split_pool: redo-stable ids for split right-halves. Seed from
+    -- args.split_capture[track_id].split_new_ids in iteration order so
+    -- the redo replay walks the same per-track sequence and consumes
+    -- the same ids.
+    local split_preset = {}
+    if args.split_capture then
+        for _, track_id in ipairs(target_track_ids) do
+            local cap = args.split_capture[track_id]
+            if cap and cap.split_new_ids then
+                for _, sid in ipairs(cap.split_new_ids) do
+                    split_preset[#split_preset + 1] = sid
+                end
+            end
+        end
+    end
+    local split_pool = id_pool.new(split_preset)
+
     local split_captures = {}
     for _, track_id in ipairs(target_track_ids) do
         local cap = place_shared.split_track_at_insertion(
-            track_id, plan.owner, plan.start_frame)
+            track_id, plan.owner, plan.start_frame, split_pool)
         if cap and (#cap.trimmed > 0 or #cap.split_new_ids > 0) then
             split_captures[track_id] = cap
         end
@@ -99,16 +118,21 @@ function M.execute(args)
         plan.owner_duration, #written.created_clip_ids)
 
     return {
-        created_clip_ids        = written.created_clip_ids,
-        video_clip_id           = written.video_clip_id,
-        audio_clip_id           = written.audio_clip_id,
-        link_group_id           = written.link_group_id,
-        duration_frames         = plan.owner_duration,
-        fps_mismatch_policy     = plan.policy,
-        rippled                 = rippled,
-        split_captures          = split_captures,
-        start_frame             = plan.start_frame,
-        created_owner_track_ids = plan.created_owner_track_ids,
+        created_clip_ids    = written.created_clip_ids,
+        video_clip_id       = written.video_clip_id,
+        audio_clip_id       = written.audio_clip_id,
+        link_group_id       = written.link_group_id,
+        duration_frames     = plan.owner_duration,
+        fps_mismatch_policy = plan.policy,
+        rippled             = rippled,
+        split_captures      = split_captures,
+        start_frame         = plan.start_frame,
+        -- Surface the pools so the executor wrapper can persist the
+        -- consumed lists (track_pool covers BOTH auto_create_record's
+        -- pre-creates and _place_shared's plan-time creates).
+        clip_pool           = plan.clip_pool,
+        link_group_pool     = plan.link_group_pool,
+        track_pool          = plan.track_pool,
     }
 end
 
@@ -153,11 +177,14 @@ local SPEC = {
 -- Patches are the sole routing mechanism: source channels with no patch
 -- row contribute nothing (they don't participate in the edit). Disabled
 -- patches likewise contribute nothing.
-local function auto_create_record_audio_tracks(args)
+local function auto_create_record_audio_tracks(args, track_pool)
     assert(args.source_sequence_id and args.source_sequence_id ~= "",
         "Insert.auto_create_record_audio_tracks: source_sequence_id required "
         .. "(SPEC declares it required=true; reaching this helper without it "
         .. "is a programming error in the executor wiring)")
+    assert(track_pool,
+        "Insert.auto_create_record_audio_tracks: track_pool required "
+        .. "(redo-stable id supply — see _id_pool.lua)")
 
     local Patch = require("models.patch")
     local rec_audio = Track.find_by_sequence(args.sequence_id, "AUDIO")
@@ -178,21 +205,20 @@ local function auto_create_record_audio_tracks(args)
     -- the patch's record_track_index. Pin track_index explicitly.
     local existing_by_idx = {}
     for _, t in ipairs(rec_audio) do existing_by_idx[t.track_index] = true end
-    local created_ids = {}
     for i = 1, max_rec_idx do
         if not existing_by_idx[i] then
+            -- Pool supplies redo-stable id; pool.consumed records it for
+            -- the executor's auto_track_ids persistence step.
             local t = Track.create_audio(
                 string.format("A%d", i), args.sequence_id,
-                { sync_mode = "ripple", index = i })
+                { id = track_pool:take(), sync_mode = "ripple", index = i })
             assert(t:save(), string.format(
                 "Insert: failed to save auto-created audio track A%d "
                 .. "for sequence %s", i, tostring(args.sequence_id)))
-            created_ids[#created_ids + 1] = t.id
             log.event("Insert: auto-created audio track A%d id=%s "
                 .. "(max enabled patch rec_idx=%d)", i, t.id, max_rec_idx)
         end
     end
-    return created_ids
 end
 
 -- Flat executed_mutations list: one entry per row touched. Stable contract
@@ -377,13 +403,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             return false
         end
 
+        -- Build the three id pools once, seeded from the args persisted
+        -- by a prior execute (empty on a fresh execute, populated on
+        -- redo). Pre-attach to args so auto_create_record_audio_tracks
+        -- (which runs BEFORE plan_placement) and the later plan-time
+        -- track creates share the SAME track_pool — pool consumption
+        -- order is the persistence order undoers Track.delete in reverse.
+        args.clip_pool       = id_pool.new(args.created_clip_ids)
+        args.link_group_pool = id_pool.from_one(args.created_link_group_id)
+        args.track_pool      = id_pool.new(args.auto_track_ids)
+
         -- T042: auto-create any missing record audio tracks (within this undo
-        -- entry so Cmd-Z removes them together with the inserted clip). The
-        -- plan_placement step below may auto-create more tracks via
-        -- _place_shared.ensure_owner_track_at_idx (video target + per-audio
-        -- patch routing); those ids are appended to auto_track_ids after
-        -- M.execute returns so the undoer Track.deletes the full set.
-        local auto_ids = auto_create_record_audio_tracks(args)
+        -- entry so Cmd-Z removes them together with the inserted clip).
+        auto_create_record_audio_tracks(args, args.track_pool)
 
         -- If the source sequence has no clips, track creation was the only
         -- goal (T042 path). Persist empty clip-insertion state and return.
@@ -396,10 +428,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             command:set_parameter("duration_frames",       0)
             command:set_parameter("fps_mismatch_policy",   "")
             command:set_parameter("executed_mutations",    {})
-            -- T042 track-only path: only auto_create_record_audio_tracks
-            -- could have created tracks (M.execute never ran), so persist
-            -- exactly auto_ids — no plan-side tracks to merge.
-            command:set_parameter("auto_track_ids",        auto_ids)
+            command:set_parameter("auto_track_ids",        args.track_pool:taken())
             command:set_parameter("__timeline_mutations",  {
                 sequence_id = args.sequence_id,
                 inserts = {}, updates = {}, deletes = {},
@@ -415,25 +444,17 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local result = result_or_err
 
-        -- Merge plan-created tracks (video target + per-audio-channel
-        -- patch routing inside _place_shared) onto auto_ids from
-        -- auto_create_record_audio_tracks. Undoer Track.deletes the
-        -- full list in reverse, so creation-order matters: patch-driven
-        -- pre-creates first, then plan-time creates.
-        assert(type(result.created_owner_track_ids) == "table",
-            "Insert: M.execute did not return created_owner_track_ids")
-        for _, tid in ipairs(result.created_owner_track_ids) do
-            auto_ids[#auto_ids + 1] = tid
-        end
-
-        command:set_parameter("created_clip_ids",      result.created_clip_ids)
-        command:set_parameter("created_link_group_id", result.link_group_id or "")
+        -- Persist consumed-id lists from the pools. Redo replays with
+        -- the same uuids because plan_placement reads these args.* slots
+        -- into pools on the next execute.
+        command:set_parameter("created_clip_ids",      result.clip_pool:taken())
+        command:set_parameter("created_link_group_id", result.link_group_pool:taken_one())
         command:set_parameter("rippled_capture",       result.rippled)
         command:set_parameter("split_capture",         result.split_captures)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
         command:set_parameter("executed_mutations",    build_executed_mutations(result))
-        command:set_parameter("auto_track_ids",        auto_ids)
+        command:set_parameter("auto_track_ids",        result.track_pool:taken())
         command:set_parameter("__timeline_mutations",
             build_executor_mutation_bucket(args, result))
 

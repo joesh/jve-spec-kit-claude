@@ -25,15 +25,9 @@ local Clip            = require("models.clip")
 local Sequence        = require("models.sequence")
 local Track           = require("models.track")
 local place_shared    = require("core.commands._place_shared")
+local id_pool         = require("core.commands._id_pool")
 local mutation_entry  = require("core.commands._mutation_entry")
 local log             = require("core.logger").for_area("commands")
-
--- Plan + apply occlusion against one target track. Delegates to the
--- shared place_shared.occlude_track (used by both Overwrite and
--- AddClipsToSequence so the four-case occlusion logic lives in one place).
-local function occlude_track(track_id, owner_seq, n_start, n_end)
-    return place_shared.occlude_track(track_id, owner_seq, n_start, n_end)
-end
 
 
 function M.execute(args)
@@ -62,20 +56,38 @@ function M.execute(args)
     require("models.patch").ensure_identity_for_source(
         args.sequence_id, args.source_sequence_id)
 
+    -- plan_placement seeds clip/link_group/track pools from args.*
+    -- so a redo replay reuses the same uuids the original execute
+    -- committed (see _id_pool.lua).
     local plan = place_shared.plan_placement(args)
-    -- Carry preset_ids through redo so created_clip_ids stays stable.
-    plan.preset_ids = args.created_clip_ids
     local n_start = plan.start_frame
     local n_end   = plan.start_frame + plan.owner_duration
+
+    -- split_pool: redo-stable ids for occlusion middle-splits. Seed
+    -- from args.occluded_capture[track_id].split_new_ids in iteration
+    -- order. Mirrors Insert's split_pool flow.
+    local target_track_ids = place_shared.iter_target_track_ids(plan)
+    local split_preset = {}
+    if args.occluded_capture then
+        for _, track_id in ipairs(target_track_ids) do
+            local cap = args.occluded_capture[track_id]
+            if cap and cap.split_new_ids then
+                for _, sid in ipairs(cap.split_new_ids) do
+                    split_preset[#split_preset + 1] = sid
+                end
+            end
+        end
+    end
+    local split_pool = id_pool.new(split_preset)
 
     -- Occlude every target track (VIDEO + each audio destination) BEFORE
     -- the new clip rows land, so the INSERTs don't collide with what's
     -- being trimmed/removed. iter_target_track_ids de-dupes — keyed map
     -- below is incidental.
     local occluded = {}
-    for _, track_id in ipairs(place_shared.iter_target_track_ids(plan)) do
-        occluded[track_id] = occlude_track(
-            track_id, plan.owner, n_start, n_end)
+    for _, track_id in ipairs(target_track_ids) do
+        occluded[track_id] = place_shared.occlude_track(
+            track_id, plan.owner, n_start, n_end, split_pool)
     end
 
     local written = place_shared.write_clips(plan)
@@ -85,15 +97,17 @@ function M.execute(args)
         plan.owner_duration, #written.created_clip_ids)
 
     return {
-        created_clip_ids        = written.created_clip_ids,
-        video_clip_id           = written.video_clip_id,
-        audio_clip_id           = written.audio_clip_id,
-        link_group_id           = written.link_group_id,
-        duration_frames         = plan.owner_duration,
-        fps_mismatch_policy     = plan.policy,
-        occluded                = occluded,
-        start_frame             = plan.start_frame,
-        created_owner_track_ids = plan.created_owner_track_ids,
+        created_clip_ids    = written.created_clip_ids,
+        video_clip_id       = written.video_clip_id,
+        audio_clip_id       = written.audio_clip_id,
+        link_group_id       = written.link_group_id,
+        duration_frames     = plan.owner_duration,
+        fps_mismatch_policy = plan.policy,
+        occluded            = occluded,
+        start_frame         = plan.start_frame,
+        clip_pool           = plan.clip_pool,
+        link_group_pool     = plan.link_group_pool,
+        track_pool          = plan.track_pool,
     }
 end
 
@@ -171,15 +185,15 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local result = result_or_err
 
-        assert(type(result.created_owner_track_ids) == "table",
-            "Overwrite: M.execute did not return created_owner_track_ids")
-        command:set_parameter("created_clip_ids",      result.created_clip_ids)
-        command:set_parameter("created_link_group_id", result.link_group_id or "")
+        -- Persist the pools' consumed lists; redo seeds new pools from
+        -- these slots and replays with the same uuids (see _id_pool.lua).
+        command:set_parameter("created_clip_ids",      result.clip_pool:taken())
+        command:set_parameter("created_link_group_id", result.link_group_pool:taken_one())
         command:set_parameter("occluded_capture",      result.occluded)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
         command:set_parameter("executed_mutations",    build_executed_mutations(result))
-        command:set_parameter("auto_track_ids",        result.created_owner_track_ids)
+        command:set_parameter("auto_track_ids",        result.track_pool:taken())
 
         local bucket = {
             sequence_id = args.sequence_id,

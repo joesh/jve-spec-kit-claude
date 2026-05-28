@@ -75,11 +75,14 @@ function M.is_linked(clip_id, db)
     return result
 end
 
--- Create a new link group between clips
+-- Create a new link group between clips.
 -- clips: array of {clip_id, role, time_offset?}
 -- db: optional database connection (uses get_connection() if not provided)
+-- forced_id: optional pre-chosen link_group_id (used by command redo to
+--   replay with the same uuid the original execute committed; non-empty
+--   string or nil). Asserted to be a string when provided.
 -- Returns: link_group_id or nil on failure
-function M.create_link_group(clips, db)
+function M.create_link_group(clips, db, forced_id)
     if not clips or #clips < 2 then
         return nil, "At least 2 clips required for a link group"
     end
@@ -87,8 +90,9 @@ function M.create_link_group(clips, db)
     -- Use provided db or get connection (models are allowed to call get_connection)
     db = db or database.get_connection()
 
-    -- Generate new link group ID
-    local link_group_id = uuid.generate()
+    assert(forced_id == nil or (type(forced_id) == "string" and forced_id ~= ""),
+        "clip_link.create_link_group: forced_id must be non-empty string or nil")
+    local link_group_id = forced_id or uuid.generate()
 
     -- Insert all clips into the link group
     local insert_query = db:prepare([[

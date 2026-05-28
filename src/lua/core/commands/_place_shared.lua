@@ -22,6 +22,7 @@ local Track     = require("models.track")
 local Clip      = require("models.clip")
 local clip_link = require("models.clip_link")
 local Cycle     = require("models.cycle")
+local id_pool   = require("core.commands._id_pool")
 
 --- Pick the effective fps-mismatch policy for a place operation.
 --- Chain: explicit arg → owner sequence override (non-NULL) → project default.
@@ -278,28 +279,28 @@ end
 -- reverse). Required (no fallback) because forgetting to thread it
 -- silently leaks tracks on undo (the bug this list fixes).
 local function ensure_owner_track_at_idx(owner_id, track_type, rec_idx,
-                                         by_index, label_fmt, created)
-    assert(type(created) == "table",
-        "place_shared.ensure_owner_track_at_idx: `created` collector required")
+                                         by_index, label_fmt, track_pool)
+    assert(track_pool, "place_shared.ensure_owner_track_at_idx: track_pool required")
     local existing = by_index[rec_idx]
     if existing then return existing end
     local creator = (track_type == "AUDIO") and Track.create_audio
                                               or Track.create_video
+    -- Pool serves preset id (redo) or fresh uuid; consumed list is
+    -- read back by the executor to persist as auto_track_ids.
     local newt = creator(
         string.format(label_fmt, rec_idx), owner_id,
-        { id = uuid.generate(), index = rec_idx })
+        { id = track_pool:take(), index = rec_idx })
     assert(newt:save(), string.format(
         "place_shared: failed to auto-create owner %s track at index %d "
         .. "on sequence %s", track_type, rec_idx, owner_id))
     by_index[rec_idx] = newt.id
-    created[#created + 1] = newt.id
     return newt.id
 end
 
 local function compute_audio_targets(owner, nested, drop_mode, args, a_dur,
-                                     owner_duration, created_owner_track_ids)
-    assert(type(created_owner_track_ids) == "table",
-        "place_shared.compute_audio_targets: created_owner_track_ids required")
+                                     owner_duration, track_pool)
+    assert(track_pool,
+        "place_shared.compute_audio_targets: track_pool required")
     if drop_mode == "composite" then
         return { {
             track_id              = M.pick_target_track(
@@ -328,7 +329,7 @@ local function compute_audio_targets(owner, nested, drop_mode, args, a_dur,
         if rec_idx ~= nil then
             local owner_track_id = ensure_owner_track_at_idx(
                 owner.id, "AUDIO", rec_idx, owner_a_by_index, "Audio %d",
-                created_owner_track_ids)
+                track_pool)
             targets[#targets + 1] = {
                 track_id              = owner_track_id,
                 master_audio_track_id = nt.id,
@@ -349,9 +350,8 @@ end
 -- Mirror of compute_audio_targets' expanded path, but video is a single
 -- clip per Insert so we return one track_id (or nil to drop video).
 -- Explicit target_video_track_id wins (per pick_target_track contract).
-local function compute_video_target(owner, nested, args, created_owner_track_ids)
-    assert(type(created_owner_track_ids) == "table",
-        "place_shared.compute_video_target: created_owner_track_ids required")
+local function compute_video_target(owner, nested, args, track_pool)
+    assert(track_pool, "place_shared.compute_video_target: track_pool required")
     if args.target_video_track_id and args.target_video_track_id ~= "" then
         return M.pick_target_track(
             owner.id, "VIDEO", args.target_video_track_id)
@@ -375,7 +375,7 @@ local function compute_video_target(owner, nested, args, created_owner_track_ids
     end
     return ensure_owner_track_at_idx(
         owner.id, "VIDEO", rec_idx, owner_v_by_index, "V%d",
-        created_owner_track_ids)
+        track_pool)
 end
 
 local function derive_base_name(nested, args)
@@ -432,12 +432,17 @@ function M.plan_placement(args)
 
     assert(owner_duration > 0, "place_shared: computed owner_duration <= 0")
 
-    -- Append-only list of owner-side tracks auto-created by this plan
-    -- (audio + video). Insert/Overwrite persist this on the command so the
-    -- undoer can Track.delete each one (reverse order). Without it the
-    -- auto-created tracks leak across undo — surfaced by test_undo_property
-    -- "Insert(N) … 1 track row drift" findings (2026-05-28).
-    local created_owner_track_ids = {}
+    -- Three id pools (clip, link group, auto-track) — see _id_pool.lua.
+    -- Caller may pre-seed via args.* (Insert pre-seeds track_pool because
+    -- its auto_create_record_audio_tracks step takes ids from the same
+    -- pool before plan_placement runs). Otherwise seed here from the
+    -- persisted-id args, so a redo replay reuses the same uuids.
+    local clip_pool       = args.clip_pool
+                          or id_pool.new(args.created_clip_ids)
+    local link_group_pool = args.link_group_pool
+                          or id_pool.from_one(args.created_link_group_id)
+    local track_pool      = args.track_pool
+                          or id_pool.new(args.auto_track_ids)
 
     local targets = {}
     if mediums.VIDEO then
@@ -445,7 +450,7 @@ function M.plan_placement(args)
         -- patch is disabled or absent — in which case no V clip is written
         -- (audio-only edit). Per spec §F2 patches are sole routing.
         targets.VIDEO = compute_video_target(
-            owner, nested, args, created_owner_track_ids)
+            owner, nested, args, track_pool)
     end
 
     -- Default = "expanded": patches drive per-channel audio routing (spec §F2).
@@ -461,24 +466,26 @@ function M.plan_placement(args)
     if mediums.AUDIO then
         audio_targets = compute_audio_targets(
             owner, nested, drop_mode, args, a_dur, owner_duration,
-            created_owner_track_ids)
+            track_pool)
     end
 
     return {
-        owner                    = owner,
-        nested                   = nested,
-        policy                   = policy,
-        video_native_dur         = v_dur,
-        audio_native_dur         = a_dur,
-        video_source_in          = v_src_in,
-        audio_source_in          = a_src_in,
-        owner_duration           = owner_duration,
-        targets                  = targets,
-        audio_targets            = audio_targets,
-        audio_drop_mode          = drop_mode,
-        base_name                = derive_base_name(nested, args),
-        start_frame              = args.sequence_start_frame,
-        created_owner_track_ids  = created_owner_track_ids,
+        owner            = owner,
+        nested           = nested,
+        policy           = policy,
+        video_native_dur = v_dur,
+        audio_native_dur = a_dur,
+        video_source_in  = v_src_in,
+        audio_source_in  = a_src_in,
+        owner_duration   = owner_duration,
+        targets          = targets,
+        audio_targets    = audio_targets,
+        audio_drop_mode  = drop_mode,
+        base_name        = derive_base_name(nested, args),
+        start_frame      = args.sequence_start_frame,
+        clip_pool        = clip_pool,
+        link_group_pool  = link_group_pool,
+        track_pool       = track_pool,
     }
 end
 
@@ -508,25 +515,16 @@ function M.iter_target_track_ids(plan)
     return ids
 end
 
--- Optional preset_ids let callers (e.g. command redo replaying a
--- persisted execute) pin the new clip ids so undo/redo round-trip
--- without churning uuids. preset_ids[1] is consumed for the video clip
--- (when there is one) and the remaining entries feed the audio clip
--- loop in order; new uuids fill the unfilled slots.
-local function make_id_supplier(plan)
-    local preset_ids = plan.preset_ids or {}
-    local idx = 0
-    return function()
-        idx = idx + 1
-        return preset_ids[idx] or uuid.generate()
-    end
-end
+-- Clip-id pool: plan.clip_pool serves the video clip first (when there
+-- is one), then the audio clips in order. On redo the persisted
+-- created_clip_ids list is fed in via id_pool.new so the same uuids
+-- replay; on fresh execute the pool generates them.
 
-local function insert_video_clip(plan, next_id)
+local function insert_video_clip(plan)
     local v_in = plan.video_source_in
     assert(v_in, "place_shared.write_clips: video target without video_source_in")
     return Clip.create({
-        id                    = next_id(),
+        id                    = plan.clip_pool:take(),
         project_id            = plan.owner.project_id,
         owner_sequence_id     = plan.owner.id,
         track_id              = plan.targets.VIDEO,
@@ -545,7 +543,7 @@ local function insert_video_clip(plan, next_id)
     })
 end
 
-local function insert_audio_clips(plan, next_id)
+local function insert_audio_clips(plan)
     local audio_targets = plan.audio_targets
     if not audio_targets or #audio_targets == 0 then return {} end
     local a_in_frames = plan.audio_source_in
@@ -567,7 +565,7 @@ local function insert_audio_clips(plan, next_id)
         -- tgt.source_out is in master.fps frames (a_dur from apply_nested_marks).
         local out_frame = a_in_frames + tgt.source_out
         ids[#ids + 1] = Clip.create({
-            id                    = next_id(),
+            id                    = plan.clip_pool:take(),
             project_id            = plan.owner.project_id,
             owner_sequence_id     = plan.owner.id,
             track_id              = tgt.track_id,
@@ -591,7 +589,10 @@ local function insert_audio_clips(plan, next_id)
 end
 
 -- Group V + every A together. Caller guarantees both mediums landed.
-local function link_video_with_audio(v_clip_id, a_clip_ids)
+-- `forced_id` (optional) pins the link_group_id so a redo replay reuses
+-- the same uuid the original execute committed. Plumbed through from
+-- plan.link_group_pool by write_clips.
+local function link_video_with_audio(v_clip_id, a_clip_ids, forced_id)
     local entries = {
         { clip_id = v_clip_id, role = "video", time_offset = 0 },
     }
@@ -600,7 +601,7 @@ local function link_video_with_audio(v_clip_id, a_clip_ids)
             clip_id = aid, role = "audio", time_offset = 0,
         }
     end
-    local link_group_id = clip_link.create_link_group(entries)
+    local link_group_id = clip_link.create_link_group(entries, nil, forced_id)
     assert(link_group_id and link_group_id ~= "",
         "place_shared: clip_link.create_link_group returned empty id")
     return link_group_id
@@ -615,12 +616,15 @@ end
 ---
 --- Link group: created with V + every A clip when both mediums land.
 function M.write_clips(plan)
-    local next_id  = make_id_supplier(plan)
+    assert(plan.clip_pool,
+        "place_shared.write_clips: plan.clip_pool required (seed via id_pool.new in plan_placement)")
+    assert(plan.link_group_pool,
+        "place_shared.write_clips: plan.link_group_pool required")
     local v_clip_id
     if plan.targets.VIDEO then
-        v_clip_id = insert_video_clip(plan, next_id)
+        v_clip_id = insert_video_clip(plan)
     end
-    local a_clip_ids = insert_audio_clips(plan, next_id)
+    local a_clip_ids = insert_audio_clips(plan)
 
     local created_list = {}
     if v_clip_id then created_list[#created_list + 1] = v_clip_id end
@@ -630,7 +634,10 @@ function M.write_clips(plan)
 
     local link_group_id
     if v_clip_id and #a_clip_ids > 0 then
-        link_group_id = link_video_with_audio(v_clip_id, a_clip_ids)
+        -- Pool serves preset id (redo replay) or generates fresh; either
+        -- way the consumed id is recorded so the executor can persist it.
+        local forced = plan.link_group_pool:take()
+        link_group_id = link_video_with_audio(v_clip_id, a_clip_ids, forced)
     end
 
     return {
@@ -710,7 +717,8 @@ local function occlude_trim_head(e, owner_seq, nested, n_end)
     return { trimmed = snap }
 end
 
-local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
+local function occlude_split_middle(e, owner_seq, nested, n_start, n_end, split_pool)
+    assert(split_pool, "place_shared.occlude_split_middle: split_pool required")
     local e_end           = e.sequence_start_frame + e.duration_frames
     local left_duration   = n_start - e.sequence_start_frame
     local right_duration  = e_end - n_end
@@ -726,7 +734,7 @@ local function occlude_split_middle(e, owner_seq, nested, n_start, n_end)
     -- right half. Inherit verbatim from e (which already carries them as
     -- loaded by database.load_clips).
     local right_id = Clip.create({
-        id                    = uuid.generate(),
+        id                    = split_pool:take(),
         project_id            = e.project_id,
         owner_sequence_id     = e.owner_sequence_id,
         track_id              = e.track_id,
@@ -757,12 +765,13 @@ local function classify_overlap(e_start, e_end, n_start, n_end)
     return nil  -- unreachable for an actually-overlapping clip
 end
 
-function M.occlude_track(track_id, owner_seq, n_start, n_end)
+function M.occlude_track(track_id, owner_seq, n_start, n_end, split_pool)
     assert(track_id and track_id ~= "",
         "place_shared.occlude_track: track_id required")
     assert(type(n_start) == "number" and type(n_end) == "number"
        and n_end > n_start,
         "place_shared.occlude_track: range must be a non-empty owner-frame pair")
+    assert(split_pool, "place_shared.occlude_track: split_pool required")
 
     local deleted_rows, trimmed, split_new_ids = {}, {}, {}
     for _, e in ipairs(Clip.find_overlapping_on_track(track_id, n_start, n_end)) do
@@ -780,7 +789,7 @@ function M.occlude_track(track_id, owner_seq, n_start, n_end)
         elseif kind == "trim_head" then
             out = occlude_trim_head(e, owner_seq, nested, n_end)
         elseif kind == "split" then
-            out = occlude_split_middle(e, owner_seq, nested, n_start, n_end)
+            out = occlude_split_middle(e, owner_seq, nested, n_start, n_end, split_pool)
         else
             error(string.format(
                 "place_shared.occlude_track: unreachable case — clip=%s "
@@ -817,13 +826,16 @@ end
 --- Returns { trimmed = [{id, prior}], split_new_ids = [ids] } — same
 --- shape subset as occlude_track. Call sites can route this through the
 --- same undo path: delete split_new_ids, restore trimmed bounds.
-function M.split_track_at_insertion(track_id, owner_seq, position)
+function M.split_track_at_insertion(track_id, owner_seq, position, split_pool)
     assert(track_id and track_id ~= "",
         "place_shared.split_track_at_insertion: track_id required")
     assert(type(position) == "number",
         "place_shared.split_track_at_insertion: position must be integer frame")
     assert(owner_seq and owner_seq.fps_numerator and owner_seq.fps_denominator,
         "place_shared.split_track_at_insertion: owner_seq with fps required")
+    assert(split_pool,
+        "place_shared.split_track_at_insertion: split_pool required "
+        .. "(redo-stable id supply — see _id_pool.lua)")
 
     local trimmed       = {}
     local split_new_ids = {}
@@ -864,7 +876,7 @@ function M.split_track_at_insertion(track_id, owner_seq, position)
                 e.sequence_start_frame, left_duration,
                 e.source_in_frame, e.source_in_frame + source_offset)
 
-            local right_id = uuid.generate()
+            local right_id = split_pool:take()
             Clip._create_v13_row({
                 id                    = right_id,
                 project_id            = e.project_id,
