@@ -60,4 +60,20 @@ function Pool:taken_one()
     return self.consumed[1] or ""
 end
 
+--- Rewrite the clip_id of every insert action in `actions` from `pool`.
+-- clip_mutator's planners (resolve_occlusions, resolve_occlusions_multi)
+-- mint fresh uuids for split right-halves at plan time; this lifts that
+-- decision to the command boundary so the same ids survive redo.
+-- Action shape: { type="insert"|"update"|"delete", clip_id=..., ... } per
+-- clip_mutator.plan_insert / plan_update / plan_delete.
+function M.reid_inserts(actions, pool)
+    assert(type(actions) == "table",
+        "_id_pool.reid_inserts: actions must be a list of clip_mutator actions")
+    for _, a in ipairs(actions) do
+        if a.type == "insert" then
+            a.clip_id = pool:take()
+        end
+    end
+end
+
 return M

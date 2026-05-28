@@ -8,6 +8,7 @@ local M = {}
 
 local clip_mutator = require("core.clip_mutator")
 local command_helper = require("core.command_helper")
+local id_pool = require("core.commands._id_pool")
 local Track = require("models.track")
 local log = require("core.logger").for_area("commands")
 
@@ -20,6 +21,7 @@ local SPEC = {
     },
     persisted = {
         executed_mutations = {},
+        created_clip_ids   = {},  -- split right-half uuids in plan order; redo replays
     },
 }
 
@@ -43,6 +45,11 @@ function M.register(command_executors, command_undoers, db, set_last_error)
 
         local tracks = Track.find_by_sequence(sequence_id)
 
+        -- id_pool seeds split-half ids; on first execute :take() mints
+        -- fresh uuids, on redo args.created_clip_ids feeds the same ids
+        -- back so undo-by-id and downstream history stay stable.
+        local clip_pool = id_pool.new(args.created_clip_ids)
+
         -- Phase 1: Lift — resolve occlusions on every track
         local lift_mutations = {}
         for _, track in ipairs(tracks) do
@@ -59,6 +66,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 table.insert(lift_mutations, mut)
             end
         end
+
+        -- Rewrite split-half ids from pool BEFORE apply_mutations so the
+        -- persisted mutations carry the pool-served ids (matches undo+redo).
+        id_pool.reid_inserts(lift_mutations, clip_pool)
 
         -- Apply lift mutations so ripple operates on post-lift state
         if #lift_mutations > 0 then
@@ -86,6 +97,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             end
         end
 
+        -- Same pool — ripple-phase splits get ids from the same sequence
+        -- as lift-phase, in deterministic Track.find_by_sequence order.
+        id_pool.reid_inserts(ripple_mutations, clip_pool)
+
         if #ripple_mutations > 0 then
             local ok_apply, apply_err = command_helper.apply_mutations(db, ripple_mutations)
             if not ok_apply then
@@ -100,6 +115,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, m in ipairs(ripple_mutations) do table.insert(all_mutations, m) end
 
         command:set_parameter("executed_mutations", all_mutations)
+        command:set_parameter("created_clip_ids",  clip_pool:taken())
         populate_timeline_mutations(command, sequence_id, all_mutations)
 
 

@@ -30,6 +30,7 @@ local Clip      = require("models.clip")
 local ClipLink  = require("models.clip_link")
 local SplitClip = require("core.commands.split_clip")
 local database  = require("core.database")
+local id_pool   = require("core.commands._id_pool")
 local log       = require("core.logger").for_area("commands")
 
 local SAVEPOINT = "blade_atomic"
@@ -98,14 +99,19 @@ function M.execute(args)
     -- Phase 2 (atomic): run SplitClip on each target. SAVEPOINT so a
     -- mid-blade SplitClip refusal unwinds the entire blade — the blade
     -- is all-or-nothing.
+    -- id_pool seeds: on first execute both pools are empty so :take()
+    -- mints fresh uuids; on redo args.created_* feed the same ids back.
+    local clip_pool       = args.clip_pool       or id_pool.new(args.created_clip_ids)
+    local link_group_pool = args.link_group_pool or id_pool.new(args.created_link_group_ids)
     assert(database.savepoint(SAVEPOINT), "Blade: savepoint failed")
     local splits = {}
     local ok, err = pcall(function()
         for _, t in ipairs(targets) do
             local r = SplitClip.execute({
-                sequence_id = args.sequence_id,
-                clip_id     = t.clip_id,
-                split_frame = args.blade_frame,
+                sequence_id    = args.sequence_id,
+                clip_id        = t.clip_id,
+                split_frame    = args.blade_frame,
+                second_clip_id = clip_pool:take(),
             })
             splits[#splits + 1] = {
                 clip_id             = t.clip_id,            -- left half (id unchanged)
@@ -136,9 +142,18 @@ function M.execute(args)
                 }
             end
         end
-        for _, bucket in pairs(right_halves_by_group) do
+        -- pairs() iteration order is undefined; sort keys so link_group_pool
+        -- serves preset ids in the same order on every redo.
+        local ordered_group_keys = {}
+        for k in pairs(right_halves_by_group) do
+            ordered_group_keys[#ordered_group_keys + 1] = k
+        end
+        table.sort(ordered_group_keys)
+        for _, k in ipairs(ordered_group_keys) do
+            local bucket = right_halves_by_group[k]
             if #bucket >= 2 then
-                local new_group, link_err = ClipLink.create_link_group(bucket)
+                local new_group, link_err = ClipLink.create_link_group(
+                    bucket, nil, link_group_pool:take())
                 assert(new_group, string.format(
                     "Blade: failed to create link group for right halves: %s",
                     tostring(link_err)))
@@ -168,19 +183,27 @@ local SPEC = {
         track_ids   = { required = true },
     },
     persisted = {
-        prior_splits = {},  -- list of {clip_id, second_clip_id, original_link_group}
+        prior_splits           = {},  -- list of {clip_id, second_clip_id, original_link_group}
+        created_clip_ids       = {},  -- right-half uuids in target order; redo replays
+        created_link_group_ids = {},  -- new right-half link groups in sorted-key order; redo replays
     },
 }
 
 function M.register(command_executors, command_undoers, _db, set_last_error)
     command_executors["Blade"] = function(command)
         local args = command:get_all_parameters()
+        -- Seed pools here so :taken() is reachable after execute (the
+        -- internal pcall in M.execute would otherwise hide them).
+        args.clip_pool       = id_pool.new(args.created_clip_ids)
+        args.link_group_pool = id_pool.new(args.created_link_group_ids)
         local ok, result_or_err = pcall(M.execute, args)
         if not ok then
             set_last_error("Blade: " .. tostring(result_or_err))
             return false, tostring(result_or_err)
         end
         command:set_parameter("prior_splits", result_or_err.splits)
+        command:set_parameter("created_clip_ids",       args.clip_pool:taken())
+        command:set_parameter("created_link_group_ids", args.link_group_pool:taken())
 
         -- Emit aggregate __timeline_mutations: each split is left UPDATE +
         -- right INSERT. Mirrors Insert's emission shape.

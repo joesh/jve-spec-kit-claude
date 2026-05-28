@@ -138,3 +138,21 @@ Phases 1–3 are the spine and must happen in order. Phase 4 can run parallel to
 2. Phase 4 schema migration: **bump schema version** per rule 3.1.
 3. Phase 8 spec docs: **delete** `data-model.md`, `plan.md`, `research.md`, `quickstart.md`, `tasks.md`, `contracts/`.
 4. Phase 8 design HTMLs: **delete** `source_in_timeline_v{1,2,3}.html` (keep v4).
+
+## Audit pass 19d (2026-05-28)
+
+Extended id_pool to Blade + ExtractRange (→ TrimHead).
+
+- **Blade**: clip_pool (right-half clip ids) + link_group_pool (new right-half link
+  groups). Sorted `right_halves_by_group` keys before pool consumption — `pairs()`
+  iteration order is undefined and would have desynced redo.
+- **ExtractRange**: single clip_pool feeds both lift and ripple phases. New helper
+  `_id_pool.reid_inserts(actions, pool)` rewrites split-half ids on `clip_mutator`-
+  planned actions BEFORE `apply_mutations`. Keeps clip_mutator API unchanged for
+  the 7 other callers (Nudge, OverwriteTrimEdge, LiftRange, MoveClipToTrack,
+  Paste, BatchRippleEdit). Pattern: command owns id stability; planner plans.
+- **`clip_link.create_link_group(clips, db, forced_id)`** unchanged from 19c.
+
+Harness (seed=42): 25 → 2. P3 redo idempotence 100% across all commands.
+Remaining 2 P2 findings are random-history interactions (duration_frames drift +
+clip row count) — separate investigation.
