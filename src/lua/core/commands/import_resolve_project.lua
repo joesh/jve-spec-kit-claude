@@ -455,8 +455,16 @@ function M.register(executors, undoers, db)
         local json = require("dkjson")
         local host = assert(Project.load(args.project_id),
             "ImportResolveTimeline: host project " .. args.project_id .. " not found")
-        local host_settings = (host.settings and host.settings ~= "")
-            and json.decode(host.settings) or {}
+        local host_settings
+        if host.settings and host.settings ~= "" then
+            local decoded, decode_err = json.decode(host.settings)
+            assert(decoded, string.format(
+                "ImportResolveTimeline: host project %s has unparseable settings JSON: %s",
+                args.project_id, tostring(decode_err)))
+            host_settings = decoded
+        else
+            host_settings = {}
+        end
         local import_result = drp_importer.import_into_project(
             args.project_id, parse_result, {
                 project_settings = host_settings,

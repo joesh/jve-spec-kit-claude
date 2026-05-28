@@ -408,7 +408,13 @@ local function parse_resolve_timecode(timecode_str, frame_rate)
         return math.floor(frames + 0.5)
     end
 
-    return 0
+    -- Unparseable input: fail loud rather than masking as frame 0 (which is a
+    -- legitimate source-start value). Empty/missing input is handled at the
+    -- top of this function; reaching here means a tag was present with a
+    -- non-empty, non-rational, non-numeric body.
+    error(string.format(
+        "parse_resolve_timecode: unparseable timecode %q (frame_rate=%s)",
+        tostring(timecode_str), tostring(frame_rate)))
 end
 
 --- Parse SequenceTabsData from a Resolve FieldsBlob hex string.
