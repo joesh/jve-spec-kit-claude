@@ -1066,8 +1066,14 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(layout, 0, 0, 0, 0)
 
-    -- Create tab bar similar to timeline tabs
-    local colors = ui_constants.COLORS or {}
+    -- Create tab bar similar to timeline tabs. All UI chrome colors are
+    -- required (rule 2.13: no fallbacks); ui_constants supplies every key.
+    local colors = assert(ui_constants.COLORS,
+        "project_browser: ui_constants.COLORS missing — required for UI chrome")
+    local function color(key)
+        return assert(colors[key],
+            "project_browser: ui_constants.COLORS." .. key .. " is required")
+    end
     local tab_container = qt_constants.WIDGET.CREATE()
     local tab_layout = qt_constants.LAYOUT.CREATE_HBOX()
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_container, tab_layout)
@@ -1075,8 +1081,8 @@ function M.create()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(tab_layout, 6)
     qt_constants.PROPERTIES.SET_STYLE(tab_container, string.format(
         [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
-        colors.PANEL_BACKGROUND_COLOR or "#1f1f1f",
-        colors.SCROLL_BORDER_COLOR or "#111111"
+        color("PANEL_BACKGROUND_COLOR"),
+        color("SCROLL_BORDER_COLOR")
     ))
 
     local tab_label = qt_constants.WIDGET.CREATE_LABEL("Untitled Project")
@@ -1090,7 +1096,7 @@ function M.create()
             border: none;
             border-bottom: 2px solid %s;
         }
-    ]], colors.WHITE_TEXT_COLOR or "#ffffff", colors.SELECTION_BORDER_COLOR or "#e64b3d"))
+    ]], color("WHITE_TEXT_COLOR"), color("SELECTION_BORDER_COLOR")))
     qt_constants.LAYOUT.ADD_WIDGET(tab_layout, tab_label)
     qt_constants.LAYOUT.ADD_STRETCH(tab_layout, 1)
     qt_constants.LAYOUT.ADD_WIDGET(layout, tab_container)

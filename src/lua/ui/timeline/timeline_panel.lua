@@ -66,11 +66,20 @@ local timecode_entry = {
     listener_token = nil,
 }
 
-local colors = ui_constants.COLORS or {}
-local selection_color = colors.SELECTION_BORDER_COLOR or "#e64b3d"
-local inactive_text_color = colors.GENERAL_LABEL_COLOR or "#9a9a9a"
+local colors = assert(ui_constants.COLORS,
+    "timeline_panel: ui_constants.COLORS missing — required for UI chrome colors")
+-- Helper: fetch a required color or assert with key name. Removes the
+-- widespread `colors.X or "#hex"` fallback pattern (rule 2.13). Production
+-- always supplies every key referenced below; the assert is a contract
+-- check, not a fallback.
+local function color(key)
+    return assert(colors[key],
+        "timeline_panel: ui_constants.COLORS." .. key .. " is required")
+end
+local selection_color = color("SELECTION_BORDER_COLOR")
+local inactive_text_color = color("GENERAL_LABEL_COLOR")
 local active_text_color = selection_color
-local hover_text_color = colors.WHITE_TEXT_COLOR or "#ffffff"
+local hover_text_color = color("WHITE_TEXT_COLOR")
 local source_tab_color = "#5cbacc"  -- --src accent from design mockup v4
 
 -- Tab styling per spec FR-002: source vs record distinction is always-on
@@ -194,14 +203,17 @@ local function refresh_timecode_display()
 end
 
 local function build_timecode_field_stylesheet()
-    local field_bg = colors.FIELD_BACKGROUND_COLOR or "#2a2a2a"
-    local field_border = colors.FIELD_BORDER_COLOR or "#444444"
-    local field_text = colors.FIELD_TEXT_COLOR or "#cccccc"
-    local focus_bg = colors.FIELD_FOCUS_BACKGROUND_COLOR or field_bg
-    local focus_border = colors.FOCUS_BORDER_COLOR or selection_color
-    local font_size = (ui_constants.FONTS and ui_constants.FONTS.TIMECODE_FONT_SIZE) or "24px"
+    local field_bg = color("FIELD_BACKGROUND_COLOR")
+    local field_border = color("FIELD_BORDER_COLOR")
+    local field_text = color("FIELD_TEXT_COLOR")
+    local focus_bg = color("FIELD_FOCUS_BACKGROUND_COLOR")
+    local focus_border = color("FOCUS_BORDER_COLOR")
+    local fonts = assert(ui_constants.FONTS,
+        "timeline_panel: ui_constants.FONTS missing — required for TIMECODE_FONT_SIZE")
+    local font_size = assert(fonts.TIMECODE_FONT_SIZE,
+        "timeline_panel: ui_constants.FONTS.TIMECODE_FONT_SIZE missing")
     local selection_bg = selection_color
-    local selection_text = colors.WHITE_TEXT_COLOR or "#ffffff"
+    local selection_text = color("WHITE_TEXT_COLOR")
 
     return string.format([[
         QLineEdit {
@@ -1161,6 +1173,9 @@ local function handle_tab_command_event(event)
 end
 
 local function build_track_header_stylesheet(background_color)
+    assert(type(background_color) == "string" and background_color ~= "",
+        "build_track_header_stylesheet: background_color required (caller must " ..
+        "pick a color — fallback removed per rule 2.13)")
     return string.format([[
         QWidget {
             background: %s;
@@ -1169,7 +1184,7 @@ local function build_track_header_stylesheet(background_color)
             border-top: 0px;
             border-bottom: 0px;
         }
-    ]], background_color or "#111111")
+    ]], background_color)
 end
 
 local function build_track_header_label_stylesheet()
@@ -2359,8 +2374,8 @@ function M.create(opts)
     qt_constants.LAYOUT.SET_ON_WIDGET(tab_bar_widget, tab_bar_layout)
     qt_constants.PROPERTIES.SET_STYLE(tab_bar_widget, string.format(
         [[QWidget { background: %s; border-bottom: 1px solid %s; }]],
-        colors.PANEL_BACKGROUND_COLOR or "#1f1f1f",
-        colors.SCROLL_BORDER_COLOR or "#111111"
+        color("PANEL_BACKGROUND_COLOR"),
+        color("SCROLL_BORDER_COLOR")
     ))
     tab_bar_tabs_container = qt_constants.WIDGET.CREATE()
     tab_bar_tabs_layout = qt_constants.LAYOUT.CREATE_HBOX()
@@ -2370,7 +2385,7 @@ function M.create(opts)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(tab_bar_tabs_container, "Preferred", "Fixed")
 
     -- Scroll area constrains tab bar width, clips overflow
-    local panel_bg = colors.PANEL_BACKGROUND_COLOR or "#1f1f1f"
+    local panel_bg = color("PANEL_BACKGROUND_COLOR")
     tab_bar_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(tab_bar_scroll, true)
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(tab_bar_scroll, "AlwaysOff")
