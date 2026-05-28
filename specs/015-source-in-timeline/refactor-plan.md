@@ -76,6 +76,7 @@ Independent of tab refactor; can run in parallel branch and merge. Recommend doi
 - Rewrite the function to compute `max_referenced_index = max(patch.record_track_index for enabled patches in edit)`, create missing tracks 1..max_referenced_index, in the same command.
 - Move auto-create AFTER the empty-sequence short-circuit in `insert.lua` so no orphan tracks on no-op edits.
 - Test: patch routes A1→A5 with no A4 present → A4 AND A5 created; no A6.
+- 2026-05-28: FR-029b cleanup contract widened. Two auto-create sites had to thread through the same `auto_track_ids` persisted parameter so Insert/Overwrite undoers can `Track.delete` the full set: (1) `auto_create_record_audio_tracks` (patch-driven pre-check, Insert only) AND (2) `_place_shared.ensure_owner_track_at_idx` (video target + per-audio patch routing, Insert + Overwrite). Plan returns `created_owner_track_ids`; executors merge into the persisted list. Overwrite gained `auto_track_ids` in SPEC.persisted + Track.delete loop in its undoer (was previously leaking auto-tracks on undo entirely). Surfaced by `test_undo_property` P1 Insert track-count drift.
 
 ### Phase 6 — Hygiene cleanup
 - Tighten asserts on `set_sync_mode.lua:23`, `toggle_track_preference.lua:24` to require `sequence_id` (rule 2.29).

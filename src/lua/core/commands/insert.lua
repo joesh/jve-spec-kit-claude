@@ -99,15 +99,16 @@ function M.execute(args)
         plan.owner_duration, #written.created_clip_ids)
 
     return {
-        created_clip_ids    = written.created_clip_ids,
-        video_clip_id       = written.video_clip_id,
-        audio_clip_id       = written.audio_clip_id,
-        link_group_id       = written.link_group_id,
-        duration_frames     = plan.owner_duration,
-        fps_mismatch_policy = plan.policy,
-        rippled             = rippled,
-        split_captures      = split_captures,
-        start_frame         = plan.start_frame,
+        created_clip_ids        = written.created_clip_ids,
+        video_clip_id           = written.video_clip_id,
+        audio_clip_id           = written.audio_clip_id,
+        link_group_id           = written.link_group_id,
+        duration_frames         = plan.owner_duration,
+        fps_mismatch_policy     = plan.policy,
+        rippled                 = rippled,
+        split_captures          = split_captures,
+        start_frame             = plan.start_frame,
+        created_owner_track_ids = plan.created_owner_track_ids,
     }
 end
 
@@ -377,9 +378,12 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
 
         -- T042: auto-create any missing record audio tracks (within this undo
-        -- entry so Cmd-Z removes them together with the inserted clip).
+        -- entry so Cmd-Z removes them together with the inserted clip). The
+        -- plan_placement step below may auto-create more tracks via
+        -- _place_shared.ensure_owner_track_at_idx (video target + per-audio
+        -- patch routing); those ids are appended to auto_track_ids after
+        -- M.execute returns so the undoer Track.deletes the full set.
         local auto_ids = auto_create_record_audio_tracks(args)
-        command:set_parameter("auto_track_ids", auto_ids)
 
         -- If the source sequence has no clips, track creation was the only
         -- goal (T042 path). Persist empty clip-insertion state and return.
@@ -392,6 +396,10 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
             command:set_parameter("duration_frames",       0)
             command:set_parameter("fps_mismatch_policy",   "")
             command:set_parameter("executed_mutations",    {})
+            -- T042 track-only path: only auto_create_record_audio_tracks
+            -- could have created tracks (M.execute never ran), so persist
+            -- exactly auto_ids — no plan-side tracks to merge.
+            command:set_parameter("auto_track_ids",        auto_ids)
             command:set_parameter("__timeline_mutations",  {
                 sequence_id = args.sequence_id,
                 inserts = {}, updates = {}, deletes = {},
@@ -407,6 +415,17 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local result = result_or_err
 
+        -- Merge plan-created tracks (video target + per-audio-channel
+        -- patch routing inside _place_shared) onto auto_ids from
+        -- auto_create_record_audio_tracks. Undoer Track.deletes the
+        -- full list in reverse, so creation-order matters: patch-driven
+        -- pre-creates first, then plan-time creates.
+        assert(type(result.created_owner_track_ids) == "table",
+            "Insert: M.execute did not return created_owner_track_ids")
+        for _, tid in ipairs(result.created_owner_track_ids) do
+            auto_ids[#auto_ids + 1] = tid
+        end
+
         command:set_parameter("created_clip_ids",      result.created_clip_ids)
         command:set_parameter("created_link_group_id", result.link_group_id or "")
         command:set_parameter("rippled_capture",       result.rippled)
@@ -414,6 +433,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
         command:set_parameter("executed_mutations",    build_executed_mutations(result))
+        command:set_parameter("auto_track_ids",        auto_ids)
         command:set_parameter("__timeline_mutations",
             build_executor_mutation_bucket(args, result))
 

@@ -273,8 +273,14 @@ end
 -- (per-channel) and video (single-target) routing paths. The by-index
 -- map is mutated in place so subsequent lookups in the same call hit
 -- the cache.
+-- `created` is an append-only list — every auto-created track id lands
+-- on it so Insert/Overwrite can persist them for undo (Track.delete in
+-- reverse). Required (no fallback) because forgetting to thread it
+-- silently leaks tracks on undo (the bug this list fixes).
 local function ensure_owner_track_at_idx(owner_id, track_type, rec_idx,
-                                         by_index, label_fmt)
+                                         by_index, label_fmt, created)
+    assert(type(created) == "table",
+        "place_shared.ensure_owner_track_at_idx: `created` collector required")
     local existing = by_index[rec_idx]
     if existing then return existing end
     local creator = (track_type == "AUDIO") and Track.create_audio
@@ -286,11 +292,14 @@ local function ensure_owner_track_at_idx(owner_id, track_type, rec_idx,
         "place_shared: failed to auto-create owner %s track at index %d "
         .. "on sequence %s", track_type, rec_idx, owner_id))
     by_index[rec_idx] = newt.id
+    created[#created + 1] = newt.id
     return newt.id
 end
 
 local function compute_audio_targets(owner, nested, drop_mode, args, a_dur,
-                                     owner_duration)
+                                     owner_duration, created_owner_track_ids)
+    assert(type(created_owner_track_ids) == "table",
+        "place_shared.compute_audio_targets: created_owner_track_ids required")
     if drop_mode == "composite" then
         return { {
             track_id              = M.pick_target_track(
@@ -318,7 +327,8 @@ local function compute_audio_targets(owner, nested, drop_mode, args, a_dur,
         local rec_idx = route_via_patch(owner.id, "AUDIO", audio_shape, nt.track_index)
         if rec_idx ~= nil then
             local owner_track_id = ensure_owner_track_at_idx(
-                owner.id, "AUDIO", rec_idx, owner_a_by_index, "Audio %d")
+                owner.id, "AUDIO", rec_idx, owner_a_by_index, "Audio %d",
+                created_owner_track_ids)
             targets[#targets + 1] = {
                 track_id              = owner_track_id,
                 master_audio_track_id = nt.id,
@@ -339,7 +349,9 @@ end
 -- Mirror of compute_audio_targets' expanded path, but video is a single
 -- clip per Insert so we return one track_id (or nil to drop video).
 -- Explicit target_video_track_id wins (per pick_target_track contract).
-local function compute_video_target(owner, nested, args)
+local function compute_video_target(owner, nested, args, created_owner_track_ids)
+    assert(type(created_owner_track_ids) == "table",
+        "place_shared.compute_video_target: created_owner_track_ids required")
     if args.target_video_track_id and args.target_video_track_id ~= "" then
         return M.pick_target_track(
             owner.id, "VIDEO", args.target_video_track_id)
@@ -362,7 +374,8 @@ local function compute_video_target(owner, nested, args)
         owner_v_by_index[t.track_index] = t.id
     end
     return ensure_owner_track_at_idx(
-        owner.id, "VIDEO", rec_idx, owner_v_by_index, "V%d")
+        owner.id, "VIDEO", rec_idx, owner_v_by_index, "V%d",
+        created_owner_track_ids)
 end
 
 local function derive_base_name(nested, args)
@@ -419,12 +432,20 @@ function M.plan_placement(args)
 
     assert(owner_duration > 0, "place_shared: computed owner_duration <= 0")
 
+    -- Append-only list of owner-side tracks auto-created by this plan
+    -- (audio + video). Insert/Overwrite persist this on the command so the
+    -- undoer can Track.delete each one (reverse order). Without it the
+    -- auto-created tracks leak across undo — surfaced by test_undo_property
+    -- "Insert(N) … 1 track row drift" findings (2026-05-28).
+    local created_owner_track_ids = {}
+
     local targets = {}
     if mediums.VIDEO then
         -- Patch-routed video target. May be nil when the source V channel's
         -- patch is disabled or absent — in which case no V clip is written
         -- (audio-only edit). Per spec §F2 patches are sole routing.
-        targets.VIDEO = compute_video_target(owner, nested, args)
+        targets.VIDEO = compute_video_target(
+            owner, nested, args, created_owner_track_ids)
     end
 
     -- Default = "expanded": patches drive per-channel audio routing (spec §F2).
@@ -439,23 +460,25 @@ function M.plan_placement(args)
     local audio_targets = {}
     if mediums.AUDIO then
         audio_targets = compute_audio_targets(
-            owner, nested, drop_mode, args, a_dur, owner_duration)
+            owner, nested, drop_mode, args, a_dur, owner_duration,
+            created_owner_track_ids)
     end
 
     return {
-        owner            = owner,
-        nested           = nested,
-        policy           = policy,
-        video_native_dur = v_dur,
-        audio_native_dur = a_dur,
-        video_source_in  = v_src_in,
-        audio_source_in  = a_src_in,
-        owner_duration   = owner_duration,
-        targets          = targets,
-        audio_targets    = audio_targets,
-        audio_drop_mode  = drop_mode,
-        base_name        = derive_base_name(nested, args),
-        start_frame      = args.sequence_start_frame,
+        owner                    = owner,
+        nested                   = nested,
+        policy                   = policy,
+        video_native_dur         = v_dur,
+        audio_native_dur         = a_dur,
+        video_source_in          = v_src_in,
+        audio_source_in          = a_src_in,
+        owner_duration           = owner_duration,
+        targets                  = targets,
+        audio_targets            = audio_targets,
+        audio_drop_mode          = drop_mode,
+        base_name                = derive_base_name(nested, args),
+        start_frame              = args.sequence_start_frame,
+        created_owner_track_ids  = created_owner_track_ids,
     }
 end
 

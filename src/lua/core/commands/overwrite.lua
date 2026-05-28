@@ -23,6 +23,7 @@ local M = {}
 
 local Clip            = require("models.clip")
 local Sequence        = require("models.sequence")
+local Track           = require("models.track")
 local place_shared    = require("core.commands._place_shared")
 local mutation_entry  = require("core.commands._mutation_entry")
 local log             = require("core.logger").for_area("commands")
@@ -84,14 +85,15 @@ function M.execute(args)
         plan.owner_duration, #written.created_clip_ids)
 
     return {
-        created_clip_ids    = written.created_clip_ids,
-        video_clip_id       = written.video_clip_id,
-        audio_clip_id       = written.audio_clip_id,
-        link_group_id       = written.link_group_id,
-        duration_frames     = plan.owner_duration,
-        fps_mismatch_policy = plan.policy,
-        occluded            = occluded,
-        start_frame         = plan.start_frame,
+        created_clip_ids        = written.created_clip_ids,
+        video_clip_id           = written.video_clip_id,
+        audio_clip_id           = written.audio_clip_id,
+        link_group_id           = written.link_group_id,
+        duration_frames         = plan.owner_duration,
+        fps_mismatch_policy     = plan.policy,
+        occluded                = occluded,
+        start_frame             = plan.start_frame,
+        created_owner_track_ids = plan.created_owner_track_ids,
     }
 end
 
@@ -123,6 +125,10 @@ local SPEC = {
         fps_mismatch_policy    = { kind = "string" },
         prior_playhead         = { kind = "number" },
         executed_mutations     = { kind = "table" },
+        -- Owner-side tracks _place_shared auto-created during this Overwrite
+        -- (video target + per-audio patch routing). Undoer Track.deletes
+        -- them in reverse — same model as Insert (T042-style cleanup).
+        auto_track_ids         = { kind = "table" },
     },
 }
 
@@ -165,12 +171,15 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         end
         local result = result_or_err
 
+        assert(type(result.created_owner_track_ids) == "table",
+            "Overwrite: M.execute did not return created_owner_track_ids")
         command:set_parameter("created_clip_ids",      result.created_clip_ids)
         command:set_parameter("created_link_group_id", result.link_group_id or "")
         command:set_parameter("occluded_capture",      result.occluded)
         command:set_parameter("duration_frames",       result.duration_frames)
         command:set_parameter("fps_mismatch_policy",   result.fps_mismatch_policy)
         command:set_parameter("executed_mutations",    build_executed_mutations(result))
+        command:set_parameter("auto_track_ids",        result.created_owner_track_ids)
 
         local bucket = {
             sequence_id = args.sequence_id,
@@ -280,6 +289,19 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
                     playhead_frame        = d.playhead_frame,
                 })
             end
+        end
+
+        -- Remove auto-created owner tracks (reverse order of creation, so a
+        -- video V2 + audio A3 created in that order get deleted A3-then-V2).
+        -- Track.delete asserts no residual clips — the deletes/trims above
+        -- already cleared every clip on these tracks (they were empty when
+        -- _place_shared auto-created them, and the only clips written here
+        -- are in created_ids which we just deleted).
+        local auto_ids = args.auto_track_ids
+        assert(type(auto_ids) == "table",
+            "Overwrite.undo: auto_track_ids not persisted on command")
+        for i = #auto_ids, 1, -1 do
+            Track.delete(auto_ids[i])
         end
 
         -- Emit __timeline_mutations so command_manager's post-DB hook can
