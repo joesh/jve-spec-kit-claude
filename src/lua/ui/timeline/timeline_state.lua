@@ -1,30 +1,38 @@
---- Timeline state facade: aggregates the per-concern sub-modules
---- (core, clips, tracks, selection, viewport, geometry) behind a
---- single API surface.
+--- Timeline state facade.
 --
--- Responsibilities:
--- - Forward reads (get_clips, get_tracks, get_playhead, etc.) to
---   the appropriate sub-module
--- - Drive apply_mutations: derive affected track ids from the
---   mutation payload, delegate to clip_state, then scoped-recompute
---   gap clips on only the touched tracks
--- - Emit the timeline_mutations_applied signal for downstream
---   listeners (renderer, audio engine, etc.)
+-- Post-022/1.3e (5a5ba9ef) the bulk per-clip / per-track read methods
+-- (get_clips, get_tracks, get_clip_by_id, get_clips_for_track,
+-- get_track_clip_index, get_clips_at_time, get_sequence_id) all moved
+-- onto TimelineTabStrip and its ergonomic methods. Callers go through
+-- M.get_tab_strip() and call strip:displayed_clips() / track_clip_index /
+-- clip_by_id / active_sequence_id directly.
+--
+-- This module's remaining responsibilities are the cross-cutting concerns
+-- that don't fit cleanly on any single tab:
+-- - apply_mutations: dispatch a mutation bucket to the target tab's
+--   per-tab cache, then scoped gap recompute on touched tracks, then
+--   emit timeline_mutations_applied
+-- - View-state pointer accessors (sequence_frame_rate getters, viewport,
+--   marks, scroll offsets) that today still go through data.state — H1
+--   audit calls out that these should live per-tab on tab.cache; pending
+--   the H1 migration the singleton mirror remains the read path
+-- - Tab lifecycle wrappers (switch_to_record_tab / switch_to_source_tab /
+--   close_displayed_tab) that need to coordinate with persistence
+-- - Selection facade (delegates to selection_state)
 --
 -- Non-goals:
--- - Owning any state itself (everything lives in sub-modules)
+-- - Owning per-tab clip / track / view-state data (lives on TimelineTab)
 -- - Command execution (goes through command_manager)
--- - Direct clip mutation from callers (use commands — the public
---   update_clip / add_clip / remove_clip wrappers error on purpose)
+-- - Direct clip mutation from callers — use commands; the public
+--   update_clip / add_clip / remove_clip wrappers error on purpose
 --
 -- Invariants:
--- - Gap recompute is scoped to the affected tracks whenever every
---   touched track can be identified from the mutation payload; it
---   falls back to full recompute only when a delete references an
---   unresolvable clip id.
--- - Views pull from this facade (per MVC); nothing here pushes to
---   them. The timeline_mutations_applied signal is purely a
---   notification, not a payload channel.
+-- - Gap recompute is scoped to the touched tracks when every affected
+--   track id is derivable from the payload; falls back to full recompute
+--   only when a delete references a clip the tab can't resolve
+-- - Views pull from this facade or the strip (per MVC, rule 3.0); nothing
+--   here pushes to them. timeline_mutations_applied is a notification,
+--   not a payload channel.
 --
 -- @file timeline_state.lua
 local M = {}

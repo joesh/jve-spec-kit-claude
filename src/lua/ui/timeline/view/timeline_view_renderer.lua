@@ -716,6 +716,103 @@ local function truncate_label(label, max_width)
     return label:sub(1, max_chars - 3) .. "..."
 end
 
+-- Draw alternating-row background fills + track separator lines for every
+-- visible track. Layout came from view.update_layout_cache; this is pure
+-- iteration + draw. Off-screen rows are skipped.
+local function render_track_backgrounds(view, state_module, layout_by_index, width, height)
+    for i, _track in ipairs(view.filtered_tracks) do
+        local entry = layout_by_index[i]
+        if entry then
+            local y = entry.y
+            local h = entry.height
+            state_module.debug_record_track_layout(view.debug_id, _track.id, y, h)
+            if y + h > 0 and y < height then
+                local color = (i % 2 == 0) and state_module.colors.track_even or state_module.colors.track_odd
+                timeline.add_rect(view.widget, 0, y, width, h, color)
+                timeline.add_line(view.widget, 0, y, width, y, state_module.colors.grid_line, 1)
+            end
+        end
+    end
+end
+
+-- Draw the selection outline rectangle around every currently-selected
+-- gap. Thin-row degenerate case (gh < 2*thick or w < 2*thick) falls back
+-- to a single filled rect since 4 separate strokes would over-draw.
+local function render_selected_gaps_overlay(view, state_module, width, height)
+    local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}
+    if #selected_gaps == 0 then return end
+    for _, gap in ipairs(selected_gaps) do
+        local gap_start = gap.start_value
+        local gap_duration = gap.duration
+        assert(type(gap_start) == "number", "timeline_view_renderer: gap.start_value must be integer")
+        assert(type(gap_duration) == "number", "timeline_view_renderer: gap.duration must be integer")
+        local gap_y = view.get_track_y_by_id(gap.track_id, height)
+        if gap_y >= 0 then
+            local th = view.get_track_visual_height(gap.track_id)
+            local sx = state_module.time_to_pixel(gap_start, width)
+            local ex = state_module.time_to_pixel(gap_start + gap_duration, width)
+            local w = ex - sx
+            if w > 0 then
+                local gt = gap_y + 5
+                local gh = th - 10
+                local outline = state_module.colors.gap_selected_outline or state_module.colors.clip_selected
+                local thick = math.max(1, math.floor((state_module.dimensions.clip_outline_thickness or 4)/2))
+                if gh > thick*2 and w > thick*2 then
+                    timeline.add_rect(view.widget, sx, gt, w, thick, outline)
+                    timeline.add_rect(view.widget, sx, gt + gh - thick, w, thick, outline)
+                    timeline.add_rect(view.widget, sx, gt, thick, gh, outline)
+                    timeline.add_rect(view.widget, sx + w - thick, gt, thick, gh, outline)
+                else
+                    timeline.add_rect(view.widget, sx, gt, w, math.max(thick, gh), outline)
+                end
+            end
+        end
+    end
+end
+
+-- Diagonal hash stripes across every locked track row. Premiere-style
+-- read-only indicator that shows regardless of clip content.
+local function render_lock_overlay(view, layout_by_index, width, height)
+    local LOCK_HASH_COLOR = 0x55ccaa00
+    local LOCK_HASH_SPACING = 12
+    for i, track in ipairs(view.filtered_tracks) do
+        if track.locked then
+            local entry = layout_by_index[i]
+            if entry and entry.y + entry.height > 0 and entry.y < height then
+                local row_y = entry.y
+                local row_h = entry.height
+                local start_x = -row_h
+                local x = start_x
+                while x < width do
+                    timeline.add_line(view.widget,
+                        x, row_y + row_h,
+                        x + row_h, row_y,
+                        LOCK_HASH_COLOR, 1)
+                    x = x + LOCK_HASH_SPACING
+                end
+            end
+        end
+    end
+end
+
+-- Mark In/Out range highlight. Implicit boundary: 0 if mark_in nil,
+-- viewport_end if mark_out nil (the domain rule, not a fallback).
+local function render_mark_overlay(view, state_module, width, height, viewport_start, viewport_end, mark_in, mark_out)
+    if not mark_in and not mark_out then return end
+    local eff_in = mark_in or 0
+    local eff_out = mark_out or viewport_end
+    if eff_out <= eff_in then return end
+    local visible_start = math.max(eff_in, viewport_start)
+    local visible_end = math.min(eff_out, viewport_end)
+    if visible_end <= visible_start then return end
+
+    local start_x = state_module.time_to_pixel(visible_start, width)
+    local end_x = state_module.time_to_pixel(visible_end, width)
+    if end_x <= start_x then end_x = start_x + 1 end
+    local region_width = math.max(1, end_x - start_x)
+    timeline.add_rect(view.widget, start_x, 0, region_width, height, state_module.colors.mark_range_fill)
+end
+
 function M.render(view)
     if not view.widget then return end
     local perf_t0 = os.clock()
@@ -740,22 +837,9 @@ function M.render(view)
     -- Compute layout
     view.update_layout_cache(height) -- Call layout logic on view object
 
-    -- Draw Tracks
     local layout_cache = view.track_layout_cache
     local layout_by_index = layout_cache.by_index
-    for i, track in ipairs(view.filtered_tracks) do
-        local entry = layout_by_index[i]
-        if entry then
-            local y = entry.y
-            local h = entry.height
-            state_module.debug_record_track_layout(view.debug_id, track.id, y, h)
-            if y + h > 0 and y < height then
-                local color = (i % 2 == 0) and state_module.colors.track_even or state_module.colors.track_odd
-                timeline.add_rect(view.widget, 0, y, width, h, color)
-                timeline.add_line(view.widget, 0, y, width, y, state_module.colors.grid_line, 1)
-            end
-        end
-    end
+    render_track_backgrounds(view, state_module, layout_by_index, width, height)
 
     local selected_clips = state_module.get_selected_clips()
     local selected_lookup = {}
@@ -999,38 +1083,7 @@ function M.render(view)
     -- flag on the strip; displayed_clips() asserts on it.
     state_module.get_tab_strip():forbid_bulk_clip_read(draw_visible_clips)
 
-    -- Draw Selected Gaps
-    local selected_gaps = state_module.get_selected_gaps and state_module.get_selected_gaps() or {}
-    if #selected_gaps > 0 then
-        for _, gap in ipairs(selected_gaps) do
-            -- All coords are integer frames now
-            local gap_start = gap.start_value
-            local gap_duration = gap.duration
-            assert(type(gap_start) == "number", "timeline_view_renderer: gap.start_value must be integer")
-            assert(type(gap_duration) == "number", "timeline_view_renderer: gap.duration must be integer")
-            local gap_y = view.get_track_y_by_id(gap.track_id, height)
-            if gap_y >= 0 then
-                local th = view.get_track_visual_height(gap.track_id)
-                local sx = state_module.time_to_pixel(gap_start, width)
-                local ex = state_module.time_to_pixel(gap_start + gap_duration, width)
-                local w = ex - sx
-                if w > 0 then
-                    local gt = gap_y + 5
-                    local gh = th - 10
-                    local outline = state_module.colors.gap_selected_outline or state_module.colors.clip_selected
-                    local thick = math.max(1, math.floor((state_module.dimensions.clip_outline_thickness or 4)/2))
-                    if gh > thick*2 and w > thick*2 then
-                        timeline.add_rect(view.widget, sx, gt, w, thick, outline)
-                        timeline.add_rect(view.widget, sx, gt + gh - thick, w, thick, outline)
-                        timeline.add_rect(view.widget, sx, gt, thick, gh, outline)
-                        timeline.add_rect(view.widget, sx + w - thick, gt, thick, gh, outline)
-                    else
-                        timeline.add_rect(view.widget, sx, gt, w, math.max(thick, gh), outline)
-                    end
-                end
-            end
-        end
-    end
+    render_selected_gaps_overlay(view, state_module, width, height)
 
     -- Drag Previews (clip drag)
     -- Use local drag_state if this view owns the drag, otherwise fall back to
@@ -1198,55 +1251,8 @@ function M.render(view)
         end
     end
 
-    -- Locked-track hash overlay (Premiere-style). Diagonal stripes
-    -- across each locked track row so the read-only state is visible
-    -- regardless of clip content. Drawn over clips (so it's never
-    -- obscured) but before mark/playhead so transport overlays still
-    -- read clearly.
-    local function draw_lock_overlay()
-        local LOCK_HASH_COLOR = 0x55ccaa00   -- ARGB-style; same hue as lock btn
-        local LOCK_HASH_SPACING = 12         -- px between diagonals
-        for i, track in ipairs(view.filtered_tracks) do
-            if track.locked then
-                local entry = layout_by_index[i]
-                if entry and entry.y + entry.height > 0 and entry.y < height then
-                    local row_y = entry.y
-                    local row_h = entry.height
-                    -- 45° lines: each diagonal is (row_h × row_h). Start x
-                    -- offset so the pattern tiles cleanly across the row.
-                    local start_x = -row_h
-                    local x = start_x
-                    while x < width do
-                        timeline.add_line(view.widget,
-                            x, row_y + row_h,
-                            x + row_h, row_y,
-                            LOCK_HASH_COLOR, 1)
-                        x = x + LOCK_HASH_SPACING
-                    end
-                end
-            end
-        end
-    end
-    draw_lock_overlay()
-
-    -- Mark In/Out highlight (on top of clips, behind playhead)
-    local function draw_mark_overlay()
-        if not mark_in and not mark_out then return end
-        -- Implicit boundary: 0 if mark_in nil, viewport_end if mark_out nil
-        local eff_in = mark_in or 0
-        local eff_out = mark_out or viewport_end
-        if eff_out <= eff_in then return end
-        local visible_start = math.max(eff_in, viewport_start)
-        local visible_end = math.min(eff_out, viewport_end)
-        if visible_end <= visible_start then return end
-
-        local start_x = state_module.time_to_pixel(visible_start, width)
-        local end_x = state_module.time_to_pixel(visible_end, width)
-        if end_x <= start_x then end_x = start_x + 1 end
-        local region_width = math.max(1, end_x - start_x)
-        timeline.add_rect(view.widget, start_x, 0, region_width, height, state_module.colors.mark_range_fill)
-    end
-    draw_mark_overlay()
+    render_lock_overlay(view, layout_by_index, width, height)
+    render_mark_overlay(view, state_module, width, height, viewport_start, viewport_end, mark_in, mark_out)
 
     -- Playhead
     if playhead_position >= viewport_start and playhead_position <= viewport_end then
