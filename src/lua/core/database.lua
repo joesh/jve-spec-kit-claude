@@ -1279,23 +1279,33 @@ end
 -- REMOVED: delete_clip() - Stub that returned false success
 -- Use command system instead: Command.create("DeleteClip", ...)
 
--- Load all media with tag associations
+-- Load all media for the current project. The schema permits multiple
+-- projects in one .jvp file (today rare, but DRP imports and migrations
+-- can introduce rows with a non-active project_id); scoping the query
+-- to the active project prevents cross-project leakage into the browser
+-- and media-status views.
 function M.load_media()
     if not db_connection then
         error("FATAL: No database connection - cannot load media")
     end
+
+    local active_project_id = M.get_current_project_id()
+    assert(active_project_id and active_project_id ~= "",
+        "load_media: get_current_project_id returned nil/empty")
 
     local query = db_connection:prepare([[
         SELECT id, project_id, name, file_path, duration_frames, fps_numerator, fps_denominator,
                width, height, audio_channels, codec, created_at, modified_at, metadata,
                offline_note
         FROM media
+        WHERE project_id = ?
         ORDER BY created_at DESC
     ]])
 
     if not query then
         error("FATAL: Failed to prepare media query")
     end
+    query:bind_value(1, active_project_id)
 
     local media_items = {}
     if query:exec() then

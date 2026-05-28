@@ -95,8 +95,17 @@ assert(left_before.duration == TIMELINE_DURATION,
 -- =========================================================================
 
 local DELTA_FRAMES = 10  -- 10 timeline frames at 25fps = 0.4 seconds
--- Expected source delta = 10 * (48000/1) / (25/1) = 19200 samples
-local EXPECTED_SOURCE_DELTA = DELTA_FRAMES * AUDIO_RATE / SEQ_FPS_NUM
+-- Domain math (NOT a copy of the implementation formula): 10 timeline
+-- frames at 25 fps = 0.4 seconds; at 48000 samples/sec that's 19200 samples.
+-- Hardcoded so a sign-flip / unit-swap in the implementation can't pass by
+-- having the test compute the same wrong value (Joe's
+-- feedback_tests_from_domain rule). If the timeline fps, audio rate, or
+-- DELTA_FRAMES change, update this number from first principles.
+local EXPECTED_SOURCE_DELTA = 19200
+assert(EXPECTED_SOURCE_DELTA == DELTA_FRAMES * AUDIO_RATE / SEQ_FPS_NUM,
+    "test_roll_audio_source_units: hardcoded EXPECTED_SOURCE_DELTA is "
+    .. "stale — recompute by hand and update both the literal and the "
+    .. "self-check arithmetic if you change setup constants")
 
 local roll_cmd = Command.create("BatchRippleEdit", layout.project_id)
 roll_cmd:set_parameter("sequence_id", layout.sequence_id)

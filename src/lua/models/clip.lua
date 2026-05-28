@@ -743,13 +743,21 @@ function M.find_clips_for_media(media_id)
     local database = require("core.database")
     local db = assert(database.get_connection(), "Clip.find_clips_for_media: no database connection")
 
+    -- Scope to the active project. The schema permits multiple projects
+    -- per .jvp; without this filter a relink operation on media shared
+    -- between two projects would touch clips in the inactive project.
+    local active_project_id = database.get_current_project_id()
+    assert(active_project_id and active_project_id ~= "",
+        "Clip.find_clips_for_media: get_current_project_id returned nil/empty")
+
     local stmt = assert(db:prepare([[
         SELECT DISTINCT c.id FROM clips c
         JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
-        WHERE mr.media_id = ?
+        WHERE mr.media_id = ? AND c.project_id = ?
     ]]), "Clip.find_clips_for_media: failed to prepare query")
 
     stmt:bind_value(1, media_id)
+    stmt:bind_value(2, active_project_id)
     assert(stmt:exec(), "Clip.find_clips_for_media: query exec failed")
 
     local clips = {}
