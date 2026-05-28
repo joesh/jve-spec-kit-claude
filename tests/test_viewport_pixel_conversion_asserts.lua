@@ -6,7 +6,7 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
-local data = require("ui.timeline.state.timeline_state_data")
+local test_env = require("test_env")
 local viewport_state = require("ui.timeline.state.viewport_state")
 
 local function expect_assert(label, fn)
@@ -16,11 +16,15 @@ local function expect_assert(label, fn)
         "assert message for '" .. label .. "' must mention viewport_state, got: " .. tostring(err))
 end
 
--- Baseline valid state for each case to start from
+-- Per-sequence view-state lives on the displayed tab's cache (H1). Reset
+-- via re-install — gives each case a fresh known-good cache to perturb.
+local cache
 local function reset_state()
-    data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-    data.state.viewport_start_time = 0
-    data.state.viewport_duration = 240
+    cache = test_env.install_displayed_tab_stub({
+        sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+        viewport_start_time = 0,
+        viewport_duration = 240,
+    })
 end
 
 -- ----- time_to_pixel -----
@@ -41,19 +45,19 @@ expect_assert("time_to_pixel: nil viewport_width", function()
 end)
 
 reset_state()
-data.state.viewport_duration = 0
+cache.viewport_duration = 0
 expect_assert("time_to_pixel: zero duration", function()
     viewport_state.time_to_pixel(0, 1920)
 end)
 
 reset_state()
-data.state.viewport_duration = nil
+cache.viewport_duration = nil
 expect_assert("time_to_pixel: nil duration", function()
     viewport_state.time_to_pixel(0, 1920)
 end)
 
 reset_state()
-data.state.viewport_start_time = nil
+cache.viewport_start_time = nil
 expect_assert("time_to_pixel: nil start", function()
     viewport_state.time_to_pixel(0, 1920)
 end)
@@ -76,13 +80,13 @@ expect_assert("pixel_to_time: nil pixel", function()
 end)
 
 reset_state()
-data.state.viewport_duration = 0
+cache.viewport_duration = 0
 expect_assert("pixel_to_time: zero duration", function()
     viewport_state.pixel_to_time(0, 1920)
 end)
 
 reset_state()
-data.state.viewport_start_time = nil
+cache.viewport_start_time = nil
 expect_assert("pixel_to_time: nil start", function()
     viewport_state.pixel_to_time(0, 1920)
 end)

@@ -558,12 +558,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         for _, track in ipairs(active_tab.cache.tracks) do
             assert(track.id and track.id ~= "",
                 "build_clip_cache: active tab cache returned track with empty id")
-            -- get_track_clip_index returns nil for tracks with no clips.
-            -- Coerce to an empty list so EVERY known track has an entry
-            -- in track_clip_map — downstream code can then `assert(map[id])`
-            -- (cache invariant) and treat empty-list as "no clips here"
-            -- without conflating it with "unknown track".
-            local track_clips = active_tab:get_track_clip_index(track.id) or {}
+            -- TimelineTab:get_track_clip_index returns `{}` for known-empty
+            -- tracks (and asserts for unknown). We iterate cache.tracks here,
+            -- so every track is known — no `or {}` shim required (M3 audit).
+            local track_clips = active_tab:get_track_clip_index(track.id)
             ctx.track_clip_map[track.id] = track_clips
             ctx.shared_track_clip_lists[track.id] = {
                 list   = track_clips,

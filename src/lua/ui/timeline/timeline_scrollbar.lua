@@ -77,9 +77,12 @@ function M.create(widget, state_module)
             local mark_out = state_module.get_display_mark_out and state_module.get_display_mark_out()
             if not mark_in and not mark_out then return end
 
-            local colors = state_module.colors or {}
-            local fill_color = colors.mark_range_fill
-            local edge_color = colors.mark_range_edge or "#ff6b6b"
+            local colors = assert(state_module.colors,
+                "timeline_scrollbar: state_module.colors is nil — required for mark overlay")
+            local fill_color = assert(colors.mark_range_fill,
+                "timeline_scrollbar: colors.mark_range_fill is nil — required translucent color for mark fill")
+            local edge_color = assert(colors.mark_range_edge,
+                "timeline_scrollbar: colors.mark_range_edge is nil — required edge color for mark handles")
             local handle_width = 2
 
             -- Fill (implicit boundary: 0 if mark_in nil, total_duration if mark_out nil)

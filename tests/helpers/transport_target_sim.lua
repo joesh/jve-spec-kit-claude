@@ -20,13 +20,20 @@ local M = {}
 --- Real timeline_state (loaded once if installed). When tests need both
 --- the derived-target stub AND the real marks/playhead surface, this lets
 --- the stub forward unknown keys to the real module.
+---
+--- Returns the currently loaded timeline_state if any (the one the test
+--- already initialised), otherwise loads it fresh. Critically, this MUST
+--- NOT fresh-load when a real module is already in package.loaded —
+--- timeline_state's module-init creates a fresh TimelineTabStrip and
+--- calls strip_holder.set(tab_strip), which would clobber the strip the
+--- test bootstrapped via command_manager.init / timeline_state.init.
+--- (Pre-H1 the strip clobber was harmless because the singleton mirror
+--- still held the per-sequence values; post-H1 the cache lives on the
+--- displaced tab, so a fresh strip means nil reads everywhere.)
 local function get_real_timeline_state()
-    -- Save the current package.loaded entry, clear it, force fresh load,
-    -- then restore the stub if any.
-    local prev = package.loaded["ui.timeline.timeline_state"]
-    package.loaded["ui.timeline.timeline_state"] = nil
+    local existing = package.loaded["ui.timeline.timeline_state"]
+    if existing then return existing end
     local ok, real = pcall(require, "ui.timeline.timeline_state")
-    package.loaded["ui.timeline.timeline_state"] = prev
     if ok then return real end
     return nil
 end

@@ -4,6 +4,18 @@ package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;
 
 require("test_env")
 
+-- H1 (#28): command_manager captures playhead from the displayed tab's
+
+-- cache. Tests that exercise command_manager without a real timeline
+
+-- install a default stub (playhead=0, viewport=(0,300), fps=30/1) so
+
+-- capture succeeds. Pre-H1 the singleton mirror provided these defaults
+
+-- implicitly; post-H1 every test states its intent explicitly.
+
+require('test_env').install_displayed_tab_stub()
+
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")

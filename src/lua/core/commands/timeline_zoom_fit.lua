@@ -96,9 +96,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         }
 
         local ui_constants = require("core.ui_constants")
-        assert(timeline_state.get_start_timecode_frame,
-            "TimelineZoomFit: timeline_state missing get_start_timecode_frame")
         local tc_floor = timeline_state.get_start_timecode_frame()
+        assert(type(tc_floor) == "number",
+            "TimelineZoomFit: start_timecode_frame nil — no displayed tab "
+            .. "or cache.sequence_timecode_start_frame missing (H1 invariant)")
         local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
 
         timeline_state.set_viewport_duration(fit_duration)

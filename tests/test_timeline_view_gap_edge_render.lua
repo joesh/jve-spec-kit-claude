@@ -25,6 +25,7 @@ local state = {
         edge_selected_available = "#00ff00",
         edge_selected_limit = "#ff0000",
         playhead = "#ffffff",
+        clip_boundary = "#000000",
     }
 }
 require("test_env").attach_strip_to_state_mock(state)

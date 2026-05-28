@@ -40,4 +40,20 @@ function M.displayed_sequence_id()
     return displayed and displayed.sequence_id or nil
 end
 
+--- Convenience: returns the displayed tab's cache, or nil when there is
+--- no strip or no displayed tab. The cache is the authoritative per-tab
+--- store for per-sequence view-state (frame_rate, tc origin, viewport,
+--- scroll offsets, playhead). Audit H1 fold-in for L4 (#34) — eliminates
+--- the strip:get():get_displayed().cache nil-dance at every read site.
+---
+--- Returns nil for "blank panel" states (no project, no displayed tab,
+--- transient close). Callers that perform arithmetic on cache fields must
+--- assert non-nil before proceeding; callers that branch on presence
+--- (panel scroll restore, etc.) should handle nil as "no work to do".
+function M.displayed_cache()
+    if not _strip then return nil end
+    local displayed = _strip:get_displayed()
+    return displayed and displayed.cache or nil
+end
+
 return M

@@ -116,10 +116,18 @@ for _, c in ipairs(v2_list) do
 end
 assert(#v2_media == 1 and v2_media[1].id == "c_v2", "v2 has one media clip c_v2")
 
--- Unknown track returns nil (parallels clip_state.get_track_clip_index).
-assert(tab:get_track_clip_index("nope") == nil, "unknown track returns nil")
-assert(tab:get_track_clip_index(nil) == nil, "nil track_id returns nil")
-print("✓ get_track_clip_index sorts by sequence_start")
+-- M3 contract: unknown track_id and nil/empty input must fail loudly with
+-- context; known-empty tracks return `{}`, not nil. The old behaviour
+-- (silent nil) conflated "track has no clips" with "track doesn't exist."
+local ok_unknown, err_unknown = pcall(tab.get_track_clip_index, tab, "nope")
+assert(not ok_unknown, "unknown track_id must assert")
+assert(tostring(err_unknown):find("unknown track_id"),
+    "unknown-track error must name the violation, got: " .. tostring(err_unknown))
+local ok_nil = pcall(tab.get_track_clip_index, tab, nil)
+assert(not ok_nil, "nil track_id must assert")
+local ok_empty = pcall(tab.get_track_clip_index, tab, "")
+assert(not ok_empty, "empty-string track_id must assert")
+print("✓ get_track_clip_index sorts by sequence_start (M3 contract: assert on unknown/nil)")
 
 -- ── 4. neighbor lookup uses the per-track position cache ─────────────────
 local next_after_first = tab:locate_neighbor(c_first, 1)

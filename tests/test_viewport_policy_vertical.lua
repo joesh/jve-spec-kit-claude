@@ -14,13 +14,17 @@ local data = require("ui.timeline.state.timeline_state_data")
 local test_env = require("test_env")
 
 local function reset_viewport()
-    test_env.install_displayed_tab_stub({ content_length = 10000 })
-    data.state.playhead_position = 100
-    data.state.viewport_start_time = 0
-    data.state.viewport_duration = 1000
-    data.state.sequence_timecode_start_frame = 0
+    -- Per-sequence view-state lives on the displayed tab's cache (H1);
+    -- is_playing is transport-global and remains on data.state.
+    test_env.install_displayed_tab_stub({
+        content_length = 10000,
+        playhead_position = 100,
+        viewport_start_time = 0,
+        viewport_duration = 1000,
+        sequence_timecode_start_frame = 0,
+        sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 },
+    })
     data.state.is_playing = false
-    data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
 end
 
 local function make_cmd(mutations)

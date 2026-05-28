@@ -3089,6 +3089,9 @@ local function zoom_to_fit_if_first_open(sequence)
 
     local ui_constants = require("core.ui_constants")
     local tc_floor = state.get_start_timecode_frame()
+    assert(type(tc_floor) == "number",
+        "zoom_to_fit_if_first_open: start_timecode_frame nil — no displayed tab "
+        .. "or cache uninitialised (H1 invariant)")
     local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(min_start, max_end, tc_floor)
     state.set_viewport_duration(fit_duration)
     state.set_viewport_start_time(fit_start)
@@ -3388,44 +3391,57 @@ function M.restore_scroll_with_targets(v_scroll, a_scroll)
         qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_scroll)
     end
     if M.vertical_splitter and M.headers_main_splitter then
+        -- ratio is per-sequence (H1: lives on displayed tab cache). Nil
+        -- means no displayed tab — skip splitter restore (panel keeps
+        -- whatever ratio the user has on screen).
         local ratio = state.get_video_audio_split_ratio()
-        log.event("Restoring split ratio: %.3f", ratio)
-        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
-        local total_height = total[1] + total[2]
-        if total_height > 0 then
-            local video_h = math.floor(total_height * ratio + 0.5)
-            local audio_h = total_height - video_h
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+        if ratio then
+            log.event("Restoring split ratio: %.3f", ratio)
+            local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+            local total_height = total[1] + total[2]
+            if total_height > 0 then
+                local video_h = math.floor(total_height * ratio + 0.5)
+                local audio_h = total_height - video_h
+                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+            end
         end
     end
 end
 
 --- Restore scroll offsets and splitter ratio from persisted state.
 -- Called after sequence load and after initial panel creation.
+-- All three reads are per-sequence (H1): nil when no displayed tab —
+-- skip that branch rather than write fabricated zeros to the Qt widget.
 function M.restore_scroll_and_splitter()
     if M.timeline_video_scroll then
         local v_off = state.get_video_scroll_offset()
-        local target = M.metrics.compute_initial_scroll_target(v_off)
-        log.event("Restoring video scroll offset: stored=%d → target=%d",
-            v_off, target)
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, target)
+        if v_off then
+            local target = M.metrics.compute_initial_scroll_target(v_off)
+            log.event("Restoring video scroll offset: stored=%d → target=%d",
+                v_off, target)
+            qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, target)
+        end
     end
     if M.timeline_audio_scroll then
         local a_off = state.get_audio_scroll_offset()
-        log.event("Restoring audio scroll offset: %d", a_off)
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_off)
+        if a_off then
+            log.event("Restoring audio scroll offset: %d", a_off)
+            qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_off)
+        end
     end
     if M.vertical_splitter and M.headers_main_splitter then
         local ratio = state.get_video_audio_split_ratio()
-        log.event("Restoring split ratio: %.3f", ratio)
-        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
-        local total_height = total[1] + total[2]
-        if total_height > 0 then
-            local video_h = math.floor(total_height * ratio + 0.5)
-            local audio_h = total_height - video_h
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+        if ratio then
+            log.event("Restoring split ratio: %.3f", ratio)
+            local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+            local total_height = total[1] + total[2]
+            if total_height > 0 then
+                local video_h = math.floor(total_height * ratio + 0.5)
+                local audio_h = total_height - video_h
+                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+            end
         end
     end
 end
@@ -3537,8 +3553,13 @@ function M:navigate_to_clip(clip_id)
     local clips = timeline_state.get_tab_strip():displayed_clips()
     for _, clip in ipairs(clips) do
         if clip.id == clip_id then
-            local frame = clip.sequence_start_frame or clip.sequence_start or 0
-            timeline_state.set_playhead_position(frame)
+            -- cache.clips uses the Lua-domain field name `sequence_start`
+            -- (no `_frame` suffix). Asserted non-nil at load by Clip.load
+            -- and by gap_lifecycle.make_gap_clip.
+            assert(type(clip.sequence_start) == "number", string.format(
+                "timeline_panel:navigate_to_clip: clip %s missing sequence_start",
+                tostring(clip_id)))
+            timeline_state.set_playhead_position(clip.sequence_start)
             timeline_state.surface_playhead()
             timeline_state.set_selection({{id = clip_id}})
             return
@@ -3555,22 +3576,40 @@ function M:select_clips(clip_ids)
     timeline_state.set_selection(sel)
 end
 
+--- Return a sift-ready snapshot of the displayed-tab clips.
+--- Gaps (synthesized in-memory, no name/codec/volume) are excluded — sift
+--- and timeline_index treat clips as DB-backed entities. Media-clip fields
+--- are asserted at the source (Clip.load) so we read them directly with
+--- no `or` fallbacks — a missing field is a model bug, not a sift concern.
+--- Consumers (sift, find_dialog, timeline_index) read sequence_start_frame
+--- and duration_frames in the `_frame`-suffixed form, so we expose those
+--- as the public field names for this VIEW snapshot — they are distinct
+--- from the underlying model fields (`sequence_start`, `duration`).
 function M:get_clips()
     local raw = timeline_state.get_tab_strip():displayed_clips()
     local clips = {}
     for _, clip in ipairs(raw) do
-        clips[#clips + 1] = {
-            id = clip.id,
-            name = clip.name or "",
-            codec = clip.codec or "",
-            fps = clip.fps_float or 0,
-            duration = clip.duration_frames or clip.duration or 0,
-            enabled = clip.enabled ~= false,
-            volume = clip.volume or 1.0,
-            sequence_start_frame = clip.sequence_start_frame or clip.sequence_start or 0,
-            track_id = clip.track_id or "",
-            properties = {},
-        }
+        if not clip.is_gap then
+            assert(type(clip.sequence_start) == "number",
+                "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing sequence_start")
+            assert(type(clip.duration) == "number",
+                "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing duration")
+            assert(type(clip.volume) == "number",
+                "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing volume")
+            assert(type(clip.track_id) == "string" and clip.track_id ~= "",
+                "timeline_panel:get_clips: clip " .. tostring(clip.id) .. " missing track_id")
+            clips[#clips + 1] = {
+                id = clip.id,
+                name = clip.name or "",
+                codec = clip.codec or "",
+                duration_frames = clip.duration,
+                enabled = clip.enabled ~= false,
+                volume = clip.volume,
+                sequence_start_frame = clip.sequence_start,
+                track_id = clip.track_id,
+                properties = {},
+            }
+        end
     end
     table.sort(clips, function(a, b)
         return a.sequence_start_frame < b.sequence_start_frame

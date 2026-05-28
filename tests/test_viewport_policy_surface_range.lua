@@ -13,18 +13,23 @@ local viewport_state = require("ui.timeline.state.viewport_state")
 local data = require("ui.timeline.state.timeline_state_data")
 local test_env = require("test_env")
 
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
+local cache = nil
 local function reset(viewport_start, viewport_duration, playhead, content_end)
-    test_env.install_displayed_tab_stub({ content_length = content_end })
-    data.state.playhead_position = playhead
-    data.state.viewport_start_time = viewport_start
-    data.state.viewport_duration = viewport_duration
-    data.state.sequence_timecode_start_frame = 0
+    cache = test_env.install_displayed_tab_stub({
+        content_length = content_end,
+        playhead_position = playhead,
+        viewport_start_time = viewport_start,
+        viewport_duration = viewport_duration,
+        sequence_timecode_start_frame = 0,
+        sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 },
+    })
+    -- is_playing is transport-global; remains on data.state (H1).
     data.state.is_playing = false
-    data.state.sequence_frame_rate = { fps_numerator = 25, fps_denominator = 1 }
 end
 
 local function vp_start()
-    return data.state.viewport_start_time
+    return cache.viewport_start_time
 end
 
 print("=== viewport_state.surface_range ===")

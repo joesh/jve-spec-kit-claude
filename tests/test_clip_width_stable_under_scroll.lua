@@ -14,7 +14,7 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
-local data = require("ui.timeline.state.timeline_state_data")
+local test_env = require("test_env")
 local viewport_state = require("ui.timeline.state.viewport_state")
 
 -- Deep zoom-out: 1920 px viewport, 100000 frames duration → ppf ≈ 0.0192
@@ -26,14 +26,17 @@ local VIEWPORT_DURATION = 100000
 local CLIP_START = 5000
 local CLIP_END = 5500
 
-data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.viewport_start_time = 0
-data.state.viewport_duration = VIEWPORT_DURATION
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
+local cache = test_env.install_displayed_tab_stub({
+    sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+    viewport_start_time = 0,
+    viewport_duration = VIEWPORT_DURATION,
+})
 
 local widths = {}
 local first_width
 for vs = 4500, 5500 do
-    data.state.viewport_start_time = vs
+    cache.viewport_start_time = vs
     local x = viewport_state.time_to_pixel(CLIP_START, VIEWPORT_WIDTH)
     local end_px = viewport_state.time_to_pixel(CLIP_END, VIEWPORT_WIDTH)
     local w = end_px - x

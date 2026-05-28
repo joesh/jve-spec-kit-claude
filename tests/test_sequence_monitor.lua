@@ -1196,8 +1196,12 @@ do
     view:load_sequence(mc_id)
 
     -- Pre-poison timeline_state with an out-of-sequence-range value, as
-    -- if the global cursor were left over from a different tab.
+    -- if the cached cursor were left over from a stale tab. H1 (#28):
+    -- per-sequence playhead lives on the displayed tab's cache, so we
+    -- need a displayed tab to write through; install a minimal stub
+    -- whose cache we can pre-poison.
     local ts = require('ui.timeline.timeline_state')
+    require('test_env').install_displayed_tab_stub({ sequence_id = mc_id })
     ts.set_playhead_position(116)
 
     -- Mutate the model row's playhead (simulates undo/redo or an

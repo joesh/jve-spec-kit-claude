@@ -3,11 +3,20 @@
 -- Regression: B1 — Command.save must not crash when playhead_value is nil or
 -- playhead_rate is missing/invalid. command_manager must assert at capture time
 -- with actionable context instead of letting a bare nil propagate to Command:save().
+--
+-- H1 (#28) UPDATE: the original contract was "captured nil = bug, assert at
+-- capture." H1 reframed this: project-level commands and tests using
+-- init_project_only legitimately capture nil (no displayed timeline, no
+-- sequence-scoped playhead exists). Command.save now accepts nil for both
+-- playhead_value and playhead_rate as a pair — they're co-required. The
+-- INVALID-TYPE cases (non-nil, non-number) still assert; the NIL cases now
+-- succeed and persist NULL in the nullable columns.
 
-require("test_env")
+local test_env = require("test_env")
 
 local database = require("core.database")
 local command_manager = require("core.command_manager")
+local strip_holder = require("ui.timeline.state.strip_holder")
 require("command") -- Loaded for side effects
 
 local pass_count = 0
@@ -42,7 +51,12 @@ db:exec(string.format([[
         1920, 1080, 0, 240, 0, '[]', '[]', %d, %d);
 ]], now, now, now, now))
 
--- Stub timeline_state with valid defaults
+-- Stub timeline_state methods that the command pipeline calls during execute
+-- but which need no real timeline UI (selection / viewport / mutation
+-- pipeline). Playhead + rate come from a real install_displayed_tab_stub
+-- cache per test below — the capture_displayed_playhead invariant requires
+-- them to track the actual strip_holder state, not be monkey-patched
+-- in isolation.
 local timeline_state = require("ui.timeline.timeline_state")
 
 timeline_state.capture_viewport = function()
@@ -74,77 +88,78 @@ end, {
     args = { project_id = { required = true } },
 })
 
--- ─── Test 1: Valid integer playhead → command saves OK ───
-print("\n--- valid integer playhead → save succeeds ---")
-do
-    timeline_state.get_playhead_position = function()
-        return 10  -- plain integer frames
-    end
-    timeline_state.get_sequence_frame_rate = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}
-    end
-
-    local result = command_manager.execute("TestStub", {project_id = "proj1"})
-    check("valid integer playhead → success", result.success == true)
-end
-
--- ─── Test 2: Valid numeric playhead → command saves OK ───
-print("\n--- valid numeric playhead → save succeeds ---")
-do
-    timeline_state.get_playhead_position = function() return 0 end
-    timeline_state.get_sequence_frame_rate = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}
-    end
-
-    local result = command_manager.execute("TestStub", {project_id = "proj1"})
-    check("valid numeric playhead → success", result.success == true)
-end
-
 -- Helper: rollback any leaked transaction from a prior assert-in-execute
 local function rollback_leaked_tx()
     pcall(function() database.rollback() end)
 end
 
--- ─── Test 3: nil playhead → early assert with context ───
-print("\n--- nil playhead_value → assert at capture ---")
+-- ─── Test 1: Valid integer playhead → command saves OK ───
+-- Displayed tab present (real strip_holder stub), playhead=10, rate set.
+-- Both invariants pass; command saves with non-nil pair.
+print("\n--- valid integer playhead → save succeeds ---")
 do
-    timeline_state.get_playhead_position = function() return nil end
-    timeline_state.get_sequence_frame_rate = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}
-    end
-
-    local ok, err = pcall(function()
-        command_manager.execute("TestStub", {project_id = "proj1"})
-    end)
-    rollback_leaked_tx()
-    check("nil playhead → error raised", not ok)
-    check("error mentions playhead", err and tostring(err):find("playhead") ~= nil)
-    check("error mentions command type", err and tostring(err):find("TestStub") ~= nil)
+    test_env.install_displayed_tab_stub({
+        playhead_position = 10,
+        sequence_frame_rate = {fps_numerator = 24000, fps_denominator = 1001},
+    })
+    local result = command_manager.execute("TestStub", {project_id = "proj1"})
+    check("valid integer playhead → success", result.success == true)
 end
 
--- ─── Test 4: nil frame rate → early assert with context ───
-print("\n--- nil playhead_rate → assert at capture ---")
+-- ─── Test 2: Valid numeric playhead at frame 0 → command saves OK ───
+print("\n--- valid numeric playhead → save succeeds ---")
 do
-    timeline_state.get_playhead_position = function() return 0 end
-    timeline_state.get_sequence_frame_rate = function() return nil end
+    test_env.install_displayed_tab_stub({
+        playhead_position = 0,
+        sequence_frame_rate = {fps_numerator = 24000, fps_denominator = 1001},
+    })
+    local result = command_manager.execute("TestStub", {project_id = "proj1"})
+    check("valid numeric playhead → success", result.success == true)
+end
+
+-- ─── Test 3: no displayed tab → save succeeds with NULL pair ───
+-- Post-H1 contract: with no displayed tab installed, get_playhead_position
+-- and get_sequence_frame_rate both return nil. The command_manager capture
+-- helper accepts the (nil, nil) pair as legitimate; Command.save persists
+-- NULL columns. Undo treats nil as "leave playhead alone".
+print("\n--- no displayed tab → save succeeds (project-level) ---")
+do
+    strip_holder.set(nil)   -- clear: no strip, no displayed cache
+    local result = command_manager.execute("TestStub", {project_id = "proj1"})
+    rollback_leaked_tx()
+    check("no-tab playhead → success", result and result.success == true)
+end
+
+-- ─── Test 4: displayed tab with playhead but missing rate → assert ───
+-- The two are co-required: had_displayed_tab=true must produce non-nil for
+-- both value AND rate. A missing rate with a present tab is a bug — the
+-- capture-site invariant must surface it loudly.
+print("\n--- nil rate with non-nil playhead → assert ---")
+do
+    local cache = test_env.install_displayed_tab_stub({
+        playhead_position = 0,
+        sequence_frame_rate = {fps_numerator = 24000, fps_denominator = 1001},
+    })
+    cache.sequence_frame_rate = nil  -- force the bug shape
 
     local ok, err = pcall(function()
         command_manager.execute("TestStub", {project_id = "proj1"})
     end)
     rollback_leaked_tx()
-    check("nil frame rate → error raised", not ok)
+    check("playhead-without-rate → error raised", not ok)
     check("error mentions rate", err and tostring(err):find("rate") ~= nil)
 end
 
--- ─── Test 5: Invalid table playhead (not a number) → early assert ───
-print("\n--- invalid table playhead → assert at capture ---")
+-- ─── Test 5: Invalid table playhead (not a number, not nil) → assert ───
+-- Bypasses the invariant by writing a table into cache.playhead_position
+-- directly; Command.save's type assert catches it.
+print("\n--- invalid table playhead → assert at save ---")
 do
-    timeline_state.get_playhead_position = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}  -- table, not integer
-    end
-    timeline_state.get_sequence_frame_rate = function()
-        return {fps_numerator = 24000, fps_denominator = 1001}
-    end
+    local cache = test_env.install_displayed_tab_stub({
+        playhead_position = 0,
+        sequence_frame_rate = {fps_numerator = 24000, fps_denominator = 1001},
+    })
+    cache.playhead_position = {fps_numerator = 24000, fps_denominator = 1001}  -- table, not integer
 
     local ok, err = pcall(function()
         command_manager.execute("TestStub", {project_id = "proj1"})

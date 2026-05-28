@@ -1,5 +1,12 @@
 --- Timeline Viewport State
--- Manages viewport position, zoom, playhead, and pixel conversions
+-- Manages viewport position, zoom, playhead, and pixel conversions.
+--
+-- Per-sequence fields (viewport_start_time, viewport_duration,
+-- playhead_position, sequence_frame_rate, sequence_timecode_start_frame)
+-- live on the displayed tab's cache via strip_holder.displayed_cache().
+-- The only data.state read that remains is `is_playing` (transport-global,
+-- not per-sequence). H1 audit migration: removed singleton-mirror reads
+-- that returned fabricated defaults (0 / 0.5) for unloaded tabs.
 local M = {}
 local data = require("ui.timeline.state.timeline_state_data")
 local strip_holder = require("ui.timeline.state.strip_holder")
@@ -7,14 +14,14 @@ local perf_log = require("core.logger").for_area("ui.scroll_perf")
 
 local viewport_guard_count = 0
 
--- content_length lives on the displayed tab's cache (per-tab source of
--- truth for clip extent). Zero when no tab displayed — blank panel.
-local function compute_sequence_content_length()
-    local strip = strip_holder.get()
-    if not strip then return 0 end
-    local displayed = strip:get_displayed()
-    if not displayed then return 0 end
-    return displayed.cache.content_length
+-- Resolve the displayed tab's per-sequence cache. Internal callers do
+-- arithmetic on its fields, so assert with a caller-tagged message —
+-- "no displayed tab" is a programming error here (the caller routed a
+-- viewport mutation to viewport_state without a sequence to mutate).
+local function cache_strict(caller)
+    local cache = strip_holder.displayed_cache()
+    assert(cache, caller .. ": no displayed tab (cache nil)")
+    return cache
 end
 
 -- Helper: Calculate timeline extent (content + playhead + buffer) in frames.
@@ -36,25 +43,31 @@ local function calculate_timeline_extent(hypothetical_start)
         "viewport_state.calculate_timeline_extent: hypothetical_start must be nil or integer, got "
             .. tostring(hypothetical_start))
     local t0 = os.clock()
-    local state = data.state
-    local max_end = compute_sequence_content_length()
+    local cache = cache_strict("viewport_state.calculate_timeline_extent")
+    -- content_length is maintained on the displayed-tab cache by
+    -- TimelineTab:load_from_database / apply_mutations. cache_strict above
+    -- guarantees a displayed tab — no fallback needed (L1 audit).
+    assert(type(cache.content_length) == "number",
+        "viewport_state.calculate_timeline_extent: cache.content_length not initialised " ..
+        "on displayed tab (sequence load did not run)")
+    local max_end = cache.content_length
 
-    local seq_fps = state.sequence_frame_rate
+    local seq_fps = cache.sequence_frame_rate
     assert(seq_fps and seq_fps.fps_numerator and seq_fps.fps_denominator,
         "viewport_state: missing sequence_frame_rate")
 
-    if state.playhead_position > max_end then
-        max_end = state.playhead_position
+    if cache.playhead_position > max_end then
+        max_end = cache.playhead_position
     end
 
     -- Explicit nil-check — hypothetical_start == 0 is a legitimate caller
     -- value (scrolling to frame 0), not a request for the default.
     local start_for_extent = hypothetical_start
     if start_for_extent == nil then
-        start_for_extent = state.viewport_start_time
+        start_for_extent = cache.viewport_start_time
     end
-    if start_for_extent and state.viewport_duration then
-        local viewport_end = start_for_extent + state.viewport_duration
+    if start_for_extent and cache.viewport_duration then
+        local viewport_end = start_for_extent + cache.viewport_duration
         if viewport_end > max_end then
             max_end = viewport_end
         end
@@ -87,7 +100,10 @@ local function clamp_viewport_start(desired_start, duration)
     -- WANTS to go, not where it currently sits. See calculate_timeline_extent.
     local total_extent = calculate_timeline_extent(desired_start)
     -- Floor is start_timecode_frame (prevents scrolling into dead space before content)
-    local floor = data.state.sequence_timecode_start_frame or 0
+    local cache = cache_strict("viewport_state.clamp_viewport_start")
+    local floor = cache.sequence_timecode_start_frame
+    assert(type(floor) == "number",
+        "viewport_state.clamp_viewport_start: cache.sequence_timecode_start_frame not initialised")
     local max_start = math.max(floor, total_extent - duration)
 
     if desired_start < floor then return floor end
@@ -97,22 +113,23 @@ end
 
 local function ensure_playhead_visible()
     if viewport_guard_count > 0 then return false end
-    -- Only auto-scroll during playback; when parked, user must be free to scroll
+    -- is_playing is transport-global, not per-sequence. Stays on data.state.
+    -- Only auto-scroll during playback; when parked, user must be free to scroll.
     if not data.state.is_playing then return false end
-    local state = data.state
+    local cache = cache_strict("viewport_state.ensure_playhead_visible")
 
-    local duration = state.viewport_duration
+    local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
 
-    local start = state.viewport_start_time
+    local start = cache.viewport_start_time
     local end_time = start + duration
-    local playhead = state.playhead_position
+    local playhead = cache.playhead_position
 
     if playhead < start or playhead > end_time then
         local desired_start = playhead - math.floor(duration / 2)
         local clamped = clamp_viewport_start(desired_start, duration)
-        if state.viewport_start_time ~= clamped then
-            state.viewport_start_time = clamped
+        if cache.viewport_start_time ~= clamped then
+            cache.viewport_start_time = clamped
             return true
         end
     end
@@ -147,11 +164,11 @@ function M.surface_range(start_frame, end_frame, persist_callback)
         "viewport_state.surface_range: end_frame must be >= start_frame")
 
     if viewport_guard_count > 0 then return false end
-    local state = data.state
-    local duration = state.viewport_duration
+    local cache = cache_strict("viewport_state.surface_range")
+    local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
 
-    local playhead = state.playhead_position
+    local playhead = cache.playhead_position
     local union_start = math.min(start_frame, playhead)
     local union_end = math.max(end_frame, playhead)
     local union_width = union_end - union_start
@@ -169,8 +186,8 @@ function M.surface_range(start_frame, end_frame, persist_callback)
     end
 
     local clamped = clamp_viewport_start(desired_start, duration)
-    if state.viewport_start_time ~= clamped then
-        state.viewport_start_time = clamped
+    if cache.viewport_start_time ~= clamped then
+        cache.viewport_start_time = clamped
         data.notify_listeners()
         if persist_callback then persist_callback() end
         return true
@@ -182,20 +199,20 @@ end
 -- Unlike ensure_playhead_visible (playback-only auto-scroll),
 -- this works when parked. Used by Find navigate_to_clip.
 function M.surface_playhead(persist_callback)
-    local state = data.state
-    local duration = state.viewport_duration
+    local cache = cache_strict("viewport_state.surface_playhead")
+    local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
 
-    local playhead = state.playhead_position
-    local start = state.viewport_start_time
+    local playhead = cache.playhead_position
+    local start = cache.viewport_start_time
     local end_time = start + duration
 
     -- Only scroll if playhead is outside viewport
     if playhead < start or playhead > end_time then
         local desired_start = playhead - math.floor(duration / 2)
         local clamped = clamp_viewport_start(desired_start, duration)
-        if state.viewport_start_time ~= clamped then
-            state.viewport_start_time = clamped
+        if cache.viewport_start_time ~= clamped then
+            cache.viewport_start_time = clamped
             data.notify_listeners()
             if persist_callback then persist_callback() end
             return true
@@ -204,8 +221,12 @@ function M.surface_playhead(persist_callback)
     return false
 end
 
+-- Public getters: return nil when no displayed cache (blank panel).
+-- Callers that do arithmetic must assert non-nil; view-layer callers
+-- handle nil as "nothing to render".
 function M.get_viewport_start_time()
-    return data.state.viewport_start_time
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.viewport_start_time or nil
 end
 
 --- Return the timeline extent in integer frames — the total scrollable
@@ -219,24 +240,25 @@ function M.get_timeline_extent()
 end
 
 function M.get_viewport_duration()
-    return data.state.viewport_duration
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.viewport_duration or nil
 end
 
 function M.set_viewport_start_time(time_obj, persist_callback)
     assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
         "viewport_state.set_viewport_start_time: time must be integer, got " .. tostring(time_obj))
-    local state = data.state
-    assert(type(state.viewport_start_time) == "number",
+    local cache = cache_strict("viewport_state.set_viewport_start_time")
+    assert(type(cache.viewport_start_time) == "number",
         "viewport_state.set_viewport_start_time: viewport_start_time not initialized")
 
-    local prev_start = state.viewport_start_time
+    local prev_start = cache.viewport_start_time
     local t0 = os.clock()
-    local clamped = clamp_viewport_start(time_obj, state.viewport_duration)
+    local clamped = clamp_viewport_start(time_obj, cache.viewport_duration)
     local t_after_clamp = os.clock()
 
     local notified = prev_start ~= clamped
     if notified then
-        state.viewport_start_time = clamped
+        cache.viewport_start_time = clamped
         data.notify_listeners()
         if persist_callback then persist_callback() end
     end
@@ -291,15 +313,15 @@ end
 --                      When nil: auto (playhead if visible, else center).
 -- @param persist_callback  optional function called after the state change
 function M.set_viewport_duration(duration_obj, opts, persist_callback)
-    local state = data.state
+    local cache = cache_strict("viewport_state.set_viewport_duration")
     assert(type(duration_obj) == "number" and duration_obj == math.floor(duration_obj),
         "viewport_state.set_viewport_duration: duration must be integer, got " .. tostring(duration_obj))
 
-    if state.viewport_duration == duration_obj then return end
+    if cache.viewport_duration == duration_obj then return end
 
-    local old_start = state.viewport_start_time
-    local old_duration = state.viewport_duration
-    local playhead = state.playhead_position
+    local old_start = cache.viewport_start_time
+    local old_duration = cache.viewport_duration
+    local playhead = cache.playhead_position
     local anchor = resolve_anchor_frame(opts, old_start, old_duration, playhead)
 
     -- Preserve the anchor's pixel fraction within the viewport.
@@ -312,25 +334,28 @@ function M.set_viewport_duration(duration_obj, opts, persist_callback)
     local desired_start = math.floor(anchor - fraction * duration_obj + 0.5)
     local clamped_start = clamp_viewport_start(desired_start, duration_obj)
 
-    state.viewport_duration = duration_obj
-    state.viewport_start_time = clamped_start
+    cache.viewport_duration = duration_obj
+    cache.viewport_start_time = clamped_start
     data.notify_listeners()
     if persist_callback then persist_callback() end
 end
 
 function M.get_playhead_position()
-    return data.state.playhead_position
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.playhead_position or nil
 end
 
 function M.set_playhead_position(time_obj, persist_callback, selection_callback)
-    local state = data.state
+    local cache = cache_strict("viewport_state.set_playhead_position")
     assert(type(time_obj) == "number" and time_obj == math.floor(time_obj),
         "viewport_state.set_playhead_position: time must be integer frame, got " .. tostring(time_obj))
 
-    local floor = state.sequence_timecode_start_frame or 0
+    local floor = cache.sequence_timecode_start_frame
+    assert(type(floor) == "number",
+        "viewport_state.set_playhead_position: cache.sequence_timecode_start_frame not initialised")
     local clamped = math.max(floor, time_obj)
-    local changed = state.playhead_position ~= clamped
-    state.playhead_position = clamped
+    local changed = cache.playhead_position ~= clamped
+    cache.playhead_position = clamped
 
     local viewport_adjusted = ensure_playhead_visible()
 
@@ -350,14 +375,14 @@ end
 -- adjacent floors to shift independently as viewport_start changes, and
 -- clips strobe ±1 px while scrolling.
 function M.time_to_pixel(time_obj, viewport_width)
-    local state = data.state
+    local cache = cache_strict("viewport_state.time_to_pixel")
     assert(type(time_obj) == "number" and math.floor(time_obj) == time_obj,
         "viewport_state.time_to_pixel: time must be integer frame, got " .. tostring(time_obj))
     assert(type(viewport_width) == "number" and viewport_width > 0,
         "viewport_state.time_to_pixel: viewport_width must be positive number, got " .. tostring(viewport_width))
 
-    local start_frames = state.viewport_start_time
-    local duration_frames = state.viewport_duration
+    local start_frames = cache.viewport_start_time
+    local duration_frames = cache.viewport_duration
     assert(type(start_frames) == "number",
         "viewport_state.time_to_pixel: viewport_start_time not initialized")
     assert(type(duration_frames) == "number" and duration_frames > 0,
@@ -371,14 +396,14 @@ end
 -- Convert pixel position to time (returns integer frame).
 -- Inverse of time_to_pixel using the same absolute pixel grid.
 function M.pixel_to_time(pixel, viewport_width)
-    local state = data.state
+    local cache = cache_strict("viewport_state.pixel_to_time")
     assert(type(pixel) == "number",
         "viewport_state.pixel_to_time: pixel must be number, got " .. tostring(pixel))
     assert(type(viewport_width) == "number" and viewport_width > 0,
         "viewport_state.pixel_to_time: viewport_width must be positive number, got " .. tostring(viewport_width))
 
-    local start_frames = state.viewport_start_time
-    local duration_frames = state.viewport_duration
+    local start_frames = cache.viewport_start_time
+    local duration_frames = cache.viewport_duration
     assert(type(start_frames) == "number",
         "viewport_state.pixel_to_time: viewport_start_time not initialized")
     assert(type(duration_frames) == "number" and duration_frames > 0,

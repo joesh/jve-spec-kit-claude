@@ -4,14 +4,16 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
-require("test_env")
+local test_env = require("test_env")
 
-local data = require("ui.timeline.state.timeline_state_data")
 local viewport_state = require("ui.timeline.state.viewport_state")
 
-data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.viewport_start_time = 0
-data.state.viewport_duration = 240 -- 10s window
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
+test_env.install_displayed_tab_stub({
+    sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+    viewport_start_time = 0,
+    viewport_duration = 240, -- 10s window
+})
 
 local width = 1200
 

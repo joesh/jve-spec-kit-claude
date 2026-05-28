@@ -217,9 +217,10 @@ end
 -- Validate every required sequence-row field BEFORE touching self.cache so
 -- a missing invariant leaves the cache untouched (rule 1.14: fail loudly,
 -- no half-state). Selection restore, viewport-fit, and other view-state
--- decisions remain in core_state.load_displayed_sequence — those interact
--- with the singleton data.state today and will move per-tab in later
--- phases (1.4+) when the cache becomes the authoritative source.
+-- decisions remain in core_state.load_displayed_sequence; H1 moved the
+-- per-sequence view-state (sequence_frame_rate, sequence_timecode_start_frame,
+-- viewport, scroll offsets, split ratio, playhead) onto this cache, so
+-- load_displayed_sequence now reads/writes the same cache directly.
 -- Numeric fields required on the sequence row for a load. Frame rate is
 -- validated separately (table, not scalar).
 local REQUIRED_SEQ_NUMERIC_FIELDS = {
@@ -340,12 +341,27 @@ function TimelineTab:get_clip_by_id(clip_id)
     return self.cache.clip_lookup[clip_id]
 end
 
---- Internal sorted clip list for a track (read-only reference, nil when
---- track has no clips). Matches clip_state.get_track_clip_index semantics.
+--- Internal sorted clip list for a track (read-only reference).
+--- Contract:
+---   * Returns the sorted list (table reference) for a known track WITH clips.
+---   * Returns `{}` for a known track that currently has NO clips.
+---   * ASSERTS for unknown track_id and nil/empty input — distinguishes a
+---     legitimate "empty track" from a producer/caller bug (rule 1.14).
+--- Callers can therefore iterate the result with `ipairs` unconditionally,
+--- and `assert(map[id])` style cache invariants hold without `or {}` shims.
 function TimelineTab:get_track_clip_index(track_id)
-    if track_id == nil then return nil end
+    assert(type(track_id) == "string" and track_id ~= "",
+        "TimelineTab:get_track_clip_index: track_id must be a non-empty string, " ..
+        "got " .. tostring(track_id))
     ensure_indexes(self)
-    return self.cache.track_clip_index[track_id]
+    local known = false
+    for _, t in ipairs(self.cache.tracks) do
+        if t.id == track_id then known = true; break end
+    end
+    assert(known, string.format(
+        "TimelineTab:get_track_clip_index: unknown track_id %s on sequence %s",
+        track_id, tostring(self.sequence_id)))
+    return self.cache.track_clip_index[track_id] or {}
 end
 
 local function recompute_content_length(cache)

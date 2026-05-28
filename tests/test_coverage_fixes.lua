@@ -120,14 +120,18 @@ print("\n--- T6c: Command.save separate playhead errors ---")
 do
     local Command = require("command")
 
-    -- nil playhead_value with valid rate
-    local cmd1 = Command.create("TestSave", "proj1")
-    cmd1.playhead_value = nil
-    cmd1.playhead_rate = { fps_numerator = 24000, fps_denominator = 1001 }
-    cmd1.executed_at = os.time()
+    -- H1 (#28): nil playhead_value is no longer an error — project-level
+    -- commands legitimately save with NULL playhead. The two fields are
+    -- co-required: nil playhead → nil rate is OK; non-nil playhead with
+    -- zero/missing rate is still an error.
+    -- Invalid TYPE on playhead_value (non-nil, non-number) still asserts.
+    local cmd_invalid = Command.create("TestSave", "proj1")
+    cmd_invalid.playhead_value = "not a number"
+    cmd_invalid.playhead_rate = { fps_numerator = 24000, fps_denominator = 1001 }
+    cmd_invalid.executed_at = os.time()
 
-    local err1 = expect_error("nil playhead_value → error mentions playhead_value", function()
-        cmd1:save(db)
+    local err1 = expect_error("invalid-type playhead_value → error mentions playhead_value", function()
+        cmd_invalid:save(db)
     end, "playhead_value")
 
     -- valid playhead_value with zero rate

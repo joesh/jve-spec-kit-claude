@@ -39,15 +39,18 @@ db:exec(string.format([[
 ]]))
 
 command_manager.init("s", "p")
-require("ui.timeline.timeline_state")  -- triggers load_displayed_sequence
+local timeline_state = require("ui.timeline.timeline_state")  -- triggers load_displayed_sequence
 
-local cached = require("ui.timeline.state.timeline_state_data").state.sequence_timecode_start_frame
+-- H1 (#28): per-sequence TC origin now lives on the displayed tab's cache,
+-- not on the data.state singleton mirror. Read through the public getter,
+-- which routes via strip_holder.displayed_cache().
+local cached = timeline_state.get_start_timecode_frame()
 assert(cached == TC_ORIGIN, string.format(
-    "FAIL: TC origin must round-trip from sequence row into the state cache. "
-    .. "Expected %d (01:00:00:00 @ 24fps), got %s. If this regresses, every "
-    .. "viewport-fit and ruler computation on cinema / BWF sequences "
-    .. "silently misaligns by the missing frame count.",
+    "FAIL: TC origin must round-trip from sequence row into the displayed "
+    .. "tab cache. Expected %d (01:00:00:00 @ 24fps), got %s. If this "
+    .. "regresses, every viewport-fit and ruler computation on cinema / "
+    .. "BWF sequences silently misaligns by the missing frame count.",
     TC_ORIGIN, tostring(cached)))
-print("  TC origin round-trips through state cache — OK")
+print("  TC origin round-trips through tab cache — OK")
 
 print("\n✅ test_nsf_timecode_start_no_fallback.lua passed")

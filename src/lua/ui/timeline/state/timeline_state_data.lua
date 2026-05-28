@@ -27,6 +27,14 @@ local function fresh_state()
         -- tracks / clips / content_length live on TimelineTab.cache.
         -- Reads come through strip:displayed_tracks() / displayed_clips()
         -- and track_state / clip_state, all routing to the displayed tab.
+        --
+        -- Per-sequence view-state (sequence_frame_rate, sequence_timecode_
+        -- start_frame, viewport_start_time, viewport_duration, video/
+        -- audio_scroll_offset, video_audio_split_ratio, playhead_position)
+        -- also lives on TimelineTab.cache as of H1 (audit #28). Reads go
+        -- through strip_holder.displayed_cache(); the singleton mirror is
+        -- gone so blank-panel reads return nil rather than fabricating
+        -- defaults (was the H1 silent-failure bug).
         project_id = nil,
         sequence_id = nil,
 
@@ -38,25 +46,12 @@ local function fresh_state()
         -- Use timeline_state.get_displayed_tab_id() (or strip_holder for
         -- modules that can't import timeline_state directly).
 
-        -- Rate
-        sequence_frame_rate = { fps_numerator = 30, fps_denominator = 1 },
-        sequence_audio_rate = 48000,
-        sequence_timecode_start_frame = 0,
-
-        -- Viewport (integer frames)
-        viewport_start_time = 0,
-        viewport_duration = 300,
-
-        -- Vertical scroll offsets (pixels, per-widget)
-        video_scroll_offset = 0,
-        audio_scroll_offset = 0,
-        video_audio_split_ratio = 0.5,
-
-        -- Playhead (integer frame)
-        playhead_position = 0,
+        -- Transport-global (NOT per-sequence — playback engines bind one
+        -- role at a time; this is the global "any engine playing?" flag
+        -- used by viewport auto-scroll).
         is_playing = false,
 
-        -- Selection
+        -- Selection (cross-tab; selection survives tab switches)
         selected_clips = {},
         selected_edges = {},
         selected_gaps = {},

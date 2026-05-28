@@ -37,6 +37,7 @@ local state = {
         edge_selected_limit = "#000",
         clip = "#000",
         clip_selected = "#000",
+        clip_boundary = "#000",
     },
     get_viewport_start_time = function() return 0 end,
     get_viewport_duration = function() return 96 end,

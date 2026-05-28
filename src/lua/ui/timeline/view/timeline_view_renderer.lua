@@ -950,7 +950,9 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
     end
 
     if not outline_only and draw_width > 0 then
-        local boundary_col = state_module.colors.clip_boundary or "#1a1a1a"
+        local boundary_col = assert(state_module.colors.clip_boundary,
+            "timeline_view_renderer: state_module.colors.clip_boundary is nil " ..
+            "— expected color for the right-edge boundary stripe on each clip")
         timeline.add_rect(view.widget, visible_x + draw_width - 1, y, 1, clip_height, boundary_col)
     end
 end

@@ -93,7 +93,9 @@ function M.create(widget, state_module)
             local colors = state_module.colors or {}
             local fill_color = assert(colors.mark_range_fill,
                 "timeline_state.colors.mark_range_fill is nil; expected translucent color for mark range overlay")
-            local edge_color = colors.mark_range_edge or colors.playhead or "#ff6b6b"
+            local edge_color = assert(colors.mark_range_edge or colors.playhead,
+                "timeline_ruler: state_module.colors must provide mark_range_edge " ..
+                "(or playhead as a documented fallback) for mark-region edge handles")
             local handle_width = 2
 
             -- Fill between marks (implicit boundary: 0 if mark_in nil, viewport_end if mark_out nil)
@@ -333,12 +335,12 @@ function M.create(widget, state_module)
             else
                 -- Click anywhere on ruler to set playhead. Dispatch via
                 -- SetPlayhead only — the playhead_changed listener in
-                -- timeline_core_state updates data.state.playhead_position
-                -- when the displayed sequence matches (MVC: model writes
-                -- → signal → view-cache reload). Writing data.state
-                -- directly here AND via the listener was redundant and
-                -- a latent desync hazard when the command's pre-write
-                -- transforms the value (clamps, snaps).
+                -- timeline_core_state writes the new frame to each open
+                -- tab's cache.playhead_position (MVC: model writes →
+                -- signal → view-cache reload). Writing cache directly
+                -- here AND via the listener was redundant and a latent
+                -- desync hazard when the command's pre-write transforms
+                -- the value (clamps, snaps).
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 command_manager.execute_interactive("SetPlayhead", {
                     project_id = state_module.get_project_id(),
@@ -361,7 +363,7 @@ function M.create(widget, state_module)
                 end
 
                 -- pixel_to_time returns integer frame, already snapped.
-                -- SetPlayhead → playhead_changed → data.state update (MVC);
+                -- SetPlayhead → playhead_changed → tab.cache update (MVC);
                 -- no direct cache write here (see press branch comment).
                 local snapped_frame = state_module.pixel_to_time(x, width)
                 command_manager.execute_interactive("SetPlayhead", {

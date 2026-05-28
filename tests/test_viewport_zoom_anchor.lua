@@ -20,14 +20,18 @@ local data = require("ui.timeline.state.timeline_state_data")
 local viewport_state = require("ui.timeline.state.viewport_state")
 local test_env = require("test_env")
 
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
 -- Large content extent so clamp never interferes with the zoom-anchor math.
+local cache = nil
 local function reset_state(start_time, duration, playhead)
-    data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-    data.state.sequence_timecode_start_frame = 0
-    test_env.install_displayed_tab_stub({ content_length = 100000 })
-    data.state.viewport_start_time = start_time
-    data.state.viewport_duration = duration
-    data.state.playhead_position = playhead
+    cache = test_env.install_displayed_tab_stub({
+        content_length = 100000,
+        sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+        sequence_timecode_start_frame = 0,
+        viewport_start_time = start_time,
+        viewport_duration = duration,
+        playhead_position = playhead,
+    })
     data.state.is_playing = false
 end
 
@@ -41,8 +45,8 @@ end
 reset_state(100, 200, 150)  -- viewport [100..300], playhead at 150 (25% from left)
 local old_fraction = pixel_fraction(150, 100, 200)
 viewport_state.set_viewport_duration(400)
-local new_start = data.state.viewport_start_time
-local new_duration = data.state.viewport_duration
+local new_start = cache.viewport_start_time
+local new_duration = cache.viewport_duration
 assert(new_duration == 400, "duration should update to 400")
 local new_fraction = pixel_fraction(150, new_start, new_duration)
 assert(math.abs(new_fraction - old_fraction) < 0.01,
@@ -56,8 +60,8 @@ print("  PASS: auto anchor keeps playhead at same pixel fraction when visible")
 reset_state(100, 200, 5000)  -- playhead way off-screen (5000), viewport [100..300]
 local old_center = 100 + 200 / 2  -- = 200
 viewport_state.set_viewport_duration(400)
-new_start = data.state.viewport_start_time
-new_duration = data.state.viewport_duration
+new_start = cache.viewport_start_time
+new_duration = cache.viewport_duration
 local new_center = new_start + new_duration / 2
 assert(new_duration == 400, "duration should update")
 assert(math.abs(new_center - old_center) < 1,
@@ -69,10 +73,10 @@ print("  PASS: auto anchor preserves viewport center when playhead off-screen")
 -- =============================================================================
 reset_state(100, 200, 5000)  -- playhead off-screen
 viewport_state.set_viewport_duration(400, { zoom_around = "playhead" })
-new_start = data.state.viewport_start_time
-new_duration = data.state.viewport_duration
+new_start = cache.viewport_start_time
+new_duration = cache.viewport_duration
 -- Playhead should end up inside the viewport (centered, modulo clamp)
-local ph = data.state.playhead_position
+local ph = cache.playhead_position
 assert(ph >= new_start and ph <= new_start + new_duration,
     string.format("playhead %d should be inside viewport [%d..%d]",
         ph, new_start, new_start + new_duration))
@@ -84,8 +88,8 @@ print("  PASS: explicit playhead anchor moves viewport to contain playhead")
 reset_state(100, 200, 150)  -- playhead visible, but we force center anyway
 old_center = 100 + 200 / 2  -- 200
 viewport_state.set_viewport_duration(400, { zoom_around = "center" })
-new_start = data.state.viewport_start_time
-new_duration = data.state.viewport_duration
+new_start = cache.viewport_start_time
+new_duration = cache.viewport_duration
 new_center = new_start + new_duration / 2
 assert(math.abs(new_center - old_center) < 1,
     string.format("center should stay at %d, got %d", old_center, new_center))
@@ -101,8 +105,8 @@ viewport_state.set_viewport_duration(100, {
     zoom_around = "frame",
     anchor_frame = anchor,
 })
-new_start = data.state.viewport_start_time
-new_duration = data.state.viewport_duration
+new_start = cache.viewport_start_time
+new_duration = cache.viewport_duration
 assert(new_duration == 100, "duration should be 100")
 local new_anchor_fraction = pixel_fraction(anchor, new_start, new_duration)
 assert(math.abs(new_anchor_fraction - old_anchor_fraction) < 0.01,
@@ -134,9 +138,9 @@ print("  PASS: unknown zoom_around value asserts")
 -- Test 8: duration unchanged → still a no-op (backward-compat of early-exit)
 -- =============================================================================
 reset_state(100, 200, 150)
-local before_start = data.state.viewport_start_time
+local before_start = cache.viewport_start_time
 viewport_state.set_viewport_duration(200)  -- same as current
-assert(data.state.viewport_start_time == before_start,
+assert(cache.viewport_start_time == before_start,
     "start should not change when duration unchanged")
 print("  PASS: setting same duration is a no-op")
 

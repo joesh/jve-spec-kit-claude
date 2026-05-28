@@ -4,13 +4,15 @@
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
-local data = require("ui.timeline.state.timeline_state_data")
+local test_env = require("test_env")
 local viewport_state = require("ui.timeline.state.viewport_state")
 
--- Configure sequence rate and viewport
-data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-data.state.viewport_start_time = 0
-data.state.viewport_duration = 240 -- 10 seconds @24fps
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
+test_env.install_displayed_tab_stub({
+    sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+    viewport_start_time = 0,
+    viewport_duration = 240, -- 10 seconds @24fps
+})
 
 local WIDTH = 1200
 -- 240 frames across 1200px => 5px/frame

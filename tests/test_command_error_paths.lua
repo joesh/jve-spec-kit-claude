@@ -319,14 +319,15 @@ db:exec(string.format([[
 -- (Can't easily test since database.init already set connection.
 --  Instead, test save(nil) which falls through to get_connection — success)
 
--- 5b. Missing playhead_value → FATAL
+-- 5b. Invalid-type playhead_value → FATAL (post-H1: nil is OK, non-nil
+-- non-number still asserts).
 cmd = Command.create("TestCmd", "proj1")
+cmd.playhead_value = "not a number"
 cmd.playhead_rate = 24
 cmd.executed_at = now
--- playhead_value is nil by default
-expect_error("save nil playhead_value → FATAL", function()
+expect_error("save invalid-type playhead_value → FATAL", function()
     cmd:save(db)
-end, "missing playhead_value")
+end, "playhead_value")
 
 -- 5c. playhead_rate = 0 → FATAL
 cmd = Command.create("TestCmd", "proj1")

@@ -295,6 +295,13 @@ local function flush_state_to_db()
         return
     end
 
+    -- Per-sequence view-state lives on the displayed tab's cache (H1).
+    -- The flush_state_to_db caller already gated on displayed_sequence_id
+    -- being set, so the cache must exist here.
+    local displayed_cache = strip_holder.displayed_cache()
+    assert(displayed_cache, "flush_state_to_db: displayed cache nil despite "
+        .. "sequence_id present — strip_holder/strip inconsistency")
+
     -- Begin command event context for UI-driven persistence.
     -- All persistence commands below are non-undoable "scriptable" commands,
     -- but they still require an active command event to execute.
@@ -307,7 +314,7 @@ local function flush_state_to_db()
     playhead_cmd:set_parameters({
         project_id = project_id,
         sequence_id = sequence_id,
-        playhead_position = data.state.playhead_position,
+        playhead_position = displayed_cache.playhead_position,
     })
     command_manager.execute(playhead_cmd)
 
@@ -316,9 +323,9 @@ local function flush_state_to_db()
     viewport_cmd:set_parameters({
         project_id = project_id,
         sequence_id = sequence_id,
-        viewport_start_time = data.state.viewport_start_time,
-        viewport_duration = data.state.viewport_duration,
-        video_audio_split_ratio = data.state.video_audio_split_ratio,
+        viewport_start_time = displayed_cache.viewport_start_time,
+        viewport_duration = displayed_cache.viewport_duration,
+        video_audio_split_ratio = displayed_cache.video_audio_split_ratio,
     })
     command_manager.execute(viewport_cmd)
 
@@ -430,10 +437,11 @@ end
 
 -- Thin sync step: the tab IS the model (cache populated by
 -- tab:load_from_database when the strip opens it; signal handlers +
--- apply_mutations keep it fresh). This mirrors the per-sequence
--- view-state fields (frame_rate, tc origin, viewport, scroll, playhead)
--- into data.state for the displayed-singleton readers, restores
--- selection (global, not per-tab), and runs viewport-fit.
+-- apply_mutations keep it fresh). The per-sequence view-state fields
+-- (frame_rate, tc origin, viewport, scroll, playhead) live ONLY on
+-- tab.cache since H1 — no data.state mirror. This sync step loads the
+-- sequence row into data.sequence (marks), restores selection (global,
+-- not per-tab), and runs viewport-fit.
 local function load_displayed_sequence(seq_id)
     assert(seq_id and seq_id ~= "",
         "load_displayed_sequence: seq_id required")
@@ -453,16 +461,11 @@ local function load_displayed_sequence(seq_id)
     assert(sequence, string.format(
         "load_displayed_sequence: failed to load seq_id=%s", tostring(seq_id)))
 
-    -- Mirror per-sequence view-state into data.state; clip/track data
-    -- lives only on tab.cache.
-    data.state.sequence_frame_rate = tab.cache.sequence_frame_rate
-    data.state.sequence_timecode_start_frame = tab.cache.sequence_timecode_start_frame
+    -- Per-sequence view-state lives ONLY on tab.cache (H1 migration).
+    -- The legacy data.state.* mirror copies are gone; readers route
+    -- through strip_holder.displayed_cache(). data.sequence is the
+    -- "active sequence model row" cache (marks); it stays.
     data.sequence = sequence
-
-    data.state.playhead_position = tab.cache.playhead_position
-    data.state.video_scroll_offset = tab.cache.video_scroll_offset
-    data.state.audio_scroll_offset = tab.cache.audio_scroll_offset
-    data.state.video_audio_split_ratio = tab.cache.video_audio_split_ratio
 
     -- Selection restore (cross-cutting; lives on data.state). Resolve clip
     -- objects via clip_state which now reads from the displayed tab cache.
@@ -497,9 +500,6 @@ local function load_displayed_sequence(seq_id)
         end
     end
 
-    data.state.viewport_start_time = tab.cache.viewport_start_time
-    data.state.viewport_duration = tab.cache.viewport_duration
-
     -- Resilience: snap the viewport to fit content when the persisted
     -- viewport would render unusably. Two failure modes covered:
     --   1. No intersection with any media clip — e.g. a master whose
@@ -525,8 +525,8 @@ local function load_displayed_sequence(seq_id)
     end
 
     local function viewport_needs_fit(min_start, max_end)
-        local vs = data.state.viewport_start_time
-        local vd = data.state.viewport_duration
+        local vs = tab.cache.viewport_start_time
+        local vd = tab.cache.viewport_duration
         if not vs or not vd or vd <= 0 then return true end
         if not min_start or not max_end or max_end <= min_start then return false end
         local ve = vs + vd
@@ -538,13 +538,11 @@ local function load_displayed_sequence(seq_id)
 
     local min_start, max_end = content_bounds()
     if viewport_needs_fit(min_start, max_end) and min_start and max_end and max_end > min_start then
-        assert(type(data.state.sequence_timecode_start_frame) == "number",
+        assert(type(tab.cache.sequence_timecode_start_frame) == "number",
             "viewport-fit: sequence_timecode_start_frame not initialised — "
-            .. "load_displayed_sequence must run before viewport fit")
+            .. "tab:load_from_database must run before viewport fit")
         local fit_start, fit_duration = ui_constants.compute_zoom_to_fit(
-            min_start, max_end, data.state.sequence_timecode_start_frame)
-        data.state.viewport_start_time = fit_start
-        data.state.viewport_duration = fit_duration
+            min_start, max_end, tab.cache.sequence_timecode_start_frame)
         tab.cache.viewport_start_time = fit_start
         tab.cache.viewport_duration = fit_duration
     end
@@ -670,7 +668,10 @@ function M.clear(prev_displayed_seq_id)
     data.state.drag_selecting = false
     data.state.active_edge_drag_state = nil
 
-    data.state.playhead_position = 0
+    -- Per-sequence playhead lives on tab.cache (H1). On clear(), the
+    -- strip's displayed pointer has already been detached by the caller,
+    -- so there is no displayed cache to reset; the strip-empty state IS
+    -- the reset. is_playing is transport-global and stays on data.state.
     data.state.is_playing = false
 
     clip_state.invalidate_indexes()
@@ -839,8 +840,9 @@ end)
 
 -- Update playhead when SetPlayhead command fires. SetPlayhead writes
 -- per-sequence; mirror to each tab's cache so the playhead is correct
--- when the user switches between tabs, and to data.state when the target
--- IS displayed (the displayed-singleton view-state mirror).
+-- when the user switches between tabs. Notify view listeners when the
+-- target IS the displayed sequence (per-tab cache is the authoritative
+-- store post-H1 — no singleton mirror to write).
 Signals.connect("playhead_changed", function(sequence_id, frame)
     if type(frame) ~= "number" then return end
     for_each_tab(function(tab)
@@ -849,7 +851,6 @@ Signals.connect("playhead_changed", function(sequence_id, frame)
         end
     end)
     if strip_holder.displayed_sequence_id() == sequence_id then
-        data.state.playhead_position = frame
         data.notify_listeners()
     end
 end)

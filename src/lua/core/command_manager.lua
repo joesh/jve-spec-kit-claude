@@ -737,6 +737,31 @@ local function command_flag(command, property, param_key)
     return false
 end
 
+--- Capture playhead value + rate from the displayed timeline tab.
+-- Returns (value, rate). Both nil iff no tab is displayed at capture time;
+-- both non-nil iff a tab is displayed. The bidirectional invariant
+-- (value-nil ⇔ rate-nil ⇔ no-displayed-tab) is asserted at this site so
+-- a bug that lets one diverge from the others (silent fabrication, missing
+-- cache field, race during tab transitions) crashes at the capture point
+-- with explicit context — not later at Command.save when the original
+-- displayed-tab state has been lost. H1 follow-up to the audit's HIGH finding.
+local function capture_displayed_playhead(label)
+    local ts = require('ui.timeline.timeline_state')
+    local strip_holder = require('ui.timeline.state.strip_holder')
+    local had_tab = strip_holder.displayed_cache() ~= nil
+    local ph_value = ts.get_playhead_position()
+    local ph_rate = ts.get_sequence_frame_rate()
+    assert((ph_value ~= nil) == had_tab, string.format(
+        "%s: playhead_value/displayed-tab invariant violated " ..
+        "(had_displayed_tab=%s, playhead_value=%s)",
+        label, tostring(had_tab), tostring(ph_value)))
+    assert((ph_rate ~= nil) == had_tab, string.format(
+        "%s: playhead_rate/displayed-tab invariant violated " ..
+        "(had_displayed_tab=%s, playhead_rate=%s)",
+        label, tostring(had_tab), tostring(ph_rate)))
+    return ph_value, ph_rate
+end
+
 extract_sequence_id = function(command)
     if not command then return nil end
     if command.get_parameter then
@@ -1681,11 +1706,16 @@ function M._execute_body(command_or_name, params)
     if spec and spec.undoable == false then
         -- Capture root playhead/selection for nested recording commands to inherit.
         if root_playhead_value == nil then
-            timeline_state = require('ui.timeline.timeline_state')
-            root_playhead_value = timeline_state.get_playhead_position()
-            assert(root_playhead_value ~= nil,
-                "command_manager: get_playhead_position() returned nil — timeline_state not initialized")
-            root_playhead_rate = timeline_state.get_sequence_frame_rate()
+            -- Both values are nil iff no displayed tab is open at capture
+            -- (project-level commands; init_project_only test fixtures;
+            -- early-startup before a sequence opens). The helper asserts
+            -- the bidirectional invariant against the actual displayed-cache
+            -- state — divergence (one nil and not the other, value present
+            -- but no tab, etc.) is a bug surfaced here, not silently
+            -- propagated to Command.save. Nested commands inherit whatever
+            -- the root captured.
+            root_playhead_value, root_playhead_rate =
+                capture_displayed_playhead("execute (root undoable=false capture)")
             if not command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot") then
                 capture_pre_selection_for_command(command)
                 root_selected_clips_pre = command.selected_clip_ids_pre
@@ -1837,10 +1867,11 @@ function M._execute_body(command_or_name, params)
 
     state_mgr.update_command_hashes(command, pre_hash)
 
-    -- Capture playhead/selection
-    timeline_state = require('ui.timeline.timeline_state')
-    command.playhead_value = timeline_state.get_playhead_position()
-    command.playhead_rate = timeline_state.get_sequence_frame_rate()
+    -- Capture playhead/selection. Both fields are nil iff no displayed tab
+    -- exists at this point; the helper asserts the bidirectional invariant
+    -- against the actual displayed-cache state.
+    command.playhead_value, command.playhead_rate =
+        capture_displayed_playhead("execute (top-level pre)")
 
     -- Store for nested commands to inherit (they share the same user action context)
     root_playhead_value = command.playhead_value
@@ -1897,9 +1928,10 @@ function M._execute_body(command_or_name, params)
             capture_post_selection_for_command(command)
         end
 
-        -- Capture post-execution playhead position (restored on redo)
-        command.playhead_value_post = timeline_state.get_playhead_position()
-        command.playhead_rate_post = timeline_state.get_sequence_frame_rate()
+        -- Capture post-execution playhead position (restored on redo).
+        -- Same invariant as pre-capture: nil iff no displayed tab.
+        command.playhead_value_post, command.playhead_rate_post =
+            capture_displayed_playhead("execute (top-level post)")
 
         suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
         if suppress_noop_after and not needs_state_hash then
@@ -2052,6 +2084,7 @@ function M._execute_body(command_or_name, params)
             if not skip_timeline_reload then
                  local reload_sequence_id = extract_sequence_id(command)
                  local applied_mutations = false
+                 timeline_state = require('ui.timeline.timeline_state')
                  local timeline_active_seq = timeline_state.get_tab_strip():active_sequence_id()
                  if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
                      -- Tests/headless command execution may run without timeline UI bootstrap; initialize on demand.
@@ -3037,9 +3070,8 @@ end
 -- playhead_value_post on the last child for ceremony.
 local function stamp_group_playhead_post(last_cmd)
     if not last_cmd or last_cmd.playhead_value_post ~= nil then return end
-    local ts = require('ui.timeline.timeline_state')
-    last_cmd.playhead_value_post = ts.get_playhead_position()
-    last_cmd.playhead_rate_post = ts.get_sequence_frame_rate()
+    last_cmd.playhead_value_post, last_cmd.playhead_rate_post =
+        capture_displayed_playhead("end_undo_group: stamp_group_playhead_post")
     assert(last_cmd:save(db),
         string.format("end_undo_group: failed to save playhead_value_post on seq %s",
             tostring(last_cmd.sequence_number)))

@@ -44,6 +44,7 @@ local function make_state(clips_by_track)
             edge_selected_limit = "#f00",
             clip = "#333",
             clip_selected = "#ff0",
+            clip_boundary = "#000",
         },
         get_viewport_start_time = function() return 0 end,
         get_viewport_duration = function() return 200 end,

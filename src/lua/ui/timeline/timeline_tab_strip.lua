@@ -237,20 +237,23 @@ function TimelineTabStrip:clip_by_id(clip_id)
 end
 
 --- Per-track clip list (sorted) for the displayed tab. Returns a COPY so
---- callers may iterate/sort safely. Empty list when no tab displayed or
---- track has no clips.
+--- callers may iterate/sort safely. Empty list when no tab displayed; the
+--- underlying TimelineTab:get_track_clip_index returns `{}` for known-empty
+--- tracks and asserts for unknown track_id (M3 contract).
 function TimelineTabStrip:clips_for_track(track_id)
     local displayed = self.displayed_tab
     if not displayed then return {} end
-    local list = displayed:get_track_clip_index(track_id)
-    if not list then return {} end
     local copy = {}
-    for _, c in ipairs(list) do table.insert(copy, c) end
+    for _, c in ipairs(displayed:get_track_clip_index(track_id)) do
+        table.insert(copy, c)
+    end
     return copy
 end
 
 --- Raw per-track clip index (sorted clip list, table reference — do NOT mutate).
---- Returns nil when no tab displayed or track is unknown.
+--- Returns nil when no tab is displayed; otherwise delegates to
+--- TimelineTab:get_track_clip_index (which returns `{}` for known-empty
+--- tracks and asserts for unknown track_id).
 function TimelineTabStrip:track_clip_index(track_id)
     local displayed = self.displayed_tab
     if not displayed then return nil end

@@ -737,7 +737,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             end
 
         elseif state.is_dragging_playhead() then
-            -- SetPlayhead → playhead_changed → data.state cache update
+            -- SetPlayhead → playhead_changed → tab.cache update
             -- (MVC; see timeline_ruler.lua press branch). No direct
             -- cache write here — that path would race the command's
             -- value transforms.

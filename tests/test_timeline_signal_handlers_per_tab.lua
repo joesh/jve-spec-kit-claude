@@ -63,11 +63,12 @@ print("✓ playhead_changed updates the matching tab's cache only")
 
 Signals.emit("playhead_changed", "seqA", 1234)
 assert(tabA.cache.playhead_position == 1234, "seqA tab cache updated")
--- Displayed (seqA) → also data.state mirrored.
-local data = require("ui.timeline.state.timeline_state_data")
-assert(data.state.playhead_position == 1234,
-    "displayed seqA also mirrored to data.state")
-print("✓ displayed-target playhead also mirrors to data.state")
+-- H1 (#28): displayed-target playhead is read straight from the tab's
+-- cache (no data.state mirror). The handler still triggers notify_listeners
+-- for the displayed case — the assertion below is the visible behavior.
+assert(timeline_state.get_playhead_position() == 1234,
+    "displayed seqA playhead readable via timeline_state getter")
+print("✓ displayed-target playhead readable via getter (tab cache)")
 
 -- ── track_preference_changed walks all tabs ───────────────────────────────
 -- tA on seqA tab and tB on seqB tab. Toggle tB's muted; only seqB tab

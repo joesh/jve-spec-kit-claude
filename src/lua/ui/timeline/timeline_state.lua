@@ -13,9 +13,10 @@
 --   per-tab cache, then scoped gap recompute on touched tracks, then
 --   emit timeline_mutations_applied
 -- - View-state pointer accessors (sequence_frame_rate getters, viewport,
---   marks, scroll offsets) that today still go through data.state — H1
---   audit calls out that these should live per-tab on tab.cache; pending
---   the H1 migration the singleton mirror remains the read path
+--   scroll offsets, playhead) that since H1 (2026-05-27) route through
+--   strip_holder.displayed_cache() onto the per-tab cache. Marks remain
+--   on the active sequence row (loaded into data.sequence by core_state)
+--   because they persist per-sequence in DB, not per-view.
 -- - Tab lifecycle wrappers (switch_to_record_tab / switch_to_source_tab /
 --   close_displayed_tab) that need to coordinate with persistence
 -- - Selection facade (delegates to selection_state)
@@ -52,6 +53,7 @@ local Signals = require("core.signals")
 -- so each project gets a fresh strip (Phase 2a; consumer migration in 2b).
 local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
 local strip_holder     = require("ui.timeline.state.strip_holder")
+local log = require("core.logger").for_area("ui")
 local tab_strip = TimelineTabStrip.new()
 strip_holder.set(tab_strip)
 
@@ -91,7 +93,9 @@ M.colors = {
 -- Strip-authoritative (015 #6): init opens a record/source tab for the
 -- sequence and sets it active+displayed BEFORE delegating to core, so the
 -- strip is the source of truth from the first frame. core.init still
--- loads tracks/clips/view-state into data.state.
+-- loads tracks/clips and view-state into the displayed tab's per-tab
+-- cache (H1, 2026-05-27); only the active-edit pointer + selection
+-- + marks land on data.state / data.sequence.
 function M.init(sequence_id, project_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "timeline_state.init: sequence_id required")
@@ -115,9 +119,9 @@ function M.init(sequence_id, project_id)
     if rec_tab then
         -- Existing tab may be stale: same sequence_id can map to a different
         -- DB row after a project re-open (tests share a process across
-        -- multiple DBs without firing project_changed). Refresh the cache
-        -- here for the same reason core.init reloads data.state — the
-        -- model on disk just changed.
+        -- multiple DBs without firing project_changed). Refresh the per-tab
+        -- cache here for the same reason core.init reloads — the model on
+        -- disk just changed.
         rec_tab:load_from_database()
     else
         rec_tab = tab_strip:open_record_tab(sequence_id)
@@ -158,7 +162,8 @@ M.reload_clips = core.reload_clips
 -- source of truth for "which sequence is the timeline view rendering".
 -- Master id → SourceTab (singleton, opened on demand). Non-master → record
 -- tab (opened on demand, idempotent). Once the strip is synced we delegate
--- to `core.activate_displayed` to load tracks/clips/marks into data.state.
+-- to `core.activate_displayed` to load tracks/clips into the per-tab cache
+-- (H1) and marks into data.sequence (per-sequence, DB-persisted).
 --
 -- Flush ordering (data-corruption bait, fixed 2026-05-17): persist
 -- resolves the target DB row via strip_holder, so any pending
@@ -724,24 +729,58 @@ function M.persist_displayed_tab_kind()
     local database = require("core.database")
     database.set_project_setting(project_id, "displayed_tab_kind", displayed.kind)
 end
-M.get_sequence_frame_rate = function() return data.state.sequence_frame_rate end
-M.get_start_timecode_frame = function() return data.state.sequence_timecode_start_frame or 0 end
-M.get_video_scroll_offset = function() return data.state.video_scroll_offset or 0 end
-M.get_audio_scroll_offset = function() return data.state.audio_scroll_offset or 0 end
--- Scroll setters: update in-memory only. DB persistence happens at save points
--- (sequence switch-away, project close) via persist_scroll_offsets().
+-- Per-sequence view-state getters/setters route through the displayed
+-- tab's cache (audit H1). Singleton mirror (data.state.*) is gone — every
+-- per-sequence field lives on tab.cache and is loaded by tab:load_from_database.
+-- Returns nil when no tab is displayed; callers that do arithmetic must
+-- assert. Setters no-op when no displayed cache (matches "blank panel"
+-- semantics — a stray Qt scroll event during transition has no target).
+M.get_sequence_frame_rate = function()
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.sequence_frame_rate or nil
+end
+M.get_start_timecode_frame = function()
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.sequence_timecode_start_frame or nil
+end
+M.get_video_scroll_offset = function()
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.video_scroll_offset or nil
+end
+M.get_audio_scroll_offset = function()
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.audio_scroll_offset or nil
+end
+-- Scroll setters: update displayed-tab cache only. DB persistence happens at
+-- save points (sequence switch-away, project close) via persist_scroll_offsets().
 -- Reason: Qt fires async scroll events (0) during widget rebuild/layout that
 -- would clobber the incoming sequence's saved offsets if persisted eagerly.
+-- Silent no-op when no displayed cache: legitimate transient state during
+-- tab close / project switch. Logged at `event` level (off by default) so the
+-- drop is observable in JVE_LOG=ui:event without spamming production (L3 audit).
 M.set_video_scroll_offset = function(offset)
-    data.state.video_scroll_offset = math.floor(offset)
+    local cache = strip_holder.displayed_cache()
+    if not cache then
+        log.event("set_video_scroll_offset: no displayed cache; dropping offset=%s", tostring(offset))
+        return
+    end
+    cache.video_scroll_offset = math.floor(offset)
 end
 M.set_audio_scroll_offset = function(offset)
-    data.state.audio_scroll_offset = math.floor(offset)
+    local cache = strip_holder.displayed_cache()
+    if not cache then
+        log.event("set_audio_scroll_offset: no displayed cache; dropping offset=%s", tostring(offset))
+        return
+    end
+    cache.audio_scroll_offset = math.floor(offset)
 end
 
 --- Persist current scroll offsets to DB. Call at save points only.
--- Reads the ACTUAL Qt scroll bar values (not in-memory state, which can be
--- clobbered by async events). Falls back to in-memory if widgets unavailable.
+-- Reads the displayed tab's cache (the source of truth for view-state since
+-- H1) and then prefers the live Qt scroll-bar value when widgets are
+-- available — async scroll events can lag the cache during widget rebuild,
+-- so the widget read is the more recent value at save time. The cache value
+-- stands when widgets aren't yet attached.
 M.persist_scroll_offsets = function()
     -- Scroll offsets are view-state and belong to the DISPLAYED sequence
     -- (FR-005, FR-007), not the active edit target. With option A
@@ -749,11 +788,15 @@ M.persist_scroll_offsets = function()
     -- this writes to whatever sequence the strip's displayed tab points
     -- at — including masters when the SourceTab is shown.
     local displayed = tab_strip:get_displayed()
-    local seq_id = displayed and displayed.sequence_id or nil
-    if not seq_id then return end
+    if not displayed then return end
+    local seq_id = displayed.sequence_id
+    local cache = displayed.cache
+    -- Cache fields are populated by tab:load_from_database; on a freshly
+    -- opened tab with no load yet they're nil. Skip — nothing to persist.
+    local v_off = cache.video_scroll_offset
+    local a_off = cache.audio_scroll_offset
+    if v_off == nil or a_off == nil then return end
     -- Read from Qt widgets (ground truth) if available
-    local v_off = data.state.video_scroll_offset or 0
-    local a_off = data.state.audio_scroll_offset or 0
     local ok, panel = pcall(require, "ui.timeline.timeline_panel")
     if ok and panel then
         local qt = require("core.qt_constants")
@@ -767,18 +810,27 @@ M.persist_scroll_offsets = function()
     local Sequence = require("models.sequence")
     Sequence.update_scroll_offsets(seq_id, v_off, a_off)
 end
-M.get_video_audio_split_ratio = function() return data.state.video_audio_split_ratio or 0.5 end
+M.get_video_audio_split_ratio = function()
+    local cache = strip_holder.displayed_cache()
+    return cache and cache.video_audio_split_ratio or nil
+end
 M.set_video_audio_split_ratio = function(ratio)
-    data.state.video_audio_split_ratio = math.max(0.05, math.min(0.95, ratio))
+    local cache = strip_holder.displayed_cache()
+    if not cache then return end
+    cache.video_audio_split_ratio = math.max(0.05, math.min(0.95, ratio))
     core.persist_state_to_db()
 end
 M.get_sequence_fps_numerator = function()
-    assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_numerator: sequence_frame_rate not initialized")
-    return data.state.sequence_frame_rate.fps_numerator
+    local cache = strip_holder.displayed_cache()
+    assert(cache and cache.sequence_frame_rate,
+        "timeline_state.get_sequence_fps_numerator: no displayed tab or sequence_frame_rate not initialized")
+    return cache.sequence_frame_rate.fps_numerator
 end
 M.get_sequence_fps_denominator = function()
-    assert(data.state.sequence_frame_rate, "timeline_state.get_sequence_fps_denominator: sequence_frame_rate not initialized")
-    return data.state.sequence_frame_rate.fps_denominator
+    local cache = strip_holder.displayed_cache()
+    assert(cache and cache.sequence_frame_rate,
+        "timeline_state.get_sequence_fps_denominator: no displayed tab or sequence_frame_rate not initialized")
+    return cache.sequence_frame_rate.fps_denominator
 end
 
 -- Marks: read from sequence model (set via undoable mark commands)

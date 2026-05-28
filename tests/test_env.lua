@@ -441,19 +441,44 @@ function M.make_strip_stub(spec)
 end
 
 --- Install a strip with a single fake displayed tab. The returned cache
---- table mirrors the per-tab cache shape (clips, tracks, indexes,
---- content_length) — tests mutate it directly. Pre-requires
---- `ui.timeline.timeline_state` so its module-load `strip_holder.set(...)`
---- can't later clobber this stub. Optional `opts.content_length` seeds
---- `cache.content_length` for viewport-policy tests that don't populate
---- clips.
+--- table mirrors the per-tab cache shape — tests mutate it directly.
+--- Pre-requires `ui.timeline.timeline_state` so its module-load
+--- `strip_holder.set(...)` can't later clobber this stub.
+---
+--- The cache is seeded with safe test defaults for per-sequence
+--- view-state (sequence_frame_rate 30/1, tc_origin 0, viewport (0, 300),
+--- scroll 0/0, split 0.5, playhead 0). H1 (#28) removed these from
+--- data.state's fresh_state — without seeding them here, every test that
+--- touches viewport / playhead through timeline_state would assert on
+--- cache.sequence_timecode_start_frame nil. Test defaults are not a
+--- production fallback — production code that hits an unloaded cache
+--- still gets nil and fails fast (the H1 invariant).
+---
+--- Any opts field that matches a cache field is honored verbatim. Common
+--- seeds: content_length (for viewport-policy tests), sequence_frame_rate,
+--- sequence_timecode_start_frame, viewport_start_time, viewport_duration,
+--- playhead_position, video_scroll_offset, audio_scroll_offset,
+--- video_audio_split_ratio.
 function M.install_displayed_tab_stub(opts)
     require("ui.timeline.timeline_state")
     opts = opts or {}
+    local function pick(key, default)
+        if opts[key] ~= nil then return opts[key] end
+        return default
+    end
     local cache = {
         clips = {},
         tracks = {},
-        content_length = opts.content_length or 0,
+        content_length = pick("content_length", 0),
+        sequence_frame_rate = pick("sequence_frame_rate",
+            { fps_numerator = 30, fps_denominator = 1 }),
+        sequence_timecode_start_frame = pick("sequence_timecode_start_frame", 0),
+        viewport_start_time = pick("viewport_start_time", 0),
+        viewport_duration = pick("viewport_duration", 300),
+        playhead_position = pick("playhead_position", 0),
+        video_scroll_offset = pick("video_scroll_offset", 0),
+        audio_scroll_offset = pick("audio_scroll_offset", 0),
+        video_audio_split_ratio = pick("video_audio_split_ratio", 0.5),
         dirty = true,
     }
     local function rebuild()
@@ -496,7 +521,21 @@ function M.install_displayed_tab_stub(opts)
         end,
         invalidate_indexes = function(_) cache.dirty = true end,
     }
-    local strip = { get_displayed = function() return tab end }
+    -- begin/commit/rollback for command_manager snapshot/rollback paths
+    -- when tests exercise command_manager without a real timeline.
+    tab.begin_mutation_transaction = function() end
+    tab.commit_mutation_transaction = function() end
+    tab.rollback_mutation_transaction = function() return cache.clips end
+    tab.has_active_mutation_snapshot = function() return false end
+    tab.sequence_id = opts.sequence_id or "stub_seq"
+    tab.kind = opts.kind or "record"
+    -- Strip surfaces both displayed (view) and active_record (edit target).
+    -- Default to the same tab — most stub callers don't need a split.
+    local strip = {
+        get_displayed = function() return tab end,
+        get_active_record = function() return tab end,
+        get_source_tab = function() return nil end,
+    }
     require("ui.timeline.state.strip_holder").set(strip)
     return cache
 end

@@ -615,17 +615,38 @@ function M:label()
     return command_labels.label_for_command(self)
 end
 
+-- Resolve a playhead_rate field that may be a bare number, a {numerator,
+-- denominator} table, or nil. Nil propagates as nil — preserves the
+-- "no displayed tab at capture" state through serialization and persistence.
+-- require_positive=true asserts the resolved value is > 0 (and non-nil);
+-- false accepts nil to pass through.
+local function resolve_playhead_rate(rate, require_positive, label, command_type)
+    local val
+    if rate == nil then
+        val = nil
+    elseif type(rate) == "number" then
+        val = rate
+    elseif type(rate) == "table" and rate.fps_numerator then
+        if not rate.fps_denominator or rate.fps_denominator == 0 then
+            error("Command.save: " .. label .. " missing fps_denominator", 2)
+        end
+        val = rate.fps_numerator / rate.fps_denominator
+    else
+        error(string.format("Command.save: %s has unsupported type (got %s, command_type=%s)",
+            label, type(rate), tostring(command_type)), 2)
+    end
+    if require_positive then
+        assert(val ~= nil and val > 0, string.format(
+            "FATAL: Command.save: invalid %s (command_type=%s, %s=%s)",
+            label, tostring(command_type), label, tostring(val)))
+    end
+    return val
+end
+
 -- Serialize command to JSON string
 function M:serialize()
-    local playhead_rate_val = 0
-    if type(self.playhead_rate) == "number" then
-        playhead_rate_val = self.playhead_rate
-    elseif type(self.playhead_rate) == "table" and self.playhead_rate.fps_numerator then
-        if not self.playhead_rate.fps_denominator or self.playhead_rate.fps_denominator == 0 then
-            error("Command:serialize: playhead_rate missing fps_denominator", 2)
-        end
-        playhead_rate_val = self.playhead_rate.fps_numerator / self.playhead_rate.fps_denominator
-    end
+    local playhead_rate_val = resolve_playhead_rate(self.playhead_rate, false,
+        "playhead_rate", self.type)
 
     -- playhead_value must be integer frames
     local db_playhead_value = self.playhead_value
@@ -689,27 +710,6 @@ local function encode_command_params(self)
     return encoded
 end
 
--- Resolve a playhead_rate field that may be a bare number, a {numerator,
--- denominator} table, or nil. require_positive=true asserts the resolved
--- value is > 0 (covers the nil case — falls through to 0 and trips the
--- assert with an actionable message).
-local function resolve_playhead_rate(rate, require_positive, label, command_type)
-    local val = 0
-    if type(rate) == "number" then
-        val = rate
-    elseif type(rate) == "table" and rate.fps_numerator then
-        if not rate.fps_denominator or rate.fps_denominator == 0 then
-            error("Command.save: " .. label .. " missing fps_denominator", 2)
-        end
-        val = rate.fps_numerator / rate.fps_denominator
-    end
-    if require_positive then
-        assert(val > 0, string.format(
-            "FATAL: Command.save: invalid %s (command_type=%s, %s=%s)",
-            label, tostring(command_type), label, tostring(val)))
-    end
-    return val
-end
 
 -- Does a row with this id already exist? The SQL connection's prepare
 -- can fail (returns nil); we propagate the failure as (nil, err).
@@ -764,16 +764,39 @@ function M:save(db)
     if not self.executed_at then
         error("FATAL: Command.save requires executed_at")
     end
-    assert(type(self.playhead_value) == "number", string.format(
-        "FATAL: Command.save: missing playhead_value (command_type=%s, playhead_value=%s)",
-        tostring(self.type), tostring(self.playhead_value)))
+    -- playhead_value / playhead_rate are captured by command_manager at
+    -- execute time. Both nil iff no displayed timeline tab existed at
+    -- capture (project-level / init_project_only / pre-sequence startup);
+    -- both non-nil iff a tab was displayed. The capture-site helper
+    -- (capture_displayed_playhead in command_manager) asserts that
+    -- invariant against the actual displayed-cache state. Here we enforce
+    -- the co-required pair as defense-in-depth: if value and rate diverge
+    -- on nil-ness, something bypassed the capture helper. Same contract
+    -- applies to the _post pair.
+    assert((self.playhead_value == nil) == (self.playhead_rate == nil), string.format(
+        "Command.save: playhead_value/playhead_rate co-required pair " ..
+        "(command_type=%s, value=%s, rate=%s)",
+        tostring(self.type), tostring(self.playhead_value), tostring(self.playhead_rate)))
+    assert((self.playhead_value_post == nil) == (self.playhead_rate_post == nil), string.format(
+        "Command.save: playhead_value_post/playhead_rate_post co-required pair " ..
+        "(command_type=%s, value=%s, rate=%s)",
+        tostring(self.type), tostring(self.playhead_value_post), tostring(self.playhead_rate_post)))
+    if self.playhead_value ~= nil then
+        assert(type(self.playhead_value) == "number", string.format(
+            "Command.save: playhead_value must be a number when non-nil (command_type=%s, got %s)",
+            tostring(self.type), tostring(self.playhead_value)))
+    end
     if self.playhead_value_post ~= nil then
-        assert(type(self.playhead_value_post) == "number",
-            "Command.save: playhead_value_post must be integer")
+        assert(type(self.playhead_value_post) == "number", string.format(
+            "Command.save: playhead_value_post must be a number when non-nil (command_type=%s, got %s)",
+            tostring(self.type), tostring(self.playhead_value_post)))
     end
 
     local encoded_params = encode_command_params(self)
-    local playhead_rate_val      = resolve_playhead_rate(self.playhead_rate, true,
+    -- Co-required with playhead_value (asserted above): rate is required
+    -- positive iff value is captured.
+    local require_positive_rate = self.playhead_value ~= nil
+    local playhead_rate_val      = resolve_playhead_rate(self.playhead_rate, require_positive_rate,
         "playhead_rate", self.type)
     local playhead_rate_post_val = resolve_playhead_rate(self.playhead_rate_post, false,
         "playhead_rate_post", self.type)

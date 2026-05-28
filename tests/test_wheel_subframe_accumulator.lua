@@ -24,6 +24,12 @@
 ---   * A pause longer than SCROLL_GESTURE_GAP_MS resets the accumulator —
 ---     a fresh gesture cannot inherit the prior gesture's fraction.
 require("test_env")
+-- H1 (#28): command_manager captures playhead from the displayed tab's
+-- cache. Tests that exercise command_manager without a real timeline
+-- install a default stub (playhead=0, viewport=(0,300), fps=30/1) so
+-- capture succeeds. Pre-H1 the singleton mirror provided these defaults
+-- implicitly; post-H1 every test states its intent explicitly.
+require('test_env').install_displayed_tab_stub()
 
 local input = require("ui.timeline.view.timeline_view_input")
 local ui_constants = require("core.ui_constants")

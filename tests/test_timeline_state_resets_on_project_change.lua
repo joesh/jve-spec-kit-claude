@@ -57,18 +57,21 @@ assert(displayed_a and #displayed_a.cache.tracks > 0,
 
 -- Simulate in-flight user state that ought to be gone after a project change.
 -- Inject directly into the displayed tab cache so the post-clear assertions
--- prove the strip reset cleanly (no stale content).
+-- prove the strip reset cleanly (no stale content). Per-sequence
+-- view-state (playhead, viewport, scroll, frame_rate, tc origin) lives on
+-- the cache post-H1 — not on data.state. Set values that aren't the
+-- "natural defaults" so a half-reset leaves a fingerprint.
 table.insert(displayed_a.cache.clips,
     { id = "c1", track_id = "tr-A", sequence_start = 0, duration = 100, clip_kind = "media" })
 table.insert(displayed_a.cache.clips,
     { id = "c2", track_id = "tr-A", sequence_start = 200, duration = 50, clip_kind = "media" })
 data.state.selected_clips = { displayed_a.cache.clips[1] }
 data.state.selected_edges = { { clip_id = "c1", edge_type = "out" } }
-data.state.playhead_position = 12345
-data.state.viewport_start_time = 500
-data.state.viewport_duration = 999
-data.state.video_scroll_offset = 77
-data.state.audio_scroll_offset = 88
+displayed_a.cache.playhead_position = 12345
+displayed_a.cache.viewport_start_time = 500
+displayed_a.cache.viewport_duration = 999
+displayed_a.cache.video_scroll_offset = 77
+displayed_a.cache.audio_scroll_offset = 88
 
 -- A view subscribes; it must be notified when the project changes so it
 -- re-pulls the (now empty) model and repaints.
@@ -99,36 +102,33 @@ assert(#data.state.selected_clips == 0,
     "after project_changed, selected_clips must be empty; got " .. #data.state.selected_clips)
 assert(#data.state.selected_edges == 0,
     "after project_changed, selected_edges must be empty; got " .. #data.state.selected_edges)
-assert(data.state.playhead_position == 0,
-    "after project_changed, playhead_position must reset to 0; got "
-    .. tostring(data.state.playhead_position))
 assert(data.sequence == nil,
     "after project_changed, cached sequence model must be cleared")
 
--- Viewport, scroll, and rate must reset to the fresh-state defaults so the
--- new project's view starts at (0, 300 frames) with 0 scroll. Before the
--- fix these lingered, so the new project inherited the old viewport.
-assert(data.state.viewport_start_time == 0,
-    "viewport_start_time should reset to 0; got "
-    .. tostring(data.state.viewport_start_time))
-assert(data.state.viewport_duration == 300,
-    "viewport_duration should reset to 300 (fresh-state default); got "
-    .. tostring(data.state.viewport_duration))
-assert(data.state.video_scroll_offset == 0,
-    "video_scroll_offset should reset to 0; got "
-    .. tostring(data.state.video_scroll_offset))
-assert(data.state.audio_scroll_offset == 0,
-    "audio_scroll_offset should reset to 0; got "
-    .. tostring(data.state.audio_scroll_offset))
--- sequence_frame_rate reverts to fresh-state default (30/1); a project
--- with a 24fps sequence must not leak that rate into a project that
--- opens without a sequence loaded.
-assert(data.state.sequence_frame_rate.fps_numerator == 30
-    and data.state.sequence_frame_rate.fps_denominator == 1,
-    "sequence_frame_rate should revert to fresh-state default 30/1; got "
-    .. string.format("%s/%s",
-        tostring(data.state.sequence_frame_rate.fps_numerator),
-        tostring(data.state.sequence_frame_rate.fps_denominator)))
+-- Per-sequence view-state lives on the displayed tab's cache (H1). After
+-- project_changed, the strip is reset to a fresh empty instance — no
+-- displayed tab → getters return nil → views render blank. This is the
+-- post-H1 invariant: the model can't leak per-sequence state across
+-- projects because there is no per-sequence state outside a tab cache,
+-- and the new project's strip starts with zero tabs.
+assert(timeline_state.get_playhead_position() == nil,
+    "after project_changed, playhead getter must return nil (no displayed tab); got "
+    .. tostring(timeline_state.get_playhead_position()))
+assert(timeline_state.get_viewport_start_time() == nil,
+    "viewport_start_time getter must return nil; got "
+    .. tostring(timeline_state.get_viewport_start_time()))
+assert(timeline_state.get_viewport_duration() == nil,
+    "viewport_duration getter must return nil; got "
+    .. tostring(timeline_state.get_viewport_duration()))
+assert(timeline_state.get_video_scroll_offset() == nil,
+    "video_scroll_offset getter must return nil; got "
+    .. tostring(timeline_state.get_video_scroll_offset()))
+assert(timeline_state.get_audio_scroll_offset() == nil,
+    "audio_scroll_offset getter must return nil; got "
+    .. tostring(timeline_state.get_audio_scroll_offset()))
+assert(timeline_state.get_sequence_frame_rate() == nil,
+    "sequence_frame_rate getter must return nil; got "
+    .. tostring(timeline_state.get_sequence_frame_rate()))
 print("  OK: per-sequence and identity state cleared")
 
 assert(listener_calls > calls_before,

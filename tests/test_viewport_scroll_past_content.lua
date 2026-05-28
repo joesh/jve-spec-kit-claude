@@ -14,7 +14,6 @@
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
 local test_env = require("test_env")
-local data = require("ui.timeline.state.timeline_state_data")
 local viewport_state = require("ui.timeline.state.viewport_state")
 
 local function content_end_from_clips(clips)
@@ -26,14 +25,16 @@ local function content_end_from_clips(clips)
     return max_end
 end
 
+-- Per-sequence view-state lives on the displayed tab's cache (H1).
+-- Seed it through the stub instead of poking data.state directly.
 local function reset(opts)
-    data.state.sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 }
-    data.state.viewport_start_time = opts.start
-    data.state.viewport_duration = opts.duration
-    data.state.playhead_position = 0
-    data.state.sequence_timecode_start_frame = 0
-    test_env.install_displayed_tab_stub({
+    return test_env.install_displayed_tab_stub({
         content_length = content_end_from_clips(opts.clips),
+        sequence_frame_rate = { fps_numerator = 24, fps_denominator = 1 },
+        viewport_start_time = opts.start,
+        viewport_duration = opts.duration,
+        playhead_position = 0,
+        sequence_timecode_start_frame = opts.tc_floor or 0,
     })
 end
 
@@ -41,7 +42,7 @@ end
 -- Setup: short content (100-frame clip), viewport wider than content, parked
 -- at a position where viewport_end already sits past content_end.
 -- =============================================================================
-reset({
+local cache = reset({
     start = 500,
     duration = 300,
     clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
@@ -51,9 +52,9 @@ reset({
 -- Test: large desired-forward delta applies in full (not throttled to buffer)
 -- =============================================================================
 viewport_state.set_viewport_start_time(5000)
-assert(data.state.viewport_start_time == 5000, string.format(
+assert(cache.viewport_start_time == 5000, string.format(
     "expected viewport_start=5000 after requesting 5000, got %d (clamped to buffer?)",
-    data.state.viewport_start_time))
+    cache.viewport_start_time))
 print("  PASS: rightward scroll past content applies full delta")
 
 -- =============================================================================
@@ -61,39 +62,39 @@ print("  PASS: rightward scroll past content applies full delta")
 -- applies in full, bounded only by the timeline floor.
 -- =============================================================================
 viewport_state.set_viewport_start_time(500)
-assert(data.state.viewport_start_time == 500, string.format(
+assert(cache.viewport_start_time == 500, string.format(
     "expected viewport_start=500 after leftward move, got %d",
-    data.state.viewport_start_time))
+    cache.viewport_start_time))
 print("  PASS: leftward scroll applies full delta")
 
 -- =============================================================================
 -- Test: floor still enforced — cannot scroll below sequence_timecode_start_frame.
 -- =============================================================================
-reset({
+cache = reset({
     start = 500,
     duration = 300,
     clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
+    tc_floor = 0,
 })
-data.state.sequence_timecode_start_frame = 0
 viewport_state.set_viewport_start_time(-1000)
-assert(data.state.viewport_start_time == 0, string.format(
+assert(cache.viewport_start_time == 0, string.format(
     "expected viewport_start=0 (clamped to floor), got %d",
-    data.state.viewport_start_time))
+    cache.viewport_start_time))
 print("  PASS: floor clamp still enforced")
 
 -- =============================================================================
 -- Test: non-zero timecode floor enforced.
 -- =============================================================================
-reset({
+cache = reset({
     start = 1000,
     duration = 300,
     clips = { { id = "c1", track_id = "t1", sequence_start = 500, duration = 100 } },
+    tc_floor = 500,
 })
-data.state.sequence_timecode_start_frame = 500
 viewport_state.set_viewport_start_time(100)
-assert(data.state.viewport_start_time == 500, string.format(
+assert(cache.viewport_start_time == 500, string.format(
     "expected viewport_start=500 (sequence tc floor), got %d",
-    data.state.viewport_start_time))
+    cache.viewport_start_time))
 print("  PASS: non-zero tc floor enforced")
 
 -- =============================================================================
@@ -104,15 +105,15 @@ print("  PASS: non-zero tc floor enforced")
 -- viewport_start — making "go to frame 0" behave like "stay where you are"
 -- under some layouts.
 -- =============================================================================
-reset({
+cache = reset({
     start = 10000,
     duration = 300,
     clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
 })
 viewport_state.set_viewport_start_time(0)
-assert(data.state.viewport_start_time == 0, string.format(
+assert(cache.viewport_start_time == 0, string.format(
     "expected viewport_start=0 when requesting 0, got %d",
-    data.state.viewport_start_time))
+    cache.viewport_start_time))
 print("  PASS: scroll to frame 0 applies (no Lua-truthiness trap)")
 
 -- =============================================================================
@@ -121,7 +122,7 @@ print("  PASS: scroll to frame 0 applies (no Lua-truthiness trap)")
 -- thumb denominator, so 0, negative, or a value smaller than the viewport
 -- would break thumb geometry.
 -- =============================================================================
-reset({
+cache = reset({
     start = 500,
     duration = 300,
     clips = { { id = "c1", track_id = "t1", sequence_start = 0, duration = 100 } },
@@ -129,9 +130,9 @@ reset({
 local extent = viewport_state.get_timeline_extent()
 assert(type(extent) == "number" and extent > 0,
     string.format("get_timeline_extent must return positive number, got %s", tostring(extent)))
-assert(extent >= data.state.viewport_start_time + data.state.viewport_duration,
+assert(extent >= cache.viewport_start_time + cache.viewport_duration,
     string.format("get_timeline_extent (%d) must enclose current viewport end (%d)",
-        extent, data.state.viewport_start_time + data.state.viewport_duration))
+        extent, cache.viewport_start_time + cache.viewport_duration))
 print("  PASS: get_timeline_extent returns sensible total")
 
 -- =============================================================================
