@@ -9,32 +9,22 @@ local qt = require("core.qt_constants")
 local query_engine = require("core.query_engine")
 local find_state = require("core.find_state")
 local command_manager = require("core.command_manager")
-local json = require("dkjson")
+local dialog_prefs = require("core.dialog_prefs")
 
 local M = {}
 
-local SETTINGS_PATH = (os.getenv("HOME") or "") .. "/.jve/find_replace_dialog_settings.json"
+local SETTINGS_PATH = dialog_prefs.path_for("find_replace_dialog_settings.json")
 
 -- ============================================================================
 -- Settings persistence
 -- ============================================================================
 
 local function load_settings()
-    local f = io.open(SETTINGS_PATH, "r")
-    if not f then return {} end
-    local raw = f:read("*a")
-    f:close()
-    return json.decode(raw) or {}
+    return dialog_prefs.load(SETTINGS_PATH)
 end
 
 local function save_settings(settings)
-    local dir = (os.getenv("HOME") or "") .. "/.jve"
-    os.execute("mkdir -p " .. dir)
-    local f = io.open(SETTINGS_PATH, "w")
-    if f then
-        f:write(json.encode(settings))
-        f:close()
-    end
+    dialog_prefs.save(SETTINGS_PATH, settings)
 end
 
 -- ============================================================================
