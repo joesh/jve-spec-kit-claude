@@ -25,16 +25,26 @@
 set -u
 
 VIOLATIONS=0
+TELEMETRY="${JVE_LINT_TELEMETRY:-$HOME/.cache/jve-lint.jsonl}"
 
 emit() {
     local file=$1 line=$2 rule=$3 msg=$4
     local raw
     raw=$(awk -v n="$line" 'NR==n' "$file" 2>/dev/null)
     if echo "$raw" | grep -qE "(--|//)\s*lint-allow:\s*$rule\b"; then
+        # Exemption used; count to telemetry so we can spot bad rules.
+        if mkdir -p "$(dirname "$TELEMETRY")" 2>/dev/null; then
+            printf '{"ts":"%s","file":"%s","line":%d,"rule":"%s","exempted":true}\n' \
+                "$(date -u +%FT%TZ)" "$file" "$line" "$rule" >> "$TELEMETRY" 2>/dev/null || true
+        fi
         return
     fi
     echo "$file:$line:$rule: $msg"
     VIOLATIONS=$((VIOLATIONS + 1))
+    if mkdir -p "$(dirname "$TELEMETRY")" 2>/dev/null; then
+        printf '{"ts":"%s","file":"%s","line":%d,"rule":"%s","exempted":false}\n' \
+            "$(date -u +%FT%TZ)" "$file" "$line" "$rule" >> "$TELEMETRY" 2>/dev/null || true
+    fi
 }
 
 skip_file() {
@@ -77,6 +87,39 @@ lint_lua() {
         emit "$f" "$ln" R004 \
             "silent type-check return hides contract violations; assert instead, or annotate with lint-allow + reason"
     done < <(grep -nE 'if\s+type\([^)]+\)\s*~=\s*"[a-z]+"\s*then\s+return\s+end' "$f" 2>/dev/null)
+
+    # R009: module-level (column-0) Signals.connect needs an explicit
+    # "intentional process-lifetime" comment block above it, OR
+    # `lint-allow: R009 reason` on the connect line. Without that, the
+    # next audit agent will re-flag it as a leak (pass 15c FP shape).
+    # Skip if the file has a top-of-file `MODULE-LEVEL SIGNAL CONNECTS`
+    # banner — that immunizes the whole file.
+    if ! grep -qE 'MODULE-LEVEL SIGNAL CONNECTS|NOT A LEAK' "$f" 2>/dev/null; then
+        while IFS=: read -r ln _; do
+            [ -z "$ln" ] && continue
+            # Scan ~10 lines above for an immunization marker. If found, skip.
+            local start=$((ln - 10))
+            [ "$start" -lt 1 ] && start=1
+            local above
+            above=$(sed -n "${start},$((ln - 1))p" "$f" 2>/dev/null)
+            if echo "$above" | grep -qE 'MODULE-LEVEL|NOT A LEAK|intentional process-lifetime|lint-allow: R009'; then
+                continue
+            fi
+            emit "$f" "$ln" R009 \
+                "module-level Signals.connect without an immunization comment — future audits will mis-flag as leak; add MODULE-LEVEL block or lint-allow: R009 reason"
+        done < <(grep -nE '^Signals\.connect\(' "$f" 2>/dev/null)
+    fi
+
+    # R010: `or 0` / `or ""` directly on schema accessor chains
+    # (clip.X, track.X, sequence.X, media.X). These columns are mostly
+    # NOT NULL; the fallback masks a contract violation. False-positive
+    # rate handled by per-line lint-allow with reason.
+    while IFS=: read -r ln _; do
+        [ -z "$ln" ] && continue
+        emit "$f" "$ln" R010 \
+            "or 0/or \"\" on schema accessor (clip/track/sequence/media.X) — most columns are NOT NULL; assert or annotate lint-allow: R010 reason"
+    done < <(grep -nE '\b(clip|track|sequence|media)\.[a-z_]+\s+or\s+(0|""|\{\})' "$f" 2>/dev/null \
+        | grep -vE ':\s*--')
 }
 
 lint_cpp() {

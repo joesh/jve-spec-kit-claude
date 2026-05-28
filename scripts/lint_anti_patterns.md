@@ -20,6 +20,8 @@ QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));  // lint-allow: R005 in
 | **R006** | C++ | `delete <name>;` where name is a Qt-flavored widget local (`shortcut`, `action`, `widget`, `menu`, `button`, ...) | Raw `delete` can yank a QObject mid-signal-dispatch. Prefer `->deleteLater()`. | Pass 15a |
 | **R007** | C++ | File contains `luaL_ref` but no `luaL_unref` | Lifetime leak unless ref is owned/freed in another translation unit. Annotate per-line if the ref is intentionally process-lifetime, or fix the owner. | Pass 14, Pass 15a |
 | **R008** | C++ | Comment containing the R002 markers | Same Claude-tell pattern; C++ variant. | Pass 10, Pass 14 |
+| **R009** | Lua | Column-0 `Signals.connect(...)` without an immunization comment above (`MODULE-LEVEL`, `NOT A LEAK`, `intentional process-lifetime`) | Pass 15c spent agent cycles re-flagging module-level connects as leaks. The fix is a comment block that immunizes — this rule enforces that the block exists so the FP doesn't recur. | Pass 15 |
+| **R010** | Lua | `clip.X or 0`, `track.X or ""`, `sequence.X or {}`, `media.X or 0` | Most clip/track/sequence/media columns are schema NOT NULL; the fallback silently masks contract violations (passes 6, 13, 15d). Annotate per-line if the field is genuinely nullable. | Pass 15 |
 
 ## How rules are wired
 
