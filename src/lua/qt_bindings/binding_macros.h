@@ -74,12 +74,14 @@ public:
         return 1; \
     }
 
-// Macro for string setters
+// Macro for string setters. luaL_checkstring fails loudly if arg 2 is missing
+// or non-string — silent no-op (the prior shape) hid caller bugs as "the UI
+// just didn't update" (Engineering 2.13 / 2.32 / 1.14, pass 18c).
 #define LUA_BIND_SETTER_STRING(FunctionName, WidgetType, SetterMethod) \
     int FunctionName(lua_State* L) { \
         WidgetType* w = get_widget<WidgetType>(L, 1); \
-        const char* val = lua_tostring(L, 2); \
-        if (w && val) { \
+        const char* val = luaL_checkstring(L, 2); \
+        if (w) { \
             w->SetterMethod(QString::fromUtf8(val)); \
         } \
         return 0; \

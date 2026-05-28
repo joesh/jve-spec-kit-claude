@@ -59,8 +59,8 @@ LUA_BIND_GETTER_BOOL(lua_get_checked, QAbstractButton, isChecked)
 
 int lua_add_combobox_item(lua_State* L) {
     QComboBox* cb = get_widget<QComboBox>(L, 1);
-    const char* text = lua_tostring(L, 2);
-    if (cb && text) {
+    const char* text = luaL_checkstring(L, 2);
+    if (cb) {
         cb->addItem(QString::fromUtf8(text));
         lua_pushboolean(L, 1);
     } else {
@@ -79,8 +79,8 @@ int lua_clear_combobox(lua_State* L) {
 
 int lua_set_combobox_current_text(lua_State* L) {
     QComboBox* cb = get_widget<QComboBox>(L, 1);
-    const char* text = lua_tostring(L, 2);
-    if (cb && text) {
+    const char* text = luaL_checkstring(L, 2);
+    if (cb) {
         cb->setCurrentText(QString::fromUtf8(text));
         lua_pushboolean(L, 1);
     } else {
