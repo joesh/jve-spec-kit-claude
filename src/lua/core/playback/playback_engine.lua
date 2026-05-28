@@ -1118,8 +1118,13 @@ end
 -- but the high-level handover (halt prior owner, acquire device) is the
 -- contract of audio_playback.halt_current / audio_playback.acquire_for.
 
---- Destroy engine: close TMB + PlaybackController + stop audio.
-function PlaybackEngine:destroy()
+--- Disconnect all signal handlers wired by `_setup_playback_controller`
+--- + the track-mix handler installed at construction. Idempotent: each
+--- conn field is nilled after disconnect, so subsequent calls are no-ops.
+--- Called from both `destroy` (app shutdown) and `teardown_engine`
+--- (project switch) — both must shed handlers or stale signals will
+--- fire on an unloaded engine between teardown and the next load_sequence.
+local function disconnect_signal_handlers(self)
     if self._track_mix_conn then
         Signals.disconnect(self._track_mix_conn)
         self._track_mix_conn = nil
@@ -1140,6 +1145,11 @@ function PlaybackEngine:destroy()
         Signals.disconnect(self._track_preference_conn)
         self._track_preference_conn = nil
     end
+end
+
+--- Destroy engine: close TMB + PlaybackController + stop audio.
+function PlaybackEngine:destroy()
+    disconnect_signal_handlers(self)
     self:stop()
     self:_close_tmb()
 
@@ -1167,6 +1177,12 @@ end
 --- not consulted at the public boundary.
 function PlaybackEngine.teardown_engine(engine)
     assert(engine ~= nil, "PlaybackEngine.teardown_engine: engine is nil")
+
+    -- Shed signal handlers so stale signals (content_changed, media_*,
+    -- track_preference_changed, track_mix) don't fire on this engine
+    -- between teardown and the next load_sequence — and don't leak if
+    -- no new sequence loads at all (e.g. close-all-projects flow).
+    disconnect_signal_handlers(engine)
 
     -- Release C++ objects (PlaybackController, TMB) before nilling the
     -- Lua-side fields in _init_unloaded_state. pcall the controller's
