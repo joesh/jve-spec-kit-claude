@@ -78,6 +78,16 @@ local function get_clip(clip_id)
     return nil
 end
 
+local function set_db_playhead(val)
+    -- viewport_state.set_playhead_position writes only to the UI cache; commands
+    -- read playhead from the DB via Sequence.load. Bypass the persist_callback
+    -- and write directly so TrimHead's pre-execute capture sees the value.
+    local stmt = db:prepare("UPDATE sequences SET playhead_frame = ? WHERE id = 'seq'")
+    stmt:bind_value(1, val)
+    assert(stmt:exec())
+    stmt:finalize()
+end
+
 local function get_db_playhead()
     local stmt = db:prepare("SELECT playhead_frame FROM sequences WHERE id = 'seq'")
     assert(stmt:exec())
@@ -153,7 +163,11 @@ do
     create_clip("th1", "v1", 50, 100, 100)
     create_clip("th1_next", "v1", 150, 80, 200)
     timeline_state.reload_clips()
-    timeline_state.set_playhead_position(80)
+    -- Pre-trim playhead = 65 (NOT equal to trim_frame=80). The pass-17 fix
+    -- captures prior_playhead from the DB and restores it on undo; if a
+    -- regression made undo restore trim_frame, this assertion would fail.
+    set_db_playhead(65)
+    timeline_state.set_playhead_position(65)
 
     local result = command_manager.execute("TrimHead", {
         clip_ids = {"th1"},
@@ -189,7 +203,7 @@ do
     local next_c = get_clip("th1_next")
     check("undo: downstream start = 150", next_c.start == 150)
 
-    check("undo: playhead restored to trim_frame = 80", get_db_playhead() == 80)
+    check("undo: playhead restored to pre-trim position = 65", get_db_playhead() == 65)
 end
 
 print("\n--- TrimHead: redo re-applies ---")

@@ -17,7 +17,7 @@ local SPEC = {
         sequence_id = { required = true },
         trim_frame = {},  -- playhead frame in owner timebase (derived from playhead if omitted)
     },
-    persisted = { "prior_playhead" },
+    persisted = { prior_playhead = { kind = "number" } },
 }
 
 local function set_playhead(sequence_id, frame)

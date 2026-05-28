@@ -51,10 +51,26 @@ local LEDGER_EXCLUSIONS = {
         current_undo_tip = true,
         current_branch_path = true,
     },
-    clip_links = { },
+    -- clip_links.id is SQLite AUTOINCREMENT — when a link group is created,
+    -- undone (rows deleted), then re-created (P3 redo, or P2 re-execute after
+    -- recovery), the autoincrement counter has advanced, so the new pk is
+    -- numerically higher than the original. That is NOT a contract violation:
+    -- the link group's logical identity is (link_group_id, clip_id, role),
+    -- not the surrogate pk. Exclude id the same way we exclude timestamps.
+    clip_links = { id = true },
 }
 
 local SNAPSHOT_TABLES = { "sequences", "tracks", "clips", "clip_links" }
+
+-- Stable sort key for snapshot rows. Defaults to the primary key column,
+-- but tables whose pk is autoincrement (clip_links.id) need a domain-stable
+-- composite key — otherwise undo+re-execute produces rows in a different
+-- pk order and the row-by-row diff reports spurious "different clip_id at
+-- index N" divergences. The logical identity of a clip_link row is
+-- (link_group_id, clip_id, role).
+local SORT_KEYS = {
+    clip_links = "link_group_id, clip_id, role",
+}
 
 -- Discover column names via PRAGMA table_info (cached per table).
 local _columns_cache = {}
@@ -90,8 +106,9 @@ local function snapshot_db(db)
             if not exclude[c] then kept[#kept + 1] = c end
         end
         local select_cols = table.concat(kept, ", ")
+        local order_by = SORT_KEYS[tbl] or info.pk
         local stmt = db:prepare(string.format(
-            "SELECT %s FROM %s ORDER BY %s", select_cols, tbl, info.pk))
+            "SELECT %s FROM %s ORDER BY %s", select_cols, tbl, order_by))
         assert(stmt and stmt:exec(),
             "snapshot_db: query failed for " .. tbl)
         local rows = {}
@@ -238,9 +255,12 @@ local function build_fixture()
                 id = "clip_v1_a", name = "V1A", track_key = "v1", media_key = "main",
                 sequence_start = 100, duration = 220, source_in = 217,
             },
+            -- v1_a ends at 320; v1_b starts at 320 → adjacent pair on v1
+            -- so the BatchRippleEdit_roll generator can find a valid roll
+            -- target. (Roll requires no gap between left.out and right.in.)
             v1_b = {
                 id = "clip_v1_b", name = "V1B", track_key = "v1", media_key = "main",
-                sequence_start = 360, duration = 310, source_in = 850,
+                sequence_start = 320, duration = 310, source_in = 850,
             },
             v1_c = {
                 id = "clip_v1_c", name = "V1C", track_key = "v1", media_key = "main",
@@ -469,31 +489,66 @@ local results = {
     skipped = 0,
 }
 
-local function record_finding(prop, history_log, diff_msg)
+local function record_finding(prop, history_log, diff_msg, extra)
     results.findings[#results.findings + 1] = {
-        prop = prop, history = history_log, diff = diff_msg,
+        prop = prop, history = history_log, diff = diff_msg, extra = extra,
     }
+end
+
+-- Bucket a divergence into a coarse category so the summary can group
+-- 60 nearly-identical findings into "Insert leaks 1 track on undo" etc.
+local function categorize(diff_msg)
+    if not diff_msg then return "unknown" end
+    if diff_msg:match("tracks: row count") then return "track_count" end
+    if diff_msg:match("clips: row count") then return "clip_count" end
+    if diff_msg:match("clip_links: row count") then return "clip_links_count" end
+    if diff_msg:match("Clip%.shift_many_by: exec failed") then return "shift_many_by" end
+    if diff_msg:match("undo .- failed") or diff_msg:match("undo failed") then return "undo_failed_other" end
+    if diff_msg:match("redo failed") then return "redo_failed" end
+    return "row_field_drift"
+end
+
+-- Dump tracks-table snapshot rows as one line each. Used when a finding
+-- is a track-row-count divergence — Joe needs the pre/post-undo track
+-- rows to diagnose what Insert auto-created and what undo left behind.
+local function fmt_tracks_snapshot(snap)
+    if not snap or not snap.tracks then return "<no tracks>" end
+    local lines = {}
+    for _, r in ipairs(snap.tracks.rows) do
+        lines[#lines + 1] = string.format(
+            "    %s name=%s type=%s idx=%s sequence=%s",
+            tostring(r.id), tostring(r.name), tostring(r.track_type),
+            tostring(r.track_index), tostring(r.sequence_id))
+    end
+    return table.concat(lines, "\n")
 end
 
 -- Try to generate + execute one command; returns:
 --   "ok"       — executed successfully
 --   "skipped"  — generator returned nil OR execute returned success=false
 --                (treat as "command not applicable in current state")
+-- Also returns the resolved (cmd_name, params) on ok so callers can record
+-- a faithful repro for failure diagnostics.
 local function try_one_command(layout, db, gen_name)
     local gen = GENS[gen_name]
     local cmd_name, params = gen(layout, db)
-    if not cmd_name then return "skipped", nil end
+    if not cmd_name then return "skipped", nil, nil, nil end
     local ok, result = pcall(command_manager.execute, cmd_name, params)
     if not ok then
-        return "skipped", string.format("%s(throw): %s", cmd_name, tostring(result))
+        return "skipped",
+            string.format("%s(throw): %s", cmd_name, tostring(result)),
+            cmd_name, params
     end
     if not result or not result.success then
-        return "skipped", string.format("%s(fail): %s",
-            cmd_name, tostring(result and result.error_message or "nil"))
+        return "skipped",
+            string.format("%s(fail): %s",
+                cmd_name, tostring(result and result.error_message or "nil")),
+            cmd_name, params
     end
-    return "ok", string.format("%s(%s)", cmd_name,
+    local label = string.format("%s(%s)", cmd_name,
         params.clip_id or tostring(params.sequence_start_frame
             or params.blade_frame or params.split_frame or "..."))
+    return "ok", label, cmd_name, params
 end
 
 -- Property 1: per-command execute+undo round-trip, N iterations each.
@@ -507,7 +562,8 @@ local function run_property_1(layout, db, baseline_snap)
             -- Always start from the baseline so divergence between commands
             -- is impossible.
             local pre = snapshot_db(db)
-            local outcome, cmd_label = try_one_command(layout, db, gen_name)
+            local outcome, cmd_label, cmd_name, cmd_params =
+                try_one_command(layout, db, gen_name)
             if outcome ~= "ok" then
                 skips = skips + 1
                 -- Don't accumulate — verify we're still at baseline.
@@ -516,7 +572,6 @@ local function run_property_1(layout, db, baseline_snap)
                 assert(d == nil, "skipped command mutated state: " .. tostring(d))
             else
                 local mid = snapshot_db(db)
-                local mid_d = diff_snapshots(pre, mid)
                 -- If a command "succeeded" but didn't change anything, that's
                 -- fine — undo will be a no-op too.
                 local undo_result = command_manager.undo()
@@ -527,7 +582,20 @@ local function run_property_1(layout, db, baseline_snap)
                 local diff = diff_snapshots(pre, post)
                 if diff then
                     if not last_failure_logged then
-                        record_finding("P1", { cmd_label }, diff)
+                        -- Capture extra context for track-count divergences:
+                        -- Joe needs to see exactly which track the executor
+                        -- created and which one undo failed to delete.
+                        local extra = nil
+                        if diff:match("tracks: row count") then
+                            extra = {
+                                cmd = cmd_name,
+                                params = cmd_params,
+                                pre_tracks = fmt_tracks_snapshot(pre),
+                                mid_tracks = fmt_tracks_snapshot(mid),
+                                post_undo_tracks = fmt_tracks_snapshot(post),
+                            }
+                        end
+                        record_finding("P1", { cmd_label }, diff, extra)
                         print(string.format("  FAIL %s: %s", gen_name, diff))
                         last_failure_logged = true
                     end
@@ -557,7 +625,7 @@ local function run_property_2(layout, db)
         while executed_count < PROP2_LEN and attempts < PROP2_LEN * 6 do
             attempts = attempts + 1
             local gen_name = GEN_ORDER[math.random(#GEN_ORDER)]
-            local outcome, label = try_one_command(layout, db, gen_name)
+            local outcome, label = try_one_command(layout, db, gen_name)  -- luacheck: ignore
             if outcome == "ok" then
                 executed_count = executed_count + 1
                 executed_log[#executed_log + 1] = label
@@ -682,16 +750,64 @@ print(string.format("  skipped:    %d", results.skipped))
 print(string.format("  findings:   %d", #results.findings))
 
 if #results.findings > 0 then
+    -- Breakdown per property and per category. Without this the raw 100+
+    -- finding list is unreadable; with it the reviewer sees "60 redo-failed
+    -- on Insert/Overwrite/Blade" at a glance and can attack one cause.
+    local by_prop = { P1 = 0, P2 = 0, P3 = 0 }
+    local by_cat = {}
+    for _, f in ipairs(results.findings) do
+        by_prop[f.prop] = (by_prop[f.prop] or 0) + 1
+        local c = categorize(f.diff)
+        by_cat[c] = (by_cat[c] or 0) + 1
+    end
     print()
-    print("=== Divergences ===")
-    for i, f in ipairs(results.findings) do
-        print(string.format("[%d] %s  history=%s", i, f.prop, table.concat(f.history, " | ")))
-        print(string.format("    %s", f.diff))
-        if i >= 12 then
-            print(string.format("    ... and %d more", #results.findings - i))
-            break
+    print("=== Breakdown ===")
+    print(string.format("  by property: P1=%d  P2=%d  P3=%d",
+        by_prop.P1, by_prop.P2, by_prop.P3))
+    local cat_names = {}
+    for k in pairs(by_cat) do cat_names[#cat_names + 1] = k end
+    table.sort(cat_names, function(a, b) return by_cat[a] > by_cat[b] end)
+    for _, c in ipairs(cat_names) do
+        print(string.format("  %-22s %d", c, by_cat[c]))
+    end
+
+    -- Sample findings: instead of just the first 12 (all P1/P2 in seed=42
+    -- order), surface the first finding of each (property, category) pair
+    -- so the reviewer sees one representative of every distinct failure
+    -- shape before the truncation cap.
+    local seen_pair = {}
+    local samples = {}
+    for _, f in ipairs(results.findings) do
+        local key = f.prop .. ":" .. categorize(f.diff)
+        if not seen_pair[key] then
+            seen_pair[key] = true
+            samples[#samples + 1] = f
         end
     end
+    print()
+    print(string.format("=== Sample finding per (property, category) — %d unique ===",
+        #samples))
+    for i, f in ipairs(samples) do
+        print(string.format("[%d] %s  history=%s",
+            i, f.prop, table.concat(f.history, " | ")))
+        print(string.format("    %s", f.diff))
+        if f.extra then
+            print(string.format("    cmd=%s", tostring(f.extra.cmd)))
+            local p = f.extra.params or {}
+            print(string.format("    params: track_v=%s track_a=%s start=%s",
+                tostring(p.target_video_track_id),
+                tostring(p.target_audio_track_id),
+                tostring(p.sequence_start_frame)))
+            print("    tracks BEFORE execute:")
+            print(f.extra.pre_tracks)
+            print("    tracks AFTER execute:")
+            print(f.extra.mid_tracks)
+            print("    tracks AFTER undo:")
+            print(f.extra.post_undo_tracks)
+        end
+    end
+    print(string.format("(%d total findings — see breakdown above for category counts)",
+        #results.findings))
     layout:cleanup()
     error(string.format("undo property harness found %d divergence(s) at seed=%d",
         #results.findings, SEED))

@@ -457,6 +457,24 @@ function Track.delete(track_id)
         end
     end
 
+    -- Refuse to delete while any clip still references this track. The FK
+    -- declares ON DELETE CASCADE, so a naïve DELETE silently takes its clips
+    -- with it — fine for forward edits, catastrophic for undo of auto-track
+    -- creation (the undoer is supposed to have removed the clips first; if
+    -- one is still here it means the undoer's mutation order has a bug, and
+    -- masking it as "delete cascades them too" hides the real defect).
+    local clip_check = db:prepare("SELECT 1 FROM clips WHERE track_id = ? LIMIT 1")
+    assert(clip_check, "Track.delete: clip_check prepare failed")
+    clip_check:bind_value(1, track_id)
+    assert(clip_check:exec(), "Track.delete: clip_check exec failed")
+    local has_clips = clip_check:next()
+    clip_check:finalize()
+    assert(not has_clips, string.format(
+        "Track.delete: refusing to delete track %s — clips still reference it. "
+        .. "Caller must remove or relocate the clips first (FK is ON DELETE "
+        .. "CASCADE so a delete here would silently destroy the clip rows).",
+        tostring(track_id)))
+
     -- Delete the track.
     local del = db:prepare("DELETE FROM tracks WHERE id = ?")
     assert(del, "Track.delete: delete prepare failed")
