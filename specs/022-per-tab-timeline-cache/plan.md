@@ -168,12 +168,12 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 - `extend_edit.lua` had an inline `require("ui.timeline.timeline_state").get_clip_by_id(...)` that neither aliased-call regex caught — migrated by hand.
 - 13 tests required per-file mock work to expose `get_tab_strip`; one (test_blade_command) keeps its custom DB-direct `clips_at_time` stub passed through `make_strip_stub`.
 - **Final state**: facade fns `get_clips / get_sequence_id / get_all_tracks / get_clip_by_id / get_clips_for_track / get_track_clip_index / get_clips_at_time` are removed from `timeline_state.lua`. Zero src/test calls remain. 844/844 Lua green. The strip is the read API; `timeline_state` is project/sequence pointer + apply_mutations + selection/viewport state, no longer a clip-read shim.
-- Sync helper + apply_mutations asymmetry (the legacy `displayed_tab.cache.clips IS data.state.clips` mirror) remain — those depend on data.state being a write target, which requires migrating WRITES off data.state. That's a separate refactor; cleanup tracked as future 1.3f.
+- Sync helper + apply_mutations asymmetry (the legacy `displayed_tab.cache.clips IS data.state.clips` mirror) were eliminated in Phase 1.3f below — `data.state.clips/tracks` removed; every write targets `tab.cache` directly.
 
 ### Phase 1.4 — Signal handler dispatch (LANDED)
-- `playhead_changed` mirrors the new frame to the matching tab's `cache.playhead_position` (per-sequence routing) AND updates `data.state.playhead_position` when target IS displayed (legacy reader path).
+- `playhead_changed` updates the matching tab's `cache.playhead_position` (per-sequence routing). Post-H1 (2026-05-27) the `data.state.playhead_position` mirror is gone — readers go through `strip_holder.displayed_cache().playhead_position`.
 - `track_preference_changed` updates the matching track on EVERY open tab's `cache.tracks` (track preferences are persisted per-track and apply across whichever tabs hold that track).
-- `media_status_changed` walks every open tab's `cache.clips` for clips referencing the changed media path (offline state is media-wide, not display-state) — plus `data.state.clips` for displayed reader compat.
+- `media_status_changed` walks every open tab's `cache.clips` for clips referencing the changed media path (offline state is media-wide, not display-state). Post-1.3f the `data.state.clips` mirror is gone — every reader goes through the per-tab cache.
 - `marks_changed` / `source_loaded_changed` unchanged: marks are pulled lazily via `tab:get_marks` (no cache invalidation needed).
 - Helper: `for_each_tab(fn)` iterates `strip.tabs` defensively (no-op when no strip).
 - Pinned by `test_timeline_signal_handlers_per_tab.lua`.
