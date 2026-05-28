@@ -184,3 +184,42 @@ Harness (seed=42, uuid pre-seeded for reproducibility): runs 38, 42, 45 cleared.
 Two end-state findings remain at run=15 (MoveClipToTrack at undo #4) and run=30
 (TrimHead at undo #5) — deeper cross-command interaction in cumulative
 execute→undo of 10-command random histories. Separate investigation.
+
+## Audit pass 19f (2026-05-28)
+
+Final P2 cluster: harness 0 findings.
+
+- **MCTT mutation-shape bug** — `record_planned_mutations` in
+  `move_clip_to_track.lua` used legacy `_value`-suffixed field names
+  (`start_value`, `duration_value`, …). Post-M4-real `clip_geometry.lua`
+  asserts on canonical `sequence_start`/`duration`/etc. When occlusion on
+  the target track produced a straddle-split INSERT, the assert fired
+  AFTER `db_module.commit()` already committed the DB writes — the
+  orphaned right-half persisted across the failed command. Found by
+  hunting d73cd0fc in run=15. Fix: switch to canonical names + carry
+  sequence_id / master_audio_track_id / fps_mismatch_policy / volume /
+  name through the insert payload.
+- **AddClipsToSequence id_pool plumbing** — surfaced by suite regression
+  after 19c. Wired `id_pool.new()` into the `occlude_track` call; ids
+  are NOT persisted on the command yet (filed as todo memo
+  `todo_add_clips_id_pool_plumbing.md`). Mirror of Insert/Overwrite
+  19a–c pattern still owed.
+- **Harness improvements** — `diff_snapshots` now emits row-set diff
+  (only_in_before / only_in_after) instead of just count delta; uuid is
+  pre-seeded from SEED so the run is fully reproducible.
+
+Harness (seed=42, deterministic): P1=0, P2=0, P3=0 across 9 commands.
+Total successes: 265 / skipped: 5 / findings: 0.
+
+## Pass 19 — audit series summary
+
+| Pass | Findings | Fix |
+|---|---|---|
+| baseline | 108 | property harness landed |
+| 19a | 92 | Insert auto-track plumbing |
+| 19b | 68 | shift_many_by trigger ordering |
+| 19c | 25 | id_pool helper preserves uuids across redo |
+| 19d | 2 | Blade + ExtractRange id_pool |
+| 19e | 2 | cascade-deleted clip_link restoration |
+| 19f | **0** | MCTT mutation shape + AddClips pool |
+

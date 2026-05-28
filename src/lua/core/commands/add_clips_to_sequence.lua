@@ -43,6 +43,7 @@ local Sequence       = require("models.sequence")
 local Track          = require("models.track")
 local clip_link      = require("models.clip_link")
 local place_shared   = require("core.commands._place_shared")
+local id_pool        = require("core.commands._id_pool")
 local mutation_entry = require("core.commands._mutation_entry")
 local database       = require("core.database")
 local uuid           = require("uuid")
@@ -162,8 +163,14 @@ local function carve_space(edit_type, sequence_id, owner_seq,
                 if intervals[i].end_frame   > hi then hi = intervals[i].end_frame   end
             end
             if hi > lo then
+                -- 19c id_pool plumbing: occlude_track requires a split pool
+                -- for the right-half ids it mints during straddle splits, so
+                -- redo replays the same uuids. Seed empty here — this caller
+                -- doesn't persist created ids yet, but it satisfies the
+                -- contract until that's added.
                 occluded_capture[track_id] =
-                    place_shared.occlude_track(track_id, owner_seq, lo, hi)
+                    place_shared.occlude_track(track_id, owner_seq, lo, hi,
+                        id_pool.new())
             end
         end
     else

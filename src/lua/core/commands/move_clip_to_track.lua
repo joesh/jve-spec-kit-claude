@@ -39,25 +39,31 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 assert(mut.track_id, string.format(
                     "record_planned_mutations: update mutation missing track_id (clip=%s)", mut.clip_id))
                 command_helper.add_update_mutation(command, sequence_id, {
-                    clip_id = mut.clip_id,
-                    track_id = mut.track_id,
-                    start_value = mut.sequence_start_frame,
-                    duration_value = mut.duration_frames,
-                    source_in_value = mut.source_in_frame,
-                    source_out_value = mut.source_out_frame,
-                    enabled = mut.enabled == 1,
+                    clip_id        = mut.clip_id,
+                    track_id       = mut.track_id,
+                    sequence_start = mut.sequence_start_frame,
+                    duration       = mut.duration_frames,
+                    source_in      = mut.source_in_frame,
+                    source_out     = mut.source_out_frame,
+                    enabled        = mut.enabled == 1,
                 })
             elseif mut.type == "insert" then
                 assert(mut.track_id, string.format(
                     "record_planned_mutations: insert mutation missing track_id (clip=%s)", mut.clip_id))
                 command_helper.add_insert_mutation(command, sequence_id, {
-                    id = mut.clip_id,
-                    track_id = mut.track_id,
-                    start_value = mut.sequence_start_frame,
-                    duration_value = mut.duration_frames,
-                    source_in_value = mut.source_in_frame,
-                    source_out_value = mut.source_out_frame,
-                    enabled = mut.enabled == 1,
+                    id                    = mut.clip_id,
+                    track_id              = mut.track_id,
+                    sequence_id           = mut.sequence_id,
+                    sequence_start        = mut.sequence_start_frame,
+                    duration              = mut.duration_frames,
+                    source_in             = mut.source_in_frame,
+                    source_out            = mut.source_out_frame,
+                    name                  = mut.name,
+                    master_layer_track_id = mut.master_layer_track_id,
+                    master_audio_track_id = mut.master_audio_track_id,
+                    fps_mismatch_policy   = mut.fps_mismatch_policy,
+                    enabled               = mut.enabled == 1,
+                    volume                = mut.volume,
                 })
             else
                 error(string.format(

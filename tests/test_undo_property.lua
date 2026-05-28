@@ -187,8 +187,20 @@ local function diff_snapshots(before, after)
         if not ba then return string.format("%s: missing in BEFORE", tbl) end
         if not aa then return string.format("%s: missing in AFTER", tbl) end
         if #ba.rows ~= #aa.rows then
-            return string.format("%s: row count %d vs %d",
-                tbl, #ba.rows, #aa.rows)
+            -- Set-diff by pk so we know which rows are missing/extra.
+            local pk = ba.pk
+            local in_b = {}
+            for _, r in ipairs(ba.rows) do in_b[tostring(r[pk])] = true end
+            local in_a = {}
+            for _, r in ipairs(aa.rows) do in_a[tostring(r[pk])] = true end
+            local only_b, only_a = {}, {}
+            for k in pairs(in_b) do if not in_a[k] then only_b[#only_b+1] = k end end
+            for k in pairs(in_a) do if not in_b[k] then only_a[#only_a+1] = k end end
+            table.sort(only_b); table.sort(only_a)
+            return string.format(
+                "%s: row count %d vs %d (only_in_before=[%s] only_in_after=[%s])",
+                tbl, #ba.rows, #aa.rows,
+                table.concat(only_b, ","), table.concat(only_a, ","))
         end
         local pk = ba.pk
         for i = 1, #ba.rows do
@@ -619,16 +631,11 @@ local function run_property_2(layout, db)
     print(string.format("Property 2: random N-command undo-all (%d runs, N=%d)",
         PROP2_RUNS, PROP2_LEN))
     local fails = 0
-    local diagnose = os.getenv("JVE_UNDO_PROP_DIAGNOSE") == "1"
     for run = 1, PROP2_RUNS do
         local pre = snapshot_db(db)
         local executed_log = {}
         local executed_count = 0
         local attempts = 0
-        -- Per-step snapshots when diagnosing: snaps[i] = state BEFORE
-        -- executing command i. snaps[1] == pre. Undo of command i should
-        -- restore state to snaps[i].
-        local snaps = diagnose and { pre } or nil
         while executed_count < PROP2_LEN and attempts < PROP2_LEN * 6 do
             attempts = attempts + 1
             local gen_name = GEN_ORDER[math.random(#GEN_ORDER)]
@@ -636,7 +643,6 @@ local function run_property_2(layout, db)
             if outcome == "ok" then
                 executed_count = executed_count + 1
                 executed_log[#executed_log + 1] = label
-                if diagnose then snaps[#snaps + 1] = snapshot_db(db) end
             end
         end
         if executed_count == 0 then
@@ -653,19 +659,6 @@ local function run_property_2(layout, db)
                     undo_failed = true
                     fails = fails + 1
                     break
-                end
-                if diagnose then
-                    -- undo i removes the i-th-from-end command, so after
-                    -- this undo state should match snaps[executed_count - i + 1].
-                    local expected_idx = executed_count - i + 1
-                    local now = snapshot_db(db)
-                    local d = diff_snapshots(snaps[expected_idx], now)
-                    if d then
-                        local offending = executed_log[expected_idx]
-                        io.stderr:write(string.format(
-                            "[diagnose] run=%d undo #%d (rolling back %s) — diverges: %s\n",
-                            run, i, tostring(offending), d))
-                    end
                 end
             end
             if not undo_failed then
