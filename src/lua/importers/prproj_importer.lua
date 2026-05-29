@@ -216,6 +216,22 @@ local function resolve_audio_stream(media_elem, by_id)
     return { sample_rate = sample_rate, channels = channels }
 end
 
+--- Extract media TC origin (seconds since midnight) from <AlternateStart>.
+-- Premiere stores file TC on the Media element as AlternateStart (ticks),
+-- gated by <UseAlternateStart>true</UseAlternateStart>. Synthetic/non-TC
+-- media (Color Matte, Adjustment Layer, screen recordings without TC) omit
+-- AlternateStart; nil propagates to importer_core.build_media_metadata
+-- which writes empty meta. Matches DRP's behavior for media without
+-- <MediaStartTime>: Media:get_start_tc() returns nil and downstream
+-- _ensure_tc_extracted probes the file (asserts loudly if absent).
+local function parse_media_start_time(media_elem)
+    local use_alt = get_child_text(media_elem, "UseAlternateStart")
+    if use_alt ~= "true" then return nil end
+    local alt_ticks = get_child_number(media_elem, "AlternateStart")
+    if not alt_ticks or alt_ticks <= 0 then return nil end
+    return alt_ticks / TICKS_PER_SECOND
+end
+
 --- Parse a Media element to extract file metadata.
 local function parse_media_element(media_elem, by_id)
     if is_synthetic_media(media_elem) then return nil end
@@ -239,6 +255,7 @@ local function parse_media_element(media_elem, by_id)
         has_audio = audio_info ~= nil,
         audio_sample_rate = audio_info and audio_info.sample_rate or nil,
         audio_channels = audio_info and audio_info.channels or 0,
+        media_start_time = parse_media_start_time(media_elem),
         alt_paths = {},
     }
 end
