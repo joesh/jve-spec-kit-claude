@@ -118,3 +118,6 @@ tests/fixtures/media/anamnesis/
 
 # speckit active-feature marker (per-working-tree state; branch deferred to /implement)
 .specify/.active-feature
+
+# cozempic guard runtime lock (per-session daemon PID/state — not VCS)
+.claude/scheduled_tasks.lock
