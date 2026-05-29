@@ -19,6 +19,7 @@ local waveform_color = require("core.media.waveform_color")
 local waveform_utils = require("core.media.waveform_utils")
 local waveform_layout = require("ui.timeline.view.waveform_layout")
 local track_state = require("ui.timeline.state.track_state")
+local duplicate_track_map = require("core.duplicate_track_map")
 local peak_cache = require("core.media.peak_cache")
 local peak_constants = require("core.media.peak_constants")
 local Signals = require("core.signals")
@@ -645,65 +646,40 @@ local function ensure_edge_preview(drag_state, state_module)
     drag_state.preview_clamped_delta_frames = clamped_frames
 end
 
-local function get_track_with_offset(state_module, track_id, offset)
-    if not offset or offset == 0 then return track_id end
-    local tracks = state_module.get_tab_strip():displayed_tracks()
-    local original_index = nil
-    for i, track in ipairs(tracks) do
-        if track.id == track_id then original_index = i; break end
-    end
-    if not original_index then return track_id end
-    local new_index = original_index + offset
-    if new_index < 1 or new_index > #tracks then return track_id end
-    local original_track = tracks[original_index]
-    local target_track = tracks[new_index]
-    if target_track and original_track and target_track.track_type == original_track.track_type then
-        return target_track.id
-    end
-    return track_id
-end
-
---- Compute target track hint for clip drag preview (owning pane only).
---- Returns preview_target_id (string track ID for single-track), preview_track_offset (number for multi-track).
---- Single-track selection: returns target track ID directly.
---- Multi-track selection: returns numeric offset applied to each clip's track.
-local function compute_clip_drag_track_hint(view, drag_state, height, state_module)
-    local current_y = drag_state.current_y or drag_state.start_y
-    local target_tid = view.get_track_id_at_y(current_y, height)
-    if not target_tid then return nil, nil end
-
-    local anchor_clip = nil
+-- Per-clip destination tracks for the clip-drag GHOST, computed by the SAME
+-- algorithm the commit uses (core.duplicate_track_map) so the preview can
+-- never show a placement DuplicateClips wouldn't produce. Only the owning
+-- pane (the one under the cursor) computes this; it stashes the map on the
+-- drag state so the non-owning pane (video↔audio split) reuses it.
+--
+-- Returns the map { [clip_id] = track_id | needs_create_descriptor } or nil
+-- when there's no anchor to map from. The cursor's target track shares the
+-- anchor's type (split panes guarantee it); with no track under the cursor
+-- yet, the anchor's own track stands in so the ghost shows a time-only move.
+local function compute_clip_drag_target_map(view, drag_state, height, state_module)
+    local anchor_clip
     local aid = drag_state.anchor_clip_id
     if aid then
         for _, c in ipairs(drag_state.clips) do
             if c.id == aid then anchor_clip = c; break end
         end
     end
-    if not anchor_clip then anchor_clip = drag_state.clips[1] end
-    if not anchor_clip then return nil, nil end
-
-    local multi = false
-    for _, c in ipairs(drag_state.clips) do
-        if c.track_id ~= drag_state.clips[1].track_id then multi = true; break end
-    end
+    anchor_clip = anchor_clip or drag_state.clips[1]
+    if not anchor_clip then return nil end
 
     local tracks = state_module.get_tab_strip():displayed_tracks()
-    local anchor_idx, target_idx
-    for i, t in ipairs(tracks) do
-        if t.id == anchor_clip.track_id then anchor_idx = i end
-        if t.id == target_tid then target_idx = i end
-    end
+    local by_id = {}
+    for _, t in ipairs(tracks) do by_id[t.id] = t end
 
-    if anchor_idx and target_idx then
-        local offset = target_idx - anchor_idx
-        if offset ~= 0 then
-            if multi then return nil, offset else return target_tid, nil end
-        end
-        if not multi then return target_tid, nil end
-    else
-        if not multi then return target_tid, nil end
-    end
-    return nil, nil
+    local anchor_track = by_id[anchor_clip.track_id]
+    if not anchor_track then return nil end
+
+    local current_y = drag_state.current_y or drag_state.start_y
+    local target_tid = view.get_track_id_at_y(current_y, height)
+    local target_track = (target_tid and by_id[target_tid]) or anchor_track
+
+    return duplicate_track_map.map_duplicate_targets(
+        tracks, anchor_track, target_track, drag_state.clips)
 end
 
 local function truncate_label(label, max_width)
@@ -1093,37 +1069,36 @@ local function build_render_ctx(view)
     }
 end
 
--- Phase: clip-drag preview overlay. Iterates the dragged clips and
--- draws outline-only copies at the cursor's target track + delta.
+-- Phase: clip-drag preview overlay. Draws outline-only copies of the
+-- dragged clips at the destination tracks the COMMIT will use (shared
+-- core.duplicate_track_map), plus the time delta.
 local function render_clip_drag_preview(ctx)
     local cd = ctx.clip_drag_state
     if not cd or cd.type ~= "clips" then return end
     assert(type(cd.delta_frames) == "number",
         "timeline_view_renderer: clip drag state missing delta_frames")
 
-    local preview_target_id, preview_track_offset
+    -- Owning pane computes the per-clip target map and stashes it; the
+    -- non-owning pane (V↔A split) reuses it so both render the same plan.
+    local target_map
     if ctx.clip_drag_owns then
-        -- Owning pane: resolve cursor Y → target track → offset, then
-        -- share offset with the non-owning pane.
-        preview_target_id, preview_track_offset =
-            compute_clip_drag_track_hint(ctx.view, cd, ctx.height, ctx.state_module)
-        cd._preview_track_offset = preview_track_offset
+        target_map = compute_clip_drag_target_map(ctx.view, cd, ctx.height, ctx.state_module)
+        cd._preview_target_map = target_map
     else
-        -- Non-owning pane: reuse the owning pane's offset in global
-        -- track-index space (matches what drag_handler applies on release).
-        preview_track_offset = cd._preview_track_offset
+        target_map = cd._preview_target_map
     end
+    if not target_map then return end
 
     for _, clip in ipairs(cd.clips) do
         if clip and clip.id then
-            local render_track_id = clip.track_id
-            if preview_track_offset then
-                render_track_id = get_track_with_offset(ctx.state_module, render_track_id, preview_track_offset)
-            elseif preview_target_id then
-                render_track_id = preview_target_id
+            local target = target_map[clip.id]
+            -- A `needs_create` descriptor (table) names a track that doesn't
+            -- exist yet; the commit auto-creates it, but the ghost has no row
+            -- to draw on, so that half is omitted from the preview.
+            if type(target) == "string" then
+                local start_value = clip.sequence_start + cd.delta_frames
+                draw_clip_instance(ctx, clip, target, start_value, clip.duration, true)
             end
-            local start_value = clip.sequence_start + cd.delta_frames
-            draw_clip_instance(ctx, clip, render_track_id, start_value, clip.duration, true)
         end
     end
 end

@@ -517,7 +517,27 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
             local is_selected = false
             for _, s in ipairs(selected_clips) do if s.id == clicked_clip.id then is_selected = true break end end
 
-            -- Execute SelectClips command (handles Option→linked, Cmd→toggle)
+            -- Pressing on an already-selected clip (without Cmd) begins a drag
+            -- of the CURRENT selection — do NOT re-run SelectClips. With Opt
+            -- held to start a duplicate-drag, SelectClips would expand the
+            -- selection to the whole link group and pull unselected partners
+            -- into the copy, clobbering a deliberate partial selection. Arm
+            -- the drag against the existing selection instead.
+            if is_selected and not (modifiers and modifiers.command) then
+                view.potential_drag = {
+                    type = "clips",
+                    start_x = x,
+                    start_y = y,
+                    start_value = state.pixel_to_time(x, width),
+                    clips = filter_non_gap_clips(selected_clips),
+                    modifiers = modifiers,
+                    anchor_clip_id = clicked_clip.id
+                }
+                return
+            end
+
+            -- Otherwise this press changes the selection: SelectClips handles
+            -- Option→linked expansion and Cmd→toggle.
             command_manager.execute_interactive("SelectClips", {
                 project_id = state.get_project_id(),
                 sequence_id = state.get_tab_strip():active_sequence_id(),
@@ -525,22 +545,7 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                 modifiers = modifiers,
             })
 
-            -- For already-selected clips without Cmd: just prepare drag, no selection change
-            -- SelectClips handles this by returning same selection
-            if is_selected and not (modifiers and modifiers.command) then
-                view.potential_drag = {
-                    type = "clips",
-                    start_x = x,
-                    start_y = y,
-                    start_value = state.pixel_to_time(x, width),
-                    clips = filter_non_gap_clips(state.get_selected_clips()),
-                    modifiers = modifiers,
-                    anchor_clip_id = clicked_clip.id
-                }
-                return
-            end
-
-            -- Prepare drag with newly selected clips
+            -- Prepare drag with the newly selected clips.
             view.potential_drag = {
                 type = "clips",
                 start_x = x,

@@ -1,5 +1,6 @@
 local ClipMutator = {}
 local uuid = require("uuid")
+local duplicate_track_map = require("core.duplicate_track_map")
 local log = require("core.logger").for_area("commands")
 local frame_utils = require("core.frame_utils")
 local krono_ok, krono = pcall(require, "core.krono")
@@ -1085,16 +1086,15 @@ local function load_source_clips_for_duplicate(db, sequence_id, clip_ids,
     return source_clips, min_start
 end
 
--- Map one source clip to its duplicated counterpart on `mapped_track`,
--- shifted by effective_delta on the timeline. Returns nil for clips that
--- map to no track on the target side or whose duplicate would land
--- exactly on the source.
-local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_delta)
+-- Map one source clip to its duplicated counterpart on `mapped_track_id`,
+-- shifted by effective_delta on the timeline. Returns nil for clips whose
+-- duplicate would land exactly on the source.
+local function build_duplicated_clip(clip, mapped_track_id, sequence_id, effective_delta)
     local new_start = clip.sequence_start + effective_delta
     if new_start < 0 then
         return nil, "clip_mutator.plan_duplicate_block: computed negative sequence_start after clamping"
     end
-    if new_start == clip.sequence_start and mapped_track.id == clip.track_id then
+    if new_start == clip.sequence_start and mapped_track_id == clip.track_id then
         return nil  -- no-op (same place, same track)
     end
     local now = os.time()
@@ -1103,7 +1103,7 @@ local function build_duplicated_clip(clip, mapped_track, sequence_id, effective_
         project_id            = clip.project_id,
         track_type            = clip.track_type,
         name                  = clip.name,
-        track_id              = mapped_track.id,
+        track_id              = mapped_track_id,
         owner_sequence_id     = sequence_id,
         sequence_id    = clip.sequence_id,
         master_layer_track_id = clip.master_layer_track_id,
@@ -1130,43 +1130,42 @@ end
 
 -- Walk the source clips, build INSERT mutations for each, and accumulate
 -- the planned-interval map (used downstream to validate overlaps and
--- drive occlusion resolution). Returns (mutations, new_clip_ids, intervals_by_track)
--- on success or (nil, err) on failure.
-local function plan_duplicate_inserts(source_clips, tracks_by_id, tracks_by_type_index,
-                                      anchor_track, sequence_id,
-                                      delta_track_index, effective_delta)
+-- drive occlusion resolution). `target_map` (from duplicate_track_map) gives
+-- the per-source-clip destination track — EVERY selected clip is duplicated
+-- (cross-type halves of a linked pair included), not just clips sharing the
+-- anchor's type. Destination tracks must already exist: the command
+-- auto-creates any `needs_create` targets before planning, so a residual
+-- descriptor here is a programming error (assert, never skip).
+-- Returns (mutations, new_clips, intervals_by_track) where new_clips is an
+-- array of {new_id, source_clip_id}, or (nil, err) on failure.
+local function plan_duplicate_inserts(source_clips, target_map, sequence_id, effective_delta)
     local insert_mutations = {}
-    local new_clip_ids = {}
+    local new_clips = {}
     local intervals_by_track = {}
 
     for _, clip in ipairs(source_clips) do
-        local source_track = clip.track_id and tracks_by_id[clip.track_id] or nil
-        assert(source_track, "clip_mutator.plan_duplicate_block: source clip track not found in sequence: "
-            .. tostring(clip.track_id))
-        local mapped_track = nil
-        if source_track.track_type == anchor_track.track_type then
-            local target_index = source_track.track_index + delta_track_index
-            local by_index = tracks_by_type_index[source_track.track_type]
-            mapped_track = by_index and by_index[target_index] or nil
+        local mapped_track_id = target_map[clip.id]
+        assert(mapped_track_id, "clip_mutator.plan_duplicate_block: no target mapping for clip "
+            .. tostring(clip.id))
+        assert(type(mapped_track_id) == "string", string.format(
+            "clip_mutator.plan_duplicate_block: target track for clip %s was not created before planning "
+            .. "(needs_create descriptor leaked into planner)", tostring(clip.id)))
+        local new_clip, err = build_duplicated_clip(clip, mapped_track_id,
+            sequence_id, effective_delta)
+        if err then
+            return nil, err
         end
-        if mapped_track then
-            local new_clip, err = build_duplicated_clip(clip, mapped_track,
-                sequence_id, effective_delta)
-            if err then
-                return nil, err
-            end
-            if new_clip then
-                insert_mutations[#insert_mutations + 1] = plan_insert(new_clip)
-                new_clip_ids[#new_clip_ids + 1] = new_clip.id
-                intervals_by_track[mapped_track.id] = intervals_by_track[mapped_track.id] or {}
-                table.insert(intervals_by_track[mapped_track.id], {
-                    start  = new_clip.sequence_start,
-                    ["end"] = new_clip.sequence_start + new_clip.duration,
-                })
-            end
+        if new_clip then
+            insert_mutations[#insert_mutations + 1] = plan_insert(new_clip)
+            new_clips[#new_clips + 1] = { new_id = new_clip.id, source_clip_id = clip.id }
+            intervals_by_track[mapped_track_id] = intervals_by_track[mapped_track_id] or {}
+            table.insert(intervals_by_track[mapped_track_id], {
+                start  = new_clip.sequence_start,
+                ["end"] = new_clip.sequence_start + new_clip.duration,
+            })
         end
     end
-    return insert_mutations, new_clip_ids, intervals_by_track
+    return insert_mutations, new_clips, intervals_by_track
 end
 
 -- Run resolve_occlusions_multi over the merged spans on each track and
@@ -1186,7 +1185,14 @@ local function resolve_duplicate_occlusions(db, intervals_by_track)
     return occlusion_mutations
 end
 
-function ClipMutator.plan_duplicate_block(db, params)
+-- Load + validate everything both the duplicate planner and the command's
+-- track-precreate step need: track list, anchor/target track rows (same
+-- type), source clips, clamped timeline delta, and the per-clip target-track
+-- map (duplicate_track_map — the single mapping algorithm shared with the
+-- drag preview). Returns a context table, or (nil, err) on a recoverable
+-- load failure. `trivial=true` marks a no-op request (no track move, no
+-- time move) so callers can short-circuit.
+local function load_duplicate_context(db, params)
     assert(db, "clip_mutator.plan_duplicate_block: db is nil")
     assert(type(params) == "table", "clip_mutator.plan_duplicate_block: params table required")
 
@@ -1206,7 +1212,7 @@ function ClipMutator.plan_duplicate_block(db, params)
     assert(type(delta_frames) == "number", "clip_mutator.plan_duplicate_block: delta_frames must be integer")
 
     local tracks = load_sequence_tracks(db, sequence_id)
-    local tracks_by_id, tracks_by_type_index = build_track_maps(tracks)
+    local tracks_by_id = build_track_maps(tracks)
 
     anchor_clip_id = anchor_clip_id or clip_ids[1]
     assert(anchor_clip_id and anchor_clip_id ~= "", "clip_mutator.plan_duplicate_block: missing anchor_clip_id")
@@ -1224,16 +1230,13 @@ function ClipMutator.plan_duplicate_block(db, params)
         string.format("clip_mutator.plan_duplicate_block: target track type mismatch (anchor=%s target=%s)",
             tostring(anchor_track.track_type), tostring(target_track.track_type)))
 
-    local delta_track_index = target_track.track_index - anchor_track.track_index
-    assert(type(delta_track_index) == "number", "clip_mutator.plan_duplicate_block: invalid delta_track_index")
-
-    if delta_track_index == 0 and delta_frames == 0 then
-        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
+    if target_track.track_index == anchor_track.track_index and delta_frames == 0 then
+        return { trivial = true }
     end
 
     local source_clips, load_err = load_source_clips_for_duplicate(
         db, sequence_id, clip_ids, seq_fps_num, seq_fps_den)
-    if not source_clips then return false, load_err end
+    if not source_clips then return nil, load_err end
 
     -- Clamp delta so the duplicated block doesn't land at a negative
     -- timeline frame. resolve_occlusions handles overlap with existing
@@ -1244,16 +1247,87 @@ function ClipMutator.plan_duplicate_block(db, params)
             min_start = c.sequence_start
         end
     end
-    local lower_bound = -(min_start or 0)
-    local effective_delta = math.max(delta_frames, lower_bound)
+    local effective_delta = math.max(delta_frames, -(min_start or 0))
 
-    local insert_mutations, new_clip_ids, intervals_by_track, plan_err =
-        plan_duplicate_inserts(source_clips, tracks_by_id, tracks_by_type_index,
-                               anchor_track, sequence_id,
-                               delta_track_index, effective_delta)
+    local target_map = duplicate_track_map.map_duplicate_targets(
+        tracks, anchor_track, target_track, source_clips)
+
+    return {
+        sequence_id     = sequence_id,
+        tracks          = tracks,
+        source_clips    = source_clips,
+        effective_delta = effective_delta,
+        target_map      = target_map,
+    }
+end
+
+-- Destination tracks the duplicate needs that don't exist yet. The command
+-- auto-creates these (insert.lua pattern) BEFORE calling plan_duplicate_block,
+-- so the planner only ever sees real track ids.
+--
+-- A track stack must stay contiguous: if a clip targets index N of a type but
+-- the stack only reaches M (< N), every missing index M+1..N is created, not
+-- just N (you can't have A3 with no A2). Mirrors insert.lua's 1..max walk.
+-- Returns an array of {track_type, track_index} sorted by (type, index) so the
+-- command creates low→high and the undoer deletes high→low.
+function ClipMutator.compute_missing_target_tracks(db, params)
+    local ctx, err = load_duplicate_context(db, params)
+    assert(ctx, "clip_mutator.compute_missing_target_tracks: " .. tostring(err))
+    if ctx.trivial then return {} end
+
+    -- Existing indices per type, and the highest index each type is asked to
+    -- reach (existing-track targets count too — they raise the contiguity bar
+    -- for any same-type sibling that needs a new track above them).
+    local existing, by_id = {}, {}
+    for _, t in ipairs(ctx.tracks) do
+        existing[t.track_type] = existing[t.track_type] or {}
+        existing[t.track_type][t.track_index] = true
+        by_id[t.id] = t
+    end
+
+    local max_target, type_needs_create = {}, {}
+    for _, target in pairs(ctx.target_map) do
+        local ttype, tindex
+        if type(target) == "table" then
+            ttype, tindex = target.track_type, target.track_index
+            type_needs_create[ttype] = true
+        else
+            local tr = by_id[target]
+            assert(tr, "compute_missing_target_tracks: mapped track id not found")
+            ttype, tindex = tr.track_type, tr.track_index
+        end
+        if not max_target[ttype] or tindex > max_target[ttype] then
+            max_target[ttype] = tindex
+        end
+    end
+
+    local missing = {}
+    for ttype in pairs(type_needs_create) do
+        for i = 1, max_target[ttype] do
+            if not (existing[ttype] and existing[ttype][i]) then
+                missing[#missing + 1] = { track_type = ttype, track_index = i }
+            end
+        end
+    end
+    table.sort(missing, function(a, b)
+        if a.track_type ~= b.track_type then return a.track_type < b.track_type end
+        return a.track_index < b.track_index
+    end)
+    return missing
+end
+
+function ClipMutator.plan_duplicate_block(db, params)
+    local ctx, err = load_duplicate_context(db, params)
+    if not ctx then return false, err end
+    if ctx.trivial then
+        return true, nil, {planned_mutations = {}, new_clip_ids = {}, new_clips = {}}
+    end
+
+    local insert_mutations, new_clips, intervals_by_track, plan_err =
+        plan_duplicate_inserts(ctx.source_clips, ctx.target_map, ctx.sequence_id, ctx.effective_delta)
     if not insert_mutations then return false, plan_err end
     if #insert_mutations == 0 then
-        return true, nil, {planned_mutations = {}, new_clip_ids = {}}
+        return true, nil, {planned_mutations = {}, new_clip_ids = {}, new_clips = {}}
     end
 
     local ok_overlaps, overlap_err = validate_no_overlaps_per_track(intervals_by_track)
@@ -1267,7 +1341,10 @@ function ClipMutator.plan_duplicate_block(db, params)
     local combined = {}
     for _, mut in ipairs(occlusion_mutations) do combined[#combined + 1] = mut end
     for _, mut in ipairs(insert_mutations)   do combined[#combined + 1] = mut end
-    return true, nil, {planned_mutations = combined, new_clip_ids = new_clip_ids}
+
+    local new_clip_ids = {}
+    for _, nc in ipairs(new_clips) do new_clip_ids[#new_clip_ids + 1] = nc.new_id end
+    return true, nil, {planned_mutations = combined, new_clip_ids = new_clip_ids, new_clips = new_clips}
 end
 
 return ClipMutator
