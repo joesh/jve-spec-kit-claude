@@ -9,12 +9,19 @@ local log = require("core.logger").for_area("commands")
 -- (LinkClips-only fields it never reads) — caller had to pass dummies
 -- to satisfy validation. Split lets each command demand only what it
 -- actually uses.
+--
+-- link_group_id is an OUTPUT, not an input: LinkClips MINTS the group id
+-- (the "Link Clips" menu has none to supply). It is persisted so undo can
+-- delete the group, and fed back as create_link_group's forced_id on redo
+-- to keep the id stable across redo.
 local LINK_SPEC = {
     args = {
-        clips         = { required = true },
-        link_group_id = { required = true },
-        project_id    = { required = true },
-        dry_run       = { kind = "boolean" },
+        clips      = { required = true },
+        project_id = { required = true },
+        dry_run    = { kind = "boolean" },
+    },
+    persisted = {
+        link_group_id = {},
     },
 }
 
@@ -50,7 +57,9 @@ function M.register(executors, undoers, db)
         end
 
         local clip_links = require('models.clip_link')
-        local link_group_id, error_msg = clip_links.create_link_group(args.clips, db)
+        -- forced_id is nil on first execute (mint fresh) and the persisted id
+        -- on redo (replay with the same group id).
+        local link_group_id, error_msg = clip_links.create_link_group(args.clips, db, args.link_group_id)
 
         if not link_group_id then
             log.error("LinkClips failed: %s", tostring(error_msg or "unknown error"))

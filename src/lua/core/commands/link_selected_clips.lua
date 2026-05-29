@@ -74,10 +74,12 @@ function M.register(command_executors, _command_undoers, _db, _set_last_error)
         -- command_manager.execute drops the executor's secondary return on
         -- success; surface success/failure only (matches BladeAtPlayhead).
         local command_manager = require("core.command_manager")
+        -- No link_group_id: LinkClips mints the group id itself (same as the
+        -- "Link Clips" menu path). Passing one here was a dummy to satisfy a
+        -- since-removed required-arg in LINK_SPEC.
         local result = command_manager.execute("LinkClips", {
-            project_id    = project_id,
-            clips         = clips_to_link,
-            link_group_id = require("uuid").generate(),
+            project_id = project_id,
+            clips      = clips_to_link,
         })
         assert(type(result) == "table" and type(result.success) == "boolean",
             string.format("LinkSelectedClips: command_manager.execute(\"LinkClips\") "
