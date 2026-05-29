@@ -41,7 +41,7 @@ Why this shape (unchanged from the original draft — it was right):
 - **The helper is the only code that touches Resolve's scripting surface.** BMD changes that surface without notice (UIManager removed from the free tier in 19.1, no changelog). Quarantine all Resolve-specific code in one small, restartable, version-swappable process. Crash isolation is a bonus.
 - **The helper holds the Resolve handle and an idempotency ledger (§4.3) — nothing else about JVE.** The moment it caches JVE timeline state it becomes a second source of truth that desyncs. JVE owns all orchestration and state.
 - **JVE spawns and supervises the helper via `QProcess`** (decided). JVE owns the lifecycle: start on first roundtrip use, restart on crash, kill on quit; then connect as a `QLocalSocket` client. The C++ side is **thin one-to-one FFI only** (`qt_process_*`, `qt_local_socket_*`) — generic, not Resolve-aware; the lifecycle *policy* (when to restart, the connect-timeout, reconnect) lives in Lua (`core/resolve_bridge/helper_supervisor.lua`), per ENGINEERING 2.18 (FFI ≠ business logic) and 1.10 (stay in layer). This keeps JVE's first `QProcess` use as reusable plumbing and all bridge behavior testable in Lua. The helper writes its socket path to a known app-support location on startup; the Lua supervisor waits for it with a structured timeout error, never a silent retry-forever.
-- **Helper language: Lua if Phase 0 proves Lua-external works on the target Studio** (preferred — matches JVE's stack, and the same Resolve-side logic is reusable by the future free in-Resolve path). Fall back to Python only if Lua cannot make an external connection. JVE is unaffected either way — it only sees the socket.
+- **Helper language: Python** (resolved by the Phase-0 spike — `phase0-findings.md`). External LuaJIT segfaults inside its own runtime loading `fusionscript.so`'s `luaopen_dfscript` (PUC-Lua-5.1 ABI vs LuaJIT NaN-tagging), and no PUC Lua 5.1 is installed; Python connects cleanly. This is the spec's pre-declared fallback, now active. JVE is unaffected — it only sees the socket.
 
 ### 1.1 What the original draft got wrong about JVE (corrected here)
 
@@ -290,7 +290,7 @@ Each phase is small and ends at a STOP gate. Do not pass a gate without reportin
 
 **Phase 1 — DRT authoring + identity spike (combined — they're entangled).** Build the minimal-viable DRT writer (§6.3); for each candidate identity field (§2.1) author a DRT carrying a known clip UUID, import it, read it back via the API, report which field round-trips byte-clean. *Deliverable:* the chosen join field + the minimal DRT that Resolve imports, both proven with real read-back. **STOP.**
 
-**Phase 2 — Helper skeleton + protocol core.** Helper (Lua if Phase 0 allows, else Python), socket, envelope (§4.1), `ping`, `import_timeline` returning the identity mapping via the Phase-1 field. JVE-side: thin `qt_process_*`/`qt_local_socket_*` FFI + the Lua `helper_supervisor` (spawn/restart/timeout policy) + the Lua socket client (mirror `debug_terminal`'s plumbing, opposite direction) + write the mapping into `resolve_bridge_link`. Helper-startup failure and connect timeout surface as structured errors, never silent retry (§0.10). Live tests per §9. **STOP.**
+**Phase 2 — Helper skeleton + protocol core.** Helper (**Python**, per Phase 0 — `phase0-findings.md`), socket, envelope (§4.1), `ping`, `import_timeline` returning the identity mapping via the Phase-1 field. JVE-side: thin `qt_process_*`/`qt_local_socket_*` FFI + the Lua `helper_supervisor` (spawn/restart/timeout policy) + the Lua socket client (mirror `debug_terminal`'s plumbing, opposite direction) + write the mapping into `resolve_bridge_link`. Helper-startup failure and connect timeout surface as structured errors, never silent retry (§0.10). Live tests per §9. **STOP.**
 
 **Phase 3 — JVE color model + grade read-back.** Build §5 (schema V12, `clip_grade` model, `SyncGradesFromResolve` command, renderer CDL stage). Implement `read_grades`/`read_identities` with honest `fidelity` (§4.4). Live tests: apply a known primary CDL in Resolve → read back → assert values → **pixel-compare** JVE render (§5.4); apply a node-graph grade → assert `fidelity` correctly downgraded. **STOP.**
 
@@ -318,7 +318,7 @@ Each phase is small and ends at a STOP gate. Do not pass a gate without reportin
 - **`SyncGradesFromResolve`**: undoable (§5.3).
 - **Grade attaches to `clip.id`** (§5.1).
 - **Bladed clips**: both halves inherit the parent's grade (§2.2).
-- **Helper language**: Lua if Phase 0 proves Lua-external works on the target Studio; else Python (§1).
+- **Helper language**: Python (resolved by Phase 0 — external LuaJIT cannot host `fusionscript.so`; see `phase0-findings.md` / §1).
 
 ## Open questions (concise)
 

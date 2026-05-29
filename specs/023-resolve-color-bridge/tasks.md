@@ -20,10 +20,10 @@
 
 ## Phase 0 — Connection spike 🔬 (STOP gate)
 
-- [ ] **T001** Cut the feature branch: run `.specify/scripts/bash/start-feature-branch.sh --json` from repo root. If it refuses on a dirty tree, commit only the 023 spec/plan/tasks docs first (never sibling work), then re-run. All later tasks run on `023-resolve-color-bridge`.
-- [ ] **T002** 🔬 SPIKE Prove a standalone process makes an *external* connection to a running Resolve Studio. Establish (a) does external-**Lua** connect, or is **Python** required; (b) does the handle survive a project/timeline switch in Resolve's UI, or is per-verb revalidation required (FR-009). Write `specs/023-resolve-color-bridge/phase0-findings.md` with the **actual** connection code + real `ping`-equivalent output. If a research.md §10 assumption is contradicted, STOP and report. **No helper code yet.**
+- [X] **T001** Cut the feature branch: run `.specify/scripts/bash/start-feature-branch.sh --json` from repo root. If it refuses on a dirty tree, commit only the 023 spec/plan/tasks docs first (never sibling work), then re-run. All later tasks run on `023-resolve-color-bridge`. **DONE** — branch `023-resolve-color-bridge` cut & checked out (the dirty file was only the cozempic guard runtime lock, now gitignored).
+- [X] **T002** 🔬 SPIKE Prove a standalone process makes an *external* connection to a running Resolve Studio. Establish (a) does external-**Lua** connect, or is **Python** required; (b) does the handle survive a project/timeline switch in Resolve's UI, or is per-verb revalidation required (FR-009). Write `specs/023-resolve-color-bridge/phase0-findings.md` with the **actual** connection code + real `ping`-equivalent output. If a research.md §10 assumption is contradicted, STOP and report. **No helper code yet.** **DONE** — see `phase0-findings.md`. (a) **Python** (external LuaJIT segfaults in its own runtime loading `luaopen_dfscript`; no PUC Lua 5.1 present) — the spec's pre-declared fallback. Studio 20.3.2.9 confirmed (FR-010). (b) `scriptapp` re-acquire is cheap → per-verb revalidation is viable; the cached-handle-across-UI-switch durability test needs Joe driving the UI (folded into T042), non-blocking since FR-009 revalidates regardless.
 
-> **STOP GATE 0** — report findings; the helper language (Lua/Python) and the revalidation requirement are now decided. Do not start Phase 1 until reviewed.
+> **STOP GATE 0 — REACHED, awaiting Joe's review.** Findings reported in `phase0-findings.md`: helper language = **Python** (decided); per-verb revalidation viable. Do not start Phase 1 until reviewed.
 
 ---
 
@@ -70,7 +70,7 @@
 - [ ] **T020** [P] `src/qt_bindings/local_socket_bindings.cpp` — thin `qt_local_socket_connect/write` + `readyRead` signal (one-to-one QLocalSocket client). Binding test against a throwaway `QLocalServer` echo.
 
 ### Helper + client + supervisor + command
-- [ ] **T021** `tools/resolve-helper/` — helper in the Phase-0 language; a single verb-dispatch path where **every verb first cheaply revalidates the Resolve handle and reacquires or returns `handle_stale`** (FR-009), then implements `ping` + `import_timeline` (imports the DRT via the API, relinks against `media_roots`, returns the identity mapping using the T008 field, reports `unrelinked`; total failure ⇒ `relink_failed`). Holds only the idempotency ledger, no timeline model (FR-005, FR-021). Makes T013/T014 pass against the helper.
+- [ ] **T021** `tools/resolve-helper/` — helper in **Python** (Phase-0 decision); a single verb-dispatch path where **every verb first cheaply revalidates the Resolve handle and reacquires or returns `handle_stale`** (FR-009), then implements `ping` + `import_timeline` (imports the DRT via the API, relinks against `media_roots`, returns the identity mapping using the T008 field, reports `unrelinked`; total failure ⇒ `relink_failed`). Holds only the idempotency ledger, no timeline model (FR-005, FR-021). Makes T013/T014 pass against the helper.
 - [ ] **T022** `src/lua/core/resolve_bridge/client.lua` — request/response over the socket with correlation ids (depends T018, T020).
 - [ ] **T023** `src/lua/core/resolve_bridge/helper_supervisor.lua` — lifecycle **policy** in Lua over T019 (start on first use, restart on crash, connect-timeout as a structured error — never silent retry; FR-007). Test via `jve --test` with a fake helper script.
 - [ ] **T024** `src/lua/core/commands/send_to_resolve.lua` — `SendToResolve`: author DRT (T007) → `import_timeline` → write mapping to ledger (T016). Registered command (FR-023).
@@ -155,7 +155,7 @@
 - **T001 → everything** (branch must exist).
 - **STOP GATES are hard barriers**: do not start a phase until the prior gate is reported/reviewed (spec §0.6). Spikes (T002, T008) gate the code that assumes their findings.
 - Phase 1: T003,T004 (fail) → T005 → T006 → T007 → T008.
-- Phase 2: T009 → {T010,T011 [P]}; T009 → T015,T016; T012→T018; T018+T020→T022; T019→T023; {T007,T016,T021,T022}→T024→T025→T026. T021 needs T008's join field + Phase-0 language.
+- Phase 2: T009 → {T010,T011 [P]}; T009 → T015,T016; T012→T018; T018+T020→T022; T019→T023; {T007,T016,T021,T022}→T024→T025→T026. T021 needs T008's join field (helper language already decided: Python).
 - Phase 3: T009→T015→T030→T031; T029 before T033/T034; T032 needs T015 (model) + T031 (data to display).
 - Phase 4: T016→T036→T035→T037.
 - Phase 5: T039→T040→T041; T040 reuses existing `RelinkClips`.

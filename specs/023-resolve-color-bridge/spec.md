@@ -107,7 +107,7 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **Grade-sync**: undoable.
 - **Grade attaches to**: the JVE clip.
 - **Bladed clips**: both halves inherit the parent's grade.
-- **Helper language**: Lua if a Phase-0 spike proves external-Lua works on the target Studio; else Python (invisible to JVE behind the socket).
+- **Helper language**: Python — resolved by the Phase-0 spike (`phase0-findings.md`): external LuaJIT segfaults loading `fusionscript.so`, no PUC Lua 5.1 present, Python connects to Studio 20.3.2.9 cleanly. (Invisible to JVE behind the socket.)
 - **Identity is bidirectional**: imported clips adopt the Resolve item id as `clip.id` (mirrors `media.id`); outbound DRT carries `clip.id`. No JVE id is injected into Resolve.
 - **Resolve edits flow back**: edit deltas (record/source/track/enabled) pull into JVE via an explicit, undoable, conflict-aware command; JVE stays the edit authority of record.
 

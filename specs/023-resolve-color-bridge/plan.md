@@ -11,7 +11,7 @@ The detailed engineering design lives in [research.md](./research.md) (architect
 
 ## Technical Context
 
-**Language/Version**: LuaJIT 2.1 (JVE model/command/UI/exporter layers + **all bridge policy**: supervision, protocol, correlation); C++17 / Qt6 only for **thin one-to-one FFI** (`qt_process_*`, `qt_local_socket_*`, `qt_zstd_compress`) and the renderer CDL stage. No Resolve-specific or supervision logic in C++ (ENGINEERING 2.18 FFI≠business-logic, 1.10 stay-in-layer). Helper process: **Lua if a Phase-0 spike proves external-Lua works on the target Resolve Studio; else Python** — invisible to JVE behind the socket.
+**Language/Version**: LuaJIT 2.1 (JVE model/command/UI/exporter layers + **all bridge policy**: supervision, protocol, correlation); C++17 / Qt6 only for **thin one-to-one FFI** (`qt_process_*`, `qt_local_socket_*`, `qt_zstd_compress`) and the renderer CDL stage. No Resolve-specific or supervision logic in C++ (ENGINEERING 2.18 FFI≠business-logic, 1.10 stay-in-layer). Helper process: **Python** (resolved by the Phase-0 spike, `phase0-findings.md`: external LuaJIT segfaults loading `fusionscript.so`'s `luaopen_dfscript`; Python connects to Studio 20.3.2.9 cleanly) — invisible to JVE behind the socket.
 **Primary Dependencies**: Qt6 (Network — `QLocalSocket` client + `QProcess`, already linked per spec 020; existing `debug_terminal` is the server-side pattern to mirror), SQLite via lsqlite3, libzstd (existing `qt_zstd_decompress`; add `qt_zstd_compress`), dkjson (wire JSON), DaVinci Resolve Studio scripting API (`fusionscript` — **helper process only**, never linked into JVE).
 **Storage**: SQLite `.jvp` project files. Schema **V11 → V12**: new `clip_grade` and `resolve_bridge_link` (incl. `edit_fingerprint`) tables (no migration — Joe regenerates). `clip.id` may now be a Resolve timeline-item id (adopted on import, mirroring `media.id`); no schema change for that — `clips.id` is already `TEXT`. Helper holds a process-local idempotency ledger only (not in `.jvp`).
 **Testing**: LuaJIT black-box test harness (`tests/`); `--test` mode (`jve --test`) for binding/integration tests needing real Qt/EMP; DRT-writer round-trip against JVE's own importer (`drp_importer.parse_drp_file`); **live tests against a real Resolve Studio**; pixel-compare for CDL math. No mocks that assert their own canned values (constitution III, `feedback_no_mocks_use_test_mode`).
@@ -83,7 +83,7 @@ src/
     local_socket_bindings.cpp   # NEW — thin QLocalSocket client FFI (qt_local_socket_connect/write + readyRead signal)
   editor_media_platform/        # MODIFIED — renderer CDL stage (per-pixel slope/offset/power+sat, then LUT)
 tools/
-  resolve-helper/               # NEW — the sidecar process (Lua or Python per Phase 0)
+  resolve-helper/               # NEW — the sidecar process (Python, resolved by Phase 0)
     helper main + Resolve-API adapter (import/read_identities/read_grades/queue_render/render_status)
 tests/
   test_drt_writer_roundtrip.lua            # NEW — encode→decode equality via existing reader
@@ -139,7 +139,7 @@ Outputs generated in `$SPECS_DIR`:
 | Deviation | Why needed | Simpler alternative rejected because |
 |-----------|------------|--------------------------------------|
 | Separate helper process (not in-JVE) | Quarantine BMD API drift + crashes; the scripting bridge is external | In-process `fusionscript` has an undocumented ABI and is forbidden; per-op shelling re-runs the fragile connect + locale landmine every call |
-| Helper may be Python, not Lua | The external scripting bridge may not support external-Lua on the target Studio | Forcing Lua could make the bridge simply not connect; language is invisible to JVE behind the socket, so the cost is contained |
+| Helper is Python, not Lua (resolved by Phase 0) | External LuaJIT segfaults loading `fusionscript.so` (PUC-Lua-5.1 ABI vs LuaJIT); Python connects cleanly — `phase0-findings.md` | Forcing Lua would need a separate PUC Lua 5.1 runtime JVE doesn't have, and the module still crashes under LuaJIT; language is invisible to JVE behind the socket, so the cost is contained |
 | New color model + renderer CDL stage | JVE has zero color model; read-back grades have nowhere to land or display | "Render-and-relink only" was offered and Joe chose store+display, so the model is required, not optional |
 | Reverse-engineered `.drt` writer | No exporter exists; Joe chose native `.drt` for fidelity | FCP7 XML (which JVE already parses) is lower-fidelity into Resolve; round-trip against the existing reader mitigates the format risk |
 | First `QProcess` in the codebase (thin FFI; policy in Lua) | JVE must own helper lifecycle for predictable UX | External/manual helper launch shifts setup burden to the user and loses crash-restart |
