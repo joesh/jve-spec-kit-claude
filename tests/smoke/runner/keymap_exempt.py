@@ -250,9 +250,7 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
         "l1": "SourceZoomFit — L3 should assert source viewer fit",
     },
     # Cmd+1/2/3/4 covered by test_keymap_cmd_1234_select_panel.py
-    ("Tilde", ()): {
-        "l1": "ToggleMaximizePanel — L3 should assert focused panel maximized/restored",
-    },
+    # (Tilde exempt declared further down with Cat E provenance comment.)
     ("Cmd+G", ()): {
         "l1": "FindNext — L3 should assert next-match focus after a prior Find",
     },
