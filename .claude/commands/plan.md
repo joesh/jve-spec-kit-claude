@@ -11,6 +11,7 @@ $ARGUMENTS
 Given the implementation details provided as an argument, do this:
 
 1. Run `.specify/scripts/bash/setup-plan.sh --json` from the repo root and parse JSON for FEATURE_SPEC, IMPL_PLAN, SPECS_DIR, BRANCH. All future file paths must be absolute.
+   - If the script exits non-zero because `plan.md` already exists with authored content, this is a re-run guard, NOT an error to work around. STOP and tell the user the plan already exists; ask whether to keep it (proceed to /tasks) or discard and regenerate. Only re-run with `--force` on explicit user confirmation. Never silently overwrite an authored plan.
    - BEFORE proceeding, inspect FEATURE_SPEC for a `## Clarifications` section with at least one `Session` subheading. If missing or clearly ambiguous areas remain (vague adjectives, unresolved critical choices), PAUSE and instruct the user to run `/clarify` first to reduce rework. Only continue if: (a) Clarifications exist OR (b) an explicit user override is provided (e.g., "proceed without clarification"). Do not attempt to fabricate clarifications yourself.
 2. Read and analyze the feature specification to understand:
    - The feature requirements and user stories
