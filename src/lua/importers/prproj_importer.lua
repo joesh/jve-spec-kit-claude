@@ -218,17 +218,19 @@ end
 
 --- Extract media TC origin (seconds since midnight) from <AlternateStart>.
 -- Premiere stores file TC on the Media element as AlternateStart (ticks),
--- gated by <UseAlternateStart>true</UseAlternateStart>. Synthetic/non-TC
--- media (Color Matte, Adjustment Layer, screen recordings without TC) omit
--- AlternateStart; nil propagates to importer_core.build_media_metadata
--- which writes empty meta. Matches DRP's behavior for media without
--- <MediaStartTime>: Media:get_start_tc() returns nil and downstream
--- _ensure_tc_extracted probes the file (asserts loudly if absent).
+-- gated by <UseAlternateStart>true</UseAlternateStart>. When either child
+-- is absent or UseAlternateStart="false", Premiere DISPLAYS TC starting
+-- at 00:00:00:00 — so the faithful translation is TC origin = 0, not
+-- "TC unknown, probe the file". Returning 0 is the prproj semantic
+-- (not a fallback, rule 2.13): Premiere itself treats absent AlternateStart
+-- as zero, and downstream importer_core.build_media_metadata writes
+-- start_tc_value=0 into the media row so ensure_master succeeds without
+-- the source file on disk.
 local function parse_media_start_time(media_elem)
     local use_alt = get_child_text(media_elem, "UseAlternateStart")
-    if use_alt ~= "true" then return nil end
+    if use_alt ~= "true" then return 0 end
     local alt_ticks = get_child_number(media_elem, "AlternateStart")
-    if not alt_ticks or alt_ticks <= 0 then return nil end
+    if not alt_ticks then return 0 end
     return alt_ticks / TICKS_PER_SECOND
 end
 
@@ -716,11 +718,6 @@ function M.parse_prproj_file(prproj_path, progress_cb)
         open_timeline_names[#open_timeline_names + 1] = tl.name
     end
 
-    -- ZeroPoint-derived media_start_time is left nil — Premiere stores TC
-    -- origin per-Sequence (not per-media), so backfilling requires
-    -- traversing each containing Sequence. Tracked in memory
-    -- todo_prproj_media_tc_seeding; the field is optional downstream.
-
     report(90, "Done parsing")
 
     return {
@@ -758,104 +755,95 @@ function M.quick_metadata(prproj_path)
 end
 
 -- ---------------------------------------------------------------------------
--- Convert: Parse .prproj and create new .jvp (Open verb)
+-- Public API consumed by open_project.convert_to_jvp.
+-- DB lifecycle (wipe, init, project record, WAL checkpoint) belongs to
+-- open_project; this module owns format knowledge only.
 -- ---------------------------------------------------------------------------
 
-function M.convert(prproj_path, jvp_path, progress_cb)
-    assert(prproj_path and prproj_path ~= "", "prproj_importer.convert: prproj_path required")
-    assert(jvp_path and jvp_path ~= "", "prproj_importer.convert: jvp_path required")
-    local raw_report = progress_cb or function() end
-    local function report(pct, text)
-        if raw_report(pct, text) == "cancel" then
-            error({cancelled = true}, 0)
+--- Derive the project settings dict from a parsed prproj. Pure transform —
+--- no DB, no Qt. Asserts on every field consumed (rule 2.13). Unlike
+--- drp_importer.derive_project_settings (which takes audio_sample_rate
+--- as a separate arg), prproj carries audio_sample_rate inside
+--- parse_result.project.settings already, so the signature is single-arg.
+function M.derive_project_settings(parse_result)
+    assert(parse_result and parse_result.project and parse_result.project.settings,
+        "prproj_importer.derive_project_settings: parse_result.project.settings required")
+    local s = parse_result.project.settings
+    assert(type(s.frame_rate) == "number" and s.frame_rate > 0, string.format(
+        "prproj_importer.derive_project_settings: frame_rate must be a positive number; got %s",
+        tostring(s.frame_rate)))
+    assert(type(s.width) == "number" and s.width > 0, string.format(
+        "prproj_importer.derive_project_settings: width must be a positive number; got %s",
+        tostring(s.width)))
+    assert(type(s.height) == "number" and s.height > 0, string.format(
+        "prproj_importer.derive_project_settings: height must be a positive number; got %s",
+        tostring(s.height)))
+    assert(type(s.audio_sample_rate) == "number" and s.audio_sample_rate > 0, string.format(
+        "prproj_importer.derive_project_settings: audio_sample_rate must be a positive number; got %s",
+        tostring(s.audio_sample_rate)))
+    return {
+        frame_rate        = s.frame_rate,
+        width             = s.width,
+        height            = s.height,
+        audio_sample_rate = s.audio_sample_rate,
+        master_clock_hz   = subframe_math.MASTER_CLOCK_HZ,
+        default_fps       = { num = 24, den = 1 },
+    }
+end
+
+--- Shared entity-creation for prproj imports. Thin pass-through to
+--- importer_core: prproj has no per-format post-import work (DRP runs
+--- apply_pool_master_clip_marks here; prproj's pool master clips have
+--- no extra marks to apply). The wrapper exists so open_project.convert_to_jvp
+--- can call importer.import_into_project uniformly across formats.
+function M.import_into_project(project_id, parse_result, opts)
+    return importer_core.import_into_project(project_id, parse_result, opts)
+end
+
+--- Translate a parsed prproj's open-tab list (timeline NAMES) to JVE
+--- sequence ids. Pure transform — no DB writes. Asserts on any
+--- unresolved name (a timeline marked open but missing from import
+--- means it was silently dropped). Returns nil when there are no open
+--- tabs to restore.
+--- @param parse_result table
+--- @param import_result table  — output of M.import_into_project
+--- @return table|nil ``{ open_sequence_ids, active_sequence_id }`` or nil
+function M.extract_tab_state(parse_result, import_result)
+    assert(parse_result, "prproj_importer.extract_tab_state: parse_result required")
+    assert(import_result,
+        "prproj_importer.extract_tab_state: import_result required")
+    local open_names = parse_result.open_timeline_names
+    if not open_names or #open_names == 0 then return nil end
+    local active_name = parse_result.active_timeline_name
+    local name_to_id = import_result.name_to_sequence_id
+    assert(type(name_to_id) == "table", string.format(
+        "prproj_importer.extract_tab_state: import_result.name_to_sequence_id "
+        .. "must be a table populated by import_into_project; got %s",
+        type(name_to_id)))
+
+    local open_sequence_ids, active_sequence_id = {}, nil
+    for _, tl_name in ipairs(open_names) do
+        local seq_id = name_to_id[tl_name]
+        assert(seq_id, string.format(
+            "prproj_importer.extract_tab_state: open timeline %q has no "
+            .. "corresponding sequence — was present in open-tab list but "
+            .. "never created during import.", tostring(tl_name)))
+        open_sequence_ids[#open_sequence_ids + 1] = seq_id
+        if tl_name == active_name then
+            active_sequence_id = seq_id
         end
     end
-
-    log.event("Converting %s -> %s", prproj_path, jvp_path)
-
-    local convert_ok, convert_err = pcall(function()
-
-    report(5, "Parsing project…")
-    local parse_progress = progress_cb and function(sub_pct, text)
-        report(5 + math.floor(sub_pct * 0.25), text)
-    end or nil
-    local parse_result = M.parse_prproj_file(prproj_path, parse_progress)
-    assert(parse_result.success, "Failed to parse .prproj: " .. tostring(parse_result.error))
-
-    report(30, "Creating project database…")
-
-    os.remove(jvp_path)
-    os.remove(jvp_path .. "-shm")
-    os.remove(jvp_path .. "-wal")
-
-    local database = require("core.database")
-    database.init(jvp_path)
-
-    local Project = require("models.project")
-    local json = require("dkjson")
-    local settings = parse_result.project.settings
-    -- 018: master_clock_hz (FR-028) and default_fps (FR-036a) are required
-    -- on every project; prproj has no master-clock concept of its own.
-    settings.master_clock_hz = subframe_math.MASTER_CLOCK_HZ
-    settings.default_fps = { num = 24, den = 1 }
-
-    local project = Project.create(parse_result.project.name, {
-        settings = json.encode(settings),
-        fps_mismatch_policy = "resample",
-    })
-    assert(project:save(), "Failed to save project record")
-
-    log.event("Created project: %s (%dx%d @ %sfps)",
-        project.name, settings.width, settings.height, tostring(settings.frame_rate))
-
-    report(40, "Importing media…")
-    importer_core.import_into_project(project.id, parse_result, {
-        project_settings = settings,
-        progress_cb = progress_cb and function(sub_pct, text)
-            report(40 + math.floor(sub_pct * 0.5), text)
-        end or nil,
-    })
-
-    -- Store open timeline state
-    report(95, "Setting active timeline…")
-    local pid = database.get_current_project_id()
-    if parse_result.active_timeline_name then
-        local sequences = database.load_sequences(pid)
-        local name_to_seq = {}
-        for _, seq in ipairs(sequences) do name_to_seq[seq.name] = seq end
-
-        if parse_result.open_timeline_names and #parse_result.open_timeline_names > 0 then
-            local open_ids = {}
-            local active_id = nil
-            for _, tl_name in ipairs(parse_result.open_timeline_names) do
-                local seq = name_to_seq[tl_name]
-                if seq then
-                    open_ids[#open_ids + 1] = seq.id
-                    if tl_name == parse_result.active_timeline_name then
-                        active_id = seq.id
-                    end
-                end
-            end
-            if #open_ids > 0 then
-                database.set_project_setting(pid, "open_sequence_ids", open_ids)
-            end
-            if active_id then
-                database.set_project_setting(pid, "last_open_sequence_id", active_id)
-            end
-        end
-    end
-
-    report(100, "Done")
-
-    end) -- pcall
-
-    if not convert_ok then
-        if type(convert_err) == "table" and convert_err.cancelled then
-            return false, "Cancelled"
-        end
-        error(convert_err)
-    end
-    return true
+    assert(active_name, string.format(
+        "prproj_importer.extract_tab_state: %d open timeline names but "
+        .. "active_timeline_name is nil — parser returned inconsistent tab state",
+        #open_names))
+    assert(active_sequence_id, string.format(
+        "prproj_importer.extract_tab_state: active timeline %q was not in "
+        .. "the open-tab list — parser inconsistency", tostring(active_name)))
+    return {
+        open_sequence_ids   = open_sequence_ids,
+        active_sequence_id  = active_sequence_id,
+    }
 end
 
 -- Expose for tests

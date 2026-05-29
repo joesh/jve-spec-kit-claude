@@ -41,6 +41,8 @@ local function detect_project_format(path)
         return "jvp"
     elseif ext == "drp" then
         return "drp"
+    elseif ext == "prproj" then
+        return "prproj"
     elseif ext == "db" or ext == "resolve" then
         return "resolve_db"
     else
@@ -115,44 +117,91 @@ end
 
 -- Synthetic command in history records the project's origin (chain of
 -- custody): sequence_number=0, parent=-1 means "visible in history,
--- invisible to undo/redo." The literal "ImportResolveProject" is the
--- DOMAIN name for the operation (Resolve-project import), not the
--- command-dispatch name — OpenProject is the command that performs it.
-local function record_provenance(project_id, drp_path, source_name)
-    require("command").insert_provenance("ImportResolveProject", project_id, {
-        drp_path    = drp_path,
-        source_name = source_name,
-    })
+-- invisible to undo/redo." The command_type literal is the DOMAIN name
+-- for the operation (e.g. Resolve-project import) — not the command-
+-- dispatch name; OpenProject is the command that performs it.
+local function record_import_provenance(project_id, command_type, source_path, source_name, path_key)
+    local params = { source_name = source_name }
+    params[path_key] = source_path
+    require("command").insert_provenance(command_type, project_id, params)
     require("models.sequence").set_undo_cursor_for_project(project_id, 0)
 end
 
---- Convert a .drp into a .jvp. Private — drives the conversion-dialog's
---- ``convert_fn``; ``M._convert_drp_to_jvp`` exposes it for tests.
---- Returns ``true`` on success, ``false, "Cancelled"`` on user cancel.
---- Raises on every other failure mode (parse / DB / save).
-local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
-    assert(drp_path and drp_path ~= "", "convert_drp_to_jvp: drp_path required")
-    assert(jvp_path and jvp_path ~= "", "convert_drp_to_jvp: jvp_path required")
-    opts = opts or {}
+-- ---------------------------------------------------------------------------
+-- Per-format import descriptors. open_project owns the convert lifecycle
+-- (wipe → init DB → create project → import → tab state → provenance →
+-- WAL checkpoint); each importer module owns format-knowledge (parse,
+-- derive settings, entity creation, tab extraction). The descriptor
+-- table is the seam — every format-specific decision the lifecycle
+-- needs is one entry. Adding a new format (e.g. FCP7) means adding an
+-- entry here, not duplicating the lifecycle.
+-- ---------------------------------------------------------------------------
 
+local function drp_parse(importer, path, progress)
+    return importer.parse_drp_file(path, progress)
+end
+
+local function drp_derive_settings(importer, parse_result, opts)
+    -- Audio rate resolution: explicit caller arg, else majority vote
+    -- across parsed media. nil propagates → import_into_project asserts
+    -- (Resolve has no project-wide audio default to invent).
+    local audio_rate = (opts and opts.audio_sample_rate)
+        or importer.pick_majority_audio_sample_rate(parse_result)
+    return importer.derive_project_settings(parse_result, audio_rate)
+end
+
+local function prproj_parse(importer, path, progress)
+    return importer.parse_prproj_file(path, progress)
+end
+
+local function prproj_derive_settings(importer, parse_result, _opts)
+    return importer.derive_project_settings(parse_result)
+end
+
+local IMPORT_FORMATS = {
+    drp = {
+        format_label            = "DaVinci Resolve",
+        importer_module         = "importers.drp_importer",
+        provenance_command_type = "ImportResolveProject",
+        provenance_path_key     = "drp_path",
+        parse                   = drp_parse,
+        derive_settings         = drp_derive_settings,
+    },
+    prproj = {
+        format_label            = "Premiere Pro",
+        importer_module         = "importers.prproj_importer",
+        provenance_command_type = "ImportPremiereProject",
+        provenance_path_key     = "prproj_path",
+        parse                   = prproj_parse,
+        derive_settings         = prproj_derive_settings,
+    },
+}
+
+--- Convert a source project file into a fresh .jvp via the format
+--- descriptor. Returns ``true`` on success, ``false, "Cancelled"`` on
+--- user cancel; raises on every other failure mode (parse / DB / save).
+--- Owns the DB lifecycle (wipe + init + project record + WAL
+--- checkpoint); the descriptor's importer owns format knowledge.
+local function convert_to_jvp(descriptor, src_path, jvp_path, progress_cb, opts)
+    assert(type(descriptor) == "table" and descriptor.importer_module,
+        "convert_to_jvp: descriptor with importer_module required")
+    assert(src_path and src_path ~= "", "convert_to_jvp: src_path required")
+    assert(jvp_path and jvp_path ~= "", "convert_to_jvp: jvp_path required")
+
+    local importer = require(descriptor.importer_module)
     local function report(pct, text) report_progress(progress_cb, pct, text) end
-    local drp_importer = require("importers.drp_importer")
 
-    log.event("Converting %s -> %s", drp_path, jvp_path)
+    log.event("Converting %s -> %s", src_path, jvp_path)
 
     local convert_ok, convert_err = pcall(function()
-        report(5, "Parsing archive…")
-        local parse_result = drp_importer.parse_drp_file(
-            drp_path, remap_progress(progress_cb, 5, 25))
-        assert(parse_result.success,
-            "Failed to parse .drp file: " .. tostring(parse_result.error))
+        report(5, "Parsing project file…")
+        local parse_result = descriptor.parse(
+            importer, src_path, remap_progress(progress_cb, 5, 25))
+        assert(parse_result.success, string.format(
+            "Failed to parse %s file: %s",
+            descriptor.format_label, tostring(parse_result.error)))
 
-        -- Audio rate resolution: explicit caller arg, else majority vote
-        -- across parsed media. nil propagates → import_into_project
-        -- asserts (Resolve has no project-wide audio default to invent).
-        local audio_rate = opts.audio_sample_rate
-            or drp_importer.pick_majority_audio_sample_rate(parse_result)
-        local settings = drp_importer.derive_project_settings(parse_result, audio_rate)
+        local settings = descriptor.derive_settings(importer, parse_result, opts)
 
         report(30, "Creating project database…")
         wipe_destination(jvp_path)
@@ -160,17 +209,18 @@ local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
         local project = create_project_record(parse_result, settings)
 
         report(40, "Importing media…")
-        local import_result = drp_importer.import_into_project(project.id, parse_result, {
+        local import_result = importer.import_into_project(project.id, parse_result, {
             project_settings = settings,
             progress_cb      = remap_progress(progress_cb, 40, 50),
         })
 
         report(95, "Setting active timeline…")
-        local tabs = drp_importer.extract_tab_state(parse_result, import_result)
+        local tabs = importer.extract_tab_state(parse_result, import_result)
         if tabs then persist_tab_state(project.id, tabs) end
 
         report(98, "Recording provenance…")
-        record_provenance(project.id, drp_path, parse_result.project.name)
+        record_import_provenance(project.id, descriptor.provenance_command_type,
+            src_path, parse_result.project.name, descriptor.provenance_path_key)
 
         -- Self-contained-file contract: cross-process consumers (smoke
         -- runner moves only the .jvp; backup / sync tools may skip
@@ -179,7 +229,7 @@ local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
         -- the editor to fall back to an arbitrary sequence on next open.
         local checkpoint_ok, checkpoint_err = require("core.database").checkpoint_wal()
         assert(checkpoint_ok, string.format(
-            "convert_drp_to_jvp: WAL checkpoint failed — %s", tostring(checkpoint_err)))
+            "convert_to_jvp: WAL checkpoint failed — %s", tostring(checkpoint_err)))
 
         report(100, "Done")
     end)
@@ -191,10 +241,54 @@ local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
     error(convert_err)
 end
 
-M._convert_drp_to_jvp = convert_drp_to_jvp  -- exported for tests
+-- Named per-format entry points. These exist as the stable test/API
+-- surface (many binding tests call them directly; the smoke runner's
+-- build_template.py embeds the .drp variant). The body lives in
+-- convert_to_jvp; these select the descriptor.
+local function convert_drp_to_jvp(drp_path, jvp_path, progress_cb, opts)
+    return convert_to_jvp(IMPORT_FORMATS.drp, drp_path, jvp_path, progress_cb, opts)
+end
 
---- Resolve project format: detect .drp/.jvp, convert if needed.
--- @param path string: path to project file (.jvp or .drp)
+local function convert_prproj_to_jvp(prproj_path, jvp_path, progress_cb, opts)
+    return convert_to_jvp(IMPORT_FORMATS.prproj, prproj_path, jvp_path, progress_cb, opts)
+end
+
+M._convert_drp_to_jvp    = convert_drp_to_jvp     -- exported for tests
+M._convert_prproj_to_jvp = convert_prproj_to_jvp  -- exported for tests
+
+-- Route a non-native format through the user-facing conversion dialog:
+-- show metadata + destination chooser, then drive the lifecycle via
+-- convert_to_jvp. Returns the resolved .jvp path or nil on cancel.
+-- The convert orchestration lives in this module — importers are format-
+-- knowledge only; lifecycle (DB swap + signal cascade) belongs to
+-- OpenProject.
+local FILE_FILTER_JVP = "JVE Project Files (*.jvp)"
+
+local function route_through_conversion_dialog(descriptor, src_path, parent_widget)
+    local importer = require(descriptor.importer_module)
+    local conversion_dialog = require("ui.conversion_dialog")
+
+    local meta, meta_err = importer.quick_metadata(src_path)
+    if not meta then
+        error(string.format("Failed to read %s metadata: %s",
+            descriptor.format_label, tostring(meta_err)))
+    end
+
+    return conversion_dialog.show({
+        source_path  = src_path,
+        format_label = descriptor.format_label,
+        project_name = meta.name,
+        default_ext  = ".jvp",
+        file_filter  = FILE_FILTER_JVP,
+        convert_fn   = function(s, d, pcb, opts)
+            return convert_to_jvp(descriptor, s, d, pcb, opts)
+        end,
+        parent       = parent_widget,
+    })
+end
+
+--- Resolve project format: detect .drp/.jvp/.prproj, convert if needed.
+-- @param path string: path to project file
 -- @param parent_widget userdata|nil: parent widget for conversion dialog
 -- @return string|nil: resolved .jvp path, or nil if user cancelled
 -- @raises error on unknown format or conversion failure
@@ -202,30 +296,9 @@ function M.resolve_format(path, parent_widget)
     local format = detect_project_format(path)
     if format == "jvp" then return path end
 
-    if format == "drp" then
-        local drp_importer = require("importers.drp_importer")
-        local conversion_dialog = require("ui.conversion_dialog")
-
-        -- Quick metadata for dialog (no full parse)
-        local meta, meta_err = drp_importer.quick_metadata(path)
-        if not meta then error("Failed to read DRP metadata: " .. tostring(meta_err)) end
-
-        local dest_path = conversion_dialog.show({
-            source_path = path,
-            format_label = "DaVinci Resolve",
-            project_name = meta.name,
-            default_ext = ".jvp",
-            file_filter = "JVE Project Files (*.jvp)",
-            -- The convert orchestration lives in this module (see
-            -- ``convert_drp_to_jvp`` above) — drp_importer is format-
-            -- knowledge only, and the lifecycle (DB swap + signal
-            -- cascade) belongs to OpenProject.
-            convert_fn = convert_drp_to_jvp,
-            parent = parent_widget,
-        })
-
-        if not dest_path then return nil end  -- cancelled
-        return dest_path
+    local descriptor = IMPORT_FORMATS[format]
+    if descriptor then
+        return route_through_conversion_dialog(descriptor, path, parent_widget)
     end
 
     if format == "resolve_db" then

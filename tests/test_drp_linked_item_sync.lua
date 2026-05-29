@@ -193,20 +193,65 @@ print("  ✓ Multi-shot take: shared parent ID + different shot name → indepen
 -- Fail-fast on malformed inputs (Rule 1.14, Rule 2.32)
 -- =========================================================================
 
--- Non-numeric LinkedItemSync content must crash with an actionable
--- error that names the offending clip and the bad value.
+-- =========================================================================
+-- Regression: Resolve's <int>|<hex> extended-integer form
+-- =========================================================================
+-- The anamnesis fixture contains a real clip "45-233-004" with
+-- <LinkedItemSync>-4799|00000000000000bd</LinkedItemSync> — the same
+-- shape Resolve uses for <Start> and <In> (see parse_drp_frame_value).
+-- The pair key is opaque (equality only), so the hex tail composes into
+-- the key as-is; two clips with the same int + same hex + same name link,
+-- while a distinct hex tail produces a distinct key.
+
+local extint_seq = elem("Sm2SequenceContainer", {}, {
+    track(0, {
+        video_clip("45-233-004", 100,
+            text("LinkedItemSync", "-4799|00000000000000bd")),
+        video_clip("45-233-004", 200,
+            text("LinkedItemSync", "-4799|00000000000000be")),  -- distinct tail
+    }),
+    track(1, {
+        audio_clip("45-233-004", 100, "ref-extint",
+            text("LinkedItemSync", "-4799|00000000000000bd")),
+    }),
+})
+local ev, ea = drp.parse_resolve_tracks(extint_seq, 25,
+    { ["ref-extint"] = "/tmp/45-233-004.wav" },
+    { ["ref-extint"] = "45-233-004.wav" },
+    { ["ref-extint"] = 48000 })
+
+local v_bd  = ev[1].clips[1]
+local v_be  = ev[1].clips[2]
+local a_bd  = ea[1].clips[1]
+
+assert(v_bd.linked_item_sync ~= nil,
+    "<int>|<hex> LinkedItemSync must produce a non-nil pair key")
+assert(v_bd.linked_item_sync == a_bd.linked_item_sync, string.format(
+    "V and A with identical extended-int LIS + name must share a key " ..
+    "(got V=%s, A=%s)", tostring(v_bd.linked_item_sync),
+    tostring(a_bd.linked_item_sync)))
+assert(v_bd.linked_item_sync ~= v_be.linked_item_sync,
+    "distinct hex tail must produce a distinct pair key")
+print("  ✓ Extended-int <int>|<hex> LinkedItemSync forms valid opaque keys")
+
+-- =========================================================================
+-- Fail-fast on malformed inputs (Rule 1.14, Rule 2.32)
+-- =========================================================================
+
+-- LinkedItemSync content outside the `<int>` / `<int>|<hex>` forms must
+-- crash with an actionable error naming the offending clip and value.
 local non_numeric_seq = elem("Sm2SequenceContainer", {}, {
     track(0, {
         video_clip("ANCHOR", 100, text("LinkedItemSync", "not-a-number")),
     }),
 })
 local ok, err = pcall(drp.parse_resolve_tracks, non_numeric_seq, 25, {}, {}, {})
-assert(not ok, "non-numeric LinkedItemSync must error")
+assert(not ok, "malformed LinkedItemSync must error")
 assert(tostring(err):find("LinkedItemSync"), string.format(
     "error message must mention LinkedItemSync (got: %s)", tostring(err)))
 assert(tostring(err):find("ANCHOR"), string.format(
     "error message must name the offending clip (got: %s)", tostring(err)))
-print("  ✓ Non-numeric <LinkedItemSync> fails fast with actionable message")
+print("  ✓ Malformed <LinkedItemSync> fails fast with actionable message")
 
 -- Clip name containing the pair-key separator must crash — pair-key
 -- composition would otherwise be ambiguous.
@@ -222,9 +267,9 @@ assert(tostring(err):find("separator") or tostring(err):find("ambiguous"),
     "error must explain the collision (got: " .. tostring(err) .. ")")
 print("  ✓ Clip name containing pair-key separator fails fast")
 
--- Fractional LinkedItemSync must crash. string.format("%d", 1.5)
--- silently truncates to "1", so two distinct fractional sync values
--- would alias on the same key. Reject upstream rather than masking.
+-- Fractional LinkedItemSync must crash — outside the <int>/<int>|<hex>
+-- forms Resolve emits. Two distinct fractional sync values would also
+-- not produce distinguishable keys under any reasonable encoding.
 local fractional_seq = elem("Sm2SequenceContainer", {}, {
     track(0, {
         video_clip("ANCHOR", 100, text("LinkedItemSync", "1.5")),
@@ -232,8 +277,8 @@ local fractional_seq = elem("Sm2SequenceContainer", {}, {
 })
 ok, err = pcall(drp.parse_resolve_tracks, fractional_seq, 25, {}, {}, {})
 assert(not ok, "fractional LinkedItemSync must error")
-assert(tostring(err):find("non-integer") or tostring(err):find("truncate"),
-    "error must explain truncation risk (got: " .. tostring(err) .. ")")
+assert(tostring(err):find("malformed"),
+    "error must flag malformed input (got: " .. tostring(err) .. ")")
 print("  ✓ Fractional <LinkedItemSync> fails fast")
 
 print("✅ test_drp_linked_item_sync.lua passed")

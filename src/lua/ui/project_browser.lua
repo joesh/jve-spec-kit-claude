@@ -126,6 +126,7 @@ local REFRESH_COMMANDS = {
     ImportResolveProject = true,
     ImportResolveTimeline = true,
     ImportResolveDatabase = true,
+    ImportPremiereProject = true,
     CreateSequence = true,
 }
 

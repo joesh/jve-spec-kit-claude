@@ -17,6 +17,12 @@
 -- "media <uuid> has no video TC origin". A.035-style camera files with
 -- real TC could not import without the source media present.
 --
+-- Premiere semantics: when AlternateStart is absent OR
+-- UseAlternateStart="false", Premiere DISPLAYS TC as 00:00:00:00. The
+-- faithful translation is media_start_time = 0 (not nil — that would
+-- mean "TC unknown, probe the file" and force a file probe that fails
+-- for portable test fixtures).
+--
 -- Black-box: only inspects parse_media_element's return value. The
 -- expected seconds are derived from prproj domain (ticks/sec constant
 -- = 254016000000), NOT from tracing the implementation.
@@ -80,9 +86,9 @@ print(string.format("  ✓ Case 1: AlternateStart=%d → media_start_time=%.6f s
     FIXTURE_TICKS, item.media_start_time))
 
 -- ─────────────────────────────────────────────────────────────────────
--- Case 2: Media with NO AlternateStart (e.g. screen recordings, files
--- imported without camera TC) → media_start_time = nil. Downstream
--- _ensure_tc_extracted will probe the file (or assert if absent).
+-- Case 2: Media with NO AlternateStart (screen recordings, files
+-- imported without camera TC, stock footage). Premiere displays such
+-- files starting at 00:00:00:00 — media_start_time = 0.
 -- ─────────────────────────────────────────────────────────────────────
 local media_no_tc = elem("Media", { ObjectUID = "uuid-no-tc" }, {
     text_child("FilePath", "/clips/screen_recording.mov"),
@@ -92,15 +98,14 @@ local media_no_tc = elem("Media", { ObjectUID = "uuid-no-tc" }, {
 
 local item2 = prproj._parse_media_element(media_no_tc, by_id)
 assert(item2, "media without TC must still parse")
-assert(item2.media_start_time == nil, string.format(
-    "Case 2: media without AlternateStart should have nil media_start_time, got %s",
+assert(item2.media_start_time == 0, string.format(
+    "Case 2: no AlternateStart should yield media_start_time=0 (Premiere shows 00:00:00:00), got %s",
     tostring(item2.media_start_time)))
-print("  ✓ Case 2: no AlternateStart → media_start_time = nil")
+print("  ✓ Case 2: no AlternateStart → media_start_time = 0")
 
 -- ─────────────────────────────────────────────────────────────────────
--- Case 3: AlternateStart present but UseAlternateStart=false → must
--- IGNORE the AlternateStart value (Premiere semantics — the field is
--- present but disabled). media_start_time = nil.
+-- Case 3: AlternateStart present but UseAlternateStart=false → Premiere
+-- ignores AlternateStart and displays 00:00:00:00. media_start_time = 0.
 -- ─────────────────────────────────────────────────────────────────────
 local media_disabled = elem("Media", { ObjectUID = "uuid-disabled" }, {
     text_child("FilePath", "/clips/disabled.mov"),
@@ -111,14 +116,17 @@ local media_disabled = elem("Media", { ObjectUID = "uuid-disabled" }, {
 
 local item3 = prproj._parse_media_element(media_disabled, by_id)
 assert(item3, "media with disabled TC must parse")
-assert(item3.media_start_time == nil, string.format(
-    "Case 3: UseAlternateStart=false must ignore AlternateStart, got %s",
+assert(item3.media_start_time == 0, string.format(
+    "Case 3: UseAlternateStart=false must ignore AlternateStart and yield 0, got %s",
     tostring(item3.media_start_time)))
-print("  ✓ Case 3: UseAlternateStart=false → media_start_time = nil")
+print("  ✓ Case 3: UseAlternateStart=false → media_start_time = 0")
 
 -- ─────────────────────────────────────────────────────────────────────
--- Case 4: UseAlternateStart=true but AlternateStart=0 → degenerate;
--- treat as no TC (midnight = absent TC). media_start_time = nil.
+-- Case 4: UseAlternateStart=true AND AlternateStart=0 → an explicit
+-- "TC starts at midnight" — valid TC origin, media_start_time = 0.
+-- (Same numeric result as the absent case; the semantic distinction
+-- is "explicit zero TC" vs "no TC declared at all" — both display as
+-- 00:00:00:00 in Premiere, so we don't distinguish at parser level.)
 -- ─────────────────────────────────────────────────────────────────────
 local media_zero = elem("Media", { ObjectUID = "uuid-zero" }, {
     text_child("FilePath", "/clips/zero.mov"),
@@ -129,9 +137,9 @@ local media_zero = elem("Media", { ObjectUID = "uuid-zero" }, {
 
 local item4 = prproj._parse_media_element(media_zero, by_id)
 assert(item4, "media with zero TC must parse")
-assert(item4.media_start_time == nil, string.format(
-    "Case 4: AlternateStart=0 should yield nil media_start_time, got %s",
+assert(item4.media_start_time == 0, string.format(
+    "Case 4: AlternateStart=0 should yield media_start_time=0, got %s",
     tostring(item4.media_start_time)))
-print("  ✓ Case 4: AlternateStart=0 → media_start_time = nil")
+print("  ✓ Case 4: AlternateStart=0 → media_start_time = 0")
 
 print("\n✅ test_prproj_media_tc_origin.lua passed")

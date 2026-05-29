@@ -939,18 +939,45 @@ local V13_REQUIRED = {
     "enabled", "volume", "playhead_frame",
 }
 
--- Sanity-check the source window. Direction-agnostic: forward clips have
--- Source window: non-empty (source_in != source_out), non-negative bounds.
+-- Sanity-check the source window. The window is the (frame, subframe)
+-- tuple: non-empty when EITHER component differs between in and out.
+-- For VIDEO clips (FR-013) subframe is NULL — comparison degenerates to
+-- the frame field. For AUDIO a sub-1-frame source range (e.g. a 1-sample
+-- patch) shares a frame index but spans distinct master-clock-tick
+-- subframes; it is a legitimate non-empty window at FR-022 granularity.
 -- Upper-bound (source_out <= master.duration) is NOT checked here: relink
 -- can shorten the master retroactively; runtime handles past-extent via
 -- partial_coverage / offline overlay / silence. Per-command preconditions
 -- (trim, slip, roll) enforce the upper bound at the right scope.
-local function assert_window_in_bounds(clip_id, source_in, source_out)
+local function assert_window_in_bounds(clip_id, source_in, source_out,
+                                       sub_in, sub_out)
     assert(type(source_in) == "number" and type(source_out) == "number",
         "Clip: source_in/out must be numbers")
-    assert(source_in ~= source_out, string.format(
-        "Clip window invariant: clip %s has source_in=%d == source_out=%d "
-        .. "(empty window)", tostring(clip_id), source_in, source_out))
+    -- FR-001: subframe is either NULL (video) or an integer (audio). Mixed
+    -- nil/int means a partial mutation slipped through — surface it loud.
+    -- nil-vs-int would otherwise read as "non-equal" and silently pass the
+    -- window check below.
+    local sub_in_kind  = (sub_in  == nil) and "nil" or type(sub_in)
+    local sub_out_kind = (sub_out == nil) and "nil" or type(sub_out)
+    assert(sub_in_kind == sub_out_kind
+        and (sub_in_kind == "nil" or sub_in_kind == "number"),
+        string.format("Clip window invariant: clip %s has mismatched or " ..
+            "non-numeric subframe kinds (source_in_subframe=%s, " ..
+            "source_out_subframe=%s); both must be NULL (video, FR-013) or " ..
+            "both integers (audio, FR-001)",
+            tostring(clip_id), tostring(sub_in), tostring(sub_out)))
+    -- Lua nil == nil → true: video clips (FR-013 NULL subframe) collapse
+    -- to a frame-only comparison automatically. Audio clips compare full
+    -- ints. nil-vs-int (a schema violation) reads as non-equal — surfaced
+    -- as a non-empty window, which is the safer direction (a real bug
+    -- would still trip the upper-bound or downstream checks).
+    local same_frame = (source_in == source_out)
+    local same_sub   = (sub_in == sub_out)
+    assert(not (same_frame and same_sub), string.format(
+        "Clip window invariant: clip %s has source_in=(%d,%s) == "
+        .. "source_out=(%d,%s) (empty window)",
+        tostring(clip_id), source_in, tostring(sub_in),
+        source_out, tostring(sub_out)))
     local lo = math.min(source_in, source_out)
     assert(lo >= 0, string.format(
         "Clip window invariant: clip %s has negative source bound %d "
@@ -1071,7 +1098,8 @@ function M._create_v13_row(fields)
 
     require("core.track_lock_guard").assert_writable(db, { fields.track_id })
     assert_owner_is_nested(db, id, fields.owner_sequence_id)
-    assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame)
+    assert_window_in_bounds(id, fields.source_in_frame, fields.source_out_frame,
+        fields.source_in_subframe, fields.source_out_subframe)
 
     local sub_in, sub_out = subframe_for_kind(db, id, fields)
 
@@ -1137,14 +1165,17 @@ function M.update(id, fields)
     local db = require("core.database").get_connection()
 
     local fetch = db:prepare(
-        "SELECT source_in_frame, source_out_frame, track_id FROM clips WHERE id = ?")
+        "SELECT source_in_frame, source_out_frame, " ..
+        "source_in_subframe, source_out_subframe, track_id FROM clips WHERE id = ?")
     assert(fetch, "Clip.update: fetch prepare failed")
     fetch:bind_value(1, id)
     assert(fetch:exec(), "Clip.update: fetch exec failed")
     assert(fetch:next(), string.format("Clip.update: clip %s not found", tostring(id)))
     local cur_in = fetch:value(0)
     local cur_out = fetch:value(1)
-    local cur_track = fetch:value(2)
+    local cur_sub_in  = fetch:value(2)
+    local cur_sub_out = fetch:value(3)
+    local cur_track = fetch:value(4)
     fetch:finalize()
 
     -- Lock gate: refuse if the clip's current track is locked, and if the
@@ -1159,8 +1190,11 @@ function M.update(id, fields)
 
     local new_in  = fields.source_in_frame  ~= nil and fields.source_in_frame  or cur_in
     local new_out = fields.source_out_frame ~= nil and fields.source_out_frame or cur_out
-    if fields.source_in_frame ~= nil or fields.source_out_frame ~= nil then
-        assert_window_in_bounds(id, new_in, new_out)
+    local new_sub_in  = fields.source_in_subframe  ~= nil and fields.source_in_subframe  or cur_sub_in
+    local new_sub_out = fields.source_out_subframe ~= nil and fields.source_out_subframe or cur_sub_out
+    if fields.source_in_frame ~= nil or fields.source_out_frame ~= nil
+        or fields.source_in_subframe ~= nil or fields.source_out_subframe ~= nil then
+        assert_window_in_bounds(id, new_in, new_out, new_sub_in, new_sub_out)
     end
 
     -- Catch duration_frames <= 0 at the Lua boundary with full context

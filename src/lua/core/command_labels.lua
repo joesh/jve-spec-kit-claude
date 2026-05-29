@@ -29,6 +29,7 @@ local overrides = {
     ImportResolveProject = "Import Resolve Project",
     ImportResolveTimeline = "Import Resolve Timeline",
     ImportResolveDatabase = "Import Resolve Database",
+    ImportPremiereProject = "Import Premiere Project",
     SetMarkIn = "Set Mark In",
     SetMarkOut = "Set Mark Out",
     SetMark = "Set Mark",
@@ -94,6 +95,12 @@ function M.detail_for_params(command_type, params)
     elseif command_type == "ImportResolveProject" then
         local name = params.source_name
         local path = params.drp_path
+        if name then return name end
+        if path then return basename(path) end
+
+    elseif command_type == "ImportPremiereProject" then
+        local name = params.source_name
+        local path = params.prproj_path
         if name then return name end
         if path then return basename(path) end
 

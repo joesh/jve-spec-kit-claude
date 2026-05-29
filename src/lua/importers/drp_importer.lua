@@ -1207,24 +1207,23 @@ local function extract_linked_item_sync(clip_elem, clip_name)
     local lis_text = lis_elem and get_text(lis_elem)
     if not lis_text or lis_text == "" then return nil end
 
-    local sync_value = tonumber(lis_text)
-    assert(sync_value, string.format(
-        "extract_linked_item_sync: clip '%s' has non-numeric LinkedItemSync '%s'",
-        clip_name, lis_text))
-    -- Float values would silently truncate inside string.format("%d", ...) —
-    -- two distinct fractional sync values would collide on the same key.
-    -- Resolve writes integers; reject anything else loudly.
-    assert(sync_value == math.floor(sync_value)
-        and sync_value > -2^53 and sync_value < 2^53, string.format(
-        "extract_linked_item_sync: clip '%s' has non-integer LinkedItemSync " ..
-        "'%s' (parsed as %s); pair-key composition truncates fractional " ..
-        "values and would alias distinct clips",
-        clip_name, lis_text, tostring(sync_value)))
+    -- Resolve emits LinkedItemSync in two forms:
+    --   "42"                              plain signed integer
+    --   "-4799|00000000000000bd"          signed int + extended low bits
+    -- (same `<int>|<hex>` shape as <Start>/<In>; see parse_drp_frame_value).
+    -- The pair key is opaque (equality only), so the raw text composes
+    -- straight into the key — distinct hex tails yield distinct keys, which
+    -- is what we want. Anything outside these two forms is malformed input.
+    assert(lis_text:match("^%-?%d+$") or lis_text:match("^%-?%d+|%x+$"),
+        string.format(
+            "extract_linked_item_sync: clip '%s' has malformed LinkedItemSync " ..
+            "'%s' (expected '<int>' or '<int>|<hex>')",
+            clip_name, lis_text))
     assert(not clip_name:find(PAIR_KEY_SEP, 1, true), string.format(
         "extract_linked_item_sync: clip name '%s' contains the pair-key " ..
         "separator (\\x1F); pair-key composition would be ambiguous",
         clip_name))
-    return string.format("%d%s%s", sync_value, PAIR_KEY_SEP, clip_name)
+    return lis_text .. PAIR_KEY_SEP .. clip_name
 end
 
 --- Parse Resolve tracks from sequence element
