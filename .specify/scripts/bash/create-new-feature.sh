@@ -71,44 +71,25 @@ BRANCH_NAME=$(echo "$FEATURE_DESCRIPTION" | tr '[:upper:]' '[:lower:]' | sed 's/
 WORDS=$(echo "$BRANCH_NAME" | tr '-' '\n' | grep -v '^$' | head -3 | tr '\n' '-' | sed 's/-$//')
 BRANCH_NAME="${FEATURE_NUM}-${WORDS}"
 
-if [ "$HAS_GIT" = true ]; then
-    # Refuse to branch when the working tree is dirty — feature branches must
-    # start from a clean tree, otherwise the new branch silently carries
-    # sibling-session changes from whatever was uncommitted at branch time.
-    if [ -n "$(git status --porcelain)" ]; then
-        echo "Error: working tree is not clean. Commit or stash before /specify." >&2
-        echo "Dirty files:" >&2
-        git status --short >&2
-        exit 1
-    fi
-
-    # Refuse to branch from a feature branch whose commits aren't on master.
-    # If HEAD has commits master doesn't, branching from here orphans them
-    # from the new feature (the 017->018 hazard: 018 was cut from master while
-    # 017 was unmerged, so the new feature ran blind to 017's work).
-    DEFAULT_BRANCH="master"
-    if ! git rev-parse --verify "$DEFAULT_BRANCH" >/dev/null 2>&1; then
-        DEFAULT_BRANCH="main"
-    fi
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    if [ "$CURRENT_BRANCH" != "$DEFAULT_BRANCH" ]; then
-        if ! git merge-base --is-ancestor HEAD "$DEFAULT_BRANCH" 2>/dev/null; then
-            UNMERGED=$(git rev-list --count "$DEFAULT_BRANCH..HEAD" 2>/dev/null || echo "?")
-            echo "Error: current branch '$CURRENT_BRANCH' has $UNMERGED commit(s) not on $DEFAULT_BRANCH." >&2
-            echo "Branching here would orphan them. Merge or rebase '$CURRENT_BRANCH' into $DEFAULT_BRANCH (or check out $DEFAULT_BRANCH) before /specify." >&2
-            echo "Unmerged commits:" >&2
-            git log --oneline "$DEFAULT_BRANCH..HEAD" >&2
-            exit 1
-        fi
-    fi
-
-    git checkout -b "$BRANCH_NAME"
-else
-    >&2 echo "[specify] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME"
+# Branch creation is DEFERRED to implementation time (see start-feature-branch.sh,
+# invoked by /implement). /specify authors the spec on the current branch (normally
+# master) and does NOT cut or check out a feature branch. Rationale:
+#   - Joe authors spec -> plan -> tasks on master, then branches only when coding.
+#   - The working tree is routinely dirty with parallel-session work that must not
+#     be committed/stashed, so a clean-tree requirement here is wrong.
+# The clean-tree and unmerged-ancestor guards still exist — they moved to
+# start-feature-branch.sh, where the branch is actually cut.
+if [ "$HAS_GIT" != true ]; then
+    >&2 echo "[specify] Warning: Git repository not detected."
 fi
 
 FEATURE_DIR="$SPECS_DIR/$BRANCH_NAME"
 mkdir -p "$FEATURE_DIR"
+
+# Record the active feature so downstream scripts (/plan, /tasks, /implement)
+# resolve this feature while still on master, before any branch exists.
+# common.sh:get_current_branch reads this when HEAD is not itself a feature branch.
+echo "$BRANCH_NAME" > "$REPO_ROOT/.specify/.active-feature"
 
 TEMPLATE="$REPO_ROOT/.specify/templates/spec-template.md"
 SPEC_FILE="$FEATURE_DIR/spec.md"
@@ -117,11 +98,13 @@ if [ -f "$TEMPLATE" ]; then cp "$TEMPLATE" "$SPEC_FILE"; else touch "$SPEC_FILE"
 # Set the SPECIFY_FEATURE environment variable for the current session
 export SPECIFY_FEATURE="$BRANCH_NAME"
 
+# BRANCH_NAME names the feature dir and the branch that will be cut later by
+# /implement — no branch is checked out now. BRANCH_DEFERRED signals that.
 if $JSON_MODE; then
-    printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s"}\n' "$BRANCH_NAME" "$SPEC_FILE" "$FEATURE_NUM"
+    printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","BRANCH_DEFERRED":true}\n' "$BRANCH_NAME" "$SPEC_FILE" "$FEATURE_NUM"
 else
-    echo "BRANCH_NAME: $BRANCH_NAME"
+    echo "BRANCH_NAME: $BRANCH_NAME (not checked out — branch is cut at /implement time)"
     echo "SPEC_FILE: $SPEC_FILE"
     echo "FEATURE_NUM: $FEATURE_NUM"
-    echo "SPECIFY_FEATURE environment variable set to: $BRANCH_NAME"
+    echo "ACTIVE_FEATURE recorded: $BRANCH_NAME"
 fi

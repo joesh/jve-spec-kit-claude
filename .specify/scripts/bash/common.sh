@@ -12,21 +12,42 @@ get_repo_root() {
     fi
 }
 
-# Get current branch, with fallback for non-git repositories
+# Resolve the active feature (used to locate specs/<feature>/). Named
+# get_current_branch for historical reasons; it returns a FEATURE name, which
+# may differ from the checked-out git branch because /specify now authors on
+# master and defers the branch cut to /implement (start-feature-branch.sh).
 get_current_branch() {
-    # First check if SPECIFY_FEATURE environment variable is set
+    # 1. Explicit override always wins.
     if [[ -n "${SPECIFY_FEATURE:-}" ]]; then
         echo "$SPECIFY_FEATURE"
         return
     fi
-    
-    # Then check git if available
+
+    # 2. If HEAD is itself a feature branch (###-name), trust it — we're past
+    #    the branch cut and the branch is authoritative.
     if git rev-parse --abbrev-ref HEAD >/dev/null 2>&1; then
-        git rev-parse --abbrev-ref HEAD
-        return
+        local git_branch
+        git_branch=$(git rev-parse --abbrev-ref HEAD)
+        if [[ "$git_branch" =~ ^[0-9]{3}- ]]; then
+            echo "$git_branch"
+            return
+        fi
     fi
-    
-    # For non-git repos, try to find the latest feature directory
+
+    # 3. Authoring on master/main: read the active-feature marker written by
+    #    /specify. This is what lets /plan and /tasks run before any branch exists.
+    local marker
+    marker="$(get_repo_root)/.specify/.active-feature"
+    if [[ -f "$marker" ]]; then
+        local active
+        active=$(tr -d '[:space:]' < "$marker")
+        if [[ -n "$active" ]]; then
+            echo "$active"
+            return
+        fi
+    fi
+
+    # 4. For non-git repos, try to find the latest feature directory
     local repo_root=$(get_repo_root)
     local specs_dir="$repo_root/specs"
     

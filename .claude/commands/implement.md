@@ -8,9 +8,11 @@ User input:
 
 $ARGUMENTS
 
-1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute.
+1. Cut the feature branch (deferred from /specify): run `.specify/scripts/bash/start-feature-branch.sh --json` from repo root. This is where the branch is created/checked out — spec→plan→tasks were authored on master. If it errors because the working tree is not clean, STOP and tell the user to commit their spec/plan/tasks first (only their own files); do not stash or reset sibling-session work.
 
-2. Load and analyze the implementation context:
+2. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute.
+
+3. Load and analyze the implementation context:
    - **REQUIRED**: Read tasks.md for the complete task list and execution plan
    - **REQUIRED**: Read plan.md for tech stack, architecture, and file structure
    - **IF EXISTS**: Read data-model.md for entities and relationships

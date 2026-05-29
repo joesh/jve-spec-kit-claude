@@ -115,3 +115,6 @@ test-errors.txt
 
 # Large media fixtures (real project media, not for VCS)
 tests/fixtures/media/anamnesis/
+
+# speckit active-feature marker (per-working-tree state; branch deferred to /implement)
+.specify/.active-feature
