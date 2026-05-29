@@ -78,9 +78,7 @@ end
 local TEXT_OPERATORS = {"contains", "begins_with", "ends_with", "matches_exactly"}
 local NUMERIC_OPERATORS = {"equals", "greater_than", "less_than"}
 
-local function populate_operators(field_name)
-    if not ws.op_combo then return end
-    -- Re-add items (no CLEAR_COMBOBOX binding yet — see memory todo_clear_combobox_binding)
+local function operators_for_field(field_name)
     local fields = query_engine.get_searchable_fields()
     for _, f in ipairs(fields) do
         if f.name == field_name then
@@ -91,6 +89,14 @@ local function populate_operators(field_name)
         end
     end
     return TEXT_OPERATORS
+end
+
+local function populate_operators(field_name)
+    if not ws.op_combo then return end
+    qt.PROPERTIES.CLEAR_COMBOBOX(ws.op_combo)
+    for _, op in ipairs(operators_for_field(field_name)) do
+        qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
+    end
 end
 
 local function update_status(text)
@@ -270,11 +276,17 @@ local function create_window()
     end
     qt.LAYOUT.ADD_WIDGET(row1, ws.attr_combo)
     ws.op_combo = qt.WIDGET.CREATE_COMBOBOX()
-    local ops = populate_operators("name")
-    for _, op in ipairs(ops) do
-        qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
-    end
+    populate_operators("name")
     qt.LAYOUT.ADD_WIDGET(row1, ws.op_combo)
+
+    -- Repopulate operator list when attribute changes — numeric/boolean fields
+    -- get NUMERIC_OPERATORS, text fields get TEXT_OPERATORS.
+    -- luacheck: globals qt_set_combobox_change_handler
+    register_handler("__find_dlg_attr_changed", function()
+        local field = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
+        populate_operators(field)
+    end)
+    qt_set_combobox_change_handler(ws.attr_combo, "__find_dlg_attr_changed")
     ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
     qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "search text")
     qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
