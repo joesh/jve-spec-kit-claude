@@ -130,14 +130,28 @@ local function compute_space_needs(groups, arrangement, position)
     return total_duration, track_map
 end
 
+-- Sorted track-map iteration so the split_pool serves preset ids in the
+-- same order on every redo. `pairs()` is undefined-order, which would
+-- break the id-stability contract (see audit pass 19c).
+local function sorted_track_keys(track_map)
+    local keys = {}
+    for k in pairs(track_map) do keys[#keys + 1] = k end
+    table.sort(keys)
+    return keys
+end
+
 -- Phase 2: carve space.
 --   insert: ripple every track in the sequence by total_duration starting
 --     at `position`. Insert ripples ALL tracks (not just target tracks)
 --     so the batch's logical "wedge" leaves the timeline consistent.
 --   overwrite: occlude the union of intervals on each target track via
---     the shared place_shared.occlude_track helper.
+--     the shared place_shared.occlude_track helper. Straddle-split
+--     right-half uuids are drawn from a single flat pool whose preset
+--     comes from prior_occluded_capture (set on redo); on first execute
+--     the pool mints fresh uuids.
 local function carve_space(edit_type, sequence_id, owner_seq,
-                          position, total_duration, track_map)
+                          position, total_duration, track_map,
+                          prior_occluded_capture)
     local rippled_capture = {}
     local occluded_capture = {}
 
@@ -155,7 +169,27 @@ local function carve_space(edit_type, sequence_id, owner_seq,
             end
         end
     elseif edit_type == "overwrite" then
-        for track_id, intervals in pairs(track_map) do
+        local track_keys = sorted_track_keys(track_map)
+
+        -- Build the flat split_pool preset from prior capture in the same
+        -- deterministic key order the pool will be drawn in below. On
+        -- first execute prior_occluded_capture is nil and the preset
+        -- stays empty so :take() mints fresh uuids.
+        local split_preset = {}
+        if prior_occluded_capture then
+            for _, track_id in ipairs(track_keys) do
+                local prior = prior_occluded_capture[track_id]
+                if prior and prior.split_new_ids then
+                    for _, sid in ipairs(prior.split_new_ids) do
+                        split_preset[#split_preset + 1] = sid
+                    end
+                end
+            end
+        end
+        local split_pool = id_pool.new(split_preset)
+
+        for _, track_id in ipairs(track_keys) do
+            local intervals = track_map[track_id]
             local lo = intervals[1].start_frame
             local hi = intervals[1].end_frame
             for i = 2, #intervals do
@@ -163,14 +197,9 @@ local function carve_space(edit_type, sequence_id, owner_seq,
                 if intervals[i].end_frame   > hi then hi = intervals[i].end_frame   end
             end
             if hi > lo then
-                -- 19c id_pool plumbing: occlude_track requires a split pool
-                -- for the right-half ids it mints during straddle splits, so
-                -- redo replays the same uuids. Seed empty here — this caller
-                -- doesn't persist created ids yet, but it satisfies the
-                -- contract until that's added.
                 occluded_capture[track_id] =
                     place_shared.occlude_track(track_id, owner_seq, lo, hi,
-                        id_pool.new())
+                        split_pool)
             end
         end
     else
@@ -314,7 +343,8 @@ function M.execute(args)
     local result = {}
     local ok, err = pcall(function()
         local carve = carve_space(edit_type, args.sequence_id, owner_seq,
-            args.position, total_duration, track_map)
+            args.position, total_duration, track_map,
+            args.occluded_capture)
         local created = place_clips(track_map, args.project_id, args.sequence_id)
         local link_group_ids = link_groups(created)
 

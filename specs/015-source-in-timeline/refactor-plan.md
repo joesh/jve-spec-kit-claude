@@ -261,3 +261,27 @@ mutation snapshot on UI throw. Filed as TODO.
 Harness (seed=42, deterministic): P1=0, P2=0, P3=0. Full Lua suite:
 848/0.
 
+
+## Audit pass 19h (2026-05-28)
+
+AddClipsToSequence id_pool plumbing — completes the 19c pattern.
+
+Pre-fix, `carve_space` passed a fresh empty `id_pool.new()` to
+`occlude_track`, so split right-half uuids regenerated on every redo
+of an overwrite that straddled an existing clip. The 19c plumbing
+was left incomplete during pass 19f's regression cleanup.
+
+Fix mirrors the Insert/Overwrite idiom:
+1. `sorted_track_keys()` makes track iteration deterministic
+   (`pairs()` is undefined-order; sorting keeps preset → take order
+   stable across runs).
+2. `carve_space` now takes `prior_occluded_capture` (= `args.occluded_capture`
+   on redo). Builds a flat `split_preset` from each track's
+   `split_new_ids` in sorted-key order.
+3. One `split_pool` feeds every `occlude_track` call.
+
+Regression test: `tests/test_add_clips_to_sequence_split_uuid_stable.lua`
+captures the right-half uuid after execute, undo+redo, asserts
+identity.
+
+Full suite: 849/0.
