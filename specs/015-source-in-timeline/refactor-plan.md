@@ -223,3 +223,41 @@ Total successes: 265 / skipped: 5 / findings: 0.
 | 19e | 2 | cascade-deleted clip_link restoration |
 | 19f | **0** | MCTT mutation shape + AddClips pool |
 
+
+## Audit pass 19g (2026-05-28) — architectural follow-up to 19f
+
+`add_insert_mutation`'s validator was the gap. Pre-fix it only rejected
+when ALL of `start_value`/`duration_value`/`track_id` were absent —
+which means a legacy `_value`-suffixed payload (the exact 19f shape
+bug) sailed through, only to fail downstream in `clip_geometry.lua:56`
+AFTER `db_module.commit()` had run. The post-commit assert is the
+"orphan d73cd0fc-…" mechanism.
+
+Fix: validate canonical shape at the producer boundary:
+- `id` and `track_id` required;
+- `sequence_start` must be a number;
+- `duration` must be a positive number;
+- legacy `_value`-suffixed names (`start_value`, `duration_value`,
+  `source_in_value`, `source_out_value`) are explicitly REJECTED with
+  a message naming the canonical replacement.
+
+The assert now fires INSIDE the executor's active DB transaction so
+`command_manager.rollback_transaction()` unwinds the DB. No orphans.
+
+Regression test: `tests/test_mutation_shape_caught_at_executor.lua`
+exercises (1) legacy shape rejection, (2) missing sequence_start
+rejection, (3) missing duration rejection, (4) canonical-shape acceptance.
+
+Deeper architectural problem NOT fixed in this pass: `db_module.commit()`
+at `command_manager.lua:2065` still runs BEFORE `apply_command_mutations`
+at `:2095`. A future UI-layer producer regression (or anything else that
+asserts in `apply_mutations`/`clip_geometry`/etc.) would still orphan
+committed rows. Proper fix is to defer the commit until after UI
+processing succeeds, which requires (a) auditing `flush_post_commit_emits`
+subscribers for ordering assumptions, (b) reverting in-memory
+history cursor state on UI throw, and (c) reverting the in-memory
+mutation snapshot on UI throw. Filed as TODO.
+
+Harness (seed=42, deterministic): P1=0, P2=0, P3=0. Full Lua suite:
+848/0.
+

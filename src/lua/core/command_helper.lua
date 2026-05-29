@@ -325,18 +325,35 @@ function M.add_insert_mutation(command, sequence_id, clip)
         return
     end
 
-    -- Validate insert mutation payload to catch incomplete undo mutations
+    -- Validate insert mutation payload at the executor boundary, INSIDE the
+    -- active DB transaction. A shape bug here was the root cause of the
+    -- audit pass 19f orphan-row contamination: MCTT emitted legacy
+    -- `start_value`/`duration_value` field names; downstream UI processing
+    -- (clip_geometry.normalize_clip_integers) asserts on canonical
+    -- `sequence_start`/`duration`. The UI assert fires AFTER
+    -- db_module.commit() — the orphan persists across the "failed" command
+    -- and contaminates future runs. Catching here, before commit, makes
+    -- rollback work correctly. Post-M4-real canonical shape (no `_value`
+    -- aliases): id, track_id, sequence_start, duration.
     local function validate_insert(entry)
         assert(entry.id, "add_insert_mutation: missing id")
-        -- For UI cache inserts, we need position data (not just id)
-        -- This catches bugs where undo delete sends {id = "..."} without start_value/duration_value
-        if not entry.start_value and not entry.duration_value and not entry.track_id then
-            error(string.format(
-                "add_insert_mutation: incomplete payload for clip %s - missing start_value, duration_value, and track_id. " ..
-                "Undo delete mutations must include full clip state for UI cache inserts.",
-                tostring(entry.id)
-            ), 2)
-        end
+        -- Reject legacy `_value`-suffixed shape loudly. Producers must
+        -- emit canonical names so clip_geometry et al. don't trip.
+        assert(entry.start_value == nil and entry.duration_value == nil
+            and entry.source_in_value == nil and entry.source_out_value == nil,
+            string.format(
+                "add_insert_mutation: legacy `_value`-suffixed fields on clip %s — "
+                .. "post-M4-real canonical names are sequence_start/duration/"
+                .. "source_in/source_out (no _value). Update the producer.",
+                tostring(entry.id)))
+        assert(entry.track_id, string.format(
+            "add_insert_mutation: missing track_id for clip %s", tostring(entry.id)))
+        assert(type(entry.sequence_start) == "number", string.format(
+            "add_insert_mutation: clip %s sequence_start must be number, got %s",
+            tostring(entry.id), type(entry.sequence_start)))
+        assert(type(entry.duration) == "number" and entry.duration > 0, string.format(
+            "add_insert_mutation: clip %s duration must be positive number, got %s",
+            tostring(entry.id), tostring(entry.duration)))
     end
 
     if clip[1] then
