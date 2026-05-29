@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "cozempic guard --daemon --threshold 3 --soft-threshold 2 --threshold-tokens 350000 --soft-threshold-tokens 200000 -rx aggressive --interval 30 2>/dev/null || true"
+            "command": "cozempic guard --daemon --no-reload --threshold-tokens 280000 --soft-threshold-tokens 160000 -rx aggressive --interval 60 2>/dev/null || true"
           }
         ]
       }
