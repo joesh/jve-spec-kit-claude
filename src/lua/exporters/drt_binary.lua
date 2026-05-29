@@ -1,0 +1,262 @@
+-- drt_binary.lua — byte-exact ENCODER mirror of importers/drp_binary.lua.
+--
+-- Every function here is the inverse of a decoder in drp_binary.lua and is
+-- kept beside its decoder's documented layout. Round-trip is proven by
+-- tests/test_drt_writer_roundtrip.lua: drp_binary.decode(encode(x)) == x.
+--
+-- Pure Lua, no FFI. drp_binary.lua:111 warns that ffi.new/ffi.cast corrupt
+-- LuaJIT state when used per-item at scale; the writer encodes one field per
+-- clip, so the encoder mirrors decode_le_double_pure's arithmetic approach
+-- rather than the FFI path.
+--
+-- I/O type matches each decoder's INPUT: low-level integer writers return raw
+-- bytes (read_be32/64 take bytes); blob encoders return hex strings (the
+-- decode_bt_*/decode_media_timemap take hex). Nested payloads (KeyframesBA,
+-- inner keyframes) are raw bytes — they live inside a 0x000c field.
+
+local M = {}
+
+-- ---------------------------------------------------------------------------
+-- Big-endian integers — inverse of M.read_be32 / M.read_be64
+-- ---------------------------------------------------------------------------
+
+--- @param n integer: non-negative, < 2^32
+--- @return string: 4 raw bytes, big-endian
+function M.write_be32(n)
+    assert(type(n) == "number" and n >= 0 and n < 4294967296 and n % 1 == 0,
+        "write_be32: integer in [0, 2^32) required, got " .. tostring(n))
+    return string.char(
+        math.floor(n / 16777216) % 256,
+        math.floor(n / 65536) % 256,
+        math.floor(n / 256) % 256,
+        n % 256)
+end
+
+--- @param n integer: non-negative, < 2^53 (Lua double-exact integer range)
+--- @return string: 8 raw bytes, big-endian (hi*2^32 + lo)
+function M.write_be64(n)
+    assert(type(n) == "number" and n >= 0 and n < 2 ^ 53 and n % 1 == 0,
+        "write_be64: integer in [0, 2^53) required, got " .. tostring(n))
+    local hi = math.floor(n / 4294967296)
+    local lo = n - hi * 4294967296
+    return M.write_be32(hi) .. M.write_be32(lo)
+end
+
+-- BE16: TLV separator + type tag (decode_tlv_fields reads b1*256 + b2).
+local function write_be16(n)
+    return string.char(math.floor(n / 256) % 256, n % 256)
+end
+
+-- ---------------------------------------------------------------------------
+-- IEEE-754 binary64 — inverse of decode_le_double_pure / decode_hex_double_at
+-- ---------------------------------------------------------------------------
+
+-- Encode a Lua number to 8 raw bytes, little-endian (LSB first). x86/arm64
+-- native order, which is what decode_hex_double_at's ffi.cast expects and what
+-- decode_le_double_pure reconstructs arithmetically.
+local function double_to_le_bytes(value)
+    assert(type(value) == "number", "double_to_le_bytes: number required")
+    local sign = 0
+    if value < 0 then sign = 1; value = -value end
+
+    local hi, lo  -- hi = sign(1)|exp(11)|mantissa_top(20); lo = mantissa_low(32)
+    if value == 0 then
+        hi, lo = sign * 2147483648, 0
+    elseif value == math.huge then
+        hi, lo = sign * 2147483648 + 0x7FF00000, 0
+    elseif value ~= value then
+        hi, lo = 0x7FF80000, 0  -- canonical quiet NaN (not expected in our domain)
+    else
+        local m, e = math.frexp(value)   -- value = m * 2^e, 0.5 <= m < 1
+        local exp_field = e - 1 + 1023   -- unbiased exponent = e-1, biased +1023
+        assert(exp_field > 0,
+            "double_to_le_bytes: subnormal/underflow unsupported (value=" .. tostring(value) .. ")")
+        assert(exp_field < 0x7FF,
+            "double_to_le_bytes: exponent overflow (value=" .. tostring(value) .. ")")
+        local frac = m * 2 - 1           -- normalized fraction in [0, 1)
+        local mant = frac * 2 ^ 52       -- integer in [0, 2^52)
+        local mant_hi = math.floor(mant / 4294967296)   -- top 20 bits
+        local mant_lo = mant - mant_hi * 4294967296      -- low 32 bits
+        hi = sign * 2147483648 + exp_field * 1048576 + mant_hi
+        lo = mant_lo
+    end
+
+    local function le32(x)
+        return string.char(
+            x % 256,
+            math.floor(x / 256) % 256,
+            math.floor(x / 65536) % 256,
+            math.floor(x / 16777216) % 256)
+    end
+    return le32(lo) .. le32(hi)
+end
+
+local function to_hex(bytes)
+    return (bytes:gsub(".", function(c) return string.format("%02x", c:byte()) end))
+end
+
+--- LE double as 16 hex chars — inverse of decode_hex_double_at / decode_le_double_pure.
+--- Used for frame rates and the <Start>|hex sub-frame fraction.
+--- @param x number
+--- @return string: 16 lowercase hex chars
+function M.encode_le_double(x)
+    return to_hex(double_to_le_bytes(x))
+end
+
+--- Two adjacent LE doubles — inverse of decode_hex_resolution.
+--- @return string: 32 hex chars (width then height)
+function M.encode_resolution(width, height)
+    return M.encode_le_double(width) .. M.encode_le_double(height)
+end
+
+-- ---------------------------------------------------------------------------
+-- TLV fields — inverse of decode_tlv_fields
+--
+-- Per field: [BE32 name_byte_len][UTF-16BE name][BE16 sep=0][BE16 type][value]
+-- Field names are ASCII stored UTF-16BE (decoder reads only the low byte of
+-- each 2-byte unit), so name_byte_len = 2 * #ascii.
+-- ---------------------------------------------------------------------------
+
+-- ASCII → UTF-16BE (high byte 0x00 per char), matching the decoder's reader.
+local function utf16be(ascii)
+    return (ascii:gsub(".", function(c) return "\0" .. c end))
+end
+
+-- Encode one field's value bytes for the given type tag.
+local function encode_value(type_tag, value)
+    if type_tag == 0x0002 or type_tag == 0x0003 then
+        -- integer: value = aux*256 + val (aux BE32, val one byte)
+        assert(type(value) == "number" and value >= 0 and value % 1 == 0,
+            "encode_value: TLV int requires non-negative integer, got " .. tostring(value))
+        local aux = math.floor(value / 256)
+        local val = value % 256
+        return M.write_be32(aux) .. string.char(val)
+    elseif type_tag == 0x0006 then
+        -- double: [1 byte pad=0][8-byte BE double]. The decoder reverses the 8
+        -- bytes to LE before casting, so we store big-endian = reverse(LE).
+        return "\0" .. string.reverse(double_to_le_bytes(value))
+    elseif type_tag == 0x000a then
+        -- string: [BE32 aux (ignored)][1 byte str_byte_len][UTF-16BE chars]
+        local u = utf16be(value)
+        assert(#u < 256, "encode_value: TLV string too long (" .. #u .. " bytes)")
+        return M.write_be32(0) .. string.char(#u) .. u
+    elseif type_tag == 0x000c then
+        -- nested payload: [BE32 aux][1 byte val] where payload_len = aux*256+val,
+        -- then the raw payload (first 8 bytes are read as an LE double, ignored).
+        assert(type(value) == "string" and #value >= 8,
+            "encode_value: 0x000c payload must be >= 8 bytes")
+        local plen = #value
+        local aux = math.floor(plen / 256)
+        local val = plen % 256
+        return M.write_be32(aux) .. string.char(val) .. value
+    end
+    error(string.format("encode_value: unsupported TLV type 0x%04x", type_tag))
+end
+
+local function encode_field(name, type_tag, value)
+    local u = utf16be(name)
+    return M.write_be32(#u) .. u .. write_be16(0) .. write_be16(type_tag)
+        .. encode_value(type_tag, value)
+end
+
+-- TLV type tag per declared field kind.
+local KIND_TYPE = { int = 0x0002, double = 0x0006, string = 0x000a, payload = 0x000c }
+
+--- Encode a flat field list to TLV bytes (no header) — inverse of
+--- decode_tlv_fields(bytes, 0, #list).
+--- @param list table: array of { name, kind="int"|"double"|"string"|"payload", value }
+--- @return string: raw TLV bytes
+function M.encode_tlv_fields(list)
+    local parts = {}
+    for _, f in ipairs(list) do
+        local type_tag = KIND_TYPE[f.kind]
+        assert(type_tag, "encode_tlv_fields: unknown kind '" .. tostring(f.kind) .. "'")
+        parts[#parts + 1] = encode_field(f.name, type_tag, f.value)
+    end
+    return table.concat(parts)
+end
+
+-- ---------------------------------------------------------------------------
+-- BtVideoInfo Time blob — inverse of decode_bt_video_time
+-- Header: [BE32 version=1][BE32 field_count]; then TLV. field_count ∈ [4,8].
+-- ---------------------------------------------------------------------------
+
+--- @param t table: { num_frames=int>0, frame_rate=number, unique_id=string }
+--- @return string: hex-encoded Time blob
+function M.encode_bt_video_time(t)
+    assert(type(t.num_frames) == "number" and t.num_frames > 0,
+        "encode_bt_video_time: num_frames must be > 0")
+    assert(type(t.frame_rate) == "number", "encode_bt_video_time: frame_rate required")
+    assert(type(t.unique_id) == "string", "encode_bt_video_time: unique_id required")
+
+    -- Four real fields (decode_bt_video_time requires field_count >= 4); the
+    -- importer only reads UniqueId, NumFrames, FrameRate back.
+    local fields = encode_field("UniqueId", 0x000a, t.unique_id)
+        .. encode_field("StartFrame", 0x0002, 0)
+        .. encode_field("NumFrames", 0x0002, t.num_frames)
+        .. encode_field("FrameRate", 0x0006, t.frame_rate)
+    local header = M.write_be32(1) .. M.write_be32(4)
+    return to_hex(header .. fields)
+end
+
+-- ---------------------------------------------------------------------------
+-- KeyframesBA + MediaTimemapBA — inverse of parse_keyframes / decode_media_timemap
+-- ---------------------------------------------------------------------------
+
+-- One inner keyframe blob: [BE32 ver][BE32 inner_fc=2][TLV X, Y]. parse_inner_keyframe
+-- reads inner_fc at offset 4 and decodes X, Y as doubles.
+local function encode_inner_keyframe(kf)
+    local fields = encode_field("X", 0x0006, kf.x) .. encode_field("Y", 0x0006, kf.y)
+    return M.write_be32(1) .. M.write_be32(2) .. fields
+end
+
+-- KeyframesBA payload: [BE32 ver][BE32 kf_count][TLV "0".."n-1" each 0x000c→inner].
+-- parse_keyframes reads kf_count at offset 4; needs kf_count ∈ [2,100].
+local function encode_keyframes(keyframes)
+    assert(#keyframes >= 2 and #keyframes <= 100,
+        "encode_keyframes: keyframe count must be in [2,100], got " .. #keyframes)
+    local body = {}
+    for i = 1, #keyframes do
+        body[#body + 1] = encode_field(tostring(i - 1), 0x000c, encode_inner_keyframe(keyframes[i]))
+    end
+    return M.write_be32(1) .. M.write_be32(#keyframes) .. table.concat(body)
+end
+
+--- MediaTimemapBA (large 0x01 format) — inverse of decode_media_timemap.
+--- The decoder derives speed_ratio = y_max/x_max and reverse-flag from the
+--- keyframe slope, and sanity-checks the keyframe endpoints against y_max/x_max
+--- (first≈(0,0)→last≈(x_max,y_max) forward, or (0,y_max)→(x_max,0) reverse).
+--- @param tm table: { y_max>0, x_max>0, is_reverse:boolean, keyframes={{x,y},...} }
+--- @return string: hex-encoded MediaTimemapBA blob
+function M.encode_media_timemap(tm)
+    assert(type(tm.y_max) == "number" and tm.y_max > 0, "encode_media_timemap: y_max must be > 0")
+    assert(type(tm.x_max) == "number" and tm.x_max > 0, "encode_media_timemap: x_max must be > 0")
+    assert(type(tm.keyframes) == "table", "encode_media_timemap: keyframes required")
+
+    local fields = encode_field("YMax", 0x0006, tm.y_max)
+        .. encode_field("XMax", 0x0006, tm.x_max)
+        .. encode_field("KeyframesBA", 0x000c, encode_keyframes(tm.keyframes))
+    local header = M.write_be32(1) .. M.write_be32(3)  -- version=1, field_count=3
+    return to_hex(header .. fields)
+end
+
+-- ---------------------------------------------------------------------------
+-- Sm2Mp*.FieldsBlob — inverse of decode_fields_blob
+-- On-wire: [BE32 version][BE32 declared_size][0x81 marker][zstd frame].
+-- Requires the qt_zstd_compress C++ binding (added in T005); fail-fast if absent.
+-- ---------------------------------------------------------------------------
+
+--- @param payload string: raw bytes to compress and wrap
+--- @param version integer: wrapper version (matches the source blob's version)
+--- @return string: hex-encoded FieldsBlob
+function M.encode_fields_blob(payload, version)
+    assert(type(payload) == "string", "encode_fields_blob: payload bytes required")
+    assert(type(version) == "number", "encode_fields_blob: version required")
+    assert(type(qt_zstd_compress) == "function",
+        "encode_fields_blob: qt_zstd_compress binding not available")
+    local frame = qt_zstd_compress(payload)
+    local wrapper = M.write_be32(version) .. M.write_be32(#payload) .. string.char(0x81)
+    return to_hex(wrapper .. frame)
+end
+
+return M
