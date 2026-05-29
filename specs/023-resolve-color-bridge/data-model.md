@@ -41,29 +41,42 @@ CREATE TABLE IF NOT EXISTS clip_grade (
 
 ---
 
-## Entity: `resolve_bridge_link` (identity ledger)
+## Clip identity (inbound adoption — FR-011b)
 
-Persisted mapping from a JVE clip to its Resolve timeline item, surviving JVE re-edits so re-conform doesn't scramble grades (FR-011, §2.2). One Resolve target per project ⇒ keyed on clip id alone.
+`clip.id` is **not always a JVE-minted UUID.** Mirroring the existing `media.id = MediaRef DbId or uuid.generate()` rule (`importer_core.lua`), the DRP/DRT importer adopts the Resolve **timeline-item id** (`Sm2TiVideoClip`/`Sm2TiAudioClip` `DbId`) as `clip.id` when present, else mints a UUID. Consequences:
+
+- For an imported clip, `clip.id` **is** the Resolve item id — the identity link is the id itself (no `resolve_bridge_link` row needed to know the mapping; a row is still used to carry fingerprints).
+- Video and audio of one synced clip are distinct Resolve items with distinct DbIds → distinct JVE clips, no PK collision.
+- Clips JVE creates after import (blades, paste) get fresh UUIDs and match positionally.
+- Re-importing the same DRP yields the same `clip.id`s (stable across re-imports — fixes the prior "fresh ids each import" gap).
+- No schema change: `clips.id` is already `TEXT PRIMARY KEY` and already holds non-UUID ids for media; a grep confirmed no code assumes `clip.id` is UUID-shaped.
+
+## Entity: `resolve_bridge_link` (identity + sync ledger)
+
+Persisted per-clip bridge state: the Resolve item correspondence plus the fingerprints used for change/conflict detection (FR-011). Bidirectional — see "Clip identity" above: for imported clips `resolve_item_id` equals `clip.id`; for JVE-originated (UUID) clips it is the matched Resolve id. One Resolve target per project ⇒ keyed on clip id alone.
 
 ```sql
 CREATE TABLE IF NOT EXISTS resolve_bridge_link (
     jve_clip_uuid     TEXT PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
-    resolve_item_id   TEXT NOT NULL,        -- the Resolve timeline-item id recovered via the join key
-    grade_fingerprint TEXT                  -- hash of last-synced grade, for change detection
+    resolve_item_id   TEXT NOT NULL,        -- Resolve timeline-item id; == clip.id for imported clips
+    grade_fingerprint TEXT,                 -- hash of last-synced grade, for change detection
+    edit_fingerprint  TEXT                  -- hash of last-synced edit state (record/source/track/enabled), for conflict detection (FR-025)
 );
 ```
 
 **Fields / validation**
 - `jve_clip_uuid` — PK and FK to `clips(id)`; `ON DELETE CASCADE` drops the link when the clip is deleted (FR-013a).
-- `resolve_item_id` — opaque Resolve identifier returned by `import_timeline`/`read_identities` (NOT NULL).
-- `grade_fingerprint` — fingerprint of the grade last synced for this clip; used to detect "did this grade change in Resolve since last sync" without diffing full CDLs. NULL until first grade sync.
+- `resolve_item_id` — Resolve timeline-item id (NOT NULL). For imported clips it equals `clip.id`; carried explicitly so UUID clips (matched positionally) and imported clips share one schema.
+- `grade_fingerprint` — fingerprint of the grade last synced; detects "did the grade change in Resolve since last sync" without diffing full CDLs. NULL until first grade sync.
+- `edit_fingerprint` — fingerprint of the edit state (record start/duration, source in/out, track, enabled) at last sync; an edit-pull compares the live state and the current JVE clip against this to tell a Resolve-side change from a JVE-side local change (FR-025). NULL until first connect/sync.
 
 **Lifecycle**
-- **Created/updated**: by `SendToResolve` (records the import mapping) and `SyncGradesFromResolve` (updates `grade_fingerprint`).
-- **Reconcile (re-conform, FR-012)**: on re-send, for each current JVE clip —
-  - clip UUID unchanged → keep its existing `resolve_item_id`;
-  - clip is a blade/split fragment of a clip present at last send → both fragments inherit the parent's `resolve_item_id`, so both inherit the parent's grade (clarification: bladed both-inherit). The exact fragment-recognition rule (candidate: `media.file_uuid` + overlapping source TC range) is a Phase-4 de-risk decision (spec Deferred).
-  - clip with no prior link → new Resolve item; recorded after import.
+- **Created/updated**: by `SendToResolve` (outbound mapping), `ConnectToResolveProject` (inbound — id match per FR-011b, else positional per FR-011c), `SyncGradesFromResolve` (`grade_fingerprint`), and `SyncEditsFromResolve` (`edit_fingerprint`). Always inside a `command_event`.
+- **Reconcile (FR-012)**: on re-send / re-connect, for each current JVE clip —
+  - `clip.id` matches a live Resolve item id → direct link (the common case for imported clips);
+  - else positional/content match (`media.file_uuid` + source TC + timeline position, FR-011c);
+  - blade/split fragment of a prior clip → both fragments inherit the parent's `resolve_item_id` and grade (bladed both-inherit). Exact fragment-recognition is a Phase-4 de-risk decision (spec Deferred).
+  - unmatched → reported, not silently dropped.
 - **Deleted**: only by FK cascade.
 
 ---

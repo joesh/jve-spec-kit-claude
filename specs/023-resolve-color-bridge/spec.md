@@ -18,6 +18,8 @@
 - Q: One Resolve target per JVE project, or many? → A: One target — a JVE project roundtrips to exactly one Resolve project/timeline at a time. Identity link and clip grade are keyed on `jve_clip_uuid` alone (no `target_id` dimension).
 - Q: Grade read-back trigger — manual or auto-poll? → A: Manual pull — the editor explicitly triggers a sync; JVE does one `read_grades` + apply per action. No background polling for grades (the render path still polls render status — that is a different operation).
 - Q: Orphan handling on deletion? → A: Cascade + flag stale — deleting a JVE clip drops its grade and identity link (FK cascade from `clips`). A JVE clip whose Resolve item is gone at read-back keeps its last-synced grade but is marked stale (not cleared, not silently current).
+- Q: How does an *imported* JVE project (DRP→JVP) connect to its live Resolve project, which never received JVE ids? → A: The identity model is **bidirectional**. On DRP import JVE adopts the Resolve timeline-item id as its own `clip.id` when present (mirroring how `media.id` already adopts the Resolve `MediaRef DbId`), else mints a UUID. So for imported clips, `clip.id` **is** the Resolve id — connect is a direct lookup, no injected ids needed. Outbound (JVE-authored sequences) still embeds `clip.id` in the DRT. Clips JVE created after import (blades, UUID ids) match positionally (`media.file_uuid` + source TC + timeline position).
+- Q: Should Resolve-side edit tweaks (a colorist trims/slips/moves/enables a clip) come back to JVE too, or only grades? → A: Yes — pull edit changes back as well. An explicit, undoable, reviewable command reads the live timeline and applies record/source/track/enabled deltas to the matched JVE clips. JVE remains the edit authority of record (the pull is a reconcile, not auto-sync); a clip JVE edited since the last sync surfaces as a conflict for the user to resolve rather than being silently overwritten.
 
 ---
 
@@ -46,6 +48,8 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **Re-import after manual edits in Resolve**: JVE can read current Resolve identities to reconcile.
 - **Graded clip deleted in JVE**: its grade and identity link are removed with it.
 - **Resolve item gone at read-back** (clip still exists in JVE): the clip retains its last-synced grade but is marked stale rather than cleared or shown as current.
+- **Connect a project imported before id-adoption existed**: those clips have UUID ids, not Resolve ids, so they connect by positional/content match; ambiguous or unmatched ones are reported for the user, not silently skipped.
+- **Colorist re-edited in Resolve since import** (trim/slip/move/enable): pulling edits applies the deltas to matched clips; a JVE clip also edited locally since the last sync surfaces as a conflict rather than being overwritten.
 
 ## Requirements *(mandatory)*
 
@@ -53,7 +57,7 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 
 **Export / conform**
 - **FR-001**: JVE MUST author a Resolve-importable timeline file (`.drt`) from a JVE sequence. (No exporter exists today; this is net-new.)
-- **FR-002**: The authored file MUST carry, per clip, a stable identity equal to the JVE clip id, in a field that survives Resolve import and is readable via the scripting API. (Which field — clip metadata, name, or marker — is proven by a Phase-1 spike before build.)
+- **FR-002**: The authored file MUST carry, per clip, a stable identity equal to the JVE `clip.id`, in a field that survives Resolve import and is readable via the scripting API. (Which field — clip metadata, name, or marker — is proven by a Phase-1 spike.) Because imported clips already carry the Resolve id as their `clip.id` (FR-011b), an outbound DRT for an imported project re-presents Resolve's own ids to it.
 - **FR-003**: The authored file's clip ranges MUST be expressed in absolute timecode (never file-relative offsets), consistent with JVE's timecode-is-truth invariant.
 - **FR-004**: Before sending any file to Resolve, JVE MUST validate the authored file by round-tripping it through JVE's own importer and confirming the timeline reads back as intended.
 
@@ -65,8 +69,10 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **FR-009**: Every operation MUST cheaply revalidate the Resolve handle and reacquire if stale, or return a structured error if it cannot.
 - **FR-010**: The feature MUST require Resolve Studio and MUST NOT add a free-tier fallback.
 
-**Identity / re-conform**
-- **FR-011**: After sending a cut, JVE MUST record the mapping between each JVE clip and its Resolve item, persisted in the project so it survives JVE re-edits.
+**Identity / re-conform (bidirectional)**
+- **FR-011**: JVE MUST maintain a persisted clip↔Resolve-item identity link surviving JVE re-edits. The link is bidirectional: it is established by *outbound* send (JVE records the import mapping) OR by *inbound* import (FR-011b), whichever originated the relationship. For a clip whose `clip.id` already equals its Resolve item id (FR-011b), the link collapses into the id itself and no separate mapping row is required.
+- **FR-011b** (inbound identity adoption): When importing a Resolve project (DRP/DRT), JVE MUST adopt the Resolve timeline-item id as the JVE `clip.id` when present, else mint a UUID — mirroring the existing rule for `media.id` (= Resolve `MediaRef DbId` when present). This makes an imported clip directly addressable in the live Resolve project by id, with no JVE id ever injected into Resolve.
+- **FR-011c** (connect an imported project): JVE MUST be able to connect an already-imported project to its live Resolve project: match each JVE clip to a live timeline item by id (FR-011b), falling back to positional/content match (`media.file_uuid` + source TC + timeline position) for clips lacking an adopted id (e.g. UUID clips JVE created post-import, or projects imported before adoption existed). Unmatched clips MUST be reported, not silently skipped.
 - **FR-012**: On re-send after a JVE re-edit, JVE MUST reconcile clips to their prior Resolve items so existing grades are not scrambled; clips bladed/split since last send MUST have both resulting halves inherit the parent clip's grade.
 - **FR-013**: JVE MUST be able to read back the current Resolve timeline identities to reconcile after manual changes in Resolve.
 - **FR-013a**: Deleting a JVE clip MUST remove its stored grade and identity link. A JVE clip whose Resolve item is absent at read-back MUST retain its last-synced grade marked stale, never silently cleared and never shown as current. (Storage mechanism — FK cascade — is in data-model.md.)
@@ -81,13 +87,17 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **FR-018**: JVE MUST be able to queue a Resolve render of the graded timeline and poll its status to completion.
 - **FR-019**: On render completion, JVE MUST relink the affected clips to the rendered masters via the existing relink path, delivering full grade fidelity that CDL read-back cannot represent.
 
+**Edit read-back (Resolve-side tweaks)**
+- **FR-024**: JVE MUST be able to read the live Resolve timeline's per-item edit state (record start/duration, source in/out, track, enabled) and apply the deltas to the matched JVE clips (FR-011c) by composing JVE's **existing** edit commands (move/trim/enable/…) under one undo group — not a new parallel edit-mutation path. This is an explicit, reviewable user action — never automatic. JVE remains the edit authority of record; the pull is a reconcile.
+- **FR-025**: A JVE clip edited locally since the last sync MUST surface as a conflict for the user to resolve (keep JVE / take Resolve), never be silently overwritten by the pull. Clips with no local change since last sync apply directly.
+
 **Safety / honesty**
 - **FR-020**: The bridge MUST detect and fail loudly on the locale fractional-frame-rate corruption rather than proceeding with a wrong rate.
 - **FR-021**: The helper MUST hold no model of JVE's timeline beyond the idempotency ledger; JVE owns all orchestration and state.
 - **FR-022**: Tests MUST assert observable Resolve state, a regenerable real-Resolve fixture, or a JVE-importer round-trip; no test may pass solely by its own setup (no mocks-assert-mock).
 
 **Invocation**
-- **FR-023**: Send-to-Resolve, sync-grades, and queue-render MUST be user-invocable through the command system (menu / shortcut / programmatic), consistent with how every JVE operation is dispatched. No bridge action is a hidden or implicit side effect.
+- **FR-023**: All bridge actions — send-to-Resolve, connect-imported-project, sync-grades, sync-edits, queue-render — MUST be user-invocable through the command system (menu / shortcut / programmatic), consistent with how every JVE operation is dispatched. No bridge action is a hidden or implicit side effect.
 
 ### Clarifications (locked decisions)
 
@@ -98,6 +108,8 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **Grade attaches to**: the JVE clip.
 - **Bladed clips**: both halves inherit the parent's grade.
 - **Helper language**: Lua if a Phase-0 spike proves external-Lua works on the target Studio; else Python (invisible to JVE behind the socket).
+- **Identity is bidirectional**: imported clips adopt the Resolve item id as `clip.id` (mirrors `media.id`); outbound DRT carries `clip.id`. No JVE id is injected into Resolve.
+- **Resolve edits flow back**: edit deltas (record/source/track/enabled) pull into JVE via an explicit, undoable, conflict-aware command; JVE stays the edit authority of record.
 
 ### Deferred decisions (resolved during de-risk, not blockers)
 
@@ -108,7 +120,7 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 
 - **Authored timeline file (`.drt`)**: JVE's export carrying clip timing (absolute TC), media references, and the per-clip identity field.
 - **Clip grade**: per-clip (keyed on JVE clip id) CDL (slope/offset/power, saturation) and/or local LUT-path reference, with a fidelity classification, provenance, and a stale flag (set when the source Resolve item is gone at read-back). Read-only in JVE. Dropped by FK cascade when the clip is deleted. New persisted JVE entity.
-- **Identity link**: persisted mapping JVE clip → Resolve item (single Resolve target per project; keyed on JVE clip id), with a last-seen grade fingerprint for change detection and re-conform. Dropped when the clip is deleted.
+- **Identity link**: the JVE-clip ↔ Resolve-item correspondence (single Resolve target per project). For imported clips it *is* the `clip.id` (which equals the Resolve item id, FR-011b) — no row needed; for JVE-originated (UUID) clips it is a persisted mapping row keyed on `clip.id`. Carries a last-seen grade fingerprint and a last-synced edit fingerprint for change/conflict detection. Dropped when the clip is deleted.
 - **Bridge helper**: the isolated process owning the Resolve connection and an idempotency ledger (its only JVE-related state).
 - **Change token**: JVE-supplied key making state-changing operations idempotent across retries.
 

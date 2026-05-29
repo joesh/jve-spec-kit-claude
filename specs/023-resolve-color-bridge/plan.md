@@ -5,7 +5,7 @@
 
 ## Summary
 
-Send a JVE cut to DaVinci Resolve Studio, grade it there, and bring the grade back into JVE. A persistent helper process owns the Resolve scripting connection; JVE spawns/supervises it (QProcess) and talks to it over a Unix domain socket with line-delimited JSON. JVE gains its first export path (a `.drt` writer mirroring the existing DRP binary *decoder*), a new persisted color model (CDL + LUT-ref per clip, read-only, displayed via a renderer CDL stage), and a persisted identity ledger that survives JVE re-edits so re-conform doesn't scramble grades. Grade read-back is asymmetric and honest: primary CDL syncs live; complex node graphs are flagged and only fully realized via a Resolve render that JVE relinks to. Topology is same-machine; one Resolve target per JVE project; grades read-only; manual sync; deletion cascades with stale-flagging.
+Send a JVE cut to DaVinci Resolve Studio, grade it there, and bring the grade back into JVE. A persistent helper process owns the Resolve scripting connection; JVE spawns/supervises it (QProcess) and talks to it over a Unix domain socket with line-delimited JSON. JVE gains its first export path (a `.drt` writer mirroring the existing DRP binary *decoder*), a new persisted color model (CDL + LUT-ref per clip, read-only, displayed via a renderer CDL stage), and a persisted identity ledger that survives JVE re-edits so re-conform doesn't scramble grades. Grade read-back is asymmetric and honest: primary CDL syncs live; complex node graphs are flagged and only fully realized via a Resolve render that JVE relinks to. Identity is **bidirectional**: outbound, JVE embeds `clip.id` in the DRT; inbound, the DRP importer adopts the Resolve timeline-item id as `clip.id` (mirroring `media.id`), so an already-imported project connects to its live Resolve project by id with no JVE id ever injected — positional/content match covers clips lacking an adopted id. Beyond grades, JVE can pull **Resolve-side edit tweaks** (record/source/track/enabled) back via an explicit, undoable, conflict-aware command (JVE stays the edit authority of record). Topology is same-machine; one Resolve target per JVE project; grades read-only; manual sync; deletion cascades with stale-flagging.
 
 The detailed engineering design lives in [research.md](./research.md) (architecture, wire protocol internals, DRT-writer format notes, phased de-risk plan with STOP gates). This plan is the bridge from spec → tasks.
 
@@ -13,7 +13,7 @@ The detailed engineering design lives in [research.md](./research.md) (architect
 
 **Language/Version**: LuaJIT 2.1 (JVE model/command/UI/exporter layers + **all bridge policy**: supervision, protocol, correlation); C++17 / Qt6 only for **thin one-to-one FFI** (`qt_process_*`, `qt_local_socket_*`, `qt_zstd_compress`) and the renderer CDL stage. No Resolve-specific or supervision logic in C++ (ENGINEERING 2.18 FFI≠business-logic, 1.10 stay-in-layer). Helper process: **Lua if a Phase-0 spike proves external-Lua works on the target Resolve Studio; else Python** — invisible to JVE behind the socket.
 **Primary Dependencies**: Qt6 (Network — `QLocalSocket` client + `QProcess`, already linked per spec 020; existing `debug_terminal` is the server-side pattern to mirror), SQLite via lsqlite3, libzstd (existing `qt_zstd_decompress`; add `qt_zstd_compress`), dkjson (wire JSON), DaVinci Resolve Studio scripting API (`fusionscript` — **helper process only**, never linked into JVE).
-**Storage**: SQLite `.jvp` project files. Schema **V11 → V12**: new `clip_grade` and `resolve_bridge_link` tables (no migration — Joe regenerates). Helper holds a process-local idempotency ledger only (not in `.jvp`).
+**Storage**: SQLite `.jvp` project files. Schema **V11 → V12**: new `clip_grade` and `resolve_bridge_link` (incl. `edit_fingerprint`) tables (no migration — Joe regenerates). `clip.id` may now be a Resolve timeline-item id (adopted on import, mirroring `media.id`); no schema change for that — `clips.id` is already `TEXT`. Helper holds a process-local idempotency ledger only (not in `.jvp`).
 **Testing**: LuaJIT black-box test harness (`tests/`); `--test` mode (`jve --test`) for binding/integration tests needing real Qt/EMP; DRT-writer round-trip against JVE's own importer (`drp_importer.parse_drp_file`); **live tests against a real Resolve Studio**; pixel-compare for CDL math. No mocks that assert their own canned values (constitution III, `feedback_no_mocks_use_test_mode`).
 **Target Platform**: macOS (darwin); Unix domain socket transport.
 **Project Type**: single desktop app (JVE) + one sidecar helper process.
@@ -54,6 +54,9 @@ specs/023-resolve-color-bridge/
 ```
 src/
   lua/
+    importers/
+      drp_importer.lua          # MODIFIED — capture Sm2TiVideoClip/AudioClip DbId (FR-011b)
+      importer_core.lua         # MODIFIED — pass adopted DbId as clip.id (mirror media.id) (FR-011b)
     exporters/
       drt_writer.lua            # NEW — authors a .drt from a JVE sequence (FR-001..004)
       drt_binary.lua            # NEW — encoder mirror of importers/drp_binary.lua decoders
@@ -64,13 +67,16 @@ src/
         client.lua              # NEW — request/response over the socket, correlation ids
         protocol.lua            # NEW — envelope build/parse, structured errors (contracts/)
         helper_supervisor.lua   # NEW — lifecycle POLICY in Lua (start/restart/timeout) over the thin FFI (FR-007)
-        identity_ledger.lua     # NEW — resolve_bridge_link read/write, reconcile (FR-011..013a)
+        identity_ledger.lua     # NEW — resolve_bridge_link read/write, id + positional match, reconcile (FR-011..013a)
+        edit_diff.lua           # NEW — diff live edit state vs JVE clip + edit_fingerprint; classify Resolve-change vs local-change (FR-025)
         change_token.lua        # NEW — {sequence_id, mutation_generation}(+project id) token (FR-008)
       commands/
         send_to_resolve.lua            # NEW — author DRT + import_timeline + record mapping
+        connect_to_resolve_project.lua # NEW — connect an imported jvp: id match + positional fallback (FR-011c)
         sync_grades_from_resolve.lua   # NEW — read_grades + upsert clip_grade (undoable, FR-017)
+        sync_edits_from_resolve.lua    # NEW — read_timeline + apply edit deltas, conflict-aware (undoable, FR-024/025)
         queue_resolve_render.lua       # NEW — queue_render + poll + relink (FR-018/019)
-    schema.sql                  # MODIFIED — V12: clip_grade, resolve_bridge_link
+    schema.sql                  # MODIFIED — V12: clip_grade, resolve_bridge_link (+ edit_fingerprint)
   qt_bindings/
     zstd_bindings.cpp           # MODIFIED — add qt_zstd_compress (mirror qt_zstd_decompress)
     process_bindings.cpp        # NEW — thin QProcess FFI (qt_process_start/terminate/state); generic, not Resolve-specific

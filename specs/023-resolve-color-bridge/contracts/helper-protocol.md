@@ -52,6 +52,12 @@ Every verb cheaply revalidates the handle first and returns `handle_stale` if it
 - **args**: none
 - **result**: `{ items: [{ resolve_item_id, jve_guid }], unkeyed_count }`
 - Current Resolve timeline items with recovered join keys; reconciles after manual changes in Resolve (FR-013). Items lacking a join key are omitted from `items` and counted in `unkeyed_count` (so the caller knows the timeline has unmatched items rather than seeing them silently vanish).
+- Bidirectional note (FR-011b): for a project JVE *imported* from Resolve, `jve_guid == resolve_item_id` (JVE adopted the Resolve item id as `clip.id`). For JVE-originated clips, `jve_guid` is the id JVE wrote into the DRT. JVE-side connect matches by id first, positional fallback for clips with no adopted id (FR-011c).
+
+### `read_timeline`
+- **args**: `{ item_ids?: [string] }` (omit ⇒ all)
+- **result**: `{ items: [{ resolve_item_id, track, record_start, record_duration, source_in, source_out, enabled }] }`
+- The live per-item **edit** state, for pulling Resolve-side edit tweaks back into JVE (FR-024). Read-only; manual-pull only. Times are absolute TC (frames + subframe), consistent with JVE's timecode-is-truth invariant; the locale-rate guard (FR-020) applies. JVE diffs these against its matched clips + the stored `edit_fingerprint` to separate Resolve-side changes from JVE-side local edits (FR-025).
 
 ### `read_grades`
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)

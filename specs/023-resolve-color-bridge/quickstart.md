@@ -10,9 +10,14 @@ Validates the seven acceptance scenarios (spec.md) against a **real Resolve Stud
 - JVE (or the runner) spawns the helper and `ping`s.
 - **Assert**: `ok:true`, `resolve_connected:true`, a real `resolve_version` string. Log the version.
 
-## 1. Send the cut (FR-001, 002, 007 — Scenario 1)
+## 1. Send the cut (FR-001, 002, 007 — Scenario 1, outbound)
 - Run command `SendToResolve` on a sequence of N clips. It authors a `.drt`, round-trips it through JVE's own importer (must read back as intended), then calls `import_timeline`.
 - **Assert**: the Resolve timeline contains **N items**; for a chosen item K, the recovered join key **byte-equals** the JVE clip id JVE wrote; any unrelinkable media appears in `unrelinked` (and the user is told), never silently missing.
+
+## 1b. Connect an imported graded project (FR-011b/c — inbound, the "I imported a graded DRP" flow)
+- Start from a JVE project that was **imported from a graded DRP** (so `clip.id` = the Resolve timeline-item id, FR-011b), with the same project open live in Resolve.
+- Run `ConnectToResolveProject`.
+- **Assert**: every clip with an adopted id links directly to its live timeline item (`jve_guid == resolve_item_id`); clips without an adopted id (e.g. blades made after import) match positionally; the unmatched count is reported, not silently zero. Then `SyncGradesFromResolve` and **assert grades land on the right clips** — this is the answer to "hook the imported DRP's grade up to the jvp."
 
 ## 2. Grade a primary CDL, sync back, display (FR-014, 015, 016 — Scenario 2)
 - In Resolve, apply a known primary grade to one clip (e.g. slope `(1.05,0.98,0.92)`, offset `(0.01,0,-0.02)`, power `(1.1,1.0,0.95)`, sat `0.85`).
@@ -38,6 +43,12 @@ Validates the seven acceptance scenarios (spec.md) against a **real Resolve Stud
 ## 7. Render + relink (FR-018, 019 — Scenario 7)
 - Run `QueueResolveRender`; poll `render_status` to completion.
 - **Assert**: the output file exists at `output_paths`; JVE relinks the affected clips to the rendered masters (existing relink path) and plays the graded footage.
+
+## 8. Pull Resolve-side edit tweaks (FR-024/025)
+- In Resolve, trim/slip/move a connected clip; run `SyncEditsFromResolve`.
+- **Assert**: the matched JVE clip's record/source/track/enabled update to the Resolve values (undoable in one step).
+- Then locally edit a different JVE clip, change the same clip in Resolve too, and pull again.
+- **Assert**: the locally-edited clip surfaces as a **conflict** (keep JVE / take Resolve), never silently overwritten; non-conflicting clips apply directly.
 
 ---
 

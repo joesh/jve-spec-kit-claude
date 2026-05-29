@@ -50,7 +50,7 @@
 ## Phase 2 — Schema, helper skeleton + protocol core (STOP gate)
 
 ### Schema + entity tests first (offline, must FAIL)
-- [ ] **T009** `src/lua/schema.sql` — bump V11→V12; add `clip_grade` and `resolve_bridge_link` tables exactly per `data-model.md` (FK `ON DELETE CASCADE` to `clips`; `fidelity` enum; CDL all-or-none; `stale` NOT NULL with **no SQL default** — the writer always sets it, per 2.13). Set `schema_version` 12. No migration. (FR-014, FR-013a)
+- [ ] **T009** `src/lua/schema.sql` — bump V11→V12; add `clip_grade` and `resolve_bridge_link` (incl. `grade_fingerprint` + `edit_fingerprint`) tables exactly per `data-model.md` (FK `ON DELETE CASCADE` to `clips`; `fidelity` enum; CDL all-or-none; `stale` NOT NULL with **no SQL default** — the writer always sets it, per 2.13). Set `schema_version` 12. No migration. (FR-014, FR-013a, FR-025)
 - [ ] **T010** [P] `tests/test_clip_grade_model.lua` — black-box: store the non-trivial CDL from data-model, reload identically; partial-CDL write asserts (pcall, actionable msg, 2.32); bad `fidelity` asserts; delete clip → grade row gone (cascade); item-missing → `stale=1`, values retained. Verify FAILS.
 - [ ] **T011** [P] `tests/test_identity_ledger.lua` — black-box: record a clip→item mapping, reload it; delete clip → link gone (cascade); fingerprint changes when grade changes. Verify FAILS.
 - [ ] **T012** [P] `tests/test_resolve_bridge_protocol.lua` — black-box envelope build/parse: round-trip a request/response, structured error parse, idempotency keys off `change_token` (not `id`). Verify FAILS.
@@ -117,6 +117,30 @@
 
 ---
 
+## Phase 2i — Inbound identity + connect an imported project (STOP gate)
+
+*Slots alongside Phase 1/2 in dependency order (it is identity infra); numbered T046+ to avoid renumbering. The inbound spike (T047) belongs with the Phase-1 identity spike T008.*
+
+- [ ] **T046** `tests/test_inbound_id_adoption.lua` — black-box: import a small DRP whose timeline items have known `Sm2Ti DbId`s; assert the resulting JVE `clip.id`s equal those DbIds; assert a synthetic item with no DbId yields a UUID; assert V and A of one synced clip get distinct ids; assert re-importing the same DRP yields the same `clip.id`s. Verify FAILS. (FR-011b)
+- [ ] **T047** 🔬 SPIKE Does the DRP `Sm2Ti DbId` equal the live scripting API's `TimelineItem` unique id? Author/import a known timeline, read item ids via the API, compare. Append to `phase0-findings.md`. If unequal, record the deterministic translation (or confirm positional match is required). Gates T049. (FR-011b/c)
+- [ ] **T048** `src/lua/importers/drp_importer.lua` + `importer_core.lua` — capture `Sm2TiVideoClip`/`Sm2TiAudioClip` `DbId` in the parser; pass it as `id` to `Clip.create` (importer_core.lua:870), mirroring the existing `media.id = stable_id` rule. Reads only project bytes (no media probe — `feedback_importers_no_media_probe`). Makes T046 pass. (FR-011b)
+- [ ] **T049** `src/lua/core/commands/connect_to_resolve_project.lua` + `identity_ledger.lua` match — `ConnectToResolveProject`: for each JVE clip, match the live `read_identities` items by id (T048), positional/content fallback (`media.file_uuid` + source TC + timeline position) for UUID/pre-adoption clips; write `resolve_bridge_link`; report unmatched (never silently skip). Registered command (FR-023). (FR-011c)
+- [ ] **T050** 🟢 LIVE `tests/live/test_connect_imported.lua` — import the graded DRP, open the same project live in Resolve, run `ConnectToResolveProject`; assert every clip with an adopted id links directly and unmatched count is reported. Then `SyncGradesFromResolve` and assert grades land on the right clips. (FR-011b/c — this is the "I imported a graded DRP, hook up the grade" flow.)
+
+> **STOP GATE 2i** — an already-imported jvp connects to its live Resolve project by id (+ positional fallback) and pulls grades onto the correct clips.
+
+## Phase 4e — Edit read-back (Resolve-side tweaks) (STOP gate)
+
+- [ ] **T051** [P] `tests/contract/test_helper_read_timeline.lua` — assert `read_timeline` result shape `{items:[{resolve_item_id, track, record_start, record_duration, source_in, source_out, enabled}]}`; absolute TC; locale-rate guard applies. FAIL first.
+- [ ] **T052** `tools/resolve-helper/` — implement `read_timeline` (live per-item edit state). Makes T051 pass.
+- [ ] **T053** `src/lua/core/resolve_bridge/edit_diff.lua` + `tests/test_edit_diff.lua` — classify, per matched clip: Resolve-changed (live ≠ `edit_fingerprint`), JVE-changed-locally (current clip ≠ `edit_fingerprint`), both-changed (conflict). Black-box test with non-trivial trims/moves. Verify test FAILS first. (FR-025)
+- [ ] **T054** `src/lua/core/commands/sync_edits_from_resolve.lua` + `tests/test_sync_edits_command.lua` — `SyncEditsFromResolve`: translate each edit delta into the **existing** JVE edit command (move/ripple-trim/set-enabled/etc.), composed under one undo group — do NOT write a parallel clip-mutation path (1.9 respect architecture; no duplicate implementations). Before reusing each, read 2+ call sites and trace its execute+undo (`feedback_no_lazy_shortcuts`). Apply only to non-conflicting matched clips; surface conflicts (keep JVE / take Resolve), never silent overwrite; update `edit_fingerprint`. Test execute/undo + conflict path (pcall/assert where invariant). Verify FAILS first. Registered command (FR-023). (FR-024/025)
+- [ ] **T055** 🟢 LIVE `tests/live/test_edit_readback.lua` — trim/move a clip in Resolve, run `SyncEditsFromResolve`; assert the matched JVE clip's record/source updates; separately, locally edit a JVE clip then pull and assert it surfaces as a conflict, not an overwrite (quickstart edit-pull steps). (FR-024/025)
+
+> **STOP GATE 4e** — Resolve-side edit tweaks pull into JVE, conflict-aware, undoable.
+
+---
+
 ## Phase 6 — Edge cases + polish
 
 - [ ] **T042** [P] 🟢 LIVE `tests/live/test_edge_cases.lua` — free (non-Studio) Resolve ⇒ `not_studio` and nothing destructive; stale handle on project switch ⇒ `handle_stale`; locale fractional-rate read as integer ⇒ `locale_rate_corruption`, conform refused (FR-010/009/020; quickstart edge checks).
@@ -172,11 +196,13 @@ Note: 🟢 LIVE tasks (T025, T026, T033, T034, T037, T041, T042, T045) cannot ru
 | FR-009 per-verb handle revalidation | T021, T042 | FR-020 locale-rate guard | T042 |
 | FR-010 Studio required | T042 | FR-021 helper holds no model | T021 |
 | FR-011 record mapping | T016, T024 | FR-022 test discipline | conventions + all test tasks |
-| FR-012 reconcile (bladed inherit) | T036, T037 | FR-023 commands invocable | T024, T031, T040, T043 |
+| FR-011b inbound id adoption | T046, T048 | FR-023 commands invocable | T024, T031, T040, T043, T049, T054 |
+| FR-011c connect imported (id + positional) | T047, T049, T050 | FR-024 pull Resolve edits | T052, T054, T055 |
+| FR-012 reconcile (bladed inherit) | T036, T037 | FR-025 edit conflict detection | T053, T054, T055 |
 
 ## Validation checklist
-- [x] Every contract verb has a contract test (T013/T014/T027/T028/T038) before its helper impl (T021/T029/T039).
-- [x] Every spec FR (001–023, incl. 013a) maps to a task — see traceability matrix above.
+- [x] Every contract verb has a contract test (T013/T014/T027/T028/T038/T051) before its helper impl (T021/T029/T039/T052).
+- [x] Every spec FR (001–025, incl. 011b/c, 013a) maps to a task — see traceability matrix above.
 - [x] Every entity has a model task (T015 clip_grade, T016 resolve_bridge_link) gated by schema T009.
 - [x] Every quickstart scenario has a 🟢 LIVE test (steps 1–7 → T025,T033,T034,T031-undo,T037,T026,T041; edges → T042).
 - [x] Tests precede their implementation (TDD); spikes precede code that assumes them.

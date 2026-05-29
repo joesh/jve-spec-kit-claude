@@ -65,9 +65,14 @@ What the draft got *right* and we keep: helper-process isolation, Unix-socket + 
 
 ## 2. The hard problems for JVE: authoring + identity (color is §5)
 
-Two joins must hold. Both are `UNVERIFIED` and gate everything downstream.
+Identity is **bidirectional** — the relationship can originate on either side, and the join differs accordingly:
 
-### 2.1 The DRT must round-trip an identity field
+- **Outbound** (JVE originates the timeline): JVE authors a `.drt` carrying its `clip.id` in a field Resolve preserves and the API can read back (§2.1).
+- **Inbound** (Resolve originated it; JVE imported the DRP — the common real case, e.g. "I imported a graded DRP, now connect it to the live project"): JVE never injected an id into Resolve. Instead, **on import JVE adopts the Resolve timeline-item id as its own `clip.id`** (§2.1a). Then `clip.id` *is* the Resolve id and connect is a direct lookup.
+
+Both directions then share one reconcile path (§2.2) for clips that lack a usable id (post-import blades, pre-adoption projects). The two `UNVERIFIED` joins below gate everything downstream.
+
+### 2.1 Outbound — the DRT must round-trip an identity field
 
 JVE writes a `.drt`; Resolve imports it; the scripting API reads items back. We need a Resolve-side field that:
 
@@ -75,7 +80,13 @@ JVE writes a `.drt`; Resolve imports it; the scripting API reads items back. We 
 - **(b)** Resolve **preserves through import**, and
 - **(c)** the scripting API can **read back**.
 
-That field carries JVE's clip UUID and becomes the join key. Candidates, in rough order of preference: a dedicated clip **metadata** field; the timeline-item / clip **name**; a **marker** payload. **Which one satisfies (a)+(b)+(c) is `UNVERIFIED`** and is the single most important thing to establish. Phase 1 proves which survives by *actual read-back byte-equality*, not assumption.
+That field carries JVE's `clip.id` and becomes the join key. Candidates, in rough order of preference: a dedicated clip **metadata** field; the timeline-item / clip **name**; a **marker** payload. **Which one satisfies (a)+(b)+(c) is `UNVERIFIED`** and is the single most important thing to establish. Phase 1 proves which survives by *actual read-back byte-equality*, not assumption.
+
+### 2.1a Inbound — adopt the Resolve item id as `clip.id` on import
+
+The DRP carries a per-timeline-item `DbId` (`Sm2TiVideoClip`/`Sm2TiAudioClip` attribute) — today the importer reads pool-item DbIds (→ `media.id`) but **drops** the timeline-item DbId. The fix mirrors the existing media rule (`importer_core.lua`: `media.id = MediaRef DbId or uuid.generate()`): **`clip.id = Sm2Ti DbId (if present) else uuid.generate()`.** A grep confirmed no code assumes `clip.id` is UUID-shaped (media.id already isn't). Benefits: connect-by-id with nothing injected into Resolve; stable ids across re-imports; V/A are distinct Resolve items → distinct ids, no collision.
+
+> `UNVERIFIED` (gates inbound connect): does the DRP's `Sm2Ti DbId` **equal the live scripting API's `TimelineItem` unique id**? If yes → `clip.id` directly matches the live item. If no → a deterministic DbId↔unique-id translation or the §2.2 positional match is required. Same spike family as §2.1, inbound direction; Phase 1.
 
 ### 2.2 The re-conform identity ledger (JVE-specific, the draft missed this)
 
