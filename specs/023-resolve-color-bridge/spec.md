@@ -1,0 +1,141 @@
+# Feature Specification: JVE ⇄ DaVinci Resolve Color Roundtrip Bridge
+
+**Feature Branch**: `023-resolve-color-bridge` (cut at /implement time, not now)
+**Created**: 2026-05-29
+**Status**: Draft
+**Input**: User description: "JVE ⇄ DaVinci Resolve color roundtrip bridge — send a JVE cut to Resolve Studio, grade it there, bring the grade back into JVE."
+
+> Companion docs in this folder: `research.md` holds the grounded engineering design (architecture, wire protocol, DRT-writer internals, color-model schema, phased de-risk plan) and is the source for `/plan`. This `spec.md` is the WHAT/WHY: user value, testable requirements, locked decisions.
+
+---
+
+## Clarifications
+
+### Session 2026-05-29
+
+- Q: Deployment topology for v1? → A: Same machine — JVE and Resolve Studio run on one box; media, LUT, and render paths are a shared local filesystem that resolves identically on both sides. No cross-machine asset transport in scope.
+- Q: Are grades read-only in JVE, or editable in JVE too? → A: Read-only in JVE — Resolve is the sole grade authority. JVE stores + displays; never edits. Re-sync overwrites. No conflict/merge model, no grade-editing UI or commands.
+- Q: One Resolve target per JVE project, or many? → A: One target — a JVE project roundtrips to exactly one Resolve project/timeline at a time. Identity link and clip grade are keyed on `jve_clip_uuid` alone (no `target_id` dimension).
+- Q: Grade read-back trigger — manual or auto-poll? → A: Manual pull — the editor explicitly triggers a sync; JVE does one `read_grades` + apply per action. No background polling for grades (the render path still polls render status — that is a different operation).
+- Q: Orphan handling on deletion? → A: Cascade + flag stale — deleting a JVE clip drops its grade and identity link (FK cascade from `clips`). A JVE clip whose Resolve item is gone at read-back keeps its last-synced grade but is marked stale (not cleared, not silently current).
+
+---
+
+## User Scenarios & Testing *(mandatory)*
+
+### Primary User Story
+
+An editor finishes a cut in JVE and wants it graded by a colorist working in DaVinci Resolve Studio. From JVE they send the cut to Resolve; Resolve receives the timeline with media correctly relinked and every clip carrying a stable identity tying it back to its JVE clip. The colorist grades. The editor pulls the grades back into JVE: simple primary grades (lift/gamma/gain-style CDL) appear live in JVE's viewer; complex grades that exceed what a CDL can express are flagged as such, and their full look is realized only when Resolve renders graded masters that JVE relinks to. Later the editor re-edits in JVE and sends again — existing grades stay attached to the right shots rather than scrambling.
+
+### Acceptance Scenarios
+
+1. **Given** a JVE sequence with N clips, **When** the editor sends it to Resolve, **Then** the Resolve timeline contains N items, each carrying a recoverable identity equal to its JVE clip id, and any media that could not be relinked is reported back (not silently dropped).
+2. **Given** a clip graded with a primary CDL in Resolve, **When** the editor syncs grades back, **Then** that clip's CDL (slope/offset/power + saturation) is stored in JVE and the JVE viewer displays the graded result, matching Resolve's render of the same clip within tolerance.
+3. **Given** a clip graded with a node graph that exceeds CDL (power windows, secondaries, multi-node), **When** the editor syncs grades back, **Then** the clip is marked with a non-primary fidelity and JVE does not falsely claim to reproduce the full grade.
+4. **Given** grades have been synced into JVE, **When** the editor undoes the sync, **Then** the prior grade state is restored.
+5. **Given** a graded Resolve timeline, **When** the editor blades a graded JVE clip into two and re-sends, **Then** both halves inherit the original clip's grade.
+6. **Given** the bridge sent a state-changing request whose reply was lost, **When** JVE re-sends the same request, **Then** Resolve's state changed exactly once and the second response equals the first.
+7. **Given** a colorist render completes in Resolve, **When** the editor pulls the result, **Then** JVE relinks the affected clips to the rendered masters and plays the graded footage.
+
+### Edge Cases
+
+- **Free (non-Studio) Resolve**: the external bridge is unavailable; the feature surfaces a clear "Resolve Studio required" error and does nothing destructive.
+- **Resolve handle goes stale** (user switches project/timeline in Resolve): the next operation revalidates and either reacquires or returns a structured error — never a silent reconnect-and-pretend.
+- **Non-US locale fractional frame rate** reported as an integer (23.976 → 23): detected and failed loudly rather than silently corrupting conform/timecode math.
+- **Media not relinkable** in Resolve: reported per-file; the import does not proceed as if complete.
+- **Re-import after manual edits in Resolve**: JVE can read current Resolve identities to reconcile.
+- **Graded clip deleted in JVE**: its grade and identity link are removed with it.
+- **Resolve item gone at read-back** (clip still exists in JVE): the clip retains its last-synced grade but is marked stale rather than cleared or shown as current.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+**Export / conform**
+- **FR-001**: JVE MUST author a Resolve-importable timeline file (`.drt`) from a JVE sequence. (No exporter exists today; this is net-new.)
+- **FR-002**: The authored file MUST carry, per clip, a stable identity equal to the JVE clip id, in a field that survives Resolve import and is readable via the scripting API. (Which field — clip metadata, name, or marker — is proven by a Phase-1 spike before build.)
+- **FR-003**: The authored file's clip ranges MUST be expressed in absolute timecode (never file-relative offsets), consistent with JVE's timecode-is-truth invariant.
+- **FR-004**: Before sending any file to Resolve, JVE MUST validate the authored file by round-tripping it through JVE's own importer and confirming the timeline reads back as intended.
+
+**Transport / isolation**
+- **FR-005**: All Resolve scripting access MUST live in a separate helper process; JVE MUST NOT link Resolve's scripting module into its own process.
+- **FR-006**: JVE MUST communicate with the helper over a local (Unix domain) socket using line-delimited JSON with a versioned envelope and structured (non-string) errors.
+- **FR-007**: JVE MUST spawn and supervise the helper's lifecycle (start, restart on crash, stop), then connect to it as a client; helper-start and connect failures surface as structured errors, never silent retry.
+- **FR-008**: State-changing operations MUST be idempotent on a JVE-supplied change token, so a retried request does not re-import or re-render.
+- **FR-009**: Every operation MUST cheaply revalidate the Resolve handle and reacquire if stale, or return a structured error if it cannot.
+- **FR-010**: The feature MUST require Resolve Studio and MUST NOT add a free-tier fallback.
+
+**Identity / re-conform**
+- **FR-011**: After sending a cut, JVE MUST record the mapping between each JVE clip and its Resolve item, persisted in the project so it survives JVE re-edits.
+- **FR-012**: On re-send after a JVE re-edit, JVE MUST reconcile clips to their prior Resolve items so existing grades are not scrambled; clips bladed/split since last send MUST have both resulting halves inherit the parent clip's grade.
+- **FR-013**: JVE MUST be able to read back the current Resolve timeline identities to reconcile after manual changes in Resolve.
+- **FR-013a**: Deleting a JVE clip MUST remove its stored grade and identity link. A JVE clip whose Resolve item is absent at read-back MUST retain its last-synced grade marked stale, never silently cleared and never shown as current. (Storage mechanism — FK cascade — is in data-model.md.)
+
+**Color model (store + display)**
+- **FR-014**: JVE MUST store, per clip, a color grade consisting of a CDL (slope/offset/power + saturation) and/or a LUT reference, plus a fidelity classification (primary / partial / unrepresentable). Grade attaches to the JVE clip. Grades are read-only in JVE (Resolve is the sole authority); JVE provides no grade-editing UI or command, so re-sync overwrites without conflict resolution. LUT references are local filesystem paths (same-machine topology).
+- **FR-015**: Reading grades back from Resolve MUST report fidelity honestly: when a Resolve grade exceeds CDL/LUT, the bridge MUST mark it partial/unrepresentable rather than approximating silently.
+- **FR-016**: JVE's viewer MUST display the stored primary grade (apply CDL, then LUT if present); display MUST be pull-based from model state (MVC), not dependent on an imperative push.
+- **FR-017**: Applying read-back grades MUST go through the command system (undoable), restoring prior grade state on undo.
+
+**Render (full-fidelity path)**
+- **FR-018**: JVE MUST be able to queue a Resolve render of the graded timeline and poll its status to completion.
+- **FR-019**: On render completion, JVE MUST relink the affected clips to the rendered masters via the existing relink path, delivering full grade fidelity that CDL read-back cannot represent.
+
+**Safety / honesty**
+- **FR-020**: The bridge MUST detect and fail loudly on the locale fractional-frame-rate corruption rather than proceeding with a wrong rate.
+- **FR-021**: The helper MUST hold no model of JVE's timeline beyond the idempotency ledger; JVE owns all orchestration and state.
+- **FR-022**: Tests MUST assert observable Resolve state, a regenerable real-Resolve fixture, or a JVE-importer round-trip; no test may pass solely by its own setup (no mocks-assert-mock).
+
+**Invocation**
+- **FR-023**: Send-to-Resolve, sync-grades, and queue-render MUST be user-invocable through the command system (menu / shortcut / programmatic), consistent with how every JVE operation is dispatched. No bridge action is a hidden or implicit side effect.
+
+### Clarifications (locked decisions)
+
+- **Roundtrip depth**: build a real JVE color model — store AND display grades (not render-and-relink only).
+- **Export format**: author native `.drt` (over FCP7 XML / AAF / EDL), using JVE's existing DRP binary reader as the format oracle.
+- **Helper lifecycle**: JVE spawns + supervises via QProcess; connects as a socket client.
+- **Grade-sync**: undoable.
+- **Grade attaches to**: the JVE clip.
+- **Bladed clips**: both halves inherit the parent's grade.
+- **Helper language**: Lua if a Phase-0 spike proves external-Lua works on the target Studio; else Python (invisible to JVE behind the socket).
+
+### Deferred decisions (resolved during de-risk, not blockers)
+
+- Cross-session shape of the change token (whether a DRT content hash is needed beyond `{sequence_id, mutation_generation}` + project id) — decided in Phase 2 against real socket traffic.
+- The exact content-identity match that recognizes a bladed fragment as a child of a prior Resolve item — designed in Phase 4 against observed Resolve behavior.
+
+### Key Entities
+
+- **Authored timeline file (`.drt`)**: JVE's export carrying clip timing (absolute TC), media references, and the per-clip identity field.
+- **Clip grade**: per-clip (keyed on JVE clip id) CDL (slope/offset/power, saturation) and/or local LUT-path reference, with a fidelity classification, provenance, and a stale flag (set when the source Resolve item is gone at read-back). Read-only in JVE. Dropped by FK cascade when the clip is deleted. New persisted JVE entity.
+- **Identity link**: persisted mapping JVE clip → Resolve item (single Resolve target per project; keyed on JVE clip id), with a last-seen grade fingerprint for change detection and re-conform. Dropped when the clip is deleted.
+- **Bridge helper**: the isolated process owning the Resolve connection and an idempotency ledger (its only JVE-related state).
+- **Change token**: JVE-supplied key making state-changing operations idempotent across retries.
+
+---
+
+## Review & Acceptance Checklist
+
+### Content Quality
+- [ ] No implementation details (languages, frameworks, APIs) — *intentional exception: this repo's specs are engineering specs; HOW detail lives in `research.md`, this file states only the technically-grounded WHAT.*
+- [x] Focused on user value and behavior
+- [x] All mandatory sections completed
+
+### Requirement Completeness
+- [x] No blocking [NEEDS CLARIFICATION] markers (open items are de-risk-phase decisions, listed under Deferred)
+- [x] Requirements are testable and unambiguous
+- [x] Success criteria are observable facts (per Acceptance Scenarios)
+- [x] Scope is clearly bounded (live Studio roundtrip; free-tier path, full node-graph fidelity, and in-process hosting are out of scope)
+- [x] Dependencies and assumptions identified (Resolve Studio; reverse-engineered DRT format; UNVERIFIED items spiked in `research.md`)
+
+---
+
+## Execution Status
+
+- [x] User description parsed
+- [x] Key concepts extracted
+- [x] Ambiguities resolved (clarifications locked) or deferred to de-risk phases
+- [x] User scenarios defined
+- [x] Requirements generated
+- [x] Entities identified
+- [x] Review checklist passed
