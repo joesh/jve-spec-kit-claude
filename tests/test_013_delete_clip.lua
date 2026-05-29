@@ -1,14 +1,16 @@
--- T046 partial (013): DeleteClip V13 + link-group-aware (no ripple).
+-- DeleteClip V13 (no ripple).
 --
--- Plain Delete (vs RippleDelete): removes clips without shifting
--- downstream. Per FR-003 a linked group is treated as one unit, so
--- deleting any member removes ALL members of the group.
+-- Plain Delete (vs RippleDelete): removes the TARGETED clip without
+-- shifting downstream. Delete acts on the selected clip ONLY — a linked
+-- partner is NOT pulled in (revised 2026-05-28, supersedes the original
+-- FR-003 "linked group is one delete unit").
 --
 -- Effect:
---   - every member of the delete unit is removed
---   - clip_links and clip_channel_override rows cascade via FK
+--   - the targeted clip is removed
+--   - its clip_links and clip_channel_override rows cascade via FK
+--   - other members of its link group survive, untouched
 --   - clips on the same track at later times stay where they are
---   - undo restores every deleted clip (and its overrides)
+--   - undo restores the deleted clip (and its overrides + link membership)
 --
 -- Black-box DB-state assertions.
 
@@ -130,10 +132,11 @@ do
 end
 
 -- -------------------------------------------------------------------------
--- Delete a linked clip: every member of the group is removed, downstream
--- stays put on each track. FR-003 — link group is one unit.
+-- Delete a linked clip: ONLY the targeted clip is removed. Its linked
+-- partner survives (and keeps its own link-group row); downstream stays
+-- put on each track (non-ripple).
 -- -------------------------------------------------------------------------
-print("-- DeleteClip linked V+A: both removed, downstream untouched --")
+print("-- DeleteClip linked V: only V removed, linked A survives --")
 do
     local db = build_fixture()
     seed_clip(db, "v1", "e-v1",   0, 100,   0, 100)
@@ -146,7 +149,17 @@ do
     DeleteClip.execute({ sequence_id = "e", clip_id = "v1" })
 
     assert(not clip_exists(db, "v1"), "v1 deleted")
-    assert(not clip_exists(db, "a1"), "a1 deleted (linked partner)")
+    assert(clip_exists(db, "a1"), "a1 (linked partner) must SURVIVE")
+
+    -- a1 keeps its own link-group membership row (v1's row cascaded away).
+    local stmt = db:prepare("SELECT link_group_id FROM clip_links WHERE clip_id = 'a1'")
+    assert(stmt:exec() and stmt:next() and stmt:value(0) == "G1",
+        "a1 must keep its G1 link row")
+    stmt:finalize()
+    local g1 = db:prepare("SELECT COUNT(*) FROM clip_links WHERE link_group_id = 'G1'")
+    assert(g1:exec() and g1:next() and g1:value(0) == 1,
+        "G1 must contain only a1 after v1's row cascades")
+    g1:finalize()
 
     -- Downstream pair must NOT shift (non-ripple).
     local v2 = load_clip(db, "v2")
@@ -231,10 +244,11 @@ do
 end
 
 -- -------------------------------------------------------------------------
--- Undo of a linked-pair delete restores BOTH clips and the original
--- clip_links rows so they remain in their original group.
+-- Undo of a linked-clip delete restores ONLY the deleted clip (its partner
+-- was never deleted) and reattaches its link-group row. The surviving
+-- partner is untouched throughout.
 -- -------------------------------------------------------------------------
-print("-- Undo DeleteClip linked V+A: pair restored, link group intact --")
+print("-- Undo DeleteClip linked V: deleted V restored to group, A untouched --")
 do
     local db = build_fixture()
     seed_clip(db, "v1", "e-v1", 0, 100, 0, 100)
@@ -244,12 +258,12 @@ do
     local exec, undo = register(DeleteClip, "DeleteClip")
     local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
     assert(exec(cmd))
-    assert(not clip_exists(db, "v1") and not clip_exists(db, "a1"),
-        "both members deleted after execute")
+    assert(not clip_exists(db, "v1"), "v1 deleted after execute")
+    assert(clip_exists(db, "a1"), "a1 (partner) survives the delete")
 
     assert(undo(cmd))
     assert(clip_exists(db, "v1") and clip_exists(db, "a1"),
-        "both members restored after undo")
+        "v1 restored after undo; a1 still present")
 
     local function group_id_for(id)
         local stmt = db:prepare("SELECT link_group_id FROM clip_links WHERE clip_id = ?")
@@ -259,7 +273,7 @@ do
         return g
     end
     assert(group_id_for("v1") == "G1", "v1 link membership restored to G1")
-    assert(group_id_for("a1") == "G1", "a1 link membership restored to G1")
+    assert(group_id_for("a1") == "G1", "a1 link membership untouched (still G1)")
     print("  ok")
 end
 

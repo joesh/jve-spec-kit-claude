@@ -1,19 +1,18 @@
---- RippleDelete command (Feature 013, T046 partial — ripple_delete only).
+--- RippleDelete command (Feature 013).
 --
--- Deletes a clip from a sequence and ripples downstream clips on each
--- affected track upstream by the deleted clip's duration on that track.
--- If the target clip is part of a link group, the WHOLE group is treated
--- as one delete unit (FR-003 / Acceptance Scenario 8): every linked clip
--- is removed and each track ripples independently.
+-- Deletes a clip from a sequence and ripples downstream clips on its track
+-- upstream by the deleted clip's duration. Ripple-Delete acts on ONLY the
+-- targeted clip — a linked partner is NOT pulled in (revised 2026-05-28,
+-- supersedes the original FR-003 "whole group is one delete unit"). The
+-- deleted clip's clip_links row cascades away; remaining group members keep
+-- their rows, stay linked among themselves, and do NOT ripple.
 --
--- Effect (per clip in the delete unit):
+-- Effect:
 --   - the clip is deleted (clip_links and clip_channel_override rows
 --     cascade via FK ON DELETE)
 --   - clips on the same track with sequence_start >= deleted_clip.end
 --     shift upstream by deleted_clip.duration
---
--- Link groups on *neighboring* (not-deleted) clips remain intact: their
--- clip_links rows are not touched.
+--   - any linked partners (other clips in the group) are untouched
 --
 -- Refuses: clip_id missing or not in args.sequence_id. Refusal is loud;
 -- DB unchanged.
@@ -26,26 +25,17 @@
 local M = {}
 
 local Clip     = require("models.clip")
-local ClipLink = require("models.clip_link")
 local database = require("core.database")
 local log      = require("core.logger").for_area("commands")
 
 local SAVEPOINT = "ripple_delete_atomic"
 
--- Resolve the delete unit: the primary clip plus every other clip that
--- shares its link group. Each entry is a full V13 capture state so undo
--- can restore the clip exactly. Captures BEFORE any DB mutation.
+-- Capture the delete unit: ONLY the targeted clip. Linked partners are
+-- deliberately NOT included — Ripple-Delete acts on the selection alone.
+-- The entry is a full V13 capture state so undo restores the clip exactly,
+-- including its link-group membership. Captures BEFORE any DB mutation.
 local function gather_delete_unit(primary_clip)
-    local unit = { Clip.capture_v13_state(primary_clip.id) }
-    local group_id = ClipLink.get_link_group_id(primary_clip.id)
-    if not group_id then return unit end
-    local members = ClipLink.get_link_group(primary_clip.id) or {}
-    for _, m in ipairs(members) do
-        if m.clip_id ~= primary_clip.id then
-            unit[#unit + 1] = Clip.capture_v13_state(m.clip_id)
-        end
-    end
-    return unit
+    return { Clip.capture_v13_state(primary_clip.id) }
 end
 
 function M.execute(args)

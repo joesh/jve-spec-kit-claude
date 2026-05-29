@@ -1,14 +1,17 @@
---- DeleteClip command (Feature 013, T046 partial).
+--- DeleteClip command (Feature 013).
 --
--- Plain (non-ripple) Delete: removes a clip from the timeline without
--- shifting downstream clips on its track. Per FR-003, a linked group is
--- one unit — deleting any member removes ALL members of the group; each
--- track keeps its remaining clips at their original positions.
+-- Plain (non-ripple) Delete: removes the targeted clip from the timeline
+-- without shifting downstream clips on its track. Delete acts on ONLY the
+-- clip(s) the user selected — a linked partner is NOT pulled in (revised
+-- 2026-05-28, supersedes the original FR-003 "linked group is one delete
+-- unit"). The deleted clip's clip_links row cascades away; the remaining
+-- members keep their rows and stay linked among themselves.
 --
--- Effect (per clip in the delete unit):
+-- Effect:
 --   - the clip row is removed
 --   - clip_links and clip_channel_override rows cascade via FK ON DELETE
 --   - clips on the same track at later times stay where they are
+--   - any linked partners (other clips in the group) are untouched
 --
 -- Refuses: clip_id missing or not in args.sequence_id; gap pseudo-ids
 -- (gap clips are derived state, not deletable).
@@ -25,28 +28,20 @@
 local M = {}
 
 local Clip            = require("models.clip")
-local ClipLink        = require("models.clip_link")
 local database        = require("core.database")
 local log             = require("core.logger").for_area("commands")
 local mutation_entry  = require("core.commands._mutation_entry")
 
 local SAVEPOINT = "delete_clip_atomic"
 
--- Resolve the delete unit: the primary clip plus every other clip that
--- shares its link group. Returns a list of full V13 capture states
--- (row + overrides + link membership) so undo can restore each clip
--- exactly. Captures BEFORE any DB mutation.
+-- Capture the delete unit: ONLY the targeted clip. Linked partners are
+-- deliberately NOT included — Delete acts on the selection alone, leaving
+-- other group members in place (and linked among themselves). Returns a
+-- list of full V13 capture states (row + overrides + link membership) so
+-- undo restores the clip exactly, including its link-group membership.
+-- Captures BEFORE any DB mutation.
 local function gather_delete_unit(primary_clip)
-    local unit = { Clip.capture_v13_state(primary_clip.id) }
-    local group_id = ClipLink.get_link_group_id(primary_clip.id)
-    if not group_id then return unit end
-    local members = ClipLink.get_link_group(primary_clip.id) or {}
-    for _, m in ipairs(members) do
-        if m.clip_id ~= primary_clip.id then
-            unit[#unit + 1] = Clip.capture_v13_state(m.clip_id)
-        end
-    end
-    return unit
+    return { Clip.capture_v13_state(primary_clip.id) }
 end
 
 function M.execute(args)

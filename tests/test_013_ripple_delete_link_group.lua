@@ -1,14 +1,9 @@
--- T038 (013): Ripple-delete preserves link group on neighbors.
---
--- Acceptance Scenario 8 / FR-003: a single ripple-delete on a clip that
--- belongs to a link group treats the whole group as one unit — every
--- linked clip is removed, and each affected track's downstream clips
--- shift upstream by the duration deleted on THAT track. Link groups on
--- *neighboring* (not-deleted) clips remain intact.
---
--- This is a DOMAIN-LEVEL contract: the editor user expects that deleting
--- a V+A pair from the timeline leaves any other V+A pair downstream
--- still linked together.
+-- Ripple-delete acts on the targeted clip ONLY (revised 2026-05-28,
+-- supersedes the original FR-003 "whole group is one delete unit"): a
+-- single ripple-delete removes just the targeted clip and ripples ONLY
+-- that clip's track. A linked partner on another track survives and does
+-- NOT ripple. The deleted clip's clip_links row cascades; remaining group
+-- members keep their rows; neighboring link groups are untouched.
 --
 -- Black-box DB-state assertions.
 
@@ -140,7 +135,7 @@ assert(type(RippleDelete.execute) == "function",
 -- A1 in group G1). Both V1 + A1 disappear; V2 shifts to [0,100) on V1
 -- track; A2 shifts to [0,100) on A1 track; G2 still links V2+A2.
 -- -------------------------------------------------------------------------
-print("-- Ripple-delete linked V+A unit; downstream pair stays linked --")
+print("-- Ripple-delete linked V: only V removed + V-track rippled; A intact --")
 do
     local db = build_fixture()
     seed_clip(db, "v1", "e-v1",   0, 100,   0, 100)
@@ -155,30 +150,36 @@ do
         clip_id     = "v1",
     })
 
-    -- Pair 1 fully removed (linked unit).
+    -- Only v1 removed; its linked partner a1 survives.
     assert(not clip_exists(db, "v1"), "v1 must be deleted")
-    assert(not clip_exists(db, "a1"), "a1 must be deleted (linked partner)")
+    assert(clip_exists(db, "a1"), "a1 (linked partner) must SURVIVE")
 
-    -- Pair 2 ripples upstream by 100 on each affected track.
+    -- ONLY the video track ripples: v2 shifts upstream by 100.
     local v2 = load_clip(db, "v2")
-    local a2 = load_clip(db, "a2")
     assert(v2.sequence_start == 0 and v2.duration == 100,
         string.format("v2 expected at [0,100); got [%d,%d)",
             v2.sequence_start, v2.sequence_start + v2.duration))
-    assert(a2.sequence_start == 0 and a2.duration == 100,
-        string.format("a2 expected at [0,100); got [%d,%d)",
+
+    -- The audio track does NOT ripple (a1 was not deleted): a1 and a2 stay.
+    local a1 = load_clip(db, "a1")
+    local a2 = load_clip(db, "a2")
+    assert(a1.sequence_start == 0 and a1.duration == 100,
+        string.format("a1 must stay at [0,100); got [%d,%d)",
+            a1.sequence_start, a1.sequence_start + a1.duration))
+    assert(a2.sequence_start == 100 and a2.duration == 100,
+        string.format("a2 must stay at [100,200); got [%d,%d)",
             a2.sequence_start, a2.sequence_start + a2.duration))
 
     -- G2 link group still intact: both v2 and a2 share G2.
-    assert(group_id_for(db, "v2") == "G2", "v2 lost G2 group")
-    assert(group_id_for(db, "a2") == "G2", "a2 lost G2 group")
     local g2 = members_of(db, "G2")
     table.sort(g2)
     assert(#g2 == 2 and g2[1] == "a2" and g2[2] == "v2",
         "G2 must still hold exactly v2+a2")
 
-    -- G1 rows cascaded by FK ON DELETE.
-    assert(#members_of(db, "G1") == 0, "G1 must be empty after cascade")
+    -- G1 now holds only a1 (v1's row cascaded by FK ON DELETE).
+    assert(group_id_for(db, "a1") == "G1", "a1 must keep its G1 row")
+    local g1 = members_of(db, "G1")
+    assert(#g1 == 1 and g1[1] == "a1", "G1 must contain only a1 after v1 cascades")
     print("  ok")
 end
 
@@ -240,11 +241,11 @@ local function register(module, name)
 end
 
 -- -------------------------------------------------------------------------
--- Undo of a linked-pair ripple-delete: both clips restored at original
--- positions, downstream pair shifts back to where it was, link groups
--- reattached.
+-- Undo of a linked-clip ripple-delete: the deleted clip is restored and its
+-- track un-ripples; the surviving partner (never deleted, never rippled)
+-- stays put throughout. Link membership reattaches.
 -- -------------------------------------------------------------------------
-print("-- Undo RippleDelete linked V+A: clips + ripple restored --")
+print("-- Undo RippleDelete linked V: V + V-track ripple restored, A untouched --")
 do
     local db = build_fixture()
     seed_clip(db, "v1", "e-v1",   0, 100,   0, 100)
@@ -257,29 +258,26 @@ do
     local exec, undo = register(RippleDelete, "RippleDelete")
     local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
     assert(exec(cmd))
-    -- Sanity: pair 1 gone, pair 2 rippled to start.
-    assert(not clip_exists(db, "v1") and not clip_exists(db, "a1"))
-    local v2 = load_clip(db, "v2")
-    assert(v2.sequence_start == 0)
+    -- Sanity: only v1 gone; v2 rippled to start; audio track untouched.
+    assert(not clip_exists(db, "v1"), "v1 deleted after execute")
+    assert(clip_exists(db, "a1"), "a1 survives the ripple-delete")
+    assert(load_clip(db, "v2").sequence_start == 0, "v2 rippled to start")
+    assert(load_clip(db, "a1").sequence_start == 0, "a1 stayed put (no audio ripple)")
+    assert(load_clip(db, "a2").sequence_start == 100, "a2 stayed put (no audio ripple)")
 
     -- Undo.
     assert(undo(cmd))
-    assert(clip_exists(db, "v1") and clip_exists(db, "a1"),
-        "deleted pair restored")
+    assert(clip_exists(db, "v1"), "v1 restored after undo")
     local v1_after = load_clip(db, "v1")
-    local a1_after = load_clip(db, "a1")
     assert(v1_after.sequence_start == 0 and v1_after.duration == 100,
         "v1 restored at original position")
-    assert(a1_after.sequence_start == 0 and a1_after.duration == 100,
-        "a1 restored at original position")
-    local v2_after = load_clip(db, "v2")
-    local a2_after = load_clip(db, "a2")
-    assert(v2_after.sequence_start == 100 and v2_after.duration == 100,
+    assert(load_clip(db, "v2").sequence_start == 100,
         "v2 un-rippled back to original position")
-    assert(a2_after.sequence_start == 100 and a2_after.duration == 100,
-        "a2 un-rippled back to original position")
+    -- Audio never moved either way.
+    assert(load_clip(db, "a1").sequence_start == 0, "a1 unchanged across undo")
+    assert(load_clip(db, "a2").sequence_start == 100, "a2 unchanged across undo")
     assert(group_id_for(db, "v1") == "G1" and group_id_for(db, "a1") == "G1",
-        "G1 link rows restored")
+        "G1 link rows restored (v1 rejoins a1)")
     assert(group_id_for(db, "v2") == "G2" and group_id_for(db, "a2") == "G2",
         "G2 link rows untouched")
     print("  ok")
