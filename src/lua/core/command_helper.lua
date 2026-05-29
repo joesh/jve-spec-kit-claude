@@ -88,7 +88,10 @@ end
 
 --- Resolve target clips at playhead using selection-aware two-tier logic.
 -- 1. If clips are selected AND any intersect playhead → those clips
--- 2. Otherwise → all clips at playhead
+--    (selection is explicit user intent — trumps the autoselect filter)
+-- 2. Otherwise → all clips at playhead on tracks with autoselect=1
+--    (spec 015 §F4 / spec 019 §FR-024 — the canonical "which clip does
+--    the user mean under the playhead" policy honors the track-arm toggle)
 -- Returns target_clips (may be empty), playhead (integer frames).
 function M.resolve_clips_at_playhead()
     local timeline_state = require("ui.timeline.timeline_state")
@@ -96,17 +99,32 @@ function M.resolve_clips_at_playhead()
     local playhead = timeline_state.get_playhead_position()
     assert(type(playhead) == "number", "resolve_clips_at_playhead: playhead must be integer")
 
+    local strip = timeline_state.get_tab_strip()
+
+    local function filter_autoselect(clips)
+        local kept = {}
+        for _, c in ipairs(clips) do
+            local track = timeline_state.get_track_by_id(c.track_id)
+            assert(track, string.format(
+                "resolve_clips_at_playhead: track %s not found for clip %s",
+                tostring(c.track_id), tostring(c.id)))
+            if track.autoselect then
+                kept[#kept + 1] = c
+            end
+        end
+        return kept
+    end
+
     local selected = timeline_state.get_selected_clips()
     local target_clips
 
     if selected and #selected > 0 then
-        target_clips = timeline_state.get_tab_strip():clips_at_time(playhead, selected)
+        target_clips = strip:clips_at_time(playhead, selected)
         if #target_clips == 0 then
-            -- Selection doesn't intersect playhead — fall back to all clips
-            target_clips = timeline_state.get_tab_strip():clips_at_time(playhead)
+            target_clips = filter_autoselect(strip:clips_at_time(playhead))
         end
     else
-        target_clips = timeline_state.get_tab_strip():clips_at_time(playhead)
+        target_clips = filter_autoselect(strip:clips_at_time(playhead))
     end
 
     return target_clips, playhead

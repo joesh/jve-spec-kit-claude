@@ -180,4 +180,36 @@ ids = set_ids(result)
 assert(ids["clip_b"] and ids["clip_c"], "should return clip_b (V2) and clip_c (V1)")
 print("✓ 5. Multiple tracks — clips on different tracks both returned")
 
+-- 6. Track autoselect=0 excludes its clips from the resolver (no-selection path).
+-- Disarm V2 and put playhead at 30 (intersects clip_a on V1, clip_b on V2).
+-- Expectation: only clip_a returned.
+db:exec("UPDATE tracks SET autoselect = 0 WHERE id = 'v2';")
+timeline_state.init("seq", "proj")
+timeline_state.set_selection({})
+timeline_state.set_playhead_position(30)
+result, ph = command_helper.resolve_clips_at_playhead()
+assert(ph == 30, "playhead should be 30")
+assert(#result == 1, string.format("expected 1 clip (V2 disarmed), got %d", #result))
+assert(result[1].id == "clip_a", "should return only clip_a (V1 still armed)")
+print("✓ 6. autoselect=0 track excluded from playhead resolution")
+
+-- 7. Explicit selection trumps autoselect — selecting a clip on a disarmed
+-- track at playhead still returns it (selection = explicit user intent).
+timeline_state.set_selection({get_ts_clip("clip_b")})
+timeline_state.set_playhead_position(30)
+result, ph = command_helper.resolve_clips_at_playhead()
+assert(#result == 1, string.format("expected 1 clip, got %d", #result))
+assert(result[1].id == "clip_b", "explicit selection of clip_b on disarmed V2 must win")
+print("✓ 7. Explicit selection on disarmed track trumps autoselect filter")
+
+-- 8. Autoselect filter also applies on the selection-doesn't-intersect fallback.
+-- Select clip_c (V1, 60..100) with playhead at 30 → selection misses; fallback
+-- enumerates clips at 30, then drops V2's clip_b because V2 is disarmed.
+timeline_state.set_selection({get_ts_clip("clip_c")})
+timeline_state.set_playhead_position(30)
+result, ph = command_helper.resolve_clips_at_playhead()
+assert(#result == 1, string.format("expected 1 clip in autoselect-filtered fallback, got %d", #result))
+assert(result[1].id == "clip_a", "fallback must drop clip_b (V2 disarmed)")
+print("✓ 8. Selection-miss fallback honors autoselect")
+
 print("\n✅ test_resolve_clips_at_playhead.lua passed")
