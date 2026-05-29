@@ -250,6 +250,13 @@ Multi-file audit triggered the following non-architectural follow-ups (all lande
 - Dead code: deleted unused `M._internal_add_clip_from_command` / `M._internal_remove_clip_from_command` (zero callers).
 - Bare `error("Use commands")` now carries function name + actionable hint (rule 1.14).
 
+### Post-Phase-1 invariant fixes (2026-05-29)
+
+Two latent bugs in the per-tab snapshot / rehydrate machinery (surfaced by binding tests once an unrelated bundle-path fix let the suite run):
+
+- **Snapshot targets the begin-time tab, not the commit-time active record.** The `clip_state` facade re-resolved `active_record_tab()` independently at `begin` vs `commit`/`rollback`. A blank-timeline drop creates its edit-target sequence *inside* the undo group, so the active record was nil at begin (snapshot skipped) but a freshly-created tab by commit — `commit_mutation_transaction` then fired on a tab that never saw a begin (`no matching begin (stack empty)`). Fix: the transaction frame now **binds the tab observed at begin** (possibly nil); commit/rollback target that tab. This restores the invariant `timeline_tab.lua` already documented ("target the tab the edit-target pointed to at begin time") and generalizes beyond the drop case to any mid-group active-record change (e.g. source loads). `has_active_mutation_snapshot()` now reflects the facade frame stack, not the live tab.
+- **`open_source_tab` is idempotent like `open_record_tab`.** Phase 1 established that `core.activate_displayed` no longer rehydrates (the tab is hydrated at open time and stays fresh via signals). But the singleton `open_source_tab` *unconditionally* called `reload`+`load_from_database`, even for the same sequence — so the `displayed_tab_changed` rebuild re-entered it and re-read the persisted viewport over the content-fit `load_displayed_sequence` had just applied for a master at a non-zero TC origin, parking the source view on empty space. Fix: only reload+rehydrate when the master sequence actually changes, matching `open_record_tab`'s early-return.
+
 ## Files most likely to change
 
 - `src/lua/ui/timeline/timeline_tab.lua` — expanded with cache fields

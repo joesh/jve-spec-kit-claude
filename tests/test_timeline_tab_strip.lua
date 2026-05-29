@@ -93,6 +93,21 @@ assert(strip.tabs[1] == s, "still first")
 assert(#strip.tabs == 3, "still 3 tabs (no duplicate)")
 print("✓ SourceTab singleton + always first + reload preserves object identity")
 
+-- Re-opening the SAME sequence is idempotent: it must NOT rehydrate the cache
+-- from the DB row. Live in-memory view-state — e.g. the content-fit viewport
+-- applied at display time for a master at a non-zero TC origin — must survive.
+-- A rehydrate here silently resets the viewport to the persisted row and parks
+-- the source view off-content (the bug this guards). Observable: a sentinel
+-- written to the cache after open survives a same-seq re-open, but the cache
+-- is still the one the DB hydrated (the object identity is unchanged).
+local sentinel = (s.cache.viewport_start_time or 0) + 12345
+s.cache.viewport_start_time = sentinel
+local s_same = strip:open_source_tab("src2")
+assert(s_same == s, "same-seq open returns the same tab object")
+assert(s.cache.viewport_start_time == sentinel,
+    "same-seq open must NOT rehydrate — live cache state must be preserved")
+print("✓ open_source_tab same-seq idempotent (no rehydrate, live cache preserved)")
+
 -- ── 5. switch_displayed to source updates ONLY displayed (FR-005) ────────
 strip:switch_active_record(r2)  -- baseline: active=r2 displayed=r2
 strip:switch_displayed(s)

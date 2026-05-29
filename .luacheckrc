@@ -114,6 +114,7 @@ exclude_files = {
     "**/*.avi",
     "**/*.drp",
     "**/*.jvp",
+    "**/*.bak",              -- editor/session backups, never source
     ".git/**",
     -- autogen contains Qt moc files, not Lua
     "tests/autogen/**",

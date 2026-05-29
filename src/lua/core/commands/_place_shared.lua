@@ -15,7 +15,6 @@
 
 local M = {}
 
-local uuid      = require("uuid")
 local Project   = require("models.project")
 local Sequence  = require("models.sequence")
 local Track     = require("models.track")

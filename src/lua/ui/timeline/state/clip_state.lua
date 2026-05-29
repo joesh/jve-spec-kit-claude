@@ -162,20 +162,23 @@ local function active_record_tab()
     return strip:get_active_record()
 end
 
---- Whether any mutation snapshot is currently active on the active tab.
+-- Mutation transaction stack — global, cross-tab. Each frame binds the tab
+-- the active edit-target pointed to at begin time (or nil) so commit/rollback
+-- target THAT tab even if the active record changes within the group — e.g. a
+-- blank-timeline drop creates the edit-target sequence mid-group, so the tab is
+-- nil at begin but non-nil by commit. Re-resolving the tab at commit would
+-- otherwise commit a snapshot on a tab that never saw a begin. The frame also
+-- carries the global selection snapshot (the cross-tab concern the per-tab
+-- module deliberately stays out of).
+local mutation_transaction_stack = {}
+
+--- Whether a mutation transaction frame is currently open.
 -- Used by command_manager.rollback_mutations to skip no-op rollbacks for
--- commands that declared skip_clip_snapshot — they never pushed a snapshot,
+-- commands that declared skip_clip_snapshot — they never pushed a frame,
 -- so there's nothing to pop.
 function M.has_active_mutation_snapshot()
-    local tab = active_record_tab()
-    if not tab then return false end
-    return tab:has_active_mutation_snapshot()
+    return #mutation_transaction_stack > 0
 end
-
--- Selection snapshot stack — global, cross-tab. Depth tracks the same
--- begin/commit/rollback boundary as the tab's clip snapshot stack;
--- skipped in lockstep when no active record tab exists.
-local selection_snapshot_stack = {}
 
 local function snapshot_global_selection()
     local clip_ids = {}
@@ -211,35 +214,36 @@ local function restore_global_selection(snap, restored_clips)
 end
 
 --- Snapshot current clip cache + global selection at the active record tab.
---- No-op when there is no active record tab (unit tests that exercise
---- command_manager without bootstrapping a timeline) — commit/rollback
---- skip in lockstep so the selection stack stays balanced.
+--- Always pushes a frame so begin/commit/rollback stay balanced even when
+--- there is no active record tab at begin time — the frame records that tab
+--- (possibly nil) so commit/rollback target it, not whatever the active
+--- record happens to be later. nil-tab frames are the unit-test case (no
+--- timeline bootstrap) and the blank-timeline-drop case (edit-target created
+--- mid-group): both skip the per-tab snapshot in lockstep.
 function M.begin_mutation_transaction()
     local tab = active_record_tab()
-    if not tab then return end
-    tab:begin_mutation_transaction()
-    table.insert(selection_snapshot_stack, snapshot_global_selection())
+    if tab then tab:begin_mutation_transaction() end
+    table.insert(mutation_transaction_stack,
+        { tab = tab, selection = snapshot_global_selection() })
 end
 
 --- Discard snapshot on successful undo group completion.
 function M.commit_mutation_transaction()
-    local tab = active_record_tab()
-    if not tab then return end
-    tab:commit_mutation_transaction()
-    assert(#selection_snapshot_stack > 0,
-        "clip_state.commit_mutation_transaction: selection stack empty (paired begin missing)")
-    table.remove(selection_snapshot_stack)
+    assert(#mutation_transaction_stack > 0,
+        "clip_state.commit_mutation_transaction: transaction stack empty (paired begin missing)")
+    local frame = table.remove(mutation_transaction_stack)
+    if frame.tab then frame.tab:commit_mutation_transaction() end
 end
 
 --- Restore clip cache + global selection from the snapshot.
 function M.rollback_mutation_transaction()
-    local tab = active_record_tab()
+    assert(#mutation_transaction_stack > 0,
+        "clip_state.rollback_mutation_transaction: transaction stack empty (paired begin missing)")
+    local frame = table.remove(mutation_transaction_stack)
+    local tab = frame.tab
     if not tab then return end
     local restored_clips = tab:rollback_mutation_transaction()
-    assert(#selection_snapshot_stack > 0,
-        "clip_state.rollback_mutation_transaction: selection stack empty (paired begin missing)")
-    local sel = table.remove(selection_snapshot_stack)
-    restore_global_selection(sel, restored_clips)
+    restore_global_selection(frame.selection, restored_clips)
     state_version = state_version + 1
     local v = state_version
     for _, c in ipairs(tab.cache.clips) do c._version = v end

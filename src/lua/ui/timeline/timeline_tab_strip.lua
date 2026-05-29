@@ -98,11 +98,22 @@ function TimelineTabStrip:open_source_tab(sequence_id)
         "TimelineTabStrip:open_source_tab: sequence_id required (non-empty string)")
 
     if self.source_tab then
-        -- Singleton: reload in place so listener subscriptions survive
-        -- (UI components rely on continuity per F1 reload semantics).
-        self.source_tab:reload(sequence_id)
-        self.source_tab:load_from_database()
-        self:_notify()
+        -- Singleton. Idempotent like open_record_tab: only reload+rehydrate
+        -- when the master actually CHANGES. Re-hydrating an unchanged tab
+        -- re-reads the persisted (often unusable) viewport over in-memory
+        -- view-state already applied this open — notably the content-fit
+        -- load_displayed_sequence computes for a master at a non-zero TC
+        -- origin. activate_displayed runs that fit then emits
+        -- displayed_tab_changed, whose rebuild re-enters here for the SAME
+        -- sequence; an unconditional rehydrate would wipe the fit and leave
+        -- the source view parked on empty space before the content.
+        if self.source_tab.sequence_id ~= sequence_id then
+            -- Reload in place so listener subscriptions survive (UI
+            -- components rely on continuity per F1 reload semantics).
+            self.source_tab:reload(sequence_id)
+            self.source_tab:load_from_database()
+            self:_notify()
+        end
         return self.source_tab
     end
 

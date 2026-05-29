@@ -218,15 +218,6 @@ local function diff_snapshots(before, after)
     return nil
 end
 
-local function assert_db_equal(before, after, ctx)
-    local d = diff_snapshots(before, after)
-    if d then
-        error(string.format("\n=== UNDO DIVERGENCE ===\n"
-            .. "context: %s\nseed:    %d\n"
-            .. "diff:    %s\n", ctx, SEED, d), 2)
-    end
-end
-
 -- =========================================================================
 -- FIXTURE
 -- =========================================================================
@@ -328,10 +319,6 @@ local function all_clip_ids(db)
     while stmt:next() do ids[#ids + 1] = stmt:value(0) end
     stmt:finalize()
     return ids
-end
-
-local function video_tracks(layout)
-    return {"track_v1", "track_v2"}
 end
 
 local function pick_random_clip(db)
@@ -645,9 +632,9 @@ local function run_property_2(layout, db)
                 executed_log[#executed_log + 1] = label
             end
         end
-        if executed_count == 0 then
-            -- couldn't make progress; skip this run
-        else
+        -- Skip runs where no command could make progress; only verify
+        -- undo-all round-trips when at least one command executed.
+        if executed_count ~= 0 then
             local undo_failed = false
             for i = 1, executed_count do
                 local r = command_manager.undo()
@@ -692,7 +679,6 @@ local function run_property_3(layout, db)
     for _, gen_name in ipairs(GEN_ORDER) do
         local ok, skips, fails = 0, 0, 0
         for iter = 1, PROP3_ITERS do
-            local pre = snapshot_db(db)
             local outcome, label = try_one_command(layout, db, gen_name)
             if outcome ~= "ok" then
                 skips = skips + 1

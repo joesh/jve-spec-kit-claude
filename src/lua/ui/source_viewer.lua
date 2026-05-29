@@ -351,6 +351,15 @@ function M.unload()
     Signals.emit("source_loaded_changed", nil, prev_id)
 end
 
+--- Reset module-private mode/state to neutral for test isolation. Pure
+--- state reset (no monitor teardown or signal emit) so a test can start the
+--- next load_clip/load_sequence from a clean slate without driving the full
+--- unload side effects. Mirrors the _reset_for_tests pattern on selection_hub,
+--- effective_source, and edit_mode.
+function M._reset_for_tests()
+    transition_to_neutral()
+end
+
 -- ─── Reactor: sequence_content_changed → FR-004a unload / FR-004b refresh ───
 
 local function refresh_staged(changed_seq_id)

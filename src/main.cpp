@@ -100,6 +100,33 @@ static void raiseFileDescriptorLimit()
     }
 }
 
+// Prepend the source tests/ tree to the Lua package.path so a --test script can
+// require("integration.integration_test_env"), require("import_schema"), etc.
+// The tests root is derived from the script's own location by walking up to the
+// ancestor directory named "tests" — robust to bundle (.app) vs bare-binary
+// layout (under the bundle the app dir is Contents/Resources, where tests/ is
+// never bundled, so appDir + "/tests" would point at a nonexistent dir).
+// No-op for scripts outside any tests/ tree (e.g. an ad-hoc debug script) — they
+// simply can't require test-tree modules.
+static void addTestsTreeToPackagePath(lua_State* L, const QFileInfo& scriptInfo)
+{
+    QDir testsDir = scriptInfo.absoluteDir();
+    while (testsDir.dirName() != "tests" && testsDir.cdUp()) {}
+    if (testsDir.dirName() != "tests") return;
+
+    const std::string root = testsDir.absolutePath().toStdString();
+
+    lua_getglobal(L, "package");
+    lua_getfield(L, -1, "path");
+    const std::string currentPath = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
+    lua_pop(L, 1);
+
+    const std::string newPath = root + "/?.lua;" + root + "/?/init.lua;" + currentPath;
+    lua_pushstring(L, newPath.c_str());
+    lua_setfield(L, -2, "path");
+    lua_pop(L, 1); // pop package table
+}
+
 int main(int argc, char *argv[])
 {
     // Install abort handler early to catch all assert()/abort() with stack traces
@@ -204,20 +231,8 @@ int main(int argc, char *argv[])
         jve_set_lua_state(luaEngine.getLuaState());
         jve_set_global_lua_state(luaEngine.getLuaState());
 
-        // Add tests/ to package.path so integration tests can require("integration.integration_test_env")
         lua_State* L = luaEngine.getLuaState();
         std::string appDir = JVE::ResourcePaths::getApplicationDirectory();
-        std::string testsDir = appDir + "/tests";
-
-        lua_getglobal(L, "package");
-        lua_getfield(L, -1, "path");
-        std::string currentPath = lua_isstring(L, -1) ? lua_tostring(L, -1) : "";
-        lua_pop(L, 1);
-
-        std::string newPath = testsDir + "/?.lua;" + testsDir + "/?/init.lua;" + currentPath;
-        lua_pushstring(L, newPath.c_str());
-        lua_setfield(L, -2, "path");
-        lua_pop(L, 1); // pop package table
 
         // Resolve test script path (relative to appDir if not absolute)
         QString scriptPath = QString::fromLocal8Bit(testScript);
@@ -231,6 +246,8 @@ int main(int argc, char *argv[])
             std::cerr << "ERROR: test script not found: " << scriptPath.toStdString() << "\n";
             return 1;
         }
+
+        addTestsTreeToPackagePath(L, scriptInfo);
 
         JVE_LOG_EVENT(Ui, "Running test script: %s", qPrintable(scriptPath));
         bool ok = luaEngine.executeFile(scriptPath);
