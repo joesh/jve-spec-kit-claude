@@ -129,8 +129,10 @@ yet V13-migrated:
   - `capture_clip_state(clip)` (line 519, reads `clip_kind`,
     `master_clip_id`, `media_id`, `offline`) — used by undo.
   - `apply_mutations(db, planned_mutations)` (final write step).
-  - `clip_update_payload` / `clip_insert_payload` / `add_*_mutation` —
-    used by stages 1–11.
+  - `clip_update_payload` / `add_*_mutation` — used by stages 1–11.
+    (`clip_insert_payload` was retired 2026-05-29: insert entries now
+    re-read the canonical DB row via `_mutation_entry.build_insert_entry`
+    → `database.load_clip_entry`, the same builder `db.load_clips` uses.)
   Migrating batch_ripple_edit alone won't work cleanly; command_helper
   must migrate alongside or first.
 - **`clip_mutator.lua`** — V8-shape clip operations. Need to audit.

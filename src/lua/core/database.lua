@@ -355,6 +355,12 @@ local function build_clip_from_query_row(query, requested_sequence_id)
 
     local track_type = query:value(19)
 
+    -- clips.volume is NOT NULL DEFAULT 1.0 — a NULL here means a raw-SQL
+    -- bypass or partial migration. Timeline-cache consumers (sift/find via
+    -- timeline_panel:get_clips) require it as a number; assert loudly.
+    local clip_volume = assert(query:value(29), string.format(
+        "load_clips: clip %s missing volume", clip_id))
+
     local clip = {
         id = clip_id,
         project_id = clip_project_id,
@@ -390,6 +396,7 @@ local function build_clip_from_query_row(query, requested_sequence_id)
         },
 
         enabled = query:value(15) == 1,
+        volume = clip_volume,
         created_at = query:value(16),
         modified_at = query:value(17),
 
@@ -1020,7 +1027,8 @@ function M.load_clips(sequence_id)
                t.sequence_id, t.track_type,
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-               mr.media_id, m.name, m.file_path, m.offline_note
+               mr.media_id, m.name, m.file_path, m.offline_note,
+               c.volume
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id
@@ -1194,7 +1202,8 @@ function M.load_clip_entry(clip_id)
                t.sequence_id, t.track_type,
                owner_seq.fps_numerator, owner_seq.fps_denominator,
                nested_seq.kind, nested_seq.fps_numerator, nested_seq.fps_denominator,
-               mr.media_id, m.name, m.file_path, m.offline_note
+               mr.media_id, m.name, m.file_path, m.offline_note,
+               c.volume
         FROM clips c
         JOIN tracks t ON c.track_id = t.id
         JOIN sequences owner_seq ON c.owner_sequence_id = owner_seq.id

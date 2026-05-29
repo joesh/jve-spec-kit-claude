@@ -2412,36 +2412,12 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- Walk ctx.planned_mutations and emit the incremental UI-sync
     -- payloads that CommandManager forwards to timeline_state so the
     -- view can update without a full reload.
+    -- All four mutation shapes BRE emits (insert/update/delete/bulk_shift)
+    -- are handled by the one canonical planner→bucket translator. Inserts
+    -- re-read the just-applied row (apply runs before this, see the call
+    -- site), so the cache entry is byte-identical to a freshly-loaded clip.
     local function emit_timeline_mutations(ctx, seq_id)
-        for _, mut in ipairs(ctx.planned_mutations) do
-            if mut.type == "update" then
-                command_helper.add_update_mutation(ctx.command, seq_id, {
-                    clip_id = mut.clip_id,
-                    track_id = mut.track_id,
-                    sequence_start = mut.sequence_start_frame,
-                    duration = mut.duration_frames,
-                    source_in = mut.source_in_frame,
-                    source_out = mut.source_out_frame,
-                    enabled = (mut.enabled == 1) or (mut.enabled == true),
-                })
-            elseif mut.type == "delete" then
-                command_helper.add_delete_mutation(ctx.command, seq_id, mut.clip_id)
-            elseif mut.type == "insert" then
-                local inserted = Clip.load_optional(mut.clip_id)
-                if inserted then
-                    local payload = command_helper.clip_insert_payload(inserted, seq_id)
-                    if payload then
-                        command_helper.add_insert_mutation(ctx.command, seq_id, payload)
-                    end
-                end
-            elseif mut.type == "bulk_shift" then
-                command_helper.add_bulk_shift_mutation(ctx.command, seq_id, {
-                    track_id = mut.track_id,
-                    shift_frames = mut.shift_frames,
-                    start_frame = mut.start_frame,
-                })
-            end
-        end
+        command_helper.report_planner_mutations(ctx.command, seq_id, ctx.planned_mutations)
     end
 
     -- Return the set of edge keys to render red in the dry-run preview.

@@ -256,51 +256,12 @@ function M.clip_update_payload(source, fallback_sequence_id)
     }
 end
 
-function M.clip_insert_payload(source, fallback_sequence_id)
-    if not source or not source.id then
-        return nil
-    end
-    local track_sequence_id = source.owner_sequence_id or source.track_sequence_id or fallback_sequence_id
-    if not track_sequence_id then
-        return nil
-    end
-    local frame_rate = source.frame_rate
-    if source.source_in ~= nil or source.source_out ~= nil then
-        assert(frame_rate
-            and frame_rate.fps_numerator
-            and frame_rate.fps_denominator,
-            string.format("command_helper.clip_insert_payload: clip %s missing frame_rate table for source bounds",
-                tostring(source.id)))
-    end
-    local label = source.label or source.name
-    if (not label or label == "") and source.id then
-        label = "Clip " .. source.id:sub(1, 8)
-    end
-    return {
-        id = source.id,
-        clip_id = source.id,
-        project_id = source.project_id,
-        track_type = source.track_type,
-        name = source.name,
-        label = label,
-        track_id = source.track_id,
-        track_sequence_id = track_sequence_id,
-        owner_sequence_id = source.owner_sequence_id or track_sequence_id,
-        sequence_id = source.sequence_id,
-        master_layer_track_id = source.master_layer_track_id,
-        master_audio_track_id = source.master_audio_track_id,
-        fps_mismatch_policy = source.fps_mismatch_policy,
-
-        sequence_start = source.sequence_start,
-        duration = source.duration,
-        source_in = source.source_in,
-        source_out = source.source_out,
-        frame_rate = frame_rate,
-
-        enabled = source.enabled ~= false,
-        volume = source.volume,
-    }
-end
+-- NOTE: there is intentionally NO clip_insert_payload here. A timeline-cache
+-- insert entry is always built by re-reading the just-written DB row via
+-- _mutation_entry.build_insert_entry (-> database.load_clip_entry), the SAME
+-- canonical builder db.load_clips uses. Hand-projecting a clip object into an
+-- insert payload drifts whenever a clip column is added (it broke offline,
+-- then label, then volume) — re-read instead.
 
 function M.add_update_mutation(command, sequence_id, update)
     assert(update, "add_update_mutation: update payload is required")
@@ -450,26 +411,18 @@ end
 function M.report_planner_mutations(command, sequence_id, mutations)
     assert(type(mutations) == "table",
         "report_planner_mutations: mutations table required (got " .. type(mutations) .. ")")
+    local mutation_entry = require("core.commands._mutation_entry")
     for _, mut in ipairs(mutations) do
         if mut.type == "insert" then
-            M.add_insert_mutation(command, sequence_id, {
-                id                    = mut.clip_id,
-                track_id              = mut.track_id,
-                sequence_start        = mut.sequence_start_frame,
-                duration              = mut.duration_frames,
-                source_in             = mut.source_in_frame,
-                source_out            = mut.source_out_frame,
-                name                  = mut.name,
-                sequence_id           = mut.sequence_id,
-                master_layer_track_id = mut.master_layer_track_id,
-                master_audio_track_id = mut.master_audio_track_id,
-                fps_mismatch_policy   = mut.fps_mismatch_policy,
-                owner_sequence_id     = mut.owner_sequence_id,
-                enabled               = mut.enabled ~= false,
-                track_type            = mut.track_type,
-                fps_numerator         = mut.fps_numerator,
-                fps_denominator       = mut.fps_denominator,
-            })
+            -- Re-read the just-applied clip so the cache entry carries the
+            -- full canonical clip shape INCLUDING the media-status denorm
+            -- (media_path/offline) — field-reading the mutation would drop
+            -- it and the inserted clip would wrongly render online. All
+            -- callers report post-apply, so the row exists.
+            assert(mut.clip_id and mut.clip_id ~= "",
+                "report_planner_mutations: insert mutation missing clip_id")
+            M.add_insert_mutation(command, sequence_id,
+                mutation_entry.build_insert_entry(mut.clip_id, "report_planner_mutations"))
         elseif mut.type == "update" then
             M.add_update_mutation(command, sequence_id, {
                 clip_id          = mut.clip_id,
@@ -478,9 +431,18 @@ function M.report_planner_mutations(command, sequence_id, mutations)
                 duration         = mut.duration_frames,
                 source_in        = mut.source_in_frame,
                 source_out       = mut.source_out_frame,
+                -- Planners are inconsistent: some emit enabled as 1/0,
+                -- some as a boolean. Accept both.
+                enabled          = (mut.enabled == 1) or (mut.enabled == true),
             })
         elseif mut.type == "delete" then
             M.add_delete_mutation(command, sequence_id, mut.clip_id)
+        elseif mut.type == "bulk_shift" then
+            M.add_bulk_shift_mutation(command, sequence_id, {
+                track_id     = mut.track_id,
+                shift_frames = mut.shift_frames,
+                start_frame  = mut.start_frame,
+            })
         else
             assert(false, string.format(
                 "report_planner_mutations: unknown mut.type=%q (clip_id=%s) — "
@@ -699,13 +661,17 @@ function M.capture_clip_state(clip)
     -- Timestamps needed for restore operations (may be nil if not set)
     if clip.created_at then state.created_at = clip.created_at end
     if clip.modified_at then state.modified_at = clip.modified_at end
-    -- Per-clip metadata: volume, source viewer marks/playhead.
-    -- load_clips() omits these for performance; fetch from Clip model if missing.
+    -- Per-clip metadata: volume, source viewer marks/playhead. The timeline
+    -- cache loader (db.load_clips) carries volume but still omits playhead +
+    -- marks, so fetch the full clip when any required field is absent. Key on
+    -- BOTH volume and playhead (both NOT NULL in schema) — not volume alone:
+    -- volume is now present on load_clips clips, so a volume-only trigger
+    -- would skip the reload and leave playhead nil.
     local volume = clip.volume
     local mark_in = clip.mark_in
     local mark_out = clip.mark_out
     local playhead = clip.playhead or clip.playhead_frame
-    if (volume == nil or not state.created_at) and clip.id then
+    if (volume == nil or playhead == nil or not state.created_at) and clip.id then
         local full_clip = Clip.load_optional(clip.id)
         if full_clip then
             volume = full_clip.volume
@@ -1348,6 +1314,16 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
     end
 
     if command then
+        -- Media-status denorm (media_path/offline/offline_note) comes from
+        -- the media JOIN, which `prev` (a captured clip state) doesn't carry.
+        -- The row is back in the DB now, so re-derive via load_clip_entry —
+        -- otherwise the restored cache clip has no media_path and renders
+        -- online even though its media is missing (the "undo cleared
+        -- offline" bug, 2026-05-28).
+        local joined = require("core.database").load_clip_entry(prev.id)
+        assert(joined, string.format(
+            "undo delete: load_clip_entry returned nil for restored clip %s",
+            tostring(prev.id)))
         M.add_insert_mutation(command, sequence_id, {
             id                 = prev.id,
             track_id           = prev.track_id,
@@ -1359,6 +1335,9 @@ local function restore_deleted_clip_revert(db, mut, command, sequence_id)
             enabled            = prev.enabled,
             name               = prev.name,
             volume             = prev.volume,
+            media_path         = joined.media_path,
+            offline            = joined.offline,
+            offline_note       = joined.offline_note,
         })
     end
     return true

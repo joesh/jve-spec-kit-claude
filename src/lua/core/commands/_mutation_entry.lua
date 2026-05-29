@@ -10,36 +10,25 @@
 --- clip.frame_rate (batch_ripple_edit.fetch_base_clip,
 --- clipboard_actions.copy_mark_range) require it.
 
-local Clip = require("models.clip")
+local database = require("core.database")
 
 local M = {}
 
+--- Build the timeline-cache insert entry for a clip that is already in the
+--- DB (callers report post-apply). Returns the canonical cache-clip shape —
+--- the SAME builder db.load_clips uses — so a re-inserted clip is identical
+--- to a freshly-loaded one (carries media_path/offline/label/etc.). Hand-
+--- projecting a field subset here drifts: it was the root of the "undo
+--- cleared offline" bug and a latent missing-label bug.
 --- @param clip_id string
 --- @param command_label string label embedded in the assert error message
 --- @return table mutation-bucket entry
 function M.build_insert_entry(clip_id, command_label)
-    local clip = Clip.load(clip_id)
+    local clip = database.load_clip_entry(clip_id)
     assert(clip, string.format(
         "%s: could not re-read clip %s for insert mutation entry",
         tostring(command_label), tostring(clip_id)))
-    return {
-        id                    = clip.id,
-        owner_sequence_id     = clip.owner_sequence_id,
-        track_sequence_id     = clip.owner_sequence_id,
-        track_id              = clip.track_id,
-        sequence_id           = clip.sequence_id,
-        sequence_start        = clip.sequence_start,
-        duration              = clip.duration,
-        source_in             = clip.source_in,
-        source_out            = clip.source_out,
-        master_layer_track_id = clip.master_layer_track_id,
-        fps_mismatch_policy   = clip.fps_mismatch_policy,
-        frame_rate            = clip.frame_rate,
-        name                  = clip.name,
-        enabled               = clip.enabled,
-        volume                = clip.volume,
-        playhead_frame        = clip.playhead_frame,
-    }
+    return clip
 end
 
 return M

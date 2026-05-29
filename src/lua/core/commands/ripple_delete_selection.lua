@@ -493,10 +493,15 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         command_helper.insert_properties_for_clip(restored.id, clip_props)
                     end
 
-                    local insert_payload = command_helper.clip_insert_payload(restored, args.ripple_selection_sequence_id or restored.owner_sequence_id)
-                    if insert_payload then
-                        command_helper.add_insert_mutation(command, insert_payload.track_sequence_id or args.ripple_selection_sequence_id, insert_payload)
-                    end
+                    -- The clip is back in the DB (saved just above), so the
+                    -- cache entry is the canonical re-read — byte-identical to
+                    -- a freshly-loaded clip (media_path/offline/label/volume).
+                    local mutation_entry = require("core.commands._mutation_entry")
+                    local insert_seq = restored.owner_sequence_id or args.ripple_selection_sequence_id
+                    assert(insert_seq and insert_seq ~= "",
+                        "UndoRippleDeleteSelection: no sequence_id for restored clip " .. tostring(restored.id))
+                    command_helper.add_insert_mutation(command, insert_seq,
+                        mutation_entry.build_insert_entry(restored.id, "Undo RippleDeleteSelection"))
                 end
             end
         end

@@ -26,52 +26,6 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    --- Convert clip_mutator planned_mutations into __timeline_mutations for UI cache.
-    local function record_planned_mutations(command, sequence_id, planned_mutations)
-        if not planned_mutations or #planned_mutations == 0 then return end
-        for _, mut in ipairs(planned_mutations) do
-            assert(mut.type, "record_planned_mutations: mutation missing type")
-            assert(mut.clip_id, string.format(
-                "record_planned_mutations: %s mutation missing clip_id", mut.type))
-            if mut.type == "delete" then
-                command_helper.add_delete_mutation(command, sequence_id, mut.clip_id)
-            elseif mut.type == "update" then
-                assert(mut.track_id, string.format(
-                    "record_planned_mutations: update mutation missing track_id (clip=%s)", mut.clip_id))
-                command_helper.add_update_mutation(command, sequence_id, {
-                    clip_id        = mut.clip_id,
-                    track_id       = mut.track_id,
-                    sequence_start = mut.sequence_start_frame,
-                    duration       = mut.duration_frames,
-                    source_in      = mut.source_in_frame,
-                    source_out     = mut.source_out_frame,
-                    enabled        = mut.enabled == 1,
-                })
-            elseif mut.type == "insert" then
-                assert(mut.track_id, string.format(
-                    "record_planned_mutations: insert mutation missing track_id (clip=%s)", mut.clip_id))
-                command_helper.add_insert_mutation(command, sequence_id, {
-                    id                    = mut.clip_id,
-                    track_id              = mut.track_id,
-                    sequence_id           = mut.sequence_id,
-                    sequence_start        = mut.sequence_start_frame,
-                    duration              = mut.duration_frames,
-                    source_in             = mut.source_in_frame,
-                    source_out            = mut.source_out_frame,
-                    name                  = mut.name,
-                    master_layer_track_id = mut.master_layer_track_id,
-                    master_audio_track_id = mut.master_audio_track_id,
-                    fps_mismatch_policy   = mut.fps_mismatch_policy,
-                    enabled               = mut.enabled == 1,
-                    volume                = mut.volume,
-                })
-            else
-                error(string.format(
-                    "record_planned_mutations: unknown mutation type '%s' (clip=%s)",
-                    tostring(mut.type), tostring(mut.clip_id)))
-            end
-        end
-    end
 
     -- SELECT sequence_id FROM tracks WHERE id = ? — single row, no result
     -- means an unknown track id. Returns nil when the row is absent.
@@ -186,7 +140,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         command:set_parameter("executed_mutations", planned_mutations)
 
         -- Populate __timeline_mutations for UI cache update
-        record_planned_mutations(command, mutation_sequence, planned_mutations)
+        command_helper.report_planner_mutations(command, mutation_sequence, planned_mutations)
 
         log.event("Moved clip %s to track %s at %s",
             clip_id, args.target_track_id, tostring(clip.sequence_start))
