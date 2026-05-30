@@ -13,9 +13,17 @@ These findings **contradict locked spec assumptions** (esp. FR-011b). Per resear
 - **Fidelity honesty (FR-015)** comes from `TimelineItem:GetNodeGraph().GetToolsInNode(n)` + `GetNodeLabel(n)`: if a clip's nodes use tools beyond a primary (e.g. "Qualifier", "LocalExposure", power windows), the CDL is a lossy approximation → mark `fidelity = partial/unrepresentable`. The first gold clip has a 10-node graph with Qualifier+LocalExposure → exactly this case.
 - **Implication for the helper:** the `read_grades` verb reads CDL by exporting the EDL+CDL and parsing it, and reads fidelity from the node graph. There is no numeric grade getter to call.
 
-## 2. Identity — IDs do NOT bridge DRP ↔ live API (T047 = NO)
-Empirical, gold timeline, V1 (1003 items) vs the gold DRP:
-- `id-equal (DRP Sm2Ti DbId == live TimelineItem.GetUniqueId()) = 0/1003`. The live id is **absent** from the DRP entirely.
+## 2. Identity — IDs bridge for a FRESH export, not for a stale one (T047 refined)
+
+**Refined conclusion (controlled 3-clip experiment):** for a DRP **exported from the current live session**, `Sm2Ti DbId == live TimelineItem.GetUniqueId()` — verified **3/3**, all equal. IDs **do** bridge within a consistent snapshot. The original "0/1003" below was an artifact of comparing a **stale, media-managed fixture** (a different project instance) against the live session — not a fundamental namespace gap.
+
+**Practical rule:**
+- Fresh export of the live timeline (what the inbound pipeline produces) → `clip DbId == live id` → **id-based connect works directly**.
+- Stale / cross-instance / media-managed DRP → ids diverge → fall back to content/position.
+- Marker-carried `clip.id` (§3) remains the *durable* channel across re-edits where DbIds may churn.
+
+Original stale-fixture evidence (gold timeline V1, 1003 items, vs the Apr-1 media-managed fixture):
+- `id-equal (DRP Sm2Ti DbId == live TimelineItem.GetUniqueId()) = 0/1003`. The live id is **absent** from that fixture entirely.
 - Media level also diverges: DRP `Sm2Mp DbId` `829cfc44…`, DRP `UniqueMediaPoolItemId` `120c428c…`, live `GetMediaId()` `91ae8d2e…`, live pool `GetUniqueId()` `bf614cd0…` — all different.
 - Root cause (web-confirmed): `GetUniqueId()` is an **undocumented runtime instance handle**, different from the persisted `DbId` *by design* (a timeline item is an instance of a pool item; BMD forum t=162360). **No documented bridge exists.**
 - Compounding: the fixture DRP is **stale** vs the live session — only `20/1003` match even positionally (head matches: OldFashioned@89750, LITTLE_SEAGULL@90025; diverges by A040@90200). The fixture path shows `…-mm/…` (media-managed export) — a different project instance.
@@ -42,12 +50,30 @@ Existing live grades sit on **unmarked** clips, so the *first* connect is positi
 3. Join CDL→clip by `(clip name + record-TC + source-TC)` — exact within one snapshot.
 4. Write `clip_grade`; set fidelity from the node graph.
 
-## 5. DRP clip-marker IMPORT (separate feature — markers shown to the user)
-Distinct from the bridge: a user's clip markers in any imported DRP must be read and displayed in JVE. Storage **fully located**, decode **partially solved**, linkage **OPEN**:
-- Markers live in `project.xml → LockableBlobMap → Sm2LockableBlobMap → Element → Sm2TiItemLockableBlob[DbId] → FieldsBlob`. **NOT** in the clip's `MarkersBA` (always empty) nor the clip's `FieldsBlob`.
-- The `FieldsBlob` is **raw protobuf** (`[BE32 ver][BE32 size][protobuf]`, `"BlobData"` header — no zstd). Decodes to nested messages; **frame number and note/name/customData strings extract cleanly** (verified against a known scratch marker: `f1 varint 5` = frame 5).
-- `Sm2TiItemLockableBlob` is a **general per-item state container** (gold: 411; full edit: 11 679), not one-per-clip; markers are one payload type.
-- **OPEN — marker→clip linkage:** the marker blob's `DbId` (`7978b63a…`) does **not** reference the clip `DbId` (`5a30f095…`) — not as string/UTF-16/raw-16-byte. The clip's `FieldsBlob` carries a third UUID (`54259379…`) that also isn't in the marker blob. The link is encoded indirectly (an undecoded protobuf field, or the `LockableBlobMap` container's key structure). **Cracking this is the gate for offline marker→clip attribution.** RE in progress (controlled multi-clip scratch experiment).
+## 5. DRP clip-marker IMPORT (separate feature — markers shown to the user) — FORMAT FULLY CRACKED
+A user's clip markers in any imported DRP must be read and displayed in JVE. Storage, container, protobuf schema, and clip-linkage are **all solved** (controlled 3-clip experiment):
+
+**Location:** `project.xml → LockableBlobMap → Sm2LockableBlobMap → LocableBlobSet → Element → Sm2TiItemLockableBlob`. **NOT** in the clip's `MarkersBA` (always empty) nor the clip's own `FieldsBlob`. `Sm2TiItemLockableBlob` is a general per-item state container (gold: 411; full edit: 11 679); markers are one payload type.
+
+**Marker→clip linkage = `<BlobOwner>`** — each `Sm2TiItemLockableBlob` has a `<BlobOwner>` child = the owning clip's `Sm2Ti DbId`. Verified 3/3, and (per §2) that DbId == the live `GetUniqueId()` for a fresh export. So markers attach to clips by `BlobOwner`.
+
+**FieldsBlob container format:**
+```
+[BE32 version][BE32 size]  Fusion "Fields" container
+  key "BlobData" (UTF-16BE)  →  value = [0x81 marker][zstd frame]
+    zstd frame decompresses to the marker protobuf
+```
+(Same `0x81`+zstd wrapper as media FieldsBlobs — reuse `qt_zstd_decompress`.)
+
+**Marker protobuf schema** (verified against known frame/name/note/customData/duration):
+```
+f2 → f1 (marker record):
+   f1 varint = FRAME
+   f2 → f1: f1 varint = color-index, f3 = note, f3 = duration, f3 = name, f6 = customData
+```
+Color is an index (the "Blue" string is not stored — it's the varint). Strings are plain ASCII length-delimited.
+
+**Status:** no unknowns remain — this is a clean decoder task: walk `LockableBlobMap`, per `Sm2TiItemLockableBlob` read `BlobOwner` + decode the FieldsBlob (Fields→BlobData→zstd→protobuf) → `{frame, color, note, name, customData, duration}`, attach to the clip with matching DbId. Implement in `drp_binary` (`decode_marker_blob`) + wire into `drp_importer` + TDD. (A second experiment with distinct color/duration values would pin the color enum + disambiguate the three `f3` strings beyond the controlled order, before shipping.)
 
 ## 6. Connection facts (reusable)
 - Helper language = **Python** (Phase 0). Read-only ping confirmed Studio 20.3.2.9.
