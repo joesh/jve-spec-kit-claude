@@ -25,6 +25,7 @@ local Media = require("models.media")
 local Sequence = require("models.sequence")
 local Track = require("models.track")
 local Clip = require("models.clip")
+local ClipMarker = require("models.clip_marker")
 local Property = require("models.property")
 local clip_link = require("models.clip_link")
 -- 018: sub-frame math primitive for audio clip source position conversion
@@ -892,6 +893,23 @@ function M.import_into_project(project_id, parse_result, opts)
                         "importer_core: failed to create clip '%s' in track '%s'",
                         clip_data.name, track_data.type .. tostring(track_data.index)))
                     table.insert(result.clip_ids, clip_id)
+
+                    -- 023: persist the clip's markers (decoded from the DRP
+                    -- Sm2TiItemLockableBlob, attached to clip_data by the parser
+                    -- and keyed by the clip's own Sm2Ti DbId).
+                    if clip_data.markers then
+                        for _, mk in ipairs(clip_data.markers) do
+                            ClipMarker.new({
+                                clip_id     = clip_id,
+                                frame       = mk.frame,
+                                duration    = mk.duration,
+                                color       = mk.color,
+                                name        = mk.name,
+                                note        = mk.note,
+                                custom_data = mk.custom_data,
+                            }):save()
+                        end
+                    end
 
                     -- Persist substitution history (OriginalClip) when the
                     -- source format carried one. Rare (replace/relink events

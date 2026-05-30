@@ -693,6 +693,30 @@ end
 -- resolves to an audio pool item).
 -- ---------------------------------------------------------------------------
 
+--- Strip the [BE32 version][BE32 size][0x81] wrapper and zstd-decompress.
+-- The 9-byte wrapper is shared by Sm2Mp FieldsBlobs and the inner BlobData
+-- payload of marker blobs, so both decode paths share this helper.
+-- @param bytes string: raw FieldsBlob bytes (9-byte wrapper + zstd frame)
+-- @return string|nil: decompressed payload on success
+-- @return string|nil: human-readable error on failure
+function M.decode_fields_blob_bytes(bytes)
+    if type(bytes) ~= "string" or #bytes < 10 then
+        return nil, "FieldsBlob bytes too short (< 9-byte wrapper + frame)"
+    end
+
+    local marker = bytes:byte(9)
+    if marker ~= 0x81 then
+        return nil, string.format(
+            "FieldsBlob wrapper byte 9 must be 0x81, got 0x%02x", marker)
+    end
+
+    if type(qt_zstd_decompress) ~= "function" then
+        return nil, "FieldsBlob: qt_zstd_decompress binding not available"
+    end
+
+    return qt_zstd_decompress(bytes:sub(10))
+end
+
 --- Decompress a Sm2Mp*.FieldsBlob hex string.
 -- @param hex_str string: full FieldsBlob hex (including 9-byte wrapper)
 -- @return string|nil: decompressed payload bytes on success
@@ -707,18 +731,7 @@ function M.decode_fields_blob(hex_str)
         return nil, "FieldsBlob hex is not valid hex or decoded < 9 bytes"
     end
 
-    local marker = bytes:byte(9)
-    if marker ~= 0x81 then
-        return nil, string.format(
-            "FieldsBlob wrapper byte 9 must be 0x81, got 0x%02x", marker)
-    end
-
-    if type(qt_zstd_decompress) ~= "function" then
-        return nil, "FieldsBlob: qt_zstd_decompress binding not available"
-    end
-
-    local frame = bytes:sub(10)
-    return qt_zstd_decompress(frame)
+    return M.decode_fields_blob_bytes(bytes)
 end
 
 --- Extract all UTF-16BE UUID strings from a decompressed FieldsBlob.
@@ -768,6 +781,185 @@ function M.extract_media_refs(bytes)
         ::continue::
     end
     return out
+end
+
+-- ---------------------------------------------------------------------------
+-- Clip marker decoding (Sm2TiItemLockableBlob → per-clip markers).
+--
+-- Resolve stores a clip's markers in an Sm2TiItemLockableBlob whose
+-- <BlobOwner> is the owning clip's Sm2Ti DbId. The <FieldsBlob> is a Fusion
+-- "Fields" TLV container holding one field, "BlobData", whose value is a
+-- [BE32 version][BE32 size][0x81][zstd] blob (same wrapper as Sm2Mp blobs).
+-- The decompressed payload is a protobuf marker collection:
+--
+--   f2 LEN  = collection
+--     repeated f1 LEN = one per marker:
+--       f1 varint = frame (relative to clip start)
+--       f2 LEN    = [BE32 ver=2][BE32 size] + f1 LEN color message:
+--           f1 varint = color value (see MARKER_COLOR_NAMES)
+--           f3 str    = note     (present even when empty)
+--           f3 str    = duration (decimal string; span width)
+--           f3 str    = name     (Resolve rejects empty-name markers)
+--           f6 str    = custom data (omitted when empty)
+--
+-- Sm2TiItemLockableBlob is a MIXED per-item state container; only some
+-- entries are markers. A non-marker blob's BlobData lacks the 0x81+zstd
+-- wrapper or fails the structural walk, so the decoders return nil and the
+-- caller skips it (consistent with this module's "nil on failure" contract).
+-- ---------------------------------------------------------------------------
+
+-- Resolve marker color value → display name. Pinned by an exhaustive
+-- 16-color round-trip export. Values are bit positions with a gap at 256
+-- (2^8 is unused between Purple=128 and Fuchsia=512) — hence an explicit
+-- table, not a formula.
+local MARKER_COLOR_NAMES = {
+    [2] = "Blue", [4] = "Cyan", [8] = "Green", [16] = "Yellow",
+    [32] = "Red", [64] = "Pink", [128] = "Purple", [512] = "Fuchsia",
+    [1024] = "Rose", [2048] = "Lavender", [4096] = "Sky", [8192] = "Mint",
+    [16384] = "Lemon", [32768] = "Sand", [65536] = "Cocoa", [131072] = "Cream",
+}
+
+--- Read a protobuf tag at pos → field_number, wire_type, next_pos (or nil).
+local function read_pb_tag(bytes, pos)
+    local tag, np = M.decode_protobuf_varint(bytes, pos)
+    if not tag then return nil end
+    return math.floor(tag / 8), tag % 8, np
+end
+
+--- Decode a marker's inner color message protobuf.
+-- @param bytes string: the color-message bytes
+-- @return table|nil: {color, note, duration, name, custom_data}
+local function decode_marker_color_message(bytes)
+    local color_value, custom_data
+    local strings = {}
+    local pos = 1
+    while pos <= #bytes do
+        local field_num, wire_type, np = read_pb_tag(bytes, pos)
+        if not field_num then return nil end
+        pos = np
+        if field_num == 1 and wire_type == 0 then
+            color_value, pos = M.decode_protobuf_varint(bytes, pos)
+            if not color_value then return nil end
+        elseif wire_type == 2 then
+            local len
+            len, pos = M.decode_protobuf_varint(bytes, pos)
+            if not len or pos + len - 1 > #bytes then return nil end
+            local s = bytes:sub(pos, pos + len - 1)
+            pos = pos + len
+            if field_num == 3 then
+                strings[#strings + 1] = s
+            elseif field_num == 6 then
+                custom_data = s
+            end
+        else
+            return nil  -- unexpected wire type → not a marker message
+        end
+    end
+
+    -- Positional strings are exactly [note, duration, name].
+    if #strings ~= 3 then return nil end
+    local color_name = MARKER_COLOR_NAMES[color_value]
+    if not color_name then return nil end
+    local duration = tonumber(strings[2])
+    if not duration then return nil end
+    return {
+        color = color_name,
+        note = strings[1],
+        duration = math.floor(duration),
+        name = strings[3],
+        custom_data = custom_data or "",
+    }
+end
+
+--- Decode the marker-collection protobuf payload → array of markers.
+-- @param payload string: decompressed BlobData payload
+-- @return table|nil: array of {frame, color, name, note, duration, custom_data}
+local function decode_marker_protobuf(payload)
+    if type(payload) ~= "string" or #payload < 2 then return nil end
+
+    -- Outer: a single f2 LEN field = the collection.
+    local field_num, wire_type, pos = read_pb_tag(payload, 1)
+    if field_num ~= 2 or wire_type ~= 2 then return nil end
+    local coll_len
+    coll_len, pos = M.decode_protobuf_varint(payload, pos)
+    if not coll_len then return nil end
+    local coll_end = pos + coll_len - 1
+    if coll_end > #payload then return nil end
+
+    local markers = {}
+    while pos <= coll_end do
+        -- Each marker is an f1 LEN entry.
+        local mfn, mwt, mp = read_pb_tag(payload, pos)
+        if mfn ~= 1 or mwt ~= 2 then return nil end
+        local mlen
+        mlen, mp = M.decode_protobuf_varint(payload, mp)
+        if not mlen then return nil end
+        local marker_end = mp + mlen - 1
+        if marker_end > coll_end then return nil end
+        pos = mp
+
+        -- frame: f1 varint
+        local ffn, fwt, fp = read_pb_tag(payload, pos)
+        if ffn ~= 1 or fwt ~= 0 then return nil end
+        local frame
+        frame, fp = M.decode_protobuf_varint(payload, fp)
+        if not frame then return nil end
+        pos = fp
+
+        -- record: f2 LEN = [BE32 ver][BE32 size] + f1 LEN color message
+        local rfn, rwt, rp = read_pb_tag(payload, pos)
+        if rfn ~= 2 or rwt ~= 2 then return nil end
+        local rlen
+        rlen, rp = M.decode_protobuf_varint(payload, rp)
+        if not rlen or rp + rlen - 1 > marker_end then return nil end
+        local record = payload:sub(rp, rp + rlen - 1)
+        pos = marker_end + 1
+
+        if #record < 8 then return nil end
+        local inner_size = M.read_be32(record, 5)
+        if not inner_size or 8 + inner_size > #record then return nil end
+        local body = record:sub(9, 8 + inner_size)
+
+        -- body wraps the color message in an f1 LEN field.
+        local cfn, cwt, cp = read_pb_tag(body, 1)
+        if cfn ~= 1 or cwt ~= 2 then return nil end
+        local clen
+        clen, cp = M.decode_protobuf_varint(body, cp)
+        if not clen or cp + clen - 1 > #body then return nil end
+
+        local marker = decode_marker_color_message(body:sub(cp, cp + clen - 1))
+        if not marker then return nil end
+        marker.frame = frame
+        markers[#markers + 1] = marker
+    end
+    return markers
+end
+
+--- Decode all markers from a Sm2TiItemLockableBlob's FieldsBlob hex.
+-- Returns nil when the blob is not a marker blob (other per-item state), so
+-- the importer can try every Sm2TiItemLockableBlob and keep what decodes.
+-- @param fields_blob_hex string: <FieldsBlob> hex (whitespace tolerated)
+-- @return table|nil: array of {frame, color, name, note, duration, custom_data}
+function M.decode_clip_markers(fields_blob_hex)
+    local bytes = M.hex_to_bytes(fields_blob_hex)
+    if not bytes or #bytes < 12 then return nil end
+
+    -- Outer Fields TLV: [BE32 version=1][BE32 field_count] then fields.
+    local version = M.read_be32(bytes, 1)
+    local field_count = M.read_be32(bytes, 5)
+    if version ~= 1 or not field_count or field_count < 1 or field_count > 8 then
+        return nil
+    end
+
+    local _, raw_payloads = M.decode_tlv_fields(bytes, 8, field_count)
+    if not raw_payloads then return nil end
+    local blob_data = raw_payloads["BlobData"]
+    if not blob_data then return nil end
+
+    local payload = M.decode_fields_blob_bytes(blob_data)
+    if not payload then return nil end
+
+    return decode_marker_protobuf(payload)
 end
 
 return M

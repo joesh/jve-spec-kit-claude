@@ -1574,7 +1574,15 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             local linked_item_sync = extract_linked_item_sync(clip_elem, clip_name)
 
+            -- The clip's own Sm2Ti DbId — markers (Sm2TiItemLockableBlob) attach
+            -- to it by BlobOwner (023). Every timeline clip carries a DbId (it is
+            -- the Sm2Ti row identity); a missing one is a parser/format bug.
+            local clip_db_id = clip_elem.attrs and clip_elem.attrs.DbId
+            assert(clip_db_id and clip_db_id ~= "", string.format(
+                "parse_clip_element: clip '%s' has no Sm2Ti DbId attribute", clip_name))
+
             local clip = {
+                clip_id = clip_db_id,
                 name = clip_name,
                 start_value = start_frames,        -- timeline position (integer frames)
                 start_subframe = start_subframe,   -- fractional frame offset (0.0–1.0, for sub-frame audio)
@@ -1927,6 +1935,46 @@ local function apply_timeline_metadata(timeline, metadata, fps_for_parsing,
     timeline.cur_playhead_relative = metadata and metadata.cur_playhead_relative or nil
 end
 
+--- Decode clip markers from the raw project.xml text.
+-- Each <Sm2TiItemLockableBlob> carries a <BlobOwner> (the owning clip's Sm2Ti
+-- DbId) and a <FieldsBlob>; the blob is decoded and its markers keyed by owner.
+-- Non-marker blobs (other per-item state) decode to nil and are skipped. A clip
+-- can in principle own more than one marker blob, so markers are merged.
+--
+-- Works on the raw XML string rather than the qt_xml_parse element tree: the
+-- LockableBlobMap subtree does not surface through find_all_elements (the tree
+-- root is <BinWrapper> and the blob map isn't traversed), whereas the large
+-- hex FieldsBlob text is intact in the file. The string scan is also what the
+-- decoder is validated against.
+-- @param project_xml string: full project.xml contents
+-- @return table: owner_dbid → array of {frame,color,name,note,duration,custom_data}
+local function parse_resolve_markers(project_xml)
+    local by_owner = {}
+    local clip_count, marker_count = 0, 0
+    for block in project_xml:gmatch("<Sm2TiItemLockableBlob.-</Sm2TiItemLockableBlob>") do
+        local owner = block:match("<BlobOwner>(.-)</BlobOwner>")
+        local hex = block:match("<FieldsBlob>(.-)</FieldsBlob>")
+        if owner and owner ~= "" and hex and hex ~= "" then
+            local markers = drp_binary.decode_clip_markers((hex:gsub("%s+", "")))
+            if markers and #markers > 0 then
+                local list = by_owner[owner]
+                if not list then
+                    list = {}
+                    by_owner[owner] = list
+                    clip_count = clip_count + 1
+                end
+                for _, m in ipairs(markers) do
+                    list[#list + 1] = m
+                    marker_count = marker_count + 1
+                end
+            end
+        end
+    end
+    log.event("drp_importer: decoded %d markers across %d clips",
+        marker_count, clip_count)
+    return by_owner
+end
+
 function M.parse_drp_file(drp_path, progress_cb)
     local pump = progress_cb or function() end
 
@@ -2024,6 +2072,25 @@ function M.parse_drp_file(drp_path, progress_cb)
                     log.warn("Skipping sequence '%s' (seq_ref_id=%s) - no fps in MediaPool metadata",
                         seq_file:match("([^/]+)%.xml$") or seq_file,
                         tostring(seq_ref_id))
+                end
+            end
+        end
+    end
+
+    -- 023: attach decoded clip markers to their clips by Sm2Ti DbId. Read the
+    -- raw project.xml (the marker blob map isn't reachable via the parsed tree).
+    do
+        local marker_handle = assert(io.open(project_xml_path, "r"),
+            "parse_drp_file: cannot reopen project.xml for marker scan: "
+            .. project_xml_path)
+        local project_xml_text = file_read_all(marker_handle, "parse_drp_file:markers")
+        marker_handle:close()
+        local markers_by_owner = parse_resolve_markers(project_xml_text)
+        for _, timeline in ipairs(timelines) do
+            for _, track in ipairs(timeline.tracks) do
+                for _, c in ipairs(track.clips) do
+                    -- clip_id is guaranteed (asserted in parse_clip_element).
+                    c.markers = markers_by_owner[c.clip_id]
                 end
             end
         end

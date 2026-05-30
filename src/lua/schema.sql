@@ -393,6 +393,25 @@ CREATE TABLE IF NOT EXISTS clip_channel_override (
 
 CREATE INDEX IF NOT EXISTS idx_clip_channel_override_clip ON clip_channel_override(clip_id);
 
+-- Clip markers: per-clip-instance markers (e.g. imported from DaVinci Resolve).
+-- Drawn directly on the clip. `frame` is the offset from the clip's start and
+-- `duration` is the span width in frames (1 = point marker). `color` is the
+-- Resolve color name (Blue, Red, …). `custom_data` carries opaque round-trip
+-- payload (e.g. a JVE clip-identity token). Wholly owned by the clip.
+-- Rule 2.13: NOT NULL on every required column.
+CREATE TABLE IF NOT EXISTS clip_markers (
+    id TEXT PRIMARY KEY,
+    clip_id TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+    frame INTEGER NOT NULL,
+    duration INTEGER NOT NULL CHECK(duration >= 1),
+    color TEXT NOT NULL,
+    name TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    custom_data TEXT NOT NULL DEFAULT ''
+);
+
+CREATE INDEX IF NOT EXISTS idx_clip_markers_clip ON clip_markers(clip_id);
+
 -- ============================================================================
 -- CLIP PROPERTIES / SNAPSHOTS / LAYOUTS / COMMANDS (unchanged from V8)
 -- ============================================================================

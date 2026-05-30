@@ -1,0 +1,171 @@
+{
+  "colors": [
+    {
+      "frame": 10,
+      "color": "Blue",
+      "name": "n_Blue",
+      "note": "note_Blue",
+      "duration": 3,
+      "customData": "cd_Blue"
+    },
+    {
+      "frame": 20,
+      "color": "Cyan",
+      "name": "n_Cyan",
+      "note": "note_Cyan",
+      "duration": 3,
+      "customData": "cd_Cyan"
+    },
+    {
+      "frame": 30,
+      "color": "Green",
+      "name": "n_Green",
+      "note": "note_Green",
+      "duration": 3,
+      "customData": "cd_Green"
+    },
+    {
+      "frame": 40,
+      "color": "Yellow",
+      "name": "n_Yellow",
+      "note": "note_Yellow",
+      "duration": 3,
+      "customData": "cd_Yellow"
+    },
+    {
+      "frame": 50,
+      "color": "Red",
+      "name": "n_Red",
+      "note": "note_Red",
+      "duration": 3,
+      "customData": "cd_Red"
+    },
+    {
+      "frame": 60,
+      "color": "Pink",
+      "name": "n_Pink",
+      "note": "note_Pink",
+      "duration": 3,
+      "customData": "cd_Pink"
+    },
+    {
+      "frame": 70,
+      "color": "Purple",
+      "name": "n_Purple",
+      "note": "note_Purple",
+      "duration": 3,
+      "customData": "cd_Purple"
+    },
+    {
+      "frame": 80,
+      "color": "Fuchsia",
+      "name": "n_Fuchsia",
+      "note": "note_Fuchsia",
+      "duration": 3,
+      "customData": "cd_Fuchsia"
+    },
+    {
+      "frame": 90,
+      "color": "Rose",
+      "name": "n_Rose",
+      "note": "note_Rose",
+      "duration": 3,
+      "customData": "cd_Rose"
+    },
+    {
+      "frame": 100,
+      "color": "Lavender",
+      "name": "n_Lavender",
+      "note": "note_Lavender",
+      "duration": 3,
+      "customData": "cd_Lavender"
+    },
+    {
+      "frame": 110,
+      "color": "Sky",
+      "name": "n_Sky",
+      "note": "note_Sky",
+      "duration": 3,
+      "customData": "cd_Sky"
+    },
+    {
+      "frame": 120,
+      "color": "Mint",
+      "name": "n_Mint",
+      "note": "note_Mint",
+      "duration": 3,
+      "customData": "cd_Mint"
+    },
+    {
+      "frame": 130,
+      "color": "Lemon",
+      "name": "n_Lemon",
+      "note": "note_Lemon",
+      "duration": 3,
+      "customData": "cd_Lemon"
+    },
+    {
+      "frame": 140,
+      "color": "Sand",
+      "name": "n_Sand",
+      "note": "note_Sand",
+      "duration": 3,
+      "customData": "cd_Sand"
+    },
+    {
+      "frame": 150,
+      "color": "Cocoa",
+      "name": "n_Cocoa",
+      "note": "note_Cocoa",
+      "duration": 3,
+      "customData": "cd_Cocoa"
+    },
+    {
+      "frame": 160,
+      "color": "Cream",
+      "name": "n_Cream",
+      "note": "note_Cream",
+      "duration": 3,
+      "customData": "cd_Cream"
+    }
+  ],
+  "edge": [
+    {
+      "frame": 400,
+      "color": "Red",
+      "name": "hasname",
+      "note": "",
+      "duration": 5,
+      "customData": "hascd",
+      "added": true
+    },
+    {
+      "frame": 410,
+      "color": "Red",
+      "name": "",
+      "note": "hasnote",
+      "duration": 5,
+      "customData": "hascd",
+      "added": false
+    },
+    {
+      "frame": 420,
+      "color": "Red",
+      "name": "hasname",
+      "note": "hasnote",
+      "duration": 5,
+      "customData": "",
+      "added": true
+    },
+    {
+      "frame": 430,
+      "color": "Blue",
+      "name": "",
+      "note": "",
+      "duration": 0,
+      "customData": "",
+      "added": false
+    }
+  ],
+  "countdown_uid": "3b262a47-6801-49df-9c76-575b07960464"
+}

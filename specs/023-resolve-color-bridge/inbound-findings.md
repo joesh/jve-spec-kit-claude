@@ -65,15 +65,35 @@ A user's clip markers in any imported DRP must be read and displayed in JVE. Sto
 ```
 (Same `0x81`+zstd wrapper as media FieldsBlobs — reuse `qt_zstd_decompress`.)
 
-**Marker protobuf schema** (verified against known frame/name/note/customData/duration):
+**FieldsBlob outer wrapper** (verified): a Fusion "Fields" TLV container —
 ```
-f2 → f1 (marker record):
-   f1 varint = FRAME
-   f2 → f1: f1 varint = color-index, f3 = note, f3 = duration, f3 = name, f6 = customData
+[BE32 version=1][BE32 field_count=1]
+  TLV field name="BlobData" (UTF-16BE), type 0x000c, payload = the marker blob
+    payload = [BE32 ver=10001][BE32 size][0x81][zstd frame]   ← same shape decode_fields_blob handles
 ```
-Color is an index (the "Blue" string is not stored — it's the varint). Strings are plain ASCII length-delimited.
+Decode path reuses existing code: `decode_tlv_fields(bytes, 8, count)` → `raw_payloads["BlobData"]` → `decode_fields_blob_bytes()` (strip 9-byte `[ver][size][0x81]` wrapper + zstd) → marker protobuf.
 
-**Status:** no unknowns remain — this is a clean decoder task: walk `LockableBlobMap`, per `Sm2TiItemLockableBlob` read `BlobOwner` + decode the FieldsBlob (Fields→BlobData→zstd→protobuf) → `{frame, color, note, name, customData, duration}`, attach to the clip with matching DbId. Implement in `drp_binary` (`decode_marker_blob`) + wire into `drp_importer` + TDD. (A second experiment with distinct color/duration values would pin the color enum + disambiguate the three `f3` strings beyond the controlled order, before shipping.)
+**Marker protobuf schema** (verified against ALL fields with distinct values + 111 real gold markers, 0 parse failures):
+```
+f2 LEN  = marker collection
+  repeated f1 LEN = one per marker:
+    f1 varint = FRAME (relative to clip start)
+    f2 LEN    = record = [BE32 ver=2][BE32 size] + f1 LEN color-message:
+        f1 varint = COLOR VALUE
+        f3 str    = note            (strs[1] — empty note IS present as "")
+        f3 str    = duration string  (strs[2] — decimal, parse to int; "duration markers" span)
+        f3 str    = name            (strs[3] — Resolve rejects empty-name markers)
+        f6 str    = customData      (OMITTED when empty → treat absent as "")
+```
+
+**Color enum** (exhaustive 16-color export — explicit table, NOT a clean formula; note the **gap at 256 / 2^8**):
+`Blue=2 Cyan=4 Green=8 Yellow=16 Red=32 Pink=64 Purple=128 Fuchsia=512 Rose=1024 Lavender=2048 Sky=4096 Mint=8192 Lemon=16384 Sand=32768 Cocoa=65536 Cream=131072`
+
+**Discriminator** (no type tag in the XML): an `Sm2TiItemLockableBlob` is a marker blob ⟺ its `BlobData` payload is `[ver][size][0x81][zstd]` decompressing to a structurally-valid marker collection (top tag `f2 LEN`). In the gold timeline 30/411 blobs are markers; the other 381 lack the `0x81`+zstd `BlobData` → cleanly rejected (decoder returns nil).
+
+**Status: CLIP markers SHIPPED (decode → import → persist).** Decoder `drp_binary.decode_clip_markers(fields_blob_hex)` → array of `{frame,color,name,note,duration,custom_data}` | nil. `clip_markers` table + `ClipMarker` model. `drp_importer.parse_resolve_markers` scans raw project.xml, attaches by `BlobOwner == clip.clip_id` (Sm2Ti DbId); `importer_core` persists after `Clip.create`. Verified on synthetic (16 colors + edges) AND production (111 real gold markers, 0 parse failures); integration test `tests/test_drp_marker_import.lua` green (18 persisted). Fixtures: `tests/fixtures/resolve/markers_16color_edge.drp` + `.truth.json`.
+
+**DEFERRED:** (a) UI rendering of markers on the timeline clip; (b) **SEQUENCE/timeline-level markers** (Resolve `Timeline:GetMarkers()`, distinct from clip markers) — separate RE: those live elsewhere in the DRP (not Sm2Ti clip items) and need their own `sequence_markers` table/model/importer/test.
 
 ## 6. Connection facts (reusable)
 - Helper language = **Python** (Phase 0). Read-only ping confirmed Studio 20.3.2.9.
