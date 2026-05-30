@@ -21,6 +21,16 @@
 - Q: How does an *imported* JVE project (DRP→JVP) connect to its live Resolve project, which never received JVE ids? → A: The identity model is **bidirectional**. On DRP import JVE adopts the Resolve timeline-item id as its own `clip.id` when present (mirroring how `media.id` already adopts the Resolve `MediaRef DbId`), else mints a UUID. So for imported clips, `clip.id` **is** the Resolve id — connect is a direct lookup, no injected ids needed. Outbound (JVE-authored sequences) still embeds `clip.id` in the DRT. Clips JVE created after import (blades, UUID ids) match positionally (`media.file_uuid` + source TC + timeline position).
 - Q: Should Resolve-side edit tweaks (a colorist trims/slips/moves/enables a clip) come back to JVE too, or only grades? → A: Yes — pull edit changes back as well. An explicit, undoable, reviewable command reads the live timeline and applies record/source/track/enabled deltas to the matched JVE clips. JVE remains the edit authority of record (the pull is a reconcile, not auto-sync); a clip JVE edited since the last sync surfaces as a conflict for the user to resolve rather than being silently overwritten.
 
+### Session 2026-05-29 (inbound spike — supersedes parts of FR-002/011b/011c/013, see `inbound-findings.md`)
+
+These were proven against live Resolve Studio 20.3.2.9; they **correct** the locked id-adoption assumption above.
+
+- Q: Does the live scripting API's timeline-item id equal the DRP-persisted `DbId` (the premise of FR-011b adoption)? → A: **No (0/1003).** `TimelineItem:GetUniqueId()` is an undocumented runtime instance handle, different from the persisted `Sm2Ti DbId` by design; the live id is absent from the DRP. Media-pool ids diverge too. **No id bridges DRP ↔ live API.** ⇒ FR-011b's "adopt the Resolve timeline-item id as `clip.id`" does **not** enable live connect.
+- Q: Then how is the durable JVE-clip ↔ Resolve-item identity carried? → A: **A clip marker carrying `clip.id`** (ASCII, in the marker name and/or `customData`). `TimelineItem:AddMarker` is per-instance, round-trips through DRP export→import (proven), and is read live via `GetMarkers`/`GetMarkerByCustomData`. This replaces id-adoption as the identity channel (FR-002 field = clip marker, spike resolved). Stamping the live project is a mutation requiring user consent; the *first* connect (clips not yet stamped) is positional.
+- Q: How are grades read, given the API has `SetCDL` but no `GetCDL`? → A: **Export the timeline as EDL+CDL** (`Export(EXPORT_EDL, EXPORT_CDL)` → `*ASC_SOP`/`*ASC_SAT` per event); fidelity (FR-015) from `GetNodeGraph().GetToolsInNode()`. There is no numeric grade getter. `read_grades` is implemented via this export+parse, not a per-item call.
+- Q: First-connect join key when nothing is marked yet? → A: **Content/position** — `(clip name + record-TC + source-TC + media identity)`, the NLE-standard conform key (Resolve's own ColorTrace uses reel+TC). The DRP `DbId` remains valid only for **file↔file** re-conform, not live connect.
+- Note: Reading a user's clip markers out of an imported DRP for *display* is a separate importer feature (markers live in `project.xml`'s `LockableBlobMap` protobuf; marker→clip linkage RE in progress) — tracked apart from the bridge, which reads markers via the live API.
+
 ---
 
 ## User Scenarios & Testing *(mandatory)*
