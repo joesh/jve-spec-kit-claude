@@ -61,12 +61,17 @@ class TestNudgeSelectionKeys(JVESmokeCase):
         self._start_before = self.eval_int(
             f"return require('models.clip').load('{self._clip_id}').sequence_start")
 
-        # Select it via a real click on the clip in the timeline.
+        # Deselect any prior state then select just this clip. Plain click
+        # on an already-selected clip in a multi-selection is a no-op
+        # (real-NLE behavior, verified vs Resolve 2026-05-30) so we MUST
+        # start from an empty selection for the click to produce {clip}.
+        self.key("Cmd+Shift+A")
         self.click_clip(self._clip_id)
         selected_count = self.eval_int(
             "return #require('ui.timeline.timeline_state').get_selected_clips()")
         self.assertEqual(1, selected_count,
-            "setUp: clicking clip did not produce a single-clip selection")
+            "setUp: clicking clip after DeselectAll did not produce a "
+            "single-clip selection")
 
         # @timeline scope is where the nudge keys are bound.
         self.focus_panel("timeline")

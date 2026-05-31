@@ -228,23 +228,23 @@ class JVESmokeCase(unittest.TestCase):
             "end; "
             "return table.concat(parts, ',')")
         selected_set = set(s for s in selected.split(",") if s)
-        if selected_set != {clip_id}:
-            # A plain left click on a clip MUST result in selection
-            # equal to exactly {clip_id} — collapses any prior multi-
-            # selection (FCP/Premiere/Resolve convention). Anything
-            # else means either the click missed, hit the wrong target,
-            # or JVE's click handler isn't collapsing on release.
+        # Real-NLE behavior (Resolve, verified 2026-05-30): clicking an
+        # already-selected clip in a multi-selection is a no-op — the
+        # press arms a drag of the whole group, the no-drag release leaves
+        # the multi-selection intact. So `click_clip` can only assert
+        # that the target IS in the resulting selection, NOT that it's
+        # the only thing selected. A test that needs exclusive selection
+        # of `clip_id` must explicitly deselect first (e.g. Cmd+Shift+A).
+        if clip_id not in selected_set:
             diag = self.eval_str(
                 f"return require('ui.timeline.timeline_panel')"
                 f".get_clip_click_diagnostic('{clip_id}')")
             raise AssertionError(
                 f"click_clip({clip_id!r}) at screen ({gx},{gy}): "
-                f"selection != {{clip_id}}. got {len(selected_set)} clip(s); "
-                f"target {'in' if clip_id in selected_set else 'NOT in'} selection. "
-                f"A plain left click must collapse multi-selection to just "
-                f"the clicked clip — if target IS in the result, JVE's "
-                f"release-without-drag handler isn't firing SelectClips to "
-                f"collapse; if NOT in, the click missed entirely.\n"
+                f"clip NOT in selection after click. got {len(selected_set)} "
+                f"clip(s) selected; target absent. Either the click missed "
+                f"(landed off the clip's body) or hit a different widget. "
+                f"Cliclick coords vs widget bounds:\n"
                 f"  post-click diagnostic: {diag}\n"
                 f"  Compare global_center in diagnostic to the actual click coords "
                 f"({gx},{gy}) — divergence means the widget moved between coord "
