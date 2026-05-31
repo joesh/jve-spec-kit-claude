@@ -248,53 +248,38 @@ class JVESmokeCase(unittest.TestCase):
         self.click_clip(clip_id, double=True)
 
     def move_playhead_to(self, frame: int) -> None:
-        """Seek the playhead by clicking on the ruler at the target frame.
+        """Seek the playhead to an absolute frame using real keyboard input
+        through the timecode entry field.
 
-        Real-OS-input equivalent of SetPlayhead with an arbitrary frame.
-        Snap-immune: a ruler click with magnetic snapping enabled would
-        pull the playhead to the nearest edit boundary, silently
-        breaking any test that seeds a playhead at an intentional offset
-        from a clip edge (e.g. Cmd+B "strictly inside" scenarios). The
-        primitive disables snap around the click and restores it.
+        Sequence: Cmd+3 (focus timeline) → Tab (focus TC field, scoped
+        to @timeline) → type "<frame>f" (absolute-frames form accepted
+        by timecode_input.parse) → Return (commits → SetPlayhead).
 
-        Asserts the click landed: post-click playhead matches ``frame``.
-        ±1 frame tolerance accounts for ruler pixel rounding when zoom
-        density is fractional.
+        No snap interaction — TC parser feeds SetPlayhead directly with
+        the typed value. No ruler click — so no pixel→time math, no
+        magnetic snap to worry about.
+
+        Asserts the post-condition: playhead actually landed at ``frame``.
         """
-        coords = self.eval_str(
-            f"return require('core.debug_helpers').ruler_global_point({frame})")
-        self.assertNotEqual("", coords,
-            f"move_playhead_to({frame}): no ruler coords — no displayed sequence")
-        gx_s, gy_s = coords.split(",", 1)
-
-        snap_was_on = self.eval_bool(
-            "return require('ui.timeline.state.snapping_state').is_enabled()")
-        if snap_was_on:
-            self.eval(
-                "require('ui.timeline.state.snapping_state').toggle_baseline()")
         read_playhead = (
             "local ts = require('ui.timeline.timeline_state'); "
             "local seq_id = ts.get_tab_strip():active_sequence_id(); "
             "local seq = require('models.sequence').load(seq_id); "
             "return seq.playhead_position")
         before = self.eval_int(read_playhead)
-        try:
-            self.runner.click(int(gx_s), int(gy_s))
-        finally:
-            if snap_was_on:
-                self.eval(
-                    "require('ui.timeline.state.snapping_state').toggle_baseline()")
-
+        self.key("Cmd+3")
+        self.key("Tab")
+        self.runner.type_text(f"{frame}f")
+        self.key("Return")
         actual = self.eval_int(read_playhead)
-        assert abs(actual - frame) <= 1, (
-            f"move_playhead_to({frame}): ruler click at screen "
-            f"({gx_s},{gy_s}) landed playhead at frame {actual} "
-            f"(delta={actual - frame}; pre-click playhead was {before}). "
-            f"Snap was toggled off around the click. "
-            f"If actual == before, the click never reached the ruler "
-            f"(wrong widget, off-screen, or focus stole the event). "
-            f"If actual != before but != frame, ruler received it but "
-            f"pixel→time math is off.")
+        assert actual == frame, (
+            f"move_playhead_to({frame}): typed-TC seek landed playhead at "
+            f"frame {actual} (delta={actual - frame}; pre was {before}). "
+            f"Sequence: Cmd+3 → Tab → '{frame}f' → Return. If actual == "
+            f"before, the typed input never committed (Tab didn't focus "
+            f"TC field, or Return didn't fire apply_timecode_entry_text). "
+            f"If actual != before but != frame, TC parser rejected the "
+            f"input (check {frame}f format vs timecode_input.parse).")
 
     def ensure_record_tab(self) -> None:
         """If a source tab is currently displayed, press grave to swap

@@ -91,10 +91,17 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
     # ── Probes ─────────────────────────────────────────────────────────
 
     def _pick_armed_video_clips_with_body(self, n: int) -> list[dict]:
-        """Return the first ``n`` distinct armed (autoselect=1, locked=0)
-        video clips whose duration is wide enough to seed the playhead
-        strictly inside. Each entry: ``{id, track_id, seq_start, seq_end,
-        rec_seq}``. Asserts when the fixture can't supply ``n``."""
+        """Return ``n`` distinct armed (autoselect=1, locked=0) video clips
+        whose duration is wide enough to seed the playhead strictly inside,
+        AND whose time ranges (extended by SEED_OFFSET on each side) do
+        not overlap with each other. The non-overlap guarantee is what
+        makes the unrelated-selection scenario meaningful: if pick[0]
+        spans the same frame range as pick[1]'s seed playhead, the
+        adapter's selection-narrow check fires on pick[0] and the test's
+        "non-intersecting selection → fallback" premise breaks.
+
+        Each entry: ``{id, track_id, seq_start, seq_end, rec_seq}``.
+        Asserts when the fixture can't supply ``n``."""
         info = self.eval(
             "local ts = require('ui.timeline.timeline_state'); "
             "local Track = require('models.track'); "
@@ -113,12 +120,25 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
             "     and type(c.sequence_start) == 'number' "
             "     and type(c.duration) == 'number' "
             f"     and c.duration > {SEED_OFFSET_INTO_CLIP + 1} then "
-            "    picked[#picked + 1] = c "
-            f"    if #picked >= {n} then break end "
+            "    local c_lo = c.sequence_start; "
+            "    local c_hi = c.sequence_start + c.duration; "
+            "    local overlaps_existing = false; "
+            "    for _, p in ipairs(picked) do "
+            "      local p_lo = p.sequence_start; "
+            "      local p_hi = p.sequence_start + p.duration; "
+            "      if c_lo < p_hi and c_hi > p_lo then "
+            "        overlaps_existing = true; "
+            "        break "
+            "      end "
+            "    end; "
+            "    if not overlaps_existing then "
+            "      picked[#picked + 1] = c; "
+            f"      if #picked >= {n} then break end "
+            "    end "
             "  end "
             "end; "
-            f"assert(#picked >= {n}, 'fixture has fewer than {n} armed-video "
-            "clip(s) wide enough'); "
+            f"assert(#picked >= {n}, 'fixture has fewer than {n} non-overlapping "
+            "armed-video clip(s) wide enough'); "
             "local lines = {} "
             "for i, c in ipairs(picked) do "
             "  lines[i] = string.format('%s|%s|%d|%d|%s', "
@@ -214,10 +234,9 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
         # a user would take.
         self.key("Cmd+Shift+A")
 
-    def _select_only(self, clip_id: str, sequence_id: str) -> None:
+    def _select_only(self, clip_id: str, _sequence_id: str) -> None:
         # A plain click on the clip replaces the selection with just that
-        # clip — same as a SelectClips dispatch with no modifier and a
-        # single target_clip_id.
+        # clip (release-without-drag collapse, FCP/Premiere convention).
         self.click_clip(clip_id)
 
     def _selected_clip_ids(self) -> list[str]:
@@ -232,9 +251,10 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
         bare = s.strip('"')
         return [x for x in bare.split(",") if x]
 
-    def _seek_record_playhead(self, seq_id: str, frame: int) -> None:
-        # Click on the ruler at the pixel column for `frame` — the same
-        # gesture a user would make to position the playhead.
+    def _seek_record_playhead(self, _seq_id: str, frame: int) -> None:
+        # Real-input seek via the timecode-entry field. move_playhead_to
+        # presses Cmd+3 (focus timeline) → Tab (focus TC field) → types
+        # "<frame>f" → Return.
         self.move_playhead_to(frame)
 
     def _clip_count_on_track(self, track_id: str) -> int:
