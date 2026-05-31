@@ -251,15 +251,50 @@ class JVESmokeCase(unittest.TestCase):
         """Seek the playhead by clicking on the ruler at the target frame.
 
         Real-OS-input equivalent of SetPlayhead with an arbitrary frame.
-        Asserts the click landed (post-eval playhead matches within
-        ±1 frame, accounting for pixel rounding).
+        Snap-immune: a ruler click with magnetic snapping enabled would
+        pull the playhead to the nearest edit boundary, silently
+        breaking any test that seeds a playhead at an intentional offset
+        from a clip edge (e.g. Cmd+B "strictly inside" scenarios). The
+        primitive disables snap around the click and restores it.
+
+        Asserts the click landed: post-click playhead matches ``frame``.
+        ±1 frame tolerance accounts for ruler pixel rounding when zoom
+        density is fractional.
         """
         coords = self.eval_str(
             f"return require('core.debug_helpers').ruler_global_point({frame})")
         self.assertNotEqual("", coords,
             f"move_playhead_to({frame}): no ruler coords — no displayed sequence")
         gx_s, gy_s = coords.split(",", 1)
-        self.runner.click(int(gx_s), int(gy_s))
+
+        snap_was_on = self.eval_bool(
+            "return require('ui.timeline.state.snapping_state').is_enabled()")
+        if snap_was_on:
+            self.eval(
+                "require('ui.timeline.state.snapping_state').toggle_baseline()")
+        read_playhead = (
+            "local ts = require('ui.timeline.timeline_state'); "
+            "local seq_id = ts.get_tab_strip():active_sequence_id(); "
+            "local seq = require('models.sequence').load(seq_id); "
+            "return seq.playhead_position")
+        before = self.eval_int(read_playhead)
+        try:
+            self.runner.click(int(gx_s), int(gy_s))
+        finally:
+            if snap_was_on:
+                self.eval(
+                    "require('ui.timeline.state.snapping_state').toggle_baseline()")
+
+        actual = self.eval_int(read_playhead)
+        assert abs(actual - frame) <= 1, (
+            f"move_playhead_to({frame}): ruler click at screen "
+            f"({gx_s},{gy_s}) landed playhead at frame {actual} "
+            f"(delta={actual - frame}; pre-click playhead was {before}). "
+            f"Snap was toggled off around the click. "
+            f"If actual == before, the click never reached the ruler "
+            f"(wrong widget, off-screen, or focus stole the event). "
+            f"If actual != before but != frame, ruler received it but "
+            f"pixel→time math is off.")
 
     def ensure_record_tab(self) -> None:
         """If a source tab is currently displayed, press grave to swap

@@ -3795,10 +3795,17 @@ end
 --- @return integer|nil, integer|nil global_x, global_y
 function M.get_ruler_global_point_for_test(frame)
     assert(type(frame) == "number", "get_ruler_global_point_for_test: frame must be integer")
-    local widget = M.video_widget or M.audio_widget
-    if not widget then return nil, nil end
-    local w, _ = qt_constants.PROPERTIES.GET_SIZE(widget)
-    if not w or w <= 0 then return nil, nil end
+    -- Must target the ruler widget, NOT the track-stack widgets. A click
+    -- inside video_widget/audio_widget lands on whatever clip occupies
+    -- that pixel (which selects, doesn't seek); only the ruler strip
+    -- treats a click as "set playhead here."
+    local widget = M.ruler_widget
+    assert(widget, "get_ruler_global_point_for_test: ruler_widget not initialized")
+    local w, h = qt_constants.PROPERTIES.GET_SIZE(widget)
+    assert(type(w) == "number" and w > 0 and type(h) == "number" and h > 0,
+        string.format("get_ruler_global_point_for_test: ruler_widget has "
+            .. "invalid size (w=%s h=%s) — widget not laid out yet",
+            tostring(w), tostring(h)))
     -- Scroll the viewport so `frame` is on-screen — same reason as
     -- M.get_clip_global_center_for_test: a ruler click at a pixel x
     -- outside the widget produces off-screen global coords that
@@ -3812,7 +3819,10 @@ function M.get_ruler_global_point_for_test(frame)
         timeline_state.set_viewport_start_time(new_start)
     end
     local px = timeline_state.time_to_pixel(frame, w)
-    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, math.floor(px), 1)
+    -- Click vertical center of the ruler so we're squarely inside its
+    -- hit region (y=1 worked for a track widget but the ruler is only
+    -- 32px tall — center is safer).
+    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, math.floor(px), math.floor(h / 2))
     return gx, gy
 end
 
