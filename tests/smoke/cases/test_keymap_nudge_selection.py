@@ -25,20 +25,14 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_nudge_selection -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Anamnesis fixture has 3000+ clips; the 5th in display order sits well
 # inside content (~424 frames past start) with a huge duration, so neither
 # direction nudge hits a boundary or a near-collision.
 INTERIOR_CLIP_INDEX = 5
-
 
 class TestNudgeSelectionKeys(JVESmokeCase):
     """Comma / Period / Shift+(Comma|Period) all nudge the selection."""
@@ -99,7 +93,6 @@ class TestNudgeSelectionKeys(JVESmokeCase):
 
     def test_shift_period_nudges_five_frames_right(self) -> None:
         self._assert_nudged_by("Shift+Period", +5)
-
 
 if __name__ == "__main__":
     unittest.main()

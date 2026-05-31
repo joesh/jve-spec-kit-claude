@@ -16,14 +16,9 @@ command-layer refusal contract only).
 #       command_manager refusal message without touching internals.
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestImportResolveDRPRefusal(JVESmokeCase):
     """File>Import>Resolve Project against a populated .jvp must refuse."""
@@ -61,7 +56,6 @@ class TestImportResolveDRPRefusal(JVESmokeCase):
         self.assertEqual(before_sequences, self.eval_int(
             'return require("core.debug_helpers").sequence_count()'),
             "sequence count unchanged after refusal")
-
 
 if __name__ == "__main__":
     unittest.main()

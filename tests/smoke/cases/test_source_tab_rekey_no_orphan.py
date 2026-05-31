@@ -19,14 +19,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_source_tab_rekey_no_orphan -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceTabRekeyNoOrphan(JVESmokeCase):
     """Source-tab rekey-in-place: A→B swap drops A; unload drops source tab."""
@@ -47,7 +42,6 @@ class TestSourceTabRekeyNoOrphan(JVESmokeCase):
         # 4. Unload source viewer (primitive TBD). Assert:
         #    open_tab_ids == {record_seq}; source_tab_seq_id == nil.
         pass
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,17 +11,13 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_undo_removes_sequence -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
 from tests.smoke.runner.case import JVESmokeCase
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "resolve" / "sample_timeline_fcp7xml.xml"
-
 
 class TestImportUndoRemovesSequence(JVESmokeCase):
     """Import an FCP7 XML into the host project, then undo. Methods chain."""
@@ -96,7 +92,6 @@ class TestImportUndoRemovesSequence(JVESmokeCase):
             'return require("core.debug_helpers").media_count()')
         self.assertEqual(media_before, media_after_undo,
             "Imported media should be removed after undo")
-
 
 if __name__ == "__main__":
     unittest.main()

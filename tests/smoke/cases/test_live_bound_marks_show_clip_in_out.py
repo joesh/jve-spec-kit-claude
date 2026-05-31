@@ -23,14 +23,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_live_bound_marks_show_clip_in_out -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestLiveBoundMarksShowClipInOut(JVESmokeCase):
     """Source monitor + source tab must show clip in/out as marks in live-bound mode."""
@@ -117,7 +112,6 @@ class TestLiveBoundMarksShowClipInOut(JVESmokeCase):
         self.assertEqual(str(expected_out), tab_out, (
             f"source tab's get_source_mark_out() expected {expected_out} "
             f"(clip.source_out) in live-bound mode; got {tab_out}."))
-
 
 if __name__ == "__main__":
     unittest.main()

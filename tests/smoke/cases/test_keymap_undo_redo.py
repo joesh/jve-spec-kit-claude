@@ -17,14 +17,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_undo_redo -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestUndoRedo(JVESmokeCase):
     """Cmd+Z reverts, Cmd+Shift+Z reapplies the last action."""
@@ -34,11 +29,7 @@ class TestUndoRedo(JVESmokeCase):
         self.ensure_record_tab()
 
     def _pick_clip(self) -> str:
-        info = self.eval_str(
-            "return require('core.debug_helpers').first_armed_video_clip()")
-        assert info, "fixture has no armed video clip"
-        # Format: "id|track_id|seq_start|duration|rec_seq"
-        return info.split("|", 1)[0]
+        return self.first_armed_video_clip().id
 
     def _enabled(self, clip_id: str) -> bool:
         return self.eval_bool(
@@ -78,7 +69,6 @@ class TestUndoRedo(JVESmokeCase):
             f"after Cmd+Shift+Z, clip {clip_id} should be back to "
             f"enabled=false (re-applied). Still true means Redo "
             f"dispatched but didn't re-run the executor."))
-
 
 if __name__ == "__main__":
     unittest.main()

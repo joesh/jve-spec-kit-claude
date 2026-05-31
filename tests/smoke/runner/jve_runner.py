@@ -90,6 +90,13 @@ class JVEEvalError(RuntimeError):
 class JVERunner:
     """Single instance owns one JVEEditor process + one socket client."""
 
+    # Monotonic id stamped at construction so mid-class respawn detection
+    # in JVESmokeCase.setUp can compare runner identity without relying on
+    # Python's `id()` (which CPython will reuse if the old runner was
+    # already GC'd by the time the new one is allocated — same allocator
+    # bucket → same address → false-negative respawn check).
+    _instance_seq: int = 0
+
     def __init__(
         self,
         socket_path: str = DEFAULT_SOCKET,
@@ -98,6 +105,8 @@ class JVERunner:
         env: Optional[dict] = None,
         stdout_log: Optional[Path] = None,
     ):
+        JVERunner._instance_seq += 1
+        self.instance_seq = JVERunner._instance_seq
         self.socket_path = socket_path
         self.binary = Path(binary) if binary else DEFAULT_BINARY
         self.startup_project = Path(startup_project) if startup_project else None

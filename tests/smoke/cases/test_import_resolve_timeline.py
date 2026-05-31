@@ -16,17 +16,13 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_resolve_timeline -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
 from tests.smoke.runner.case import JVESmokeCase
 
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "resolve" / "retime-test.drt"
-
 
 class TestImportResolveTimelineMergesIntoHostProject(JVESmokeCase):
     """One session: import DRT into host, undo, redo. Methods chain."""
@@ -121,7 +117,6 @@ class TestImportResolveTimelineMergesIntoHostProject(JVESmokeCase):
             'return require("core.debug_helpers").sequence_count()')
         self.assertEqual(seq_after, seq_after_redo,
             "redo restores imported sequences")
-
 
 if __name__ == "__main__":
     unittest.main()

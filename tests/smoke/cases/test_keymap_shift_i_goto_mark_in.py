@@ -16,18 +16,12 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_shift_i_goto_mark_in -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 MARK_IN_OFFSET = 200
 START_PLAYHEAD_OFFSET = 50  # somewhere ELSE so the seek is observable
-
 
 class TestShiftIGoesToMarkIn(JVESmokeCase):
     """`Shift+I` on @timeline must park the playhead at mark_in."""
@@ -90,7 +84,6 @@ class TestShiftIGoesToMarkIn(JVESmokeCase):
             "return require('models.sequence').load('"
             + seq_id + "').playhead_position"),
             "sequences.playhead_position did not follow the seek")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,11 +30,27 @@ Failure isolation:
 import atexit
 import unittest
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import NamedTuple, Optional
 
 from tests.smoke.runner.jve_runner import (
     Fixtures, JVERunner, JVERunnerError, JVEEvalError,
 )
+
+
+class ArmedClip(NamedTuple):
+    """Decoded result of ``debug_helpers.first_armed_video_clip()``.
+
+    Fields mirror the pipe-encoded payload from the Lua side; the wire
+    format is positional because the debug-terminal repr cap can't carry
+    nested tables. ``Case.first_armed_video_clip()`` is the only place
+    that should split the payload — test bodies receive an ArmedClip.
+    """
+    id: str
+    track_id: str
+    seq_start: int
+    duration: int
+    rec_seq: str
+    master_seq_id: str
 
 
 # Module-level singleton: one JVE for the entire suite run, not per
@@ -116,12 +132,12 @@ class JVESmokeCase(unittest.TestCase):
     specific method, override setUp and call `self._reset_to_template()`.
     """
 
-    # Class-level aliases to the singleton, populated in setUpClass so
-    # test methods can use self._runner / self._fixtures as before.
-    _runner: ClassVar[Optional[JVERunner]] = None
-    _fixtures: ClassVar[Optional[Fixtures]] = None
-
-    runner: JVERunner  # alias for type-checking convenience
+    # Type-checking annotations for the instance attributes setUp binds.
+    # The actual values come from _ensure_runner() — there's no class-level
+    # cache because the singleton can be respawned mid-suite (a wedged
+    # test's force-shutdown), so a cls._runner would silently go stale.
+    runner: JVERunner
+    _fixtures: Fixtures
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -131,11 +147,17 @@ class JVESmokeCase(unittest.TestCase):
         # methods in the class operate on this copy in sequence; no
         # per-method reset. Naming the copy after cls.__qualname__
         # keeps the on-disk file traceable to its owning class.
-        cls._runner = runner
-        cls._fixtures = fixtures
         jvp = fixtures.fresh_copy(f"class__{cls.__qualname__}")
         runner.open_project(jvp)
         runner.foreground()
+        # Stash the project + the runner identity so setUp can detect
+        # a mid-class respawn (a wedged test that triggered force-
+        # shutdown in `_ensure_runner`). Without this, the respawned
+        # runner would silently leave the class's remaining methods
+        # executing against `startup_session.jvp`, not their class
+        # project — undetectable cross-class contamination.
+        cls._class_jvp = jvp  # type: ignore[attr-defined]
+        cls._setup_runner_seq = runner.instance_seq  # type: ignore[attr-defined]
 
     # No tearDownClass: the suite-wide runner is owned by atexit. Per-
     # class teardown would kill JVE between TestCase classes — defeats
@@ -143,11 +165,19 @@ class JVESmokeCase(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        # Re-resolve the runner — if a prior test wedged JVE the
-        # singleton was respawned and the cls-cached pointer is stale.
-        # NB: this does NOT reopen the project. Methods within a class
-        # share the setUpClass-opened project, accumulating state.
         self.runner, self._fixtures = _ensure_runner()
+        # Detect mid-class respawn: if `_ensure_runner` returned a
+        # different runner than `setUpClass` saw, JVE was force-shut
+        # and restarted (its startup project is now the throwaway
+        # session copy, not this class's project). Re-open this
+        # class's project so remaining methods run against the right
+        # data. The respawned runner is then "re-adopted" as the
+        # canonical class runner for any later respawn-detection.
+        cls = type(self)
+        expected_seq = getattr(cls, "_setup_runner_seq", None)
+        if expected_seq is not None and self.runner.instance_seq != expected_seq:
+            self.runner.open_project(cls._class_jvp)  # type: ignore[attr-defined]
+            cls._setup_runner_seq = self.runner.instance_seq  # type: ignore[attr-defined]
         # Re-foreground in case a prior test stole focus (osascript
         # dialogs, modals, the host user clicking elsewhere).
         self.runner.foreground()
@@ -219,7 +249,8 @@ class JVESmokeCase(unittest.TestCase):
         # clip is actually selected here so the failure surfaces at the
         # helper, not 3 lines later in a key-doesn't-toggle assertion.
         selected = self.eval_str(
-            "local sel = require('ui.timeline.timeline_state').get_selected_clips() or {}; "
+            "local sel = require('ui.timeline.timeline_state').get_selected_clips(); "
+            "assert(sel, 'get_selected_clips returned nil — timeline_state not initialized'); "
             "local parts = {}; "
             "for i, c in ipairs(sel) do "
             "  assert(type(c) == 'table' and type(c.id) == 'string', "
@@ -289,7 +320,8 @@ class JVESmokeCase(unittest.TestCase):
         # rows for cheap parsing.
         rows = self.eval_str(
             "local edges = require('ui.timeline.timeline_state')"
-            ".get_selected_edges() or {}; "
+            ".get_selected_edges(); "
+            "assert(edges, 'get_selected_edges returned nil — timeline_state not initialized'); "
             "local parts = {}; "
             "for i, e in ipairs(edges) do "
             "  parts[i] = tostring(e.clip_id) .. '|' "
@@ -323,30 +355,42 @@ class JVESmokeCase(unittest.TestCase):
     def double_click_clip(self, clip_id: str) -> None:
         self.click_clip(clip_id, double=True)
 
+    def type_in_tc_field(self, text: str) -> None:
+        """Type a timecode-parser-compatible string into the @timeline
+        TC entry field and commit it.
+
+        Sequence: Cmd+3 (focus timeline) → Tab (focus TC field, scoped
+        to @timeline) → type ``text`` → Return (commits →
+        ApplyTimecodeEntryText → SetPlayhead at the parsed value).
+
+        Lower-level than ``move_playhead_to`` — does NOT post-assert
+        the resulting playhead position, so callers can intentionally
+        request out-of-range frames to verify clamp behaviour.
+        """
+        self.key("Cmd+3")
+        self.key("Tab")
+        self.runner.type_text(text)
+        self.key("Return")
+
     def move_playhead_to(self, frame: int) -> None:
         """Seek the playhead to an absolute frame using real keyboard input
         through the timecode entry field.
 
-        Sequence: Cmd+3 (focus timeline) → Tab (focus TC field, scoped
-        to @timeline) → type "<frame>f" (absolute-frames form accepted
-        by timecode_input.parse) → Return (commits → SetPlayhead).
+        Wraps ``type_in_tc_field(f"{frame}f")`` and asserts the
+        post-condition that the playhead actually landed at ``frame``.
+
+        For requests that expect a clamp (frame < start_tc, frame >
+        sequence end), call ``type_in_tc_field`` directly and assert
+        the clamped position yourself.
 
         No snap interaction — TC parser feeds SetPlayhead directly with
         the typed value. No ruler click — so no pixel→time math, no
         magnetic snap to worry about.
-
-        Asserts the post-condition: playhead actually landed at ``frame``.
         """
         read_playhead = (
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local seq_id = ts.get_tab_strip():active_sequence_id(); "
-            "local seq = require('models.sequence').load(seq_id); "
-            "return seq.playhead_position")
+            "return require('core.debug_helpers').playhead()")
         before = self.eval_int(read_playhead)
-        self.key("Cmd+3")
-        self.key("Tab")
-        self.runner.type_text(f"{frame}f")
-        self.key("Return")
+        self.type_in_tc_field(f"{frame}f")
         actual = self.eval_int(read_playhead)
         assert actual == frame, (
             f"move_playhead_to({frame}): typed-TC seek landed playhead at "
@@ -355,7 +399,9 @@ class JVESmokeCase(unittest.TestCase):
             f"before, the typed input never committed (Tab didn't focus "
             f"TC field, or Return didn't fire apply_timecode_entry_text). "
             f"If actual != before but != frame, TC parser rejected the "
-            f"input (check {frame}f format vs timecode_input.parse).")
+            f"input (check {frame}f format vs timecode_input.parse). "
+            f"If clamp was expected (out-of-range frame), use "
+            f"type_in_tc_field() directly instead.")
 
     def ensure_record_tab(self) -> None:
         """If a source tab is currently displayed, press grave to swap
@@ -369,6 +415,37 @@ class JVESmokeCase(unittest.TestCase):
     def wait_for(self, lua_predicate: str, timeout: float = 5.0) -> None:
         """Convenience proxy to self.runner.wait_for."""
         self.runner.wait_for(lua_predicate, timeout=timeout)
+
+    def first_armed_video_clip(self, min_frames: int = 48) -> ArmedClip:
+        """Probe the displayed record sequence for the first non-gap clip
+        on an armed (autoselect=1, locked=0) video track whose duration
+        exceeds ``min_frames``. Returns the decoded ``ArmedClip``; raises
+        AssertionError if no clip matches.
+
+        The Lua side encodes its result as a pipe-delimited string (the
+        debug-terminal repr cap can't carry tables) — this helper is the
+        single seam that splits the payload. Test bodies receive a typed
+        record, not a positional split.
+        """
+        raw = self.eval_str(
+            f"return require('core.debug_helpers')"
+            f".first_armed_video_clip({min_frames})")
+        assert raw, (
+            f"first_armed_video_clip({min_frames}): fixture has no armed "
+            f"video clip with body > {min_frames} frames")
+        parts = raw.split("|", 5)
+        assert len(parts) == 6, (
+            f"first_armed_video_clip: expected 6 pipe-delimited fields, "
+            f"got {len(parts)} ({raw!r}) — debug_helpers payload format "
+            f"changed; update ArmedClip in tests/smoke/runner/case.py")
+        return ArmedClip(
+            id=parts[0],
+            track_id=parts[1],
+            seq_start=int(parts[2]),
+            duration=int(parts[3]),
+            rec_seq=parts[4],
+            master_seq_id=parts[5],
+        )
 
     def fetch_str_array(self, producer_lua: str, key: str,
                         chunk_size: int = 5) -> list:

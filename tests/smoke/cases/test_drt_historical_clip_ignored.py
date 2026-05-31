@@ -30,14 +30,10 @@ Run:
     python3 -m unittest tests.smoke.cases.test_drt_historical_clip_ignored -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 FIXTURE = (
     "tests/fixtures/media/anamnesis/"
@@ -45,7 +41,6 @@ FIXTURE = (
     "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt"
 )
 PHANTOM_PATH = r"D:\Reshoots\IMG_3270.MOV"
-
 
 class TestDRTHistoricalClipIgnored(JVESmokeCase):
     """Import the gold DRT and inspect the resulting catalog + clip metadata."""
@@ -147,7 +142,6 @@ class TestDRTHistoricalClipIgnored(JVESmokeCase):
         self.assertEqual("IMG_3270.MOV", name, (
             f"persisted original_clip.name = {name!r}, expected "
             f"'IMG_3270.MOV'"))
-
 
 if __name__ == "__main__":
     unittest.main()

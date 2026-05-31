@@ -21,20 +21,15 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_fcp7_negative_start -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 FIXTURE = (
     "tests/fixtures/resolve/"
     "2025-07-08-anamnesis-PICTURE-LOCK-TWO more comps.xml"
 )
-
 
 class TestImportFCP7NegativeStart(JVESmokeCase):
     """FCP7 importer must not leak negative-start sentinel clips."""
@@ -83,7 +78,6 @@ class TestImportFCP7NegativeStart(JVESmokeCase):
             "expected importer to create timeline clips on the displayed "
             "sequence; got zero — negative-count assertion above was "
             "vacuous.")
-
 
 if __name__ == "__main__":
     unittest.main()

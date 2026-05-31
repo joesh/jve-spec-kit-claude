@@ -15,14 +15,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_cmd_1234_select_panel -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Keymap binding → expected focused panel id, captured here so any
 # rebinding in keymaps/default.jvekeys requires updating this table
@@ -33,7 +28,6 @@ PANEL_BINDINGS: list[tuple[str, str]] = [
     ("Cmd+3", "timeline"),
     ("Cmd+4", "project_browser"),
 ]
-
 
 class TestCmd1234SelectPanel(JVESmokeCase):
     """Each Cmd+N focuses the panel its keymap entry names."""
@@ -66,7 +60,6 @@ class TestCmd1234SelectPanel(JVESmokeCase):
                 f"{expected!r}. Got {actual!r}. SelectPanel either "
                 f"dispatched to the wrong panel id (keymap arg mismatch) "
                 f"or focus_manager.focus_panel didn't accept the request."))
-
 
 if __name__ == "__main__":
     unittest.main()

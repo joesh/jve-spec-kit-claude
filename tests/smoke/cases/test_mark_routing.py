@@ -12,20 +12,14 @@ real ruler clicks on each displayed tab so the routing is exercised
 end-to-end through transport.engine_for_target().
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Offsets from each sequence's start_timecode_frame, chosen distinct
 # enough that no accidental routing coincidence could pass both methods.
 RECORD_PLAYHEAD_OFFSET = 47
 SOURCE_PLAYHEAD_OFFSET = 113
-
 
 class TestMarkRoutingFollowsFocus(JVESmokeCase):
     """`I` press routes SetMark by the focused monitor's engine binding."""
@@ -213,7 +207,6 @@ class TestMarkRoutingFollowsFocus(JVESmokeCase):
             f"master (source) sequence (was restored to nil by Cmd+Z); "
             f"got {master_mark}. engine_for_target() routed to the source "
             f"engine despite the timeline monitor being focused."))
-
 
 if __name__ == "__main__":
     unittest.main()

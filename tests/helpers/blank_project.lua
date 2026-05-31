@@ -49,7 +49,9 @@ end
 ---
 --- @param path string absolute path for the new .jvp (will be wiped first)
 --- @param opts table|nil { template_name="Film 24fps", project_name="Test Project" }
---- @return table { project_id=string, sequence_id=string }
+--- @return table { project_id=string, sequence_id=string, template=table }
+---   `template` is the picked TEMPLATES entry so callers building
+---   additional sequences via CreateSequence don't have to re-look it up.
 function M.open_fresh(path, opts)
     assert(path and path ~= "", "blank_project.open_fresh: path required")
     opts = opts or {}
@@ -77,7 +79,7 @@ function M.open_fresh(path, opts)
     local sequence_id = command_manager.get_active_sequence_id()
     assert(project_id and project_id ~= "",
         "blank_project.open_fresh: OpenProject succeeded but active project_id is empty")
-    return { project_id = project_id, sequence_id = sequence_id }
+    return { project_id = project_id, sequence_id = sequence_id, template = template }
 end
 
 return M

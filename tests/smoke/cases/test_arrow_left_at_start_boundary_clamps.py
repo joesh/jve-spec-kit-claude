@@ -16,14 +16,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_arrow_left_at_start_boundary_clamps -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestArrowLeftBoundaryClamp(JVESmokeCase):
     """Left arrow with playhead at start must not violate the lower bound."""
@@ -64,7 +59,6 @@ class TestArrowLeftBoundaryClamp(JVESmokeCase):
         self.assertEqual(start_tc, model_after,
             f"sequences.playhead_position drifted below start "
             f"({start_tc}); got {model_after}")
-
 
 if __name__ == "__main__":
     unittest.main()

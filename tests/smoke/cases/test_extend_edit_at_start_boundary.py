@@ -19,14 +19,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_extend_edit_at_start_boundary -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestExtendEditBoundary(JVESmokeCase):
     """E (ExtendEdit) toward floor must not push the clip's in-edge below."""
@@ -87,7 +82,6 @@ class TestExtendEditBoundary(JVESmokeCase):
             f"invariant clip.sequence_start >= sequence.start_timecode_frame "
             f"was violated. Above {start_tc} means the extend didn't "
             f"reach the playhead — separate bug."))
-
 
 if __name__ == "__main__":
     unittest.main()

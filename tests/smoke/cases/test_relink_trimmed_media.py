@@ -17,14 +17,9 @@ source coordinates atomically. Pinned previously by
 # before un-skipping).
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestRelinkTrimmedMediaPreservesTC(JVESmokeCase):
     """Relink original→trimmed: source_in/out unchanged; undo/redo atomic."""
@@ -57,7 +52,6 @@ class TestRelinkTrimmedMediaPreservesTC(JVESmokeCase):
         # trimmed, clip source coords still unchanged from baseline.
         self.key("Cmd+Shift+Z")
         raise NotImplementedError
-
 
 if __name__ == "__main__":
     unittest.main()

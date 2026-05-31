@@ -23,17 +23,13 @@ Run:
     python3 -m unittest tests.smoke.cases.test_drp_playhead_invariant -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
 from tests.smoke.runner.case import JVESmokeCase
 
 FIXTURE_DRP = REPO_ROOT / "tests" / "fixtures" / "resolve" / "sample_project.drp"
-
 
 class TestDRPPlayheadInvariant(JVESmokeCase):
     """Every imported sequence must satisfy playhead >= start_timecode_frame."""
@@ -92,7 +88,6 @@ class TestDRPPlayheadInvariant(JVESmokeCase):
                 f"start_timecode_frame={start_tc} — track down which "
                 f"Sequence.create call site emitted a sub-TC-origin "
                 f"playhead."))
-
 
 if __name__ == "__main__":
     unittest.main()

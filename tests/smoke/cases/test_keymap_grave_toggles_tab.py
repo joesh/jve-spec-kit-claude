@@ -23,14 +23,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_grave_toggles_tab -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestGraveToggleSourceRecordTab(JVESmokeCase):
     """Grave on @source_monitor must hand focus to the timeline."""
@@ -58,7 +53,6 @@ class TestGraveToggleSourceRecordTab(JVESmokeCase):
                  "focus stayed on source_monitor. The dispatch chain "
                  "(keymap → QShortcut → scope cascade → executor) is "
                  "broken somewhere upstream of the executor."))
-
 
 if __name__ == "__main__":
     unittest.main()

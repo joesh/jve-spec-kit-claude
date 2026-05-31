@@ -31,15 +31,11 @@ Run:
     python3 -m unittest tests.smoke.cases.test_match_frame -v
 """
 
-import sys
 import unittest
-from pathlib import Path
+
 from typing import Optional
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestMatchFrame(JVESmokeCase):
     """MatchFrame resolution + master-write side effects."""
@@ -255,7 +251,6 @@ class TestMatchFrame(JVESmokeCase):
     def test_08_selected_audio_overrides_video_preference(self) -> None:
         """Test 11 (lua): selecting an audio clip overrides the
         video-trumps-audio default."""
-
 
 if __name__ == "__main__":
     unittest.main()

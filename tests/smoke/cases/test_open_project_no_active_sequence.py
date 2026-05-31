@@ -28,14 +28,10 @@ Run:
 import json
 import sqlite3
 import shutil
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestOpenProjectNoActiveSequence(JVESmokeCase):
     """OpenProject must accept a project with no last_open_sequence_id."""
@@ -96,7 +92,6 @@ class TestOpenProjectNoActiveSequence(JVESmokeCase):
         # with a socket error before our assertion can run.
         self.assertEqual(2, self.eval_int("return 1 + 1"),
             "JVE socket dead after OpenProject — likely crashed")
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,14 +18,9 @@ exercise multi-track Prev, (b) a mid-clip park to exercise Next-to-
 clip-end, and (c) the last edit point to exercise Next-clamping.
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestGoToEditsMultiTrackNavigation(JVESmokeCase):
     """Up/Down on @timeline walk multi-track edits and clamp at the end."""
@@ -59,8 +54,8 @@ class TestGoToEditsMultiTrackNavigation(JVESmokeCase):
         test-overhaul.md §"State queries beyond the cap")."""
         rows = self.fetch_str_array(
             "return require('core.debug_helpers')"
-            ".compute_displayed_clip_spans()",
-            "_smoke_clip_spans")
+            ".stash_displayed_clip_spans()",
+            "displayed_clip_spans")
         out = []
         for row in rows:
             tid, s, e = row.split(":")
@@ -183,7 +178,6 @@ class TestGoToEditsMultiTrackNavigation(JVESmokeCase):
             f"stay put; got {landed}. If higher, the walk produced a "
             f"frame past the last edit (no clamp). If lower, Next "
             f"moved backwards — a different bug."))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,15 +1,18 @@
 --- State-query helpers for smoke tests + the debug terminal.
 --
--- A flat namespace of stable, named, READ-ONLY queries. Smokes call
--- these via `self.eval_str("return require('core.debug_helpers').X()")`
--- instead of hand-writing `require(...)` chains in every test body.
+-- A flat namespace of stable, named accessors. Smokes call these via
+-- `self.eval_str("return require('core.debug_helpers').X()")` instead
+-- of hand-writing `require(...)` chains in every test body.
 --
--- Contract:
---   * Every function is a state query. None mutate, none fire signals,
---     none execute commands.
---   * Each returns a primitive (string/int/bool) or a small flat table,
---     never deep nested structures (debug-terminal repr cap is depth 3).
---   * No caching. Each call re-reads the underlying state.
+-- Two surfaces:
+--   * Query functions — pure reads. Return primitive (string/int/bool)
+--     or a small flat table; never deep nested structures (debug-terminal
+--     repr cap is depth 3). No caching; each call re-reads.
+--   * `stash_*` producers — fetch a large array, write it into the
+--     module-local `_stashed` table under a fixed key, and return the
+--     count. Paired with `array_chunk(key, start, end)` so smokes can
+--     fetch arrays that would overflow the 256-char repr cap. These
+--     mutate `_stashed` and are named honestly to say so.
 --
 -- Smoke tests use this for assertions. Real actions still go through
 -- real OS input (osascript keystroke, click) per
@@ -28,32 +31,23 @@ local M = {}
 
 --- @return string|nil currently-active project id (or nil if no project loaded)
 function M.active_project_id()
-    local ok, command_manager = pcall(require, "core.command_manager")
-    if not ok then return nil end
-    return command_manager.get_active_project_id()
+    return require("core.command_manager").get_active_project_id()
 end
 
 --- @return string|nil currently-active sequence id (the edit target — feature 015)
 function M.active_sequence_id()
-    local ok, command_manager = pcall(require, "core.command_manager")
-    if not ok then return nil end
-    return command_manager.get_active_sequence_id()
+    return require("core.command_manager").get_active_sequence_id()
 end
 
 --- @return string|nil currently-displayed sequence id (which sequence is rendered;
 --- can differ from active when a source tab is displayed per spec 015)
 function M.displayed_sequence_id()
-    local ok, strip_holder = pcall(require, "ui.timeline.state.strip_holder")
-    if not ok then return nil end
-    return strip_holder.displayed_sequence_id()
+    return require("ui.timeline.state.strip_holder").displayed_sequence_id()
 end
 
 --- @return string|nil 'record' / 'source' / nil — which tab kind is currently displayed
 function M.displayed_tab_kind()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok then return nil end
-    if type(ts.get_displayed_tab_kind) ~= "function" then return nil end
-    return ts.get_displayed_tab_kind()
+    return require("ui.timeline.timeline_state").get_displayed_tab_kind()
 end
 
 -- ─── Counts (for fast smoke assertions) ─────────────────────────────
@@ -64,9 +58,7 @@ end
 
 --- @return integer number of sequences in the database
 function M.sequence_count()
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return 0 end
-    return Sequence.count() or 0
+    return require("models.sequence").count()
 end
 
 --- @param sequence_id string
@@ -74,18 +66,12 @@ end
 function M.clip_count_on_sequence(sequence_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "debug_helpers.clip_count_on_sequence: sequence_id required")
-    local ok, Clip = pcall(require, "models.clip")
-    if not ok then return 0 end
-    local clips = Clip.list_in_sequence(sequence_id)
-    if type(clips) ~= "table" then return 0 end
-    return #clips
+    return #require("models.clip").list_in_sequence(sequence_id)
 end
 
 --- @return integer total media rows in the database
 function M.media_count()
-    local ok, Media = pcall(require, "models.media")
-    if not ok then return 0 end
-    return Media.count() or 0
+    return require("models.media").count()
 end
 
 --- @param sequence_id string
@@ -93,46 +79,26 @@ end
 function M.sequence_clip_count(sequence_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "debug_helpers.sequence_clip_count: sequence_id required")
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return 0 end
-    return Sequence.count_clips(sequence_id) or 0
+    return require("models.sequence").count_clips(sequence_id)
 end
 
 -- ─── Marks / selection ──────────────────────────────────────────────
 
 --- @return integer|nil mark-in frame on the displayed sequence, or nil if unset
 function M.mark_in()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok then return nil end
-    if type(ts.get_display_mark_in) == "function" then
-        return ts.get_display_mark_in()
-    end
-    if type(ts.get_mark_in) == "function" then
-        return ts.get_mark_in()
-    end
-    return nil
+    return require("ui.timeline.timeline_state").get_display_mark_in()
 end
 
 --- @return integer|nil mark-out frame on the displayed sequence, or nil if unset
 function M.mark_out()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok then return nil end
-    if type(ts.get_display_mark_out) == "function" then
-        return ts.get_display_mark_out()
-    end
-    if type(ts.get_mark_out) == "function" then
-        return ts.get_mark_out()
-    end
-    return nil
+    return require("ui.timeline.timeline_state").get_display_mark_out()
 end
 
 --- @return integer count of currently selected clips on the displayed sequence
 function M.selection_count()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok then return 0 end
-    if type(ts.get_selected_clip_ids) ~= "function" then return 0 end
-    local ids = ts.get_selected_clip_ids()
-    if type(ids) ~= "table" then return 0 end
+    local ids = require("ui.timeline.timeline_state").get_selected_clip_ids()
+    assert(ids, "debug_helpers.selection_count: timeline_state returned no "
+        .. "selection table (no displayed sequence?)")
     return #ids
 end
 
@@ -140,10 +106,7 @@ end
 
 --- @return string|nil id of the panel currently holding keyboard focus
 function M.focused_panel()
-    local ok, fm = pcall(require, "ui.focus_manager")
-    if not ok then return nil end
-    if type(fm.get_focused_panel) ~= "function" then return nil end
-    return fm.get_focused_panel()
+    return require("ui.focus_manager").get_focused_panel()
 end
 
 -- ─── Clip state (for undo/redo assertions) ──────────────────────────
@@ -153,24 +116,49 @@ end
 function M.clip_enabled(clip_id)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "debug_helpers.clip_enabled: clip_id required")
-    local ok, Clip = pcall(require, "models.clip")
-    assert(ok, "debug_helpers.clip_enabled: models.clip not loadable")
-    local clip = Clip.load(clip_id)
+    local clip = require("models.clip").load(clip_id)
     assert(clip, "debug_helpers.clip_enabled: clip not found: " .. clip_id)
     return clip.enabled and true or false
 end
 
+-- Whitelist of Lua Clip field names exposed via clip_field. Mirrors
+-- the row mapping in `models/clip.lua` (the SQL '_frame'/'_frames'
+-- suffix is dropped on load). Unknown fields fail-fast rather than
+-- silently returning nil — guards against the recurring smoke-test
+-- bug of typing the SQL column name ('source_in_frame', 'start_frame')
+-- which would otherwise return nil and crash eval_int's parse downstream.
+-- Real fields exposed by `Clip.load` (mirrors `models/clip.lua:87-145`).
+-- An unknown name fails fast — keeps the rename-friction the whitelist
+-- exists to provide; do NOT add speculative entries.
+local CLIP_FIELDS = {
+    id = true, project_id = true, name = true,
+    track_id = true, track_type = true,
+    owner_sequence_id = true, sequence_id = true,
+    sequence_start = true, duration = true,
+    source_in = true, source_out = true,
+    enabled = true, volume = true,
+    mark_in = true, mark_out = true, playhead_frame = true,
+    master_layer_track_id = true, master_audio_track_id = true,
+    fps_mismatch_policy = true, source_sequence_kind = true,
+    source_in_subframe = true, source_out_subframe = true,
+    created_at = true, modified_at = true,
+    media_path = true,
+}
+
 --- @param clip_id string
---- @param field string  — one of: source_in source_out sequence_start duration enabled track_id name
+--- @param field string  — see CLIP_FIELDS whitelist above
 --- @return any field value (raw from Clip:load)
 function M.clip_field(clip_id, field)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "debug_helpers.clip_field: clip_id required")
     assert(type(field) == "string" and field ~= "",
         "debug_helpers.clip_field: field required")
-    local ok, Clip = pcall(require, "models.clip")
-    assert(ok, "debug_helpers.clip_field: models.clip not loadable")
-    local clip = Clip.load(clip_id)
+    assert(CLIP_FIELDS[field],
+        "debug_helpers.clip_field: unknown field '" .. field
+        .. "'. Did you use the SQL column name? Lua Clip drops "
+        .. "'_frame'/'_frames' suffix — see CLIP_FIELDS in debug_helpers.lua "
+        .. "and the row mapping in models/clip.lua.")
+    local clip = require("models.clip").load(clip_id)
     assert(clip, "debug_helpers.clip_field: clip not found: " .. clip_id)
     return clip[field]
 end
@@ -180,13 +168,7 @@ end
 function M.clip_exists(clip_id)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "debug_helpers.clip_exists: clip_id required")
-    local ok, Clip = pcall(require, "models.clip")
-    if not ok then return false end
-    if type(Clip.load_optional) == "function" then
-        return Clip.load_optional(clip_id) ~= nil
-    end
-    local ok2, clip = pcall(Clip.load, clip_id)
-    return ok2 and clip ~= nil
+    return require("models.clip").load_optional(clip_id) ~= nil
 end
 
 -- ─── Playhead / viewport ────────────────────────────────────────────
@@ -195,9 +177,7 @@ end
 function M.playhead()
     local sid = M.displayed_sequence_id()
     if not sid then return nil end
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return nil end
-    local s = Sequence.load(sid)
+    local s = require("models.sequence").load(sid)
     if not s then return nil end
     return s.playhead_position
 end
@@ -207,9 +187,7 @@ end
 function M.playhead_of(sequence_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "debug_helpers.playhead_of: sequence_id required")
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return nil end
-    local s = Sequence.load(sequence_id)
+    local s = require("models.sequence").load(sequence_id)
     if not s then return nil end
     return s.playhead_position
 end
@@ -219,24 +197,32 @@ end
 function M.sequence_start_tc(sequence_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "debug_helpers.sequence_start_tc: sequence_id required")
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return nil end
-    local s = Sequence.load(sequence_id)
+    local s = require("models.sequence").load(sequence_id)
     if not s then return nil end
     return s.start_timecode_frame
 end
 
+local SEQUENCE_FIELDS = {
+    id = true, name = true, project_id = true, kind = true,
+    mark_in = true, mark_out = true,
+    playhead_position = true,
+    start_timecode_frame = true, frame_rate = true,
+    duration_frames = true,
+    viewport_start_time = true, viewport_duration = true,
+}
+
 --- @param sequence_id string
---- @param field string  — mark_in mark_out playhead_position start_timecode_frame frame_rate
+--- @param field string  — see SEQUENCE_FIELDS whitelist above
 --- @return any field value
 function M.sequence_field(sequence_id, field)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "debug_helpers.sequence_field: sequence_id required")
     assert(type(field) == "string" and field ~= "",
         "debug_helpers.sequence_field: field required")
-    local ok, Sequence = pcall(require, "models.sequence")
-    if not ok then return nil end
-    local s = Sequence.load(sequence_id)
+    assert(SEQUENCE_FIELDS[field],
+        "debug_helpers.sequence_field: unknown field '" .. field
+        .. "' — see SEQUENCE_FIELDS in debug_helpers.lua")
+    local s = require("models.sequence").load(sequence_id)
     if not s then return nil end
     return s[field]
 end
@@ -245,73 +231,47 @@ end
 
 --- @return string|nil source-viewer mode: 'neutral' 'staged_sequence' 'live_bound_clip'
 function M.source_viewer_mode()
-    local ok, sv = pcall(require, "ui.source_viewer")
-    if not ok then return nil end
-    if type(sv.get_mode) == "function" then return sv.get_mode() end
-    return rawget(sv, "mode")
+    return require("ui.source_viewer").get_mode()
 end
 
---- @return string|nil source-viewer's loaded sequence id (master or live-bound clip's owner)
+--- @return string|nil staged-master sequence id loaded into the source viewer
 function M.source_viewer_sequence_id()
-    local ok, sv = pcall(require, "ui.source_viewer")
-    if not ok then return nil end
-    if type(sv.get_loaded_sequence_id) == "function" then return sv.get_loaded_sequence_id() end
-    return nil
+    return require("ui.source_viewer").get_staged_seq_id()
 end
 
---- @return string|nil source-viewer's loaded clip id (live-bound mode only)
+--- @return string|nil live-bound clip id loaded into the source viewer
 function M.source_viewer_clip_id()
-    local ok, sv = pcall(require, "ui.source_viewer")
-    if not ok then return nil end
-    if type(sv.get_loaded_clip_id) == "function" then return sv.get_loaded_clip_id() end
-    return nil
+    return require("ui.source_viewer").get_live_clip_id()
 end
 
 --- @return string|nil transport target: 'source' 'record' nil
 function M.transport_target()
-    local ok, transport = pcall(require, "core.playback.transport")
-    if not ok then return nil end
-    if type(transport.get_target) == "function" then return transport.get_target() end
-    return nil
+    return require("core.playback.transport").get_target()
 end
 
 --- @return string|nil record engine's loaded sequence id
 function M.record_engine_sequence_id()
-    local ok, transport = pcall(require, "core.playback.transport")
-    if not ok then return nil end
-    local engine = rawget(transport, "record_engine")
-    if not engine then return nil end
-    return rawget(engine, "loaded_sequence_id")
+    local engine = require("core.playback.transport").record_engine
+    return engine and engine.loaded_sequence_id or nil
 end
 
 --- @return string|nil source engine's loaded sequence id
 function M.source_engine_sequence_id()
-    local ok, transport = pcall(require, "core.playback.transport")
-    if not ok then return nil end
-    local engine = rawget(transport, "source_engine")
-    if not engine then return nil end
-    return rawget(engine, "loaded_sequence_id")
+    local engine = require("core.playback.transport").source_engine
+    return engine and engine.loaded_sequence_id or nil
 end
 
 --- @return integer number of clips on the displayed sequence's tab strip
 function M.displayed_clips_count()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok then return 0 end
-    local strip = ts.get_tab_strip()
-    if not strip then return 0 end
-    local clips = strip:displayed_clips()
-    if type(clips) ~= "table" then return 0 end
-    return #clips
+    local strip = require("ui.timeline.timeline_state").get_tab_strip()
+    assert(strip, "debug_helpers.displayed_clips_count: no tab strip "
+        .. "(timeline not initialized yet?)")
+    return #strip:displayed_clips()
 end
 
 --- @return integer number of open tabs in the strip
 function M.open_tabs_count()
-    local ok, tp = pcall(require, "ui.timeline.timeline_panel")
-    if not ok then return 0 end
-    if type(tp.get_open_tab_ids) ~= "function" then return 0 end
-    local ids = tp.get_open_tab_ids()
-    if type(ids) ~= "table" then return 0 end
-    return #ids
+    return #require("ui.timeline.timeline_panel").get_open_tab_ids()
 end
 
 -- ─── Coords for clicking (forwards to timeline_panel) ───────────────
@@ -321,9 +281,7 @@ end
 function M.clip_global_center(clip_id)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "debug_helpers.clip_global_center: clip_id required")
-    local ok, tp = pcall(require, "ui.timeline.timeline_panel")
-    if not ok then return "" end
-    if type(tp.get_clip_global_center_for_test) ~= "function" then return "" end
+    local tp = require("ui.timeline.timeline_panel")
     local gx, gy = tp.get_clip_global_center_for_test(clip_id)
     if not gx or not gy then return "" end
     return string.format("%d,%d", gx, gy)
@@ -355,47 +313,45 @@ function M.clip_edge_global_point(clip_id, edge_type, trim_type)
     return string.format("%d,%d", gx, gy)
 end
 
---- @param frame integer
---- @return string "<gx>,<gy>" coords for ruler click that seeks to frame
-function M.ruler_global_point(frame)
-    assert(type(frame) == "number",
-        "debug_helpers.ruler_global_point: frame required (integer)")
-    local ok, tp = pcall(require, "ui.timeline.timeline_panel")
-    if not ok then return "" end
-    if type(tp.get_ruler_global_point_for_test) ~= "function" then return "" end
-    local gx, gy = tp.get_ruler_global_point_for_test(frame)
-    if not gx or not gy then return "" end
-    return string.format("%d,%d", gx, gy)
-end
-
 -- ─── Probe: first armed video clip with body ────────────────────────
 
 --- Find the first non-gap clip on an armed (autoselect=1, locked=0)
 --- video track on the displayed record sequence whose duration > min_frames.
 --- @param min_frames integer (default 48)
---- @return string "<clip_id>|<track_id>|<sequence_start>|<duration>|<rec_seq>" or "" if none
+--- @return string "<clip_id>|<track_id>|<sequence_start>|<duration>|<rec_seq>|<sequence_id>" or "" if none
 function M.first_armed_video_clip(min_frames)
-    min_frames = min_frames or 48
-    local ok, transport = pcall(require, "core.playback.transport")
-    if not ok then return "" end
-    local rec_seq = transport.record_engine and transport.record_engine.loaded_sequence_id
-    if not rec_seq then return "" end
-    local ok_t, Track = pcall(require, "models.track")
-    if not ok_t then return "" end
+    -- Optional arg — explicit nil-check so `min_frames=0` (legitimate
+    -- "any non-empty clip") isn't silently rewritten to 48 by `or`.
+    if min_frames == nil then min_frames = 48 end
+    assert(type(min_frames) == "number" and min_frames >= 0,
+        "debug_helpers.first_armed_video_clip: min_frames must be a "
+        .. "non-negative integer")
+    local transport = require("core.playback.transport")
+    assert(transport.record_engine,
+        "debug_helpers.first_armed_video_clip: no record engine bound — "
+        .. "transport not initialized (was a project ever opened?)")
+    local rec_seq = transport.record_engine.loaded_sequence_id
+    assert(rec_seq and rec_seq ~= "",
+        "debug_helpers.first_armed_video_clip: record engine has no "
+        .. "loaded sequence — fixture broken")
+    local strip = require("ui.timeline.timeline_state").get_tab_strip()
+    assert(strip, "debug_helpers.first_armed_video_clip: no tab strip — "
+        .. "timeline not initialized")
+    local Track = require("models.track")
     local armed = {}
     for _, t in ipairs(Track.find_by_sequence(rec_seq)) do
         if t.track_type == "VIDEO" and t.autoselect and not t.locked then
             armed[t.id] = true
         end
     end
-    local ok_ts, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok_ts then return "" end
-    local strip = ts.get_tab_strip()
-    if not strip then return "" end
+    -- Empty return = "no clip in fixture matched the criteria" (a
+    -- legitimate caller-level signal; the Python wrapper asserts on it).
+    -- Environmental preconditions (transport/strip) already asserted above.
     for _, c in ipairs(strip:displayed_clips()) do
         if armed[c.track_id] and not c.is_gap
-            and type(c.duration) == "number" and c.duration > min_frames
-            and c.sequence_id and c.sequence_id ~= "" then
+            and type(c.duration) == "number" and c.duration > min_frames then
+            -- `c.sequence_id` is TEXT NOT NULL per schema.sql (clips table);
+            -- the `not c.is_gap` filter excludes synthetic gaps that lack one.
             return string.format("%s|%s|%d|%d|%s|%s",
                 c.id, c.track_id, c.sequence_start, c.duration, rec_seq,
                 c.sequence_id)
@@ -404,17 +360,30 @@ function M.first_armed_video_clip(min_frames)
     return ""
 end
 
+-- ─── Array stashers (paired with array_chunk) ───────────────────────
+--
+-- Producers stash large arrays into `_stashed` keyed by a stable name,
+-- then `array_chunk` pages them back to the smoke runner in CSV
+-- fragments. The 256-char debug-terminal repr cap makes this the only
+-- way to ferry large arrays across the wire.
+--
+-- Mutating `_stashed` is the whole point; the names lead with `stash_`
+-- so the contract is honest. State is module-local — no `_G` pollution.
+
+local _stashed = {}
+
+local function stash(key, arr)
+    _stashed[key] = arr
+    return #arr
+end
+
 --- Clip spans (track_id, start, end) for every non-gap displayed clip,
---- in iteration order. Stashed on `_smoke_clip_spans` as strings
---- ``"<track_id>:<start>:<end>"``; pair with `smoke_array_chunk`. Lets
---- multi-track edit-nav smokes enumerate every clip span without
---- hitting the 256-char repr cap on the producer's return value.
---- @return integer number of spans (also sets the global)
-function M.compute_displayed_clip_spans()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    assert(ok, "debug_helpers.compute_displayed_clip_spans: timeline_state not loadable")
-    local strip = ts.get_tab_strip()
-    assert(strip, "debug_helpers.compute_displayed_clip_spans: no tab strip")
+--- in iteration order. Stashed under `"displayed_clip_spans"` as
+--- strings ``"<track_id>:<start>:<end>"``; pair with `array_chunk`.
+--- @return integer number of spans
+function M.stash_displayed_clip_spans()
+    local strip = require("ui.timeline.timeline_state").get_tab_strip()
+    assert(strip, "debug_helpers.stash_displayed_clip_spans: no tab strip")
     local out = {}
     for _, c in ipairs(strip:displayed_clips()) do
         if not c.is_gap then
@@ -422,21 +391,16 @@ function M.compute_displayed_clip_spans()
                 c.track_id, c.sequence_start, c.sequence_start + c.duration)
         end
     end
-    _G._smoke_clip_spans = out
-    return #out
+    return stash("displayed_clip_spans", out)
 end
 
---- Edit points (distinct clip start/end frames) on the displayed sequence,
---- sorted ascending. The set is what GoToNext/PrevEdit walks.
---- Stashed on `_smoke_edit_points` global so smoke tests can fetch
---- the count + items via `_smoke_array_chunk` without re-running the
---- query (avoids the debug-terminal 256-char repr cap on long CSVs).
---- @return integer number of edit points (also sets the global)
-function M.compute_edit_points_on_displayed_sequence()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    assert(ok, "debug_helpers.compute_edit_points_on_displayed_sequence: timeline_state not loadable")
-    local strip = ts.get_tab_strip()
-    assert(strip, "debug_helpers.compute_edit_points_on_displayed_sequence: no tab strip")
+--- Edit points (distinct clip start/end frames) on the displayed
+--- sequence, sorted ascending — the set that GoToNext/PrevEdit walks.
+--- Stashed under `"edit_points"`; pair with `array_chunk`.
+--- @return integer number of edit points
+function M.stash_edit_points_on_displayed_sequence()
+    local strip = require("ui.timeline.timeline_state").get_tab_strip()
+    assert(strip, "debug_helpers.stash_edit_points_on_displayed_sequence: no tab strip")
     local set = {}
     for _, c in ipairs(strip:displayed_clips()) do
         if not c.is_gap then
@@ -447,30 +411,28 @@ function M.compute_edit_points_on_displayed_sequence()
     local out = {}
     for k, _ in pairs(set) do table.insert(out, k) end
     table.sort(out)
-    _G._smoke_edit_points = out
-    return #out
+    return stash("edit_points", out)
 end
 
---- Page from a smoke-array global. Pair with the producer (e.g.
---- `compute_edit_points_on_displayed_sequence`) that stashes the array
---- on `_G[global_name]`. Returns a comma-separated string of items in
---- `[start_idx, end_idx]` (1-based, inclusive). Caller sizes the chunk
---- so the resulting CSV fits inside the debug-terminal repr cap
---- (≤ 256 chars — 20 ints with up to 11 digits each + commas = ~240).
---- @param global_name string name of the stashed array
+--- Page from a stashed array. Pair with a `stash_*` producer that
+--- writes the array under `key`. Returns a comma-separated string of
+--- items in `[start_idx, end_idx]` (1-based, inclusive). Caller sizes
+--- the chunk so the resulting CSV fits inside the debug-terminal repr
+--- cap (≤ 256 chars — 20 ints with up to 11 digits each + commas = ~240).
+--- @param key string name of the stashed array (matches `stash_*` producer's key)
 --- @param start_idx integer 1-based start (inclusive)
 --- @param end_idx integer 1-based end (inclusive)
 --- @return string comma-separated items
-function M.smoke_array_chunk(global_name, start_idx, end_idx)
-    assert(type(global_name) == "string" and global_name ~= "",
-        "debug_helpers.smoke_array_chunk: global_name required")
+function M.array_chunk(key, start_idx, end_idx)
+    assert(type(key) == "string" and key ~= "",
+        "debug_helpers.array_chunk: key required")
     assert(type(start_idx) == "number" and start_idx >= 1,
-        "debug_helpers.smoke_array_chunk: start_idx must be >= 1")
+        "debug_helpers.array_chunk: start_idx must be >= 1")
     assert(type(end_idx) == "number" and end_idx >= start_idx,
-        "debug_helpers.smoke_array_chunk: end_idx must be >= start_idx")
-    local arr = _G[global_name]
+        "debug_helpers.array_chunk: end_idx must be >= start_idx")
+    local arr = _stashed[key]
     assert(type(arr) == "table",
-        "debug_helpers.smoke_array_chunk: no array at _G." .. global_name)
+        "debug_helpers.array_chunk: no array stashed under key " .. key)
     local n = #arr
     if start_idx > n then return "" end
     if end_idx > n then end_idx = n end

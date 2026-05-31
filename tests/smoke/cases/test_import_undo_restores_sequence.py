@@ -15,18 +15,13 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_undo_restores_sequence -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
 from tests.smoke.runner.case import JVESmokeCase
 
-
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "resolve" / "sample_timeline_fcp7xml.xml"
-
 
 class TestImportUndoRestoresActiveSequence(JVESmokeCase):
     """Import FCP7 → undo → active sequence is the pre-import one."""
@@ -87,7 +82,6 @@ class TestImportUndoRestoresActiveSequence(JVESmokeCase):
             f"Expected pre-import active sequence {active_before} after "
             f"undo, got {active_after}. Undo must restore the user's prior "
             f"editing context, not leave them on some arbitrary other tab."))
-
 
 if __name__ == "__main__":
     unittest.main()

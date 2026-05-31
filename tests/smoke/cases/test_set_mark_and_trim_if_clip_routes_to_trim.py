@@ -19,20 +19,14 @@ Run:
     python3 -m unittest tests.smoke.cases.test_set_mark_and_trim_if_clip_routes_to_trim -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Offsets chosen so I-then-O leaves a non-trivial source range and the
 # collapse cases land cleanly at-or-past the surviving boundary.
 TRIM_IN_OFFSET = 50    # frame inside clip source range for I press
 TRIM_OUT_OFFSET = 150  # frame for O press (must stay > new source_in)
-
 
 class TestSetMarkAndTrimIfClipRoutesToTrim(JVESmokeCase):
     """Live-bound source viewer routes I/O to clip trim, not sequence mark."""
@@ -61,7 +55,7 @@ class TestSetMarkAndTrimIfClipRoutesToTrim(JVESmokeCase):
 
     def _clip_source_in(self, clip_id: str) -> int:
         return self.eval_int(
-            f"return require('core.debug_helpers').clip_field('{clip_id}', 'source_in_frame')")
+            f"return require('core.debug_helpers').clip_field('{clip_id}', 'source_in')")
 
     def _clip_source_out(self, clip_id: str) -> int:
         return self.eval_int(
@@ -341,7 +335,6 @@ class TestSetMarkAndTrimIfClipRoutesToTrim(JVESmokeCase):
         self.assertEqual(dur_before, self._clip_duration(clip_id), (
             f"collapse OUT-at-IN must NOT mutate clip duration; was "
             f"{dur_before}, now {self._clip_duration(clip_id)}."))
-
 
 if __name__ == "__main__":
     unittest.main()

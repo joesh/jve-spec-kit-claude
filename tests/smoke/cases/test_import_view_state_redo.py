@@ -29,14 +29,10 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_view_state_redo -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestImportViewStateRedo(JVESmokeCase):
     """Import + modify viewport/playhead + undo + redo + persist — the
@@ -157,7 +153,6 @@ class TestImportViewStateRedo(JVESmokeCase):
         self.assertEqual(35, playhead_after_persist, (
             f"playhead should still be 35 after persist, got "
             f"{playhead_after_persist}."))
-
 
 if __name__ == "__main__":
     unittest.main()

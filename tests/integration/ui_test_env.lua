@@ -165,36 +165,26 @@ function M.launch(opts)
         db_path = string.format("/tmp/jve/test_%s.jvp", sanitized)
     end
     os.execute("mkdir -p /tmp/jve")
-    os.remove(db_path); os.remove(db_path .. "-wal"); os.remove(db_path .. "-shm")
 
-    -- Build the .jvp on disk. Same primitive NewProject's dialog uses
-    -- post-OK; produces a valid single-project, single-sequence file
-    -- with all per-template metadata (fps, sample rate, dims) wired.
-    local project_templates = require("core.project_templates")
-    local template
-    for _, t in ipairs(project_templates.TEMPLATES) do
-        if t.name == "Film 24fps" then template = t; break end
-    end
-    assert(template, "ui_test_env: Film 24fps template not found")
-    project_templates.create_project_from_template(template, project_name, db_path)
+    -- Create + open the .jvp via the user-visible primitive. blank_project
+    -- wipes the path, calls create_project_from_template, then executes
+    -- the OpenProject command — exactly the path a real user takes through
+    -- New Project / Open Project, with the full project_changed signal
+    -- cascade firing. This is the first OpenProject of the session — its
+    -- post_open_init tolerates the missing-UI state because
+    -- panel_manager.get_persistable_sizes returns nil when not initialized.
+    local blank_project = require("tests.helpers.blank_project")
+    local opened = blank_project.open_fresh(db_path, {
+        template_name = "Film 24fps",
+        project_name  = project_name,
+    })
+    local template = opened.template
+    local project_id = opened.project_id
+    local default_seq_id = opened.sequence_id
 
-    -- Prep phase: open the freshly-created .jvp via the OpenProject command
-    -- so we can customize sequences via commands (same path a user takes).
-    -- This is the first OpenProject of the session — its post_open_init
-    -- tolerates the missing-UI state thanks to panel_manager.get_persistable
-    -- _sizes returning nil when not initialized.
     local command_manager = require("core.command_manager")
     local database = require("core.database")
     local uuid = require("uuid")
-    local r = command_manager.execute("OpenProject", { project_path = db_path })
-    assert(r and r.success,
-        "ui_test_env: pre-launch OpenProject failed: " ..
-        tostring(r and r.error_message or "(nil)"))
-
-    local project_id = command_manager.get_active_project_id()
-    local default_seq_id = command_manager.get_active_sequence_id()
-    assert(project_id and default_seq_id,
-        "ui_test_env: command_manager has no active project/sequence after OpenProject")
 
     local sequence_names = opts.sequence_names or {}
     local num_sequences = opts.num_sequences or 1

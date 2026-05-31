@@ -20,14 +20,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_nudge_clip_at_start_boundary_clamps -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestNudgeBoundaryClamp(JVESmokeCase):
     """Comma on a boundary-aligned clip must not corrupt the invariant."""
@@ -70,7 +65,6 @@ class TestNudgeBoundaryClamp(JVESmokeCase):
             f"error'). Got {after}. Below {start_tc} means Nudge wrote a "
             f"value violating the domain invariant "
             f"clip.sequence_start >= sequence.start_timecode_frame."))
-
 
 if __name__ == "__main__":
     unittest.main()

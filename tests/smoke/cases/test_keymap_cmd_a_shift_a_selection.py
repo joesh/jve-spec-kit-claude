@@ -16,14 +16,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_cmd_a_shift_a_selection -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestCmdASelectAllAndDeselectAll(JVESmokeCase):
 
@@ -76,7 +71,6 @@ class TestCmdASelectAllAndDeselectAll(JVESmokeCase):
             f"{self._selection_count()} clip(s) still selected. "
             f"DeselectAll either didn't fire or only cleared part of the "
             f"selection."))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -15,14 +15,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_go_to_next_prev_edit -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestGoToNextPrevEdit(JVESmokeCase):
     """Up/Down navigation across edit points on the displayed sequence."""
@@ -54,8 +49,8 @@ class TestGoToNextPrevEdit(JVESmokeCase):
         anamnesis (~hundreds of clips → thousands of chars of CSV)."""
         return self.fetch_int_array(
             "return require('core.debug_helpers')"
-            ".compute_edit_points_on_displayed_sequence()",
-            "_smoke_edit_points")
+            ".stash_edit_points_on_displayed_sequence()",
+            "edit_points")
 
     def _park_via_ruler(self, frame: int) -> None:
         """Click the ruler at `frame` and confirm the playhead landed
@@ -210,7 +205,6 @@ class TestGoToNextPrevEdit(JVESmokeCase):
             f"the starting frame {landed}. Got {after_up}. Up is "
             f"incorrectly remembering the pre-Down position instead of "
             f"walking to the prior edit."))
-
 
 if __name__ == "__main__":
     unittest.main()

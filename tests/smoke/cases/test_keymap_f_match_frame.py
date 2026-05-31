@@ -15,17 +15,11 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_f_match_frame -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 SEED_OFFSET_INTO_CLIP = 24
-
 
 class TestFMatchFrame(JVESmokeCase):
 
@@ -36,14 +30,8 @@ class TestFMatchFrame(JVESmokeCase):
     def test_f_loads_clips_master_into_source_viewer(self) -> None:
         # Pick a clip with sufficient body. We need both its master id
         # (target of the load) and its sequence_start to seed playhead.
-        info = self.eval_str(
-            "return require('core.debug_helpers').first_armed_video_clip(48)")
-        assert info, "fixture has no armed video clip with sufficient body"
-        clip_id, _track_id, seq_start, _duration, _rec_seq, master_id = (
-            info.split("|", 5))
-        frame = int(seq_start) + SEED_OFFSET_INTO_CLIP
-
-        self.move_playhead_to(frame)
+        clip = self.first_armed_video_clip(48)
+        self.move_playhead_to(clip.seq_start + SEED_OFFSET_INTO_CLIP)
 
         self.focus_panel("timeline")
         self.assertEvalEqual("timeline",
@@ -54,13 +42,12 @@ class TestFMatchFrame(JVESmokeCase):
 
         loaded_master = self.eval_str(
             "return require('ui.source_viewer').get_staged_seq_id() or ''")
-        self.assertEqual(master_id, loaded_master, (
-            f"after F press with playhead inside clip {clip_id}, source "
+        self.assertEqual(clip.master_seq_id, loaded_master, (
+            f"after F press with playhead inside clip {clip.id}, source "
             f"viewer should be staged on the clip's master sequence "
-            f"({master_id}). Got {loaded_master!r}. MatchFrame either "
-            f"picked the wrong clip (resolve_clips_at_playhead) or "
-            f"load_master_clip didn't reach get_staged_seq_id."))
-
+            f"({clip.master_seq_id}). Got {loaded_master!r}. MatchFrame "
+            f"either picked the wrong clip (resolve_clips_at_playhead) "
+            f"or load_master_clip didn't reach get_staged_seq_id."))
 
 if __name__ == "__main__":
     unittest.main()

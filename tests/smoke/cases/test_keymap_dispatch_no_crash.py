@@ -46,12 +46,9 @@ import time
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
 from tests.smoke.runner.coverage import list_keymap_bindings
 from tests.smoke.runner.keymap_exempt import l2_skip_reason
-
 
 # Substrings that mark a dispatch-time crash. Match on bytes to skip
 # decoding overhead — the log is plain ASCII for these markers.
@@ -66,7 +63,6 @@ FORBIDDEN_MARKERS: tuple[bytes, ...] = (
 # some dispatches schedule single_shot_timers whose errors land
 # asynchronously.
 SETTLE_AFTER_PRESS_S = 0.15
-
 
 class TestKeymapDispatchNoCrash(JVESmokeCase):
     """Every non-l2-exempt binding dispatches without a Lua callback
@@ -90,13 +86,10 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
         # commands (DeselectAll, SetMark, GoToStart, ...) would
         # otherwise drift the realistic-state baseline that L2 needs
         # to isolate each binding's dispatch from state pollution.
-        info = self.eval_str(
-            "return require('core.debug_helpers').first_armed_video_clip(48)")
-        assert info, "fixture has no armed video clip with body"
-        parts = info.split("|", 5)
-        self._seed_clip_id = parts[0]
-        self._seed_rec_seq = parts[4]
-        self._seed_frame = int(parts[2]) + 24
+        clip = self.first_armed_video_clip(48)
+        self._seed_clip_id = clip.id
+        self._seed_rec_seq = clip.rec_seq
+        self._seed_frame = clip.seq_start + 24
 
     def _seed_state(self) -> None:
         """Restore the per-press baseline: playhead inside the seed
@@ -296,7 +289,6 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
                 f"  - If a binding genuinely can't be smoked here "
                 f"(opens a dialog, requires modal recovery), add an "
                 f"``l2`` reason to its entry in keymap_exempt.EXEMPT.")
-
 
 if __name__ == "__main__":
     unittest.main()

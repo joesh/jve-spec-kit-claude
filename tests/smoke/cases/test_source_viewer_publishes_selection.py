@@ -25,14 +25,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_source_viewer_publishes_selection -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceViewerPublishesSelection(JVESmokeCase):
     """Source viewer publishes typed items into selection_hub."""
@@ -237,7 +232,6 @@ class TestSourceViewerPublishesSelection(JVESmokeCase):
     @unittest.skip("needs source-viewer unload primitive (no keybinding)")
     def test_04_unload_clears_source_monitor_selection(self) -> None:
         pass
-
 
 if __name__ == "__main__":
     unittest.main()

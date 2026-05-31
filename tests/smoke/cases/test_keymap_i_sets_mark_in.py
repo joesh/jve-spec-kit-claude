@@ -23,21 +23,15 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_i_sets_mark_in -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Offset from the sequence's start_timecode_frame at which to seed the
 # playhead. 100 frames is well past the boundary clamp (mirrors timeline
 # viewport_state.set_playhead_position) and well inside any Anamnesis-class
 # fixture's content (the fixtures are hours long).
 SEED_OFFSET_FROM_START = 100
-
 
 class TestIKeySetsMarkIn(JVESmokeCase):
     """`I` on @timeline must mutate the displayed sequence's mark_in."""
@@ -113,7 +107,6 @@ class TestIKeySetsMarkIn(JVESmokeCase):
             f"or read a different playhead source. Dispatch chain (keymap → "
             f"QShortcut → @timeline scope cascade → command_manager auto-inject "
             f"→ SetMark executor) is broken upstream of the executor."))
-
 
 if __name__ == "__main__":
     unittest.main()

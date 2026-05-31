@@ -23,14 +23,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_playhead_below_start_clamps -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSetPlayheadBelowStartClamps(JVESmokeCase):
     """SetPlayhead with frame < start_timecode_frame must clamp silently."""
@@ -47,15 +42,11 @@ class TestSetPlayheadBelowStartClamps(JVESmokeCase):
             + seq_id + "').start_timecode_frame")
         below = start_tc - 50
 
-        # Request a frame 50 below the lower bound via the timecode-entry
-        # UI (Cmd+3 → Tab → type "<below>f" → Return). This is the same
-        # real-input path move_playhead_to uses; inlined here because the
-        # helper post-asserts playhead == requested frame, which is the
-        # exact assumption this test is designed to break.
-        self.key("Cmd+3")
-        self.key("Tab")
-        self.runner.type_text(f"{below}f")
-        self.key("Return")
+        # Request a frame 50 below the lower bound via the lower-level
+        # TC-entry primitive (move_playhead_to post-asserts playhead ==
+        # requested frame, which is the exact assumption this test is
+        # designed to break).
+        self.type_in_tc_field(f"{below}f")
 
         # Both the model row AND the engine MUST land at start_tc
         # (silent clamp). Today the model corrupts; the engine refuses.
@@ -74,7 +65,6 @@ class TestSetPlayheadBelowStartClamps(JVESmokeCase):
         self.assertEqual(start_tc, engine_after, (
             f"engine reports {engine_after} after SetPlayhead({below}); "
             f"expected start_tc={start_tc} (silent clamp)."))
-
 
 if __name__ == "__main__":
     unittest.main()

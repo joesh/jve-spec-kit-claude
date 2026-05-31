@@ -22,14 +22,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_show_source_tab_empty_blanks_body -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestEmptySourceTabBlanksBody(JVESmokeCase):
     """Grave with no source loaded blanks the body, doesn't auto-seed."""
@@ -111,7 +106,6 @@ class TestEmptySourceTabBlanksBody(JVESmokeCase):
             "AUTO-SEED REGRESSION: ToggleSourceRecordTab with empty "
             "source must NOT load a random master into source_viewer; "
             f"got sequence_id={src_seq_after}")
-
 
 if __name__ == "__main__":
     unittest.main()

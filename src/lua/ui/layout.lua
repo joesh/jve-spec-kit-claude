@@ -663,6 +663,8 @@ local function save_window_state()
     })
 
     local sizes = panel_manager.get_persistable_sizes()
+    assert(sizes, "save_window_state: panel_manager has no splitters but "
+        .. "window_ready_to_save is true — bootstrap order violation")
     db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, sizes)
 
     log.detail("Window state saved: geo=%d,%d %dx%d, splitters top=%s main=%s",

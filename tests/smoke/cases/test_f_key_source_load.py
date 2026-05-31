@@ -22,14 +22,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_f_key_source_load -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestFKeySourceLoad(JVESmokeCase):
     """F-key MatchFrame loads master as a displayed-only source tab."""
@@ -177,7 +172,6 @@ class TestFKeySourceLoad(JVESmokeCase):
             f"after second F, displayed should be the new master "
             f"({new_master}); got {post_displayed}. The source tab did not "
             f"swap to the second clip's master."))
-
 
 if __name__ == "__main__":
     unittest.main()

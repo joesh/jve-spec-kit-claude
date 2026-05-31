@@ -15,14 +15,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_shift_f_opens_clip_in_source_viewer -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestShiftFLoadsClipInSourceViewer(JVESmokeCase):
     """`Shift+F` must load the clip under the playhead into the source viewer."""
@@ -77,7 +72,6 @@ class TestShiftFLoadsClipInSourceViewer(JVESmokeCase):
         self.assertEqual("live_bound_clip", mode,
             f"after Shift+F, source viewer mode expected 'live_bound_clip'; "
             f"got {mode}")
-
 
 if __name__ == "__main__":
     unittest.main()

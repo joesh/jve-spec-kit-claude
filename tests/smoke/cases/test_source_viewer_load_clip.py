@@ -22,14 +22,9 @@ Run:
 # selection_hub item_type / owner_sequence_id query in core.debug_helpers
 # to pin the FR-002 publish contract through real UI. See MIGRATION_ANALYSIS.md.
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceViewerLoadClip(JVESmokeCase):
     """Shift+F on a selected timeline clip live-binds the source viewer."""
@@ -149,7 +144,6 @@ class TestSourceViewerLoadClip(JVESmokeCase):
         sequence_content_changed; source viewer reloads + retitles to
         include the new name. Needs F2-rename primitive that doesn't
         yet exist."""
-
 
 if __name__ == "__main__":
     unittest.main()

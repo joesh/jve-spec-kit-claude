@@ -19,14 +19,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_n_toggles_snapping -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestNTogglesSnapping(JVESmokeCase):
     """N on @timeline flips the baseline snapping preference."""
@@ -57,7 +52,6 @@ class TestNTogglesSnapping(JVESmokeCase):
             f"original. before={before}, after={after_two}. Asymmetric "
             f"toggle means the command is reading from the wrong state "
             f"on the second press."))
-
 
 if __name__ == "__main__":
     unittest.main()

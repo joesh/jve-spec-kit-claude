@@ -16,14 +16,9 @@ Domain rules:
     transport target derives back to "record".
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceTabAndViewerSetTransportTarget(JVESmokeCase):
     """Source-tab / source-viewer display flips transport target to source."""
@@ -48,14 +43,7 @@ class TestSourceTabAndViewerSetTransportTarget(JVESmokeCase):
         # source_viewer.load_master_clip(target_master_id) — the same
         # entry point exercised by the Lua origin. It focuses the source
         # monitor, which causes transport.get_target() to derive 'source'.
-        info = self.eval_str(
-            'return require("core.debug_helpers").first_armed_video_clip(48)')
-        self.assertNotEqual("", info, (
-            "fixture precondition: anamnesis template must contain at "
-            "least one non-gap clip on an armed video track of the "
-            "displayed record sequence"))
-        clip_id, _track_id, _seq_start, _duration, rec_seq, _master = (
-            info.split("|", 5))
+        clip = self.first_armed_video_clip(48)
 
         rec_engine_seq_before = self.eval_str(
             'return tostring(require("core.debug_helpers")'
@@ -63,7 +51,7 @@ class TestSourceTabAndViewerSetTransportTarget(JVESmokeCase):
 
         # Select the clip via real click, then anchor focus on the
         # timeline so F dispatches to the right scope.
-        self.click_clip(clip_id)
+        self.click_clip(clip.id)
         self.focus_panel("timeline")
 
         # Press F — MatchFrame → source_viewer.load_master_clip → focus
@@ -118,7 +106,6 @@ class TestSourceTabAndViewerSetTransportTarget(JVESmokeCase):
             "with the record tab displayed and source monitor not "
             "focused, derived transport target should be 'record'; got "
             f"'{target}'"))
-
 
 if __name__ == "__main__":
     unittest.main()

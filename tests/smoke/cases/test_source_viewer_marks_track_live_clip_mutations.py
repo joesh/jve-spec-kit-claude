@@ -26,14 +26,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_source_viewer_marks_track_live_clip_mutations -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
     """External mutation to the live clip must refresh source viewer marks."""
@@ -79,7 +74,7 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
         # then press Shift+F (OpenClipInSourceMonitor — 019 FR-024).
         self.ensure_record_tab()
         clip_start_frame = self.eval_int(
-            f"return require('core.debug_helpers').clip_field('{clip_id}', 'start_frame')")
+            f"return require('core.debug_helpers').clip_field('{clip_id}', 'sequence_start')")
         # Position playhead a few frames into the clip so Shift+F lands on it.
         self.move_playhead_to(clip_start_frame + 2)
         self.focus_panel("timeline")
@@ -114,9 +109,17 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
 
         after_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")
-        self.assertNotEqual(before_clip_source_in, after_clip_source_in, (
-            "ripple in-edge by -5 expected to move clip.source_in; if it "
-            "didn't, the test isn't exercising the right mutation"))
+        # Shift+Comma → NudgeSelection magnitude=5 → BatchRippleEdit -5 on
+        # the in-edge moves source_in DOWN by 5 (trimming the head leftward
+        # exposes 5 more source frames at the start). Assert the exact
+        # delta — a future keymap default change (e.g. magnitude=10) would
+        # silently pass an inequality check while testing the wrong thing.
+        self.assertEqual(before_clip_source_in - 5, after_clip_source_in, (
+            f"Shift+Comma ripple-in by -5 expected source_in "
+            f"{before_clip_source_in} -> {before_clip_source_in - 5}; "
+            f"got {after_clip_source_in}. If delta is 0, ripple didn't "
+            f"fire; if a different magnitude, NudgeSelection's default "
+            f"changed and this test needs updating."))
 
         after_effective = self.eval_str(
             "local s, i, o = require('core.effective_source').get(); "
@@ -130,7 +133,6 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             f"BatchRippleEdit must emit sequence_content_changed on its "
             f"owner_sequence_id so source_viewer's refresh_live_bound "
             f"re-pulls the clip and republishes its source_in/out."))
-
 
 if __name__ == "__main__":
     unittest.main()

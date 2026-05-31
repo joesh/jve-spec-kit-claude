@@ -24,17 +24,11 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_delete_lift -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 SEED_OFFSET_INTO_CLIP = 24
-
 
 class TestDeleteLiftsSelectedClip(JVESmokeCase):
 
@@ -45,14 +39,10 @@ class TestDeleteLiftsSelectedClip(JVESmokeCase):
     def _pick_and_select_clip(self) -> str:
         """Pick an armed video clip, select it, seed playhead inside.
         Returns the clip id."""
-        info = self.eval_str(
-            "return require('core.debug_helpers').first_armed_video_clip(48)")
-        assert info, "fixture has no armed video clip with body"
-        clip_id, _track_id, seq_start_s, _duration, _rec_seq, _master = (
-            info.split("|", 5))
-        self.move_playhead_to(int(seq_start_s) + SEED_OFFSET_INTO_CLIP)
-        self.click_clip(clip_id)
-        return clip_id
+        clip = self.first_armed_video_clip(48)
+        self.move_playhead_to(clip.seq_start + SEED_OFFSET_INTO_CLIP)
+        self.click_clip(clip.id)
+        return clip.id
 
     def _clip_exists(self, clip_id: str) -> bool:
         return self.eval_bool(
@@ -85,7 +75,6 @@ class TestDeleteLiftsSelectedClip(JVESmokeCase):
             f"is wired identically to Delete in the keymap). Still "
             f"present means the Backspace binding isn't carrying the "
             f"same args, or has drifted from Delete."))
-
 
 if __name__ == "__main__":
     unittest.main()

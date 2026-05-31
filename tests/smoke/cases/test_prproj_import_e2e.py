@@ -15,18 +15,14 @@ Run:
     python3 -m unittest tests.smoke.cases.test_prproj_import_e2e -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPO_ROOT))
-
 from tests.smoke.runner.case import JVESmokeCase
 
 FIXTURE_PRPROJ = (REPO_ROOT / "tests" / "fixtures" / "premiere"
                   / "2026-03-20-anamnesis joe edit.prproj")
-
 
 class TestPrprojImportE2E(JVESmokeCase):
     """Opening the anamnesis .prproj yields a populated project."""
@@ -165,7 +161,6 @@ class TestPrprojImportE2E(JVESmokeCase):
             'local v = stmt:value(0); stmt:finalize(); return v')
         self.assertGreaterEqual(track_count, 10,
             f"expected >=10 tracks (fixture has 20), got {track_count}")
-
 
 if __name__ == "__main__":
     unittest.main()

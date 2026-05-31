@@ -14,14 +14,9 @@ orphan pre-existing rows).
 #       fixture's referenced media paths; otherwise pre-seed step is moot.
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestImportReusesExistingMedia(JVESmokeCase):
     """FCP7 import dedupes media by file_path; undo preserves pre-existing."""
@@ -79,7 +74,6 @@ class TestImportReusesExistingMedia(JVESmokeCase):
         # self.assertEqual(pre_id, surviving,
         #     "Undo import must not delete pre-existing media rows that "
         #     "the import merely referenced.")
-
 
 if __name__ == "__main__":
     unittest.main()

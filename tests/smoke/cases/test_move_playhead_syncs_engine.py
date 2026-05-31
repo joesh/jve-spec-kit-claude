@@ -16,17 +16,11 @@ Run:
     python3 -m unittest tests.smoke.cases.test_move_playhead_syncs_engine -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 DELTA_FRAMES = 50
-
 
 class TestMovePlayheadSyncsEngine(JVESmokeCase):
     """MovePlayhead must move the displayed engine, not just the model."""
@@ -71,7 +65,6 @@ class TestMovePlayheadSyncsEngine(JVESmokeCase):
         self.assertEqual(start + DELTA_FRAMES, model_playhead,
             f"sequences.playhead_position after MovePlayhead expected "
             f"{start + DELTA_FRAMES}, got {model_playhead}")
-
 
 if __name__ == "__main__":
     unittest.main()

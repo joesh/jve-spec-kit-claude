@@ -57,20 +57,14 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_cmd_b_blades_at_playhead -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Frames from the clip's left boundary at which to seed the playhead.
 # Must be strictly between sequence_start and sequence_end for Blade to
 # treat it as inside-the-clip (boundary-touching is a no-op per spec).
 SEED_OFFSET_INTO_CLIP = 24
-
 
 class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
     """Cmd+B on @timeline must split the spanning clip at the playhead,
@@ -465,7 +459,6 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
             f"after Cmd+B, track B's spanning clip should still strictly "
             f"span frame {common_frame} — it wasn't selected, so the "
             f"narrow excluded it.")
-
 
 if __name__ == "__main__":
     unittest.main()

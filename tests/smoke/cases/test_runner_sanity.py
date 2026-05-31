@@ -13,17 +13,13 @@ Run:
 """
 
 import os
-import sys
 import unittest
 from pathlib import Path
 
 # Allow direct invocation (`python3 path/to/this.py`) without env tweaking.
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.jve_runner import (  # noqa: E402
     JVERunner, JVEEvalError, JVERunnerError,
 )
-
 
 class TestRunnerSanity(unittest.TestCase):
     """Bypasses JVESmokeCase — no per-test OpenProject. Just the runner."""
@@ -98,7 +94,6 @@ class TestRunnerSanity(unittest.TestCase):
         # Wire framing survives many round-trips.
         for i in range(50):
             self.assertEqual(self.runner.eval_int(f"return {i} * 2"), i * 2)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -16,14 +16,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_d_toggles_clip_enabled -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestDTogglesClipEnabled(JVESmokeCase):
     """D on @timeline flips the selected clip's enabled flag."""
@@ -83,7 +78,6 @@ class TestDTogglesClipEnabled(JVESmokeCase):
             f"(toggle returns to original). Got false. The toggle is "
             f"not symmetric — likely enabled_before isn't being read "
             f"from the current state on each press."))
-
 
 if __name__ == "__main__":
     unittest.main()

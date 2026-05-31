@@ -24,14 +24,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keyboard_qshortcut_integration -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestKeyboardQShortcutIntegration(JVESmokeCase):
     """Meta-checks on the QShortcut registry + residual-key dispatch."""
@@ -154,7 +149,6 @@ class TestKeyboardQShortcutIntegration(JVESmokeCase):
         # script but materially larger than the rest of this file;
         # belongs in a dedicated overwrite smoke.
         pass
-
 
 if __name__ == "__main__":
     unittest.main()

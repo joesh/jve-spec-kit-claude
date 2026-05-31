@@ -14,14 +14,10 @@ Run:
     python3 -m unittest tests.smoke.cases.test_imported_sequence_ripple -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 FIXTURE = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
 
@@ -30,7 +26,6 @@ FIXTURE = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
 # enough to leave a head, large enough to produce a visible downstream
 # shift (and >1 even after seek/snap rounding).
 SEED_OFFSET_INTO_CLIP = 24
-
 
 class TestImportedSequenceRipple(JVESmokeCase):
     """Import an FCP7 timeline, then ripple-trim a clip; downstream shifts."""
@@ -225,7 +220,6 @@ class TestImportedSequenceRipple(JVESmokeCase):
             f"{downstream_seq_start_after}. Length identity broken — "
             f"the ripple didn't propagate, or it propagated by a "
             f"different amount than the clip shrank."))
-
 
 if __name__ == "__main__":
     unittest.main()

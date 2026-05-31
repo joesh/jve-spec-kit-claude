@@ -37,14 +37,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_show_source_tab -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestShowSourceTab(JVESmokeCase):
     """Show/blank source-tab contract via the Grave keybinding."""
@@ -194,7 +189,6 @@ class TestShowSourceTab(JVESmokeCase):
         self.assertEqual(sv_master_after, displayed_after, (
             f"re-shown source tab must display the same loaded master "
             f"({sv_master_after}); displayed={displayed_after}."))
-
 
 if __name__ == "__main__":
     unittest.main()

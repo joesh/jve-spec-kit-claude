@@ -21,14 +21,9 @@ reuse them (no regen). Origin: tests/integration/test_relink_invalidates_peaks.l
 #       (~/.claude/.../todo_smoke_file_dialog_driver.md).
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestRelinkInvalidatesPeaks(JVESmokeCase):
     """Peak cache reuse-vs-regen across relink scenarios."""
@@ -36,7 +31,6 @@ class TestRelinkInvalidatesPeaks(JVESmokeCase):
     @unittest.skip("needs relink-via-UI + peak_cache debug_helpers + PEAK_REQUEST counter")
     def test_relink_invalidates_peaks(self) -> None:
         raise NotImplementedError
-
 
 if __name__ == "__main__":
     unittest.main()

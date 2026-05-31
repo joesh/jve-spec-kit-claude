@@ -27,14 +27,9 @@ Authoring rules forbid driving ``source_viewer.load_master_clip`` /
 """
 
 # TODO: needs source_viewer_load_master / source_viewer_unload UI primitives + signal listener — see MIGRATION_ANALYSIS.md
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceViewerLoadSignals(JVESmokeCase):
     """source_loaded_changed signal contract on load / switch / unload."""
@@ -49,7 +44,6 @@ class TestSourceViewerLoadSignals(JVESmokeCase):
         #   (e) redundant unld → no signal
         #   (f) nil arg        → asserts
         pass
-
 
 if __name__ == "__main__":
     unittest.main()

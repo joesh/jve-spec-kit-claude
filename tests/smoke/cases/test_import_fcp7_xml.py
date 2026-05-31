@@ -15,17 +15,12 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_fcp7_xml -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
 
-
 FIXTURE = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
-
 
 class TestImportFCP7(JVESmokeCase):
     """Import + nudge + undo/redo on an FCP7 XML timeline."""
@@ -156,7 +151,6 @@ class TestImportFCP7(JVESmokeCase):
         self.assertEqual(TestImportFCP7._media_after_import, media_after_redo, (
             f"Redo should reproduce media count exactly: expected "
             f"{TestImportFCP7._media_after_import}, got {media_after_redo}."))
-
 
 if __name__ == "__main__":
     unittest.main()

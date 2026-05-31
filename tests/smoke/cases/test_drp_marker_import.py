@@ -26,19 +26,14 @@ Run:
 """
 
 import json
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXTURE = REPO_ROOT / "tests/fixtures/resolve/markers_16color_edge.drp"
 TRUTH = REPO_ROOT / "tests/fixtures/resolve/markers_16color_edge.truth.json"
-
 
 class TestDRPMarkerImport(JVESmokeCase):
     """DRP import round-trips every marker on the countdown clip."""
@@ -142,7 +137,6 @@ class TestDRPMarkerImport(JVESmokeCase):
             "empty-custom-data marker (frame 420) did not round-trip — custom_data non-empty")
         self.assertEqual(empty_cd["note"], "hasnote",
             "empty-custom-data marker (frame 420): note lost")
-
 
 if __name__ == "__main__":
     unittest.main()

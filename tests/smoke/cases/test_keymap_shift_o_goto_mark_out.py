@@ -14,18 +14,12 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_shift_o_goto_mark_out -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 MARK_OUT_INCLUSIVE_OFFSET = 300  # the user-facing out-frame
 START_PLAYHEAD_OFFSET = 50       # somewhere ELSE
-
 
 class TestShiftOGoesToMarkOut(JVESmokeCase):
     """`Shift+O` on @timeline must park the playhead at mark_out - 1."""
@@ -82,7 +76,6 @@ class TestShiftOGoesToMarkOut(JVESmokeCase):
             f"Dispatch chain (keymap → QShortcut → @timeline → "
             f"GoToMark out executor → park_at → transport listener) is "
             f"broken upstream."))
-
 
 if __name__ == "__main__":
     unittest.main()

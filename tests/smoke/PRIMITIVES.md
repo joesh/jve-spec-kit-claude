@@ -12,7 +12,10 @@ none of them mutate JVE via direct calls.
 | `self.click_clip(clip_id)` | Click on the visual center of a clip on the displayed sequence |
 | `self.right_click_clip(clip_id)` | Right-click for context menu |
 | `self.double_click_clip(clip_id)` | Double-click (open in source viewer, etc.) |
-| `self.move_playhead_to(frame)` | Click on the ruler at the pixel column for `frame` |
+| `self.move_playhead_to(frame)` | Real keys: Cmd+3 → Tab → type `<frame>f` → Return (TC field). Snap-immune; asserts the post-condition that the playhead actually landed on `frame`. For out-of-range requests where you expect a clamp, use `type_in_tc_field` instead. |
+| `self.type_in_tc_field(text)` | Lower-level: Cmd+3 → Tab → type `text` → Return. No post-assert on resulting playhead; use when the test verifies clamp behaviour. |
+| `self.first_armed_video_clip(min_frames=48)` | Probe: returns an `ArmedClip` (id, track_id, seq_start, duration, rec_seq, master_seq_id) for the first non-gap clip on an armed video track with duration > `min_frames`; asserts if the fixture has none. |
+| `self.click_clip_edge(clip_id, edge_type, trim_type)` | Click the visual edge of a clip — `edge_type` `"in"`/`"out"`, `trim_type` `"ripple"`/`"roll"`. Asserts the requested edge is in `selected_edges` post-click. |
 | `self.ensure_record_tab()` | If source tab is displayed, press Grave to swap back |
 | `self.menu_pick("File > Import > Resolve Project (.drp)...")` | Click a menu item via System Events |
 | `self.pick_file_in_open_dialog(path)` | After triggering an Open/Import: Cmd+Shift+G → type → Return → Return |
@@ -54,7 +57,7 @@ All via `self.eval_*` calling into `core.debug_helpers`:
 | `…source_engine_sequence_id()` | source engine's loaded seq |
 | `…first_armed_video_clip([min_frames])` | `"id\|track_id\|seq_start\|duration\|rec_seq\|master_seq_id"` or `""` |
 | `…clip_global_center(id)` | `"gx,gy"` for runner.click — used internally by click_clip |
-| `…ruler_global_point(frame)` | `"gx,gy"` for ruler seek — used internally by move_playhead_to |
+| `…clip_edge_global_point(id, edge, trim)` | `"gx,gy"` for an edge click — used internally by click_clip_edge |
 
 ## Synchronization
 

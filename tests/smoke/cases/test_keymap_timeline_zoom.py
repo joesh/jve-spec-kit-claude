@@ -16,21 +16,15 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_timeline_zoom -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Seed viewport duration to a known mid-range value so zoom-in and
 # zoom-out have headroom in both directions before bumping into the
 # command's internal clamps (typical NLE: 1 frame minimum, sequence
 # length maximum).
 SEED_VIEWPORT_DURATION = 2400
-
 
 class TestTimelineZoom(JVESmokeCase):
     """Cmd+Equal / Cmd+Minus / Shift+Z update viewport_duration."""
@@ -92,7 +86,6 @@ class TestTimelineZoom(JVESmokeCase):
             f"after Shift+Z: viewport_duration should change to fit content. "
             f"Still {after} (unchanged). ZoomFit didn't fire or computed "
             f"the same duration."))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,14 +19,10 @@ TODO: needs clip_marker_count_for_clip / clip_marker_count_on_sequence
       skipped until that helper lands.
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestDRPMarkers(JVESmokeCase):
     """DRP marker import + re-import idempotency.
@@ -62,7 +58,6 @@ class TestDRPMarkers(JVESmokeCase):
         # the count captured in test_01. Re-import doubling the count is
         # the regression — per-marker UUID being fresh per parse would
         # cause every re-import to N×.
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -45,14 +45,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_editor_operations_suite -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestRollVsRippleDownstreamDiscriminator(JVESmokeCase):
     """Same edge, same delta — roll holds downstream still, ripple
@@ -81,7 +76,6 @@ class TestRollVsRippleDownstreamDiscriminator(JVESmokeCase):
         #      shift downstream by exactly the trim delta. If d is
         #      unchanged, ripple silently behaved as a roll.
         raise NotImplementedError("scaffolded — awaiting edge-drag primitive")
-
 
 if __name__ == "__main__":
     unittest.main()

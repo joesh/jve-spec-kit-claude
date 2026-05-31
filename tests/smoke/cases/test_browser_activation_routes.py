@@ -20,14 +20,9 @@ Pins three domain behaviors observable via the project_browser:
 #   interaction primitives (double-click row in browser)."
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestBrowserActivationRoutes(JVESmokeCase):
     """Browser row activation atomically switches view + focus; non-undoable."""
@@ -61,7 +56,6 @@ class TestBrowserActivationRoutes(JVESmokeCase):
         #   self.assertEqual(before, after,
         #       "browser activation must be non-undoable; view must survive Cmd+Z")
         raise AssertionError("unreachable — skipped")
-
 
 if __name__ == "__main__":
     unittest.main()

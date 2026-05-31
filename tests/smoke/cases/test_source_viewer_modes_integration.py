@@ -28,14 +28,9 @@ real-OS-input version called out by the migration plan.
 #     should be completed alongside this smoke.
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestSourceViewerModesIntegration(JVESmokeCase):
     """Full mode-transition journey for the 019 source-viewer feature."""
@@ -130,7 +125,7 @@ class TestSourceViewerModesIntegration(JVESmokeCase):
         self.assertEvalEqual(
             park_at,
             f"return require('core.debug_helpers').clip_field('{clip_id}', "
-            f"'source_in_frame')",
+            f"'source_in')",
             msg=f"clip.source_in should advance from {original_src_in} "
                 f"to {park_at} (delta=+{trim_delta}) after I-key trim "
                 "in live-bound mode")
@@ -156,7 +151,6 @@ class TestSourceViewerModesIntegration(JVESmokeCase):
             "neutral",
             'return require("core.debug_helpers").source_viewer_mode()',
             msg="after unload, source viewer should be back in neutral")
-
 
 if __name__ == "__main__":
     unittest.main()

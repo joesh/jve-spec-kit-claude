@@ -29,14 +29,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_shift_f_parks_playhead_at_clip_source_in -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
     """OpenClipInSourceMonitor must MAP rec playhead through the clip."""
@@ -201,7 +196,6 @@ class TestShiftFMatchFrameMapsRecPlayheadToSource(JVESmokeCase):
             f"{self.source_in + 60} (source_in + new offset); got "
             f"{actual_engine}. If it sits at {self.source_in + 10}, the "
             f"second Shift+F is using the stale rec-playhead value."))
-
 
 if __name__ == "__main__":
     unittest.main()

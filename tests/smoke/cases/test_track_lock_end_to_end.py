@@ -36,14 +36,9 @@ Run (after primitives exist):
 # TODO: needs core.debug_helpers.last_error_message() — see MIGRATION_ANALYSIS.md line 195
 # TODO: needs core.debug_helpers.track_locked(track_id) — see MIGRATION_ANALYSIS.md line 195
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestTrackLockEndToEnd(JVESmokeCase):
     """Track lock persists, blocks edits on the locked track, allows undo
@@ -67,7 +62,6 @@ class TestTrackLockEndToEnd(JVESmokeCase):
         #      press Cmd+Z, assert the pre-lock D edit was undone
         #      (clip_enabled flipped back) — undo bypasses the lock.
         raise AssertionError("unreachable: test is skipped")
-
 
 if __name__ == "__main__":
     unittest.main()

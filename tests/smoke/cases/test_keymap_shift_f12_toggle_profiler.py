@@ -12,14 +12,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_shift_f12_toggle_profiler -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestShiftF12TogglesProfiler(JVESmokeCase):
 
@@ -52,7 +47,6 @@ class TestShiftF12TogglesProfiler(JVESmokeCase):
             "after second Shift+F12: profiler should be stopped "
             "(toggle returns to baseline). Still running means M.stop() "
             "didn't fire."))
-
 
 if __name__ == "__main__":
     unittest.main()

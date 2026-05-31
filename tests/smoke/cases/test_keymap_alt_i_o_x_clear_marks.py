@@ -19,20 +19,14 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_alt_i_o_x_clear_marks -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 # Two arbitrary in-content frames distinct enough that "in" vs "out"
 # can't be confused. Both above Anamnesis start_frame (89750).
 MARK_IN_OFFSET = 100
 MARK_OUT_OFFSET = 500
-
 
 class TestAltIOXClearMarks(JVESmokeCase):
     """Alt+I/O/X clear the corresponding mark(s) on the displayed sequence."""
@@ -119,7 +113,6 @@ class TestAltIOXClearMarks(JVESmokeCase):
         self.assertEqual((None, None), self._marks(), (
             f"after Alt+X: both marks should be nil. Got {self._marks()}. "
             f"Alt+X dispatched but didn't clear both marks."))
-
 
 if __name__ == "__main__":
     unittest.main()

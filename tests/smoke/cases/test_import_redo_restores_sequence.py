@@ -24,17 +24,12 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_redo_restores_sequence -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
 
-
 FIXTURE = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
-
 
 class TestImportRedoRestoresSequence(JVESmokeCase):
     """Redo after import-undo recreates sequence/tracks/clips even when
@@ -161,7 +156,6 @@ class TestImportRedoRestoresSequence(JVESmokeCase):
         self.assertEqual(baseline_clips, after_redo_clips, (
             f"Redo should restore clip count "
             f"({after_redo_clips} vs {baseline_clips})"))
-
 
 if __name__ == "__main__":
     unittest.main()

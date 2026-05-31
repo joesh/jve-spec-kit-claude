@@ -16,14 +16,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_go_to_edit_surfaces_playhead -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestGoToEditSurfacesPlayhead(JVESmokeCase):
     """Down/Up onto an off-screen edit point scrolls the viewport."""
@@ -55,8 +50,8 @@ class TestGoToEditSurfacesPlayhead(JVESmokeCase):
         anamnesis (~hundreds of clips → thousands of chars of CSV)."""
         return self.fetch_int_array(
             "return require('core.debug_helpers')"
-            ".compute_edit_points_on_displayed_sequence()",
-            "_smoke_edit_points")
+            ".stash_edit_points_on_displayed_sequence()",
+            "edit_points")
 
     def _set_viewport(self, start_frame: int, duration: int) -> None:
         """Narrow the viewport — view-layer setup, not model mutation."""
@@ -168,7 +163,6 @@ class TestGoToEditSurfacesPlayhead(JVESmokeCase):
             f"{a} after Up — surface_playhead should have scrolled. "
             f"Pre-press viewport was [{vp_s}, {vp_s + vp_d}). Regression: "
             f"GoToPrevEdit wrote the playhead without surfacing it."))
-
 
 if __name__ == "__main__":
     unittest.main()

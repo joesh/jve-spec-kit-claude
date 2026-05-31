@@ -23,14 +23,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_goto_mark_uses_live_clip_in_out -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestGoToMarkUsesLiveClipInOut(JVESmokeCase):
     """Shift+I / Shift+O must respect the live-clip overrides."""
@@ -115,7 +110,6 @@ class TestGoToMarkUsesLiveClipInOut(JVESmokeCase):
             f"GoToMarkOut in live-bound mode expected to park at "
             f"clip.source_out - 1 = {expected_out_park}; got {after_out}. "
             f"Master row mark_out was set to {bogus_out_frame} (stale)."))
-
 
 if __name__ == "__main__":
     unittest.main()

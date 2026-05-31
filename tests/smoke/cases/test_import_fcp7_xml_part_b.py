@@ -18,17 +18,12 @@ Run:
     python3 -m unittest tests.smoke.cases.test_import_fcp7_xml_part_b -v
 """
 
-import sys
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from tests.smoke.runner.case import JVESmokeCase
 
-
 FIXTURE = "tests/fixtures/resolve/sample_timeline_fcp7xml.xml"
-
 
 class TestImportFCP7Regressions(JVESmokeCase):
     """Post-import D / Cmd+B / Delete must operate correctly."""
@@ -162,7 +157,6 @@ class TestImportFCP7Regressions(JVESmokeCase):
         self.assertEqual(clips_before, clips_after_undo,
             "displayed sequence clip count should return to pre-delete "
             "value after Cmd+Z")
-
 
 if __name__ == "__main__":
     unittest.main()

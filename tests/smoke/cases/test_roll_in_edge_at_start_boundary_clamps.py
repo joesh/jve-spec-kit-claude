@@ -26,14 +26,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_roll_in_edge_at_start_boundary_clamps -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestRollInEdgeBoundaryClamp(JVESmokeCase):
     """Roll edit point at floor must not drive sequence_start below it."""
@@ -99,7 +94,6 @@ class TestRollInEdgeBoundaryClamp(JVESmokeCase):
             f"BRE roll-constraint path skips its own prev_end_frames check "
             f"when the prev edge is in the edit selection — "
             f"apply_sequence_floor_limits must cover this case."))
-
 
 if __name__ == "__main__":
     unittest.main()

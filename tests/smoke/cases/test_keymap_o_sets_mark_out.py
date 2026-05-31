@@ -14,17 +14,11 @@ Run:
     python3 -m unittest tests.smoke.cases.test_keymap_o_sets_mark_out -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
 
-
 SEED_OFFSET_FROM_START = 100
-
 
 class TestOKeySetsMarkOut(JVESmokeCase):
     """`O` on @timeline must mutate the displayed sequence's mark_out."""
@@ -78,7 +72,6 @@ class TestOKeySetsMarkOut(JVESmokeCase):
             f"Dispatch chain (keymap → QShortcut → @timeline scope → "
             f"command_manager auto-inject → SetMark executor) is broken "
             f"upstream of the executor."))
-
 
 if __name__ == "__main__":
     unittest.main()

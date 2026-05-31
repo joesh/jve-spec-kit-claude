@@ -15,14 +15,9 @@ Run:
     python3 -m unittest tests.smoke.cases.test_playback_routes_to_displayed_tab -v
 """
 
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from tests.smoke.runner.case import JVESmokeCase
-
 
 class TestPlaybackRoutesToDisplayedTab(JVESmokeCase):
     """Transport target tracks the displayed tab kind."""
@@ -116,7 +111,6 @@ class TestPlaybackRoutesToDisplayedTab(JVESmokeCase):
             msg=("after Grave toggled back to record tab, transport target "
                  "must be 'record' again — routing must track the displayed "
                  "tab on every change, not just on initial wiring."))
-
 
 if __name__ == "__main__":
     unittest.main()
