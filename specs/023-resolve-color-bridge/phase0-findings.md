@@ -87,3 +87,31 @@ What I deliberately did **not** do: switch the active project/timeline in Joe's 
 - **Open (needs Joe + live Resolve):** does a cached object handle survive a UI project/timeline switch (b)? — folded into T042's stale-handle live check; not blocking, design already revalidates per verb.
 
 **STOP GATE 0.** Awaiting review before Phase 1 (DRT authoring + identity spike).
+
+---
+
+## T008 spike — Resolve refuses our "minimal-viable" DRT (2026-05-31)
+
+**Run:** Joe drove Resolve Studio 20.3.2.9 to import `/tmp/jve/t008_identity.drt` (authored by `tools/resolve-helper/spikes/t008_author_drt.lua` against the T007 writer). Result: Resolve dialog **"Unable to Import Project — Failed to import project."** Identity carrier readback (T008's actual goal) is **not reachable** until import succeeds.
+
+**Cause (evidence-backed via Resolve-authored reference DRP):** Our writer emits a structurally-tolerable archive for JVE's own DRP importer (T004 self-consistency green) but **not** the shape Resolve insists on. A canonical Resolve-exported DRP — produced via `tools/resolve-helper/spikes/t008_export_reference_drp.py` driving `ProjectManager.ExportProject(name, path, False)` — has the same archive layout (project.xml + MediaPool/Master/MpFolder.xml + SeqContainer/&lt;dbid&gt;.xml) but a much richer schema. Diff (incomplete; see `tests/fixtures/resolve/t008_reference_empty_timeline.drp` for the source-of-truth):
+
+| Element | Our writer | Resolve canonical |
+|---|---|---|
+| root tag (project.xml) | `<Project>` | `<SM_Project DbId="…">` |
+| version header | (none) | `<!--DbAppVer="20.3.2.0009" DbPrjVer="15"-->` |
+| project metadata | ProjectName + TimelineFrameRate/Width/Height | LockId/, User, Folder/, UserId, SysId, ProjectId, UpToDate, OrigProjUpToDate, RevivalTaskSetID, PlayHeadsSplitDisplay, LastModTimeInSecs, UpgradeLockSysId/, ProjectAgeInMs, ProjectName, FolderMap/, TimelineVec/, TimelineHandleVec (with `<Element>` per timeline DbId), CurrentTimelineIndex, StreamCursorVector + 4 sibling stream vectors, NumTotalStreams, NumPlayStreams, CurrentStreamId, PlayingStreamId, PlayHeadMode, CommonConfig > SM_Config (with binary settings FieldsBlob), DeletedSsnList, IsADeliverableProject + 2 deliverables siblings, NumReader, ClipInfoSeed, ReelSeed, EDLSeed, RenderText* (3), activeStereoLeft/RightSession/, IsAutoSave, ProjRef/, Thumbnails/, MediaPool > Sm2MediaPool (FieldsBlob carries RootFolderRef UUID), ProjectVersion, GroupList(+Obj), IsLiveCollaborationEnabled, LockableBlobMap > Sm2MediaPoolLockableBlob, PowerNodeList > LmPowerNodeList, Notes/, FaceTaggingClipVec/, FaceTaggingPeopleVec/ |
+| project.xml line count | ~5 | 124 |
+| MpFolder root | `<Sm2MpFolder DbId="…">` with Name + Sm2MpTimelineClip children | same root, but Sm2MpTimelineClip requires UniqueMediaPoolItemId, MarkIn/Out+Video/Audio (6 empty marks), CurPlayheadPosition, PinsBA/, VirtualAudioTracksBA/, MatteVec/, AudioSource, PTZRPreset > SmPTZRPreset (with ID=100), PTZRPresetType, SlateTC, TimelineSharedHandle > Sm2Timeline { FieldsBlob/, Name, MpTimelineClip (back-ref!), Sequence > Sm2Sequence { LARGE FieldsBlob, UniqueSequenceId, MediaExtents, FrameRate, Resolution, VideoTrackVec/, AudioTrackVec/, Parent (back-ref), pLmVerTable > LmVersionTable { Locals > LmVersion { Body binary }, … }, LastChangedTime, RenderCacheBA, AuxRenderCacheBA, UIElementsState/, NumOutputAudioChannels, OutputAudioGain, PinsBA/, ImportExportMetadataBA/, LockSysId/, DbSavedTime } }, OfflineFrameOffset, PTZRPreset (again), VideoStereoSource, Type, ImportExportMetadataBA/, EnableLTC, LTCSyncDelay, EnableAudio, AudioSyncDelay, ModTimeInSecs, CreateTimeInSecs }, VideoMetadata (binary blob), MediaMetadata/. Plus MediaPool back-ref UUID, Folded, ColorTag, LockSysId/, DbSavedTime |
+| MpFolder.xml line count | ~10 | 121 |
+| SeqContainer track structure | `<Sm2SequenceContainer><Sm2TiTrack>…clips…</Sm2TiTrack>…</Sm2SequenceContainer>` | `<Sm2SequenceContainer DbId="…">` (filename == container DbId) with `<VideoTrackVec><Element><Sm2TiTrack DbId="…">{FieldsBlob, Type, SubType, Flags, Sequence (back-ref), Items, FusionCompHolderItems/, UserDefinedName/, LayersVec/}</Sm2TiTrack></Element>…</VideoTrackVec>` plus parallel `<AudioTrackVec>`, `<SubtitleTrackVec/>`, `<GeometryTrackVec/>`, `<DbSavedTime>` |
+| SeqContainer filename | `seq_001.xml` (N-indexed) | `<container_dbid>.xml` |
+
+In short: **JVE's own DRP importer is tolerant; Resolve's DRP importer demands the full Resolve persistence schema.** The writer's `-- DRT vs DRP: Resolve treats both identically per spec 023` comment is now demonstrably wrong and must be removed.
+
+**Identity-carrier verdict for T008: blocked.** The DBID/NAME/LIS round-trip question can't be tested until Resolve accepts the archive. The writer needs the canonical shape before any carrier readback measurement is meaningful.
+
+**Reference fixture preserved:** `tests/fixtures/resolve/t008_reference_empty_timeline.drp` (Resolve-authored, 17.7 KB, empty timeline). Its unzipped contents are the source of truth for any rewrite.
+
+**Next decision** (Joe): expand `drt_writer.lua` to emit the canonical Resolve shape (significant rewrite — empty FieldsBlobs may suffice for some elements, the Sm2Sequence's big binary blob may need to be either stubbed or copied verbatim from the reference), OR try a different Resolve import entry point (Timeline > Import Timeline from File rather than Project > Import Project — different parser inside Resolve).
+

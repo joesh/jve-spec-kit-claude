@@ -10,9 +10,16 @@
 ---     SeqContainer/seq_<i>.xml               one per sequence, with tracks +
 ---                                            clips carrying identity (`DbId`)
 ---
---- DRT vs DRP: same archive shape, same XML schema; "DRT" is JVE's outbound
---- label for the subset we author. Resolve treats both identically per
---- spec 023 / Phase-0 findings.
+--- DRT vs DRP: same archive shape (zip of project.xml + MediaPool + SeqContainer).
+--- JVE's own DRP importer is tolerant of the minimal subset this module
+--- emits today (T004 round-trip green). **Resolve's importer is NOT** —
+--- spike 2026-05-31 (phase0-findings.md §"T008 spike") confirmed Resolve
+--- rejects this archive ("Failed to import project") because it lacks the
+--- bulk of Resolve's persistence schema (DbId attrs, version comment,
+--- TimelineHandleVec, Sm2MpTimelineClip/Sm2Timeline/Sm2Sequence wrapping
+--- with FieldsBlobs, separate VideoTrackVec/AudioTrackVec, etc.). The
+--- Resolve-accepted writer is a rewrite gated on Joe's decision; the
+--- reference shape is `tests/fixtures/resolve/t008_reference_empty_timeline.drp`.
 ---
 --- Round-trip contract (per FR-002, FR-011b, feedback_timecode_is_truth):
 ---   • Per-clip identity field (clip.id) → Sm2Ti{Video,Audio}Clip.DbId attr
