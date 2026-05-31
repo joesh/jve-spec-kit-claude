@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--DbAppVer="20.3.2.0009" DbPrjVer="15"-->
+<Sm2SequenceContainer DbId="09a19a21-d424-41ef-945f-d598b9d4a4ac">
+ <FieldsBlob/>
+ <VideoTrackVec>
+  <Element>
+   <Sm2TiTrack DbId="4d99acf3-a1b6-461f-a89d-6d614a3285e7">
+    <FieldsBlob>000000010000000100000012004e0075006d004c00610079006500720073000000020000000000</FieldsBlob>
+    <Type>0</Type>
+    <SubType>0</SubType>
+    <Flags>0</Flags>
+    <Sequence>1e46c9dd-80b8-4977-aaec-35f0498cd16b</Sequence>
+    <Items/>
+    <FusionCompHolderItems/>
+    <UserDefinedName/>
+    <LayersVec/>
+   </Sm2TiTrack>
+  </Element>
+ </VideoTrackVec>
+ <AudioTrackVec>
+  <Element>
+   <Sm2TiTrack DbId="036c4b7a-5862-4f5c-b1f3-abc216bdc9b0">
+    <FieldsBlob>000000010000000100000012004e0075006d004c00610079006500720073000000020000000000</FieldsBlob>
+    <Type>1</Type>
+    <SubType>0</SubType>
+    <Flags>0</Flags>
+    <Sequence>1e46c9dd-80b8-4977-aaec-35f0498cd16b</Sequence>
+    <Items/>
+    <FusionCompHolderItems/>
+    <UserDefinedName/>
+    <LayersVec/>
+   </Sm2TiTrack>
+  </Element>
+ </AudioTrackVec>
+ <SubtitleTrackVec/>
+ <GeometryTrackVec/>
+ <DbSavedTime>1689590</DbSavedTime>
+</Sm2SequenceContainer>
