@@ -1,4 +1,13 @@
--- JVE Database Schema V11
+-- JVE Database Schema V12
+-- Feature 023: Resolve Color Roundtrip Bridge (clip_grade + resolve_bridge_link).
+--   - clip_grade: per-clip CDL primaries + LUT ref + fidelity enum + stale flag;
+--     CASCADE on clips delete (FR-013a). NO SQL default on `stale` — writer
+--     always sets it (2.13). All-nine-or-none CDL invariant enforced at the
+--     model write boundary (`models/clip_grade.lua`).
+--   - resolve_bridge_link: per-clip Resolve item id + grade/edit fingerprints;
+--     CASCADE on clips delete (FR-013a). One Resolve target per project ⇒ PK
+--     on clip id alone (data-model.md "Clip identity" — for imported clips,
+--     `resolve_item_id == clip.id`; for UUID-minted clips, matched positionally).
 -- Feature 018: Uniform Clip Source Timebase + Canonical-Clock Sub-Frame Primitives.
 --   - clips.source_in_subframe / source_out_subframe (INTEGER, NULL for video, NOT NULL for audio)
 --   - media_refs.audio_sample_rate (INTEGER, denormalized from media row)
@@ -23,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (11);
+INSERT OR IGNORE INTO schema_version (version) VALUES (12);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -830,3 +839,39 @@ BEGIN
     SELECT RAISE(ABORT,
         'sequences.audio_sample_rate must be NULL for kind=''master''');
 END;
+
+-- ============================================================================
+-- RESOLVE COLOR BRIDGE (Feature 023, V12)
+-- ============================================================================
+
+-- Per-clip color grade read back from Resolve (FR-014, FR-013a, FR-015).
+-- Read-only in JVE — only SyncGradesFromResolve writes rows. CDL is
+-- all-nine-or-none; the model layer asserts (SQL can't express that in a
+-- single constraint cleanly). `stale` has NO SQL default (2.13): writer
+-- always sets it.
+CREATE TABLE IF NOT EXISTS clip_grade (
+    clip_id     TEXT PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+    slope_r REAL, slope_g REAL, slope_b REAL,
+    offset_r REAL, offset_g REAL, offset_b REAL,
+    power_r REAL, power_g REAL, power_b REAL,
+    saturation REAL,
+    lut_ref     TEXT,
+    fidelity    TEXT NOT NULL CHECK(fidelity IN ('primary', 'partial', 'unrepresentable')),
+    source      TEXT NOT NULL,
+    stale       INTEGER NOT NULL CHECK(stale IN (0, 1)),
+    synced_at   INTEGER NOT NULL
+);
+
+-- Per-clip Resolve identity + change/conflict fingerprints (FR-011, FR-025).
+-- For imported clips, `resolve_item_id == clip.id` (FR-011b: importer adopts
+-- the Resolve timeline-item DbId). For UUID-minted clips, it's the Resolve
+-- id matched at connect time (FR-011c — positional/content). One Resolve
+-- target per project ⇒ PK on jve_clip_uuid alone (no project_id column).
+CREATE TABLE IF NOT EXISTS resolve_bridge_link (
+    jve_clip_uuid     TEXT PRIMARY KEY REFERENCES clips(id) ON DELETE CASCADE,
+    resolve_item_id   TEXT NOT NULL,
+    grade_fingerprint TEXT,
+    edit_fingerprint  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_resolve_bridge_link_resolve_item
+    ON resolve_bridge_link(resolve_item_id);
