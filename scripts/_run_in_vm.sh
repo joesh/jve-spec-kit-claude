@@ -70,5 +70,5 @@ fi
 # debug nightmare).
 echo "[vm-dispatch] $(basename "$0") → $_VM_HOST" >&2
 $_VM_SSH "$_VM_USER@$_VM_HOST" \
-    "cd $_VM_GUEST_PATH && JVE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL"
+    "cd $_VM_GUEST_PATH && JVE_IN_VM=1 JVE_SMOKE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL"
 exit $?
