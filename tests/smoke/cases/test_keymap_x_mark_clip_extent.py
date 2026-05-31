@@ -43,7 +43,9 @@ class TestXMarksClipExtent(JVESmokeCase):
             "return require('core.debug_helpers').first_armed_video_clip(49)")
         raw = info.strip('"')
         assert raw, "fixture has no armed video clip with body"
-        clip_id, _track_id, seq_start_s, duration_s, rec_seq = raw.split("|", 4)
+        # first_armed_video_clip returns 6 fields: id|track|start|dur|rec_seq|sequence_id.
+        # Split with maxsplit=5 (= 6 parts) so rec_seq doesn't absorb sequence_id.
+        clip_id, _track_id, seq_start_s, duration_s, rec_seq, _seq_id = raw.split("|", 5)
         seq_start = int(seq_start_s)
         duration = int(duration_s)
 

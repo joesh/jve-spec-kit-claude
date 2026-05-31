@@ -3732,7 +3732,21 @@ function M.get_clip_global_center_for_test(clip_id)
 
     local sx = timeline_state.time_to_pixel(clip.sequence_start, w)
     local ex = timeline_state.time_to_pixel(clip.sequence_start + clip.duration, w)
-    local cx = math.floor((sx + ex) / 2)
+    -- Pick the center of the clip's intersection with the visible
+    -- viewport, not the clip's true center. When the clip is wider
+    -- than the viewport (post-scroll the viewport sits inside the
+    -- clip), the true center is many widget-widths off-screen and
+    -- cliclick at those coords lands in empty space outside the
+    -- widget. Clamping each edge to [0, w] keeps the click reliably
+    -- inside the clip's body.
+    local visible_sx = math.max(sx, 0)
+    local visible_ex = math.min(ex, w)
+    assert(visible_ex > visible_sx, string.format(
+        "get_clip_global_center_for_test: clip %s has no visible width "
+        .. "(clip px [%d,%d], widget w=%d) — viewport recenter above "
+        .. "should have made it visible",
+        tostring(clip_id), sx, ex, w))
+    local cx = math.floor((visible_sx + visible_ex) / 2)
     local track_y = view.get_track_y_by_id(clip.track_id, h)
     if not track_y or track_y < 0 then return nil, nil end
     local track_h = view.get_track_visual_height(clip.track_id)
