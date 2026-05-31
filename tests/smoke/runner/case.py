@@ -71,8 +71,17 @@ def _ensure_runner() -> tuple[JVERunner, Fixtures]:
         if _singleton_fixtures is None:
             _singleton_fixtures = Fixtures()
             atexit.register(_singleton_shutdown)
+        # Start JVE on a throwaway copy of the template, NOT the template
+        # itself. JVE writes to its startup project's SQLite WAL as the
+        # session runs (selection state, viewport scroll, transient cache
+        # flushes); pointing it at template.jvp directly meant the
+        # template was getting written to (template.jvp-wal grows to
+        # >100MB) and per-class fresh_copy() snapshots were inheriting
+        # that drift. Each suite gets a brand-new startup-session file;
+        # the template stays pristine for class fresh-copies.
+        startup_jvp = _singleton_fixtures.fresh_copy("startup_session")
         _singleton_runner = JVERunner(
-            startup_project=Path("/tmp/jve_smoke/template.jvp"),
+            startup_project=startup_jvp,
             stdout_log=Path("/tmp/jve_smoke") / "suite.log")
         _singleton_runner.start()
         _singleton_runner.foreground()
