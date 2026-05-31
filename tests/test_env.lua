@@ -59,10 +59,24 @@ do
 end
 M.repo_root = repo_root
 
+-- UTM guest: the host repo is shared at this AppleVirtIOFS mount. Used as
+-- a fall-through for paths the sync pipeline doesn't push (large media
+-- fixtures: 588 GB anamnesis rushes, etc). Source code stays sync-based
+-- per specs/020-debug-terminal/phase1-test-overhaul.md (virtiofs cache
+-- staleness on host edits), so the synced tree wins when both have it.
+local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-spec-kit-claude"
+
 function M.resolve_repo_path(relative)
     if not relative or relative == "" then return repo_root end
     if relative:sub(1, 1) == "/" then return relative end
-    return repo_root .. "/" .. relative
+    local synced = repo_root .. "/" .. relative
+    if os.getenv("JVE_IN_VM") == "1" then
+        -- Prefer the synced copy when present; mount only when it's not.
+        local f = io.open(synced, "r")
+        if f then f:close(); return synced end
+        return GUEST_REPO_MOUNT .. "/" .. relative
+    end
+    return synced
 end
 
 --- Touch every path in the current DB's `media` table so that reachability

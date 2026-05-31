@@ -99,7 +99,11 @@ def key(self, combo):       # e.g. "Cmd+Z", "Shift+I"
                    check=True)
 ```
 
-The runner does NOT need a CGEventPostToPid helper or `cliclick`; the bundle work makes the cheaper osascript path sufficient.
+**Mouse clicks: cliclick, not osascript** (revised 2026-05-30). The original spec said osascript was sufficient. It is not, once the command-completion barrier (above) is in place: osascript's `tell System Events to click at {x,y}` posts the CGEvent and then BLOCKS waiting for the frontmost app to acknowledge — when JVE is mid-command (which becomes the common case immediately after the barrier returns), the ack stalls and osascript times out at 5 s. vm10 measured 72 × 5 s click timeouts on a 153-test run (~360 s of pure wall-time waste).
+
+`cliclick c:x,y` calls `CGEventCreateMouseEvent` + `CGEventPost(kCGHIDEventTap, …)` directly — the event drops into the HID queue and cliclick returns. No daemon, no ack-wait. Latency ≈ 5 ms. Install via Homebrew (`brew install cliclick`); the runner resolves the binary at module-load time (`/opt/homebrew/bin/cliclick` on Apple Silicon, `/usr/local/bin/cliclick` on Intel, or `JVE_SMOKE_CLICLICK` override) and raises a clear install-hint error if absent.
+
+Keystrokes stay on osascript: cliclick's key support is limited to plain chars + a small set of named keys, and ack-wait is not a problem in practice for keystrokes (osascript key timeouts in vm10: 3-4 vs 72 for clicks). Mixed-tool delivery — clicks via cliclick, keys via osascript — is the supported model.
 
 **Coexistence with concurrent user input — two supported paths.** macOS keystrokes go to the OS-level frontmost app with no per-process targeting. Two collision directions matter:
 
@@ -116,6 +120,31 @@ The two supported execution environments are now:
 [memory/feedback_smoke_tests_real_keypress_only.md] documents why bypassing real keystrokes (in-process synthetic events, CGEventPostToPid) is not an option — Qt's QShortcut activation requires spontaneous events from a foregrounded source process.
 
 Menu invocation goes through `osascript` (`tell app "System Events" to click menu item ...`) when the test is asserting the menu surface itself rather than the keybinding.
+
+### UI action → command-completion barrier (1:1)
+
+Joe contract (2026-05-29): every UI action provokes a command. Once the root command completes, the UI is ready for the next action. The harness enforces this 1:1 by snapshotting a monotonic counter before every input and blocking until it bumps.
+
+JVE side: `core.command_manager` exposes `get_top_level_event_count()`. The counter bumps on the trailing edge of each top-level `end_command_event` (covers `execute` / `execute_interactive`) and on `undo_interactive` / `redo_interactive` (which bypass the begin/end envelope). Nested executes inside a single user-visible action do NOT bump — one user action, one bump.
+
+Wait is fully **event-driven**: one socket round-trip, no polling on either side, no spinning in Lua. The protocol gets a dedicated verb `WAIT_BUMP <snap> <timeout_ms>` that the debug terminal routes directly (NOT as a Lua expression):
+
+- If `command_manager.get_top_level_event_count() > snap` already, the terminal replies `true,<count>` immediately.
+- Otherwise it parks the wait: stores `(snap, m_client)`, arms a single-shot `QTimer` for `timeout_ms`, and returns to the Qt event loop **without writing a reply**. Qt processes events normally — clicks/keys dispatch, commands run, listeners fire, etc.
+- When `command_manager` next bumps the counter (trailing edge of `end_command_event` / `undo_interactive` / `redo_interactive`), it invokes `_jve_on_top_level_event(count)` — a C function the debug terminal registered as a Lua global at start. That C function calls `DebugTerminal::notifyTopLevelEventBumped(count)`; if there's a pending wait and the new count exceeds the snap, it writes `true,<count>` and cancels the timer.
+- If the timer fires first, the terminal writes `false,<count>` and clears the pending state.
+
+Either way, exactly ONE line comes back per WAIT_BUMP — the same shape every other `eval()` reply has, so the harness uses the existing read path.
+
+Two prior attempts taught the design: client-side polling (2026-05-29 vm9) added ~75% suite wall time from per-poll socket round-trips. Server-side Lua spin pumping events in a `while` loop (2026-05-30) made JVE beachball — the Lua call holds the main thread for the duration of the spin, so other Qt-mainloop work can't interleave. The deferred-reply design avoids both: the wait happens entirely in Qt event-loop machinery (`QTimer`, signal/slot) with no Lua-side blocking and no client-side iteration.
+
+Harness side: `JVERunner.get_command_count()` reads the counter via Lua eval (unchanged). `JVERunner.wait_for_command_after(snap, timeout=0.5)` sends the `WAIT_BUMP` line and parses the reply. Both `key()` and `click_clip()` apply this barrier automatically. Raw `click()` does NOT — callers that send non-commanding input (dialog button, focus-only click) skip the barrier.
+
+Single-flight: at most one WAIT_BUMP at a time per connection (matches the single-client protocol invariant). A second WAIT_BUMP while one is pending fails loudly with an ERROR reply rather than queuing or silently overwriting.
+
+`key()` accepts `expect_command=False` for inputs that intentionally do not reach JVE — the canonical case is keystrokes typed INTO a frontmost macOS native dialog (e.g. NSOpenPanel's Cmd+Shift+G "Go to folder" prompt, the typed path, and the dialog's Return → Open button). The OS dialog consumes the key; JVE never sees it and no command fires. Callers using that path must do their own wait-for-result polling (see `pick_file_in_open_dialog`'s post-dialog responsiveness loop). The default stays `expect_command=True` so an accidental lost keystroke surfaces as a barrier timeout, not as a mystery downstream assertion.
+
+Replaces the prior 50 ms post-input `time.sleep`. The sleep was a guess; the barrier observes the actual completion event, so tests no longer race in-flight dispatch and there is no silent-failure mode (an input that fires no command surfaces as a `wait_for_command_after` timeout, not as a mystery assertion downstream).
 
 ### UTM macOS guest runbook (isolated execution path)
 
@@ -232,6 +261,14 @@ class JVESmokeSuite:
     def tearDownClass(cls):
         cls.jve.shutdown()
 ```
+
+### Startup readiness gate
+
+`JVERunner.start()` does NOT return as soon as the debug socket appears. The `QLocalServer` starts listening early in JVE startup — before Qt's first paint + layout pass completes. On the VM that gap is ~99 ms, during which the video panel widget shifts ~48 px down once. A `click_clip()` computed in that pre-jump window lands off the clip after the shift (no clean detection from inside the test — the click fires `DeselectAll` on the empty space it hits, the command-completion barrier sees the bump, and the next key press operates on empty selection).
+
+`start()` therefore polls `video_widget`'s global Y until two consecutive 50 ms samples agree before returning. Adds ~100-200 ms once per JVE process. Hard-failures (3 s) with a clear diagnostic if the layout doesn't settle.
+
+The cleaner long-term fix is JVE-side — defer `m_server->listen()` until the main window's first layout pass settles (most readable: a Lua trigger from `ui/layout.lua` after `event_loop_start`). Tracked at [memory/todo_jve_socket_accept_after_layout.md].
 
 ### Failure isolation
 

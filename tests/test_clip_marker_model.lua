@@ -17,52 +17,62 @@ local function expect_error(fn, substr, label)
         "%s: error %q does not mention %q", label, tostring(err), substr))
 end
 
--- A valid marker: only the required fields; note/custom_data default to "".
-local m = ClipMarker.new({
-    clip_id = "clip-1", frame = 30, duration = 1, color = "Red", name = "shot 4",
-})
+-- Helper: a complete-field constructor call, varied per test.
+local function with(overrides)
+    local base = {
+        clip_id = "clip-1", frame = 30, duration = 1, color = "Red",
+        name = "shot 4", note = "", custom_data = "",
+    }
+    if overrides then
+        for k, v in pairs(overrides) do base[k] = v end
+    end
+    return base
+end
+
+-- A valid marker carrying every field (empty note + empty custom_data are
+-- legitimate values, not absences — rule 2.13: the model takes no defaults).
+local m = ClipMarker.new(with())
 assert(m.id and #m.id > 0, "marker must receive a generated id")
 assert(m.note == "" and m.custom_data == "",
-    "absent note/custom_data must default to empty string, not nil")
+    "explicit empty note/custom_data must round-trip as ''")
 
 -- Each required field, when absent, fails naming that field.
-expect_error(function() ClipMarker.new({
-    frame = 0, duration = 1, color = "Red", name = "x" }) end,
+local function without(field)
+    local d = with()
+    d[field] = nil
+    return d
+end
+expect_error(function() ClipMarker.new(without("clip_id")) end,
     "clip_id", "missing clip_id")
-expect_error(function() ClipMarker.new({
-    clip_id = "c", duration = 1, color = "Red", name = "x" }) end,
+expect_error(function() ClipMarker.new(without("frame")) end,
     "frame", "missing frame")
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = 0, color = "Red", name = "x" }) end,
+expect_error(function() ClipMarker.new(without("duration")) end,
     "duration", "missing duration")
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 1, name = "x" }) end,
+expect_error(function() ClipMarker.new(without("color")) end,
     "color", "missing color")
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 1, color = "Red" }) end,
+expect_error(function() ClipMarker.new(without("name")) end,
     "name", "missing name")
+expect_error(function() ClipMarker.new(without("note")) end,
+    "note", "missing note (must pass '' explicitly, not nil)")
+expect_error(function() ClipMarker.new(without("custom_data")) end,
+    "custom_data", "missing custom_data (must pass '' explicitly, not nil)")
 
 -- Domain bounds: position can't be negative; a span is at least one frame.
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = -1, duration = 1, color = "Red", name = "x" }) end,
+expect_error(function() ClipMarker.new(with{frame = -1}) end,
     "frame", "negative frame")
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 0, color = "Red", name = "x" }) end,
+expect_error(function() ClipMarker.new(with{duration = 0}) end,
     "duration", "zero-width span (point marker is 1)")
 
 -- Color must be one of the 16 Resolve names; anything else is decoded garbage.
-expect_error(function() ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 1, color = "Mauve", name = "x" }) end,
+expect_error(function() ClipMarker.new(with{color = "Mauve"}) end,
     "color", "unknown color")
 
 -- frame 0 is valid (start-of-clip marker); duration 1 is the point marker; a
 -- larger duration is a span.
-local at_start = ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 1, color = "Blue", name = "head" })
+local at_start = ClipMarker.new(with{frame = 0, color = "Blue", name = "head"})
 assert(at_start.frame == 0 and at_start.duration == 1,
     "frame 0 / duration 1 (point marker at clip start) must be accepted")
-local span = ClipMarker.new({
-    clip_id = "c", frame = 0, duration = 24, color = "Blue", name = "range" })
+local span = ClipMarker.new(with{frame = 0, duration = 24, color = "Blue", name = "range"})
 assert(span.duration == 24, "span marker must keep its duration")
 
 print("✅ test_clip_marker_model.lua passed (new() validation + domain bounds)")

@@ -36,38 +36,13 @@ class TestCmdShiftBracketTrimHeadTail(JVESmokeCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
 
     def _pick_armed_clip(self) -> dict:
-        info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local Track = require('models.track'); "
-            "local rec_seq = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(rec_seq, 'record engine has no loaded sequence'); "
-            "local armed = {}; "
-            "for _, t in ipairs(Track.find_by_sequence(rec_seq)) do "
-            "  if t.track_type == 'VIDEO' and t.autoselect and not t.locked then "
-            "    armed[t.id] = true "
-            "  end "
-            "end; "
-            "local picked; "
-            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
-            "  if armed[c.track_id] and not c.is_gap "
-            "     and type(c.duration) == 'number' and c.duration > 48 then "
-            "    picked = c; break "
-            "  end "
-            "end; "
-            "assert(picked, 'fixture has no armed video clip with body'); "
-            "return string.format('%s|%s|%d|%d|%s', "
-            "  picked.id, picked.track_id, picked.sequence_start, "
-            "  picked.duration, rec_seq)")
-        parts = info.strip('"').split("|", 4)
+        info = self.eval_str(
+            "return require('core.debug_helpers').first_armed_video_clip(48)")
+        assert info, "fixture has no armed video clip with body"
+        parts = info.split("|", 5)
         return {
             "id":        parts[0],
             "track_id":  parts[1],
@@ -91,21 +66,12 @@ class TestCmdShiftBracketTrimHeadTail(JVESmokeCase):
     def _seed_for_trim(self, clip: dict) -> int:
         """Select the clip + park playhead SEED_OFFSET_INTO_CLIP into it.
         Returns the observed playhead frame that TrimHead/TrimTail will
-        actually use (`timeline_state.get_playhead_position()`). The
-        observed value may differ from the requested by 1 frame
+        actually use. Observed may differ from requested by 1 frame
         depending on snap/seek rounding — derive expectations from
         what TrimHead sees, not from the request."""
-        proj = self.eval_str(
-            "return require('core.command_manager').get_active_project_id()")
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ project_id='{proj}', sequence_id='{clip['rec_seq']}', "
-            f"target_clip_ids={{'{clip['id']}'}} }})")
+        self.click_clip(clip["id"])
         requested = clip["seq_start"] + SEED_OFFSET_INTO_CLIP
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{clip['rec_seq']}', "
-            f"playhead_position={requested} }})")
+        self.move_playhead_to(requested)
         return self.eval_int(
             "return require('ui.timeline.timeline_state').get_playhead_position()")
 

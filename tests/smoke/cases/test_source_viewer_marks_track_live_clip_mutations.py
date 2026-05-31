@@ -74,13 +74,19 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             f"hard-coded clip {clip_id} not on hard-coded track {track_id} — "
             f"fixture changed? regenerate per the comment above")
 
-        # Load into source viewer in live-bound mode.
-        self.eval(
-            "require('ui.source_viewer').load_clip("
-            f"'{clip_id}', require('models.clip').load('{clip_id}'))")
+        # Load into source viewer in live-bound mode via real input:
+        # ensure record tab is displayed, park playhead on the clip,
+        # then press Shift+F (OpenClipInSourceMonitor — 019 FR-024).
+        self.ensure_record_tab()
+        clip_start_frame = self.eval_int(
+            f"return require('core.debug_helpers').clip_field('{clip_id}', 'start_frame')")
+        # Position playhead a few frames into the clip so Shift+F lands on it.
+        self.move_playhead_to(clip_start_frame + 2)
+        self.focus_panel("timeline")
+        self.key("Shift+F")
         self.assertEqual(clip_id, self.eval_str(
-            "return tostring(require('ui.source_viewer').get_live_clip_id())"),
-            "setUp: load_clip did not pin the clip in live-bound mode")
+            "return tostring(require('core.debug_helpers').source_viewer_clip_id())"),
+            "setUp: Shift+F did not pin the clip in live-bound mode")
 
         # spec 022 / 1.3a-ii: no workaround needed. BRE's build_clip_cache
         # reads from the ACTIVE record tab's per-tab cache directly via
@@ -107,6 +113,14 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
         # batch_ripple_edit.lua finalize_execution real-path). A
         # clamped_delta_frames != requested signals the test picked an
         # un-movable clip (see hard-coding rationale above).
+        #
+        # command under test — driven directly because there is no
+        # keyboard analogue for "select clip {id}'s in-edge precisely and
+        # ripple by -5". Edge selection requires pixel-accurate
+        # hover/click on an edge handle; no smoke primitive exists for
+        # that yet. The contract under test is "BRE must emit
+        # sequence_content_changed" — driving via command_manager is the
+        # only way to deterministically trigger that specific mutation.
         result_summary = self.eval_str(
             "local cm = require('core.command_manager'); "
             f"local r = cm.execute('BatchRippleEdit', {{ "

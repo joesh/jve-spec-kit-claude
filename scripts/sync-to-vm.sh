@@ -12,8 +12,22 @@
 #                                  resources via CMake post-build bundling)
 #   - tests/smoke/                (Python runner + cases — lives outside
 #                                  the .app by design, drives it)
+#   - tests/binding/              (Lua --test scripts dispatched via _run_in_vm.sh)
+#   - tests/integration/          (Lua --test scripts dispatched via _run_in_vm.sh)
+#   - tests/test_env.lua          (test bootstrap; sets package.path)
+#   - tests/import_schema.lua     (loads src/lua/schema.sql via io.open)
 #   - tests/fixtures/resolve/     (small DRP fixtures consumed by the
-#                                  template builder before smokes run)
+#                                  template builder + DRP import tests)
+#   - src/lua/                    (test_env.lua injects ~/jve/src/lua/ into
+#                                  package.path so `require("core.foo")`
+#                                  resolves on guest exactly as on host —
+#                                  the .app bundle's Resources/src/lua is
+#                                  not in test_env's search list, and
+#                                  import_schema.lua reads schema.sql via
+#                                  io.open (not require) from this tree)
+#   - scripts/run_binding_tests.sh + tests/run_integration_tests.sh +
+#     scripts/_run_in_vm.sh       (the runners themselves are re-exec'd
+#                                  on the guest)
 #
 # What's excluded:
 #   - .git/                       (guest doesn't need git)
@@ -70,7 +84,18 @@ rsync -az --delete \
     --exclude='.DS_Store' \
     -- \
     tests/smoke \
+    tests/binding \
+    tests/integration \
+    tests/test_env.lua \
+    tests/import_schema.lua \
+    tests/helpers \
     tests/fixtures/resolve \
+    "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
+    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
+    src/lua \
+    scripts/run_binding_tests.sh \
+    tests/run_integration_tests.sh \
+    scripts/_run_in_vm.sh \
     "$USER@$HOST:$GUEST_PATH/"
 
 echo "→ jve.app → $USER@$HOST:$GUEST_PATH/build/bin/"
@@ -79,8 +104,15 @@ echo "→ jve.app → $USER@$HOST:$GUEST_PATH/build/bin/"
 # inside a bundle (xattr handling). tar is simple, full-transfer
 # (not incremental — but the .app is small enough that doesn't matter),
 # and round-trips Apple xattrs correctly.
+#
+# `-h` dereferences symlinks. The host bundle's Resources/{src/lua,
+# keymaps, menus.xml, resources} are CMake-POST_BUILD symlinks into the
+# repo (fast dev-iteration trick); without -h, those land on the guest
+# as dangling pointers to host-only paths and the binary's bundle-path
+# check (pathExists Resources/src/lua) fails, dropping back to a
+# repo-fallback that misses Resources/lua_modules (lxp.so).
 $SSH_OPTS "$USER@$HOST" "mkdir -p $GUEST_PATH/build/bin && rm -rf $GUEST_PATH/build/bin/jve.app"
-tar -c -C "$(dirname "$APP")" "$(basename "$APP")" \
+tar -ch -C "$(dirname "$APP")" "$(basename "$APP")" \
     | $SSH_OPTS "$USER@$HOST" "tar -x -C $GUEST_PATH/build/bin"
 
 echo "✓ synced. Run smokes in guest with:"

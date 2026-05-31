@@ -12,18 +12,17 @@
 -- Source In = 03:21:26:18 (media frame 0 for that file), matching our
 -- post-fix source_in value of 302168.
 
-require('test_env')
+local test_env = require('test_env')
 
 local drp_importer = require("importers.drp_importer")
 
 local function fail(msg)
-    io.stderr:write(msg .. "\n")
-    os.exit(1)
+    error(msg, 2)
 end
 
-local fixture = "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis/"
-    .. "2026-02-28-anamnesis joe edit-mm/"
-    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt"
+local fixture = test_env.require_fixture(
+    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/"
+    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
 
 -- Black-box: the fixture is a real Resolve timeline export with retimed
 -- clips whose bezier-curve first keyframes carry sub-frame negative Y.

@@ -14,8 +14,7 @@ local command_manager = require("core.command_manager")
 local Command = require("command")
 
 local function fail(label)
-    io.stderr:write(label .. "\n")
-    os.exit(1)
+    error(label, 2)
 end
 
 local function assert_true(label, value)

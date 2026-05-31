@@ -241,9 +241,6 @@ print("")
 if #failures == 0 then
     print("✅ test_019_source_viewer_integration passed")
 else
-    print(string.format("❌ test_019_source_viewer_integration FAILED — %d broken behavior(s):", #failures))
-    for _, label in ipairs(failures) do
-        print("    - " .. label)
-    end
-    os.exit(1)
+    error(string.format("test_019_source_viewer_integration: %d broken behavior(s): %s",
+        #failures, table.concat(failures, "; ")))
 end

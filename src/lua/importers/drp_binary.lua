@@ -812,23 +812,52 @@ end
 -- 16-color round-trip export. Values are bit positions with a gap at 256
 -- (2^8 is unused between Purple=128 and Fuchsia=512) — hence an explicit
 -- table, not a formula.
-local MARKER_COLOR_NAMES = {
+M.MARKER_COLOR_NAMES = {
     [2] = "Blue", [4] = "Cyan", [8] = "Green", [16] = "Yellow",
     [32] = "Red", [64] = "Pink", [128] = "Purple", [512] = "Fuchsia",
     [1024] = "Rose", [2048] = "Lavender", [4096] = "Sky", [8192] = "Mint",
     [16384] = "Lemon", [32768] = "Sand", [65536] = "Cocoa", [131072] = "Cream",
 }
 
---- Read a protobuf tag at pos → field_number, wire_type, next_pos (or nil).
+-- Inverse for the outbound writer (drt_binary). Built once from the name map
+-- so the two never drift.
+M.MARKER_COLOR_VALUES = {}
+for value, name in pairs(M.MARKER_COLOR_NAMES) do
+    M.MARKER_COLOR_VALUES[name] = value
+end
+
+-- ---------------------------------------------------------------------------
+-- Protobuf wire helpers (marker-decoder-local)
+-- ---------------------------------------------------------------------------
+
+local PB_WIRE_VARINT = 0
+local PB_WIRE_LEN    = 2
+
+-- Read a protobuf tag → field_number, wire_type, next_pos (or nil).
 local function read_pb_tag(bytes, pos)
     local tag, np = M.decode_protobuf_varint(bytes, pos)
     if not tag then return nil end
     return math.floor(tag / 8), tag % 8, np
 end
 
---- Decode a marker's inner color message protobuf.
--- @param bytes string: the color-message bytes
--- @return table|nil: {color, note, duration, name, custom_data}
+-- Read a LEN-delimited slice → slice, position past it (or nil on truncation).
+local function read_pb_len_slice(bytes, pos)
+    local len, after_len = M.decode_protobuf_varint(bytes, pos)
+    if not len or after_len + len - 1 > #bytes then return nil end
+    return bytes:sub(after_len, after_len + len - 1), after_len + len
+end
+
+-- Expect (field_num, wire_type) at `pos`. Returns next_pos or nil on mismatch.
+local function expect_tag(bytes, pos, want_field, want_wire)
+    local fn, wt, np = read_pb_tag(bytes, pos)
+    if fn ~= want_field or wt ~= want_wire then return nil end
+    return np
+end
+
+-- ---------------------------------------------------------------------------
+-- Inner color message — { color, note, duration, name, custom_data }
+-- ---------------------------------------------------------------------------
+
 local function decode_marker_color_message(bytes)
     local color_value, custom_data
     local strings = {}
@@ -837,15 +866,13 @@ local function decode_marker_color_message(bytes)
         local field_num, wire_type, np = read_pb_tag(bytes, pos)
         if not field_num then return nil end
         pos = np
-        if field_num == 1 and wire_type == 0 then
+        if field_num == 1 and wire_type == PB_WIRE_VARINT then
             color_value, pos = M.decode_protobuf_varint(bytes, pos)
             if not color_value then return nil end
-        elseif wire_type == 2 then
-            local len
-            len, pos = M.decode_protobuf_varint(bytes, pos)
-            if not len or pos + len - 1 > #bytes then return nil end
-            local s = bytes:sub(pos, pos + len - 1)
-            pos = pos + len
+        elseif wire_type == PB_WIRE_LEN then
+            local s, after = read_pb_len_slice(bytes, pos)
+            if not s then return nil end
+            pos = after
             if field_num == 3 then
                 strings[#strings + 1] = s
             elseif field_num == 6 then
@@ -858,10 +885,12 @@ local function decode_marker_color_message(bytes)
 
     -- Positional strings are exactly [note, duration, name].
     if #strings ~= 3 then return nil end
-    local color_name = MARKER_COLOR_NAMES[color_value]
+    local color_name = M.MARKER_COLOR_NAMES[color_value]
     if not color_name then return nil end
     local duration = tonumber(strings[2])
     if not duration then return nil end
+    -- custom_data: field 6 is omitted on the wire when empty (Resolve's
+    -- encoding) — boundary fold, not a fallback.
     return {
         color = color_name,
         note = strings[1],
@@ -871,76 +900,92 @@ local function decode_marker_color_message(bytes)
     }
 end
 
---- Decode the marker-collection protobuf payload → array of markers.
--- @param payload string: decompressed BlobData payload
--- @return table|nil: array of {frame, color, name, note, duration, custom_data}
+-- ---------------------------------------------------------------------------
+-- Marker entry + collection walk
+-- ---------------------------------------------------------------------------
+
+-- One marker entry → marker table, position past it (or nil on malformation).
+-- All intermediate reads are bound against the entry's declared length, so a
+-- lying `mlen` cannot let us scan past the entry into the next one's bytes.
+local function read_marker_entry(payload, pos, coll_end)
+    local entry_start = expect_tag(payload, pos, 1, PB_WIRE_LEN)
+    if not entry_start then return nil end
+    local mlen, after_mlen = M.decode_protobuf_varint(payload, entry_start)
+    if not mlen then return nil end
+    local marker_end = after_mlen + mlen - 1
+    if marker_end > coll_end then return nil end
+
+    -- Slice the entry once; further reads stay within its bounds.
+    local entry = payload:sub(after_mlen, marker_end)
+
+    -- frame: f1 varint
+    local frame_val_pos = expect_tag(entry, 1, 1, PB_WIRE_VARINT)
+    if not frame_val_pos then return nil end
+    local frame, after_frame = M.decode_protobuf_varint(entry, frame_val_pos)
+    if not frame then return nil end
+
+    -- record: f2 LEN = [BE32 ver][BE32 size] + f1 LEN color message
+    local record_val_pos = expect_tag(entry, after_frame, 2, PB_WIRE_LEN)
+    if not record_val_pos then return nil end
+    local record = read_pb_len_slice(entry, record_val_pos)
+    if not record or #record < 8 then return nil end
+
+    local inner_size = M.read_be32(record, 5)
+    if not inner_size or 8 + inner_size > #record then return nil end
+    local body = record:sub(9, 8 + inner_size)
+
+    local color_msg_pos = expect_tag(body, 1, 1, PB_WIRE_LEN)
+    if not color_msg_pos then return nil end
+    local color_bytes = read_pb_len_slice(body, color_msg_pos)
+    if not color_bytes then return nil end
+
+    local marker = decode_marker_color_message(color_bytes)
+    if not marker then return nil end
+    marker.frame = frame
+    return marker, marker_end + 1
+end
+
+-- Decode the marker-collection protobuf payload. Returns the array on success,
+-- or (nil, err) when the payload is shaped like a marker collection but a
+-- specific entry is malformed — the caller has already committed to "this is
+-- a marker blob" so the failure is worth surfacing.
 local function decode_marker_protobuf(payload)
-    if type(payload) ~= "string" or #payload < 2 then return nil end
+    if type(payload) ~= "string" or #payload < 2 then
+        return nil, "marker payload too short"
+    end
 
     -- Outer: a single f2 LEN field = the collection.
-    local field_num, wire_type, pos = read_pb_tag(payload, 1)
-    if field_num ~= 2 or wire_type ~= 2 then return nil end
-    local coll_len
-    coll_len, pos = M.decode_protobuf_varint(payload, pos)
-    if not coll_len then return nil end
-    local coll_end = pos + coll_len - 1
-    if coll_end > #payload then return nil end
+    local after_tag = expect_tag(payload, 1, 2, PB_WIRE_LEN)
+    if not after_tag then return nil, "outer tag is not collection (f2 LEN)" end
+    local coll_len, after_len = M.decode_protobuf_varint(payload, after_tag)
+    if not coll_len then return nil, "missing collection length" end
+    local coll_end = after_len + coll_len - 1
+    if coll_end > #payload then return nil, "collection length exceeds payload" end
 
     local markers = {}
+    local pos = after_len
     while pos <= coll_end do
-        -- Each marker is an f1 LEN entry.
-        local mfn, mwt, mp = read_pb_tag(payload, pos)
-        if mfn ~= 1 or mwt ~= 2 then return nil end
-        local mlen
-        mlen, mp = M.decode_protobuf_varint(payload, mp)
-        if not mlen then return nil end
-        local marker_end = mp + mlen - 1
-        if marker_end > coll_end then return nil end
-        pos = mp
-
-        -- frame: f1 varint
-        local ffn, fwt, fp = read_pb_tag(payload, pos)
-        if ffn ~= 1 or fwt ~= 0 then return nil end
-        local frame
-        frame, fp = M.decode_protobuf_varint(payload, fp)
-        if not frame then return nil end
-        pos = fp
-
-        -- record: f2 LEN = [BE32 ver][BE32 size] + f1 LEN color message
-        local rfn, rwt, rp = read_pb_tag(payload, pos)
-        if rfn ~= 2 or rwt ~= 2 then return nil end
-        local rlen
-        rlen, rp = M.decode_protobuf_varint(payload, rp)
-        if not rlen or rp + rlen - 1 > marker_end then return nil end
-        local record = payload:sub(rp, rp + rlen - 1)
-        pos = marker_end + 1
-
-        if #record < 8 then return nil end
-        local inner_size = M.read_be32(record, 5)
-        if not inner_size or 8 + inner_size > #record then return nil end
-        local body = record:sub(9, 8 + inner_size)
-
-        -- body wraps the color message in an f1 LEN field.
-        local cfn, cwt, cp = read_pb_tag(body, 1)
-        if cfn ~= 1 or cwt ~= 2 then return nil end
-        local clen
-        clen, cp = M.decode_protobuf_varint(body, cp)
-        if not clen or cp + clen - 1 > #body then return nil end
-
-        local marker = decode_marker_color_message(body:sub(cp, cp + clen - 1))
-        if not marker then return nil end
-        marker.frame = frame
+        local marker, next_pos = read_marker_entry(payload, pos, coll_end)
+        if not marker then
+            return nil, string.format(
+                "malformed marker entry at offset %d (entry %d)",
+                pos, #markers + 1)
+        end
         markers[#markers + 1] = marker
+        pos = next_pos
     end
     return markers
 end
 
---- Decode all markers from a Sm2TiItemLockableBlob's FieldsBlob hex.
--- Returns nil when the blob is not a marker blob (other per-item state), so
--- the importer can try every Sm2TiItemLockableBlob and keep what decodes.
--- @param fields_blob_hex string: <FieldsBlob> hex (whitespace tolerated)
--- @return table|nil: array of {frame, color, name, note, duration, custom_data}
-function M.decode_clip_markers(fields_blob_hex)
+-- Three-state unwrap. Returns one of:
+--   (payload, nil) — IS a marker blob and decompressed cleanly
+--   (nil, nil)     — NOT a marker blob (silent skip; most per-item blobs)
+--   (nil, err)     — IS marker-shaped (0x81 wrapper byte present) but
+--                    decompression failed; the caller MUST surface this so a
+--                    Resolve format drift doesn't silently drop markers.
+-- The discriminator is the 0x81 wrapper byte at offset 9 of the inner
+-- BlobData: 0x81 = marker; anything else = different per-item state.
+local function unwrap_marker_blob(fields_blob_hex)
     local bytes = M.hex_to_bytes(fields_blob_hex)
     if not bytes or #bytes < 12 then return nil end
 
@@ -956,9 +1001,30 @@ function M.decode_clip_markers(fields_blob_hex)
     local blob_data = raw_payloads["BlobData"]
     if not blob_data then return nil end
 
-    local payload = M.decode_fields_blob_bytes(blob_data)
-    if not payload then return nil end
+    -- Peek the marker byte BEFORE attempting decompress so we distinguish
+    -- non-marker (skip) from marker-shaped-but-corrupted (surface).
+    if type(blob_data) ~= "string" or #blob_data < 10 or blob_data:byte(9) ~= 0x81 then
+        return nil  -- not a marker blob (different per-item state)
+    end
 
+    local payload, err = M.decode_fields_blob_bytes(blob_data)
+    if not payload then
+        return nil, "marker-shaped (0x81) blob failed to decompress: " .. tostring(err)
+    end
+    return payload
+end
+
+--- Decode all markers from a Sm2TiItemLockableBlob's FieldsBlob hex.
+-- Three-state result so the caller can distinguish "not a marker blob" (silent
+-- skip) from "marker blob that failed to parse" (worth surfacing).
+-- @param fields_blob_hex string: <FieldsBlob> hex (whitespace tolerated)
+-- @return table|nil: array of markers, or nil if not a marker blob (or failed)
+-- @return string|nil: error context when the blob WAS marker-shaped but
+--                     decompression or protobuf parse failed
+function M.decode_clip_markers(fields_blob_hex)
+    local payload, unwrap_err = unwrap_marker_blob(fields_blob_hex)
+    if unwrap_err then return nil, unwrap_err end
+    if not payload then return nil end
     return decode_marker_protobuf(payload)
 end
 

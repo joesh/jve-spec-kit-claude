@@ -83,74 +83,41 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
         # Cache the seed clip once per test (the fixture's clip set
         # doesn't shift across the test method). Re-seeded BEFORE each
         # press via _seed_state — alphabetical iteration plus stateful
         # commands (DeselectAll, SetMark, GoToStart, ...) would
         # otherwise drift the realistic-state baseline that L2 needs
         # to isolate each binding's dispatch from state pollution.
-        info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local Track = require('models.track'); "
-            "local rec_seq = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(rec_seq, 'record engine has no loaded sequence'); "
-            "local armed = {}; "
-            "for _, t in ipairs(Track.find_by_sequence(rec_seq)) do "
-            "  if t.track_type == 'VIDEO' and t.autoselect and not t.locked then "
-            "    armed[t.id] = true "
-            "  end "
-            "end; "
-            "local picked; "
-            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
-            "  if armed[c.track_id] and not c.is_gap "
-            "     and type(c.duration) == 'number' and c.duration > 48 then "
-            "    picked = c; break "
-            "  end "
-            "end; "
-            "assert(picked, 'fixture has no armed video clip with body'); "
-            "return string.format('%s|%s|%d', "
-            "  picked.id, rec_seq, picked.sequence_start + 24)")
-        clip_id, rec_seq, frame = info.strip('"').split("|", 2)
-        self._seed_clip_id = clip_id
-        self._seed_rec_seq = rec_seq
-        self._seed_frame = int(frame)
-        self._seed_project_id = self.eval_str(
-            "return require('core.command_manager').get_active_project_id()")
+        info = self.eval_str(
+            "return require('core.debug_helpers').first_armed_video_clip(48)")
+        assert info, "fixture has no armed video clip with body"
+        parts = info.split("|", 5)
+        self._seed_clip_id = parts[0]
+        self._seed_rec_seq = parts[4]
+        self._seed_frame = int(parts[2]) + 24
 
     def _seed_state(self) -> None:
         """Restore the per-press baseline: playhead inside the seed
-        clip + just that clip selected. Idempotent. SelectClips
+        clip + just that clip selected. Idempotent. Click-on-clip
         tolerates the cached id no longer existing (e.g., after an
-        earlier Delete press); the binding under test then dispatches
-        with an empty selection, which is itself a valid contract to
+        earlier Delete press) — click_clip would fail, so guard with
+        clip_exists; the binding under test then dispatches with an
+        empty selection, which is itself a valid contract to
         smoke-check."""
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{self._seed_rec_seq}', "
-            f"playhead_position={self._seed_frame} }})")
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ project_id='{self._seed_project_id}', "
-            f"sequence_id='{self._seed_rec_seq}', "
-            f"target_clip_ids={{'{self._seed_clip_id}'}} }})")
+        self.move_playhead_to(self._seed_frame)
+        still_there = self.eval_bool(
+            f"return require('core.debug_helpers').clip_exists('{self._seed_clip_id}')")
+        if still_there:
+            self.click_clip(self._seed_clip_id)
 
     def _unwind_press(self) -> None:
-        """Dispatch a single Undo via command_manager to roll back any
-        undoable mutation the press just made. No-op if the undo stack
-        is empty. Keeps the fixture clip-set intact across the loop so
-        later presses see a populated timeline."""
-        self.eval(
-            "local cm = require('core.command_manager'); "
-            "if cm.can_undo and cm.can_undo() then "
-            "  cm.execute('Undo', {}) "
-            "end")
+        """Press Cmd+Z to roll back any undoable mutation the press
+        just made. No-op if the undo stack is empty. Keeps the fixture
+        clip-set intact across the loop so later presses see a
+        populated timeline."""
+        self.key("Cmd+Z")
 
     # ── log scraping helpers ──────────────────────────────────────────
 
@@ -244,7 +211,12 @@ class TestKeymapDispatchNoCrash(JVESmokeCase):
                 "return require('core.keyboard_shortcut_registry')"
                 ".get_shortcut_fire_count()")
             try:
-                self.key(b.combo)
+                # L2 deliberately hammers EVERY keymap entry — most fire a
+                # command, but plenty (focus shifts, modal dismissals,
+                # already-at-end navigation) don't. The default barrier
+                # would wait 2 s × non-commanding presses = many minutes.
+                # We check command activity below via fire_count anyway.
+                self.key(b.combo, expect_command=False)
             except Exception as e:
                 failures.append(
                     f"  {b!r}: runner.key() raised before press completed: "

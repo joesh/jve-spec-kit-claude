@@ -36,56 +36,28 @@ class TestXMarksClipExtent(JVESmokeCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
 
     def test_x_sets_marks_to_spanning_clip_boundaries(self) -> None:
         info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local Track = require('models.track'); "
-            "local rec_seq = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(rec_seq, 'record engine has no loaded sequence'); "
-            "local armed = {}; "
-            "for _, t in ipairs(Track.find_by_sequence(rec_seq)) do "
-            "  if t.track_type == 'VIDEO' and t.autoselect and not t.locked then "
-            "    armed[t.id] = true "
-            "  end "
-            "end; "
-            "local picked; "
-            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
-            "  if armed[c.track_id] and not c.is_gap "
-            "     and type(c.duration) == 'number' and c.duration > 48 then "
-            "    picked = c; break "
-            "  end "
-            "end; "
-            "assert(picked, 'fixture has no armed video clip with body'); "
-            "return string.format('%s|%d|%d|%s', "
-            "  picked.id, picked.sequence_start, picked.duration, rec_seq)")
-        clip_id, seq_start_s, duration_s, rec_seq = info.strip('"').split("|", 3)
+            "return require('core.debug_helpers').first_armed_video_clip(49)")
+        raw = info.strip('"')
+        assert raw, "fixture has no armed video clip with body"
+        clip_id, _track_id, seq_start_s, duration_s, rec_seq = raw.split("|", 4)
         seq_start = int(seq_start_s)
         duration = int(duration_s)
 
-        # Park playhead well inside this clip.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{rec_seq}', "
-            f"playhead_position={seq_start + SEED_OFFSET_INTO_CLIP} }})")
+        # Park playhead well inside this clip via real ruler click.
+        self.move_playhead_to(seq_start + SEED_OFFSET_INTO_CLIP)
 
         # Clear marks beforehand so the press is observably setting
         # them, not happening to match prior state.
-        self.eval(
-            "require('core.command_manager').execute('ClearMarks', "
-            f"{{ sequence_id='{rec_seq}' }})")
+        self.focus_panel("timeline")
+        self.key("Alt+X")
         self.assertEqual(-1, self.eval_int(
             f"return (require('models.sequence').load('{rec_seq}').mark_in) or -1"),
-            "seed: ClearMarks must leave mark_in nil")
+            "seed: Alt+X (ClearMarks) must leave mark_in nil")
 
-        self.focus_panel("timeline")
         self.assertEvalEqual("timeline",
             'return require("ui.focus_manager").get_focused_panel()',
             msg="focus did not anchor on timeline before X press")

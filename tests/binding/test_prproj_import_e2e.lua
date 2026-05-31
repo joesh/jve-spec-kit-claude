@@ -27,20 +27,16 @@
 -- dedup / filter behavior is verified by other unit tests; this one
 -- checks the pipeline composes end-to-end.
 
-require("test_env")
+local test_env = require("test_env")
 
 local open_project = require("core.commands.open_project")
 local database = require("core.database")
 
 print("=== test_prproj_import_e2e.lua ===")
 
-local FIXTURE = "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/premiere/"
-    .. "2026-03-20-anamnesis joe edit.prproj"
+local FIXTURE = test_env.require_fixture(
+    "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj")
 local JVP_PATH = "/tmp/jve/test_prproj_import_e2e.jvp"
-
-local f = io.open(FIXTURE, "r")
-assert(f, "Missing fixture: " .. FIXTURE)
-f:close()
 
 os.execute("mkdir -p /tmp/jve")
 os.remove(JVP_PATH)

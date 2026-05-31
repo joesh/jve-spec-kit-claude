@@ -19,6 +19,10 @@
 // so qt_zstd_decompress (which requires a content-size-known frame) reads
 // the output back symmetrically.
 //
+// qt_zstd_compress's optional second arg is the zstd compression level
+// (1..22, default ZSTD_CLEVEL_DEFAULT = 3). Resolve's blobs are small so the
+// default is fine; left optional for future tuning.
+//
 // Errors (rather than aborts) because a malformed FieldsBlob should
 // surface to the Lua importer with actionable context (which clip / blob
 // failed), not crash the whole editor.

@@ -31,38 +31,19 @@ class TestFMatchFrame(JVESmokeCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
 
     def test_f_loads_clips_master_into_source_viewer(self) -> None:
         # Pick a clip with sufficient body. We need both its master id
         # (target of the load) and its sequence_start to seed playhead.
-        info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local rec_seq = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(rec_seq, 'record engine has no loaded sequence'); "
-            "local picked; "
-            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
-            "  if not c.is_gap "
-            "     and type(c.duration) == 'number' and c.duration > 48 "
-            "     and c.sequence_id and c.sequence_id ~= '' then "
-            "    picked = c; break "
-            "  end "
-            "end; "
-            "assert(picked, 'fixture has no clip with a master sequence_id'); "
-            "return string.format('%s|%d|%s|%s', "
-            "  picked.id, picked.sequence_start, picked.sequence_id, rec_seq)")
-        clip_id, seq_start, master_id, rec_seq = info.strip('"').split("|", 3)
+        info = self.eval_str(
+            "return require('core.debug_helpers').first_armed_video_clip(48)")
+        assert info, "fixture has no armed video clip with sufficient body"
+        clip_id, _track_id, seq_start, _duration, _rec_seq, master_id = (
+            info.split("|", 5))
         frame = int(seq_start) + SEED_OFFSET_INTO_CLIP
 
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{rec_seq}', playhead_position={frame} }})")
+        self.move_playhead_to(frame)
 
         self.focus_panel("timeline")
         self.assertEvalEqual("timeline",

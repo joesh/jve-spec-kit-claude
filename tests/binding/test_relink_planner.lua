@@ -32,8 +32,7 @@ local relink_planner = require("core.relink_planner")
 local pass_count = 0
 local function expect(label, cond, detail)
     if not cond then
-        io.stderr:write(string.format("FAIL: %s\n  detail: %s\n", label, tostring(detail)))
-        os.exit(1)
+        error(string.format("FAIL: %s — %s", label, tostring(detail)), 2)
     end
     pass_count = pass_count + 1
 end

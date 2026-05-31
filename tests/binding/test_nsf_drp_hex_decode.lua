@@ -22,7 +22,7 @@ local f = io.open(DRP_PATH, "r")
 if not f then
     print("  (skipping - fixture not available)")
     print("\n✅ test_nsf_drp_hex_decode.lua passed (no fixture)")
-    os.exit(0)
+    return
 end
 f:close()
 

@@ -41,12 +41,7 @@ class TestAltIOXClearMarks(JVESmokeCase):
         super().setUp()
         # Anchor on the record tab so the displayed sequence is the
         # record sequence and the ClearMark dispatch lands there.
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
         self._rec_seq = self.eval_str(
             "local sid = require('core.playback.transport')"
             ".record_engine.loaded_sequence_id; "
@@ -57,26 +52,35 @@ class TestAltIOXClearMarks(JVESmokeCase):
             ".start_timecode_frame")
 
     def _seed_both_marks(self) -> tuple[int, int]:
-        """Returns (expected_mark_in_in_db, expected_mark_out_in_db).
-        SetMarkOut stores frame+1 (inclusive→exclusive convention per
-        set_marks.lua header). The expected DB values reflect that."""
+        """Seeds mark_in and mark_out via real I/O keypresses at distinct
+        playhead positions. Returns (expected_mark_in_in_db,
+        expected_mark_out_in_db). SetMarkOut stores frame+1
+        (inclusive→exclusive convention per set_marks.lua header). The
+        expected DB values reflect that."""
         in_inclusive = self._start + MARK_IN_OFFSET
         out_inclusive = self._start + MARK_OUT_OFFSET
-        self.eval(
-            "require('core.command_manager').execute('SetMarkIn', "
-            f"{{ sequence_id='{self._rec_seq}', frame={in_inclusive} }})")
-        self.eval(
-            "require('core.command_manager').execute('SetMarkOut', "
-            f"{{ sequence_id='{self._rec_seq}', frame={out_inclusive} }})")
+
+        # Seed mark_in: position playhead, focus timeline, press I.
+        self.move_playhead_to(in_inclusive)
+        self.focus_panel("timeline")
+        self.key("I")
+
+        # Seed mark_out: position playhead, focus timeline, press O.
+        self.move_playhead_to(out_inclusive)
+        self.focus_panel("timeline")
+        self.key("O")
+
         return in_inclusive, out_inclusive + 1
 
     def _marks(self) -> tuple[object, object]:
         # Returns (mark_in, mark_out); each is int or None ("nil" → -1
-        # sentinel → mapped to None).
+        # sentinel → mapped to None). Reads display marks via
+        # debug_helpers — displayed tab is the record tab (anchored in
+        # setUp), so display marks == record sequence marks.
         raw_in = self.eval_int(
-            f"return (require('models.sequence').load('{self._rec_seq}').mark_in) or -1")
+            "return (require('core.debug_helpers').mark_in()) or -1")
         raw_out = self.eval_int(
-            f"return (require('models.sequence').load('{self._rec_seq}').mark_out) or -1")
+            "return (require('core.debug_helpers').mark_out()) or -1")
         return (None if raw_in == -1 else raw_in,
                 None if raw_out == -1 else raw_out)
 

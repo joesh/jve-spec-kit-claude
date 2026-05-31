@@ -9,11 +9,10 @@ require("test_env")
 -- value survives.
 --
 -- Expected values come from NLE/timecode/format domain rules — NTSC rates,
--- timecode math, retime semantics — NEVER by tracing the encoder. The encoder
--- does not exist yet; this test MUST fail at `require` until T006 lands.
+-- timecode math, retime semantics — NEVER by tracing the encoder.
 -- =============================================================================
 
-local enc = require("exporters.drt_binary")   -- T006 — does not exist yet (TDD: FAIL here)
+local enc = require("exporters.drt_binary")
 local dec = require("importers.drp_binary")
 
 -- IEEE-754 doubles reconstructed by the pure-Lua decoder can differ from the

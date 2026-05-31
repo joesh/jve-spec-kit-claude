@@ -45,6 +45,30 @@ DEFAULT_SOCKET = "/tmp/jve_smoke.sock"
 _DEFAULT_EVAL_TIMEOUT = "30" if os.environ.get("JVE_SMOKE_IN_VM") else "5"
 EVAL_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_EVAL_TIMEOUT", _DEFAULT_EVAL_TIMEOUT))
 STARTUP_TIMEOUT_S = float(os.environ.get("JVE_SMOKE_STARTUP_TIMEOUT", "20"))
+
+# cliclick (Homebrew: `brew install cliclick`) replaces osascript for mouse
+# clicks. osascript routes through the System Events daemon which blocks
+# waiting for the app to ack the click — that ack-wait hangs when JVE is
+# mid-command, producing multi-second timeouts. cliclick posts the CGEvent
+# directly and returns. /opt/homebrew on Apple Silicon, /usr/local on
+# Intel — pick whichever exists. NSF: fail loudly at module-load time if
+# neither exists rather than at the first click().
+def _resolve_cliclick() -> str:
+    override = os.environ.get("JVE_SMOKE_CLICLICK")
+    candidates = [override] if override else [
+        "/opt/homebrew/bin/cliclick",
+        "/usr/local/bin/cliclick",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    raise RuntimeError(
+        "cliclick not found. Install with `brew install cliclick` or set "
+        "JVE_SMOKE_CLICLICK to the absolute path. The smoke harness uses "
+        "it for OS-level mouse clicks because the osascript path hangs "
+        "waiting for System Events to ack-deliver when JVE is mid-command.")
+
+CLICLICK_BINARY = _resolve_cliclick()
 PROMPT = b"jve> "
 
 
@@ -113,6 +137,7 @@ class JVERunner:
         self._wait_for_socket()
         self._connect()
         self._drain_initial_prompt()
+        self._wait_for_layout_settle()
 
     def shutdown(self) -> None:
         """Close the socket, terminate JVE, unlink the socket file."""
@@ -330,7 +355,7 @@ class JVERunner:
         subprocess.run(["osascript", "-e", script],
                        capture_output=True, timeout=5)
 
-    def key(self, combo: str) -> None:
+    def key(self, combo: str, expect_command: bool = True) -> None:
         """Deliver a single key press via osascript / System Events.
 
         ``combo`` is the same syntax as keymaps/default.jvekeys —
@@ -366,6 +391,7 @@ class JVERunner:
         Accessibility permission. Without it macOS returns error
         ``1002``; surfaced as ``JVERunnerError`` with the fix location.
         """
+        snap = self.get_command_count()
         keystroke = _combo_to_osascript_keystroke(combo)
         result = subprocess.run(
             ["osascript", "-e",
@@ -380,23 +406,251 @@ class JVERunner:
                 f"  grant the parent process (Terminal / iTerm / your IDE)\n"
                 f"  permission in System Settings → Privacy & Security →\n"
                 f"  Accessibility.")
-        # Settle — let Qt's event loop pick up the key + dispatch the
-        # QShortcut + run the Lua handler before the next eval.
-        time.sleep(0.05)
+        # Joe contract: every UI keypress provokes a command 1:1. Block
+        # until the command commits before returning, so the next eval
+        # reads post-command state. If the press is lost / lands in
+        # another app / fires no command, surface that loudly rather
+        # than silently racing the next assertion.
+        #
+        # Opt-out: ``expect_command=False`` for inputs that intentionally
+        # don't reach JVE — keystrokes typed INTO a frontmost macOS
+        # native dialog (NSOpenPanel "Go to folder" prompt, type the
+        # path, Return). The OS dialog consumes the key; JVE never sees
+        # it and no command fires. Callers using that path are
+        # responsible for their own wait-for-result polling (e.g.,
+        # ``pick_file_in_open_dialog`` polls for the dialog to close).
+        if expect_command:
+            self.wait_for_command_after(snap)
 
-    def click(self, x: int, y: int, double: bool = False) -> None:
-        """Mouse click at absolute screen coords via osascript / System Events.
+    def click(self, x: int, y: int, double: bool = False, right: bool = False) -> None:
+        """Mouse click at absolute screen coords via cliclick (CGEventPost).
 
-        Note: System Events click coordinates are screen-relative. Tests
-        that need widget-relative coords should query JVE via the socket
-        for the widget's frame first.
+        Why cliclick and not ``osascript -e 'tell System Events to click ...'``:
+        osascript routes through the System Events daemon, which posts
+        the CGEvent and then BLOCKS waiting for the frontmost app to
+        acknowledge the click. When JVE is mid-command (which our
+        command-completion barrier makes the common case immediately
+        after the prior key/click commits), the ack stalls and osascript
+        times out. Pre-barrier vm6: 0 osascript timeouts. Post-barrier
+        vm10: 72 × 5s timeouts on click = ~360s wasted wall time.
+
+        cliclick uses ``CGEventCreateMouseEvent`` + ``CGEventPost`` —
+        the click is dropped into the HID event queue and returns
+        immediately. No daemon, no ack-wait, no hang. Latency ~5ms.
+
+        Coordinates are absolute screen coords (same as the osascript
+        path was). Both forms use the same screen pixel grid.
         """
-        kind = "double click" if double else "click"
+        if double:
+            verb = "dc"
+        elif right:
+            verb = "rc"
+        else:
+            verb = "c"
+        subprocess.run(
+            [CLICLICK_BINARY, f"{verb}:{x},{y}"],
+            check=True, capture_output=True, timeout=5)
+
+    # ─── higher-level user-input helpers ──────────────────────────────
+
+    def type_text(self, s: str) -> None:
+        """Type a string via osascript keystroke. Slow (one osascript
+        per character); avoid for >100 chars."""
+        if not s:
+            return
+        # Escape backslashes and double-quotes for the AppleScript literal.
+        escaped = s.replace("\\", "\\\\").replace('"', '\\"')
         subprocess.run(
             ["osascript", "-e",
-             f'tell application "System Events" to {kind} at {{{x}, {y}}}'],
-            check=True, capture_output=True, timeout=5)
+             f'tell application "System Events" to keystroke "{escaped}"'],
+            check=True, capture_output=True, timeout=10)
         time.sleep(0.05)
+
+    def menu_pick(self, path: str) -> None:
+        """Click a menu item via the system menu bar. ``path`` is
+        ``"Menu > Submenu > Item"`` syntax matching menus.xml.
+
+        Example: ``runner.menu_pick("File > Import > Resolve Project (.drp)...")``
+
+        Uses osascript to walk the menu bar of the JVE process. Fails
+        loudly with the AppleScript error if the menu path doesn't exist
+        — typo in the path is the most common cause.
+        """
+        if self._proc is None:
+            raise JVERunnerError("menu_pick: process not started")
+        parts = [p.strip() for p in path.split(">")]
+        if len(parts) < 2:
+            raise ValueError(
+                f"menu_pick: path must include at least 'Menu > Item' "
+                f"(got {path!r})")
+        pid = self._proc.pid
+        top, *intermediates, leaf = parts
+        # Build the AppleScript menu reference inside-out. macOS Accessibility
+        # models a menu like so:
+        #   menu bar 1
+        #     menu bar item "File"                  <- top-level entry
+        #       menu "File"                         <- the dropdown
+        #         menu item "Import"                <- a submenu's parent item
+        #           menu "Import"                   <- the submenu (same name)
+        #             menu item "FCP7 XML..."       <- leaf
+        # So each intermediate name appears TWICE: as a menu item inside its
+        # parent menu, and as the wrapping menu of the same name. The leaf is
+        # `menu item "<leaf>" of menu "<inner>" of menu item "<inner>" of …`.
+        menu_chain = []
+        for name in intermediates:
+            menu_chain.append(f'menu "{name}" of menu item "{name}"')
+        menu_chain.append(f'menu "{top}"')
+        menu_chain.append(f'menu bar item "{top}" of menu bar 1')
+        menu_ref = " of ".join(menu_chain)
+        script = (
+            f'tell application "System Events" to tell '
+            f'(first process whose unix id is {pid}) to '
+            f'click menu item "{leaf}" of {menu_ref}'
+        )
+        result = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, timeout=10)
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="replace").strip()
+            raise JVERunnerError(
+                f"menu_pick({path!r}) failed: {stderr}\n"
+                f"  Likely cause: typo in menu path, or menu hasn't been\n"
+                f"  built yet. Check src/lua/ui/menus.xml for the exact\n"
+                f"  menu/item names.")
+        # Settle — menu click dispatch + downstream command + UI update.
+        time.sleep(0.2)
+
+    def pick_file_in_open_dialog(self, path: str, timeout: float = 8.0) -> None:
+        """Drive a frontmost NSOpenPanel via Cmd+Shift+G → type path → Return.
+
+        Must be called RIGHT AFTER triggering an Open / Import menu item
+        that opens a file-picker sheet. Polling: waits briefly for the
+        sheet to appear (cold app open is slower than warm), then sends
+        Cmd+Shift+G (opens the path entry), types the path, presses
+        Return to commit, then Return again on the dialog's Open button.
+
+        Tests that don't need a real file dialog should not call this —
+        the importer command can be triggered directly via the menu, but
+        the dialog must close before any post-import eval will succeed.
+        """
+        if not path:
+            raise ValueError("pick_file_in_open_dialog: path required")
+        # Settle: let the sheet attach to the main window.
+        time.sleep(0.4)
+        # Cmd+Shift+G opens the "Go to folder" prompt.
+        # Dialog keys go to NSOpenPanel — JVE never sees them, no
+        # command fires. Bypass the command barrier; we poll for the
+        # dialog to close below.
+        self.key("Cmd+Shift+G", expect_command=False)
+        time.sleep(0.2)
+        self.type_text(path)
+        time.sleep(0.1)
+        # Commit path entry.
+        self.key("Return", expect_command=False)
+        # Empirical: NSOpenPanel needs a noticeable beat after the
+        # "Go to folder" prompt dismisses + file selection updates,
+        # before the dialog's default-button (Open) is wired to Return.
+        # 0.3s raced the prompt-dismiss animation on the VM and the
+        # second Return became a no-op, leaving the dialog hung with
+        # the right file selected. 0.6s holds.
+        time.sleep(0.6)
+        # Confirm selection (presses default button = Open). The final
+        # Return DOES dismiss the dialog and trigger an importer/open
+        # command on the JVE side, but the command may take longer than
+        # the 2s barrier (large project loads), so we still skip the
+        # barrier here and rely on the post-dialog responsiveness poll.
+        self.key("Return", expect_command=False)
+        # Wait for dialog to close — there is no signal we can poll
+        # cleanly from outside, so block on a settle window. Importers
+        # tend to take noticeable wall time; the caller should follow
+        # with a wait_for() on the expected post-state.
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            time.sleep(0.1)
+            try:
+                # If JVE is responsive, the modal sheet is closed.
+                self.eval("return 1")
+                return
+            except (JVERunnerError, JVEEvalError):
+                continue
+        raise JVERunnerError(
+            f"pick_file_in_open_dialog: JVE did not respond within "
+            f"{timeout}s after dialog Return — see {self.stdout_log}")
+
+    def get_command_count(self) -> int:
+        """Snapshot the top-level command-event counter.
+
+        Each completed user-visible command (SelectClips from a click,
+        ToggleClipEnabled from D, Delete, undo via Cmd+Z, etc.) bumps
+        this once. Smoke harness uses this to barrier "UI action → command
+        done" 1:1 — see ``wait_for_command_after`` below.
+        """
+        return self.eval_int(
+            "return require('core.command_manager').get_top_level_event_count()")
+
+    def wait_for_command_after(self, snap: int, timeout: float = 0.5) -> None:
+        """Block until the top-level command-event counter exceeds ``snap``.
+
+        Joe's contract (2026-05-29): every UI action provokes a command
+        1:1; once the root command completes, the UI is ready for the
+        next action. ``click()`` / ``key()`` call this immediately after
+        posting the OS input so the next eval reads post-command state,
+        not racing in-flight dispatch.
+
+        Event-driven: a single socket request ``WAIT_BUMP <snap>
+        <timeout_ms>`` whose reply is DEFERRED inside JVE until the next
+        ``end_command_event``/``undo_interactive``/``redo_interactive``
+        bumps the counter past ``snap`` (or a Qt timer fires for
+        timeout). JVE's main event loop runs normally during the wait;
+        neither side polls or spins. Replies arrive on the same socket
+        Python is reading from, so this is one read for one write.
+
+        Raises if no command bumped the counter within ``timeout`` — that
+        means the UI action was lost (osascript dropped it, JVE wasn't
+        frontmost, click landed off-target) or the action genuinely
+        doesn't fire a command (selection on empty area, focus shift).
+        Callers that send non-commanding input should not barrier.
+        """
+        timeout_ms = max(1, int(timeout * 1000))
+        # WAIT_BUMP is a dedicated protocol verb (NOT a Lua expression).
+        # debug_terminal.cpp::handleLine routes it to handleWaitBump,
+        # which checks the counter immediately and either replies
+        # ("true,<count>") or defers the reply via a single-shot QTimer
+        # and the Lua-side bump callback. Either way exactly one line
+        # comes back, the same shape every eval reads.
+        reply = self.eval(f"WAIT_BUMP {snap} {timeout_ms}")
+        ok_str, _, count_str = reply.partition(",")
+        if ok_str != "true":
+            raise JVERunnerError(
+                f"wait_for_command_after: no command completed within {timeout}s "
+                f"after the input (snap={snap}, current={count_str}). "
+                f"The keystroke/click was lost OR did not provoke a command. "
+                f"If the action is non-commanding, use the raw click/key path.")
+
+    def wait_for(self, lua_predicate: str, timeout: float = 5.0,
+                 poll_interval: float = 0.1) -> None:
+        """Poll ``eval_bool(lua_predicate)`` until true or timeout.
+
+        Raises JVERunnerError on timeout, with the last predicate value
+        captured for diagnosis.
+        """
+        deadline = time.monotonic() + timeout
+        last_val = None
+        last_err = None
+        while time.monotonic() < deadline:
+            try:
+                last_val = self.eval_bool(lua_predicate)
+                if last_val:
+                    return
+            except (JVERunnerError, JVEEvalError) as e:
+                last_err = e
+            time.sleep(poll_interval)
+        if last_err is not None:
+            raise JVERunnerError(
+                f"wait_for: predicate raised within {timeout}s: {last_err}\n"
+                f"  predicate: {lua_predicate}")
+        raise JVERunnerError(
+            f"wait_for: predicate never true within {timeout}s "
+            f"(last value: {last_val})\n  predicate: {lua_predicate}")
 
     # ─── internals ─────────────────────────────────────────────────────
 
@@ -414,6 +668,45 @@ class JVERunner:
         raise JVERunnerError(
             f"JVE did not create socket {self.socket_path} within "
             f"{STARTUP_TIMEOUT_S}s — see {self.stdout_log}")
+
+    def _wait_for_layout_settle(self) -> None:
+        """Block until the JVE main window has finished its initial layout
+        pass. The socket file appears before Qt completes the first paint
+        + layout pass — on the VM that gap is ~100 ms during which the
+        video panel widget shifts ~48 px down once. A click_clip()
+        computed during the pre-jump window lands off the clip after the
+        shift, with no clean detection from inside the test.
+
+        Polls `video_widget`'s global Y until two consecutive 50 ms
+        samples agree, then returns. Fails loudly on timeout (Qt didn't
+        settle within ~3 s — symptom of a deeper layout bug).
+        """
+        deadline = time.monotonic() + 3.0
+        prev_y = None
+        stable_samples = 0
+        while time.monotonic() < deadline:
+            try:
+                y = int(self.eval(
+                    "local qc = require('core.qt_constants'); "
+                    "local tp = require('ui.timeline.timeline_panel'); "
+                    "if not tp.video_widget then return -1 end; "
+                    "local _, gy = qc.WIDGET.MAP_TO_GLOBAL(tp.video_widget, 0, 0); "
+                    "return gy or -1").strip())
+            except (JVERunnerError, JVEEvalError):
+                time.sleep(0.05)
+                continue
+            if y >= 0 and y == prev_y:
+                stable_samples += 1
+                if stable_samples >= 2:
+                    return
+            else:
+                stable_samples = 0
+                prev_y = y
+            time.sleep(0.05)
+        raise JVERunnerError(
+            "JVE main window layout did not stabilize within 3 s after "
+            "socket connect. video_widget global Y kept changing. Symptom "
+            "of a deeper layout bug — see stdout_log.")
 
     def _connect(self) -> None:
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -592,10 +885,15 @@ class Fixtures:
         self.scratch_root.mkdir(parents=True, exist_ok=True)
         self.template_path = self.scratch_root / "template.jvp"
 
-    def fresh_copy(self, test_id: str) -> Path:
-        """Return a writable .jvp copy named after the test id."""
-        # Slugify the test id (pytest gives "module.py::Class::test" form).
-        slug = test_id.replace("/", "_").replace(":", "_").replace(".", "_")
+    def fresh_copy(self, name_or_id: str) -> Path:
+        """Return a writable .jvp copy of the Anamnesis template, named ``name_or_id``.
+
+        Per Joe's 2026-05-30 directive, all smokes operate on a copy of
+        the anamnesis-derived template (rich real-world project with
+        media + clips + sequences). No blank-fixture variant — the
+        anamnesis project has plenty of substrate for any test.
+        """
+        slug = name_or_id.replace("/", "_").replace(":", "_").replace(".", "_")
         dst = self.scratch_root / f"{slug}.jvp"
         for suffix in ("", "-wal", "-shm"):
             p = Path(str(dst) + suffix)

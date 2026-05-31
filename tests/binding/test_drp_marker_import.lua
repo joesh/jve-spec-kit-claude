@@ -11,17 +11,14 @@
 -- clip ("countdown_chirp_30s.mp4"); `.truth.json` records exactly what was
 -- entered.
 --
--- Run: ./build/bin/jve.app/Contents/MacOS/jve --test tests/test_drp_marker_import.lua
-require("test_env")
+-- Run: ./build/bin/jve.app/Contents/MacOS/jve --test tests/binding/test_drp_marker_import.lua
+local test_env = require("test_env")
 local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
 local dkjson = require("dkjson")
 
-local function fixture_dir()
-    return (debug.getinfo(1, "S").source:match("@(.*/)") or "./") .. "fixtures/resolve/"
-end
-local FIXTURE = fixture_dir() .. "markers_16color_edge.drp"
-local TRUTH = fixture_dir() .. "markers_16color_edge.truth.json"
+local FIXTURE = test_env.require_fixture("tests/fixtures/resolve/markers_16color_edge.drp")
+local TRUTH   = test_env.require_fixture("tests/fixtures/resolve/markers_16color_edge.truth.json")
 
 -- ── Import the DRP into a scratch project DB ────────────────────────────
 -- Bootstrap mirrors tests/binding/test_import_resolve_drp.lua exactly.

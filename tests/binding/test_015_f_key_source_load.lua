@@ -228,7 +228,6 @@ print("")
 if #failures == 0 then
     print("✅ test_015_f_key_source_load passed")
 else
-    print(string.format("❌ test_015_f_key_source_load FAILED — %d behavior(s) broken:", #failures))
-    for _, f in ipairs(failures) do print("    - " .. f) end
-    os.exit(1)
+    error(string.format("test_015_f_key_source_load: %d behavior(s) broken: %s",
+        #failures, table.concat(failures, "; ")))
 end

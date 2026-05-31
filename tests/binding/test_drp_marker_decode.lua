@@ -9,17 +9,12 @@
 -- empty custom data). The companion `.truth.json` records exactly what was
 -- entered. We assert recovered == entered.
 
-require("test_env")
+local test_env = require("test_env")
 local drp_binary = require("importers.drp_binary")
 local dkjson = require("dkjson")
 
-assert(type(qt_zstd_decompress) == "function",
-    "this test needs C++ bindings — run with: jve --test tests/test_drp_marker_decode.lua")
-
-local FIXTURE_DIR = assert(os.getenv("JVE_REPO"),
-    "set JVE_REPO to the repo root") .. "/tests/fixtures/resolve/"
-local DRP = FIXTURE_DIR .. "markers_16color_edge.drp"
-local TRUTH = FIXTURE_DIR .. "markers_16color_edge.truth.json"
+local DRP   = test_env.require_fixture("tests/fixtures/resolve/markers_16color_edge.drp")
+local TRUTH = test_env.require_fixture("tests/fixtures/resolve/markers_16color_edge.truth.json")
 
 -- Read a single entry from a .drp (ZIP) via `unzip -p` — the same mechanism
 -- the importer uses; avoids needing a Lua zip module.

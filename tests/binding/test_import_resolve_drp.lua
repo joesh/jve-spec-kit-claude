@@ -8,11 +8,11 @@ local drp_importer = require("importers.drp_importer")
 local database = require("core.database")
 local command_manager = require("core.command_manager")
 local Command = require("command")
+local blank_project = require("helpers.blank_project")
 
 local function assert_true(label, value)
     if not value then
-        io.stderr:write(label .. " failed\n")
-        os.exit(1)
+        error(label .. " failed", 2)
     end
 end
 
@@ -56,42 +56,17 @@ assert_true("track clips", type(track.clips) == "table" and #track.clips > 0)
 local clip = track.clips[1]
 assert_true("clip duration", clip.duration ~= nil)
 
--- Execute full command pipeline against a scratch database
-local TEST_DB = "/tmp/jve/test_import_resolve_drp.db"
-os.remove(TEST_DB)
-database.init(TEST_DB)
-local db = database.get_connection()
-assert_true("db connection", db ~= nil)
-
--- Bootstrap schema using import_schema helper
-local schema_sql = require('import_schema')
-assert_true("schema creation", db:exec(schema_sql))
-
--- Add initial project data
-local bootstrap_ok = db:exec([[
-    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
-    VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
-]])
-assert_true("bootstrap project", bootstrap_ok)
-
--- Add default sequence
-local seq_ok, seq_err = db:exec([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('default_sequence', 'default_project', 'Default Timeline', 'sequence', 30, 1, 48000, 1920, 1080, 0, 0);
-]])
-if not seq_ok then
-    io.stderr:write("Bootstrap sequence error: " .. tostring(seq_err) .. "\n")
-    os.exit(1)
-end
-
-command_manager.init('default_sequence', 'default_project')
+-- Open a fresh project via the real OpenProject lifecycle so the .jvp is
+-- non-empty (one default project + sequence from the template) — the
+-- precondition needed to exercise ImportResolveProject's refusal path.
+local info = blank_project.open_fresh("/tmp/jve/test_import_resolve_drp.jvp")
 
 -- ImportResolveProject must REFUSE to run against a non-empty .jvp:
 -- first-open of a .drp goes through OpenProject's convert path, which
 -- writes a fresh single-project .jvp; this executor is reserved for
--- the genuinely-empty-DB case. The bootstrap above seeded one project,
+-- the genuinely-empty-DB case. The template above seeded one project,
 -- so the assertion in the executor must fire.
-local cmd = Command.create("ImportResolveProject", "default_project")
+local cmd = Command.create("ImportResolveProject", info.project_id)
 cmd:set_parameter("drp_path", fixture_path)
 cmd:set_parameter("audio_sample_rate", 48000)
 
@@ -104,6 +79,7 @@ assert_true(
     tostring(exec_result.error_message or "")
         :find("refuses to import into a non-empty .jvp", 1, true) ~= nil)
 
+local db = database.get_connection()
 local project_count = scalar(db, "SELECT COUNT(*) FROM projects")
 assert_true("project count unchanged after refusal", project_count == 1)
 
@@ -115,6 +91,5 @@ assert_true("project count unchanged after refusal", project_count == 1)
 -- Don't duplicate that coverage here; this file pins the command-layer
 -- contract (parse → refuse-non-empty), not the importer's output shape.
 
-os.remove(TEST_DB)
-
+blank_project.cleanup("/tmp/jve/test_import_resolve_drp.jvp")
 print("✅ Resolve .drp importer + command test passed")

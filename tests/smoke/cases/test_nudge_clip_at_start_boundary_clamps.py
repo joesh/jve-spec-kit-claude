@@ -55,10 +55,7 @@ class TestNudgeBoundaryClamp(JVESmokeCase):
             "error('no clip at sequence.start_timecode_frame — fixture cannot "
             "exercise the boundary case')")
 
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ sequence_id='{seq_id}', "
-            f"target_clip_ids = {{ '{boundary_clip_id}' }} }})")
+        self.click_clip(boundary_clip_id)
 
         self.focus_panel("timeline")
         self.key("Comma")

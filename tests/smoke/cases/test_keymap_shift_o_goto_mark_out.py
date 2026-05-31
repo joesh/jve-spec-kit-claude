@@ -48,12 +48,14 @@ class TestShiftOGoesToMarkOut(JVESmokeCase):
         expected_seek_target = mark_out_inclusive  # GoToMark out lands here
         playhead_before = start + START_PLAYHEAD_OFFSET
 
-        self.eval(
-            "require('core.command_manager').execute('SetMarkOut', "
-            f"{{ sequence_id='{seq_id}', frame={mark_out_inclusive} }})")
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={playhead_before} }})")
+        # Stage mark_out via canonical I/O: position playhead at the
+        # inclusive out-frame, press 'O'. SetMarkOut stores frame+1
+        # (exclusive boundary).
+        self.focus_panel("timeline")
+        self.move_playhead_to(mark_out_inclusive)
+        self.key("O")
+        # Move playhead somewhere else before the Shift+O press.
+        self.move_playhead_to(playhead_before)
 
         # Sanity stage.
         stored_mark_out = self.eval_int(

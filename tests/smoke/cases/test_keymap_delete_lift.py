@@ -40,54 +40,23 @@ class TestDeleteLiftsSelectedClip(JVESmokeCase):
 
     def setUp(self) -> None:
         super().setUp()
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  if active then ts.switch_to_record_tab(active) end "
-            "end")
+        self.ensure_record_tab()
 
     def _pick_and_select_clip(self) -> str:
         """Pick an armed video clip, select it, seed playhead inside.
         Returns the clip id."""
-        info = self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "local Track = require('models.track'); "
-            "local rec_seq = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(rec_seq, 'record engine has no loaded sequence'); "
-            "local armed = {}; "
-            "for _, t in ipairs(Track.find_by_sequence(rec_seq)) do "
-            "  if t.track_type == 'VIDEO' and t.autoselect and not t.locked then "
-            "    armed[t.id] = true "
-            "  end "
-            "end; "
-            "local picked; "
-            "for _, c in ipairs(ts.get_tab_strip():displayed_clips()) do "
-            "  if armed[c.track_id] and not c.is_gap "
-            "     and type(c.duration) == 'number' and c.duration > 48 then "
-            "    picked = c; break "
-            "  end "
-            "end; "
-            "assert(picked, 'fixture has no armed video clip with body'); "
-            "return string.format('%s|%d|%s', "
-            "  picked.id, picked.sequence_start, rec_seq)")
-        clip_id, seq_start_s, rec_seq = info.strip('"').split("|", 2)
-        proj = self.eval_str(
-            "return require('core.command_manager').get_active_project_id()")
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ project_id='{proj}', sequence_id='{rec_seq}', "
-            f"target_clip_ids={{'{clip_id}'}} }})")
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{rec_seq}', "
-            f"playhead_position={int(seq_start_s) + SEED_OFFSET_INTO_CLIP} }})")
+        info = self.eval_str(
+            "return require('core.debug_helpers').first_armed_video_clip(48)")
+        assert info, "fixture has no armed video clip with body"
+        clip_id, _track_id, seq_start_s, _duration, _rec_seq, _master = (
+            info.split("|", 5))
+        self.move_playhead_to(int(seq_start_s) + SEED_OFFSET_INTO_CLIP)
+        self.click_clip(clip_id)
         return clip_id
 
     def _clip_exists(self, clip_id: str) -> bool:
         return self.eval_bool(
-            f"return require('models.clip').load_optional('{clip_id}') ~= nil")
+            f"return require('core.debug_helpers').clip_exists('{clip_id}')")
 
     def _press(self, combo: str) -> None:
         self.focus_panel("timeline")

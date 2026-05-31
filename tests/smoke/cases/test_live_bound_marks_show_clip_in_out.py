@@ -43,28 +43,38 @@ class TestLiveBoundMarksShowClipInOut(JVESmokeCase):
             "       'record engine has no loaded sequence — fixture broken'); "
             "return sid")
 
-        # Pick any interior media clip with non-zero source range.
+        # Pick any interior media clip with non-zero source range, plus
+        # an interior frame to park the playhead on before Shift+F.
         info = self.eval(
             "local clips = require('ui.timeline.timeline_state').get_tab_strip():displayed_clips(); "
             "for _, c in ipairs(clips) do "
             "  if not c.is_gap "
             "     and type(c.source_in) == 'number' "
             "     and type(c.source_out) == 'number' "
-            "     and c.source_out > c.source_in then "
-            "    return string.format('%s|%d|%d', c.id, c.source_in, c.source_out) "
+            "     and c.source_out > c.source_in "
+            "     and c.duration >= 10 then "
+            "    return string.format('%s|%d|%d|%d', c.id, c.source_in, c.source_out, c.sequence_start + 5) "
             "  end "
             "end; "
-            "error('no media clip with valid source range in fixture')")
-        clip_id, src_in_str, src_out_str = info.strip('"').split('|', 2)
+            "error('no media clip with valid source range and duration >= 10 in fixture')")
+        clip_id, src_in_str, src_out_str, mid_frame_str = info.strip('"').split('|', 3)
         expected_in = int(src_in_str)
         expected_out = int(src_out_str)
+        mid_frame = int(mid_frame_str)
 
-        # Load the clip in live-bound mode.
-        self.eval(
-            f"require('ui.source_viewer').load_clip('{clip_id}')")
+        # Park playhead inside the chosen clip, then load it into the
+        # source viewer in live-bound mode via the canonical Shift+F
+        # binding (mirrors the user action that triggers this display
+        # path).
+        self.move_playhead_to(mid_frame)
+        self.focus_panel("timeline")
+        self.key("Shift+F")
         self.assertEqual("live_bound_clip", self.eval_str(
             "return tostring(require('ui.source_viewer').get_mode())"),
-            "setUp: load_clip didn't enter live_bound_clip mode")
+            "setUp: Shift+F didn't enter live_bound_clip mode")
+        self.assertEqual(clip_id, self.eval_str(
+            "return tostring(require('ui.source_viewer').get_live_clip_id())"),
+            "setUp: Shift+F loaded a different clip than the one under playhead")
 
         # ── Source monitor's mark bar (sequence_monitor.lua:472 consumes
         #    get_mark_in/get_mark_out into the bar widget). ──

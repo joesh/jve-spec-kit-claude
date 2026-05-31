@@ -45,9 +45,7 @@ class TestOKeySetsMarkOut(JVESmokeCase):
             + seq_id + "').start_timecode_frame")
         target = start + SEED_OFFSET_FROM_START
 
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={target} }})")
+        self.move_playhead_to(target)
 
         engine_pos = self.eval_int(
             "return require('core.playback.transport')"

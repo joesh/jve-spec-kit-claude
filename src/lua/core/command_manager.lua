@@ -159,6 +159,25 @@ function M.peek_command_event_origin()
     return command_event_origin
 end
 
+-- Monotonic counter of completed top-level command events. Bumps once per
+-- outermost begin/end pair (regardless of how many nested executes run
+-- inside) and once per undo/redo. Smoke harness reads it via
+-- M.get_top_level_event_count() to barrier "UI action → command done" 1:1.
+-- Declared here (before end_command_event) so the function captures the
+-- local upvalue rather than escaping to the global namespace.
+local top_level_event_count = 0
+
+-- Fire the debug-terminal's bump notifier (if present) so a parked
+-- WAIT_BUMP can resolve immediately. Registered as a Lua global by
+-- src/debug_terminal.cpp::DebugTerminal::start() when the terminal is
+-- enabled. nil in production builds — the if-check is the entire gate.
+-- Declared here so the bump sites below (which call it) see the local
+-- upvalue, not a missing global.
+local function notify_top_level_event_listener()
+    if _G._jve_on_top_level_event then
+        _G._jve_on_top_level_event(top_level_event_count)
+    end
+end
 
 function M.begin_command_event(origin)
     if command_event_origin and command_event_depth > 0 then
@@ -180,6 +199,15 @@ function M.end_command_event()
     command_event_depth = command_event_depth - 1
     if command_event_depth == 0 then
         command_event_origin = nil
+        -- Bump on the trailing edge of every top-level command event.
+        -- The smoke harness reads this via M.get_top_level_event_count()
+        -- to synchronize "UI action → command completes" 1:1 (no more
+        -- racing keypresses against in-flight clicks). One bump per
+        -- user-visible action (click → SelectClips, key → Toggle/Delete/
+        -- Insert/etc.); nested executes don't bump because they re-use
+        -- the same outer event.
+        top_level_event_count = top_level_event_count + 1
+        notify_top_level_event_listener()
     end
     return true
 end
@@ -203,6 +231,10 @@ local active_project_id = nil
 -- Undo/redo context flag - when true, UI state persistence should be skipped
 -- to avoid executing new commands during undo/redo operations
 local undo_redo_in_progress = false
+
+function M.get_top_level_event_count()
+    return top_level_event_count
+end
 
 function M.is_undo_redo_in_progress()
     return undo_redo_in_progress
@@ -2726,11 +2758,20 @@ end
 --   change region of the undone/redone command without every caller having
 --   to do it themselves.
 function M.undo_interactive()
-    return M.undo()
+    local result = M.undo()
+    -- Smoke-harness barrier: undo is a user-visible "command done" event,
+    -- but it bypasses begin/end_command_event. Bump explicitly so the
+    -- harness's wait-for-completion logic doesn't hang on Cmd+Z.
+    top_level_event_count = top_level_event_count + 1
+    notify_top_level_event_listener()
+    return result
 end
 
 function M.redo_interactive()
-    return M.redo()
+    local result = M.redo()
+    top_level_event_count = top_level_event_count + 1
+    notify_top_level_event_listener()
+    return result
 end
 
 function M.redo_group(group_id)

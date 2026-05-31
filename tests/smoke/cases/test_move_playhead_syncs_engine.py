@@ -33,26 +33,23 @@ class TestMovePlayheadSyncsEngine(JVESmokeCase):
 
     def test_move_playhead_advances_engine_by_delta(self) -> None:
         seq_id = self.eval_str(
-            "local sid = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
-            "assert(type(sid) == 'string' and sid ~= '', "
-            "       'record engine has no loaded sequence — fixture broken'); "
-            "return sid")
+            "return require('core.debug_helpers').record_engine_sequence_id()")
+        assert seq_id, "record engine has no loaded sequence — fixture broken"
 
-        # Seed the engine to a known absolute frame.
+        # Seed the engine to a known absolute frame via the ruler.
         start = self.eval_int(
-            "return require('models.sequence').load('"
-            + seq_id + "').start_timecode_frame")
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={start} }})")
+            "return require('core.debug_helpers')"
+            f".sequence_start_tc('{seq_id}')")
+        self.move_playhead_to(start)
         seeded = self.eval_int(
             "return require('core.playback.transport')"
             ".engine_for_target():get_position()")
         self.assertEqual(start, seeded,
-            f"seed precondition: SetPlayhead({start}) left engine at {seeded}")
+            f"seed precondition: ruler-click at {start} left engine at {seeded}")
 
         # Step by DELTA_FRAMES via MovePlayhead's positional delta literal.
+        # command under test — driven directly because there is no keyboard
+        # analogue for an exact N-frame relative jump (arrows move by 1).
         self.eval(
             "require('core.command_manager').execute('MovePlayhead', "
             f"{{ _positional = {{ '{DELTA_FRAMES}f' }} }})")

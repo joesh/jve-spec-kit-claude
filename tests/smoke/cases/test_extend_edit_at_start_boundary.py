@@ -31,15 +31,14 @@ from tests.smoke.runner.case import JVESmokeCase
 class TestExtendEditBoundary(JVESmokeCase):
     """E (ExtendEdit) toward floor must not push the clip's in-edge below."""
 
-    # Currently red: ExtendEdit silently no-ops on the Anamnesis candidates
-    # tried (clip stays at original sequence_start despite edge selected,
-    # source_in headroom available, playhead well above floor). Separate
-    # from the boundary concern — the ripple-trim path inside
-    # BatchRippleEdit is rejecting / clamping the trim for a reason that
-    # needs its own investigation. Documented as expected-fail so the
-    # smoke suite stays green on discover; remove the decorator once the
-    # no-op cause is identified.
-    @unittest.expectedFailure
+    # TODO: needs an edge-selection primitive (e.g. self.click_edge(clip_id,
+    # 'in', trim='ripple')) — there is no keyboard analogue for selecting a
+    # specific clip's in-edge as a ripple-trim edge, and the rule (2026-05-30)
+    # forbids command_manager.execute() from the test body. Was previously
+    # @expectedFailure for a separate ExtendEdit no-op investigation; both
+    # blockers are recorded here so the smoke is ready to re-enable once the
+    # primitive lands.
+    @unittest.skip("needs click_edge primitive (SelectEdges has no keyboard analogue)")
     def test_extend_in_edge_to_floor_lands_at_floor(self) -> None:
         seq_id = self.eval_str(
             "local sid = require('core.playback.transport')"

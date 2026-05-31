@@ -540,6 +540,23 @@ function Sequence.count()
     return count
 end
 
+-- Count clips in one sequence (project-scoped via FK on tracks).
+function Sequence.count_clips(sequence_id)
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "Sequence.count_clips: sequence_id required")
+    local db = require("core.database")
+    local conn = assert(db.get_connection(), "Sequence.count_clips: no database connection")
+    local stmt = assert(conn:prepare(
+        "SELECT COUNT(*) FROM clips c JOIN tracks t ON c.track_id = t.id WHERE t.sequence_id = ?"),
+        "Sequence.count_clips: failed to prepare query")
+    stmt:bind_value(1, sequence_id)
+    assert(stmt:exec(), "Sequence.count_clips: query execution failed")
+    assert(stmt:next(), "Sequence.count_clips: no result row")
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count
+end
+
 --- Rebind all sequences from one project_id to another.
 -- Used by project_templates when stamping a new identity on a copied .jvp.
 -- @param old_project_id string

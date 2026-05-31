@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+
+# If the UTM guest is reachable, sync the host tree and re-exec this script
+# there. Falls through to host-local execution when the VM is off / key absent.
+# Must run BEFORE `set -e`.
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/_run_in_vm.sh"
+
 set -euo pipefail
 
 # Integration test runner — uses batch mode (single JVEEditor process per group)

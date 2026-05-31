@@ -14,18 +14,17 @@
 -- The gold DRT has a single <OriginalClip> block: the Render.mov on track
 -- V2 was substituted from D:\Reshoots\IMG_3270.MOV.
 
-require('test_env')
+local test_env = require('test_env')
 
 local drp_importer = require("importers.drp_importer")
 
 local function fail(msg)
-    io.stderr:write(msg .. "\n")
-    os.exit(1)
+    error(msg, 2)
 end
 
-local fixture = "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis/"
-    .. "2026-02-28-anamnesis joe edit-mm/"
-    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt"
+local fixture = test_env.require_fixture(
+    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/"
+    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
 
 local r = drp_importer.parse_drp_file(fixture)
 if not r.success then fail("parse failed: " .. tostring(r.error)) end

@@ -869,6 +869,10 @@ function M.import_into_project(project_id, parse_result, opts)
                         src_out_frame, sub_out = source_out_final, defaults_out
                     end
                     local clip_id = Clip.create({
+                        -- Spec 023 FR-011b: adopt the Resolve Sm2Ti DbId as
+                        -- clip.id when the source carries one (real Resolve
+                        -- exports always do); nil → Clip.create mints a UUID.
+                        id                    = clip_data.clip_id,
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
                         track_id              = track.id,
@@ -896,8 +900,12 @@ function M.import_into_project(project_id, parse_result, opts)
 
                     -- 023: persist the clip's markers (decoded from the DRP
                     -- Sm2TiItemLockableBlob, attached to clip_data by the parser
-                    -- and keyed by the clip's own Sm2Ti DbId).
+                    -- and keyed by the clip's own Sm2Ti DbId). The DRP defines
+                    -- the canonical marker set for this clip: clear first so
+                    -- re-import is idempotent (the per-marker UUID would
+                    -- otherwise mint fresh ids each parse and accumulate dups).
                     if clip_data.markers then
+                        ClipMarker.delete_for_clip(clip_id)
                         for _, mk in ipairs(clip_data.markers) do
                             ClipMarker.new({
                                 clip_id     = clip_id,

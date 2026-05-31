@@ -30,6 +30,7 @@ static int lua_process_events(lua_State*) {
 
 
 
+
 int lua_set_scroll_area_widget(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
     QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));

@@ -30,41 +30,37 @@ class TestArrowLeftBoundaryClamp(JVESmokeCase):
 
     def test_left_arrow_at_start_does_not_go_below_start_timecode_frame(self) -> None:
         seq_id = self.eval_str(
-            "local sid = require('core.playback.transport')"
-            ".record_engine.loaded_sequence_id; "
+            "local sid = require('core.debug_helpers').record_engine_sequence_id(); "
             "assert(type(sid) == 'string' and sid ~= '', "
             "       'record engine has no loaded sequence — fixture broken'); "
             "return sid")
         start_tc = self.eval_int(
-            "return require('models.sequence').load('"
-            + seq_id + "').start_timecode_frame")
+            "return require('core.debug_helpers').sequence_start_tc('"
+            + seq_id + "')")
 
-        # Park the engine exactly at the lower bound.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={start_tc} }})")
+        # Park the playhead exactly at the lower bound via the ruler.
+        self.ensure_record_tab()
+        self.move_playhead_to(start_tc)
         self.assertEqual(start_tc, self.eval_int(
-            "return require('core.playback.transport')"
-            ".engine_for_target():get_position()"),
-            "stage: failed to park engine at start_timecode_frame")
+            "return require('core.debug_helpers').playhead()"),
+            "stage: failed to park playhead at start_timecode_frame")
 
         self.focus_panel("timeline")
         self.key("Left")
 
-        engine_after = self.eval_int(
-            "return require('core.playback.transport')"
-            ".engine_for_target():get_position()")
-        self.assertEqual(start_tc, engine_after, (
+        playhead_after = self.eval_int(
+            "return require('core.debug_helpers').playhead()")
+        self.assertEqual(start_tc, playhead_after, (
             f"after Left arrow with playhead at start_timecode_frame "
-            f"({start_tc}), engine expected to stay there (silent clamp). "
-            f"Got {engine_after}. Below {start_tc} means MovePlayhead or "
+            f"({start_tc}), playhead expected to stay there (silent clamp). "
+            f"Got {playhead_after}. Below {start_tc} means MovePlayhead or "
             f"its delegates wrote a value violating the domain invariant "
             f"sequence.playhead_position >= sequence.start_timecode_frame."))
 
         # Model row must also respect the floor.
         model_after = self.eval_int(
-            "return require('models.sequence').load('"
-            + seq_id + "').playhead_position")
+            "return require('core.debug_helpers').playhead_of('"
+            + seq_id + "')")
         self.assertEqual(start_tc, model_after,
             f"sequences.playhead_position drifted below start "
             f"({start_tc}); got {model_after}")

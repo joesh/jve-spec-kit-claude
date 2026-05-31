@@ -9,15 +9,111 @@ extern "C" {
 
 #include <cstdio>
 
+// Single-process pointer used by the Lua-side bump callback to find its
+// owning DebugTerminal instance. The terminal is a singleton per JVE
+// process (one --control-socket flag → one instance) so a file-local
+// pointer is sufficient and avoids threading the instance pointer
+// through lua_pushcfunction's upvalue mechanism.
+static DebugTerminal* g_terminal_instance = nullptr;
+
+// Lua-callable C function. Registered as the global
+// `_jve_on_top_level_event` at start(); command_manager.lua invokes it
+// from the trailing edge of every top-level end_command_event /
+// undo_interactive / redo_interactive bump. Runs on the main thread
+// (Lua → C call, no thread switch), same thread as the Qt event loop.
+static int lua_on_top_level_event_bumped(lua_State* L) {
+    if (!g_terminal_instance) return 0;
+    int count = static_cast<int>(luaL_checkinteger(L, 1));
+    g_terminal_instance->notifyTopLevelEventBumped(count);
+    return 0;
+}
+
 DebugTerminal::DebugTerminal(const QString& socket_path, lua_State* L, QObject* parent)
-    : QObject(parent), m_socket_path(socket_path), m_lua_state(L) {}
+    : QObject(parent), m_socket_path(socket_path), m_lua_state(L) {
+    g_terminal_instance = this;
+    m_wait_timer = new QTimer(this);
+    m_wait_timer->setSingleShot(true);
+    connect(m_wait_timer, &QTimer::timeout, this, [this]() {
+        if (!m_wait_active) return;
+        // Pull the current counter for the timeout reply so the harness
+        // sees how close the wait got to satisfying.
+        int count = m_wait_snap;
+        if (m_lua_state) {
+            int top = lua_gettop(m_lua_state);
+            if (luaL_dostring(m_lua_state,
+                "return require('core.command_manager').get_top_level_event_count()") == 0
+                && lua_isnumber(m_lua_state, -1)) {
+                count = static_cast<int>(lua_tointeger(m_lua_state, -1));
+            }
+            lua_settop(m_lua_state, top);
+        }
+        completeWait(false, count);
+    });
+}
 
 DebugTerminal::~DebugTerminal() {
+    if (g_terminal_instance == this) {
+        g_terminal_instance = nullptr;
+    }
     if (m_server) {
         m_server->close();
     }
     // Remove the socket file so a subsequent run can bind the same path.
     QFile::remove(m_socket_path);
+}
+
+void DebugTerminal::notifyTopLevelEventBumped(int new_count) {
+    if (!m_wait_active) return;
+    if (new_count > m_wait_snap) {
+        m_wait_timer->stop();
+        completeWait(true, new_count);
+    }
+}
+
+void DebugTerminal::completeWait(bool ok, int count) {
+    if (!m_wait_active) return;
+    m_wait_active = false;
+    if (!m_client) return;  // client disconnected during the wait — drop
+    QByteArray body = ok ? "true," : "false,";
+    body += QByteArray::number(count);
+    writeReply(body);
+}
+
+void DebugTerminal::handleWaitBump(int snap, int timeout_ms) {
+    if (!m_lua_state) {
+        writeError("WAIT_BUMP: no Lua state");
+        return;
+    }
+    if (timeout_ms <= 0) {
+        writeError("WAIT_BUMP: timeout_ms must be positive");
+        return;
+    }
+    if (m_wait_active) {
+        writeError("WAIT_BUMP: a wait is already pending — single-flight only");
+        return;
+    }
+    // Read current count; if it's already past snap, reply immediately.
+    int top = lua_gettop(m_lua_state);
+    int current = -1;
+    if (luaL_dostring(m_lua_state,
+        "return require('core.command_manager').get_top_level_event_count()") == 0
+        && lua_isnumber(m_lua_state, -1)) {
+        current = static_cast<int>(lua_tointeger(m_lua_state, -1));
+    }
+    lua_settop(m_lua_state, top);
+    if (current < 0) {
+        writeError("WAIT_BUMP: failed to read command_manager.get_top_level_event_count()");
+        return;
+    }
+    if (current > snap) {
+        QByteArray body = "true,";
+        body += QByteArray::number(current);
+        writeReply(body);
+        return;
+    }
+    m_wait_active = true;
+    m_wait_snap = snap;
+    m_wait_timer->start(timeout_ms);
 }
 
 bool DebugTerminal::start() {
@@ -38,6 +134,16 @@ bool DebugTerminal::start() {
     }
     connect(m_server, &QLocalServer::newConnection,
             this, &DebugTerminal::onNewConnection);
+
+    // Register the bump callback as a Lua global. command_manager.lua
+    // calls it from the trailing edge of every top-level
+    // end_command_event / undo_interactive / redo_interactive so the
+    // C++ side can resolve a pending WAIT_BUMP without polling.
+    if (m_lua_state) {
+        lua_pushcfunction(m_lua_state, lua_on_top_level_event_bumped);
+        lua_setglobal(m_lua_state, "_jve_on_top_level_event");
+    }
+
     JVE_LOG_EVENT(Ui, "DebugTerminal: listening on %s", qPrintable(m_socket_path));
     return true;
 }
@@ -90,6 +196,11 @@ void DebugTerminal::onDisconnected() {
         m_client = nullptr;
     }
     m_pending.clear();
+    // Drop any deferred reply: there's no one to send it to.
+    if (m_wait_active) {
+        m_wait_timer->stop();
+        m_wait_active = false;
+    }
 }
 
 // ─── Lua helpers (file-local) ───────────────────────────────────────────────
@@ -237,6 +348,26 @@ void DebugTerminal::handleLine(const QByteArray& line) {
     QByteArray trimmed = line.trimmed();
     if (trimmed.isEmpty()) {
         writeReply(QByteArray());
+        return;
+    }
+
+    // Protocol verbs (NOT Lua expressions) dispatched before the Lua
+    // eval path. Currently just WAIT_BUMP — see notifyTopLevelEventBumped
+    // for the deferred-reply machinery.
+    if (trimmed.startsWith("WAIT_BUMP ")) {
+        QList<QByteArray> parts = trimmed.split(' ');
+        if (parts.size() != 3) {
+            writeError("WAIT_BUMP: usage 'WAIT_BUMP <snap> <timeout_ms>'");
+            return;
+        }
+        bool snap_ok = false, to_ok = false;
+        int snap = parts[1].toInt(&snap_ok);
+        int timeout_ms = parts[2].toInt(&to_ok);
+        if (!snap_ok || !to_ok) {
+            writeError("WAIT_BUMP: snap and timeout_ms must be integers");
+            return;
+        }
+        handleWaitBump(snap, timeout_ms);
         return;
     }
 

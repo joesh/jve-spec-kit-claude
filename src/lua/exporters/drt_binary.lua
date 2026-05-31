@@ -44,7 +44,9 @@ end
 
 -- BE16: TLV separator + type tag (decode_tlv_fields reads b1*256 + b2).
 local function write_be16(n)
-    return string.char(math.floor(n / 256) % 256, n % 256)
+    assert(type(n) == "number" and n >= 0 and n < 65536 and n % 1 == 0,
+        "write_be16: integer in [0, 2^16) required, got " .. tostring(n))
+    return string.char(math.floor(n / 256), n % 256)
 end
 
 -- ---------------------------------------------------------------------------
@@ -122,25 +124,32 @@ local function utf16be(ascii)
     return (ascii:gsub(".", function(c) return "\0" .. c end))
 end
 
+-- TLV type tags — pinned by decode_tlv_fields (drp_binary.lua:300-306). 0x0002
+-- and 0x0003 share an encoding (small/medium int); the encoder emits 0x0002.
+local TLV_INT     = 0x0002
+local TLV_DOUBLE  = 0x0006
+local TLV_STRING  = 0x000a
+local TLV_PAYLOAD = 0x000c
+
 -- Encode one field's value bytes for the given type tag.
 local function encode_value(type_tag, value)
-    if type_tag == 0x0002 or type_tag == 0x0003 then
+    if type_tag == TLV_INT then
         -- integer: value = aux*256 + val (aux BE32, val one byte)
         assert(type(value) == "number" and value >= 0 and value % 1 == 0,
             "encode_value: TLV int requires non-negative integer, got " .. tostring(value))
         local aux = math.floor(value / 256)
         local val = value % 256
         return M.write_be32(aux) .. string.char(val)
-    elseif type_tag == 0x0006 then
+    elseif type_tag == TLV_DOUBLE then
         -- double: [1 byte pad=0][8-byte BE double]. The decoder reverses the 8
         -- bytes to LE before casting, so we store big-endian = reverse(LE).
         return "\0" .. string.reverse(double_to_le_bytes(value))
-    elseif type_tag == 0x000a then
+    elseif type_tag == TLV_STRING then
         -- string: [BE32 aux (ignored)][1 byte str_byte_len][UTF-16BE chars]
         local u = utf16be(value)
         assert(#u < 256, "encode_value: TLV string too long (" .. #u .. " bytes)")
         return M.write_be32(0) .. string.char(#u) .. u
-    elseif type_tag == 0x000c then
+    elseif type_tag == TLV_PAYLOAD then
         -- nested payload: [BE32 aux][1 byte val] where payload_len = aux*256+val,
         -- then the raw payload (first 8 bytes are read as an LE double, ignored).
         assert(type(value) == "string" and #value >= 8,
@@ -159,8 +168,13 @@ local function encode_field(name, type_tag, value)
         .. encode_value(type_tag, value)
 end
 
--- TLV type tag per declared field kind.
-local KIND_TYPE = { int = 0x0002, double = 0x0006, string = 0x000a, payload = 0x000c }
+-- Public field-kind name → tag, for callers that don't want raw hex constants.
+local KIND_TYPE = {
+    int     = TLV_INT,
+    double  = TLV_DOUBLE,
+    string  = TLV_STRING,
+    payload = TLV_PAYLOAD,
+}
 
 --- Encode a flat field list to TLV bytes (no header) — inverse of
 --- decode_tlv_fields(bytes, 0, #list).
@@ -247,14 +261,17 @@ end
 -- ---------------------------------------------------------------------------
 
 --- @param payload string: raw bytes to compress and wrap
---- @param version integer: wrapper version (matches the source blob's version)
+--- @param version integer: wrapper version (1 or 2 — pinned by observed Resolve blobs)
 --- @return string: hex-encoded FieldsBlob
 function M.encode_fields_blob(payload, version)
     assert(type(payload) == "string", "encode_fields_blob: payload bytes required")
-    assert(type(version) == "number", "encode_fields_blob: version required")
+    assert(version == 1 or version == 2,
+        "encode_fields_blob: version must be 1 or 2 (Resolve's known wrappers), got "
+        .. tostring(version))
     assert(type(qt_zstd_compress) == "function",
         "encode_fields_blob: qt_zstd_compress binding not available")
-    local frame = qt_zstd_compress(payload)
+    local frame, zstd_err = qt_zstd_compress(payload)
+    assert(frame, "encode_fields_blob: qt_zstd_compress failed: " .. tostring(zstd_err))
     local wrapper = M.write_be32(version) .. M.write_be32(#payload) .. string.char(0x81)
     return to_hex(wrapper .. frame)
 end

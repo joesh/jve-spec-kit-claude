@@ -50,62 +50,71 @@ class TestGoToMarkUsesLiveClipInOut(JVESmokeCase):
             "     and type(c.source_in) == 'number' "
             "     and type(c.source_out) == 'number' "
             "     and c.source_out > c.source_in + 1 then "
-            "    return string.format('%s|%d|%d|%s', c.id, "
-            "      c.source_in, c.source_out, c.sequence_id) "
+            "    return string.format('%s|%d|%d|%d|%s', c.id, "
+            "      c.source_in, c.source_out, c.sequence_start, c.sequence_id) "
             "  end "
             "end; "
             "error('no media clip with valid source range in fixture')")
-        clip_id, src_in_str, src_out_str, source_seq_id = info.strip('"').split('|', 3)
+        clip_id, src_in_str, src_out_str, seq_start_str, source_seq_id = \
+            info.strip('"').split('|', 4)
         expected_in = int(src_in_str)
         expected_out_park = int(src_out_str) - 1  # GoToMarkOut parks at out-1 (exclusive)
+        clip_seq_start = int(seq_start_str)
 
-        # Pollute the master source sequence's mark_in/mark_out with a
-        # different value — this simulates a prior staged-mode SetMark
-        # session that left stale row marks. If GoToMark* reads the row
-        # (the bug), it'll park here. If it reads the override (the
-        # fix), it'll park at the clip's source_in.
-        bogus_mark_in = expected_in + 1000
-        bogus_mark_out = expected_in + 2000
-        self.eval(
-            f"local s = require('models.sequence').load('{source_seq_id}'); "
-            f"s.mark_in = {bogus_mark_in}; "
-            f"s.mark_out = {bogus_mark_out}; "
-            "assert(s:save())")
+        # ── Pollute the displayed sequence's mark_in/mark_out with values
+        # at unrelated timeline frames — simulates a prior staged-mode
+        # SetMark session that left stale row marks. If GoToMark* reads
+        # the row (the bug), it'll park at one of these. If it reads the
+        # live override (the fix), it'll park at the clip's source_in/out.
+        #
+        # Set via real keypresses: I and O on the timeline scope set marks
+        # on the displayed sequence. Picking two arbitrary timeline frames
+        # well away from the target clip so any leak is obvious.
+        self.focus_panel("timeline")
+        bogus_in_frame = clip_seq_start + 1
+        bogus_out_frame = clip_seq_start + 2
+        self.move_playhead_to(bogus_in_frame)
+        self.key("I")
+        self.move_playhead_to(bogus_out_frame)
+        self.key("O")
 
-        # Load the clip in live-bound mode.
-        self.eval(f"require('ui.source_viewer').load_clip('{clip_id}')")
+        # Park the playhead inside the target clip and load it live via
+        # Shift+F (the canonical live-bound entry — see
+        # test_keymap_shift_f_opens_clip_in_source_viewer).
+        mid_frame = clip_seq_start + 1
+        self.move_playhead_to(mid_frame)
+        self.focus_panel("timeline")
+        self.key("Shift+F")
         self.assertEqual("live_bound_clip", self.eval_str(
             "return tostring(require('ui.source_viewer').get_mode())"),
-            "setUp: load_clip didn't enter live_bound_clip mode")
+            "setUp: Shift+F didn't enter live_bound_clip mode")
+        self.assertEqual(clip_id, self.eval_str(
+            "return tostring(require('ui.source_viewer').get_live_clip_id())"),
+            "setUp: Shift+F bound the wrong clip")
 
-        # Press Shift+I via the command path (the keymap routes Shift+I
-        # to "GoToMark in @timeline @source_monitor @timeline_monitor";
-        # @source_monitor active dispatches against the source seq).
-        self.eval(
-            "require('core.command_manager').execute('GoToMark', "
-            f"{{ sequence_id='{source_seq_id}', project_id=require('core.command_manager').get_active_project_id(), "
-            "_positional = { 'in' } })")
+        # Press Shift+I (GoToMark in). Keymap routes Shift+I to
+        # "GoToMark in @timeline @source_monitor @timeline_monitor"; with
+        # the timeline focused it dispatches against the displayed
+        # (source_seq_id) sequence. Live-bound override should win.
+        self.key("Shift+I")
         after_in = self.eval_int(
-            f"return require('models.sequence').load('{source_seq_id}').playhead_position")
+            f"return require('core.debug_helpers').playhead_of('{source_seq_id}')")
         self.assertEqual(expected_in, after_in, (
             f"GoToMarkIn in live-bound mode expected to park at "
             f"clip.source_in={expected_in}; got {after_in}. Master row "
-            f"mark_in is {bogus_mark_in} (stale) — if the command read "
-            f"that instead of the live override, the user jumps to a "
+            f"mark_in was set to {bogus_in_frame} (stale) — if the command "
+            f"read that instead of the live override, the user jumps to a "
             f"frame they can't see marked, breaking the 'mark I see is "
             f"the mark I jump to' invariant."))
 
-        # Press Shift+O.
-        self.eval(
-            "require('core.command_manager').execute('GoToMark', "
-            f"{{ sequence_id='{source_seq_id}', project_id=require('core.command_manager').get_active_project_id(), "
-            "_positional = { 'out' } })")
+        # Press Shift+O (GoToMark out).
+        self.key("Shift+O")
         after_out = self.eval_int(
-            f"return require('models.sequence').load('{source_seq_id}').playhead_position")
+            f"return require('core.debug_helpers').playhead_of('{source_seq_id}')")
         self.assertEqual(expected_out_park, after_out, (
             f"GoToMarkOut in live-bound mode expected to park at "
             f"clip.source_out - 1 = {expected_out_park}; got {after_out}. "
-            f"Master row mark_out is {bogus_mark_out} (stale)."))
+            f"Master row mark_out was set to {bogus_out_frame} (stale)."))
 
 
 if __name__ == "__main__":

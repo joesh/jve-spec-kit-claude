@@ -69,13 +69,13 @@ class TestIKeySetsMarkIn(JVESmokeCase):
             + seq_id + "').start_timecode_frame")
         target = start + SEED_OFFSET_FROM_START
 
-        # SetPlayhead writes the model + emits playhead_changed; the
-        # listener in sequence_monitor (sequence_monitor.lua:188-193)
-        # seeks the engine for matching sequences. After this returns,
+        # Seed the playhead via a real ruler click. move_playhead_to
+        # clicks the ruler at the pixel column for the target frame;
+        # the ensuing playhead_changed signal drives sequence_monitor's
+        # listener (sequence_monitor.lua:188-193), which seeks the
+        # engine for the displayed sequence. After this returns,
         # the engine MUST report the seeded frame.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={target} }})")
+        self.move_playhead_to(target)
 
         engine_pos = self.eval_int(
             "return require('core.playback.transport')"

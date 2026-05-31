@@ -219,6 +219,13 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- (patch-drag strip drops, FR-010a). Same function the view's
         -- internal input/renderer helpers already use.
         get_track_id_at_y = view.get_track_id_at_y,
+        -- Track-id → widget-y / pixel-height. Same primitives the
+        -- renderer consumes; exposed so external consumers (drop
+        -- handlers, test-helpers asking "where on screen is clip X?")
+        -- don't re-implement layout math against the internal view
+        -- table. y already accounts for vertical_scroll_offset.
+        get_track_y_by_id = view.get_track_y_by_id,
+        get_track_visual_height = view.get_track_visual_height,
         on_mouse_event = on_mouse,
         on_wheel_event = on_wheel
     }

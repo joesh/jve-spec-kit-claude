@@ -1,7 +1,7 @@
 -- ClipMarker Model
 -- A per-clip-instance marker: a frame offset from the clip's start, a span
--- `duration` (1 = point marker), a Resolve color name, a name, an optional
--- note (tooltip), and opaque `custom_data` (round-trip payload). Imported from
+-- `duration` (1 = point marker), a Resolve color name, a name, a note
+-- (tooltip), and opaque `custom_data` (round-trip payload). Imported from
 -- DaVinci Resolve DRP; drawn directly on the clip in the timeline.
 local ClipMarker = {}
 ClipMarker.__index = ClipMarker
@@ -21,8 +21,10 @@ local VALID_COLORS = {
 }
 
 -- Create a new clip marker instance.
--- @param data table: marker properties (clip_id, frame, duration, color, name,
---   note?, custom_data?, id?)
+-- Every field is required (rule 2.13): the decoder always produces a complete
+-- record (empty note / empty custom_data are passed as ""), so a missing field
+-- here is a caller bug, not a value to substitute.
+-- @param data table: { clip_id, frame, duration, color, name, note, custom_data, id? }
 function ClipMarker.new(data)
     local function require_field(name)
         assert(data[name] ~= nil, "ClipMarker.new: missing required field: " .. name)
@@ -36,8 +38,8 @@ function ClipMarker.new(data)
     marker.duration = require_field("duration")
     marker.color = require_field("color")
     marker.name = require_field("name")
-    marker.note = data.note or ""
-    marker.custom_data = data.custom_data or ""
+    marker.note = require_field("note")
+    marker.custom_data = require_field("custom_data")
 
     assert(type(marker.frame) == "number" and marker.frame >= 0,
         "ClipMarker.new: frame must be a non-negative number")
@@ -45,15 +47,20 @@ function ClipMarker.new(data)
         "ClipMarker.new: duration must be >= 1 (1 = point marker)")
     assert(VALID_COLORS[marker.color],
         "ClipMarker.new: unknown marker color: " .. tostring(marker.color))
+    assert(type(marker.note) == "string",
+        "ClipMarker.new: note must be a string (use '' for absent)")
+    assert(type(marker.custom_data) == "string",
+        "ClipMarker.new: custom_data must be a string (use '' for absent)")
     return marker
 end
 
--- Persist this marker.
+-- Persist this marker. Plain INSERT: a UUID collision is a bug we want to see,
+-- not silently replace; re-import dedup goes through delete_for_clip first.
 function ClipMarker:save()
     local conn = database.get_connection()
     assert(conn, "ClipMarker:save: no database connection")
     local stmt = conn:prepare([[
-        INSERT OR REPLACE INTO clip_markers
+        INSERT INTO clip_markers
         (id, clip_id, frame, duration, color, name, note, custom_data)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ]])
@@ -74,11 +81,29 @@ function ClipMarker:save()
     return self
 end
 
+-- Drop every marker attached to a clip. Used by importers to make re-import
+-- idempotent: the source defines the marker set for the clip, so clear before
+-- re-inserting (fresh UUIDs per parse would otherwise accumulate duplicates).
+-- @param clip_id string
+function ClipMarker.delete_for_clip(clip_id)
+    assert(clip_id and clip_id ~= "",
+        "ClipMarker.delete_for_clip: clip_id required")
+    local conn = database.get_connection()
+    assert(conn, "ClipMarker.delete_for_clip: no database connection")
+    local stmt = conn:prepare("DELETE FROM clip_markers WHERE clip_id = ?")
+    assert(stmt, "ClipMarker.delete_for_clip: failed to prepare delete")
+    stmt:bind_value(1, clip_id)
+    local ok = stmt:exec()
+    stmt:finalize()
+    assert(ok, "ClipMarker.delete_for_clip: delete failed for " .. clip_id)
+end
+
 -- Load all markers for a clip, ordered by frame.
 -- @param clip_id string
 -- @return table: array of ClipMarker (empty if none)
 function ClipMarker.find_by_clip(clip_id)
-    assert(clip_id, "ClipMarker.find_by_clip: clip_id required")
+    assert(clip_id and clip_id ~= "",
+        "ClipMarker.find_by_clip: clip_id required")
     local conn = database.get_connection()
     assert(conn, "ClipMarker.find_by_clip: no database connection")
     local stmt = conn:prepare(
@@ -97,8 +122,8 @@ function ClipMarker.find_by_clip(clip_id)
             duration = stmt:value(3),
             color = stmt:value(4),
             name = stmt:value(5),
-            note = stmt:value(6) or "",
-            custom_data = stmt:value(7) or "",
+            note = stmt:value(6),
+            custom_data = stmt:value(7),
         }, ClipMarker)
     end
     stmt:finalize()

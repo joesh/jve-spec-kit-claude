@@ -3,54 +3,17 @@
 -- Regression: undoing an FCP7 XML import while focused on the imported sequence
 -- should not strand the redo stack. Redo must recreate the sequence, tracks,
 -- and clips even though the timeline stack points at a deleted sequence ID.
--- Uses REAL timeline_state — no mock.
 
 require('test_env')
 
 -- No-op timer: prevent debounced persistence from firing mid-command
 _G.qt_create_single_shot_timer = function() end
 
--- Only mock needed: panel_manager (Qt widget management)
-package.loaded["ui.panel_manager"] = {
-    get_active_sequence_monitor = function() return nil end,
-}
-
 local test_env = require('test_env')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local Command = require('command')
-
-local SCHEMA_SQL = require('import_schema')
-
-local function init_database(path)
-    os.remove(path)
-    os.remove(path .. "-wal")
-    os.remove(path .. "-shm")
-    assert(database.init(path))
-    local db = database.get_connection()
-    assert(db:exec(SCHEMA_SQL))
-    assert(db:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
-        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough');
-        INSERT INTO sequences (
-            id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate,
-            width, height,
-            view_start_frame, view_duration_frames, playhead_frame,
-            selected_clip_ids, selected_edge_infos, selected_gap_infos,
-            current_sequence_number, created_at, modified_at
-        )
-        VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'sequence',
-            30, 1, 48000,
-            1920, 1080,
-            0, 300, 0,
-            '[]', '[]', '[]',
-            0, 0, 0
-        );
-    ]]))
-    return db
-end
+local blank_project = require('helpers.blank_project')
 
 local function count_rows(db, table_name)
     local stmt = db:prepare("SELECT COUNT(*) FROM " .. table_name)
@@ -61,20 +24,18 @@ local function count_rows(db, table_name)
     return value
 end
 
-local tmp_db = "/tmp/jve/test_import_redo_restores_sequence.db"
-local db = init_database(tmp_db)
+local info = blank_project.open_fresh("/tmp/jve/test_import_redo_restores_sequence.jvp")
+local db = database.get_connection()
+command_manager.activate_timeline_stack(info.sequence_id)
 
-command_manager.init('default_sequence', 'default_project')
-command_manager.activate_timeline_stack('default_sequence')
-
-local import_cmd = Command.create("ImportFCP7XML", "default_project")
-import_cmd:set_parameter("project_id", "default_project")
+local import_cmd = Command.create("ImportFCP7XML", info.project_id)
+import_cmd:set_parameter("project_id", info.project_id)
 import_cmd:set_parameter("xml_path", test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
 
 local exec_result = command_manager.execute(import_cmd)
 assert(exec_result.success, exec_result.error_message or "ImportFCP7XML execution failed")
 
-local import_record = command_manager.get_last_command('default_project')
+local import_record = command_manager.get_last_command(info.project_id)
 assert(import_record, "Import command not recorded in log")
 
 local created_sequence_ids = import_record:get_parameter("created_sequence_ids")
@@ -96,7 +57,7 @@ assert(clip_stmt:exec() and clip_stmt:next(), "Failed to fetch clip from importe
 local imported_clip_id = clip_stmt:value(0)
 clip_stmt:finalize()
 
-local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
+local toggle_cmd = Command.create("ToggleClipEnabled", info.project_id)
 toggle_cmd:set_parameter("sequence_id", imported_sequence_id)
 toggle_cmd:set_parameter("clip_ids", { imported_clip_id })
 local toggle_result = command_manager.execute(toggle_cmd)
@@ -110,6 +71,7 @@ local after_undo_counts = {
     tracks = count_rows(db, "tracks"),
     clips = count_rows(db, "clips")
 }
+-- Template provides 1 sequence ("Sequence 1"); import added more; undo removes them.
 assert(after_undo_counts.sequences == 1, "Undo should remove imported sequence")
 assert(after_undo_counts.tracks == 0, "Undo should remove imported tracks")
 assert(after_undo_counts.clips == 0, "Undo should remove imported clips")
@@ -133,5 +95,5 @@ assert(after_redo_counts.tracks == baseline_counts.tracks,
 assert(after_redo_counts.clips == baseline_counts.clips,
     string.format("Redo should restore clip count (%d vs %d)", after_redo_counts.clips, baseline_counts.clips))
 
-os.remove(tmp_db)
+blank_project.cleanup("/tmp/jve/test_import_redo_restores_sequence.jvp")
 print("✅ Redo after ImportFCP7XML restores deleted sequence state")

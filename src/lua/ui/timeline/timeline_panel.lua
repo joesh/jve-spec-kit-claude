@@ -3676,4 +3676,144 @@ function M.get_track_header_layout_for_test(track_id)
     }
 end
 
+--- TEST-ONLY: global screen coords of the center of a clip on the
+--- displayed sequence. Smoke tests use this to drive real OS mouse
+--- clicks at clip centers via the Python runner.click(gx,gy).
+--- Returns (nil, nil) when the clip is not on the displayed sequence
+--- (caller asserts loudly — no silent zero-coord clicks).
+--- @param clip_id string
+--- @return integer|nil, integer|nil global_x, global_y
+function M.get_clip_global_center_for_test(clip_id)
+    assert(clip_id and clip_id ~= "",
+        "get_clip_global_center_for_test: clip_id required")
+    local strip = timeline_state.get_tab_strip()
+    if not strip then return nil, nil end
+    local clip = strip:clip_by_id(clip_id)
+    if not clip then return nil, nil end
+    local track_type
+    for _, t in ipairs(strip:displayed_tracks()) do
+        if t.id == clip.track_id then track_type = t.track_type; break end
+    end
+    if not track_type then return nil, nil end
+    local widget, view
+    if track_type == "VIDEO" then
+        widget = M.video_widget; view = video_view_ref
+    elseif track_type == "AUDIO" then
+        widget = M.audio_widget; view = audio_view_ref
+    else
+        return nil, nil
+    end
+    if not widget or not view then return nil, nil end
+    local w, h = qt_constants.PROPERTIES.GET_SIZE(widget)
+    if not w or w <= 0 or not h or h <= 0 then return nil, nil end
+
+    -- Mirror what a user does manually: scroll the timeline to bring the
+    -- clip into view before clicking. Without this, tests that ran after
+    -- a viewport-narrowing test (or simply opened a project whose
+    -- saved viewport doesn't cover this clip's frame) compute a pixel x
+    -- far outside [0, widget_w], producing off-screen global coords that
+    -- System Events refuses (-25200). Center the clip in the current
+    -- viewport duration. If the viewport is narrower than the clip,
+    -- align the viewport's left edge with the clip's start.
+    local vstart = timeline_state.get_viewport_start_time()
+    local vdur = timeline_state.get_viewport_duration()
+    assert(type(vstart) == "number" and type(vdur) == "number" and vdur > 0,
+        "get_clip_global_center_for_test: viewport not initialized")
+    local clip_end = clip.sequence_start + clip.duration
+    if clip.sequence_start < vstart or clip_end > vstart + vdur then
+        local new_start
+        if clip.duration >= vdur then
+            new_start = clip.sequence_start
+        else
+            new_start = math.floor(clip.sequence_start - (vdur - clip.duration) / 2)
+        end
+        timeline_state.set_viewport_start_time(new_start)
+    end
+
+    local sx = timeline_state.time_to_pixel(clip.sequence_start, w)
+    local ex = timeline_state.time_to_pixel(clip.sequence_start + clip.duration, w)
+    local cx = math.floor((sx + ex) / 2)
+    local track_y = view.get_track_y_by_id(clip.track_id, h)
+    if not track_y or track_y < 0 then return nil, nil end
+    local track_h = view.get_track_visual_height(clip.track_id)
+    assert(type(track_h) == "number" and track_h > 0,
+        "get_clip_global_center_for_test: track height missing for " .. tostring(clip.track_id))
+    -- track_y already accounts for vertical_scroll_offset (see
+    -- timeline_view.update_layout_cache: entry.y = cursor - scroll).
+    -- Don't subtract scroll again — would be a double-correction.
+    local cy = math.floor(track_y + track_h / 2)
+    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, cx, cy)
+    return gx, gy
+end
+
+--- TEST-ONLY: return a diagnostic string describing every coordinate
+--- the test helper computed for the given clip. Used by smoke runner
+--- when click_clip's post-condition check fails — the test would
+--- otherwise have to reach into module locals (video_view_ref) which
+--- the architectural-correctness rule forbids exposing publicly.
+--- Format: `widget_size=WxH widget_global=(X,Y) clip_local_x=[sx,ex]
+--- track_y=TY track_h=TH local_center=(cx,cy) global_center=(gx,gy)
+--- viewport=[vstart,vdur]`
+function M.get_clip_click_diagnostic(clip_id)
+    assert(clip_id and clip_id ~= "", "get_clip_click_diagnostic: clip_id required")
+    local strip = timeline_state.get_tab_strip()
+    if not strip then return "no_strip" end
+    local clip = strip:clip_by_id(clip_id)
+    if not clip then return "no_clip:" .. clip_id end
+    local track_type
+    for _, t in ipairs(strip:displayed_tracks()) do
+        if t.id == clip.track_id then track_type = t.track_type; break end
+    end
+    if not track_type then return "no_track" end
+    local widget, view
+    if track_type == "VIDEO" then widget, view = M.video_widget, video_view_ref
+    elseif track_type == "AUDIO" then widget, view = M.audio_widget, audio_view_ref
+    else return "unknown_track_type:" .. track_type end
+    if not widget or not view then return "no_widget_or_view" end
+    local w, h = qt_constants.PROPERTIES.GET_SIZE(widget)
+    local vstart = timeline_state.get_viewport_start_time()
+    local vdur = timeline_state.get_viewport_duration()
+    local sx = timeline_state.time_to_pixel(clip.sequence_start, w)
+    local ex = timeline_state.time_to_pixel(clip.sequence_start + clip.duration, w)
+    local cx = math.floor((sx + ex) / 2)
+    local track_y = view.get_track_y_by_id(clip.track_id, h)
+    local track_h = view.get_track_visual_height(clip.track_id)
+    local cy = (track_y and track_h) and math.floor(track_y + track_h / 2) or -1
+    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, cx, cy)
+    local wgx, wgy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, 0, 0)
+    return string.format(
+        "widget=%dx%d widget_global=(%d,%d) clip_local_x=[%d,%d] track_y=%s track_h=%s local_center=(%d,%d) global_center=(%d,%d) viewport=[%d,%d] track_id=%s",
+        w or -1, h or -1, wgx or -1, wgy or -1, sx, ex, tostring(track_y), tostring(track_h),
+        cx, cy, gx or -1, gy or -1, vstart or -1, vdur or -1, clip.track_id:sub(1, 8))
+end
+
+--- TEST-ONLY: global screen coords for a ruler click that seeks the
+--- playhead to the given frame on the displayed sequence. The ruler
+--- shares the video viewport pixel grid; clicking at the computed
+--- pixel column at the top of the video widget hits the ruler row.
+--- @param frame integer
+--- @return integer|nil, integer|nil global_x, global_y
+function M.get_ruler_global_point_for_test(frame)
+    assert(type(frame) == "number", "get_ruler_global_point_for_test: frame must be integer")
+    local widget = M.video_widget or M.audio_widget
+    if not widget then return nil, nil end
+    local w, _ = qt_constants.PROPERTIES.GET_SIZE(widget)
+    if not w or w <= 0 then return nil, nil end
+    -- Scroll the viewport so `frame` is on-screen — same reason as
+    -- M.get_clip_global_center_for_test: a ruler click at a pixel x
+    -- outside the widget produces off-screen global coords that
+    -- System Events refuses. Center `frame` in the viewport.
+    local vstart = timeline_state.get_viewport_start_time()
+    local vdur = timeline_state.get_viewport_duration()
+    assert(type(vstart) == "number" and type(vdur) == "number" and vdur > 0,
+        "get_ruler_global_point_for_test: viewport not initialized")
+    if frame < vstart or frame >= vstart + vdur then
+        local new_start = math.floor(frame - vdur / 2)
+        timeline_state.set_viewport_start_time(new_start)
+    end
+    local px = timeline_state.time_to_pixel(frame, w)
+    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, math.floor(px), 1)
+    return gx, gy
+end
+
 return M

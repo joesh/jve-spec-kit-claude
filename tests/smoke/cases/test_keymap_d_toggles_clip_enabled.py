@@ -28,10 +28,6 @@ from tests.smoke.runner.case import JVESmokeCase
 class TestDTogglesClipEnabled(JVESmokeCase):
     """D on @timeline flips the selected clip's enabled flag."""
 
-    def _active_project_id(self) -> str:
-        return self.eval_str(
-            "return require('core.command_manager').get_active_project_id()")
-
     def _pick_clip(self) -> tuple[str, str]:
         """Return ``(clip_id, rec_seq_id)`` for the first non-gap clip
         in the displayed record sequence."""
@@ -54,14 +50,10 @@ class TestDTogglesClipEnabled(JVESmokeCase):
             f"return require('models.clip').load('{clip_id}').enabled")
 
     def test_d_toggles_selected_clip_enabled_flag(self) -> None:
-        clip_id, rec_seq = self._pick_clip()
-        proj = self._active_project_id()
+        clip_id, _rec_seq = self._pick_clip()
 
-        # Replace selection with just this clip (canonical click-equivalent).
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ project_id='{proj}', sequence_id='{rec_seq}', "
-            f"target_clip_ids={{'{clip_id}'}} }})")
+        # Replace selection with just this clip via real click.
+        self.click_clip(clip_id)
 
         # Anamnesis clips start enabled. Pin the precondition.
         before = self._clip_enabled(clip_id)

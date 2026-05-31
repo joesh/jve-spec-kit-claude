@@ -164,6 +164,14 @@ function M.create_project_from_template(template, project_name, dest_path)
     local sequence_id = Sequence.find_first_by_project(new_project_id)
     assert(sequence_id, "project_templates: no sequence found after identity update")
 
+    -- Mark the template's single sequence as the active one. Without this,
+    -- Sequence.resolve_initial_for_project returns nil on first open and
+    -- the project opens in the no-active-sequence state — UX bug (fresh
+    -- project from File→New shows a blank timeline) AND tripwire for
+    -- timeline_panel.create which assumes an active sequence's fps cache.
+    -- The single template sequence IS the natural active one.
+    database.set_project_setting(new_project_id, "last_open_sequence_id", sequence_id)
+
     database.shutdown()
 
     -- Restore previous database if one was open

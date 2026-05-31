@@ -827,6 +827,30 @@ function M.handle_mouse(view, event_type, x, y, button, modifiers)
                     state.flush_pending_notify()
                 end
             end
+            -- Click without drag on an already-selected clip: the press
+            -- path armed a `clips` potential_drag (preserving the multi-
+            -- selection in case the user drags the group). With no drag,
+            -- collapse the selection to just the clicked clip — FCP /
+            -- Premiere / Resolve convention. Shift / Cmd are reserved
+            -- for additive/toggle gestures; skip the collapse so those
+            -- modifiers keep their semantics intact.
+            if pd.type == "clips" and pd.anchor_clip_id
+                and not (pd.modifiers and (pd.modifiers.command or pd.modifiers.shift)) then
+                -- Collapse the multi-selection to just the clicked clip.
+                -- The clearing belongs to release-without-drag — not to
+                -- SelectClips, whose press-time no-op-when-already-selected
+                -- is exactly what arms the drag in the first place. Skip
+                -- the command and go straight to the state setter.
+                local anchor_clip = state.get_tab_strip():clip_by_id(pd.anchor_clip_id)
+                assert(anchor_clip, string.format(
+                    "timeline_view_input release: anchor_clip_id=%s armed at "
+                    .. "press time no longer resolves — clip vanished between "
+                    .. "press and release of the same click. Investigate which "
+                    .. "command-content_changed handler is racing the input loop.",
+                    tostring(pd.anchor_clip_id)))
+                state.clear_edge_selection()
+                state.set_selection({ anchor_clip })
+            end
             view.potential_drag = nil
         end
         if view.drag_state then

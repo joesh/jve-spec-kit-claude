@@ -61,17 +61,12 @@ class TestNudgeSelectionKeys(JVESmokeCase):
         self._start_before = self.eval_int(
             f"return require('models.clip').load('{self._clip_id}').sequence_start")
 
-        # Select it. Per command_manager's MOVEMENT auto-injection,
-        # NudgeSelection's sequence_id is paired with playhead from the
-        # transport target, so we don't pass it explicitly here.
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ sequence_id='{self._seq_id}', "
-            f"target_clip_ids = {{ '{self._clip_id}' }} }})")
+        # Select it via a real click on the clip in the timeline.
+        self.click_clip(self._clip_id)
         selected_count = self.eval_int(
             "return #require('ui.timeline.timeline_state').get_selected_clips()")
         self.assertEqual(1, selected_count,
-            "setUp: SelectClips did not produce a single-clip selection")
+            "setUp: clicking clip did not produce a single-clip selection")
 
         # @timeline scope is where the nudge keys are bound.
         self.focus_panel("timeline")

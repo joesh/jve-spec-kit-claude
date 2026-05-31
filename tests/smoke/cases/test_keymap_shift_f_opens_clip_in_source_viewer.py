@@ -49,10 +49,8 @@ class TestShiftFLoadsClipInSourceViewer(JVESmokeCase):
         clip_id, mid_frame_str = info.strip('"').split('|', 1)
         mid_frame = int(mid_frame_str)
 
-        # Park playhead inside that clip.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={mid_frame} }})")
+        # Park playhead inside that clip via real ruler click.
+        self.move_playhead_to(mid_frame)
         self.assertEqual(mid_frame, self.eval_int(
             "return require('core.playback.transport')"
             ".engine_for_target():get_position()"),

@@ -83,15 +83,9 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
         # *record* sequence regardless (`sequence_id` for active-record
         # routing) but the user-visible state must match what a human
         # would see when they press Cmd+B.
-        self.eval(
-            "local ts = require('ui.timeline.timeline_state'); "
-            "if ts.get_displayed_tab_kind() ~= 'record' then "
-            "  local active = ts.get_active_sequence_id(); "
-            "  assert(active, 'no active sequence to switch back to'); "
-            "  ts.switch_to_record_tab(active); "
-            "end")
+        self.ensure_record_tab()
         # Canonical baseline: nothing selected. Per-scenario tests below
-        # may then layer a specific selection on top via SelectClips.
+        # may then layer a specific selection on top via a click.
         self._deselect_all()
 
     # ── Probes ─────────────────────────────────────────────────────────
@@ -215,27 +209,16 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
              "rec_seq": bp[4]}
         return a, b, int(common_raw)
 
-    def _active_project_id(self) -> str:
-        return self.eval_str(
-            "return require('core.command_manager').get_active_project_id()")
-
     def _deselect_all(self) -> None:
-        # Use the real DeselectAll command — same path a user would take
-        # via Esc / equivalent. project_id is the only required arg.
-        proj = self._active_project_id()
-        self.eval(
-            "require('core.command_manager').execute('DeselectAll', "
-            f"{{ project_id='{proj}' }})")
+        # Cmd+Shift+A is the canonical DeselectAll keybinding — same path
+        # a user would take.
+        self.key("Cmd+Shift+A")
 
     def _select_only(self, clip_id: str, sequence_id: str) -> None:
-        # SelectClips with no modifier and target_clip_ids=[id] is the
-        # "replace selection with just this clip" form — equivalent to
-        # a plain click on that clip in the timeline.
-        proj = self._active_project_id()
-        self.eval(
-            "require('core.command_manager').execute('SelectClips', "
-            f"{{ project_id='{proj}', sequence_id='{sequence_id}', "
-            f"target_clip_ids={{'{clip_id}'}} }})")
+        # A plain click on the clip replaces the selection with just that
+        # clip — same as a SelectClips dispatch with no modifier and a
+        # single target_clip_id.
+        self.click_clip(clip_id)
 
     def _selected_clip_ids(self) -> list[str]:
         # Return current selection as a list of clip ids — used by the
@@ -250,11 +233,9 @@ class TestCmdBBladesClipAtPlayhead(JVESmokeCase):
         return [x for x in bare.split(",") if x]
 
     def _seek_record_playhead(self, seq_id: str, frame: int) -> None:
-        # SetPlayhead is the canonical model-write for the playhead;
-        # transport listeners pick up the change and seek the engine.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={frame} }})")
+        # Click on the ruler at the pixel column for `frame` — the same
+        # gesture a user would make to position the playhead.
+        self.move_playhead_to(frame)
 
     def _clip_count_on_track(self, track_id: str) -> int:
         # Count non-gap clips currently on the named track. Reads from

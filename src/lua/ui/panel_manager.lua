@@ -132,11 +132,17 @@ function M.is_maximized()
     return state.maximized ~= nil
 end
 
---- Return splitter sizes suitable for persistence.
--- If maximized, returns the saved pre-maximize sizes.
--- If not maximized, reads current sizes from Qt.
+--- Return splitter sizes suitable for persistence, or nil if there's
+-- nothing to snapshot yet (UI not bootstrapped — e.g. a project swap
+-- driven from the debug-terminal socket or a `--test` script before
+-- ui/layout.lua wires the splitters). Callers in OpenProject's
+-- post_open_init already gate on this returning nil. Matches the
+-- `if timeline_panel and ...` pattern used elsewhere in this snapshot
+-- phase; a query for non-existent state should return nil, not assert.
+-- `restore_sizes` keeps its assert: that one is a precondition-bearing
+-- command (caller passes data to apply), not a snapshot query.
 function M.get_persistable_sizes()
-    assert(state.main_splitter, "panel_manager.get_persistable_sizes: not initialized")
+    if not state.main_splitter then return nil end
     if state.maximized then
         return {
             top = state.maximized.top_sizes,

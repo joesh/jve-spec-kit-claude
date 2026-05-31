@@ -90,7 +90,22 @@ def _singleton_shutdown() -> None:
 
 
 class JVESmokeCase(unittest.TestCase):
-    """Base class. All subclasses share one long-lived JVE for the suite."""
+    """Base class. All subclasses share one long-lived JVE for the suite.
+
+    Project lifecycle (revised 2026-05-30 per Joe's directive
+    "instead of blank fixtures how about just File/New Project? ...
+    group tests that can operate on the same data and not keep clearing
+    the project. We WANT to find cross command contamination."):
+
+    Each TestCase class opens ONE fresh copy of the Anamnesis-derived
+    template at setUpClass; test methods within the class share that
+    project and accumulate state. Cross-command contamination across
+    methods is intentional surface — it's exactly the kind of stress
+    no clean-state-per-test suite ever exercises.
+
+    Default: methods share state. To opt into a fresh start before a
+    specific method, override setUp and call `self._reset_to_template()`.
+    """
 
     # Class-level aliases to the singleton, populated in setUpClass so
     # test methods can use self._runner / self._fixtures as before.
@@ -102,11 +117,16 @@ class JVESmokeCase(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()
-        # Touch the singleton early so first-class bring-up cost lands
-        # in setUpClass instead of the first setUp. The singleton itself
-        # is re-fetched per setUp — if a prior test wedged JVE, the
-        # singleton was respawned and the cls-cached pointer is stale.
-        _ensure_runner()
+        runner, fixtures = _ensure_runner()
+        # ONE fresh anamnesis-template copy per TestCase class. All
+        # methods in the class operate on this copy in sequence; no
+        # per-method reset. Naming the copy after cls.__qualname__
+        # keeps the on-disk file traceable to its owning class.
+        cls._runner = runner
+        cls._fixtures = fixtures
+        jvp = fixtures.fresh_copy(f"class__{cls.__qualname__}")
+        runner.open_project(jvp)
+        runner.foreground()
 
     # No tearDownClass: the suite-wide runner is owned by atexit. Per-
     # class teardown would kill JVE between TestCase classes — defeats
@@ -114,13 +134,25 @@ class JVESmokeCase(unittest.TestCase):
 
     def setUp(self) -> None:
         super().setUp()
-        # Always re-resolve the runner: _ensure_runner returns the
-        # current live singleton, respawning if the prior test killed
-        # it via eval-timeout force-shutdown.
+        # Re-resolve the runner — if a prior test wedged JVE the
+        # singleton was respawned and the cls-cached pointer is stale.
+        # NB: this does NOT reopen the project. Methods within a class
+        # share the setUpClass-opened project, accumulating state.
         self.runner, self._fixtures = _ensure_runner()
-        # Per-test fresh project copy. Foreground again in case a prior
-        # test stole focus (osascript dialogs, modals, etc.).
-        jvp = self._fixtures.fresh_copy(self.id())
+        # Re-foreground in case a prior test stole focus (osascript
+        # dialogs, modals, the host user clicking elsewhere).
+        self.runner.foreground()
+
+    def _reset_to_template(self) -> None:
+        """Optional opt-in: open a fresh anamnesis-template copy mid-suite.
+
+        Use sparingly — the design point is shared state. Reach for this
+        only when a specific test method genuinely needs a pristine
+        baseline (e.g. testing project-open behavior itself, or
+        recovering from an intentional destructive test that left the
+        project unusable for downstream methods).
+        """
+        jvp = self._fixtures.fresh_copy(f"reset__{self.id()}")
         self.runner.open_project(jvp)
         self.runner.foreground()
 
@@ -143,6 +175,172 @@ class JVESmokeCase(unittest.TestCase):
 
     def click(self, x: int, y: int, double: bool = False) -> None:
         self.runner.click(x, y, double=double)
+
+    def click_clip(self, clip_id: str, right: bool = False, double: bool = False) -> None:
+        """Click on a clip in the displayed timeline at its visual center.
+
+        Queries `core.debug_helpers.clip_global_center(clip_id)` for the
+        screen coords and posts a real OS click via the runner. This is
+        the canonical replacement for `command_manager.execute('SelectClips')`
+        in test setUp.
+
+        Asserts loudly if the clip isn't on the displayed sequence (would
+        return empty coords) — silent zero-coord clicks would land in
+        the menu bar and confuse downstream tests.
+        """
+        coords = self.eval_str(
+            f"return require('core.debug_helpers').clip_global_center('{clip_id}')")
+        self.assertNotEqual("", coords, (
+            f"click_clip({clip_id!r}): debug_helpers returned empty coords. "
+            f"Clip not on the displayed sequence — switch tabs first, or "
+            f"the clip_id is stale."))
+        gx_s, gy_s = coords.split(",", 1)
+        gx, gy = int(gx_s), int(gy_s)
+        # Joe contract: a click on a clip provokes SelectClips 1:1. Snap
+        # the command counter before clicking and block until it bumps,
+        # so the next eval (selection_count, mode-readout, key-press)
+        # reads post-command state instead of racing in-flight dispatch.
+        snap = self.runner.get_command_count()
+        self.runner.click(gx, gy, right=right, double=double)
+        self.runner.wait_for_command_after(snap)
+        # The barrier only proves SOME command committed — not that the
+        # click landed on this specific clip. A miss on the clip body
+        # fires DeselectAll (also bumps), and the test would proceed
+        # with empty selection and silently fail downstream. Verify the
+        # clip is actually selected here so the failure surfaces at the
+        # helper, not 3 lines later in a key-doesn't-toggle assertion.
+        selected = self.eval_str(
+            "local sel = require('ui.timeline.timeline_state').get_selected_clips() or {}; "
+            "local parts = {}; "
+            "for i, c in ipairs(sel) do "
+            "  assert(type(c) == 'table' and type(c.id) == 'string', "
+            "    'get_selected_clips()[' .. i .. '] missing .id (got ' .. type(c) .. ')'); "
+            "  parts[i] = c.id "
+            "end; "
+            "return table.concat(parts, ',')")
+        selected_set = set(s for s in selected.split(",") if s)
+        if selected_set != {clip_id}:
+            # A plain left click on a clip MUST result in selection
+            # equal to exactly {clip_id} — collapses any prior multi-
+            # selection (FCP/Premiere/Resolve convention). Anything
+            # else means either the click missed, hit the wrong target,
+            # or JVE's click handler isn't collapsing on release.
+            diag = self.eval_str(
+                f"return require('ui.timeline.timeline_panel')"
+                f".get_clip_click_diagnostic('{clip_id}')")
+            raise AssertionError(
+                f"click_clip({clip_id!r}) at screen ({gx},{gy}): "
+                f"selection != {{clip_id}}. got {len(selected_set)} clip(s); "
+                f"target {'in' if clip_id in selected_set else 'NOT in'} selection. "
+                f"A plain left click must collapse multi-selection to just "
+                f"the clicked clip — if target IS in the result, JVE's "
+                f"release-without-drag handler isn't firing SelectClips to "
+                f"collapse; if NOT in, the click missed entirely.\n"
+                f"  post-click diagnostic: {diag}\n"
+                f"  Compare global_center in diagnostic to the actual click coords "
+                f"({gx},{gy}) — divergence means the widget moved between coord "
+                f"compute and click send.")
+
+    def right_click_clip(self, clip_id: str) -> None:
+        self.click_clip(clip_id, right=True)
+
+    def double_click_clip(self, clip_id: str) -> None:
+        self.click_clip(clip_id, double=True)
+
+    def move_playhead_to(self, frame: int) -> None:
+        """Seek the playhead by clicking on the ruler at the target frame.
+
+        Real-OS-input equivalent of SetPlayhead with an arbitrary frame.
+        Asserts the click landed (post-eval playhead matches within
+        ±1 frame, accounting for pixel rounding).
+        """
+        coords = self.eval_str(
+            f"return require('core.debug_helpers').ruler_global_point({frame})")
+        self.assertNotEqual("", coords,
+            f"move_playhead_to({frame}): no ruler coords — no displayed sequence")
+        gx_s, gy_s = coords.split(",", 1)
+        self.runner.click(int(gx_s), int(gy_s))
+
+    def ensure_record_tab(self) -> None:
+        """If a source tab is currently displayed, press grave to swap
+        back to the record tab. No-op when record is already displayed."""
+        kind = self.eval_str(
+            'local k = require("core.debug_helpers").displayed_tab_kind(); '
+            'return tostring(k or "")')
+        if kind != "record":
+            self.key("Grave")
+
+    def wait_for(self, lua_predicate: str, timeout: float = 5.0) -> None:
+        """Convenience proxy to self.runner.wait_for."""
+        self.runner.wait_for(lua_predicate, timeout=timeout)
+
+    def fetch_str_array(self, producer_lua: str, global_name: str,
+                        chunk_size: int = 5) -> list:
+        """Fetch a Lua string array of arbitrary length without hitting
+        the debug-terminal 256-char repr cap. See ``fetch_int_array``
+        for contract; differs only in chunk_size default (strings are
+        wider — 5 × 50-char "uuid:start:end" rows = ~250 chars).
+        Strings must not contain commas (CSV-safe is the caller's
+        responsibility — UUIDs and ints are fine)."""
+        n = self.eval_int(producer_lua)
+        if n <= 0:
+            return []
+        out: list = []
+        helper = "require('core.debug_helpers').smoke_array_chunk"
+        for start in range(1, n + 1, chunk_size):
+            end = min(start + chunk_size - 1, n)
+            chunk = self.eval_str(
+                f"return {helper}('{global_name}', {start}, {end})")
+            if chunk:
+                out.extend(x for x in chunk.split(",") if x)
+        assert len(out) == n, (
+            f"fetch_str_array: expected {n} items, got {len(out)} — "
+            f"chunking dropped items (global_name={global_name!r}, "
+            f"chunk_size={chunk_size})")
+        return out
+
+    def fetch_int_array(self, producer_lua: str, global_name: str,
+                        chunk_size: int = 20) -> list:
+        """Fetch a sortable Lua int array of arbitrary length without
+        hitting the debug-terminal repr cap (256 chars per response,
+        per spec.md FR-005).
+
+        Contract — ``producer_lua`` is a Lua snippet that stashes a
+        sorted int array on ``_G[global_name]`` and returns its length.
+        Example producer:
+            "return require('core.debug_helpers').compute_edit_points_on_displayed_sequence()"
+            (stashes on ``_G._smoke_edit_points``)
+
+        chunk_size is the items-per-fetch budget; default 20 = ~240
+        chars of CSV (11-digit ints + commas), well inside the 256 cap.
+
+        Per spec phase1-test-overhaul.md §"State queries beyond the
+        cap" — this is the documented chunked-fetch pattern.
+        """
+        n = self.eval_int(producer_lua)
+        if n <= 0:
+            return []
+        out: list[int] = []
+        helper = "require('core.debug_helpers').smoke_array_chunk"
+        for start in range(1, n + 1, chunk_size):
+            end = min(start + chunk_size - 1, n)
+            chunk = self.eval_str(
+                f"return {helper}('{global_name}', {start}, {end})")
+            if chunk:
+                out.extend(int(x) for x in chunk.split(",") if x)
+        assert len(out) == n, (
+            f"fetch_int_array: expected {n} items, got {len(out)} — "
+            f"chunking dropped items (global_name={global_name!r}, "
+            f"chunk_size={chunk_size})")
+        return out
+
+    def menu_pick(self, path: str) -> None:
+        """Convenience proxy to self.runner.menu_pick."""
+        self.runner.menu_pick(path)
+
+    def pick_file_in_open_dialog(self, path: str, timeout: float = 8.0) -> None:
+        """Convenience proxy to self.runner.pick_file_in_open_dialog."""
+        self.runner.pick_file_in_open_dialog(path, timeout=timeout)
 
     def focus_panel(self, panel_id: str) -> None:
         """Force keyboard focus to the named panel by id.

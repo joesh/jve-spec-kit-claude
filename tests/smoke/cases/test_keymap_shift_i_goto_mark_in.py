@@ -51,12 +51,10 @@ class TestShiftIGoesToMarkIn(JVESmokeCase):
         # Stage: mark_in at one frame; playhead parked somewhere else
         # so the post-Shift+I seek is unambiguously the GoToMark, not
         # a no-op coincidence.
-        self.eval(
-            "require('core.command_manager').execute('SetMarkIn', "
-            f"{{ sequence_id='{seq_id}', frame={mark_in_frame} }})")
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={playhead_before} }})")
+        self.focus_panel("timeline")
+        self.move_playhead_to(mark_in_frame)
+        self.key("I")
+        self.move_playhead_to(playhead_before)
 
         # Sanity: stage landed where expected.
         self.assertEqual(mark_in_frame, self.eval_int(

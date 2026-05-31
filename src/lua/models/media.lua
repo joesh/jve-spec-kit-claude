@@ -564,6 +564,19 @@ local function _hydrate_row(query)
     return media
 end
 
+-- Count all media rows in the database
+function M.count()
+    local database = require("core.database")
+    local db = assert(database.get_connection(), "Media.count: no database connection")
+    local stmt = assert(db:prepare("SELECT COUNT(*) FROM media"),
+        "Media.count: failed to prepare query")
+    assert(stmt:exec(), "Media.count: query execution failed")
+    assert(stmt:next(), "Media.count: no result row")
+    local count = stmt:value(0)
+    stmt:finalize()
+    return count
+end
+
 -- Load a media item from the database
 function M.load(media_id)
     assert(media_id and media_id ~= "", "Media.load: media_id must not be nil or empty")

@@ -1574,12 +1574,13 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             local linked_item_sync = extract_linked_item_sync(clip_elem, clip_name)
 
-            -- The clip's own Sm2Ti DbId — markers (Sm2TiItemLockableBlob) attach
-            -- to it by BlobOwner (023). Every timeline clip carries a DbId (it is
-            -- the Sm2Ti row identity); a missing one is a parser/format bug.
+            -- The clip's own Sm2Ti DbId. Real Resolve exports carry one on every
+            -- timeline clip; per spec 023 FR-011b the importer adopts it as the
+            -- JVE clip.id when present, else mints a UUID (Clip.create handles
+            -- the nil case). Markers (Sm2TiItemLockableBlob) attach by BlobOwner
+            -- = DbId, so absent DbId = no marker linkage either.
             local clip_db_id = clip_elem.attrs and clip_elem.attrs.DbId
-            assert(clip_db_id and clip_db_id ~= "", string.format(
-                "parse_clip_element: clip '%s' has no Sm2Ti DbId attribute", clip_name))
+            if clip_db_id == "" then clip_db_id = nil end
 
             local clip = {
                 clip_id = clip_db_id,
@@ -1950,18 +1951,24 @@ end
 -- @return table: owner_dbid → array of {frame,color,name,note,duration,custom_data}
 local function parse_resolve_markers(project_xml)
     local by_owner = {}
-    local clip_count, marker_count = 0, 0
+    local owner_count, marker_count = 0, 0
     for block in project_xml:gmatch("<Sm2TiItemLockableBlob.-</Sm2TiItemLockableBlob>") do
         local owner = block:match("<BlobOwner>(.-)</BlobOwner>")
         local hex = block:match("<FieldsBlob>(.-)</FieldsBlob>")
         if owner and owner ~= "" and hex and hex ~= "" then
-            local markers = drp_binary.decode_clip_markers((hex:gsub("%s+", "")))
-            if markers and #markers > 0 then
+            local markers, err = drp_binary.decode_clip_markers((hex:gsub("%s+", "")))
+            if err then
+                -- The blob unwrapped as a marker collection but a specific
+                -- entry was malformed — surface so a Resolve format drift
+                -- doesn't silently drop markers (rule 2.32).
+                log.warn("drp_importer: marker decode failed for owner %s: %s",
+                    owner, err)
+            elseif markers and #markers > 0 then
                 local list = by_owner[owner]
                 if not list then
                     list = {}
                     by_owner[owner] = list
-                    clip_count = clip_count + 1
+                    owner_count = owner_count + 1
                 end
                 for _, m in ipairs(markers) do
                     list[#list + 1] = m
@@ -1970,8 +1977,8 @@ local function parse_resolve_markers(project_xml)
             end
         end
     end
-    log.event("drp_importer: decoded %d markers across %d clips",
-        marker_count, clip_count)
+    log.event("drp_importer: decoded %d markers across %d BlobOwners",
+        marker_count, owner_count)
     return by_owner
 end
 
@@ -2089,8 +2096,12 @@ function M.parse_drp_file(drp_path, progress_cb)
         for _, timeline in ipairs(timelines) do
             for _, track in ipairs(timeline.tracks) do
                 for _, c in ipairs(track.clips) do
-                    -- clip_id is guaranteed (asserted in parse_clip_element).
-                    c.markers = markers_by_owner[c.clip_id]
+                    -- c.clip_id is the Sm2Ti DbId (nil for synthetic fixtures
+                    -- without one; those carry no markers either). A nil index
+                    -- on the map is a valid no-match read.
+                    if c.clip_id then
+                        c.markers = markers_by_owner[c.clip_id]
+                    end
                 end
             end
         end

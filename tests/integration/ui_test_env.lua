@@ -124,30 +124,133 @@ end
 --------------------------------------------------------------------------------
 
 --- Launch the full application UI.
--- Creates a test project, sets env vars, requires layout.lua.
--- @param opts same as create_test_project
--- @return app table (widget references from layout.lua), project_info table
+--
+-- Builds the test .jvp on disk via `project_templates.create_project_from_template`
+-- (the same primitive NewProject uses non-interactively), then sets
+-- JVE_PROJECT_PATH and requires `ui.layout` — that single layout.lua
+-- startup is the only DB open, so the full `project_changed` signal
+-- cascade fires exactly once. Customization (rename default sequence,
+-- add more, switch active) happens AFTER the UI is up, via commands
+-- (`SetSequenceMetadata` / `CreateSequence` / `OpenSequenceInTimeline`)
+-- — the same path a real user takes. Replaces the prior
+-- `database.init` + raw `Project/Sequence.create():save()` bootstrap
+-- which bypassed signals and was the cascade source breaking batched
+-- runs (see todo_tests_migrate_to_openproject memory).
+--
+-- @param opts table:
+--   db_path         string  — SQLite path (default: derived from project_name)
+--   project_name    string  — default: "UI Test Project"
+--   num_sequences   number  — default: 1 (the template's default counts as #1)
+--   sequence_names  table   — names for each sequence (optional; defaults to
+--                             template default for #1, "Sequence N" for extras)
+--   active_sequence number  — 1-based active sequence index (default: 1)
+-- @return app table (from layout.lua), project_info table {db_path, project, sequences}
 function M.launch(opts)
+    opts = opts or {}
+
     -- Capture real HOME for luarocks paths BEFORE we change HOME
     saved_home = os.getenv("HOME")
-
-    -- Pre-load luarocks cpath using real HOME (layout.lua will try with fake HOME)
     package.cpath = package.cpath .. ';' .. saved_home .. '/.luarocks/lib/lua/5.1/?.so'
     package.path = package.path .. ';' .. saved_home .. '/.luarocks/share/lua/5.1/?.lua'
     package.path = package.path .. ';' .. saved_home .. '/.luarocks/share/lua/5.1/?/init.lua'
 
-    -- Isolate test from user's home directory (prevents overwriting ~/.jve/last_project_path)
     local test_home = "/tmp/jve_test_home"
     os.execute("mkdir -p " .. test_home .. "/.jve")
     setenv("HOME", test_home)
 
-    -- Create test project
-    local project_info = M.create_test_project(opts)
+    local project_name = opts.project_name or "UI Test Project"
+    local db_path = opts.db_path
+    if not db_path then
+        local sanitized = project_name:gsub("[^%w_-]", "_"):lower()
+        db_path = string.format("/tmp/jve/test_%s.jvp", sanitized)
+    end
+    os.execute("mkdir -p /tmp/jve")
+    os.remove(db_path); os.remove(db_path .. "-wal"); os.remove(db_path .. "-shm")
 
-    -- Set project path so layout.lua skips welcome screen
-    setenv("JVE_PROJECT_PATH", project_info.db_path)
+    -- Build the .jvp on disk. Same primitive NewProject's dialog uses
+    -- post-OK; produces a valid single-project, single-sequence file
+    -- with all per-template metadata (fps, sample rate, dims) wired.
+    local project_templates = require("core.project_templates")
+    local template
+    for _, t in ipairs(project_templates.TEMPLATES) do
+        if t.name == "Film 24fps" then template = t; break end
+    end
+    assert(template, "ui_test_env: Film 24fps template not found")
+    local created = project_templates.create_project_from_template(template, project_name, db_path)
 
-    -- Launch the full UI (creates window, panels, menus, everything)
+    -- Prep phase: open the freshly-created .jvp via the OpenProject command
+    -- so we can customize sequences via commands (same path a user takes).
+    -- This is the first OpenProject of the session — its post_open_init
+    -- tolerates the missing-UI state thanks to panel_manager.get_persistable
+    -- _sizes returning nil when not initialized.
+    local command_manager = require("core.command_manager")
+    local database = require("core.database")
+    local uuid = require("uuid")
+    local r = command_manager.execute("OpenProject", { project_path = db_path })
+    assert(r and r.success,
+        "ui_test_env: pre-launch OpenProject failed: " ..
+        tostring(r and r.error_message or "(nil)"))
+
+    local project_id = command_manager.get_active_project_id()
+    local default_seq_id = command_manager.get_active_sequence_id()
+    assert(project_id and default_seq_id,
+        "ui_test_env: command_manager has no active project/sequence after OpenProject")
+
+    local sequence_names = opts.sequence_names or {}
+    local num_sequences = opts.num_sequences or 1
+    local active_idx = opts.active_sequence or 1
+    local sequences = { { id = default_seq_id, name = "Sequence 1" } }
+
+    -- Rename the template default if a name was requested.
+    local first_name = sequence_names[1]
+    if first_name then
+        local rr = command_manager.execute("SetSequenceMetadata", {
+            project_id  = project_id,
+            sequence_id = default_seq_id,
+            field       = "name",
+            value       = first_name,
+        })
+        assert(rr and rr.success,
+            "ui_test_env: rename default sequence failed: " ..
+            tostring(rr and rr.error_message or "(nil)"))
+        sequences[1].name = first_name
+    end
+
+    -- Additional sequences via CreateSequence.
+    for i = 2, num_sequences do
+        local name = sequence_names[i] or ("Sequence " .. i)
+        local new_id = uuid.generate()
+        local rr = command_manager.execute("CreateSequence", {
+            project_id        = project_id,
+            sequence_id       = new_id,
+            name              = name,
+            frame_rate        = { fps_numerator = template.fps_num, fps_denominator = template.fps_den },
+            audio_sample_rate = template.audio_sample_rate,
+            width             = template.width,
+            height            = template.height,
+        })
+        assert(rr and rr.success,
+            "ui_test_env: CreateSequence failed for " .. name .. ": " ..
+            tostring(rr and rr.error_message or "(nil)"))
+        sequences[i] = { id = new_id, name = name }
+    end
+
+    -- Persist which sequence should be active on next open. This setting is
+    -- the natural "remember session" state every user-driven sequence switch
+    -- writes; setting it directly here is fixture session state, not a
+    -- model mutation. layout.lua reads it via Sequence.resolve_initial_for
+    -- _project when it opens.
+    if sequences[active_idx] then
+        database.set_project_setting(project_id, "last_open_sequence_id",
+            sequences[active_idx].id)
+    end
+
+    -- Hand off to layout.lua. It runs its own OpenProject path (close
+    -- current → open same file → resolve active sequence → init
+    -- command_manager → build UI). Wasteful but harmless — the on-disk
+    -- state is what counts, and layout captures app.active_sequence_id
+    -- AT this open, so it sees the active sequence we just prepared.
+    setenv("JVE_PROJECT_PATH", db_path)
     local app = require("ui.layout")
     assert(type(app) == "table",
         "ui_test_env: layout.lua must return a table (got " .. type(app) .. ")")
@@ -157,11 +260,13 @@ function M.launch(opts)
         "ui_test_env: layout.lua did not return top_splitter")
     assert(app.main_splitter,
         "ui_test_env: layout.lua did not return main_splitter")
-
-    -- Let layout settle: pump events to fire the 50ms splitter-size timer
     M.pump(200)
 
-    return app, project_info
+    return app, {
+        db_path   = db_path,
+        project   = { id = project_id, name = project_name },
+        sequences = sequences,
+    }
 end
 
 --------------------------------------------------------------------------------
