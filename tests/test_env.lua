@@ -203,10 +203,18 @@ end
 -- can't link Qt, so we shell out to `stat` here. fs_utils.file_mtime
 -- now assumes the binding exists — the stub keeps the same global
 -- contract so tests don't need to know which environment they run in.
+-- stat's format flag is platform-split (same OS branch as the monotonic
+-- clock above): macOS/BSD use `-f %Fm`, GNU/Linux use `-c %.Y`. Both
+-- emit a fractional epoch, matching the binding's sub-second resolution.
+-- Without this branch the macOS form silently returns nil on Linux,
+-- which also blinds media_status's in-place-rewrite mtime comparison.
 if not _G.qt_file_mtime then
+    local stat_fmt = (jit.os == "OSX" or jit.os == "BSD")
+        and "stat -f %%Fm %q 2>/dev/null"
+        or  "stat -c %%.Y %q 2>/dev/null"
     _G.qt_file_mtime = function(path)
         if type(path) ~= "string" or path == "" then return nil end
-        local handle = io.popen(string.format("stat -f %%Fm %q 2>/dev/null", path))
+        local handle = io.popen(string.format(stat_fmt, path))
         if not handle then return nil end
         local data = handle:read("*a") or ""
         local close_ok = handle:close()
