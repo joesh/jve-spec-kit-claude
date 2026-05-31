@@ -47,12 +47,12 @@ class TestMovePlayheadSyncsEngine(JVESmokeCase):
         self.assertEqual(start, seeded,
             f"seed precondition: ruler-click at {start} left engine at {seeded}")
 
-        # Step by DELTA_FRAMES via MovePlayhead's positional delta literal.
-        # command under test — driven directly because there is no keyboard
-        # analogue for an exact N-frame relative jump (arrows move by 1).
-        self.eval(
-            "require('core.command_manager').execute('MovePlayhead', "
-            f"{{ _positional = {{ '{DELTA_FRAMES}f' }} }})")
+        # Step by DELTA_FRAMES via the timecode-entry UI: read current
+        # playhead, compute target, drive the seek through the same
+        # Cmd+3 → Tab → "<frame>f" → Return path move_playhead_to uses.
+        # This exercises the engine-sync contract via the actual user
+        # surface; no command_manager.execute() shortcut.
+        self.move_playhead_to(seeded + DELTA_FRAMES)
 
         engine_pos = self.eval_int(
             "return require('core.playback.transport')"

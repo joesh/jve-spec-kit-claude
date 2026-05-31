@@ -47,10 +47,15 @@ class TestSetPlayheadBelowStartClamps(JVESmokeCase):
             + seq_id + "').start_timecode_frame")
         below = start_tc - 50
 
-        # Request a frame 50 below the lower bound.
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={below} }})")
+        # Request a frame 50 below the lower bound via the timecode-entry
+        # UI (Cmd+3 → Tab → type "<below>f" → Return). This is the same
+        # real-input path move_playhead_to uses; inlined here because the
+        # helper post-asserts playhead == requested frame, which is the
+        # exact assumption this test is designed to break.
+        self.key("Cmd+3")
+        self.key("Tab")
+        self.runner.type_text(f"{below}f")
+        self.key("Return")
 
         # Both the model row AND the engine MUST land at start_tc
         # (silent clamp). Today the model corrupts; the engine refuses.

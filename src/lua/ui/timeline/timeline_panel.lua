@@ -3801,6 +3801,174 @@ function M.get_clip_click_diagnostic(clip_id)
         cx, cy, gx or -1, gy or -1, vstart or -1, vdur or -1, clip.track_id:sub(1, 8))
 end
 
+--- TEST-ONLY: global screen coords for a click that the edge_picker
+--- will resolve to a SPECIFIC edge selection on `clip_id`.
+---
+--- The picker is driven entirely by cursor-x relative to a boundary
+--- pixel (see edge_picker.pick_edges):
+---   * within ±EDGE_ZONE_PX of a boundary  → some edge selected
+---   * within ±ROLL_ZONE_PX/2 of boundary  → ROLL (both neighbor edges)
+---   * outside roll center, inside edge   → RIPPLE on the side
+---                                          containing the cursor
+--- We pick an offset that lands the cursor in the requested zone, then
+--- map to global screen coords. The smoke runner's click() does the rest.
+---
+--- Preconditions enforced loudly:
+---   * For ripple, the target clip's visible width must be ≥
+---     MIN_EDGE_SELECTABLE_WIDTH_PX or the picker rejects it.
+---   * For roll, BOTH neighbor clips at the boundary must meet that
+---     width AND a roll partner must exist (clip can't be at the very
+---     start/end of the track — no partner edge).
+--- If either fails, the helper raises with the measured widths and the
+--- required minimum so the test can zoom the viewport accordingly.
+---
+--- @param clip_id string
+--- @param edge_type string "in" | "out"
+--- @param trim_type string "ripple" | "roll"
+--- @return integer|nil, integer|nil global_x, global_y
+function M.get_clip_edge_global_point_for_test(clip_id, edge_type, trim_type)
+    assert(clip_id and clip_id ~= "",
+        "get_clip_edge_global_point_for_test: clip_id required")
+    assert(edge_type == "in" or edge_type == "out",
+        "get_clip_edge_global_point_for_test: edge_type must be 'in'|'out', got "
+        .. tostring(edge_type))
+    assert(trim_type == "ripple" or trim_type == "roll",
+        "get_clip_edge_global_point_for_test: trim_type must be 'ripple'|'roll', got "
+        .. tostring(trim_type))
+
+    local edge_zone = ui_constants.TIMELINE.EDGE_ZONE_PX
+    local roll_zone = ui_constants.TIMELINE.ROLL_ZONE_PX
+    local min_width = ui_constants.TIMELINE.MIN_EDGE_SELECTABLE_WIDTH_PX
+    assert(edge_zone and roll_zone and min_width,
+        "get_clip_edge_global_point_for_test: ui_constants.TIMELINE edge "
+        .. "constants missing (EDGE_ZONE_PX/ROLL_ZONE_PX/MIN_EDGE_SELECTABLE_WIDTH_PX)")
+    local center_half = math.max(1, math.floor(roll_zone / 2))
+    -- Ripple offset: just outside center band but inside edge zone, on the
+    -- clip-body side of the boundary. edge_type=in → body to the right,
+    -- so cursor +offset; edge_type=out → body to the left, so −offset.
+    local ripple_offset = center_half + 1
+    assert(ripple_offset < edge_zone, string.format(
+        "get_clip_edge_global_point_for_test: ripple_offset (%d) must be "
+        .. "< EDGE_ZONE_PX (%d) — picker zone math is wrong",
+        ripple_offset, edge_zone))
+
+    local strip = timeline_state.get_tab_strip()
+    assert(strip, "get_clip_edge_global_point_for_test: no tab strip")
+    local clip = strip:clip_by_id(clip_id)
+    assert(clip, "get_clip_edge_global_point_for_test: clip not found: " .. clip_id)
+
+    local track_type
+    for _, t in ipairs(strip:displayed_tracks()) do
+        if t.id == clip.track_id then track_type = t.track_type; break end
+    end
+    assert(track_type, "get_clip_edge_global_point_for_test: clip's track "
+        .. "not in displayed_tracks (clip_id=" .. clip_id .. ")")
+
+    local widget, view
+    if track_type == "VIDEO" then
+        widget, view = M.video_widget, video_view_ref
+    elseif track_type == "AUDIO" then
+        widget, view = M.audio_widget, audio_view_ref
+    else
+        error("get_clip_edge_global_point_for_test: unknown track_type " .. track_type)
+    end
+    assert(widget and view,
+        "get_clip_edge_global_point_for_test: widget/view not initialized")
+
+    local w, h = qt_constants.PROPERTIES.GET_SIZE(widget)
+    assert(w and w > 0 and h and h > 0,
+        "get_clip_edge_global_point_for_test: widget not laid out")
+
+    local boundary_frame = (edge_type == "in")
+        and clip.sequence_start
+        or  (clip.sequence_start + clip.duration)
+
+    -- Find the partner clip at the boundary (same track, adjacent).
+    local partner = nil
+    for _, c in ipairs(strip:displayed_clips()) do
+        if c.track_id == clip.track_id and c.id ~= clip.id then
+            if edge_type == "in"
+               and (c.sequence_start + (c.duration or 0)) == boundary_frame then
+                partner = c; break
+            elseif edge_type == "out"
+                   and c.sequence_start == boundary_frame then
+                partner = c; break
+            end
+        end
+    end
+
+    if trim_type == "roll" then
+        assert(partner, string.format(
+            "get_clip_edge_global_point_for_test(%s,%s,roll): no partner "
+            .. "clip on track at boundary frame %d — clip is at the "
+            .. "start/end of the track; roll requires a neighbor edge",
+            clip_id:sub(1, 8), edge_type, boundary_frame))
+    end
+
+    -- Scroll the viewport so the boundary sits inside the visible area
+    -- with edge_zone+2 px margin on each side.
+    local vstart = timeline_state.get_viewport_start_time()
+    local vdur = timeline_state.get_viewport_duration()
+    assert(type(vstart) == "number" and type(vdur) == "number" and vdur > 0,
+        "get_clip_edge_global_point_for_test: viewport not initialized")
+    local frames_per_px = vdur / w
+    local margin_frames = math.ceil((edge_zone + 2) * frames_per_px)
+    if boundary_frame - margin_frames < vstart
+       or boundary_frame + margin_frames > vstart + vdur then
+        timeline_state.set_viewport_start_time(
+            math.floor(boundary_frame - vdur / 2))
+    end
+
+    -- Width validation. Picker rejects edges whose owning clip's visible
+    -- pixel width < MIN_EDGE_SELECTABLE_WIDTH_PX.
+    local function clip_visible_width_px(c)
+        local sx = timeline_state.time_to_pixel(c.sequence_start, w)
+        local ex = timeline_state.time_to_pixel(c.sequence_start + c.duration, w)
+        return math.max(0, math.min(ex, w) - math.max(sx, 0))
+    end
+    local target_width = clip_visible_width_px(clip)
+    assert(target_width >= min_width, string.format(
+        "get_clip_edge_global_point_for_test(%s,%s,%s): target clip's "
+        .. "visible width %dpx < MIN_EDGE_SELECTABLE_WIDTH_PX %dpx. "
+        .. "Zoom viewport in (current vdur=%d frames @ %dpx) before "
+        .. "calling this helper.",
+        clip_id:sub(1, 8), edge_type, trim_type,
+        target_width, min_width, vdur, w))
+    if trim_type == "roll" then
+        local partner_width = clip_visible_width_px(partner)
+        assert(partner_width >= min_width, string.format(
+            "get_clip_edge_global_point_for_test(%s,%s,roll): partner "
+            .. "clip %s visible width %dpx < MIN_EDGE_SELECTABLE_WIDTH_PX "
+            .. "%dpx. Zoom viewport in.",
+            clip_id:sub(1, 8), edge_type,
+            partner.id:sub(1, 8), partner_width, min_width))
+    end
+
+    local boundary_px = timeline_state.time_to_pixel(boundary_frame, w)
+    local cursor_x
+    if trim_type == "roll" then
+        cursor_x = math.floor(boundary_px)
+    elseif edge_type == "in" then
+        cursor_x = math.floor(boundary_px + ripple_offset)
+    else
+        cursor_x = math.floor(boundary_px - ripple_offset)
+    end
+    assert(cursor_x >= 0 and cursor_x < w, string.format(
+        "get_clip_edge_global_point_for_test: cursor_x %d out of widget "
+        .. "bounds [0,%d) — boundary_px=%d", cursor_x, w, boundary_px))
+
+    local track_y = view.get_track_y_by_id(clip.track_id, h)
+    assert(track_y and track_y >= 0,
+        "get_clip_edge_global_point_for_test: track_y missing for " .. clip.track_id)
+    local track_h = view.get_track_visual_height(clip.track_id)
+    assert(type(track_h) == "number" and track_h > 0,
+        "get_clip_edge_global_point_for_test: track_h missing for " .. clip.track_id)
+    local cy = math.floor(track_y + track_h / 2)
+
+    local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, cursor_x, cy)
+    return gx, gy
+end
+
 --- TEST-ONLY: global screen coords for a ruler click that seeks the
 --- playhead to the given frame on the displayed sequence. The ruler
 --- shares the video viewport pixel grid; clicking at the computed

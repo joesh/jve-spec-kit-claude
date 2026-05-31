@@ -329,6 +329,32 @@ function M.clip_global_center(clip_id)
     return string.format("%d,%d", gx, gy)
 end
 
+--- Global click coords that the edge picker will resolve to a specific
+--- edge selection on `clip_id`. Thin wrapper around
+--- timeline_panel.get_clip_edge_global_point_for_test so the smoke runner
+--- can call through the same debug_helpers surface it uses for other
+--- coord lookups. Asserts on missing args; the underlying helper asserts
+--- on every precondition failure (clip not found, viewport not laid out,
+--- target/partner clip too narrow, etc.) so any "" return from here
+--- means the picker explicitly refused — not a silent failure path.
+--- @param clip_id string
+--- @param edge_type string "in" | "out"
+--- @param trim_type string "ripple" | "roll"
+--- @return string "<gx>,<gy>" coords
+function M.clip_edge_global_point(clip_id, edge_type, trim_type)
+    assert(type(clip_id) == "string" and clip_id ~= "",
+        "debug_helpers.clip_edge_global_point: clip_id required")
+    assert(edge_type == "in" or edge_type == "out",
+        "debug_helpers.clip_edge_global_point: edge_type must be 'in'|'out'")
+    assert(trim_type == "ripple" or trim_type == "roll",
+        "debug_helpers.clip_edge_global_point: trim_type must be 'ripple'|'roll'")
+    local tp = require("ui.timeline.timeline_panel")
+    local gx, gy = tp.get_clip_edge_global_point_for_test(clip_id, edge_type, trim_type)
+    assert(gx and gy, "debug_helpers.clip_edge_global_point: helper returned "
+        .. "nil coords without asserting — bug in get_clip_edge_global_point_for_test")
+    return string.format("%d,%d", gx, gy)
+end
+
 --- @param frame integer
 --- @return string "<gx>,<gy>" coords for ruler click that seeks to frame
 function M.ruler_global_point(frame)

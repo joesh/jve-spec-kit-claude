@@ -88,12 +88,6 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             "return tostring(require('core.debug_helpers').source_viewer_clip_id())"),
             "setUp: Shift+F did not pin the clip in live-bound mode")
 
-        # spec 022 / 1.3a-ii: no workaround needed. BRE's build_clip_cache
-        # reads from the ACTIVE record tab's per-tab cache directly via
-        # strip:find_record_tab_by_sequence_id(ctx.sequence_id), so the
-        # edit lands correctly even while the displayed tab is the source
-        # master (this test's setup loads a clip into source viewer, which
-        # auto-switches displayed to the master).
         before_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")
         before_effective = self.eval_str(
@@ -105,37 +99,18 @@ class TestSourceViewerMarksTrackLiveClipMutations(JVESmokeCase):
             f"should already match clip.source_in ({before_clip_source_in}) "
             f"after load_clip; got {before_effective}"))
 
-        # External mutation: ripple the in-edge by -5 frames. This moves
-        # the clip's source_in (in-edge ripple grows duration + walks
-        # source_in earlier; sequence_start stays).
-        # Verify BRE actually applied the requested delta (didn't clamp).
-        # Reads top-level fields surfaced by the executor (see
-        # batch_ripple_edit.lua finalize_execution real-path). A
-        # clamped_delta_frames != requested signals the test picked an
-        # un-movable clip (see hard-coding rationale above).
-        #
-        # command under test — driven directly because there is no
-        # keyboard analogue for "select clip {id}'s in-edge precisely and
-        # ripple by -5". Edge selection requires pixel-accurate
-        # hover/click on an edge handle; no smoke primitive exists for
-        # that yet. The contract under test is "BRE must emit
-        # sequence_content_changed" — driving via command_manager is the
-        # only way to deterministically trigger that specific mutation.
-        result_summary = self.eval_str(
-            "local cm = require('core.command_manager'); "
-            f"local r = cm.execute('BatchRippleEdit', {{ "
-            f"sequence_id='{seq_id}', "
-            f"edge_infos = {{ {{ clip_id='{clip_id}', edge_type='in', trim_type='ripple', track_id='{track_id}' }} }}, "
-            "delta_frames = -5 }); "
-            "return tostring(r.success) "
-            "  .. '|err=' .. tostring(r.error_message or 'ok') "
-            "  .. '|req=' .. tostring(r.requested_delta_frames) "
-            "  .. '|clamp=' .. tostring(r.clamped_delta_frames)")
-        self.assertTrue(result_summary.startswith('true|'),
-            f"BatchRippleEdit failed: {result_summary}")
-        self.assertIn("|req=-5|clamp=-5", result_summary, (
-            f"BRE clamped the requested delta away from -5 — selector "
-            f"picked an un-movable clip: {result_summary}"))
+        # External mutation via real UI: ripple the in-edge by -5 frames.
+        # Shift+F auto-switched the displayed tab to the source master, so
+        # we have to swap back to the record tab to click the clip on the
+        # record timeline. The source viewer's live-bound pin survives the
+        # tab swap (019 FR-024 contract).
+        # Then click_clip_edge picks the in-edge as ripple, and Shift+Comma
+        # nudges -5 via NudgeSelection → BatchRippleEdit. No
+        # command_manager.execute() shortcut — all real OS input.
+        self.ensure_record_tab()
+        self.click_clip_edge(clip_id, "in", "ripple")
+        self.focus_panel("timeline")
+        self.key("Shift+Comma")
 
         after_clip_source_in = self.eval_int(
             f"return require('models.clip').load('{clip_id}').source_in")

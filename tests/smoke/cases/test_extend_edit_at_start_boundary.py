@@ -31,14 +31,12 @@ from tests.smoke.runner.case import JVESmokeCase
 class TestExtendEditBoundary(JVESmokeCase):
     """E (ExtendEdit) toward floor must not push the clip's in-edge below."""
 
-    # TODO: needs an edge-selection primitive (e.g. self.click_edge(clip_id,
-    # 'in', trim='ripple')) — there is no keyboard analogue for selecting a
-    # specific clip's in-edge as a ripple-trim edge, and the rule (2026-05-30)
-    # forbids command_manager.execute() from the test body. Was previously
-    # @expectedFailure for a separate ExtendEdit no-op investigation; both
-    # blockers are recorded here so the smoke is ready to re-enable once the
-    # primitive lands.
-    @unittest.skip("needs click_edge primitive (SelectEdges has no keyboard analogue)")
+    # Skip pending phase 1 (core.playhead.set clamp) AND a separate
+    # ExtendEdit no-op investigation that was previously @expectedFailure.
+    # The edge-selection blocker is RESOLVED by click_clip_edge (2026-05-30);
+    # the body below uses it and is policy-clean, so when phase 1 lands +
+    # the ExtendEdit bug is fixed, this is a one-line skip removal.
+    @unittest.skip("pending phase 1 playhead clamp + separate ExtendEdit no-op investigation")
     def test_extend_in_edge_to_floor_lands_at_floor(self) -> None:
         seq_id = self.eval_str(
             "local sid = require('core.playback.transport')"
@@ -66,26 +64,15 @@ class TestExtendEditBoundary(JVESmokeCase):
         clip_id, clip_start_str = info.strip('"').split('|', 1)
         clip_start_before = int(clip_start_str)
 
-        # Select the in-edge for ripple trim.
-        self.eval(
-            "require('core.command_manager').execute('SelectEdges', "
-            f"{{ sequence_id='{seq_id}', "
-            f"target_edges = {{ {{ clip_id='{clip_id}', edge_type='in', "
-            f"  trim_type='ripple' }} }} }})")
-        self.assertEqual(1, self.eval_int(
-            "return #require('ui.timeline.timeline_state').get_selected_edges()"),
-            "setUp: failed to select the in-edge")
+        # Select the in-edge for ripple trim via real click on the edge
+        # handle (post-asserts the selection landed).
+        self.click_clip_edge(clip_id, "in", "ripple")
 
-        # Park playhead at the floor. After phase 1, this lands at floor
-        # exactly (any below-floor request would be clamped — verified
-        # by test_playhead_below_start_clamps.py).
-        self.eval(
-            "require('core.command_manager').execute('SetPlayhead', "
-            f"{{ sequence_id='{seq_id}', playhead_position={start_tc} }})")
-        self.assertEqual(start_tc, self.eval_int(
-            "return require('core.playback.transport')"
-            ".engine_for_target():get_position()"),
-            "setUp: playhead didn't park at floor")
+        # Park playhead at the floor via the timecode-entry UI.
+        # After phase 1, this lands at floor exactly (any below-floor
+        # request would be clamped — verified by
+        # test_playhead_below_start_clamps.py).
+        self.move_playhead_to(start_tc)
 
         self.focus_panel("timeline")
         self.key("E")

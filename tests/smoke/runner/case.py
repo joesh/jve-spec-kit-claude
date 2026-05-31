@@ -250,6 +250,73 @@ class JVESmokeCase(unittest.TestCase):
                 f"({gx},{gy}) — divergence means the widget moved between coord "
                 f"compute and click send.")
 
+    def click_clip_edge(self, clip_id: str, edge_type: str,
+                        trim_type: str) -> None:
+        """Click on a clip's edge so the edge_picker selects it as the
+        requested trim_type (ripple or roll).
+
+        Resolves the pixel via
+        ``timeline_panel.get_clip_edge_global_point_for_test`` which
+        picks a cursor offset that lands in the correct picker zone
+        (center → roll, outside center → ripple on the clip-body side).
+        After the click, asserts the requested edge is actually in
+        ``timeline_state.get_selected_edges()`` with the requested
+        ``trim_type`` — surfaces picker mismatches at this helper, not
+        downstream where a missing edge selection would silently
+        produce wrong nudge behaviour.
+
+        For roll, the picker selects edges on BOTH sides of the
+        boundary; this asserts ``clip_id``'s edge is among them.
+        """
+        if edge_type not in ("in", "out"):
+            raise ValueError(f"edge_type must be 'in'|'out', got {edge_type!r}")
+        if trim_type not in ("ripple", "roll"):
+            raise ValueError(f"trim_type must be 'ripple'|'roll', got {trim_type!r}")
+        coords = self.eval_str(
+            "return require('core.debug_helpers').clip_edge_global_point("
+            f"'{clip_id}', '{edge_type}', '{trim_type}')")
+        self.assertNotEqual("", coords, (
+            f"click_clip_edge({clip_id!r},{edge_type!r},{trim_type!r}): "
+            f"debug_helpers returned empty coords."))
+        gx_s, gy_s = coords.split(",", 1)
+        gx, gy = int(gx_s), int(gy_s)
+        snap = self.runner.get_command_count()
+        self.runner.click(gx, gy)
+        self.runner.wait_for_command_after(snap)
+
+        # Post-condition: the requested edge is in the selection with
+        # the requested trim_type. CSV-encode {clip_id|edge_type|trim_type}
+        # rows for cheap parsing.
+        rows = self.eval_str(
+            "local edges = require('ui.timeline.timeline_state')"
+            ".get_selected_edges() or {}; "
+            "local parts = {}; "
+            "for i, e in ipairs(edges) do "
+            "  parts[i] = tostring(e.clip_id) .. '|' "
+            "    .. tostring(e.edge_type) .. '|' "
+            "    .. tostring(e.trim_type) "
+            "end; "
+            "return table.concat(parts, ',')")
+        selected = []
+        for row in rows.split(","):
+            row = row.strip()
+            if not row:
+                continue
+            try:
+                cid, etype, ttype = row.split("|", 2)
+            except ValueError:
+                continue
+            selected.append((cid, etype, ttype))
+        wanted = (clip_id, edge_type, trim_type)
+        if wanted not in selected:
+            raise AssertionError(
+                f"click_clip_edge({clip_id!r},{edge_type!r},{trim_type!r}) "
+                f"at screen ({gx},{gy}): requested edge NOT in selection. "
+                f"Got {len(selected)} edge(s): {selected}. The click likely "
+                f"landed off the picker's zone — check the boundary pixel "
+                f"vs widget bounds, viewport zoom, and any partner-clip "
+                f"width constraints raised by the helper.")
+
     def right_click_clip(self, clip_id: str) -> None:
         self.click_clip(clip_id, right=True)
 
@@ -303,7 +370,7 @@ class JVESmokeCase(unittest.TestCase):
         """Convenience proxy to self.runner.wait_for."""
         self.runner.wait_for(lua_predicate, timeout=timeout)
 
-    def fetch_str_array(self, producer_lua: str, global_name: str,
+    def fetch_str_array(self, producer_lua: str, key: str,
                         chunk_size: int = 5) -> list:
         """Fetch a Lua string array of arbitrary length without hitting
         the debug-terminal 256-char repr cap. See ``fetch_int_array``
@@ -315,30 +382,31 @@ class JVESmokeCase(unittest.TestCase):
         if n <= 0:
             return []
         out: list = []
-        helper = "require('core.debug_helpers').smoke_array_chunk"
+        helper = "require('core.debug_helpers').array_chunk"
         for start in range(1, n + 1, chunk_size):
             end = min(start + chunk_size - 1, n)
             chunk = self.eval_str(
-                f"return {helper}('{global_name}', {start}, {end})")
+                f"return {helper}('{key}', {start}, {end})")
             if chunk:
                 out.extend(x for x in chunk.split(",") if x)
         assert len(out) == n, (
             f"fetch_str_array: expected {n} items, got {len(out)} — "
-            f"chunking dropped items (global_name={global_name!r}, "
+            f"chunking dropped items (key={key!r}, "
             f"chunk_size={chunk_size})")
         return out
 
-    def fetch_int_array(self, producer_lua: str, global_name: str,
+    def fetch_int_array(self, producer_lua: str, key: str,
                         chunk_size: int = 20) -> list:
         """Fetch a sortable Lua int array of arbitrary length without
         hitting the debug-terminal repr cap (256 chars per response,
         per spec.md FR-005).
 
-        Contract — ``producer_lua`` is a Lua snippet that stashes a
-        sorted int array on ``_G[global_name]`` and returns its length.
-        Example producer:
-            "return require('core.debug_helpers').compute_edit_points_on_displayed_sequence()"
-            (stashes on ``_G._smoke_edit_points``)
+        Contract — ``producer_lua`` is a Lua snippet that calls a
+        ``stash_*`` producer in ``core.debug_helpers``. The producer
+        stashes its sorted int array into a module-local table under a
+        stable ``key`` and returns its length. Example:
+            "return require('core.debug_helpers').stash_edit_points_on_displayed_sequence()"
+            (stashes under ``"edit_points"``)
 
         chunk_size is the items-per-fetch budget; default 20 = ~240
         chars of CSV (11-digit ints + commas), well inside the 256 cap.
@@ -350,16 +418,16 @@ class JVESmokeCase(unittest.TestCase):
         if n <= 0:
             return []
         out: list[int] = []
-        helper = "require('core.debug_helpers').smoke_array_chunk"
+        helper = "require('core.debug_helpers').array_chunk"
         for start in range(1, n + 1, chunk_size):
             end = min(start + chunk_size - 1, n)
             chunk = self.eval_str(
-                f"return {helper}('{global_name}', {start}, {end})")
+                f"return {helper}('{key}', {start}, {end})")
             if chunk:
                 out.extend(int(x) for x in chunk.split(",") if x)
         assert len(out) == n, (
             f"fetch_int_array: expected {n} items, got {len(out)} — "
-            f"chunking dropped items (global_name={global_name!r}, "
+            f"chunking dropped items (key={key!r}, "
             f"chunk_size={chunk_size})")
         return out
 

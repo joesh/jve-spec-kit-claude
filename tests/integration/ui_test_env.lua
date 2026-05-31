@@ -176,7 +176,7 @@ function M.launch(opts)
         if t.name == "Film 24fps" then template = t; break end
     end
     assert(template, "ui_test_env: Film 24fps template not found")
-    local created = project_templates.create_project_from_template(template, project_name, db_path)
+    project_templates.create_project_from_template(template, project_name, db_path)
 
     -- Prep phase: open the freshly-created .jvp via the OpenProject command
     -- so we can customize sequences via commands (same path a user takes).

@@ -49,9 +49,10 @@ class TestRollInEdgeBoundaryClamp(JVESmokeCase):
             "return require('models.sequence').load('"
             + seq_id + "').start_timecode_frame")
 
-        # Find a leftmost media clip at the floor and its leading gap on
-        # the same track. The roll edit point sits at the gap's OUT and
-        # the clip's IN — same frame.
+        # Find a leftmost media clip at the floor with a leading gap on
+        # the same track. Roll edit point sits at the gap's OUT and the
+        # clip's IN — same frame. Read-only eval (selection happens via
+        # real click below).
         info = self.eval(
             "local ts = require('ui.timeline.timeline_state'); "
             f"local boundary = {start_tc}; "
@@ -72,23 +73,20 @@ class TestRollInEdgeBoundaryClamp(JVESmokeCase):
             "end; "
             "if not gap then error('no leading gap adjacent to boundary clip') end; "
             "return string.format('%s|%s|%d', target.id, gap.id, target.sequence_start)")
-        target_id, gap_id, before_start_str = info.strip('"').split('|', 2)
+        target_id, _gap_id, before_start_str = info.strip('"').split('|', 2)
         before_sequence_start = int(before_start_str)
 
-        # Invoke BatchRippleEdit with both edges of the roll edit point.
-        # UI roll-select auto-pairs these; this is the same shape the
-        # nudge keys produce after edge_decoration.decorate runs.
-        result_summary = self.eval_str(
-            "local cm = require('core.command_manager'); "
-            f"local r = cm.execute('BatchRippleEdit', {{ "
-            f"sequence_id='{seq_id}', "
-            "edge_infos = { "
-            f"  {{ clip_id='{gap_id}', edge_type='out', trim_type='roll' }}, "
-            f"  {{ clip_id='{target_id}', edge_type='in', trim_type='roll' }} "
-            "}, delta_frames = -5 }); "
-            "return tostring(r.success) .. ':' .. tostring(r.error_message or 'ok')")
-        self.assertTrue(result_summary.startswith('true:'),
-            f"BatchRippleEdit failed unexpectedly: {result_summary}")
+        # Select the roll edit point via a real click in the center zone
+        # of the boundary (picker auto-pairs gap.out + target.in as roll).
+        # If the gap or target is too narrow at current viewport zoom,
+        # the helper raises with the widths and the required minimum.
+        self.click_clip_edge(target_id, "in", "roll")
+
+        # Nudge -5 via Shift+Comma → NudgeSelection direction=-1
+        # magnitude=5 (default.jvekeys) → BatchRippleEdit on the roll
+        # edit point. key() blocks until the command commits.
+        self.focus_panel("timeline")
+        self.key("Shift+Comma")
 
         after_sequence_start = self.eval_int(
             f"return require('models.clip').load('{target_id}').sequence_start")
