@@ -23,6 +23,8 @@
 #include "lua/qt_bindings/input_bindings.cpp"
 #include "lua/qt_bindings/xml_bindings.cpp"
 #include "lua/qt_bindings/zstd_bindings.cpp"
+#include "lua/qt_bindings/process_bindings.cpp"
+#include "lua/qt_bindings/local_socket_bindings.cpp"
 
 // Define the metatable name (declared extern in qt_bindings.h)
 const char* WIDGET_METATABLE = "JVE.Widget";
@@ -416,6 +418,12 @@ void registerQtBindings(lua_State* L)
     // Register zstd decompression (qt_zstd_decompress — used by DRP importer
     // to decode Sm2Mp FieldsBlob payloads for synced-clip resolution).
     register_zstd_bindings(L);
+
+    // Register QProcess + QLocalSocket primitives (spec 023 T019/T020) for
+    // the Resolve helper supervisor. Supervision policy lives in
+    // core/resolve_bridge/helper_supervisor.lua; these are thin FFI only.
+    register_process_bindings(L);
+    register_local_socket_bindings(L);
 
     // Populate 'qt_constants.SIGNAL' subtable for application-level signal handlers
     lua_newtable(L);
