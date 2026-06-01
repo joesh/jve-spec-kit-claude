@@ -57,7 +57,7 @@ Every verb cheaply revalidates the handle first and returns `handle_stale` if it
 ### `read_timeline`
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)
 - **result**: `{ items: [{ resolve_item_id, track, record_start, record_duration, source_in, source_out, enabled }] }`
-- The live per-item **edit** state, for pulling Resolve-side edit tweaks back into JVE (FR-024). Read-only; manual-pull only. Times are absolute TC (frames + subframe), consistent with JVE's timecode-is-truth invariant; the locale-rate guard (FR-020) applies. JVE diffs these against its matched clips + the stored `edit_fingerprint` to separate Resolve-side changes from JVE-side local edits (FR-025).
+- The live per-item **edit** state, for pulling Resolve-side edit tweaks back into JVE (FR-024). Read-only; manual-pull only. Times are absolute TC consistent with JVE's timecode-is-truth invariant; the locale-rate guard (FR-020) applies. **Video items**: integer frames only (no subframe). **Audio items**: each TC field is `{frame, subframe}` where subframe is sample-level precision below the frame (matches JVE clip schema's `source_in_subframe`/`source_out_subframe`). JVE diffs these against its matched clips + the stored `edit_fingerprint` to separate Resolve-side changes from JVE-side local edits (FR-025).
 
 ### `read_grades`
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)

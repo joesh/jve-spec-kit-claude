@@ -112,29 +112,28 @@ seed_link("c_skip_n",    fp_at(1000, 1200, 5600, 200))
 seed_link("c_skip_jve",  fp_at(1000, 1200, 5900, 200))
 seed_link("c_bootstrap", "")  -- empty edit_fingerprint → bootstrap path
 
--- Response shape — what helper read_timeline returns.
+-- Response shape — exactly the field names helper-protocol.md:59
+-- specifies (resolve_item_id + record_duration). Response values for
+-- resolve_item_id match what the ledger upserts above ("rs-<clip>").
 local response = { items = {
     -- Resolve trimmed right edge by -20; JVE unchanged from baseline → apply
-    { jve_guid = "c_apply",    source_in = 1000, source_out = 1180,
-      record_start = 5000, record_dur = 180, enabled = true },
+    { resolve_item_id = "rs-c_apply",    source_in = 1000, source_out = 1180,
+      record_start = 5000, record_duration = 180, enabled = true },
     -- Resolve trimmed left by +10; JVE locally moved → both → conflict
-    { jve_guid = "c_conflict", source_in = 1010, source_out = 1200,
-      record_start = 5310, record_dur = 190, enabled = true },
+    { resolve_item_id = "rs-c_conflict", source_in = 1010, source_out = 1200,
+      record_start = 5310, record_duration = 190, enabled = true },
     -- Neither side changed → skipped (neither)
-    { jve_guid = "c_skip_n",   source_in = 1000, source_out = 1200,
-      record_start = 5600, record_dur = 200, enabled = true },
+    { resolve_item_id = "rs-c_skip_n",   source_in = 1000, source_out = 1200,
+      record_start = 5600, record_duration = 200, enabled = true },
     -- Resolve matches PRE-trim baseline; JVE diverged locally → jve_only
-    { jve_guid = "c_skip_jve", source_in = 1000, source_out = 1200,
-      record_start = 5900, record_dur = 200, enabled = true },
+    { resolve_item_id = "rs-c_skip_jve", source_in = 1000, source_out = 1200,
+      record_start = 5900, record_duration = 200, enabled = true },
     -- Bootstrap: ledger has empty fp; live ≠ current → resolve_only
-    { jve_guid = "c_bootstrap", source_in = 1000, source_out = 1150,
-      record_start = 6100, record_dur = 150, enabled = true },
+    { resolve_item_id = "rs-c_bootstrap", source_in = 1000, source_out = 1150,
+      record_start = 6100, record_duration = 150, enabled = true },
     -- Clip exists but no ledger row → unmatched(ledger_missing)
-    { jve_guid = "c_no_ledger", source_in = 1000, source_out = 1200,
-      record_start = 6400, record_dur = 200, enabled = true },
-    -- No clip with this id → unmatched(clip_missing)
-    { jve_guid = "c_ghost",    source_in = 1000, source_out = 1200,
-      record_start = 5000, record_dur = 200, enabled = true },
+    { resolve_item_id = "rs-c_no_ledger", source_in = 1000, source_out = 1200,
+      record_start = 6400, record_duration = 200, enabled = true },
 } }
 
 -- Make c_conflict's JVE-current state differ from baseline_fp so the
@@ -150,7 +149,7 @@ local result = sync_edits.classify_all(response, db)
 
 local function find(list, clip_id)
     for _, e in ipairs(list) do
-        if (e.clip_id or e.jve_guid) == clip_id then return e end
+        if (e.clip_id or e.resolve_item_id) == clip_id then return e end
     end
     return nil
 end
@@ -170,17 +169,20 @@ check("c_skip_jve kind jve_only",
 check("c_bootstrap → to_apply", find(result.to_apply,  "c_bootstrap") ~= nil)
 check("c_bootstrap kind resolve_only",
     (find(result.to_apply, "c_bootstrap") or {}).kind == "resolve_only")
-check("c_no_ledger → unmatched", find(result.unmatched, "c_no_ledger") ~= nil)
+-- ledger_missing entries carry only resolve_item_id (the ledger lookup
+-- failed before any clip_id was known) — search by the helper-side id.
+check("c_no_ledger → unmatched",
+    find(result.unmatched, "rs-c_no_ledger") ~= nil)
 check("c_no_ledger reason ledger_missing",
-    (find(result.unmatched, "c_no_ledger") or {}).reason == "ledger_missing")
-check("c_ghost → unmatched",    find(result.unmatched, "c_ghost") ~= nil)
-check("c_ghost reason clip_missing",
-    (find(result.unmatched, "c_ghost") or {}).reason == "clip_missing")
+    (find(result.unmatched, "rs-c_no_ledger") or {}).reason
+        == "ledger_missing")
+-- clip_missing is an unreachable invariant under FK CASCADE
+-- (schema.sql:871) — asserted in classify_all, not bucketed.
 
 check("to_apply count == 2",  #result.to_apply  == 2)
 check("conflicts count == 1", #result.conflicts == 1)
 check("skipped count == 2",   #result.skipped   == 2)
-check("unmatched count == 2", #result.unmatched == 2)
+check("unmatched count == 1", #result.unmatched == 1)
 
 -- Fail-fast asserts (rule 1.14): every error path raises, none silent.
 local ok_no_db = pcall(sync_edits.classify_all, response, nil)
@@ -188,7 +190,7 @@ check("classify_all asserts on missing db", not ok_no_db)
 local ok_no_items = pcall(sync_edits.classify_all, {}, db)
 check("classify_all asserts on missing items", not ok_no_items)
 local ok_bad_item = pcall(sync_edits.classify_all,
-    { items = {{ jve_guid = "x" }} }, db)
+    { items = {{ resolve_item_id = "x" }} }, db)
 check("classify_all asserts on incomplete item", not ok_bad_item)
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))

@@ -81,6 +81,28 @@ function M.load(clip_id, db)
     return read_row(clip_id, db)
 end
 
+--- Reverse-direction lookup: given a Resolve item id, return the JVE
+--- clip_id it maps to (or nil if no row). Used by SyncEditsFromResolve
+--- to translate read_timeline response rows (keyed on resolve_item_id)
+--- back to JVE clip ids (FR-011c — UUID-minted clips where
+--- resolve_item_id ≠ jve_clip_uuid).
+function M.lookup_clip_id(resolve_item_id, db)
+    assert(type(resolve_item_id) == "string" and resolve_item_id ~= "",
+        "identity_ledger.lookup_clip_id: resolve_item_id required")
+    assert(db, "identity_ledger.lookup_clip_id: db connection required")
+    local stmt = assert(db:prepare([[
+        SELECT jve_clip_uuid FROM resolve_bridge_link
+        WHERE resolve_item_id = ?
+    ]]), "identity_ledger.lookup_clip_id: prepare failed")
+    stmt:bind_value(1, resolve_item_id)
+    local clip_id
+    if stmt:exec() and stmt:next() then
+        clip_id = stmt:value(0)
+    end
+    stmt:finalize()
+    return clip_id
+end
+
 --- Reconcile algorithm (spec 023 T036, FR-012, data-model.md §reconcile).
 ---
 --- Pure data: takes the current JVE clip list + the current Resolve item

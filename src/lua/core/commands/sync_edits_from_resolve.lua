@@ -27,18 +27,22 @@ local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.items) == "table",
         "sync_edits.classify_all: response.items array required")
     for i, row in ipairs(response.items) do
-        assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
+        assert(type(row.resolve_item_id) == "string"
+            and row.resolve_item_id ~= "",
             string.format(
-                "sync_edits.classify_all: item[%d] missing jve_guid", i))
+                "sync_edits.classify_all: item[%d] missing resolve_item_id",
+                i))
         for _, k in ipairs({
-            "source_in", "source_out", "record_start", "record_dur",
+            "source_in", "source_out", "record_start", "record_duration",
         }) do
             assert(type(row[k]) == "number", string.format(
                 "sync_edits.classify_all: item[%d] missing %s (number)",
                 i, k))
         end
-        assert(row.enabled ~= nil, string.format(
-            "sync_edits.classify_all: item[%d] missing enabled", i))
+        assert(type(row.enabled) == "boolean",
+            string.format(
+                "sync_edits.classify_all: item[%d] missing enabled (boolean)",
+                i))
     end
 end
 
@@ -59,12 +63,16 @@ local function load_current_state(clip_id)
     }
 end
 
+--- Map helper-protocol field names to JVE-internal canonical (drops
+--- `_frame` / `_frames` per [[feedback_clip_lua_field_names]]; helper
+--- uses `record_duration`, JVE clip model uses `duration` (= record_dur
+--- in fingerprint vocabulary)).
 local function live_state_from_response_row(row)
     return {
         source_in    = row.source_in,
         source_out   = row.source_out,
         record_start = row.record_start,
-        record_dur   = row.record_dur,
+        record_dur   = row.record_duration,
         enabled      = row.enabled,
     }
 end
@@ -101,19 +109,29 @@ function M.classify_all(response, db)
     }
 
     for _, row in ipairs(response.items) do
-        local clip_id = row.jve_guid
-        local current = load_current_state(clip_id)
-        if current == nil then
+        local resolve_item_id = row.resolve_item_id
+        local clip_id = identity_ledger.lookup_clip_id(resolve_item_id, db)
+        if clip_id == nil then
             result.unmatched[#result.unmatched + 1] = {
-                jve_guid = clip_id, reason = "clip_missing",
+                resolve_item_id = resolve_item_id,
+                reason          = "ledger_missing",
             }
         else
-            local link = identity_ledger.load(clip_id, db)
-            if link == nil then
-                result.unmatched[#result.unmatched + 1] = {
-                    jve_guid = clip_id, reason = "ledger_missing",
-                }
-            else
+            -- FK invariant: `resolve_bridge_link.jve_clip_uuid` references
+            -- `clips(id)` ON DELETE CASCADE (schema.sql:871) ⇒ an
+            -- orphan ledger row is structurally impossible. If the
+            -- lookup returns a clip_id, the clip row exists.
+            local current = load_current_state(clip_id)
+            assert(current ~= nil, string.format(
+                "sync_edits.classify_all: ledger row points at missing "
+                .. "clip %s (FK CASCADE violated) — DB corruption",
+                clip_id))
+            do
+                local link = identity_ledger.load(clip_id, db)
+                assert(link ~= nil, string.format(
+                    "sync_edits.classify_all: ledger row vanished between "
+                    .. "lookup_clip_id and load for resolve_item_id=%s",
+                    resolve_item_id))
                 local live = live_state_from_response_row(row)
                 local stored_fp = link.edit_fingerprint
                 if stored_fp == nil or stored_fp == "" then
@@ -122,11 +140,12 @@ function M.classify_all(response, db)
                 local classified = edit_diff.classify(
                     live, stored_fp, current)
                 local entry = {
-                    clip_id   = clip_id,
-                    live      = live,
-                    current   = current,
-                    stored_fp = stored_fp,
-                    kind      = classified.kind,
+                    clip_id         = clip_id,
+                    resolve_item_id = resolve_item_id,
+                    live            = live,
+                    current         = current,
+                    stored_fp       = stored_fp,
+                    kind            = classified.kind,
                 }
                 if classified.kind == "resolve_only" then
                     result.to_apply[#result.to_apply + 1] = entry
