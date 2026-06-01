@@ -179,19 +179,29 @@ Every emit point asserts its `reason` is in the appropriate set — catches typo
 Internal flow:
 1. Pre-flight intent resolution (delete-wins, mutual-exclusion assert).
 2. Build `take_resolve_set`; `classify_all(response, sequence_id, db, take_resolve_set)`.
-3. Persist bootstrap fingerprints for `skipped[]` entries with `bootstrapped = true` (outside undo group; metadata-only).
-4. If no dispatches planned → return.
-5. `command_manager.begin_undo_group("Sync Edits from Resolve")`.
-6. Pre-Phase-0 — `delete_locally` dispatches.
-7. **Phase 0** — `MoveClipToTrack` per `to_apply` entry with `requires_track_move = true`.
-8. **Phase A** — `ToggleClipEnabled` per clip with Δenabled.
-9. **Phase B** — trim fixpoint loop (`RippleTrimEdge` / `OverwriteTrimEdge`); blanket reload of sequence clips after each `RippleTrimEdge` to absorb sync_mode cross-track propagation.
-10. **Phase C** — `Nudge` for residual pure-record-start shifts.
-11. **Phase D** — surface unmatched shape-residuals into `apply.skipped[]` with `reason = unknown_delta_shape`.
-12. `end_undo_group`.
-13. Persist post-dispatch fingerprints for clips whose every dispatched verb succeeded (outside undo group).
+3. Persist bootstrap fingerprints for every entry — in `skipped[]` OR `to_apply[]` — with `bootstrapped = true` (outside undo group; metadata-only). Persisting bootstrapped `to_apply` entries up front means a subsequent dispatch failure leaves the baseline fingerprint in place so the next sync diffs against it.
+4. V1 MVP path: surface `conflicts[]` entries into `result.skipped[]` with `reason = no_modal_v1_unhandled_conflict`, carrying the classifier's `kind / live / current / stored_fp / track_id / track_type / live_track_id` fields through verbatim (modal shape parity). Also pass through `classified.skipped` entries.
+5. If no `to_apply` dispatches planned → return.
+6. `command_manager.begin_undo_group("Sync Edits from Resolve")`.
+7. Pre-Phase-0 — `delete_locally` dispatches (V2 only; V1 user_choices=nil → no deletes).
+8. **Phase 0** — `MoveClipToTrack` per `to_apply` entry with `requires_track_move = true`.
+9. **Phase A** — `ToggleClipEnabled` per clip with Δenabled.
+10. **Phase B** — trim fixpoint loop (`RippleTrimEdge` / `OverwriteTrimEdge`); blanket reload of sequence clips after each `RippleTrimEdge` to absorb sync_mode cross-track propagation.
+11. **Phase C** — `Nudge` for residual pure-record-start shifts.
+12. **Phase D** — surface unmatched shape-residuals into `apply.skipped[]` with `reason = unknown_delta_shape`.
+13. `end_undo_group`.
+14. Persist post-dispatch fingerprints for clips whose every dispatched verb succeeded (outside undo group).
 
-`apply.failed[]` entries are per-(clip, verb): `{clip_id, attempted_verb, args, error}`. Per-phase failure cascade: Phase 0 failure cascade-skips A/B/C for that clip (`phase0_failed`); Phase A failure is independent (`enabled` is geometrically inert); Phase B failure cascade-skips C (`phaseB_failed`). Fingerprints are persisted only for clips whose every attempted phase succeeded; partial-success clips retain their prior fingerprint so the next sync retries.
+### Result bucket shapes
+
+| Bucket | Required fields | Optional |
+|--------|-----------------|----------|
+| `applied[]` | `clip_id, resolve_item_id, attempted_verbs` (array of verb strings in dispatch order) | — |
+| `failed[]` | `clip_id, resolve_item_id, attempted_verb, args, error` | — |
+| `skipped[]` | `clip_id, resolve_item_id, reason` | `kind, live, current, stored_fp, track_id, track_type, live_track_id` (carried from classifier) |
+| `fingerprints_persisted[]` | `clip_id, resolve_item_id, edit_fingerprint, origin` (`"bootstrap"` or `"phase_success"`) | — |
+
+`failed[]` is per-(clip, verb): one entry per attempted dispatch that returned `success=false`. Per-phase failure cascade: Phase 0 failure cascade-skips A/B/C for that clip (`reason = phase0_failed` added to `skipped[]`); Phase A failure is independent (`enabled` is geometrically inert); Phase B failure cascade-skips C (`reason = phaseB_failed`). Fingerprints persist only for clips whose every attempted phase succeeded; partial-success clips retain their prior fingerprint so the next sync retries.
 
 ### Dispatch verbs
 

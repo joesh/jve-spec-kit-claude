@@ -22,6 +22,8 @@ local Clip            = require("models.clip")
 local Track           = require("models.track")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local edit_diff       = require("core.resolve_bridge.edit_diff")
+local command_manager = require("core.command_manager")
+local log             = require("core.logger").for_area("commands")
 
 -- Closed-set reasons (module-local; tests assert literal strings, no
 -- public exposure needed). Every emit asserts the reason it carries is
@@ -345,6 +347,257 @@ function M.classify_all(response, sequence_id, db, take_resolve_set)
         classify_row(row, sequence_id, db, take_resolve_set, result)
     end
     walk_ledger_for_deleted(sequence_id, seen_resolve_ids, db, result)
+    return result
+end
+
+-- Closed-set verbs the dispatcher may invoke. Mirrors data-model.md
+-- §SyncEditsFromResolve → Dispatch verbs. Adding a verb requires
+-- updating this constant AND the spec; the dispatcher asserts every
+-- command_manager.execute name is in this set (2.21).
+local DISPATCH_VERBS = {
+    MoveClipToTrack    = true,
+    ToggleClipEnabled  = true,
+    RippleTrimEdge     = true,
+    OverwriteTrimEdge  = true,
+    Nudge              = true,
+    DeleteClip         = true,
+    RippleDelete       = true,
+}
+
+-- Compute the post-success fingerprint that would persist for an
+-- entry whose live state has been fully applied. Pulled from the entry's
+-- `live` (live state from Resolve) plus the original `current.enabled`
+-- iff Phase A was not executed — but for B1, only Phase 0 runs and the
+-- live geometric fields already equal `current`'s for any clip that
+-- entered Phase 0 (track-only delta — fingerprint excludes track_id).
+-- So the fingerprint to persist == fingerprint(live), with `enabled`
+-- pinned to live.enabled.
+local function fingerprint_for_persist(entry)
+    return edit_diff.fingerprint(entry.live)
+end
+
+-- Bootstrap fingerprint persistence. Walks `skipped[]` and `to_apply[]`
+-- for entries the classifier marked `bootstrapped = true` and writes
+-- `link.edit_fingerprint = stored_fp`. Outside the undo group because
+-- it is metadata catch-up, not a user-visible edit (data-model.md
+-- §apply step 3).
+local function persist_bootstrap_fingerprints(classified, db, persisted_list)
+    local function persist_one(entry)
+        if not entry.bootstrapped then return end
+        assert(entry.stored_fp ~= nil and entry.stored_fp ~= "",
+            "sync_edits.apply: bootstrap entry missing stored_fp "
+            .. "(clip_id=" .. tostring(entry.clip_id) .. ")")
+        identity_ledger.upsert(entry.clip_id, {
+            resolve_item_id  = entry.resolve_item_id,
+            edit_fingerprint = entry.stored_fp,
+        }, db)
+        table.insert(persisted_list, {
+            clip_id          = entry.clip_id,
+            resolve_item_id  = entry.resolve_item_id,
+            edit_fingerprint = entry.stored_fp,
+            origin           = "bootstrap",
+        })
+    end
+    for _, e in ipairs(classified.skipped)  do persist_one(e) end
+    for _, e in ipairs(classified.to_apply) do persist_one(e) end
+end
+
+-- V1 no-modal conflict surface (data-model.md §apply step 4 — V1 MVP
+-- path ignores user_choices and surfaces conflicts as skipped). Pure
+-- transform; no DB writes.
+local function surface_conflicts_as_skipped(classified, result)
+    -- Carry the classifier's fields through verbatim — same shape the
+    -- modal would receive in V2 — so callers/log readers can inspect
+    -- why the conflict was bucketed. Only `reason` is rewritten.
+    for _, c in ipairs(classified.conflicts) do
+        table.insert(result.skipped, {
+            clip_id         = c.clip_id,
+            resolve_item_id = c.resolve_item_id,
+            reason          = "no_modal_v1_unhandled_conflict",
+            kind            = c.kind,
+            live            = c.live,
+            current         = c.current,
+            stored_fp       = c.stored_fp,
+            track_id        = c.track_id,
+            track_type      = c.track_type,
+            live_track_id   = c.live_track_id,
+        })
+    end
+    for _, s in ipairs(classified.skipped) do
+        table.insert(result.skipped, s)
+    end
+end
+
+-- Dispatch one verb with closed-set validation. Returns (ok, error_message).
+-- Asserts the verb is in DISPATCH_VERBS before invoking command_manager —
+-- catches drift between this dispatcher and the spec's verb list (2.21).
+local function dispatch_verb(verb, params)
+    assert(DISPATCH_VERBS[verb], string.format(
+        "sync_edits.dispatch_verb: verb %q not in DISPATCH_VERBS "
+        .. "(closed set drift vs data-model.md)", tostring(verb)))
+    local exec_result = command_manager.execute(verb, params)
+    assert(type(exec_result) == "table"
+            and type(exec_result.success) == "boolean",
+        string.format(
+            "sync_edits.dispatch_verb: command_manager.execute(%s) "
+            .. "returned non-conforming result", verb))
+    if exec_result.success then return true, nil end
+    return false, exec_result.error_message or ""
+end
+
+-- Phase 0: MoveClipToTrack for every to_apply entry with
+-- requires_track_move = true. Returns a per-clip status table:
+--   per_clip[clip_id] = { phase0 = "ran_ok" | "ran_failed" | "not_needed" }
+-- Phase 0 failure cascade-skips A/B/C — per data-model.md, the caller
+-- treats `phase0 = "ran_failed"` as a hard stop for that clip's other
+-- phases. B1 only runs Phase 0, so the per-clip table only carries
+-- Phase 0's status today; later commits append phaseA/phaseB/phaseC.
+local function run_phase_0(to_apply_entries, project_id, sequence_id, result)
+    local per_clip = {}
+    for _, entry in ipairs(to_apply_entries) do
+        if entry.requires_track_move then
+            assert(type(entry.target_track_id) == "string"
+                    and entry.target_track_id ~= "",
+                "sync_edits.run_phase_0: requires_track_move entry "
+                .. "missing target_track_id (clip_id="
+                .. tostring(entry.clip_id) .. ")")
+            local ok, err = dispatch_verb("MoveClipToTrack", {
+                clip_id         = entry.clip_id,
+                target_track_id = entry.target_track_id,
+                project_id      = project_id,
+                sequence_id     = sequence_id,
+            })
+            if ok then
+                per_clip[entry.clip_id] = { phase0 = "ran_ok" }
+                table.insert(result.applied, {
+                    clip_id          = entry.clip_id,
+                    resolve_item_id  = entry.resolve_item_id,
+                    attempted_verbs  = { "MoveClipToTrack" },
+                })
+            else
+                per_clip[entry.clip_id] = { phase0 = "ran_failed" }
+                table.insert(result.failed, {
+                    clip_id         = entry.clip_id,
+                    resolve_item_id = entry.resolve_item_id,
+                    attempted_verb  = "MoveClipToTrack",
+                    args = {
+                        target_track_id = entry.target_track_id,
+                    },
+                    error = err,
+                })
+                table.insert(result.skipped, {
+                    clip_id         = entry.clip_id,
+                    resolve_item_id = entry.resolve_item_id,
+                    reason          = "phase0_failed",
+                })
+                log.warn("sync_edits: Phase 0 MoveClipToTrack failed "
+                    .. "for clip %s: %s", tostring(entry.clip_id),
+                    tostring(err))
+            end
+        else
+            per_clip[entry.clip_id] = { phase0 = "not_needed" }
+        end
+    end
+    return per_clip
+end
+
+-- For each to_apply entry whose every executed phase succeeded,
+-- persist the post-success fingerprint to the ledger. B1 only runs
+-- Phase 0, and Phase 0 only addresses track changes (fingerprint
+-- excludes track_id), so a successful Phase 0 means the live state's
+-- geometric/enabled fields already match current — the persisted
+-- fingerprint equals fingerprint(live). Entries with `phase0 =
+-- "not_needed"` are NOT persisted in B1: those entries carry an
+-- edit-diff residual that Phases A/B/C will resolve in later commits;
+-- persisting now would mark the residual as "applied" while it has
+-- not been (data-model.md §apply step 13 — partial-success clips
+-- retain prior fingerprint so the next sync retries).
+local function persist_phase_success_fingerprints(per_clip,
+                                                    to_apply_entries,
+                                                    db, result)
+    for _, entry in ipairs(to_apply_entries) do
+        local status = per_clip[entry.clip_id]
+        if status and status.phase0 == "ran_ok" then
+            local fp = fingerprint_for_persist(entry)
+            identity_ledger.upsert(entry.clip_id, {
+                resolve_item_id  = entry.resolve_item_id,
+                edit_fingerprint = fp,
+            }, db)
+            table.insert(result.fingerprints_persisted, {
+                clip_id          = entry.clip_id,
+                resolve_item_id  = entry.resolve_item_id,
+                edit_fingerprint = fp,
+                origin           = "phase_success",
+            })
+        end
+    end
+end
+
+-- B1-scoping assert: any to_apply entry that B1 cannot dispatch
+-- (no requires_track_move; needs Phases A/B/C/D not yet implemented)
+-- aborts apply() with a clear message. This is a deliberate "honest
+-- incompleteness" guard, not a stub (2.17) — the dispatcher truthfully
+-- refuses work it cannot perform. Later commits (B2/B3/B4) relax the
+-- check by wiring the corresponding phase, and the check disappears
+-- once Phase D is in place.
+local function assert_phase0_only(to_apply_entries)
+    for _, entry in ipairs(to_apply_entries) do
+        if not entry.requires_track_move then
+            error(string.format(
+                "sync_edits.apply: to_apply entry for clip %s has "
+                .. "non-Phase-0 work (edit-diff residual); Phases A/B/C/D "
+                .. "land in subsequent T054b commits. B1 dispatches "
+                .. "Phase 0 (track move) only.",
+                tostring(entry.clip_id)))
+        end
+    end
+end
+
+--- Pull Resolve-side edit deltas back into JVE (data-model.md
+--- §SyncEditsFromResolve, FR-024 / FR-025).
+---
+--- @param response     table  helper read_timeline payload
+--- @param sequence_id  string JVE sequence the response describes
+--- @param project_id   string JVE project (required by dispatched verbs)
+--- @param db           table  open SQLite connection
+--- @param user_choices table? V2; V1 MVP must pass nil
+--- @return table {applied, failed, skipped, fingerprints_persisted}
+---
+--- V1 MVP scope (this commit): Phase 0 (`MoveClipToTrack`) + bootstrap
+--- fingerprint persist + V1 no-modal conflict surface. Other phases
+--- assert until their commits land.
+function M.apply(response, sequence_id, project_id, db, user_choices)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "sync_edits.apply: project_id required")
+    assert(user_choices == nil,
+        "sync_edits.apply: user_choices is V2 only; V1 MVP must pass "
+        .. "nil (conflicts surface as skipped with reason "
+        .. "no_modal_v1_unhandled_conflict)")
+
+    local classified = M.classify_all(response, sequence_id, db, nil)
+
+    local result = {
+        applied                 = {},
+        failed                  = {},
+        skipped                 = {},
+        fingerprints_persisted  = {},
+    }
+
+    persist_bootstrap_fingerprints(classified, db,
+        result.fingerprints_persisted)
+    surface_conflicts_as_skipped(classified, result)
+
+    if #classified.to_apply == 0 then return result end
+
+    assert_phase0_only(classified.to_apply)
+
+    command_manager.begin_undo_group("Sync Edits from Resolve")
+    local per_clip = run_phase_0(classified.to_apply, project_id,
+        sequence_id, result)
+    command_manager.end_undo_group()
+
+    persist_phase_success_fingerprints(per_clip, classified.to_apply,
+        db, result)
     return result
 end
 
