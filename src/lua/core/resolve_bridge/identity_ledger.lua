@@ -81,4 +81,127 @@ function M.load(clip_id, db)
     return read_row(clip_id, db)
 end
 
+--- Reconcile algorithm (spec 023 T036, FR-012, data-model.md §reconcile).
+---
+--- Pure data: takes the current JVE clip list + the current Resolve item
+--- list, returns { mapped, unmatched }. NO DB writes — callers persist
+--- via M.upsert.
+---
+--- Strategy precedence (strongest first):
+---   1. `direct` — JVE clip.id == Resolve item.jve_guid. Wins over any
+---      other candidate (FR-011).
+---   2. `content_match` — same media file_uuid AND overlapping source
+---      TC range. Used when JVE-originated clips are roundtripped
+---      through Resolve without an id (FR-011c positional fallback).
+---   3. `blade_inherit` — the JVE clip is a fragment whose source range
+---      sits ENTIRELY WITHIN some other JVE clip's range on the same
+---      media (file_uuid), AND that parent clip got a direct match.
+---      Both parent + fragment(s) inherit the parent's resolve_item_id
+---      (bladed both-inherit, data-model.md).
+---   4. unmatched — reported, never silently dropped (FR-007 / FR-011).
+---
+--- @param jve_clips     array of {id, file_uuid, source_in, source_out}
+--- @param resolve_items array of {resolve_item_id, jve_guid, file_uuid,
+---                                source_in, source_out}
+--- @return table { mapped = [{clip_id, resolve_item_id, source}, ...],
+---                 unmatched = [{clip_id}, ...] }
+local function ranges_overlap(a_in, a_out, b_in, b_out)
+    return a_in < b_out and b_in < a_out
+end
+
+local function range_contains(parent_in, parent_out, child_in, child_out)
+    return parent_in <= child_in and child_out <= parent_out
+end
+
+local function find_direct(jve_clip, by_jve_guid)
+    local hit = by_jve_guid[jve_clip.id]
+    if hit then return hit end
+    return nil
+end
+
+local function find_content_match(jve_clip, resolve_items)
+    for _, rs in ipairs(resolve_items) do
+        if rs.file_uuid == jve_clip.file_uuid
+            and (rs.jve_guid == nil or rs.jve_guid == "")
+            and ranges_overlap(jve_clip.source_in, jve_clip.source_out,
+                rs.source_in, rs.source_out) then
+            return rs
+        end
+    end
+    return nil
+end
+
+local function find_parent_with_direct(jve_clip, jve_clips, direct_by_clip)
+    for _, candidate in ipairs(jve_clips) do
+        if candidate.id ~= jve_clip.id
+            and candidate.file_uuid == jve_clip.file_uuid
+            and direct_by_clip[candidate.id]
+            and range_contains(candidate.source_in, candidate.source_out,
+                jve_clip.source_in, jve_clip.source_out) then
+            return direct_by_clip[candidate.id]
+        end
+    end
+    return nil
+end
+
+function M.reconcile(jve_clips, resolve_items)
+    assert(type(jve_clips) == "table",
+        "identity_ledger.reconcile: jve_clips array required")
+    assert(type(resolve_items) == "table",
+        "identity_ledger.reconcile: resolve_items array required")
+
+    -- Pass 1: build the by-jve_guid index and resolve direct matches.
+    local by_jve_guid = {}
+    for _, rs in ipairs(resolve_items) do
+        if type(rs.jve_guid) == "string" and rs.jve_guid ~= "" then
+            by_jve_guid[rs.jve_guid] = rs
+        end
+    end
+
+    local direct_by_clip = {}      -- clip_id → resolve_item_id
+    local pending_no_direct = {}   -- jve clips still seeking a match
+    local mapped = {}
+
+    for _, jve_clip in ipairs(jve_clips) do
+        local hit = find_direct(jve_clip, by_jve_guid)
+        if hit then
+            direct_by_clip[jve_clip.id] = hit.resolve_item_id
+            mapped[#mapped+1] = {
+                clip_id         = jve_clip.id,
+                resolve_item_id = hit.resolve_item_id,
+                source          = "direct",
+            }
+        else
+            pending_no_direct[#pending_no_direct+1] = jve_clip
+        end
+    end
+
+    -- Pass 2: for unresolved clips try content_match, then blade_inherit.
+    local unmatched = {}
+    for _, jve_clip in ipairs(pending_no_direct) do
+        local content = find_content_match(jve_clip, resolve_items)
+        if content then
+            mapped[#mapped+1] = {
+                clip_id         = jve_clip.id,
+                resolve_item_id = content.resolve_item_id,
+                source          = "content_match",
+            }
+        else
+            local parent_resolve_id = find_parent_with_direct(
+                jve_clip, jve_clips, direct_by_clip)
+            if parent_resolve_id then
+                mapped[#mapped+1] = {
+                    clip_id         = jve_clip.id,
+                    resolve_item_id = parent_resolve_id,
+                    source          = "blade_inherit",
+                }
+            else
+                unmatched[#unmatched+1] = { clip_id = jve_clip.id }
+            end
+        end
+    end
+
+    return { mapped = mapped, unmatched = unmatched }
+end
+
 return M
