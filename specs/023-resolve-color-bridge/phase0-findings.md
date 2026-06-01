@@ -94,7 +94,7 @@ What I deliberately did **not** do: switch the active project/timeline in Joe's 
 
 **Run:** Joe drove Resolve Studio 20.3.2.9 to import `/tmp/jve/t008_identity.drt` (authored by `tools/resolve-helper/spikes/t008_author_drt.lua` against the T007 writer). Result: Resolve dialog **"Unable to Import Project — Failed to import project."** Identity carrier readback (T008's actual goal) is **not reachable** until import succeeds.
 
-**Cause (evidence-backed via Resolve-authored reference DRP):** Our writer emits a structurally-tolerable archive for JVE's own DRP importer (T004 self-consistency green) but **not** the shape Resolve insists on. A canonical Resolve-exported DRP — produced via `tools/resolve-helper/spikes/t008_export_reference_drp.py` driving `ProjectManager.ExportProject(name, path, False)` — has the same archive layout (project.xml + MediaPool/Master/MpFolder.xml + SeqContainer/&lt;dbid&gt;.xml) but a much richer schema. Diff (incomplete; see `tests/fixtures/resolve/t008_reference_empty_timeline.drp` for the source-of-truth):
+**Cause (evidence-backed via Resolve-authored reference DRP):** Our writer emits a structurally-tolerable archive for JVE's own DRP importer (T004 self-consistency green) but **not** the shape Resolve insists on. A canonical Resolve-exported DRP — produced via `tools/resolve-helper/spikes/t008_export_reference_drp.py` driving `ProjectManager.ExportProject(name, path, False)` — has the same archive layout (project.xml + MediaPool/Master/MpFolder.xml + SeqContainer/&lt;dbid&gt;.xml) but a much richer schema. Diff (incomplete; see `tests/fixtures/resolve/resolve_authored_empty.drp` for the source-of-truth):
 
 | Element | Our writer | Resolve canonical |
 |---|---|---|
@@ -111,7 +111,7 @@ In short: **JVE's own DRP importer is tolerant; Resolve's DRP importer demands t
 
 **Identity-carrier verdict for T008: blocked.** The DBID/NAME/LIS round-trip question can't be tested until Resolve accepts the archive. The writer needs the canonical shape before any carrier readback measurement is meaningful.
 
-**Reference fixture preserved:** `tests/fixtures/resolve/t008_reference_empty_timeline.drp` (Resolve-authored, 17.7 KB, empty timeline). Its unzipped contents are the source of truth for any rewrite.
+**Reference fixture preserved:** `tests/fixtures/resolve/resolve_authored_empty.drp` (Resolve-authored, 17.7 KB, empty timeline). Its unzipped contents are the source of truth for any rewrite.
 
 **Next decision** (Joe): expand `drt_writer.lua` to emit the canonical Resolve shape (significant rewrite — empty FieldsBlobs may suffice for some elements, the Sm2Sequence's big binary blob may need to be either stubbed or copied verbatim from the reference), OR try a different Resolve import entry point (Timeline > Import Timeline from File rather than Project > Import Project — different parser inside Resolve).
 
@@ -121,7 +121,7 @@ In short: **JVE's own DRP importer is tolerant; Resolve's DRP importer demands t
 
 **Decision:** Joe chose full canonical rewrite (option 1). Authored a known-content DRP via Resolve UI to map JVE attributes → Resolve XML encoding.
 
-**Fixture:** `tests/fixtures/resolve/t008_kitchen_sink_grade.drp` (89 KB). Built by Joe in Resolve UI: 23.976/1920×1080 project `JVE_KS_v1`, timeline `JVE_KS_SEQ`. 3 imported source files (`A005_C052_0925BL_001.mp4`, `countdown_chirp_30s.mp4`, `test_click_48k_stereo.wav`) + `test_tone_48k_stereo.wav` synced into A005's MediaPoolItem as an extra audio track. Two graded clip-markers (`JVE_MARKER_A/B` + `JVE_NOTE_A/B` + `JVE_KEYWORD_A/B`), one sequence marker (`JVE_SEQUENCE_MARKER_A` + `_NOTE_A` + `_KEYWORD_A`). Distinct grade values on countdown_chirp clip B (Lift/Gamma/Gain/Offset/Sat/Hue/LumMix/Temp/Tint/Contrast/Pivot/MidDetail/ColorBoost/Shadows/Highlights).
+**Fixture:** `tests/fixtures/resolve/resolve_authored_full.drp` (89 KB). Built by Joe in Resolve UI: 23.976/1920×1080 project `JVE_KS_v1`, timeline `JVE_KS_SEQ` (legacy naming preserved in the committed DRP's XML; the fixture itself was authored before the rename). 3 imported source files (`A005_C052_0925BL_001.mp4`, `countdown_chirp_30s.mp4`, `test_click_48k_stereo.wav`) + `test_tone_48k_stereo.wav` synced into A005's MediaPoolItem as an extra audio track. Two graded clip-markers (`JVE_MARKER_A/B` + `JVE_NOTE_A/B` + `JVE_KEYWORD_A/B`), one sequence marker (`JVE_SEQUENCE_MARKER_A` + `_NOTE_A` + `_KEYWORD_A`). Distinct grade values on countdown_chirp clip B (Lift/Gamma/Gain/Offset/Sat/Hue/LumMix/Temp/Tint/Contrast/Pivot/MidDetail/ColorBoost/Shadows/Highlights).
 
 ### A. Sequence frame-rate and resolution
 
@@ -288,7 +288,198 @@ Most non-Offset/Sat/Hue/LumMix values found at predictable positions. The values
 - Sm2Sequence's large color-setup `FieldsBlob` (the 1013-byte one in the empty reference) — the writer can copy this verbatim from the empty reference initially, with a `-- BORROWED, NOT REGENERATED` marker.
 
 **Source-of-truth fixtures:**
-- `tests/fixtures/resolve/t008_reference_empty_timeline.drp` (empty timeline; envelope reference)
-- `tests/fixtures/resolve/t008_kitchen_sink_grade.drp` (this fixture; clip/grade/marker/synced-audio reference)
+- `tests/fixtures/resolve/resolve_authored_empty.drp` (empty timeline; envelope reference)
+- `tests/fixtures/resolve/resolve_authored_full.drp` (this fixture; clip/grade/marker/synced-audio reference)
 - `tests/fixtures/resolve/retime-test.drt` (pre-existing; only-real-clip reference for `Sm2TiVideoClip` shape with `MediaTimemapBA` populated)
+
+---
+
+## T012 follow-up — Sm2MpVideoClip / Sm2MpAudioClip child schema + injection (2026-05-31)
+
+**Why this section exists:** T012 implemented the canonical-shape rewrite from
+§§A–J but did not populate `<MediaVec>` inside `MpFolder.xml` with per-source
+`Sm2MpVideoClip` / `Sm2MpAudioClip` entries. PROVENANCE.md row 2 already
+flagged this ("the whole `<MediaVec>` rebuilt"). Result: timeline-clip
+`<MediaRef>UUID</MediaRef>` pointers were dangling, Resolve dropped every
+clip on import, and `jve_authored_single_clip.drp` rendered an empty
+timeline (Resolve **accepted** the project — symptom is silent clip loss,
+not error dialog). Evidence: `awk '/<MediaVec>/,/<\/MediaVec>/'` over
+JVE-authored vs Resolve-authored MpFolder.xml ⇒ JVE = 1 Sm2MpTimelineClip
++ 0 source items; Resolve = 1 + 4 video + 2 audio.
+
+### K1. Sm2MpVideoClip child schema (observed)
+
+From `resolve_authored_full.drp` MpFolder.xml lines 238–290 (A005). Child
+order verified across all four kitchen-sink video items.
+
+```
+FieldsBlob              ← zstd-compressed metadata (~370 bytes). Opaque.
+Name                    ← source filename (basename of file_path)
+MpFolder                ← parent-folder DbId back-ref
+UniqueMediaPoolItemId   ← per-instance UUID (stable across saves of same project)
+MarkIn/                 ← empty self-closing (or integer if media has marks)
+MarkInVideo[/]          ← optional integer (frame index)
+MarkInAudio[/]          ← optional integer
+MarkOut/
+MarkOutVideo[/]
+MarkOutAudio[/]
+CurPlayheadPosition     ← integer (last playhead in media viewer)
+PinsBA/                 ← empty
+VirtualAudioTracksBA    ← embedded-audio track routing blob (large hex)
+MatteVec/               ← empty (mattes/Power Windows artwork — N/A here)
+AudioSource             ← "AUDIO_SOURCE_EMBEDDED" | "AUDIO_SOURCE_CUSTOM" (custom = synced audio added)
+PTZRPreset > SmPTZRPreset {FieldsBlob/, Name/, ID=100, IsCustom=true, Producer=Producer@Resolve, Presets=7b7d}
+PTZRPresetType          ← integer (0)
+SlateTC                 ← integer "-68719476737" (large negative — sentinel for "no slate TC")
+Video > BtVideoInfo {FieldsBlob/, Clip, Time, Geometry, Radiometry, Proxy, VideoMetadata, MediaMetadata/, Type=STANDARD_CLIP, Eye=SUB_TRACK_MONO}
+EmbeddedAudioVec > Element > BtAudioInfo {FieldsBlob/, Clip, TracksBA, MediaMetadata/}
+```
+
+`BtVideoInfo.Clip/Time/Geometry/Radiometry/Proxy/VideoMetadata` and
+`BtAudioInfo.Clip/TracksBA` are custom-TLV blobs containing UTF-16 LE
+KEY/VALUE pairs (file path, frame rate, resolution, channel count, etc.).
+Decode deferred — see §K3.
+
+### K2. Sm2MpAudioClip child schema (observed)
+
+From `resolve_authored_full.drp` MpFolder.xml lines 348–372
+(test_click_48k_stereo.wav).
+
+Same prefix as Sm2MpVideoClip through `VirtualAudioTracksBA`, then skips
+`MatteVec/`, `AudioSource`, `PTZRPreset`, `PTZRPresetType`, `SlateTC`, and
+the entire `Video` wrapper. Goes straight to `EmbeddedAudioVec`. So:
+
+```
+FieldsBlob, Name, MpFolder, UniqueMediaPoolItemId,
+6 Mark{In,Out}{,Video,Audio} empties,
+CurPlayheadPosition, PinsBA/, VirtualAudioTracksBA,
+EmbeddedAudioVec > Element > BtAudioInfo {...}
+```
+
+### K3. Writer strategy — borrow verbatim per-extension
+
+For Phase-1 round-trip (T008 identity carrier validation only — single
+A005 video clip), the writer borrows A005's entire 53-line
+`Sm2MpVideoClip` block verbatim from the kitchen-sink reference
+(`src/lua/exporters/drt_canonical/full_reference_mp_video_clip_a005.xml`)
+and substitutes only the fields needed to make the round-trip resolve:
+
+| Field | Substitution |
+|---|---|
+| `Sm2MpVideoClip@DbId` | → `media.file_uuid` (so timeline `<MediaRef>` resolves) |
+| `<MpFolder>` back-ref | → minted `mp_folder` DbId |
+| `<UniqueMediaPoolItemId>` | → fresh-minted UUID (defensive against cross-archive collision) |
+| `<Name>` | → basename of `media.file_path` if different from baked-in `A005_C052_0925BL_001.mp4` |
+
+Everything else (FieldsBlob, embedded blobs with hard-coded path/rate/
+resolution, internal DbIds for SmPTZRPreset/BtVideoInfo/BtAudioInfo)
+stays verbatim. Consequences:
+
+- Spike payloads must use A005 at the exact baked-in path
+  (`/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/A005_C052_0925BL_001.mp4`)
+  or Resolve will probe `MediaFilePath` (from the timeline clip) and the
+  media-pool item's embedded `Clip` blob path will disagree. Resolve
+  will likely show the source as offline despite the `<MediaRef>` DbId
+  resolving correctly — acceptable for identity-carrier validation;
+  unacceptable for production export.
+- Sm2MpAudioClip support deferred until a payload requires it
+  (current spike has no audio).
+
+### K3b. Sm2Sequence/MediaExtents semantics (anamnesis-gold dissection)
+
+The `<MediaExtents>` element on `Sm2Sequence` (inside MpFolder.xml) is
+two 8-byte LE doubles concatenated as 32 hex chars:
+
+```
+MediaExtents = LE-double(earliest_clip_real_sec) ‖ LE-double(latest_clip_real_sec)
+```
+
+Both values are absolute project-epoch seconds: `clip.sequence_start /
+sequence.fps`. JVE's `clip.sequence_start_frame` is already in absolute
+project-epoch frames (see sequence.lua:1007 and the Insert/Overwrite
+commands which store `args.playhead` — itself absolute TC), so the writer
+treats it as-is on both sides.
+
+| Reference        | Hex                                | Decoded                  |
+|---|---|---|
+| empty_reference  | `000000000020ac400000000000000000` | `3600.000000, 0.000000`  |
+| anamnesis-gold   | `00000000000cac409a99999999dfb140` | `3590.000000, 4575.600000` |
+
+Writer substitution: compute from the payload (`drt_writer.lua:
+compute_seq_extents_frames` → MediaExtents emission in
+`build_mp_folder_xml`). The empty-reference's `(3600, 0)` leaks an
+empty-content extent if not substituted — Resolve treats the sequence
+as having no media and renders an empty timeline.
+
+### K3c. Sm2TiVideoClip synthesis (per-clip emission contract)
+
+The timeline-clip element (per video clip, inside `SeqContainer/<dbid>.xml`)
+is synthesized from payload — `drt_writer.lua: build_clip_element`. A
+verbatim template extracted from `resolve_authored_single_clip.drp` is
+retained as a shape reference in `src/lua/exporters/drt_canonical/full_reference_ti_video_clip_a005.xml`
+(not loaded by the writer; useful for diff-based regression).
+
+Per-field source:
+
+| Field                       | Source                                                                            |
+|---|---|
+| `Sm2TiVideoClip@DbId`       | `clip.id` (FR-011b identity carrier)                                              |
+| `<Name>`                    | `clip.name`                                                                       |
+| `<Start>`                   | `clip.sequence_start` (already absolute project-epoch frames; sequence.lua:1007)  |
+| `<Duration>`                | `clip.duration` (timeline frames at sequence.fps)                                 |
+| `<In>`                      | `clip.source_in − media.start_tc_frame` (file-relative offset)                    |
+| `<MediaRef>`                | `media.file_uuid` (round-trips with Sm2MpVideoClip@DbId)                          |
+| `<MediaStartTime>`          | `media.start_tc_frame / media.native_rate` — bare integer for integral seconds (Resolve writes `0` not `0.000000000`), `%.9f` otherwise |
+| `<MediaFilePath>`           | `media.file_path`                                                                 |
+| `<MediaFrameRate>`          | LE-double(`media.native_rate`) + 8 zero bytes — media's native rate, NOT sequence's |
+| `<MediaTimemapBA>`          | `0x02` (1-byte type tag) + BE-double((`clip.duration` − 1) / `media.native_rate`); the −1 reflects the curve spanning frames 0..N−1 inclusive |
+| `<FieldsBlob>`              | empty (`<FieldsBlob/>`) — Resolve accepts and regenerates on save                |
+| `<PreConformMediaExtents>`  | constant `00000100000030c20000010000003042` (verbatim from Resolve fixtures; decode tracked in `todo_drt_preconform_media_extents_decode.md`) |
+| `BtThumnail@DbId`           | freshly minted UUID per export (cross-archive collision avoidance)               |
+
+Both JVE and Resolve treat `<Start>` as absolute project-epoch frames, so no
+add of `seq.start_tc_frame`. MediaTimemapBA uses media's native rate not
+sequence's: Resolve's hex for the 108-frame A005 clip in a 24 fps timeline
+decodes to `107 / 23.976`, not `107 / 24`.
+
+### K4. Items deferred for full media-pool authoring (post-K)
+
+- `Sm2MpVideoClip.FieldsBlob` decode (zstd-compressed metadata payload).
+- `BtVideoInfo` Clip/Time/Geometry/Radiometry/Proxy/VideoMetadata blob
+  formats (UTF-16 LE KEY/VALUE TLV).
+- `BtAudioInfo` Clip/TracksBA blob format (similar).
+- `VirtualAudioTracksBA` layout (currently borrowed verbatim).
+- Synced-audio linkage encoding inside `Sm2MpVideoClip` (§J unchanged).
+- General Sm2MpAudioClip authoring (write side; currently borrow-only for
+  the one fixture used today).
+
+### K5. T008 Resolve-acceptance findings (2026-06-01)
+
+Two bugs surfaced during the round-trip acceptance test:
+
+- **UTF-16BE sweep miss.** `sweep_reference_dbids` swept seed UUIDs as
+  plain ASCII only. The same UUIDs appear inside `<FieldsBlob>` hex
+  strings as UTF-16BE-encoded-as-hex (each char → `00XX`). Two such
+  references were missed: `seq_container` seed (`09a19a21-…`) inside
+  Sm2Sequence's FieldsBlob as `SeqRef`, and `mp_folder` seed
+  (`6cf9979b-…`) inside Sm2MediaPool's FieldsBlob as `RootFolderRef`.
+  Resolve loaded the archive but couldn't resolve the timeline → seq-
+  container link, so the clip body was invisible (TC position correct).
+  Fix: sweep both ASCII and UTF-16BE encodings; post-sweep asserts on
+  both. Regression: `tests/test_drt_writer_fields_blob_uuid_sweep.lua`.
+
+- **`MediaTimemapBA` long form.** The 9-byte 0x02 short form (just
+  `02 + be(d)`) correlated with Resolve refusing to render visible
+  clips. The actual on-wire shape for a rendered clip is 41 bytes:
+  `02 | be(d) | 0×8 | be(d + 1/24000) | 0×8 | be(d)` where
+  `d = (duration_frames − 1) / native_rate`. Epsilon `1/24000` is
+  hard-coded for 23.976; non-23.976 rates are gated by assert in
+  `build_media_timemap_ba` (tracked in `todo_drt_media_timemap_ba_
+  format.md`).
+
+- **`CurrentSelectorIdx` magic value.** Resolve writes `1083179008`
+  (= `0x40903000`) for an unversioned plain clip. Emitting `0`
+  correlated with Resolve refusing to render. Semantics opaque;
+  writer emits the magic constant verbatim (tracked in
+  `todo_drt_current_selector_idx.md`).
 

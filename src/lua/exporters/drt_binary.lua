@@ -105,6 +105,24 @@ function M.encode_le_double(x)
     return to_hex(double_to_le_bytes(x))
 end
 
+--- BE double as 16 hex chars — byte-reverse of encode_le_double.
+--- Used inside MediaTimemapBA (`02` type tag + BE double seconds).
+--- @param x number
+--- @return string: 16 lowercase hex chars
+function M.encode_be_double(x)
+    return to_hex(string.reverse(double_to_le_bytes(x)))
+end
+
+--- Resolve's <MediaFrameRate> wire shape: LE-double(rate) + 16 zero hex chars.
+--- The trailing zeros are a fixed pad (observed byte-identical in every
+--- Resolve-authored DRP; their meaning is not yet decoded but Resolve refuses
+--- the element without them — see phase0-findings.md §K3c).
+--- @param rate number: media's native fps
+--- @return string: 32 lowercase hex chars
+function M.encode_resolve_frame_rate(rate)
+    return M.encode_le_double(rate) .. "0000000000000000"
+end
+
 --- Two adjacent LE doubles — inverse of decode_hex_resolution.
 --- @return string: 32 hex chars (width then height)
 function M.encode_resolution(width, height)

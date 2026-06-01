@@ -52,8 +52,11 @@ local req_str = protocol.build_request({
         change_token = change_token,
     },
 })
-check("request is single-line JSON",  not req_str:find("\n"))
-check("request ends with newline",    req_str:sub(-1) == "\n")
+-- Wire format is one JSON object per line, `\n`-terminated. The JSON body
+-- itself has no embedded newlines; the terminator is the only `\n`.
+check("request body has no embedded newlines",
+    not req_str:sub(1, -2):find("\n"))
+check("request ends with newline terminator", req_str:sub(-1) == "\n")
 
 local parsed_req = protocol.parse_request(req_str)
 check("parsed v == 1",                parsed_req.v == 1)

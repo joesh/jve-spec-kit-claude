@@ -40,18 +40,21 @@ local MEDIA = {
         file_path       = "/Volumes/Media/A_take03.mov",
         duration_frames = 7200,                   -- 5min @ 23.976
         start_tc_frame  = TC_1H_AT_23976,         -- file TC origin 01:00:00:00
+        native_rate     = FR_23976,
     },
     {
         file_uuid       = "22222222-2222-4222-8222-222222222222",
         file_path       = "/Volumes/Media/B_take01.mov",
         duration_frames = 4800,
         start_tc_frame  = 0,                      -- tc=0 (most files)
+        native_rate     = FR_23976,
     },
     {
         file_uuid       = "33333333-3333-4333-8333-333333333333",
         file_path       = "/Volumes/Media/C_take07.mov",
         duration_frames = 9600,
         start_tc_frame  = 2 * TC_1H_AT_23976,     -- 02:00:00:00
+        native_rate     = FR_23976,
     },
 }
 
@@ -88,14 +91,12 @@ local PAYLOAD = {
         fps  = FR_23976,
     },
     media_refs = MEDIA,
-    sequences = {
-        {
-            name             = "Seq1",
-            fps              = FR_23976,
-            start_tc_frame   = TC_1H_AT_23976,    -- 01:00:00:00 sequence start
-            tracks = {
-                { type = "video", clips = CLIPS },
-            },
+    sequence = {
+        name  = "Seq1",
+        fps   = FR_23976,
+        width = 1920, height = 1080,
+        tracks = {
+            { type = "video", clips = CLIPS },
         },
     },
 }

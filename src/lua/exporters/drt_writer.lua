@@ -6,39 +6,12 @@
 ---   SeqContainer/<seq_container_dbid>.xml  one per sequence (tracks + clips)
 ---   Gallery.xml                            color-still gallery (carried verbatim)
 ---
---- Resolve-acceptance shape (vs JVE-importer-only):
---- The earlier minimal writer emitted `<Project>` / `<Sm2SequenceContainer>` with
---- tracks-as-direct-children and no media-pool envelope. JVE's own importer was
---- tolerant; Resolve refused with "Failed to import project" because the schema
---- it validates is far richer (SM_Project root with ~30 wrapper children,
---- Sm2MpTimelineClip/Sm2Timeline/Sm2Sequence wrapping each timeline, version
---- comment header, separate VideoTrackVec / AudioTrackVec). T008 spike + the
---- 2026-05-31 kitchen-sink dissection (specs/023-resolve-color-bridge/
---- phase0-findings.md §§A–J) mapped the required schema.
----
---- This writer takes the canonical-rewrite path (Strategy 1, Joe's choice):
----   • Load Resolve-authored verbatim XML templates from drt_canonical/
----   • Mint fresh UUIDs for every per-export entity (no two JVE exports
----     collide when imported to the same Resolve instance)
----   • Substitute UUIDs + names + FrameRate + Resolution in the templates
----   • Build the SeqContainer XML fresh (tracks + clips) per the dissected schema
----   • Stage + zip
----
---- Borrowed verbatim from the empty-reference DRP (and explicitly NOT
---- regenerated from JVE state in this pass):
----   • SM_Project root FieldsBlob (project-wide settings: render text flags,
----     gallery ref, fusion sizing version, etc.)
----   • SM_Config FieldsBlob (large color-engine setup blob)
----   • Sm2Sequence FieldsBlob (color setup per-sequence; also large)
----   • LmVersionTable + LmVersion FieldsBlob/Body (the "Version 1" default
----     grade ladder for the sequence-level version)
----   • Gallery.xml in its entirety
----   • PTZRPreset / Sm2MediaPool / Sm2GroupList / Sm2LockableBlobMap / LmPowerNodeList
----     wrappers
---- These deferred encodings are tracked in
---- `~/.claude/projects/.../memory/todo_drt_writer_resolve_canonical_shape.md`.
---- For the first round of timeline content this is enough; if Resolve flags
---- a specific borrowed FieldsBlob during import we'll regenerate that one.
+--- Strategy: load Resolve-authored verbatim templates from drt_canonical/,
+--- mint fresh UUIDs per export, substitute payload-driven fields. SeqContainer
+--- is built fresh; other files are template + sweep. Schema detail and the
+--- list of borrowed-verbatim FieldsBlobs are documented in
+--- specs/023-resolve-color-bridge/phase0-findings.md §§A–K and tracked in
+--- todo_drt_writer_resolve_canonical_shape.md.
 ---
 --- Round-trip contract (per FR-011b, feedback_timecode_is_truth):
 ---   • Per-clip identity (clip.id)      → Sm2Ti{Video,Audio}Clip.DbId attr
@@ -80,34 +53,35 @@ local function load_template(name)
     return read_file(script_dir() .. "/drt_canonical/" .. name)
 end
 
--- Reference DbIds as they appear in the verbatim templates. We replace each
--- one with a freshly-minted UUID per export so two JVE-authored DRTs imported
--- into the same Resolve instance do not collide (Resolve treats matching
--- SM_Project DbId as "same project — replace?").
-local REFERENCE_DBIDS = {
-    sm_project           = "1b5606b3-a688-4e51-8e0b-5419c3920167",
-    sm_config            = "3f8d11fa-9f8e-4b9a-abe0-e3da14b14c37",
-    sm_multi_sys         = "365cdf7d-752f-4e04-a717-2104a8d7cfe2",
-    sm_media_pool        = "5c050c82-bcf9-498e-9d66-780afde902cc",
-    sm_group_list        = "07d5f5bb-1a7b-4f5a-afce-74c0fe4694b3",
-    lockable_blob_map    = "85470bbb-51f6-4fd4-9a66-51320ee4f681",
-    media_pool_lockable  = "80cc20f6-6d21-42df-86e4-8a4d63094d16",
-    power_node_list      = "207dfe44-2b14-4752-ab99-6345b1631585",
-    -- Per-timeline UUIDs (in the empty reference, single timeline)
-    mp_folder            = "6cf9979b-3e45-4c7c-874f-4162010c5f8e",
-    mp_folder_unique_id  = "ac079579-635c-4165-a592-f12984bc1cfb",
-    mp_timeline_clip     = "9d3a9478-efa8-43f7-b419-6c64b4c0b733",
-    mp_timeline_unique   = "4fa3ff10-7d93-49db-8f23-b6cdcaaecc01",
-    timeline             = "dffcf5b8-3bdb-499a-b375-8fdf94f5e5c4",
-    sequence             = "1e46c9dd-80b8-4977-aaec-35f0498cd16b",
-    unique_sequence_id   = "d108fed5-430a-4f5f-8433-0f4b63144e30",
-    seq_container        = "09a19a21-d424-41ef-945f-d598b9d4a4ac",
-    plm_ver_table        = "6b42ab53-487b-4e39-8236-03df47a32e93",
-    lm_version           = "3c943505-3438-4067-808b-31b5f9702a4d",
-    ptzr_preset_outer    = "9329dc34-fb30-433f-9218-f3eb22a880d6",
-    ptzr_preset_timeline = "b4da443a-0706-457f-b7e1-03e570fef353",
-    -- Gallery is referenced from SM_Project FieldsBlob; keeping verbatim by
-    -- leaving Gallery.xml intact (no minted alternative).
+-- Per-export-minted DbId slots. `ref` is the reference UUID as it appears
+-- in the verbatim templates; `seed` is the entropy byte fed to fresh_uuid
+-- (distinct per slot so two slots can never collide). The writer mints one
+-- fresh UUID per slot and sweeps the template, replacing every occurrence
+-- of `ref` with the minted value. Per-export minting is required because
+-- Resolve treats matching SM_Project DbId as "same project — replace?".
+-- Gallery is referenced from SM_Project FieldsBlob; Gallery.xml is left
+-- verbatim (no minted alternative).
+local DBID_SLOTS = {
+    sm_project           = { ref = "1b5606b3-a688-4e51-8e0b-5419c3920167", seed = 0x01 },
+    sm_config            = { ref = "3f8d11fa-9f8e-4b9a-abe0-e3da14b14c37", seed = 0x02 },
+    sm_multi_sys         = { ref = "365cdf7d-752f-4e04-a717-2104a8d7cfe2", seed = 0x03 },
+    sm_media_pool        = { ref = "5c050c82-bcf9-498e-9d66-780afde902cc", seed = 0x04 },
+    sm_group_list        = { ref = "07d5f5bb-1a7b-4f5a-afce-74c0fe4694b3", seed = 0x05 },
+    lockable_blob_map    = { ref = "85470bbb-51f6-4fd4-9a66-51320ee4f681", seed = 0x06 },
+    media_pool_lockable  = { ref = "80cc20f6-6d21-42df-86e4-8a4d63094d16", seed = 0x07 },
+    power_node_list      = { ref = "207dfe44-2b14-4752-ab99-6345b1631585", seed = 0x08 },
+    mp_folder            = { ref = "6cf9979b-3e45-4c7c-874f-4162010c5f8e", seed = 0x10 },
+    mp_folder_unique_id  = { ref = "ac079579-635c-4165-a592-f12984bc1cfb", seed = 0x11 },
+    mp_timeline_clip     = { ref = "9d3a9478-efa8-43f7-b419-6c64b4c0b733", seed = 0x20 },
+    mp_timeline_unique   = { ref = "4fa3ff10-7d93-49db-8f23-b6cdcaaecc01", seed = 0x21 },
+    timeline             = { ref = "dffcf5b8-3bdb-499a-b375-8fdf94f5e5c4", seed = 0x30 },
+    sequence             = { ref = "1e46c9dd-80b8-4977-aaec-35f0498cd16b", seed = 0x40 },
+    unique_sequence_id   = { ref = "d108fed5-430a-4f5f-8433-0f4b63144e30", seed = 0x41 },
+    seq_container        = { ref = "09a19a21-d424-41ef-945f-d598b9d4a4ac", seed = 0x50 },
+    plm_ver_table        = { ref = "6b42ab53-487b-4e39-8236-03df47a32e93", seed = 0x60 },
+    lm_version           = { ref = "3c943505-3438-4067-808b-31b5f9702a4d", seed = 0x61 },
+    ptzr_preset_outer    = { ref = "9329dc34-fb30-433f-9218-f3eb22a880d6", seed = 0x80 },
+    ptzr_preset_timeline = { ref = "b4da443a-0706-457f-b7e1-03e570fef353", seed = 0x81 },
 }
 
 -- Hard-coded text values in templates that must be replaced with payload
@@ -117,20 +91,39 @@ local REFERENCE_PROJECT_NAME  = "JVE_T008_reference"
 local REFERENCE_SEQUENCE_NAME = "JVE_T008_ref_seq"
 local REFERENCE_PROJECT_CFG   = "JVE_T008_reference.Cfg"
 
+-- Reference values inside the kitchen-sink-borrowed Sm2MpVideoClip template
+-- (drt_canonical/full_reference_mp_video_clip_a005.xml). See phase0-findings.md
+-- §K3 for substitution rationale. The MpFolder back-ref UUID is the
+-- kitchen-sink's mp_folder DbId (NOT the empty-reference's — those differ),
+-- so it gets handled inline rather than via the REFERENCE_DBIDS sweep.
+local A005_TEMPLATE_DBID                = "1665f18c-e385-4ffe-85b2-5ec5ab03d635"
+local A005_TEMPLATE_MP_FOLDER_BACKREF   = "d0bfec57-7a39-4c33-91eb-67bbc4db5cc0"
+local A005_TEMPLATE_UNIQUE_MP_ITEM_ID   = "35350146-9c4c-434b-a193-c99bbfa5303a"
+local A005_TEMPLATE_NAME                = "A005_C052_0925BL_001.mp4"
+
 -- ─── UUID minting ───────────────────────────────────────────────────────────
 --
--- Deterministic, counter-based (workflow/resume safety — no Date.now /
--- Math.random). Caller seeds the writer's counter at the start of author();
--- each mint advances it by one.
+-- Counter-based + per-export entropy: the counter is seeded from a hash of
+-- the output path so distinct exports produce distinct minted DbIds (Resolve
+-- would otherwise reject the second-imported archive as a duplicate of the
+-- first when the project-level UUIDs collide). Same out_path + same payload
+-- still produce byte-identical bytes — reproducibility preserved for
+-- verification and diff-based regression.
+
+local function hash_uint24(s)
+    local h = 0
+    for i = 1, #s do
+        h = (h * 31 + s:byte(i)) % 0x1000000   -- FNV-style, 24-bit
+    end
+    return h
+end
 
 local function fresh_uuid(seed_byte)
     M._uuid_counter = (M._uuid_counter or 0) + 1
     local k = M._uuid_counter
-    -- Embed (counter, seed_byte) directly into the UUID so two calls with
-    -- different seeds OR different counters can never collide. (The earlier
-    -- mod-16 nibble formula collided when counter differences happened to be
-    -- multiples of 16 — caught by manual archive inspection.)
-    -- Format: 8-4-4-4-12; version=4, variant in {8,9,a,b}.
+    -- (counter, seed) embedded directly so two calls with different seeds
+    -- or different counters can never collide. Format: 8-4-4-4-12;
+    -- version=4, variant in {8,9,a,b}.
     return string.format(
         "%08x-%04x-4%03x-%s%03x-%012x",
         k % 0x100000000,
@@ -144,7 +137,9 @@ end
 -- ─── XML helpers ────────────────────────────────────────────────────────────
 
 local function xml_text(s)
-    s = tostring(s or "")
+    assert(s ~= nil, "drt_writer.xml_text: nil input — callers must "
+        .. "provide a non-nil value (use self_close for empty elements)")
+    s = tostring(s)
     s = s:gsub("&", "&amp;")
     s = s:gsub("<", "&lt;")
     s = s:gsub(">", "&gt;")
@@ -202,6 +197,59 @@ local function plain_gsub_required(haystack, needle, replacement)
     return result
 end
 
+-- Replace every reference DbId that appears in `template` with the
+-- correspondingly-named minted DbId from `dbids`. Each REFERENCE_DBIDS
+-- entry lives in some subset of the archive's XMLs — we don't know which
+-- without parsing — so missing-in-this-file is silent. Drift IS caught at
+-- the end: if any reference DbId remains in the output after substitution,
+-- it means we either forgot to mint a fresh value or Resolve renamed the
+-- field but our REFERENCE_DBIDS table still calls the old slot.
+--
+-- UUIDs appear in TWO encodings in the archive:
+--   1. Plain ASCII — XML attributes, element text, MediaPool back-refs
+--   2. UTF-16BE-as-hex inside <FieldsBlob>...</FieldsBlob> hex strings —
+--      e.g. ASCII "09a19a21" → hex `00300039006100310039006100320031`.
+-- Both must be swept. Missing the UTF-16BE form was the 2026-06-01 T008
+-- kill: SeqRef inside Sm2Sequence's FieldsBlob and RootFolderRef inside
+-- Sm2MediaPool's FieldsBlob still carried seed UUIDs, so Resolve couldn't
+-- resolve the timeline → seq-container link and rendered no clip body in
+-- the timeline (TC start was correct, but the clip itself was invisible).
+local function uuid_utf16be_hex(uuid)
+    local out = {}
+    for i = 1, #uuid do
+        out[#out+1] = string.format("00%02x", string.byte(uuid, i))
+    end
+    return table.concat(out)
+end
+
+local function sweep_reference_dbids(template, dbids)
+    for slot, info in pairs(DBID_SLOTS) do
+        local fresh = dbids[slot]
+        assert(fresh, "drt_writer.sweep_reference_dbids: slot '" .. slot
+            .. "' not minted before sweep")
+        if fresh ~= info.ref then
+            template = plain_gsub(template, info.ref, fresh)
+            template = plain_gsub(template,
+                uuid_utf16be_hex(info.ref),
+                uuid_utf16be_hex(fresh))
+        end
+    end
+    for slot, info in pairs(DBID_SLOTS) do
+        assert(not template:find(info.ref, 1, true), string.format(
+            "drt_writer.sweep_reference_dbids: reference DbId '%s' "
+            .. "(slot '%s') survived substitution — template carries this "
+            .. "DbId in an unexpected location",
+            info.ref, slot))
+        assert(not template:find(uuid_utf16be_hex(info.ref), 1, true),
+            string.format(
+                "drt_writer.sweep_reference_dbids: UTF-16BE-encoded "
+                .. "reference DbId '%s' (slot '%s') survived "
+                .. "substitution — FieldsBlob carries this seed UUID",
+                info.ref, slot))
+    end
+    return template
+end
+
 -- ─── Per-clip XML emission ──────────────────────────────────────────────────
 --
 -- One Sm2TiVideoClip / Sm2TiAudioClip element per timeline placement. Child
@@ -214,68 +262,137 @@ end
 --   when sub-frame. JVE payloads carry integer frames; the sub-frame form
 --   is only emitted if a non-integer source_in is passed (defensive).
 
+-- <In> = file-relative source-in frames. JVE payloads carry integer frames;
+-- the sub-frame `<frames>|<hex_LE_double>` form is unreachable by current
+-- JVE model state (all source_in / start_tc_frame are integers — see
+-- feedback_timecode_is_truth and feedback_clip_lua_field_names). If JVE ever
+-- adopts sub-frame source-in this assert will fire and force a deliberate
+-- format extension rather than a silent precision loss.
 local function build_in_element(in_offset)
+    assert(in_offset == math.floor(in_offset), string.format(
+        "drt_writer.build_in_element: in_offset must be integer frames, "
+        .. "got %s. Sub-frame source-in is not part of JVE's model; if "
+        .. "you're reaching this assert, extend the writer + drp_importer "
+        .. "together with the `<frames>|<hex_LE_double>` form.",
+        tostring(in_offset)))
     if in_offset == 0 then
         return self_close("In")
     end
-    local frames = math.floor(in_offset)
-    local subframe = in_offset - frames
-    if subframe == 0 then
-        return text_elem("In", tostring(frames))
-    end
-    return text_elem("In", string.format("%d|%s",
-        frames, enc.encode_le_double(subframe)))
+    return text_elem("In", tostring(in_offset))
 end
 
--- VirtualAudioTrackBA: per-audio-clip routing blob. Per phase0-findings §F,
--- audio clips encode their source-channel routing via MediaTrackIdx + a
--- VirtualAudioTrackBA blob. For Phase 1 we emit the kitchen-sink-observed
--- "single mono channel routed to Audio N" form. Synced-audio (idx=2) is not
--- yet payload-driven (deferred — todo_drt_writer_resolve_canonical_shape).
-local function build_virtual_audio_track_ba(audio_type)
-    -- Observed shape in kitchen-sink: count=1 outer + 2 inner TLV fields
-    -- (ChannelsBA payload + AudioType int=1). Bake the observed bytes
-    -- verbatim — exact format-level encoding can be migrated to drt_binary
-    -- later if we need to vary it.
-    if audio_type == 2 then
-        -- A3-style: stereo file embedded ch 1; subtype 2 in ChannelsBA
-        return "000000010000000200000014004300680061006e006e0065006c0073004200" ..
-               "410000000c000000000c000000020000000100004002000000120041007500" ..
-               "640069006f0054007900700065000000020000000001"
-    end
-    -- A1-style: mono embedded ch 1; subtype 1 in ChannelsBA
-    return "000000010000000200000014004300680061006e006e0065006c0073004200" ..
-           "410000000c000000000c000000020000000100004001000000120041007500" ..
-           "640069006f0054007900700065000000020000000001"
+-- Restored: still referenced by audio clip path until #14 lands.
+local VIRTUAL_AUDIO_TRACK_BA_MONO_A1 =
+    "000000010000000200000014004300680061006e006e0065006c0073004200" ..
+    "410000000c000000000c000000020000000100004001000000120041007500" ..
+    "640069006f0054007900700065000000020000000001"
+
+-- MediaTimemapBA — un-retimed timing curve for the clip.
+--
+-- Observed REF format from resolve_authored_single_clip.drp (108-frame A005
+-- clip at 23.976 native rate) is **41 bytes** (not 9), shape:
+--   02 | be(d) | 0×8 | be(d + 1/numerator) | 0×8 | be(d)
+-- where d = (duration_frames - 1) / native_rate in seconds, and the
+-- middle epsilon `1/numerator` (with native_rate = numerator / 1001)
+-- is empirically `1/24000` for 23.976 fps. Format is otherwise opaque —
+-- Resolve probably encodes a 3-keyframe curve (start/peak/end) with
+-- implicit x-coords, but full decode is deferred. Tracked in
+-- todo_drt_media_timemap_ba_format.md.
+--
+-- The 9-byte 0x02 form (just `02 + be(d)`) is documented by drp_binary's
+-- decoder as "no speed info" and was the first thing this writer emitted —
+-- but the empirical Resolve refusal to render the clip (only TC start
+-- shown, no clip body in TL — 2026-05-31) suggests Resolve's parser
+-- treats the short form as malformed for visible clips. Emitting the
+-- long form unblocks the spike acceptance test.
+local function build_media_timemap_ba(duration_frames, media_native_rate)
+    assert(type(duration_frames) == "number" and duration_frames > 0,
+        "drt_writer.build_media_timemap_ba: positive duration_frames required")
+    assert(type(media_native_rate) == "number" and media_native_rate > 0,
+        "drt_writer.build_media_timemap_ba: positive media_native_rate required")
+    -- Epsilon constant derives from native_rate's numerator (24000 for
+    -- 23.976 = 24000/1001). For non-23.976 rates this constant must be
+    -- reverse-engineered — fail-fast so a future caller's wrong-rate
+    -- output doesn't silently confuse Resolve.
+    local TWENTYFOURTHOUSAND_INV = 1 / 24000
+    assert(math.abs(media_native_rate - 24000 / 1001) < 1e-6,
+        string.format("drt_writer.build_media_timemap_ba: epsilon constant "
+        .. "1/24000 was empirically derived from 23.976 fps "
+        .. "(24000/1001) only — got native_rate=%.6f. Re-derive from a "
+        .. "Resolve-authored DRP at this rate before extending.",
+        media_native_rate))
+    local d_secs = (duration_frames - 1) / media_native_rate
+    local d_plus = d_secs + TWENTYFOURTHOUSAND_INV
+    local zeros = "0000000000000000"
+    return "02" .. enc.encode_be_double(d_secs)
+        .. zeros .. enc.encode_be_double(d_plus)
+        .. zeros .. enc.encode_be_double(d_secs)
 end
 
--- MediaTimemapBA — un-retimed default. Format from kitchen-sink dissection:
---   leading 0x02 0x40 + 8-byte BE double = duration-extent in seconds.
--- For a clip with no retime, this is just the clip's source duration in
--- seconds, encoded BE. Resolve sets this per-source-clip; for our purposes
--- emitting the source duration suffices.
-local function build_media_timemap_ba(source_duration_seconds)
-    assert(type(source_duration_seconds) == "number"
-        and source_duration_seconds > 0,
-        "drt_writer.build_media_timemap_ba: positive number required")
-    -- 8-byte BE double: pack manually since drt_binary's
-    -- encode_le_double is LE. We reverse the LE bytes.
-    local le_hex = enc.encode_le_double(source_duration_seconds)
-    assert(#le_hex == 16,
-        "drt_writer: LE double encoding must be 16 hex chars, got " .. #le_hex)
-    -- Reverse byte order: hex pairs swapped from end to start.
-    local be_hex = {}
-    for i = 15, 1, -2 do
-        be_hex[#be_hex + 1] = le_hex:sub(i, i + 1)
-    end
-    return "0240" .. table.concat(be_hex)
-end
-
--- PreConformMediaExtents — observed value carried verbatim across every clip
--- in the kitchen-sink reference. 16-byte blob; format-level decode deferred.
+-- PreConformMediaExtents — 16-byte blob copied verbatim from
+-- resolve_authored_single_clip. Format-level decode tracked in
+-- todo_drt_preconform_media_extents_decode.md.
 local PRECONFORM_MEDIA_EXTENTS = "00000100000030c20000010000003042"
 
-local function build_clip_element(clip, media, native_rate, track_type)
+-- Sm2MpTimelineClip <FieldsBlob>: protobuf-ish zstd-compressed wrapper
+-- describing the media-pool timeline-item (Type, MediaExtents,
+-- ChannelVecBA, ChannelIdx). The empty-reference template's version
+-- carried TWO embedded MediaRef pointers to its own slot UUID (a stale
+-- 9d3a9478-... self-reference that, after our outer-DbId sweep, dangles
+-- to nothing in JVE-authored output → Resolve rejected the timeline-item's
+-- media binding and refused to render any clip body).
+--
+-- Borrowed verbatim from resolve_authored_single_clip.drp's single-clip
+-- timeline FieldsBlob, which encodes the same Type/MediaExtents/etc but
+-- WITHOUT the dangling MediaRef pointers. Substituted into the empty-
+-- reference template's Sm2MpTimelineClip element before any DbId sweep.
+-- See todo_drt_inner_fieldsblob_uuids.md for the broader leak class and
+-- todo_drt_mp_timeline_clip_fields_blob.md for the per-timeline decode work.
+local SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_SINGLE_CLIP =
+    "00000002000000ae8128b52ffd6004001d0500a2481d2a9039cd019fb131c47a" ..
+    "fffc65fa22ee36ca76a9aa2ad1991d5b0afe7f44340be9da28b946482f112172" ..
+    "a7777777778f297777556941e5cd25737d1d0414a8b04dd8b09d4ea30b073e00" ..
+    "1416e72175da52ab04a30ca5adc1a775081161e48d8a971cbade58601cd064e2" ..
+    "2243c28130c61a0cb622581100091b9a3424904a20b5d547e80a32d321abe3cc" ..
+    "c28a606ed6ca39a54d5484373961cdccdf664e4cb831"
+local EMPTY_REF_MP_TIMELINE_CLIP_FIELDS_BLOB =
+    "00000002000000eb8128b52ffd60d600050700420d282e804d9a0373c1e38249" ..
+    "9627e51467ac989c3662512092904700d80d44a9dd2d39f7393f16aa29da7f29" ..
+    "b068ef9d02efbdf7de7b011b3c1a3b33250e5ead5e2fa918ab25a6e5145b69bd" ..
+    "9c5e35ab56365d78b562b3d54c6cc4b76bba1492c74ae850c2d3d021a66b31a3" ..
+    "bbb999bdf890c2208220e5c8b9e9727642cc62cc742752dc8d1d2b0e3c02794e" ..
+    "702af43c1a5100a00a424c4e3e2481d65a44d2a2921618005b3b48836c006fda" ..
+    "05872efba2610a2ed66a2cd3f59a0db78880d0fb7c301718ac938d8e330eab3c" ..
+    "b9b12b3794365c11dce48435337f9b3975e6c6"
+
+-- Sm2TiVideoClip / Sm2TiAudioClip <FieldsBlob>: per-clip color/effect state
+-- payload (zstd-compressed, protobuf-like TLV inside). Resolve refuses to
+-- instantiate a clip on the timeline when this element is empty
+-- (`<FieldsBlob/>`) — symptom observed 2026-05-31: import succeeded with
+-- correct timeline TC start, but no clip body on tracks. Borrowed verbatim
+-- from resolve_authored_single_clip.drp (Strategy 1, same pattern as the
+-- other borrowed FieldsBlobs — phase0-findings §K).
+--
+-- Caveat: the video blob's payload embeds a hard-coded reference to its
+-- linked audio clip's DbId ("1235499f-..."). Borrowing means every JVE
+-- export carries that dangling pointer. Tolerable for the single-clip
+-- spike (Resolve appears to treat broken sync links as non-fatal); the
+-- inner-DbId leak is tracked in todo_drt_inner_fieldsblob_uuids.md and
+-- will be fixed when we synthesize these blobs from JVE state.
+-- Pulled 2026-06-01 from the CURRENT resolve_authored_single_clip.drp (Joe
+-- re-exported after adding the clip to TL — the prior values were from an
+-- older single-clip reference where the audio half had different DbIds).
+local TI_VIDEO_CLIP_FIELDS_BLOB =
+    "00000002000000618128b52ffd2079bd0200c206131bd0a539000000000092ec" ..
+    "fd54eae496726f22870121025e45919d027777777781824141401a53655bb8b6" ..
+    "6cbaaa27326964cf546d8f277a5c269e6c8b985caae86a78731450fc60149330" ..
+    "010200196ec4338704"
+local TI_AUDIO_CLIP_FIELDS_BLOB =
+    "00000002000000528128b52ffd206945020082050f16a037ad013f67370938ea" ..
+    "d29636d9df17f845d84cdb298043099c67f29ad65ed444a245a4317983067b44" ..
+    "cfa2693ca682d6a684af5ba2bc5057a902030040865bee3b7348"
+
+local function build_clip_element(clip, media, track_type)
     assert(type(clip.id) == "string" and clip.id ~= "",
         "drt_writer.build_clip_element: clip.id required")
     assert(type(clip.name) == "string" and clip.name ~= "",
@@ -295,12 +412,15 @@ local function build_clip_element(clip, media, native_rate, track_type)
     assert(type(media.start_tc_frame) == "number"
         and media.start_tc_frame >= 0,
         "drt_writer.build_clip_element: media.start_tc_frame required")
+    assert(type(media.native_rate) == "number" and media.native_rate > 0,
+        "drt_writer.build_clip_element: media.native_rate required "
+        .. "(media file's native fps; drives <MediaFrameRate> and "
+        .. "MediaStartTime — independent of the sequence's fps)")
     assert(type(media.file_path) == "string" and media.file_path ~= "",
         "drt_writer.build_clip_element: media.file_path required")
-    assert(type(media.duration_frames) == "number"
-        and media.duration_frames > 0,
-        "drt_writer.build_clip_element: media.duration_frames required "
-        .. "(for MediaTimemapBA encoding)")
+    assert(track_type == "video" or track_type == "audio",
+        "drt_writer.build_clip_element: track_type must be 'video' or 'audio', "
+        .. "got " .. tostring(track_type))
 
     local in_offset = clip.source_in - media.start_tc_frame
     assert(in_offset >= 0, string.format(
@@ -308,17 +428,21 @@ local function build_clip_element(clip, media, native_rate, track_type)
         .. "start_tc_frame (%d) — source_in below file TC origin invalid",
         clip.id, clip.source_in, media.start_tc_frame))
 
-    local media_start_seconds = media.start_tc_frame / native_rate
-    local source_dur_seconds  = media.duration_frames / native_rate
+    local media_start_seconds = media.start_tc_frame / media.native_rate
     local tag = (track_type == "audio") and "Sm2TiAudioClip" or "Sm2TiVideoClip"
-    local is_video = (track_type ~= "audio")
+    local is_video = (track_type == "video")
 
     -- Child order pinned to Resolve's schema. Empty self-closing elements
     -- are still present (Resolve's parser checks for them).
     local parts = {
-        self_close("FieldsBlob"),
+        text_elem("FieldsBlob",
+            is_video and TI_VIDEO_CLIP_FIELDS_BLOB or TI_AUDIO_CLIP_FIELDS_BLOB),
         self_close("PrettyType"),
         text_elem("Name", clip.name),
+        -- <Start> is ABSOLUTE project-epoch frames (phase0-findings §B).
+        -- JVE's clip.sequence_start is also absolute (sequence.lua:1007,
+        -- placement commands store args.playhead which is absolute TC). Same
+        -- coordinate system both sides — no conversion.
         text_elem("Start", math.floor(clip.sequence_start)),
         text_elem("Duration", math.floor(clip.duration)),
         self_close("LinkedItemSync"),
@@ -335,12 +459,19 @@ local function build_clip_element(clip, media, native_rate, track_type)
         build_in_element(in_offset),
         text_elem("MixedFrameRateAlignment", "0"),
         text_elem("MediaRef",       clip.media_uuid),
-        text_elem("MediaStartTime", string.format("%.9f", media_start_seconds)),
+        -- Bare integer for integral seconds (Resolve writes "0" not
+        -- "0.000000000"); fixed-point otherwise. Matches the byte shape
+        -- observed in resolve_authored_single_clip and anamnesis-gold.
+        text_elem("MediaStartTime",
+            media_start_seconds == math.floor(media_start_seconds)
+                and tostring(math.floor(media_start_seconds))
+                or string.format("%.9f", media_start_seconds)),
         text_elem("MediaFilePath",  media.file_path),
         self_close("MediaReelNumber"),
-        text_elem("MediaFrameRate", enc.encode_le_double(native_rate)
+        text_elem("MediaFrameRate", enc.encode_le_double(media.native_rate)
                                     .. "0000000000000000"),
-        text_elem("MediaTimemapBA", build_media_timemap_ba(source_dur_seconds)),
+        text_elem("MediaTimemapBA",
+            build_media_timemap_ba(clip.duration, media.native_rate)),
         text_elem("LastChangedTime", "0"),
         text_elem("LastRenderedTime", "0"),
         text_elem("IsMarkedForCaching", "false"),
@@ -351,7 +482,11 @@ local function build_clip_element(clip, media, native_rate, track_type)
         self_close("RenderCacheBA"),
     }
     if is_video then
-        parts[#parts + 1] = text_elem("CurrentSelectorIdx", "0")
+        -- Empirically observed in resolve_authored_single_clip.drp; meaning
+        -- not yet decoded but emitting "0" correlated with Resolve refusing
+        -- to render the clip in the timeline (only TC start visible). See
+        -- todo_drt_current_selector_idx.md.
+        parts[#parts + 1] = text_elem("CurrentSelectorIdx", "1083179008")
         parts[#parts + 1] = text_elem("IsPreConformed", "false")
         parts[#parts + 1] = text_elem("PreConformMediaExtents",
             PRECONFORM_MEDIA_EXTENTS)
@@ -367,7 +502,7 @@ local function build_clip_element(clip, media, native_rate, track_type)
         parts[#parts + 1] = text_elem("ThumbnailDirtyFlag", "true")
     else
         parts[#parts + 1] = text_elem("VirtualAudioTrackBA",
-            build_virtual_audio_track_ba(1))
+            VIRTUAL_AUDIO_TRACK_BA_MONO_A1)
         parts[#parts + 1] = text_elem("MediaTrackIdx", "0")
     end
 
@@ -383,11 +518,13 @@ end
 local TRACK_FIELDS_BLOB_NUM_LAYERS =
     "000000010000000100000012004e0075006d004c00610079006500720073000000020000000000"
 
-local function build_track_element(track, seq_dbid, media_by_uuid, native_rate)
+local function build_track_element(track, seq_dbid, media_by_uuid)
     assert(type(track.clips) == "table",
         "drt_writer.build_track_element: track.clips array required")
-    local track_kind = (track.type == "audio") and "audio" or "video"
-    local type_value = (track_kind == "audio") and 1 or 0
+    assert(track.type == "video" or track.type == "audio",
+        "drt_writer.build_track_element: track.type must be 'video' or "
+        .. "'audio', got " .. tostring(track.type))
+    local type_value = (track.type == "audio") and 1 or 0
     local track_dbid = fresh_uuid(0x70)
 
     local items = {}
@@ -396,7 +533,7 @@ local function build_track_element(track, seq_dbid, media_by_uuid, native_rate)
         assert(media, "drt_writer.build_track_element: track clip references "
             .. "unknown media_uuid " .. tostring(c.media_uuid))
         items[#items + 1] = elem("Element",
-            build_clip_element(c, media, native_rate, track_kind))
+            build_clip_element(c, media, track.type))
     end
 
     return elem("Element", elem("Sm2TiTrack", table.concat({
@@ -421,12 +558,10 @@ local function build_seq_container_xml(seq, seq_dbid, container_dbid,
                                        media_by_uuid)
     assert(type(seq.tracks) == "table" and #seq.tracks >= 1,
         "drt_writer.build_seq_container_xml: sequence.tracks non-empty array")
-    local native_rate = seq.fps
 
     local video_tracks, audio_tracks = {}, {}
     for _, t in ipairs(seq.tracks) do
-        local rendered = build_track_element(t, seq_dbid, media_by_uuid,
-                                             native_rate)
+        local rendered = build_track_element(t, seq_dbid, media_by_uuid)
         if t.type == "audio" then
             audio_tracks[#audio_tracks + 1] = rendered
         else
@@ -447,6 +582,126 @@ local function build_seq_container_xml(seq, seq_dbid, container_dbid,
         elem("Sm2SequenceContainer", body, {DbId = container_dbid})
 end
 
+-- ─── Sm2MpVideoClip — kitchen-sink borrowed, per-media substituted ──────────
+--
+-- See phase0-findings.md §K. Without these media-pool items the timeline
+-- clips' <MediaRef>UUID</MediaRef> pointers dangle and Resolve drops every
+-- clip on import (silently — no error dialog; just an empty timeline).
+--
+-- Substitutions (the only ones we vary today):
+--   • outer Sm2MpVideoClip @DbId  → media.file_uuid (matches MediaRef)
+--   • <MpFolder> back-ref         → minted mp_folder DbId
+--   • <UniqueMediaPoolItemId>     → fresh-minted UUID
+--   • <Name>                      → basename(media.file_path) if different
+--
+-- Everything else (FieldsBlob zstd payloads, embedded BtVideoInfo /
+-- BtAudioInfo blobs with hard-coded path/rate/resolution) is borrowed
+-- verbatim — see §K3 for consequences (payload's media must use A005's
+-- baked-in path for this spike, full payload-driven authoring deferred
+-- per §K4).
+
+local function basename(path)
+    local b = path:match("([^/]+)$")
+    assert(b, "drt_writer.basename: cannot extract basename from '"
+        .. tostring(path) .. "' — caller passed an empty or all-slash path")
+    return b
+end
+
+-- A005 baked-in constants. The kitchen-sink-borrowed
+-- full_reference_mp_video_clip_a005.xml carries A005's BtVideoInfo /
+-- BtAudioInfo blobs verbatim. Those blobs encode native_rate, duration
+-- (in frames at native_rate), and frame size as binary fields the writer
+-- does NOT yet rewrite. Any media whose probed values don't match A005
+-- would silently emit the wrong rate/duration/resolution to Resolve, and
+-- the imported clip would either fail to render or render with wrong
+-- timing. Fail fast until we synthesize the Mp video item from payload
+-- (tracked in todo_drt_writer_resolve_canonical_shape.md).
+local A005_NATIVE_RATE     = 24000 / 1001
+local A005_DURATION_FRAMES = 108
+-- A005 width/height aren't carried on `media`, so we can't assert them;
+-- those are baked in the BtVideoInfo blob and the writer's payload doesn't
+-- expose width/height per media_ref. When the payload gains width/height,
+-- add asserts here.
+
+local function build_media_pool_video_item(media, dbids)
+    assert(type(media.file_uuid) == "string" and media.file_uuid ~= "",
+        "drt_writer.build_media_pool_video_item: media.file_uuid required")
+    assert(type(media.file_path) == "string" and media.file_path ~= "",
+        "drt_writer.build_media_pool_video_item: media.file_path required")
+    local ext = media.file_path:match("%.([^.]+)$")
+    assert(ext == "mp4" or ext == "mov",
+        "drt_writer.build_media_pool_video_item: only .mp4/.mov media "
+        .. "supported by this writer pass (phase0-findings §K3); got '"
+        .. tostring(ext) .. "' for " .. media.file_path
+        .. ". Audio (Sm2MpAudioClip) deferred per §K4.")
+    assert(type(media.native_rate) == "number"
+        and math.abs(media.native_rate - A005_NATIVE_RATE) < 1e-6,
+        string.format(
+            "drt_writer.build_media_pool_video_item: media.native_rate "
+            .. "%s differs from A005 baked-in template native_rate %s. "
+            .. "The Mp video item template carries A005's BtVideoInfo "
+            .. "and BtAudioInfo verbatim — emitting it for a different-"
+            .. "rate file would corrupt the media descriptor. Synthesize "
+            .. "the Mp video item from payload before authoring non-A005 "
+            .. "media (todo_drt_writer_resolve_canonical_shape.md).",
+            tostring(media.native_rate), tostring(A005_NATIVE_RATE)))
+    assert(type(media.duration_frames) == "number"
+        and media.duration_frames == A005_DURATION_FRAMES,
+        string.format(
+            "drt_writer.build_media_pool_video_item: media.duration_"
+            .. "frames %s differs from A005 baked-in template duration "
+            .. "%d frames. The template carries A005's duration in its "
+            .. "embedded blobs; mismatched payload would emit the wrong "
+            .. "duration to Resolve.",
+            tostring(media.duration_frames), A005_DURATION_FRAMES))
+
+    local tpl = load_template("full_reference_mp_video_clip_a005.xml")
+    tpl = plain_gsub_required(tpl,
+        A005_TEMPLATE_DBID, media.file_uuid)
+    tpl = plain_gsub_required(tpl,
+        A005_TEMPLATE_MP_FOLDER_BACKREF, dbids.mp_folder)
+    tpl = plain_gsub_required(tpl,
+        A005_TEMPLATE_UNIQUE_MP_ITEM_ID, fresh_uuid(0xa0))
+
+    local name = basename(media.file_path)
+    if name ~= A005_TEMPLATE_NAME then
+        tpl = plain_gsub_required(tpl, A005_TEMPLATE_NAME, name)
+    end
+
+    return "  <Element>\n" .. tpl .. "  </Element>\n"
+end
+
+-- Walk every clip on every track of a sequence and return its overall
+-- timeline-frame extent: earliest sequence_start and latest end (= start +
+-- duration). Drives MediaExtents — see anamnesis-gold dissection
+-- (phase0-findings.md §K). Asserts on an empty sequence rather than
+-- returning sentinel zeros: an empty timeline shouldn't reach the canonical-
+-- writer path in the first place (T008 has clips by construction).
+local function compute_seq_extents_frames(seq)
+    assert(type(seq.tracks) == "table" and #seq.tracks > 0,
+        "drt_writer.compute_seq_extents_frames: seq.tracks required")
+    local earliest, latest
+    for _, track in ipairs(seq.tracks) do
+        assert(type(track.clips) == "table",
+            "drt_writer.compute_seq_extents_frames: track.clips required "
+            .. "(empty table OK, nil not OK)")
+        for _, clip in ipairs(track.clips) do
+            assert(type(clip.sequence_start) == "number"
+                and type(clip.duration) == "number",
+                "drt_writer.compute_seq_extents_frames: "
+                .. "clip.sequence_start + clip.duration required")
+            local s = clip.sequence_start
+            local e = s + clip.duration
+            if not earliest or s < earliest then earliest = s end
+            if not latest   or e > latest   then latest   = e end
+        end
+    end
+    assert(earliest and latest,
+        "drt_writer.compute_seq_extents_frames: no clips in sequence "
+        .. tostring(seq.name) .. " — MediaExtents undefined")
+    return earliest, latest
+end
+
 -- ─── project.xml + MpFolder.xml — template-substitute ───────────────────────
 --
 -- Both files are loaded verbatim from drt_canonical/ and have their reference
@@ -460,47 +715,80 @@ local function build_project_xml(template, payload, dbids)
         REFERENCE_PROJECT_CFG, payload.project.name .. ".Cfg")
     template = plain_gsub_required(template,
         REFERENCE_PROJECT_NAME, payload.project.name)
-    -- DbId sweep: each ref DbId appears in some files but not others; this
-    -- function runs over project.xml only, so DbIds that live exclusively in
-    -- MpFolder.xml or SeqContainer/*.xml won't be present here. Use the
-    -- non-asserting form.
-    for key, ref_dbid in pairs(REFERENCE_DBIDS) do
-        local fresh = dbids[key]
-        if fresh and fresh ~= ref_dbid then
-            template = plain_gsub(template, ref_dbid, fresh)
-        end
-    end
-    return template
+    return sweep_reference_dbids(template, dbids)
 end
 
 local function build_mp_folder_xml(template, payload, seq, dbids)
-    template = plain_gsub_required(template, REFERENCE_SEQUENCE_NAME, seq.name)
+    assert(type(payload.media_refs) == "table",
+        "drt_writer.build_mp_folder_xml: payload.media_refs required")
+    assert(type(seq.width) == "number" and seq.width > 0,
+        "drt_writer.build_mp_folder_xml: sequence.width required (positive)")
+    assert(type(seq.height) == "number" and seq.height > 0,
+        "drt_writer.build_mp_folder_xml: sequence.height required (positive)")
+    -- Anchor the sequence-name substitution to <Name>...</Name> so it can't
+    -- accidentally match a hex sequence inside any FieldsBlob. Both
+    -- `JVE_T008_ref_seq` occurrences in the template are <Name> children
+    -- (one in the Sm2Sequence, one in the Sm2MpTimelineClip wrapper);
+    -- plain_gsub_required uses string.gsub under the hood and replaces all.
+    template = plain_gsub_required(template,
+        "<Name>" .. REFERENCE_SEQUENCE_NAME .. "</Name>",
+        "<Name>" .. seq.name .. "</Name>")
     -- The reference's Sm2Sequence carries a FrameRate hex blob hard-coded to
-    -- 23.976 and Resolution hard-coded to 1920×1080. Swap with payload values
-    -- so the MpFolder metadata correctly advertises the timeline shape.
-    -- Empty reference was authored as a 24.0 fps project; the kitchen-sink
-    -- fixture happens to be 23.976. We're substituting against the EMPTY
-    -- reference template, so the needle is the 24.0 hex.
+    -- 24.0 (the empty reference's project rate) and Resolution hard-coded to
+    -- 1920×1080. Both substituted from payload.
     local ref_frame_rate_hex =
         "00000000000038400000000000000000"   -- LE double 24.0 + 0
     local ref_resolution_hex =
         "00000000000007800000000000000438"   -- BE int64 1920 + 1080
     local our_frame_rate_hex = enc.encode_le_double(seq.fps)
         .. "0000000000000000"
-    local our_resolution_hex = string.format(
-        "%016x%016x", seq.width or 1920, seq.height or 1080)
+    local our_resolution_hex =
+        string.format("%016x%016x", seq.width, seq.height)
     template = plain_gsub_required(template,
         ref_frame_rate_hex, our_frame_rate_hex)
     template = plain_gsub_required(template,
         ref_resolution_hex, our_resolution_hex)
 
-    -- DbId sweep — not every ref DbId lives in MpFolder.xml; use silent form.
-    for key, ref_dbid in pairs(REFERENCE_DBIDS) do
-        local fresh = dbids[key]
-        if fresh and fresh ~= ref_dbid then
-            template = plain_gsub(template, ref_dbid, fresh)
-        end
+    -- MediaExtents: two LE doubles [earliest_real_sec, latest_real_sec] in
+    -- absolute project-epoch seconds (per anamnesis-gold dissection — see
+    -- phase0-findings.md §K). The empty reference encodes (3600.0, 0.0)
+    -- because its timeline has no clips; if we don't substitute, the empty-
+    -- content extent leaks into JVE-authored DRPs and Resolve treats the
+    -- sequence as having no media → empty timeline.
+    -- compute_seq_extents_frames returns absolute project-epoch frames
+    -- (clip.sequence_start is absolute throughout JVE; see sequence.lua:1007).
+    local earliest_frame, latest_frame = compute_seq_extents_frames(seq)
+    local earliest_sec = earliest_frame / seq.fps
+    local latest_sec   = latest_frame   / seq.fps
+    local ref_extents_hex =
+        "000000000020ac400000000000000000"   -- LE doubles 3600.0 + 0.0
+    local our_extents_hex =
+        enc.encode_le_double(earliest_sec)
+        .. enc.encode_le_double(latest_sec)
+    template = plain_gsub_required(template,
+        ref_extents_hex, our_extents_hex)
+
+    -- Replace the empty-reference Sm2MpTimelineClip FieldsBlob with the
+    -- single-clip-timeline version. The empty-ref blob embeds dangling
+    -- MediaRef pointers to its own slot UUID; after sweep, those dangle
+    -- and Resolve refuses to render the timeline's clip body.
+    template = plain_gsub_required(template,
+        EMPTY_REF_MP_TIMELINE_CLIP_FIELDS_BLOB,
+        SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_SINGLE_CLIP)
+
+    template = sweep_reference_dbids(template, dbids)
+
+    -- Inject one Sm2MpVideoClip per media_ref. Without these, timeline
+    -- clips' <MediaRef> pointers dangle → Resolve drops the clips → empty
+    -- timeline. Substitutions happen AFTER the DbId sweep so the items
+    -- carry payload media UUIDs, not freshly-minted ones.
+    local items = {}
+    for _, m in ipairs(payload.media_refs) do
+        items[#items + 1] = build_media_pool_video_item(m, dbids)
     end
+    template = plain_gsub_required(template,
+        "</MediaVec>", table.concat(items) .. " </MediaVec>")
+
     return template
 end
 
@@ -517,20 +805,28 @@ local function shell_quote(s) return "'" .. s:gsub("'", [['\'']]) .. "'" end
 
 -- ─── Public API ─────────────────────────────────────────────────────────────
 
---- Author a .drt at out_path from a JVE payload.
+--- Author a DRP archive at out_path from a JVE payload.
 --- @param out_path string  absolute path to write
 --- @param payload  table {
----     project    = { name, fps, [width=1920], [height=1080] },
+---     project    = { name, fps },
 ---     media_refs = { { file_uuid, file_path, duration_frames,
----                       start_tc_frame }, ... },
----     sequences  = { { name, fps, [width], [height],
----                      tracks = { { type="video"|"audio",
----                                   clips = { { id, media_uuid,
----                                               sequence_start, duration,
----                                               source_in, name }, ... }
----                                 }, ... }
----                    }, ... }   -- (T009 wire allows ≥1; T004 round-trip uses 1)
+---                       start_tc_frame, native_rate }, ... },
+---     sequence   = { name, fps, width, height,
+---                    tracks = { { type="video"|"audio",
+---                                 clips = { { id, media_uuid,
+---                                             sequence_start, duration,
+---                                             source_in, name }, ... }
+---                               }, ... }
+---                  }
 ---   }
+--- The writer is single-sequence by design (spec 023 T008 scope; FR-002 +
+--- phase0-findings §K3). Multi-sequence DRTs would require a second pass.
+--- All numeric fields are integers in their native unit:
+---   clip.sequence_start, clip.duration   timeline frames at seq.fps
+---   clip.source_in                       absolute project-epoch frames
+---   media.start_tc_frame                 media's TC origin (native frames)
+---   media.duration_frames                media's length (native frames)
+---   media.native_rate                    media file's container fps
 --- @return table  { path, stage }
 function M.author(out_path, payload)
     assert(type(out_path) == "string" and out_path ~= "",
@@ -545,12 +841,11 @@ function M.author(out_path, payload)
         "drt_writer.author: payload.project.fps required (positive)")
     assert(type(payload.media_refs) == "table",
         "drt_writer.author: payload.media_refs required (array)")
-    assert(type(payload.sequences) == "table" and #payload.sequences >= 1,
-        "drt_writer.author: payload.sequences must be a non-empty array")
-    assert(#payload.sequences == 1, "drt_writer.author: only single-sequence "
-        .. "payloads are supported in this writer pass (FR-002 scope); got "
-        .. #payload.sequences)
-    local seq = payload.sequences[1]
+    assert(type(payload.sequence) == "table",
+        "drt_writer.author: payload.sequence (singular) required. The "
+        .. "writer is single-sequence by design — see FR-002 + spec 023 "
+        .. "T008 scope; multi-sequence DRTs are out of scope.")
+    local seq = payload.sequence
     assert(type(seq.name) == "string" and seq.name ~= "",
         "drt_writer.author: sequence.name required")
     assert(type(seq.fps) == "number" and seq.fps > 0,
@@ -564,8 +859,11 @@ function M.author(out_path, payload)
         media_by_uuid[m.file_uuid] = m
     end
 
-    -- Reset and seed the deterministic UUID counter for this export.
-    M._uuid_counter = 0
+    -- Seed the UUID counter from a hash of out_path: distinct exports get
+    -- distinct minted DbIds (no cross-archive collision in the same Resolve
+    -- instance) while same path + same payload still produces byte-identical
+    -- output (reproducibility for verification / diff regression).
+    M._uuid_counter = hash_uint24(out_path)
     local dbids = {}
     local seeds = {
         sm_project = 0x01, sm_config = 0x02, sm_multi_sys = 0x03,
@@ -588,9 +886,15 @@ function M.author(out_path, payload)
     local seq_container_xml = build_seq_container_xml(
         seq, dbids.sequence, dbids.seq_container, media_by_uuid)
 
-    -- Stage tree under /tmp; nuke any prior leftover.
-    local stage = "/tmp/jve_drt_stage_" .. tostring(M._uuid_counter)
-    os.execute("rm -rf " .. shell_quote(stage))
+    -- Fresh unique stage dir per call so concurrent authors (parallel test
+    -- processes, parallel Claude sessions) don't collide on /tmp paths.
+    -- mktemp -d returns a freshly-minted empty directory; no rm-first needed.
+    local h = assert(io.popen("mktemp -d -t jve_drt_stage.XXXXXX"),
+        "drt_writer.author: mktemp -d failed")
+    local stage = h:read("*l")
+    h:close()
+    assert(stage and stage ~= "",
+        "drt_writer.author: mktemp -d returned empty path")
     assert(os.execute("mkdir -p " .. shell_quote(stage
         .. "/MediaPool/Master")) == 0,
         "drt_writer.author: mkdir MediaPool/Master failed")
