@@ -50,6 +50,17 @@ function M.upsert(clip_id, link, db)
     assert(type(link.resolve_item_id) == "string"
         and link.resolve_item_id ~= "",
         "identity_ledger.upsert: link.resolve_item_id required")
+    -- Fingerprint columns are nil-or-non-empty by contract: "" is a
+    -- malformed signal that would force the classifier into bootstrap
+    -- forever. Force callers to pass nil when they mean "no fingerprint."
+    assert(link.grade_fingerprint == nil
+            or (type(link.grade_fingerprint) == "string"
+                and link.grade_fingerprint ~= ""),
+        "identity_ledger.upsert: grade_fingerprint must be nil or non-empty")
+    assert(link.edit_fingerprint == nil
+            or (type(link.edit_fingerprint) == "string"
+                and link.edit_fingerprint ~= ""),
+        "identity_ledger.upsert: edit_fingerprint must be nil or non-empty")
 
     local existing = read_row(clip_id, db)
     local grade_fp = link.grade_fingerprint
@@ -98,6 +109,19 @@ function M.lookup_clip_id(resolve_item_id, db)
     local clip_id
     if stmt:exec() and stmt:next() then
         clip_id = stmt:value(0)
+        -- Multi-row defensive assert. One resolve_item_id should map to
+        -- at most one clip; multiple ledger rows means reconcile produced
+        -- a bad state (blade-inherit fragments should be read-time
+        -- decorations, not persisted ledger rows — see data-model.md
+        -- §reconcile bladed-inherit).
+        if stmt:next() then
+            local second = stmt:value(0)
+            stmt:finalize()
+            error(string.format(
+                "identity_ledger.lookup_clip_id: multiple clip mappings "
+                .. "for resolve_item_id=%s (at least %s and %s)",
+                resolve_item_id, tostring(clip_id), tostring(second)))
+        end
     end
     stmt:finalize()
     return clip_id

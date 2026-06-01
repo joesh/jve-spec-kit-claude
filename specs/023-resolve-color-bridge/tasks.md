@@ -131,10 +131,11 @@
 
 ## Phase 4e — Edit read-back (Resolve-side tweaks) (STOP gate)
 
-- [ ] **T051** [P] `tests/contract/test_helper_read_timeline.lua` — assert `read_timeline` result shape `{items:[{resolve_item_id, track, record_start, record_duration, source_in, source_out, enabled}]}`; absolute TC; locale-rate guard applies. FAIL first.
+- [ ] **T051** [P] `tests/contract/test_helper_read_timeline.lua` — assert `read_timeline` result shape `{items:[{resolve_item_id, track_id, record_start, record_duration, source_in, source_out, enabled}]}`; absolute TC; locale-rate guard applies. `track_id` is the JVE track id (see helper-protocol.md §`read_timeline`). FAIL first.
 - [ ] **T052** `tools/resolve-helper/` — implement `read_timeline` (live per-item edit state). Makes T051 pass.
 - [ ] **T053** `src/lua/core/resolve_bridge/edit_diff.lua` + `tests/test_edit_diff.lua` — classify, per matched clip: Resolve-changed (live ≠ `edit_fingerprint`), JVE-changed-locally (current clip ≠ `edit_fingerprint`), both-changed (conflict). Black-box test with non-trivial trims/moves. Verify test FAILS first. (FR-025)
-- [ ] **T054** `src/lua/core/commands/sync_edits_from_resolve.lua` + `tests/test_sync_edits_command.lua` — `SyncEditsFromResolve`: translate each edit delta into the **existing** JVE edit command (move/ripple-trim/set-enabled/etc.), composed under one undo group — do NOT write a parallel clip-mutation path (1.9 respect architecture; no duplicate implementations). Before reusing each, read 2+ call sites and trace its execute+undo (`feedback_no_lazy_shortcuts`). Apply only to non-conflicting matched clips; surface conflicts (keep JVE / take Resolve), never silent overwrite; update `edit_fingerprint`. Test execute/undo + conflict path (pcall/assert where invariant). Verify FAILS first. Registered command (FR-023). (FR-024/025)
+- [ ] **T054a** `src/lua/core/commands/sync_edits_from_resolve.lua::classify_all` + `tests/test_sync_edits_classify_all.lua` + `tests/test_resolve_bridge_link_schema.lua` — pure-data classifier: walk `read_timeline` response + ledger; bucket into `{to_apply, conflicts, skipped, unmatched}` per the data-model.md §SyncEditsFromResolve contract. V1 VIDEO ONLY (audio asserts; deferred to `todo_t054_audio_support`). Fail-fast invariants: cross-sequence assert; FK CASCADE asserted (regression test); closed-set reason validation at every emit. Identity-ledger reverse lookup + multi-row defensive assert + empty-string fingerprint rejection. Verify tests FAIL first. (FR-024/025, supports FR-011c)
+- [ ] **T054b** `src/lua/core/commands/sync_edits_from_resolve.lua::apply` + `tests/test_sync_edits_apply.lua` — dispatcher: translate each `to_apply` entry into existing JVE commands under one undo group — do NOT write a parallel clip-mutation path (1.9; `feedback_no_lazy_shortcuts`). Before reusing each verb, read 2+ call sites and trace its execute+undo. Phases: pre-Phase-0 deletes → Phase 0 `MoveClipToTrack` → Phase A `ToggleClipEnabled` → Phase B trim fixpoint (`RippleTrimEdge`/`OverwriteTrimEdge` with blanket reload after each ripple to absorb sync_mode propagation) → Phase C `Nudge` → Phase D shape-fail surface. Per-phase failure cascade; fingerprints persist only on full-clip success. V1 MVP no-modal path: surface unhandled conflicts as `apply.skipped[]`. `DISPATCH_VERBS` closed-set asserted before each `command_manager.execute`. Test execute/undo + conflict path. Verify FAILS first. Registered command (FR-023). (FR-024/025)
 - [ ] **T055** 🟢 LIVE `tests/live/test_edit_readback.lua` — trim/move a clip in Resolve, run `SyncEditsFromResolve`; assert the matched JVE clip's record/source updates; separately, locally edit a JVE clip then pull and assert it surfaces as a conflict, not an overwrite (quickstart edit-pull steps). (FR-024/025)
 
 > **STOP GATE 4e** — Resolve-side edit tweaks pull into JVE, conflict-aware, undoable.
@@ -196,9 +197,9 @@ Note: 🟢 LIVE tasks (T025, T026, T033, T034, T037, T041, T042, T045) cannot ru
 | FR-009 per-verb handle revalidation | T021, T042 | FR-020 locale-rate guard | T042 |
 | FR-010 Studio required | T042 | FR-021 helper holds no model | T021 |
 | FR-011 record mapping | T016, T024 | FR-022 test discipline | conventions + all test tasks |
-| FR-011b inbound id adoption | T046, T048 | FR-023 commands invocable | T024, T031, T040, T043, T049, T054 |
-| FR-011c connect imported (id + positional) | T047, T049, T050 | FR-024 pull Resolve edits | T052, T054, T055 |
-| FR-012 reconcile (bladed inherit) | T036, T037 | FR-025 edit conflict detection | T053, T054, T055 |
+| FR-011b inbound id adoption | T046, T048 | FR-023 commands invocable | T024, T031, T040, T043, T049, T054b |
+| FR-011c connect imported (id + positional) | T047, T049, T050 | FR-024 pull Resolve edits | T052, T054a, T054b, T055 |
+| FR-012 reconcile (bladed inherit) | T036, T037 | FR-025 edit conflict detection | T053, T054a, T054b, T055 |
 
 ## Validation checklist
 - [x] Every contract verb has a contract test (T013/T014/T027/T028/T038/T051) before its helper impl (T021/T029/T039/T052).

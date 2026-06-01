@@ -67,8 +67,10 @@ CREATE TABLE IF NOT EXISTS resolve_bridge_link (
 **Fields / validation**
 - `jve_clip_uuid` — PK and FK to `clips(id)`; `ON DELETE CASCADE` drops the link when the clip is deleted (FR-013a).
 - `resolve_item_id` — Resolve timeline-item id (NOT NULL). For imported clips it equals `clip.id`; carried explicitly so UUID clips (matched positionally) and imported clips share one schema.
-- `grade_fingerprint` — fingerprint of the grade last synced; detects "did the grade change in Resolve since last sync" without diffing full CDLs. NULL until first grade sync.
-- `edit_fingerprint` — fingerprint of the edit state (record start/duration, source in/out, track, enabled) at last sync; an edit-pull compares the live state and the current JVE clip against this to tell a Resolve-side change from a JVE-side local change (FR-025). NULL until first connect/sync.
+- `grade_fingerprint` — fingerprint of the grade last synced; detects "did the grade change in Resolve since last sync" without diffing full CDLs. NULL until first grade sync. **Contract**: nil-or-non-empty-string only; the model rejects `""` (empty string is a malformed bootstrap signal that would force re-bootstrap forever).
+- `edit_fingerprint` — fingerprint of the edit state (record start/duration, source in/out, track, enabled) at last sync; an edit-pull compares the live state and the current JVE clip against this to tell a Resolve-side change from a JVE-side local change (FR-025). NULL until first connect/sync. Same nil-or-non-empty contract as `grade_fingerprint`.
+
+**Algorithmic invariant**: each `resolve_item_id` maps to at most one JVE clip. Blade-inherit fragments do **not** get their own ledger rows — only the parent's row is persisted; fragments inherit the parent's mapping at query time. `identity_ledger.lookup_clip_id` asserts the uniqueness (defensive against reconcile bugs); a future schema bump may enforce it via `UNIQUE(resolve_item_id)`.
 
 **Lifecycle**
 - **Created/updated**: by `SendToResolve` (outbound mapping), `ConnectToResolveProject` (inbound — id match per FR-011b, else positional per FR-011c), `SyncGradesFromResolve` (`grade_fingerprint`), and `SyncEditsFromResolve` (`edit_fingerprint`). Always inside a `command_event`.
@@ -111,3 +113,98 @@ A clip may have a link without a grade (sent but not yet graded) or a grade with
 - Writing a partial CDL (e.g. `slope_r` set, `power_b` NULL) → asserts (all-nine-or-none invariant).
 - Writing `fidelity` outside the enum → asserts.
 - Writing a `clip_grade` outside a `command_event` → asserts (command-only mutation, `todo_command_bypass_enforcement`).
+
+---
+
+## SyncEditsFromResolve — classification + dispatch contract (FR-024 / FR-025)
+
+The `read_timeline` response from the helper (`contracts/helper-protocol.md` §`read_timeline`) is classified into four buckets before any model write happens. `classify_all` is pure data; `apply` translates each `to_apply` entry into existing JVE commands under one undo group — no parallel clip-mutation path (1.9). Source: `src/lua/core/commands/sync_edits_from_resolve.lua`, `src/lua/core/resolve_bridge/edit_diff.lua`, `src/lua/core/resolve_bridge/identity_ledger.lua`.
+
+### Scope
+
+- **V1 ships VIDEO only.** Audio support — subframe-aware fingerprint, table-typed positional fields, sample-rate mismatch handling — lands separately (`todo_t054_audio_support`).
+- **One Resolve timeline per response** (helper-protocol guarantee). The classifier does not detect cross-timeline contamination from response shape alone; it asserts each clip's `owner_sequence_id` matches the supplied `sequence_id`.
+- **Schema V12+** required (`resolve_bridge_link` table and its `resolve_item_id` index).
+
+### `classify_all(response, sequence_id, db, take_resolve_set?) → {to_apply, conflicts, skipped, unmatched}`
+
+Inputs:
+- `response` — helper `read_timeline` payload.
+- `sequence_id` — JVE sequence the response describes.
+- `db` — open SQLite connection (clip + ledger reads).
+- `take_resolve_set` — optional `{[clip_id] = true}`; clips listed here have their stored fingerprint synthesized from `current` (caller chose Take-Resolve on a prior conflict).
+
+Internal phases:
+1. **Response walk** — `classify_row` per item: ledger lookup → clip load + invariant assert → V1 video-only assert → track-change branch → edit-diff branch.
+2. **Ledger walk** — for each `resolve_bridge_link` row whose clip belongs to `sequence_id` and whose `resolve_item_id` was not seen in the response, emit a `deleted_in_resolve` conflict.
+
+Iteration order is response order, not contractual; callers key bucket entries by `clip_id` (or `resolve_item_id` for `unmatched`).
+
+### Bucket entry shapes
+
+| Bucket | Required fields | Optional |
+|--------|------------------|----------|
+| `to_apply[]` | `clip_id, resolve_item_id, kind="resolve_only", live, current, stored_fp, track_id, track_type` | `bootstrapped`, `requires_track_move`, `target_track_id` |
+| `conflicts[]` | `resolve_item_id, reason` | `clip_id, kind, live, current, stored_fp, track_id, track_type, live_track_id` |
+| `skipped[]` | `clip_id, resolve_item_id, reason, live, current, stored_fp, track_id, track_type` | `bootstrapped` |
+| `unmatched[]` | `resolve_item_id, reason` | — |
+
+`kind` (the `edit_diff.classify` outcome) is preserved on `to_apply` entries and on `conflicts` entries whose reason is `diverged_both_sides`; elsewhere `reason` is the sole discriminator. `bootstrapped = true` marks entries whose `stored_fp` was synthesized from `current` (no prior ledger fingerprint); `apply` persists those fingerprints outside the undo group so subsequent syncs have a baseline.
+
+### Closed-set reasons
+
+```
+CONFLICT_REASONS = {
+    diverged_both_sides, deleted_in_resolve,
+    fps_mismatch_unsupported, subframe_unsupported,
+    unknown_delta_shape, composite_undecomposable,
+    mutual_composite, overwrite_absorb_inconsistent,
+    slip_unsupported, roll_unsupported,
+    multi_mapped_ambiguous, missing_target_track_in_jve,
+}
+SKIP_REASONS = {
+    neither_changed, only_jve_changed,
+    no_modal_v1_unhandled_conflict, stale_user_choice,
+    phase0_failed, phaseB_failed,
+}
+UNMATCHED_REASONS = { ledger_missing }
+```
+
+Every emit point asserts its `reason` is in the appropriate set — catches typos and drift between spec and code (2.21). Pass-1 `classify_all` emits a subset; the remainder become reachable in Pass-2 `apply`.
+
+### `apply(response, sequence_id, project_id, db, user_choices?) → {applied, failed, skipped, fingerprints_persisted}`
+
+`user_choices` (V2): `{take_resolve: [clip_id], keep_jve: [clip_id], delete_locally: [{clip_id, flavor: "ripple"|"overwrite"}]}`. The three lists are mutually exclusive per clip; `apply` asserts. V1 MVP path ignores `user_choices` and surfaces conflict entries as `apply.skipped[]` with `reason = no_modal_v1_unhandled_conflict`.
+
+Internal flow:
+1. Pre-flight intent resolution (delete-wins, mutual-exclusion assert).
+2. Build `take_resolve_set`; `classify_all(response, sequence_id, db, take_resolve_set)`.
+3. Persist bootstrap fingerprints for `skipped[]` entries with `bootstrapped = true` (outside undo group; metadata-only).
+4. If no dispatches planned → return.
+5. `command_manager.begin_undo_group("Sync Edits from Resolve")`.
+6. Pre-Phase-0 — `delete_locally` dispatches.
+7. **Phase 0** — `MoveClipToTrack` per `to_apply` entry with `requires_track_move = true`.
+8. **Phase A** — `ToggleClipEnabled` per clip with Δenabled.
+9. **Phase B** — trim fixpoint loop (`RippleTrimEdge` / `OverwriteTrimEdge`); blanket reload of sequence clips after each `RippleTrimEdge` to absorb sync_mode cross-track propagation.
+10. **Phase C** — `Nudge` for residual pure-record-start shifts.
+11. **Phase D** — surface unmatched shape-residuals into `apply.skipped[]` with `reason = unknown_delta_shape`.
+12. `end_undo_group`.
+13. Persist post-dispatch fingerprints for clips whose every dispatched verb succeeded (outside undo group).
+
+`apply.failed[]` entries are per-(clip, verb): `{clip_id, attempted_verb, args, error}`. Per-phase failure cascade: Phase 0 failure cascade-skips A/B/C for that clip (`phase0_failed`); Phase A failure is independent (`enabled` is geometrically inert); Phase B failure cascade-skips C (`phaseB_failed`). Fingerprints are persisted only for clips whose every attempted phase succeeded; partial-success clips retain their prior fingerprint so the next sync retries.
+
+### Dispatch verbs
+
+```
+DISPATCH_VERBS = {
+    MoveClipToTrack, ToggleClipEnabled,
+    RippleTrimEdge, OverwriteTrimEdge, Nudge,
+    DeleteClip, RippleDelete,
+}
+```
+
+Adding a verb means updating this constant and this section; the dispatcher asserts every `command_manager.execute` verb name is in the set.
+
+### Modal contract
+
+The conflict modal consumes `conflicts[]`, surfaces per-row choices, and returns `user_choices` to `apply`. V1 modal does not show auto-`to_apply` entries — those dispatch by implicit consent; a user can undo the whole sync after the fact. UI layout lives in `src/lua/ui/` and evolves independently of this data contract.
