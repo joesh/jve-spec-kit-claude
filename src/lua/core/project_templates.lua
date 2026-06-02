@@ -82,6 +82,14 @@ function M.get_template_path(template)
     })
     assert(project:save(), "project_templates: failed to save template project")
 
+    -- Seed the project-level audio_sample_rate that DRP/DRT importers
+    -- (importer_core.resolve_sequence_audio_rate, rule 2.13 — no silent
+    -- default) require. Without this, File → New → Import DRT fails with
+    -- "audio_sample_rate required" because the per-sequence rate is not
+    -- the project-level fallback the importer reads.
+    database.set_project_setting(project.id, "audio_sample_rate",
+        template.audio_sample_rate)
+
     -- The user's edit timeline is kind='sequence' (it holds clips referencing
     -- other sequences). Master sequences are created later by import.
     local sequence = Sequence.create("Sequence 1", project.id,
