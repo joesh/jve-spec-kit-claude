@@ -175,21 +175,19 @@ function M.restore(captured, db)
         #captured.entries)
 end
 
-local database = require("core.database")
-
 --- Full command path: pulls grades from helper, applies them, fires
 --- on_complete. Non-blocking — on_complete carries success/error.
-function M.execute(args)
+function M.execute(args, db)
     assert(type(args) == "table", "SyncGradesFromResolve: args required")
+    assert(db, "SyncGradesFromResolve: db required (passed by "
+        .. "register's executor closure; SQL isolation policy keeps "
+        .. "the global DB lookup out of commands)")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SyncGradesFromResolve: sequence_id required (FR-013a scope)")
     assert(type(args.on_complete) == "function",
         "SyncGradesFromResolve: on_complete callback required")
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
-
-    local db = database.get_connection()
-    assert(db, "SyncGradesFromResolve: no database connection")
 
     local client, err = supervisor.ensure_client()
     if not client then
@@ -229,10 +227,10 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, command_undoers, _db, set_last_error)
+function M.register(command_executors, command_undoers, db, set_last_error)
     command_executors["SyncGradesFromResolve"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
+        local ok, err = pcall(M.execute, args, db)
         if not ok then
             set_last_error("SyncGradesFromResolve: " .. tostring(err))
             return false, tostring(err)
@@ -249,7 +247,7 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         assert(args.captured, "SyncGradesFromResolve undoer: args.captured "
             .. "required (apply() must persist captured before undo is "
             .. "reachable — see todo_sync_grades_undo_capture)")
-        M.restore(args.captured, database.get_connection())
+        M.restore(args.captured, db)
         return true
     end
     return {

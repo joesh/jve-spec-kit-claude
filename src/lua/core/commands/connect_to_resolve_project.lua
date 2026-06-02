@@ -43,7 +43,6 @@ local M = {}
 local Track           = require("models.track")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local supervisor      = require("core.resolve_bridge.helper_supervisor")
-local database        = require("core.database")
 local log             = require("core.logger").for_area("commands")
 
 local function validate_args(args)
@@ -267,11 +266,11 @@ local function load_resolve_state(client, on_done)
         end)
 end
 
-function M.execute(args)
+function M.execute(args, db)
     validate_args(args)
-
-    local db = database.get_connection()
-    assert(db, "ConnectToResolveProject: no database connection")
+    assert(db, "ConnectToResolveProject: db required (passed by "
+        .. "register's executor closure; SQL isolation policy keeps "
+        .. "the global DB lookup out of commands)")
 
     local jve_clips = load_jve_clips_for_sequence(args.sequence_id, db)
 
@@ -324,10 +323,10 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, _db, set_last_error)
+function M.register(command_executors, _command_undoers, db, set_last_error)
     command_executors["ConnectToResolveProject"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
+        local ok, err = pcall(M.execute, args, db)
         if not ok then
             set_last_error("ConnectToResolveProject: " .. tostring(err))
             return false, tostring(err)

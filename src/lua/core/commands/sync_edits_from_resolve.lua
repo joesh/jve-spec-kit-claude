@@ -936,8 +936,11 @@ end
 --- The inner phase dispatches happen inside the apply() undo group, so
 --- the command itself is not separately undoable (one Cmd-Z reverts
 --- the whole sync via the group entries).
-function M.execute(args)
+function M.execute(args, db)
     assert(type(args) == "table", "SyncEditsFromResolve: args required")
+    assert(db, "SyncEditsFromResolve: db required (passed by register's "
+        .. "executor closure; SQL isolation policy keeps "
+        .. "the global DB lookup out of commands)")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SyncEditsFromResolve: sequence_id required")
     assert(type(args.project_id) == "string" and args.project_id ~= "",
@@ -946,10 +949,6 @@ function M.execute(args)
         "SyncEditsFromResolve: on_complete callback required")
     assert(args.user_choices == nil or type(args.user_choices) == "table",
         "SyncEditsFromResolve: user_choices must be a table or nil")
-
-    local database = require("core.database")
-    local db = database.get_connection()
-    assert(db, "SyncEditsFromResolve: no database connection")
 
     local client, err = supervisor.ensure_client()
     if not client then
@@ -996,10 +995,10 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, _db, set_last_error)
+function M.register(command_executors, _command_undoers, db, set_last_error)
     command_executors["SyncEditsFromResolve"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
+        local ok, err = pcall(M.execute, args, db)
         if not ok then
             set_last_error("SyncEditsFromResolve: " .. tostring(err))
             return false, tostring(err)

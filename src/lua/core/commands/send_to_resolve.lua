@@ -27,7 +27,6 @@ local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local drt_writer        = require("exporters.drt_writer")
 local Sequence          = require("models.sequence")
-local database          = require("core.database")
 local log               = require("core.logger").for_area("commands")
 
 local function out_path_for_export(sequence_id)
@@ -36,8 +35,11 @@ local function out_path_for_export(sequence_id)
     return string.format("/tmp/jve-resolve-%s.drp", sequence_id)
 end
 
-function M.execute(args)
+function M.execute(args, db)
     assert(type(args) == "table", "SendToResolve: args required")
+    assert(db, "SendToResolve: db required (passed by register's "
+        .. "executor closure; SQL isolation policy keeps "
+        .. "the global DB lookup out of commands)")
     assert(type(args.project_id) == "string" and args.project_id ~= "",
         "SendToResolve: project_id required")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
@@ -47,9 +49,6 @@ function M.execute(args)
     assert(type(args.on_complete) == "function",
         "SendToResolve: on_complete callback required (FR-007 — never "
         .. "silent enqueue)")
-
-    local db = database.get_connection()
-    assert(db, "SendToResolve: no database connection")
 
     local seq = Sequence.load(args.sequence_id)
     assert(seq, "SendToResolve: sequence not found: " .. args.sequence_id)
@@ -113,10 +112,10 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, _db, set_last_error)
+function M.register(command_executors, _command_undoers, db, set_last_error)
     command_executors["SendToResolve"] = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args)
+        local ok, err = pcall(M.execute, args, db)
         if not ok then
             set_last_error("SendToResolve: " .. tostring(err))
             return false, tostring(err)
