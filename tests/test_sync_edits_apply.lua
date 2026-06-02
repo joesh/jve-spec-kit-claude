@@ -1,15 +1,15 @@
--- T054b-1/2 — sync_edits_from_resolve.apply skeleton + Phase 0 + Phase A
+-- sync_edits_from_resolve.apply — black-box dispatch contract test
 -- (spec 023 FR-024 / FR-025; data-model.md §SyncEditsFromResolve —
 -- classification + dispatch contract, V1 MVP).
 --
--- Black-box: feed apply() a synthetic read_timeline response built to
--- helper-protocol.md §read_timeline's exact shape; assert observable
+-- Feeds apply() a synthetic read_timeline response built to
+-- helper-protocol.md §read_timeline's exact shape; asserts observable
 -- outcomes — DB state (clip.track_id, clip.enabled, ledger fingerprint)
 -- and the result buckets (applied, failed, skipped, fingerprints_persisted).
 --
--- T054b-2 scope: + Phase A (ToggleClipEnabled). T054b-1 scope: bootstrap-fp
--- persist, V1 no-modal conflict surface, Phase 0 (MoveClipToTrack).
--- Phases B/C/D land in T054b-3/4.
+-- Currently wired: bootstrap fp persist, V1 no-modal conflict surface,
+-- Phase 0 (MoveClipToTrack), Phase A (ToggleClipEnabled). Phases B/C/D
+-- not yet dispatched.
 
 require("test_env")
 
@@ -25,7 +25,7 @@ local function check(label, cond)
     else fail = fail + 1; print("FAIL: " .. label) end
 end
 
-print("\n=== sync_edits.apply Tests (T054b-1) ===")
+print("\n=== sync_edits.apply Tests ===")
 
 -- Two video tracks (v1, v2) come from ripple_layout's defaults; we
 -- override clips to be the four scenarios B1 exercises.
@@ -184,31 +184,14 @@ check("c_conflict: not dispatched",
     and find(r2.failed, "c_conflict") == nil)
 -- Conflict clip's stored fingerprint MUST NOT be overwritten — next
 -- sync should re-detect divergence (regression: silent fp updates would
--- swallow the conflict).
-local link_conflict = identity_ledger.load("c_conflict", db)
-check("c_conflict: ledger fp unchanged after no-modal skip",
-    link_conflict and
-    link_conflict.edit_fingerprint == current_fp("c_conflict")
-    -- current was diverged but stored fp predates the divergence;
-    -- after fixture tweak current_fp != stored. The invariant is
-    -- "no overwrite": fp stays equal to whatever we seeded.
-    or true)
--- Stronger: re-load and compare to the originally seeded fp.
+-- swallow the conflict). We seeded with the PRE-tweak fp
+-- (sequence_start=400); after the local tweak current_fp is for
+-- sequence_start=450 — so stored ≠ current is proof of "no overwrite."
 do
+    local link_conflict = identity_ledger.load("c_conflict", db)
     local seeded = link_conflict and link_conflict.edit_fingerprint
-    local Clip = require("models.clip")
-    local conflict_clip = Clip.load("c_conflict")
-    -- We seeded with the PRE-tweak fp (sequence_start=400). After tweak,
-    -- current_fp is for sequence_start=450 — so seeded ≠ current.
-    local current_after_tweak = edit_diff.fingerprint{
-        source_in    = conflict_clip.source_in,
-        source_out   = conflict_clip.source_out,
-        record_start = conflict_clip.sequence_start,
-        record_dur   = conflict_clip.duration,
-        enabled      = conflict_clip.enabled,
-    }
     check("c_conflict: stored fp ≠ current (proof we didn't overwrite)",
-        seeded ~= nil and seeded ~= current_after_tweak)
+        seeded ~= nil and seeded ~= current_fp("c_conflict"))
 end
 
 ----------------------------------------------------------------------
@@ -308,6 +291,7 @@ check("c_move_and_disable: ledger fp persisted post-success",
 ----------------------------------------------------------------------
 -- Scenario 4: user_choices is V2; passing non-nil must assert.
 ----------------------------------------------------------------------
+----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,
         { items = {} }, layout.sequence_id, layout.project_id, db,
@@ -317,7 +301,7 @@ do
 end
 
 ----------------------------------------------------------------------
--- Scenario 4: missing project_id asserts (rule 2.29 / 1.14).
+-- Scenario 5: missing project_id asserts (rule 2.29 / 1.14).
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,

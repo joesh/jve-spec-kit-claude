@@ -1,17 +1,16 @@
 --- SyncEditsFromResolve — pull Resolve-side edit deltas back into JVE
---- (spec 023, T054, FR-024 / FR-025).
+--- (spec 023 FR-024 / FR-025).
 ---
 --- Two-pass design (see `specs/023-resolve-color-bridge/data-model.md`
 --- §SyncEditsFromResolve — classification + dispatch contract):
 ---
----   * `M.classify_all` (this file, Pass 1 / T054a) — pure-data
----     classifier; walks the helper `read_timeline` response + the
----     ledger and buckets every clip into `to_apply`, `conflicts`,
----     `skipped`, or `unmatched`. No commands invoked.
----   * `M.apply` (Pass 2 / T054b, separate commit) — translates each
----     `to_apply` entry into existing JVE commands under one
----     `begin_undo_group`. No parallel clip-mutation path (1.9;
----     `feedback_no_lazy_shortcuts`).
+---   * `M.classify_all` (Pass 1) — pure-data classifier; walks the
+---     helper `read_timeline` response + the ledger and buckets every
+---     clip into `to_apply`, `conflicts`, `skipped`, or `unmatched`.
+---     No commands invoked.
+---   * `M.apply` (Pass 2) — translates each `to_apply` entry into
+---     existing JVE commands under one `begin_undo_group`. No
+---     parallel clip-mutation path (1.9; `feedback_no_lazy_shortcuts`).
 ---
 --- V1 ships VIDEO ONLY (audio support deferred — see
 --- `todo_t054_audio_support`). The classifier asserts on AUDIO clips.
@@ -364,14 +363,10 @@ local DISPATCH_VERBS = {
     RippleDelete       = true,
 }
 
--- Compute the post-success fingerprint that would persist for an
--- entry whose live state has been fully applied. Pulled from the entry's
--- `live` (live state from Resolve) plus the original `current.enabled`
--- iff Phase A was not executed — but for B1, only Phase 0 runs and the
--- live geometric fields already equal `current`'s for any clip that
--- entered Phase 0 (track-only delta — fingerprint excludes track_id).
--- So the fingerprint to persist == fingerprint(live), with `enabled`
--- pinned to live.enabled.
+-- Post-success fingerprint: the Resolve-side `live` state we just
+-- caught JVE up to. Fingerprint vocabulary excludes track_id, so a
+-- track-only Phase-0 success persists `fingerprint(live)` correctly
+-- (live geometric fields already equal current's).
 local function fingerprint_for_persist(entry)
     return edit_diff.fingerprint(entry.live)
 end
@@ -482,10 +477,13 @@ end
 -- requires_track_move = true. Phase 0 failure cascade-skips A/B/C
 -- (data-model.md §apply step 8 failure cascade) — caller observes
 -- `state.phase0_status == "ran_failed"` and refuses subsequent phases
--- for that clip.
-local function run_phase_0(per_clip, project_id, sequence_id, result)
-    for _, state in pairs(per_clip) do
-        local entry = state.entry
+-- for that clip. Iterates `to_apply_entries` (response order) rather
+-- than `pairs(per_clip)` to keep result.failed / result.skipped
+-- deterministic.
+local function run_phase_0(to_apply_entries, per_clip, project_id,
+                            sequence_id, result)
+    for _, entry in ipairs(to_apply_entries) do
+        local state = per_clip[entry.clip_id]
         if not entry.requires_track_move then
             state.phase0_status = "not_needed"
         else
@@ -527,10 +525,13 @@ end
 -- failure cascade-skips A/B/C). Phase A failure is INDEPENDENT — it
 -- does not cascade-skip later phases because `enabled` is
 -- geometrically inert. Dispatched via explicit `clip_toggles` form
--- (idempotent: sets exact enabled_after; not a blind flip).
-local function run_phase_a(per_clip, project_id, sequence_id, result)
-    for _, state in pairs(per_clip) do
-        local entry = state.entry
+-- (idempotent: sets exact enabled_after; not a blind flip). Iterates
+-- `to_apply_entries` for deterministic dispatch order (same reason as
+-- run_phase_0).
+local function run_phase_a(to_apply_entries, per_clip, project_id,
+                            sequence_id, result)
+    for _, entry in ipairs(to_apply_entries) do
+        local state = per_clip[entry.clip_id]
         local delta = entry.live.enabled ~= entry.current.enabled
         if not delta then
             state.phaseA_status = "not_needed"
@@ -598,12 +599,14 @@ local function finalize_per_clip(per_clip, to_apply_entries, db, result)
     end
 end
 
--- Stage guard: reject to_apply entries that need phases not yet
--- implemented in this commit. T054b-2 wires Phase 0 + Phase A; any
--- residual on source_in / source_out / record_start / record_dur
--- needs Phase B/C/D and aborts apply() with a clear staging message.
--- Not a stub (2.17) — the dispatcher truthfully refuses work it
--- cannot perform. T054b-3/4 relax and finally remove this guard.
+-- Stage guard: reject to_apply entries whose deltas need phases not
+-- yet wired. Currently dispatched: Phase 0 (track move) + Phase A
+-- (enabled toggle). Any residual on source_in/source_out/record_start/
+-- record_dur needs Phase B (trim fixpoint), C (Nudge), or D (shape
+-- residual surface) and aborts apply() with a loud staging message.
+-- Not a stub (2.17) — the dispatcher truthfully refuses work it cannot
+-- perform rather than silently no-op'ing. Removed entirely once Phase
+-- B/C/D land.
 local function assert_no_unimplemented_phases(to_apply_entries)
     for _, entry in ipairs(to_apply_entries) do
         local live = entry.live
@@ -616,10 +619,10 @@ local function assert_no_unimplemented_phases(to_apply_entries)
         if geom_delta then
             error(string.format(
                 "sync_edits.apply: to_apply entry for clip %s has "
-                .. "geometric residual (Δ source_in/out or record_*); "
-                .. "Phases B/C/D land in subsequent T054b commits. "
-                .. "T054b-2 dispatches Phase 0 (track move) + Phase A "
-                .. "(enabled toggle) only.",
+                .. "geometric residual on source_in/source_out/"
+                .. "record_start/record_dur; Phases B (trim) / C "
+                .. "(Nudge) / D (shape-fail surface) not yet "
+                .. "implemented in this dispatcher.",
                 tostring(entry.clip_id)))
         end
     end
@@ -635,11 +638,12 @@ end
 --- @param user_choices table? V2; V1 MVP must pass nil
 --- @return table {applied, failed, skipped, fingerprints_persisted}
 ---
---- V1 MVP scope (T054b-1 + T054b-2): Phase 0 (`MoveClipToTrack`) +
+--- V1 MVP scope currently wired: Phase 0 (`MoveClipToTrack`) +
 --- Phase A (`ToggleClipEnabled`) + bootstrap fingerprint persist + V1
 --- no-modal conflict surface. Entries with geometric residual on
 --- source_in/source_out/record_start/record_dur abort with a staging
---- message; Phases B/C/D land in T054b-3/4.
+--- message until Phase B (trim) / C (Nudge) / D (shape-fail surface)
+--- land.
 function M.apply(response, sequence_id, project_id, db, user_choices)
     assert(type(project_id) == "string" and project_id ~= "",
         "sync_edits.apply: project_id required")
@@ -667,8 +671,8 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
 
     local per_clip = init_per_clip(classified.to_apply)
     command_manager.begin_undo_group("Sync Edits from Resolve")
-    run_phase_0(per_clip, project_id, sequence_id, result)
-    run_phase_a(per_clip, project_id, sequence_id, result)
+    run_phase_0(classified.to_apply, per_clip, project_id, sequence_id, result)
+    run_phase_a(classified.to_apply, per_clip, project_id, sequence_id, result)
     command_manager.end_undo_group()
 
     finalize_per_clip(per_clip, classified.to_apply, db, result)
