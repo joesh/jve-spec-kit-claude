@@ -609,6 +609,111 @@ def verb_render_status(args, handle, envelope_id, helper_version):
     return _ok(envelope_id, result)
 
 
+# ─── Identity marker stamp (T048) ─────────────────────────────────────
+
+# Marker properties used when stamping per helper-protocol.md
+# §stamp_identity_marker. `customData` carries the JVE clip.id (the
+# identity field). `color`/`name`/`note` are reserved for user use and
+# NOT consulted by read_identities — values here are chosen so the
+# marker is visually distinguishable in Resolve's UI from user-created
+# markers.
+_IDENTITY_MARKER_COLOR = "Purple"
+_IDENTITY_MARKER_NAME  = "JVE clip identity"
+_IDENTITY_MARKER_NOTE  = ""
+_IDENTITY_MARKER_DURATION_FRAMES = 1
+_IDENTITY_MARKER_FRAME = 0  # item-relative; placed at the head
+
+
+def _find_timeline_item_by_uid(timeline, resolve_item_id):
+    for _track_type, _tidx, item in _iter_all_timeline_items(timeline):
+        try:
+            uid = item.GetUniqueId()
+        except Exception as exc:
+            raise RuntimeError(
+                f"item.GetUniqueId() raised: {exc}") from exc
+        if uid == resolve_item_id:
+            return item
+    return None
+
+
+def verb_stamp_identity_marker(args, handle, envelope_id, helper_version):
+    del helper_version
+
+    token_check = _validate_change_token(args, "stamp_identity_marker")
+    if token_check[0] != "ok":
+        return _error(envelope_id, "bad_request", token_check[1])
+
+    resolve_item_id = args.get("resolve_item_id")
+    custom_data     = args.get("custom_data")
+    if not isinstance(resolve_item_id, str) or not resolve_item_id:
+        return _error(envelope_id, "bad_request",
+            "stamp_identity_marker args.resolve_item_id required "
+            "(non-empty string)")
+    if not isinstance(custom_data, str) or not custom_data:
+        return _error(envelope_id, "bad_request",
+            "stamp_identity_marker args.custom_data required "
+            "(non-empty string, typically the JVE clip.id)")
+
+    handle_result = _revalidate(handle, envelope_id)
+    if handle_result[0] != "ok":
+        return handle_result[1]
+    _, _resolve, project = handle_result
+
+    try:
+        timeline = project.GetCurrentTimeline()
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetCurrentTimeline raised: {exc}")
+    if timeline is None:
+        return _error(envelope_id, "handle_stale",
+            "no current timeline — open one in Resolve")
+
+    try:
+        item = _find_timeline_item_by_uid(timeline, resolve_item_id)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+    if item is None:
+        return _error(envelope_id, "handle_stale",
+            f"resolve_item_id {resolve_item_id!r} not found in current "
+            "timeline (item may have been deleted in Resolve)")
+
+    # Idempotency + conflict detection. _recover_jve_guid raises on
+    # multi-marker ambiguity already (rule 2.32) — same discipline as
+    # the reader (T029a).
+    try:
+        existing = _recover_jve_guid(item)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+    if existing is not None:
+        if existing == custom_data:
+            # Already stamped with the same id — no-op success.
+            return _ok(envelope_id, {"stamped": False})
+        return _error(envelope_id, "resolve_api_error",
+            f"resolve_item_id {resolve_item_id!r} already carries a "
+            f"different identity marker (customData={existing!r}); "
+            "refuse to overwrite — resolve the ambiguity JVE-side")
+
+    try:
+        added = item.AddMarker(
+            _IDENTITY_MARKER_FRAME,
+            _IDENTITY_MARKER_COLOR,
+            _IDENTITY_MARKER_NAME,
+            _IDENTITY_MARKER_NOTE,
+            _IDENTITY_MARKER_DURATION_FRAMES,
+            custom_data,
+        )
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"item.AddMarker raised: {exc}")
+    if not added:
+        return _error(envelope_id, "resolve_api_error",
+            "item.AddMarker returned False (Resolve refused the "
+            "stamp — possibly a frame collision with an existing "
+            "marker at the same position)")
+
+    return _ok(envelope_id, {"stamped": True})
+
+
 def _unimplemented(verb_name):
     def thunk(args, handle, envelope_id, helper_version):
         del args, handle, helper_version
@@ -625,6 +730,7 @@ VERB_TABLE = {
     "read_grades":     _unimplemented("read_grades"),
     "queue_render":    verb_queue_render,
     "render_status":   verb_render_status,
+    "stamp_identity_marker": verb_stamp_identity_marker,
 }
 
 

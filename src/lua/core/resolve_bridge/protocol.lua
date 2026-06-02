@@ -160,8 +160,9 @@ end
 -- of `id`. Non-state-changing verbs (no change_token in args) → nil.
 
 local STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
-    import_timeline = true,
-    queue_render = true,
+    import_timeline        = true,
+    queue_render           = true,
+    stamp_identity_marker  = true,
 }
 
 function M.idempotency_key(parsed_request)
