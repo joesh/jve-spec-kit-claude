@@ -5,81 +5,41 @@
 -- Uses REAL timeline_state — no mock.
 
 local test_env = require('test_env')
+local ui       = require('integration.ui_test_env')
 
-local database = require('core.database')
+print("=== test_import_fcp7_xml ===")
+
+local DB = "/tmp/jve/test_import_fcp7_xml.jvp"
+local _, info = ui.launch({
+    db_path      = DB,
+    project_name = "Default Project",
+})
+
+local database        = require('core.database')
 local command_manager = require('core.command_manager')
-local command_impl = require('core.command_implementations')
-local Command = require('command')
-local json = require("dkjson")
-local sqlite3 = require("core.sqlite3")
-local fcp7_importer = require("importers.fcp7_xml_importer")
-local timeline_state = require('ui.timeline.timeline_state')
-local Signals = require('core.signals')
-
-local TEST_DB = "/tmp/jve/test_import_fcp7_xml.db"
-os.remove(TEST_DB)
-os.remove(TEST_DB .. "-wal")
-os.remove(TEST_DB .. "-shm")
-
-local function bootstrap_schema(conn)
-    assert(conn, "bootstrap_schema requires a database connection")
-    assert(conn:exec(require('import_schema')), "Failed to create schema tables")
-    assert(conn:exec([[
-        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy, settings)
-        VALUES ('default_project', 'Default Project', 0, 0, 'passthrough',
-                '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
-
-        INSERT INTO sequences (
-            id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate,
-            width, height,
-            view_start_frame, view_duration_frames, playhead_frame,
-            mark_in_frame, mark_out_frame,
-            selected_clip_ids, selected_edge_infos, selected_gap_infos,
-            current_sequence_number,
-            created_at, modified_at
-        )
-        VALUES (
-            'default_sequence', 'default_project', 'Default Sequence', 'sequence',
-            30, 1, 48000,
-            1920, 1080,
-            0, 240, 0,
-            NULL, NULL,
-            '[]', '[]', '[]',
-            0,
-            0, 0
-        );
-
-        INSERT OR IGNORE INTO tag_namespaces(id, display_name)
-        VALUES('bin', 'Bins');
-    ]]), "Failed to seed default project/sequence")
-end
-
-database.init(TEST_DB)
+local Command         = require('command')
+local json            = require("dkjson")
+local fcp7_importer   = require("importers.fcp7_xml_importer")
+local Signals         = require('core.signals')
+local sqlite3         = require("core.sqlite3")
+local timeline_state  = require('ui.timeline.timeline_state')
+local PROJECT_ID      = info.project.id
+local DEFAULT_SEQ_ID  = info.sequences[1].id
 local db = database.get_connection()
-bootstrap_schema(db)
 
--- Real source/timeline monitors + focus_manager registration. MatchFrame
--- (line 335 below) loads the master into the source monitor via the real
--- panel_manager.get_sequence_monitor("source_monitor") path; the assertion
--- at line ~349 reads sequence_id off the same monitor.
-local panel_manager   = require("ui.panel_manager")
-local focus_manager   = require("ui.focus_manager")
-local SequenceMonitor = require("ui.sequence_monitor")
-local source_mon   = SequenceMonitor.new({ view_id = "source_monitor"   })
-local timeline_mon = SequenceMonitor.new({ view_id = "timeline_monitor" })
-panel_manager.register_sequence_monitor("source_monitor",   source_mon)
-panel_manager.register_sequence_monitor("timeline_monitor", timeline_mon)
-focus_manager.register_panel("source_monitor",   source_mon:get_widget(),
-    source_mon:get_title_widget(),   "Source")
-focus_manager.register_panel("timeline_monitor", timeline_mon:get_widget(),
-    timeline_mon:get_title_widget(), "Timeline")
-focus_manager.set_focused_panel("timeline_monitor")
-
-command_manager.init('default_sequence', 'default_project')
-local executors = {}
-local undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- Used only by the anamnesis sub-scenario below, which exercises the
+-- importer against a side-DB to assert track_type discipline. The main
+-- project DB is provisioned by ui.launch above.
+local function bootstrap_schema(conn)
+    assert(conn:exec(require('import_schema')),
+        "Failed to create schema tables")
+    assert(conn:exec(string.format([[
+        INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy, settings)
+        VALUES ('%s', 'Default Project', 0, 0, 'passthrough',
+                '{"audio_sample_rate":48000,"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
+        INSERT OR IGNORE INTO tag_namespaces(id, display_name) VALUES('bin', 'Bins');
+    ]], PROJECT_ID)), "Failed to seed scratch project")
+end
 
 -- Signal-based mutation tracking (replaces mock instrumentation)
 local mutation_log = {}
@@ -160,9 +120,9 @@ end
 -- Execute Import
 -- ============================================================
 local xml_path = resolve_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
-local import_cmd = Command.create("ImportFCP7XML", "default_project")
+local import_cmd = Command.create("ImportFCP7XML", PROJECT_ID)
 import_cmd:set_parameter("xml_path", xml_path)
-import_cmd:set_parameter("project_id", "default_project")
+import_cmd:set_parameter("project_id", PROJECT_ID)
 
 local execute_result = command_manager.execute(import_cmd)
 assert(execute_result.success, "Import command should succeed")
@@ -193,7 +153,7 @@ assert(master_clip_count > 0, "Import should create master sequences for MatchFr
 
 local expected_master_bin_name = "Timeline 1 (Resolve) Master Clips"
 local master_bin_id = nil
-for _, bin in ipairs(database.load_bins("default_project")) do
+for _, bin in ipairs(database.load_bins(PROJECT_ID)) do
     if bin.name == expected_master_bin_name then
         master_bin_id = bin.id
         break
@@ -205,7 +165,7 @@ local sample_master_stmt = db:prepare([[SELECT id FROM sequences WHERE kind = 'm
 assert(sample_master_stmt, "Sample master sequence query should prepare")
 assert(sample_master_stmt:exec() and sample_master_stmt:next(), "Should fetch at least one master sequence")
 sample_master_stmt:finalize()
-local media_bin_map = database.load_master_clip_bin_map("default_project")
+local media_bin_map = database.load_master_clip_bin_map(PROJECT_ID)
 local assigned_count = 0
 for _, bin_ids in pairs(media_bin_map) do
     for _, bid in ipairs(bin_ids) do
@@ -234,9 +194,9 @@ bootstrap_schema(scratch_db)
 local original_connection = database.get_connection()
 database.set_connection(scratch_db)
 
-local parsed_anamnesis = fcp7_importer.import_xml(anamnesis_path, "default_project")
+local parsed_anamnesis = fcp7_importer.import_xml(anamnesis_path, PROJECT_ID)
 assert(parsed_anamnesis.success, parsed_anamnesis.errors and parsed_anamnesis.errors[1] or "Anamnesis fixture parsing failed")
-local anamnesis_entities = fcp7_importer.create_entities(parsed_anamnesis, scratch_db, "default_project")
+local anamnesis_entities = fcp7_importer.create_entities(parsed_anamnesis, scratch_db, PROJECT_ID)
 assert(anamnesis_entities.success, anamnesis_entities.error or "Anamnesis fixture entity creation failed")
 
 -- Restore the original connection before cleanup
@@ -274,20 +234,20 @@ assert(timeline_clip_id and timeline_master_id,
     "Importer should assign source_sequence_id (master) for timeline clips")
 
 -- Get the imported sequence and switch real timeline_state to it
-local import_record = command_manager.get_last_command('default_project')
+local import_record = command_manager.get_last_command(PROJECT_ID)
 assert(import_record, "Import command should exist")
 local created_sequence_ids = import_record:get_parameter("created_sequence_ids")
 assert(type(created_sequence_ids) == "table" and #created_sequence_ids >= 1,
     "Importer should store created sequence ids")
 local imported_sequence_id = created_sequence_ids[1]
 
-timeline_state.init(imported_sequence_id, "default_project")
+timeline_state.init(imported_sequence_id, PROJECT_ID)
 command_manager.activate_timeline_stack(imported_sequence_id)
 
 -- MatchFrame: set playhead inside the clip
 timeline_state.set_playhead_position(tl_start + 1)
 
-local match_cmd = Command.create("MatchFrame", "default_project")
+local match_cmd = Command.create("MatchFrame", PROJECT_ID)
 local match_result = command_manager.execute(match_cmd)
 -- KNOWN OPEN QUESTION (flagged for Joe): MatchFrame's file_exists guard
 -- (match_frame.lua:127) requires media on disk. The FCP7 fixture refers
@@ -301,6 +261,8 @@ local match_result = command_manager.execute(match_cmd)
 -- being silently masked.
 assert(match_result.success, "MatchFrame should succeed on imported clips: "
     .. tostring(match_result.error_message))
+local source_mon = require("ui.panel_manager").get_sequence_monitor("source_monitor")
+assert(source_mon, "panel_manager must expose source_monitor after ui.launch")
 assert(source_mon.sequence_id == timeline_master_id,
     "MatchFrame should load the master clip into source viewer")
 
@@ -312,7 +274,7 @@ assert(#clip_ids > 0, "Import should create clips to nudge")
 
 reset_mutation_tracking()
 
-local nudge_cmd = Command.create("Nudge", "default_project")
+local nudge_cmd = Command.create("Nudge", PROJECT_ID)
 nudge_cmd:set_parameter("nudge_amount", 30)
 nudge_cmd:set_parameter("selected_clip_ids", { clip_ids[1] })
 
@@ -326,7 +288,7 @@ reset_mutation_tracking()
 -- ============================================================
 -- ToggleClipEnabled applies mutations + undo/redo
 -- ============================================================
-local toggle_cmd = Command.create("ToggleClipEnabled", "default_project")
+local toggle_cmd = Command.create("ToggleClipEnabled", PROJECT_ID)
 toggle_cmd:set_parameter("clip_ids", { clip_ids[1] })
 local pre_toggle_count = #mutation_log
 local toggle_result = command_manager.execute(toggle_cmd)
@@ -461,7 +423,7 @@ local replay_stmt = db:prepare("SELECT * FROM commands WHERE sequence_number = ?
 replay_stmt:bind_value(1, import_sequence)
 if replay_stmt and replay_stmt:exec() then
     while replay_stmt:next() do
-        local parsed = Command.parse_from_query(replay_stmt, 'default_project')
+        local parsed = Command.parse_from_query(replay_stmt, PROJECT_ID)
         if parsed then
             table.insert(replay_commands, parsed)
         end
@@ -469,7 +431,7 @@ if replay_stmt and replay_stmt:exec() then
 end
 if replay_stmt then replay_stmt:finalize() end
 
-assert(db:exec([[
+assert(db:exec(string.format([[
     PRAGMA foreign_keys = OFF;
     DELETE FROM tag_assignments;
     DELETE FROM tags;
@@ -491,7 +453,7 @@ assert(db:exec([[
         current_sequence_number,
         created_at, modified_at
     ) VALUES (
-        'default_sequence', 'default_project', 'Default Sequence', 'sequence',
+        '%s', '%s', 'Default Sequence', 'sequence',
         30, 1, 48000,
         1920, 1080,
         0, 240, 0,
@@ -500,14 +462,29 @@ assert(db:exec([[
         0,
         0, 0
     );
-]]), "Failed to clear timeline state before replay")
+]], DEFAULT_SEQ_ID, PROJECT_ID)), "Failed to clear timeline state before replay")
 
--- Reinit real timeline_state + command_manager for replay
-command_manager.init('default_sequence', 'default_project')
-timeline_state.init('default_sequence', 'default_project')
-executors = {}
-undoers = {}
-command_impl.register_commands(executors, undoers, db)
+-- Reinit real timeline_state + command_manager for replay (executors
+-- were registered during ui.launch and remain wired — no re-register
+-- needed).
+command_manager.init(DEFAULT_SEQ_ID, PROJECT_ID)
+timeline_state.init(DEFAULT_SEQ_ID, PROJECT_ID)
+
+-- Wiped baseline: one empty sequence, no tracks/clips/media. Replay
+-- should produce exactly the delta a fresh import produces, not the
+-- pre-wipe absolute counts (the template's tracks were wiped too).
+local import_delta = {
+    sequences = after_import_counts.sequences - initial_counts.sequences,
+    tracks    = after_import_counts.tracks    - initial_counts.tracks,
+    clips     = after_import_counts.clips     - initial_counts.clips,
+    media     = after_import_counts.media     - initial_counts.media,
+}
+local wiped_counts = {
+    sequences = count_rows("sequences"),
+    tracks    = count_rows("tracks"),
+    clips     = count_rows("clips"),
+    media     = count_rows("media"),
+}
 
 for _, cmd in ipairs(replay_commands) do
     local exec_result = command_manager.execute(cmd)
@@ -523,9 +500,13 @@ local after_replay_counts = {
     media = count_rows("media")
 }
 
-assert(after_replay_counts.sequences == after_import_counts.sequences, "Replay should not duplicate sequences")
-assert(after_replay_counts.tracks == after_import_counts.tracks, "Replay should not duplicate tracks")
-assert(after_replay_counts.clips == after_import_counts.clips, "Replay should not duplicate clips")
+-- Wiped baseline + replayed import delta == post-replay state.
+assert(after_replay_counts.sequences == wiped_counts.sequences + import_delta.sequences,
+    "Replay should reproduce import sequence delta exactly (no duplicates)")
+assert(after_replay_counts.tracks == wiped_counts.tracks + import_delta.tracks,
+    "Replay should reproduce import track delta exactly (no duplicates)")
+assert(after_replay_counts.clips == wiped_counts.clips + import_delta.clips,
+    "Replay should reproduce import clip delta exactly (no duplicates)")
 
 print("✅ FCP7 XML import is idempotent across undo/redo and command replay")
 
@@ -586,7 +567,9 @@ local function fetch_single_clip_id(sequence_id)
 end
 
 -- Switch real timeline_state to the replayed imported sequence
-local replay_seq_stmt = db:prepare([[SELECT id FROM sequences WHERE id != 'default_sequence' AND kind = 'sequence' LIMIT 1]])
+local replay_seq_stmt = db:prepare(
+    "SELECT id FROM sequences WHERE id != ? AND kind = 'sequence' LIMIT 1")
+replay_seq_stmt:bind_value(1, DEFAULT_SEQ_ID)
 assert(replay_seq_stmt:exec())
 local replayed_sequence_id = nil
 if replay_seq_stmt:next() then
@@ -594,7 +577,7 @@ if replay_seq_stmt:next() then
 end
 replay_seq_stmt:finalize()
 assert(replayed_sequence_id, "Should find replayed imported sequence")
-timeline_state.init(replayed_sequence_id, "default_project")
+timeline_state.init(replayed_sequence_id, PROJECT_ID)
 command_manager.activate_timeline_stack(replayed_sequence_id)
 
 local video_tracks = fetch_video_tracks(replayed_sequence_id)
@@ -605,12 +588,12 @@ assert(#media_ids >= 1, "Importer should provide media rows for insert operation
 
 -- Create masterclip sequence for the media (required for Insert after IS-a refactor)
 local insert_source_sequence_id = test_env.create_test_masterclip_sequence(
-    'default_project', 'Test Insert Master', 30, 1, 10000, media_ids[1])
+    PROJECT_ID, 'Test Insert Master', 30, 1, 10000, media_ids[1])
 
 local clip_for_move = fetch_single_clip_id(replayed_sequence_id)
 
 command_manager.begin_undo_group("move_nudge")
-local move_cmd = Command.create("MoveClipToTrack", "default_project")
+local move_cmd = Command.create("MoveClipToTrack", PROJECT_ID)
 move_cmd:set_parameter("clip_id", clip_for_move)
 move_cmd:set_parameter("target_track_id", video_tracks[2])
 move_cmd:set_parameter("skip_occlusion", true)
@@ -619,13 +602,13 @@ do
     assert(r and r.success, "MoveClipToTrack should succeed; got result="
         .. require("dkjson").encode(r) .. " last_error=" .. tostring(command_manager.get_last_error and command_manager.get_last_error()))
 end
-local nudge_cmd2 = Command.create("Nudge", "default_project")
+local nudge_cmd2 = Command.create("Nudge", PROJECT_ID)
 nudge_cmd2:set_parameter("nudge_amount", -10)
 nudge_cmd2:set_parameter("selected_clip_ids", {clip_for_move})
 assert(command_manager.execute(nudge_cmd2).success, "Nudge should succeed")
 command_manager.end_undo_group()
 
-local toggle_cmd2 = Command.create("ToggleClipEnabled", "default_project")
+local toggle_cmd2 = Command.create("ToggleClipEnabled", PROJECT_ID)
 toggle_cmd2:set_parameter("clip_ids", {clip_for_move})
 assert(command_manager.execute(toggle_cmd2).success, "ToggleClipEnabled should succeed for regression setup")
 
@@ -645,7 +628,7 @@ do
     mc_seq.mark_out = end_frame
     mc_seq:save()
 end
-local insert_cmd2 = Command.create("Insert", "default_project")
+local insert_cmd2 = Command.create("Insert", PROJECT_ID)
 insert_cmd2:set_parameter("source_sequence_id", insert_source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", video_tracks[1])
 insert_cmd2:set_parameter("sequence_start_frame", 800)
@@ -662,7 +645,7 @@ assert(created_clip_ids and created_clip_ids[1],
 local inserted_clip_id = created_clip_ids[1]
 
 -- V13 SplitClip param renamed split_value → split_frame (frame coords).
-local split_cmd = Command.create("SplitClip", "default_project")
+local split_cmd = Command.create("SplitClip", PROJECT_ID)
 split_cmd:set_parameter("clip_id", inserted_clip_id)
 split_cmd:set_parameter("split_frame", 805)
 split_cmd:set_parameter("sequence_id", replayed_sequence_id)
@@ -677,10 +660,10 @@ local split_second_clip_id = split_cmd:get_parameter("second_clip_id")
 local clip_to_delete = split_second_clip_id or inserted_clip_id or fetch_single_clip_id(replayed_sequence_id)
 assert(clip_to_delete, "There should be a clip to delete")
 
-local delete_cmd = Command.create("DeleteClip", "default_project")
+local delete_cmd = Command.create("DeleteClip", PROJECT_ID)
 delete_cmd:set_parameter("clip_id", clip_to_delete)
 delete_cmd:set_parameter("sequence_id", replayed_sequence_id)
-delete_cmd:set_parameter("project_id", "default_project")
+delete_cmd:set_parameter("project_id", PROJECT_ID)
 
 local delete_result = command_manager.execute(delete_cmd)
 assert(delete_result.success, "Deleting a clip should succeed")
@@ -692,4 +675,3 @@ print("✅ Delete clip undo regression covered")
 
 -- Cleanup
 Signals.disconnect(mutation_conn)
-os.remove(TEST_DB)
