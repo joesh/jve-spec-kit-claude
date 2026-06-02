@@ -109,7 +109,7 @@
 
 ## Phase 5 — Render + relink (STOP gate)
 
-- [ ] **T038** [P] `tests/contract/test_helper_render.lua` — assert `queue_render` `{job_id}` (idempotent on token+spec hash) and `render_status` `{state, progress, output_paths?}`. FAIL first.
+- [x] **T038** [P] `tests/binding/test_helper_render.lua` — asserts `queue_render` happy-path `{job_id}` non-empty string; bad_request for missing/malformed spec (preset_name, target_dir); FR-008 client-side change_token gate; `render_status` closed-set `state ∈ {queued, rendering, completed, failed}`, `progress ∈ [0,100]`, `output_paths` STRICTLY gated on `state=="completed"` (absent otherwise; non-empty absolute paths when present); bad_request for missing/wrong-typed `job_id`. RED until T039.
 - [ ] **T039** `tools/resolve-helper/` — implement `queue_render` + `render_status`. Makes T038 pass.
 - [ ] **T040** `src/lua/core/commands/queue_resolve_render.lua` — `QueueResolveRender`: queue → poll status → on completion relink affected clips to `output_paths` via the existing `RelinkClips` path (FR-019). Registered command (FR-023).
 - [ ] **T041** 🟢 LIVE `tests/live/test_render_relink.lua` — queue, poll to completion, assert the output file exists, JVE relinks and plays the graded master (quickstart step 7).
