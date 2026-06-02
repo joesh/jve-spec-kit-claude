@@ -24,11 +24,19 @@
 #     (subframe-aware fingerprints + sample-rate mismatch handling on
 #     the JVE side, paired with this helper carrying audio items in
 #     the `{frame, subframe}` shape the contract documents).
+#   - `queue_render` + `render_status` (T039) — Resolve render queue
+#     management. queue_render loads a preset, sets target_dir +
+#     optional file_prefix, calls AddRenderJob + StartRendering,
+#     returns job_id. Idempotent on (change_token + spec hash) via
+#     ledger.py (helper-protocol.md §queue_render). render_status maps
+#     Resolve's JobStatus string to the closed-set state enum and
+#     computes output_paths from the queued spec when state ==
+#     "completed".
 #
-# Other verbs (read_grades / queue_render / render_status) belong to
-# T029b / T039 and return `not_implemented` — never a no-op.
-# read_grades is split off because CDL extraction needs live-Resolve
-# API exploration (see todo_read_grades_cdl_extraction).
+# Other verbs (read_grades) belong to T029b and return
+# `not_implemented` — never a no-op. read_grades is split off because
+# CDL extraction needs live-Resolve API exploration (see
+# todo_read_grades_cdl_extraction).
 
 import os
 
@@ -88,6 +96,10 @@ def verb_ping(args, handle, envelope_id, helper_version):
 
 def verb_import_timeline(args, handle, envelope_id, helper_version):
     del helper_version
+
+    token_check = _validate_change_token(args, "import_timeline")
+    if token_check[0] != "ok":
+        return _error(envelope_id, "bad_request", token_check[1])
 
     drt_path = args.get("drt_path")
     media_roots = args.get("media_roots")
@@ -349,6 +361,254 @@ def verb_read_timeline(args, handle, envelope_id, helper_version):
     return _ok(envelope_id, {"items": items})
 
 
+def _validate_change_token(args, verb_name):
+    # FR-008: state-changing verbs MUST carry a `change_token`
+    # shaped as `{project_id, sequence_id, mutation_generation}`.
+    # Enforced inside each state-changing verb so a malformed token
+    # surfaces as bad_request, not as a cache-layer crash.
+    ct = args.get("change_token")
+    if ct is None:
+        return ("error",
+            f"{verb_name}: args.change_token required (FR-008)")
+    if not isinstance(ct, dict):
+        return ("error",
+            f"{verb_name}: args.change_token must be JSON object")
+    for field, expected_py_type, type_name in (
+        ("project_id",          str, "string"),
+        ("sequence_id",         str, "string"),
+        ("mutation_generation", int, "integer"),
+    ):
+        val = ct.get(field)
+        if not isinstance(val, expected_py_type) or (
+                expected_py_type is str and val == ""):
+            return ("error",
+                f"{verb_name}: args.change_token.{field} required "
+                f"({type_name})")
+        if expected_py_type is int and isinstance(val, bool):
+            return ("error",
+                f"{verb_name}: args.change_token.{field} must be "
+                f"integer (got bool)")
+    return ("ok", ct)
+
+
+# ─── Render path (T039) ────────────────────────────────────────────────
+
+# Resolve job-status string → JVE state enum (helper-protocol.md
+# §render_status closed set). Resolve reports the JobStatus via
+# `Project.GetRenderJobStatus(job_id)['JobStatus']`; observed strings
+# from BMD docs + Resolve's render queue UI: "Ready", "Rendering",
+# "Complete", "Failed", "Cancelled". Anything outside this map is
+# surfaced as resolve_api_error so we don't silently bucket an
+# unknown status (rule 2.32).
+_JOB_STATUS_TO_STATE = {
+    "Ready":     "queued",
+    "Rendering": "rendering",
+    "Complete":  "completed",
+    "Failed":    "failed",
+    "Cancelled": "failed",
+}
+
+# Cached spec per job_id, populated at queue time. render_status reads
+# the spec back when the job completes to compose output_paths.
+# Process-local; evaporates on helper restart (FR-021).
+_JOB_SPECS = {}
+
+
+def _validate_queue_render_args(args):
+    spec = args.get("spec")
+    if spec is None:
+        return ("error", "queue_render args missing 'spec'")
+    if not isinstance(spec, dict):
+        return ("error",
+            f"queue_render args.spec must be JSON object, got "
+            f"{type(spec).__name__}")
+    preset_name = spec.get("preset_name")
+    target_dir  = spec.get("target_dir")
+    if not isinstance(preset_name, str) or not preset_name:
+        return ("error",
+            "queue_render args.spec missing 'preset_name' (non-empty string)")
+    if not isinstance(target_dir, str) or not target_dir:
+        return ("error",
+            "queue_render args.spec missing 'target_dir' (non-empty string)")
+    file_prefix = spec.get("file_prefix")
+    if file_prefix is not None and (
+            not isinstance(file_prefix, str) or file_prefix == ""):
+        return ("error",
+            "queue_render args.spec.file_prefix must be non-empty string "
+            "when present")
+    return ("ok", {
+        "preset_name": preset_name,
+        "target_dir":  target_dir,
+        "file_prefix": file_prefix,
+    })
+
+
+def verb_queue_render(args, handle, envelope_id, helper_version):
+    del helper_version
+
+    token_check = _validate_change_token(args, "queue_render")
+    if token_check[0] != "ok":
+        return _error(envelope_id, "bad_request", token_check[1])
+
+    validation = _validate_queue_render_args(args)
+    if validation[0] != "ok":
+        return _error(envelope_id, "bad_request", validation[1])
+    spec = validation[1]
+
+    handle_result = _revalidate(handle, envelope_id)
+    if handle_result[0] != "ok":
+        return handle_result[1]
+    _, _resolve, project = handle_result
+
+    try:
+        loaded = project.LoadRenderPreset(spec["preset_name"])
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"LoadRenderPreset({spec['preset_name']!r}) raised: {exc}")
+    if not loaded:
+        return _error(envelope_id, "resolve_api_error",
+            f"LoadRenderPreset({spec['preset_name']!r}) returned False — "
+            "preset not found in Resolve's Deliver page")
+
+    settings = {"TargetDir": spec["target_dir"]}
+    if spec["file_prefix"]:
+        settings["CustomName"] = spec["file_prefix"]
+    try:
+        set_ok = project.SetRenderSettings(settings)
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"SetRenderSettings raised: {exc}")
+    if not set_ok:
+        return _error(envelope_id, "resolve_api_error",
+            f"SetRenderSettings({settings}) returned False")
+
+    try:
+        job_id = project.AddRenderJob()
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"AddRenderJob raised: {exc}")
+    if not isinstance(job_id, str) or not job_id:
+        return _error(envelope_id, "resolve_api_error",
+            f"AddRenderJob returned non-string/empty: {job_id!r}")
+
+    try:
+        started = project.StartRendering(job_id)
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"StartRendering({job_id!r}) raised: {exc}")
+    if not started:
+        return _error(envelope_id, "resolve_api_error",
+            f"StartRendering({job_id!r}) returned False")
+
+    _JOB_SPECS[job_id] = dict(spec)
+    return _ok(envelope_id, {"job_id": job_id})
+
+
+def _job_output_paths(job_id, project):
+    # When state == completed the helper composes output_paths by
+    # consulting the queued spec + Resolve's GetRenderJobList (which
+    # surfaces per-job TargetDir + OutputFilename). If the job isn't in
+    # the list (Resolve dropped it) we surface what we cached at queue
+    # time — at minimum the target_dir; concrete filenames left empty.
+    spec = _JOB_SPECS.get(job_id)
+    if spec is None:
+        # Job was queued in a different helper process (restart)
+        # OR job_id never went through queue_render. Per FR-021 the
+        # helper holds no persistent state, so we can't compose
+        # output_paths without the spec. Surface resolve_api_error
+        # rather than guess.
+        raise RuntimeError(
+            f"job {job_id!r} is completed but no queued spec is cached "
+            "(helper restart between queue and completion?)")
+    try:
+        job_list = project.GetRenderJobList() or []
+    except Exception as exc:
+        raise RuntimeError(
+            f"GetRenderJobList() raised: {exc}") from exc
+    if not isinstance(job_list, list):
+        raise RuntimeError(
+            f"GetRenderJobList() returned non-list: "
+            f"{type(job_list).__name__}")
+
+    target_dir = spec["target_dir"]
+    paths = []
+    for job in job_list:
+        if not isinstance(job, dict):
+            continue
+        if job.get("JobId") != job_id:
+            continue
+        # OutputFilename is the per-job rendered filename when
+        # complete. Older Resolve API versions used different keys
+        # (TargetPath / FileName); we accept any of them.
+        for key in ("OutputFilename", "FileName", "TargetPath"):
+            fn = job.get(key)
+            if isinstance(fn, str) and fn:
+                paths.append(fn if fn.startswith("/")
+                             else f"{target_dir.rstrip('/')}/{fn}")
+                break
+    if not paths:
+        raise RuntimeError(
+            f"job {job_id!r} is completed but Resolve's job list did "
+            f"not expose a known output-filename field (TargetDir="
+            f"{target_dir!r}); explore the live GetRenderJobList "
+            "shape against this Resolve version")
+    return paths
+
+
+def verb_render_status(args, handle, envelope_id, helper_version):
+    del helper_version
+
+    job_id = args.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        return _error(envelope_id, "bad_request",
+            "render_status args.job_id required (non-empty string)")
+
+    handle_result = _revalidate(handle, envelope_id)
+    if handle_result[0] != "ok":
+        return handle_result[1]
+    _, _resolve, project = handle_result
+
+    try:
+        status = project.GetRenderJobStatus(job_id)
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetRenderJobStatus({job_id!r}) raised: {exc}")
+    if not isinstance(status, dict):
+        return _error(envelope_id, "resolve_api_error",
+            f"GetRenderJobStatus({job_id!r}) returned non-dict: "
+            f"{type(status).__name__}")
+
+    job_status = status.get("JobStatus")
+    if not isinstance(job_status, str):
+        return _error(envelope_id, "resolve_api_error",
+            f"GetRenderJobStatus({job_id!r}) missing JobStatus string "
+            f"(got: {status!r})")
+    state = _JOB_STATUS_TO_STATE.get(job_status)
+    if state is None:
+        return _error(envelope_id, "resolve_api_error",
+            f"unknown Resolve JobStatus {job_status!r} for job "
+            f"{job_id!r} — extend _JOB_STATUS_TO_STATE")
+
+    if "CompletionPercentage" not in status:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetRenderJobStatus({job_id!r}) missing "
+            f"CompletionPercentage (got: {status!r})")
+    completion = status["CompletionPercentage"]
+    if not isinstance(completion, (int, float)) or isinstance(completion, bool):
+        return _error(envelope_id, "resolve_api_error",
+            f"GetRenderJobStatus({job_id!r}) CompletionPercentage "
+            f"non-numeric: {completion!r}")
+    progress = max(0.0, min(100.0, float(completion)))
+
+    result = {"state": state, "progress": progress}
+    if state == "completed":
+        try:
+            result["output_paths"] = _job_output_paths(job_id, project)
+        except RuntimeError as exc:
+            return _error(envelope_id, "resolve_api_error", str(exc))
+    return _ok(envelope_id, result)
+
+
 def _unimplemented(verb_name):
     def thunk(args, handle, envelope_id, helper_version):
         del args, handle, helper_version
@@ -363,8 +623,8 @@ VERB_TABLE = {
     "read_identities": verb_read_identities,
     "read_timeline":   verb_read_timeline,
     "read_grades":     _unimplemented("read_grades"),
-    "queue_render":    _unimplemented("queue_render"),
-    "render_status":   _unimplemented("render_status"),
+    "queue_render":    verb_queue_render,
+    "render_status":   verb_render_status,
 }
 
 
