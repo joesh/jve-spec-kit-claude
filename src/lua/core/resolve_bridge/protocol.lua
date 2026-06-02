@@ -19,6 +19,12 @@ local PROTOCOL_VERSION = 1
 M.VERSION = PROTOCOL_VERSION
 
 -- Closed error-code set (helper-protocol.md). Extend by bumping VERSION.
+-- `helper_unavailable` is a JVE-side code (no helper process / socket
+-- unreachable) — never wire-observed but surfaced to commands via the
+-- same on_complete(code, message) channel, so the closed set covers it.
+-- `not_implemented` is for helper verbs not yet wired in this build —
+-- distinct from `resolve_api_error` so log readers can tell a Resolve
+-- API failure from a coverage gap.
 local KNOWN_ERROR_CODES = {
     not_studio = true,
     handle_stale = true,
@@ -27,6 +33,8 @@ local KNOWN_ERROR_CODES = {
     identity_field_missing = true,
     bad_request = true,
     resolve_api_error = true,
+    helper_unavailable = true,
+    not_implemented = true,
 }
 
 function M.is_known_error_code(code)
@@ -134,6 +142,13 @@ function M.parse_response(line)
             and type(obj.error.message) == "string",
             "protocol.parse_response: error response must carry "
             .. "`error.{code,message}` (structured, never bare string)")
+        -- Closed-set discipline (rule 2.21): the helper is a trust
+        -- boundary; reject any code outside KNOWN_ERROR_CODES so a
+        -- helper-side typo or unwired path can't ship a code commands
+        -- have no routing for.
+        assert(KNOWN_ERROR_CODES[obj.error.code] == true, string.format(
+            "protocol.parse_response: error.code %q is not in the "
+            .. "closed set — helper-protocol.md drift", obj.error.code))
     end
     return obj
 end

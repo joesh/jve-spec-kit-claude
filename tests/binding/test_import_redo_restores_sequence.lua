@@ -16,7 +16,8 @@ local function count_rows(db, table_name)
     local stmt = db:prepare("SELECT COUNT(*) FROM " .. table_name)
     assert(stmt, "Failed to prepare count for " .. tostring(table_name))
     assert(stmt:exec() and stmt:next(), "Failed to execute count for " .. tostring(table_name))
-    local value = stmt:value(0) or 0
+    local value = stmt:value(0)
+    assert(value ~= nil, "count_rows: COUNT(*) returned nil for " .. table_name)
     stmt:finalize()
     return value
 end

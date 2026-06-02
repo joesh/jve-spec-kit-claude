@@ -1,19 +1,23 @@
-# Verb dispatch — every verb revalidates the handle first (FR-009), then
-# touches the Resolve API. Errors map to the closed code set from
-# contracts/helper-protocol.md; nothing raises across the socket boundary.
+# Verb dispatch — state-changing verbs revalidate the handle via
+# `_revalidate` before touching the Resolve API (FR-009). Liveness
+# (`ping`) calls `handle.acquire()` directly so it can downgrade to
+# alive=True/resolve_connected=False without raising. Unwired verbs
+# return `not_implemented` without touching the handle — distinct from
+# `resolve_api_error` so log readers can tell a Resolve API failure
+# from a helper coverage gap.
 #
 # Scope of THIS file (T021 landing):
 #   - `ping` — full implementation
-#   - `import_timeline` — wired skeleton (DRT path validation + relink
-#     call gates, with the real API import deferred to a live-Resolve
-#     iteration). Returns `resolve_api_error` with a precise message until
-#     wired so failures are never silent.
+#   - `import_timeline` — DRT path validation + handle revalidation gate;
+#     the actual ImportTimelineFromFile call is deferred until the
+#     mapping + relink follow-on lands (T029). State-changing verbs must
+#     not mutate Resolve state before they can report success, so the
+#     verb returns `not_implemented` BEFORE calling the Resolve API.
 #
 # Other verbs (read_identities / read_timeline / read_grades /
 # queue_render / render_status) belong to T029 / T038 / T039 / T052 and
-# return `resolve_api_error` with "not yet implemented" — never a no-op.
+# return `not_implemented` — never a no-op.
 
-import logging
 import os
 
 PROTOCOL_VERSION = 1
@@ -72,7 +76,6 @@ def verb_ping(args, handle, envelope_id, helper_version):
 
 def verb_import_timeline(args, handle, envelope_id, helper_version):
     del helper_version
-    log = logging.getLogger("verb.import_timeline")
 
     drt_path = args.get("drt_path")
     media_roots = args.get("media_roots")
@@ -89,35 +92,22 @@ def verb_import_timeline(args, handle, envelope_id, helper_version):
     handle_result = _revalidate(handle, envelope_id)
     if handle_result[0] != "ok":
         return handle_result[1]
-    _, resolve, project = handle_result
 
-    media_pool = project.GetMediaPool()
-    if media_pool is None:
-        return _error(envelope_id, "resolve_api_error",
-            "GetMediaPool() returned None")
-
-    try:
-        imported = media_pool.ImportTimelineFromFile(drt_path)
-    except Exception as exc:
-        log.exception("ImportTimelineFromFile raised")
-        return _error(envelope_id, "resolve_api_error",
-            f"ImportTimelineFromFile raised: {exc}")
-    if not imported:
-        return _error(envelope_id, "relink_failed",
-            "ImportTimelineFromFile returned falsy (Resolve refused .drt)")
-
-    # Identity-mapping + relink remain to be implemented against the live
-    # Resolve scripting surface. Surfacing a precise unimplemented error
-    # instead of returning empty arrays keeps callers honest.
-    return _error(envelope_id, "resolve_api_error",
-        "import_timeline mapping + relink not yet implemented "
-        "(T029 follow-on)")
+    # State-changing verbs must not mutate Resolve state before they can
+    # report success. ImportTimelineFromFile + mapping + relink are not
+    # yet wired (T029 follow-on); calling the import alone would leave a
+    # ghost timeline in Resolve while JVE saw a failure. Return early
+    # WITHOUT touching the Resolve API.
+    return _error(envelope_id, "not_implemented",
+        "import_timeline: mapping + relink not yet wired (T029); "
+        "Resolve-side import deliberately not performed so state stays "
+        "consistent")
 
 
 def _unimplemented(verb_name):
     def thunk(args, handle, envelope_id, helper_version):
         del args, handle, helper_version
-        return _error(envelope_id, "resolve_api_error",
+        return _error(envelope_id, "not_implemented",
             f"verb '{verb_name}' not yet implemented in this helper build")
     return thunk
 

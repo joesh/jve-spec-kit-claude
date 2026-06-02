@@ -618,10 +618,10 @@ end
 -- (tracked in todo_drt_writer_resolve_canonical_shape.md).
 local A005_NATIVE_RATE     = 24000 / 1001
 local A005_DURATION_FRAMES = 108
--- A005 width/height aren't carried on `media`, so we can't assert them;
--- those are baked in the BtVideoInfo blob and the writer's payload doesn't
--- expose width/height per media_ref. When the payload gains width/height,
--- add asserts here.
+-- A005 width/height are baked in the BtVideoInfo blob; the writer's
+-- payload exposes seq.width/seq.height but NOT per-media_ref width/
+-- height (media table doesn't carry them). When media_ref gains
+-- width/height fields, assert against the A005-baked values here too.
 
 local function build_media_pool_video_item(media, dbids)
     assert(type(media.file_uuid) == "string" and media.file_uuid ~= "",
@@ -806,6 +806,17 @@ local function shell_quote(s) return "'" .. s:gsub("'", [['\'']]) .. "'" end
 -- ─── Public API ─────────────────────────────────────────────────────────────
 
 --- Author a DRP archive at out_path from a JVE payload.
+---
+--- SCOPE (spec 023 T008 spike): single-sequence; media must be
+--- `.mp4`/`.mov` matching the A005 baked-in template (native_rate ≈
+--- 23.976 fps, duration 108 frames). The Mp video item template
+--- carries A005's BtVideoInfo/BtAudioInfo verbatim — non-A005 media
+--- would corrupt the descriptor. See `phase0-findings.md §K3/K4` +
+--- `todo_drt_writer_resolve_canonical_shape.md` for the synthesize-
+--- from-payload follow-up that lifts these constraints. Asserts at
+--- `build_media_pool_video_item` enforce the constraints; this
+--- docstring documents them so callers know up-front.
+---
 --- @param out_path string  absolute path to write
 --- @param payload  table {
 ---     project    = { name, fps },

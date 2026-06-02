@@ -11,8 +11,12 @@
 --- NOT responsible for: protocol framing (client.lua), idempotency
 --- (helper-side ledger), reconcile algorithm (T036).
 ---
---- Socket path: `/tmp/jve-resolve-bridge-<pid>.sock` (Joe's decision —
---- /tmp keeps multi-instance JVE supportable; per-pid disambiguates).
+--- Socket path: `/tmp/jve-resolve-bridge-<n>.sock` where <n> is a
+--- per-process spawn counter that increments per re-spawn. /tmp keeps
+--- the path stable across reboots. NOTE: two parallel JVE processes
+--- both start at n=1 and would collide on the same socket — multi-
+--- instance support needs a real pid (or mktemp) in the path;
+--- tracked in todo_helper_supervisor_pid_socket.
 --- Helper script: bundled at `jve.app/Contents/Resources/resolve-helper/
 --- helper.py` (Joe's decision — Python binary discovered via env/PATH).
 
@@ -30,15 +34,21 @@ local state = {
     socket_path = nil,
     client_handle = nil,
     helper_script_path = nil,
-    pending_starts = 0,
+    spawn_sequence = 0,
 }
 
+-- DaVinci Resolve's scripting API is loaded into a Python interpreter
+-- by the helper process; phase0-findings.md proved system `python3` is
+-- the compatible choice. The lookup is a two-step: explicit env
+-- override wins, then bare `python3` resolved against PATH. Both modes
+-- are explicit (env or shebang-equivalent name); there is no "guess"
+-- fallback to `python` or `python2`. qt_process_start surfaces a
+-- structured failure when the named binary is not on PATH.
+local DEFAULT_PYTHON_BINARY = "python3"
 local function detect_python()
-    -- Resolve scripting API works with system Python 3 (phase0-findings).
-    -- Caller may override via env JVE_RESOLVE_HELPER_PYTHON; otherwise
-    -- we trust PATH. No silent fallback to "python" — explicit error
-    -- if neither resolves at start time.
-    return os.getenv("JVE_RESOLVE_HELPER_PYTHON") or "python3"
+    local override = os.getenv("JVE_RESOLVE_HELPER_PYTHON")
+    if override ~= nil and override ~= "" then return override end
+    return DEFAULT_PYTHON_BINARY
 end
 
 --- Configure the supervisor (called once at app start, before first use).
@@ -56,9 +66,9 @@ local function spawn_helper()
     assert(state.helper_script_path,
         "helper_supervisor: configure() must be called first")
 
-    state.pending_starts = state.pending_starts + 1
+    state.spawn_sequence = state.spawn_sequence + 1
     local socket_path = string.format(
-        "/tmp/jve-resolve-bridge-%d.sock", state.pending_starts)
+        "/tmp/jve-resolve-bridge-%d.sock", state.spawn_sequence)
     state.socket_path = socket_path
 
     local proc = qt_process_create()

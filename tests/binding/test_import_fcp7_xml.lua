@@ -101,19 +101,7 @@ local initial_counts = {
 }
 
 local function resolve_fixture(path)
-    local absolute = test_env.resolve_repo_path(path)
-    local handle = io.open(absolute, "r")
-    if handle then
-        handle:close()
-        return absolute
-    end
-    local fallback = absolute .. ".real"
-    handle = io.open(fallback, "r")
-    if handle then
-        handle:close()
-        return fallback
-    end
-    error("Unable to locate fixture at " .. absolute .. " (or .real)")
+    return test_env.require_fixture(path)
 end
 
 -- ============================================================
@@ -249,16 +237,8 @@ timeline_state.set_playhead_position(tl_start + 1)
 
 local match_cmd = Command.create("MatchFrame", PROJECT_ID)
 local match_result = command_manager.execute(match_cmd)
--- KNOWN OPEN QUESTION (flagged for Joe): MatchFrame's file_exists guard
--- (match_frame.lua:127) requires media on disk. The FCP7 fixture refers
--- to Premiere tutorial paths that don't exist on dev machines. Importers
--- don't rely on file paths (CLAUDE.md), so it's inconsistent for MatchFrame
--- (a downstream operation on imported state) to require them. Either:
---   a. MatchFrame should drop file_exists (source viewer already shows
---      offline indicators); test then passes for offline fixtures.
---   b. This test should ship real media.
--- Asserting strict success here so the inconsistency surfaces rather than
--- being silently masked.
+-- See memory `todo_matchframe_offline_file_exists` — open question about
+-- MatchFrame's file_exists guard vs offline fixtures.
 assert(match_result.success, "MatchFrame should succeed on imported clips: "
     .. tostring(match_result.error_message))
 local source_mon = require("ui.panel_manager").get_sequence_monitor("source_monitor")

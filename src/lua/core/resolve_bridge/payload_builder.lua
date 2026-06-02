@@ -24,6 +24,7 @@
 local Sequence = require("models.sequence")
 local Track    = require("models.track")
 local Media    = require("models.media")
+local Project  = require("models.project")
 
 local M = {}
 
@@ -62,14 +63,30 @@ local function load_clips_for_track(db, track_id)
     return rows
 end
 
+local function media_native_rate(media)
+    -- Media stores rate as {fps_numerator, fps_denominator}; drt_writer
+    -- consumes a single number. Fail-fast on missing rate — every media
+    -- row must carry one (rule 1.14 / 2.13).
+    assert(type(media.frame_rate) == "table"
+        and type(media.frame_rate.fps_numerator) == "number"
+        and type(media.frame_rate.fps_denominator) == "number"
+        and media.frame_rate.fps_denominator ~= 0,
+        "payload_builder: media missing frame_rate {fps_numerator, "
+        .. "fps_denominator} — id=" .. tostring(media.id))
+    return media.frame_rate.fps_numerator
+        / media.frame_rate.fps_denominator
+end
+
 local function media_to_payload(media, track_type)
     -- drt_writer expects a flat media_ref record. We fold in track_type
     -- so the writer can pick video vs audio media-pool item shape.
+    assert(type(media.name) == "string" and media.name ~= "",
+        "payload_builder: media missing name — id=" .. tostring(media.id))
     return {
         file_uuid        = media.id,
-        name             = media.name or media:get_file_path(),
+        name             = media.name,
         path             = media:get_file_path(),
-        native_rate      = media.frame_rate or media.fps,
+        native_rate      = media_native_rate(media),
         duration_frames  = media.duration_frames,
         start_tc_frame   = assert(media.start_tc_frame,
             "payload_builder: media missing start_tc_frame — "
@@ -94,9 +111,14 @@ function M.build(db, project_id, sequence_id)
     local seq = Sequence.load(sequence_id)
     assert(seq, "payload_builder.build: sequence not found: " .. sequence_id)
 
+    local project = Project.load(project_id, db)
+    assert(project, "payload_builder.build: project not found: " .. project_id)
+    assert(type(project.name) == "string" and project.name ~= "",
+        "payload_builder.build: project missing name — id=" .. project_id)
+
     local payload = {
         project = {
-            name = seq.name,  -- Project file may not be loaded here; use sequence name as the project name surface. SendToResolve overrides if a project name is known.
+            name = project.name,
             fps  = fps_number(seq),
         },
         media_refs = {},

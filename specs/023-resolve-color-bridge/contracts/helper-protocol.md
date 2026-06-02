@@ -34,10 +34,12 @@ A structured value `{ project_id, sequence_id, mutation_generation }` passed in 
 | `identity_field_missing` | imported item lacks the join key (FR-002) |
 | `bad_request` | malformed envelope/args |
 | `resolve_api_error` | underlying scripting call failed (carries Resolve's message + `resolve_version`) |
+| `helper_unavailable` | JVE-side: helper process not running / socket unreachable / connect timeout. Never wire-observed (the helper can't emit it about itself); surfaced by `client.lua`/`helper_supervisor.lua` to the same on_complete channel so command callers see a single closed-set error space |
+| `not_implemented` | verb not yet wired in this helper build (returned BEFORE touching the Resolve API so state stays consistent). Distinct from `resolve_api_error` so log readers can tell a Resolve API failure from a coverage gap |
 
 ## Verbs
 
-Every verb cheaply revalidates the handle first and returns `handle_stale` if it cannot reacquire (FR-009).
+State-changing verbs revalidate the handle before touching the Resolve API and return `handle_stale` if it cannot reacquire (FR-009). Liveness (`ping`) calls `handle.acquire()` directly so it can downgrade to `alive=True/resolve_connected=False` on handle errors without raising. Verbs not yet wired in this helper build return `not_implemented` without touching the handle.
 
 ### `ping`
 - **args**: none
@@ -53,7 +55,7 @@ Every verb cheaply revalidates the handle first and returns `handle_stale` if it
 - **args**: none
 - **result**: `{ items: [{ resolve_item_id, jve_guid }], unkeyed_count }`
 - Current Resolve timeline items with recovered join keys; reconciles after manual changes in Resolve (FR-013). Items lacking a join key are omitted from `items` and counted in `unkeyed_count` (so the caller knows the timeline has unmatched items rather than seeing them silently vanish).
-- Bidirectional note (FR-011b): for a project JVE *imported* from Resolve, `jve_guid == resolve_item_id` (JVE adopted the Resolve item id as `clip.id`). For JVE-originated clips, `jve_guid` is the id JVE wrote into the DRT. JVE-side connect matches by id first, positional fallback for clips with no adopted id (FR-011c).
+- Bidirectional note (FR-011b/c, **corrected by 2026-05-29 T047 spike**): the live `resolve_item_id` here is `TimelineItem:GetUniqueId()`, a runtime instance handle that does **NOT** equal the DRP `Sm2Ti DbId` JVE adopted as `clip.id` (proven 0/1003). So `jve_guid` in this result is recovered via either (a) a clip marker carrying `clip.id` (id-anchored) or (b) content/position match (`name + record-TC + source-TC + media identity`, first-connect) — NOT via raw id equality with `clip.id`. Items lacking both channels are omitted from `items` and counted in `unkeyed_count`.
 
 ### `read_timeline`
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)

@@ -20,8 +20,11 @@
 ---
 --- The reply path is async: the FFI's readyRead callback drains the socket
 --- into a line buffer; complete lines parse + dispatch to in-flight
---- callbacks by correlation id. Timeouts are a structured error
---- ("timeout"), never a silent drop (FR-007).
+--- callbacks by correlation id. Each in-flight request arms a single-shot
+--- `request_timeout_ms` timer that fires `resolve_api_error` /
+--- "request timed out after Nms" to on_complete if no reply arrives —
+--- never a silent drop (FR-007). A reply that beats the timer wins the
+--- race by clearing in_flight; the timer callback no-ops on missing slot.
 
 local protocol = require("core.resolve_bridge.protocol")
 local log = require("core.logger").for_area("commands")
@@ -128,10 +131,21 @@ function M.connect(socket_path, opts)
         local written, werr = qt_local_socket_write(handle, line)
         if written == nil then
             in_flight[corr_id] = nil
-            on_complete(nil, "resolve_api_error", werr or "write failed")
+            assert(type(werr) == "string" and werr ~= "",
+                "client:request: qt_local_socket_write returned nil "
+                .. "without an error string (FFI contract violation)")
+            on_complete(nil, "resolve_api_error", werr)
             return
         end
         qt_local_socket_flush(handle)
+        qt_create_single_shot_timer(request_timeout_ms, function()
+            local slot = in_flight[corr_id]
+            if slot == nil then return end
+            in_flight[corr_id] = nil
+            slot.on_complete(nil, "resolve_api_error", string.format(
+                "request timed out after %dms (verb=%s)",
+                request_timeout_ms, verb))
+        end)
     end
 
     function self:close()  -- luacheck: ignore self

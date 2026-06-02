@@ -17,6 +17,7 @@ require("test_env")
 
 local database = require("core.database")
 local ClipGrade = require("models.clip_grade")
+local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local sync_grades = require("core.commands.sync_grades_from_resolve")
 
 local pass = 0
@@ -98,7 +99,7 @@ local response = {
           fidelity = "primary", lut = nil },
     },
 }
-local captured = sync_grades.apply(response, db, now + 60)
+local captured = sync_grades.apply(response, "s", db, now + 60)
 
 local applied_pre = ClipGrade.load("c_pre", db)
 check("c_pre post-apply slope_r is new value",
@@ -125,9 +126,42 @@ local restored_none = ClipGrade.load("c_none", db)
 check("c_none restored has NO grade row (was ungraded before sync)",
     restored_none == nil)
 
+-- ─── FR-013a: a clip in the sequence whose Resolve item is absent
+-- from the response keeps its grade but is marked stale ─────────────
+-- Restore first so we're back to {c_pre graded, c_none ungraded}.
+sync_grades.restore(captured, db)
+
+-- FR-013a only applies to ledger-linked clips ("a JVE clip whose Resolve
+-- item is absent at read-back" implies a prior link). Stamp the link
+-- the SendToResolve roundtrip would have produced.
+identity_ledger.upsert("c_pre", { resolve_item_id = "resolve_pre" }, db)
+
+-- Resolve also lost c_pre between syncs (absent from response.grades).
+-- c_pre had a grade; FR-013a requires it survives, marked stale=1.
+-- c_none had no grade and Resolve still has nothing — no stale row.
+local response_missing_pre = { grades = {} }
+local stale_captured = sync_grades.apply(response_missing_pre, "s",
+    db, now + 90)
+local pre_after_absent = ClipGrade.load("c_pre", db)
+check("FR-013a: c_pre keeps its grade after Resolve drops it",
+    pre_after_absent ~= nil
+        and pre_after_absent.cdl
+        and pre_after_absent.cdl.slope_r == PRE_CDL.slope_r)
+check("FR-013a: c_pre marked stale=1",
+    pre_after_absent ~= nil and pre_after_absent.stale == 1)
+local none_after_absent = ClipGrade.load("c_none", db)
+check("FR-013a: c_none with no prior grade stays ungraded (no row)",
+    none_after_absent == nil)
+
+-- Undo the stale-mark: c_pre back to stale=0.
+sync_grades.restore(stale_captured, db)
+local pre_after_undo_stale = ClipGrade.load("c_pre", db)
+check("FR-013a undo: c_pre stale=0 restored",
+    pre_after_undo_stale ~= nil and pre_after_undo_stale.stale == 0)
+
 -- ─── re-apply after restore yields the same captured state ─────────
 -- Idempotency check: apply→restore→apply should land at the post-state.
-local captured2 = sync_grades.apply(response, db, now + 120)
+local captured2 = sync_grades.apply(response, "s", db, now + 120)
 local reapplied_pre = ClipGrade.load("c_pre", db)
 check("re-apply: c_pre slope_r is post-state again",
     reapplied_pre and reapplied_pre.cdl

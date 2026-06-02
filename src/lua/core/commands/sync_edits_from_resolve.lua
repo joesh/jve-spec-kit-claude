@@ -438,7 +438,12 @@ local function dispatch_verb(verb, params)
             "sync_edits.dispatch_verb: command_manager.execute(%s) "
             .. "returned non-conforming result", verb))
     if exec_result.success then return true, nil end
-    return false, exec_result.error_message or ""
+    assert(type(exec_result.error_message) == "string"
+            and exec_result.error_message ~= "",
+        string.format(
+            "sync_edits.dispatch_verb: %s failed with empty error_message "
+            .. "(command_manager contract violation)", verb))
+    return false, exec_result.error_message
 end
 
 -- Per-clip dispatch state, built up across phases. Each clip starts
@@ -869,22 +874,22 @@ function M.execute(args)
         return
     end
 
-    client:request("read_timeline",
-        { sequence_id = args.sequence_id, project_id = args.project_id },
+    -- read_timeline contract args is `{item_ids?}`; sequence_id/project_id
+    -- are caller-side state used by apply() below, not wire args.
+    client:request("read_timeline", {},
         function(response, code, message)
             if response == nil then
                 args.on_complete(nil, code, message)
                 return
             end
-            local ok, result_or_err = pcall(M.apply,
-                response.result, args.sequence_id, args.project_id, db,
-                args.user_choices)
-            if not ok then
-                args.on_complete(nil, "resolve_api_error",
-                    tostring(result_or_err))
-                return
-            end
-            args.on_complete(result_or_err, nil, nil)
+            -- No pcall around M.apply: a JVE-side assert failure (DB,
+            -- schema, response shape, classifier invariant) is an
+            -- internal violation, not a Resolve-API failure. Fail-fast
+            -- (rule 1.14) — masking it as `resolve_api_error` would
+            -- conflate origin (rule 2.21).
+            local result = M.apply(response.result, args.sequence_id,
+                args.project_id, db, args.user_choices)
+            args.on_complete(result, nil, nil)
         end)
 end
 

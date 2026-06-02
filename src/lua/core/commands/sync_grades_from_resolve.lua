@@ -2,10 +2,13 @@
 --- (spec 023, T031, FR-013/FR-014/FR-015/FR-017).
 ---
 --- Three entry points:
----   M.apply(response, db, synced_at)
+---   M.apply(response, sequence_id, db, synced_at)
 ---       Pure data path: takes the helper's `read_grades` result, upserts
 ---       clip_grade rows for matched clips, updates the identity_ledger
----       grade_fingerprint, returns a captured-state table for undo.
+---       grade_fingerprint, AND marks any ledger-linked clip in
+---       `sequence_id` whose Resolve item was absent from the response
+---       with stale=1 (FR-013a — never silently cleared, never shown as
+---       current). Returns a captured-state table for undo.
 ---   M.restore(captured, db)
 ---       Reverts the rows apply() touched: re-upserts the prior grade
 ---       row for clips that had one; deletes the row for clips that
@@ -63,17 +66,69 @@ local function new_grade_from_response_row(row, synced_at)
     }
 end
 
+-- FR-013a stale walk: any ledger-linked clip in `sequence_id` whose
+-- Resolve item was absent from the read_grades response keeps its
+-- last-synced grade but is marked stale=1. Captures the prior row so
+-- restore() can revert.
+local function walk_ledger_for_stale(sequence_id, seen_clip_ids, db,
+                                      captured)
+    local stmt = assert(db:prepare([[
+        SELECT rbl.jve_clip_uuid
+        FROM resolve_bridge_link rbl
+        JOIN clips c ON c.id = rbl.jve_clip_uuid
+        WHERE c.owner_sequence_id = ?
+    ]]), "sync_grades.walk_ledger_for_stale: prepare failed")
+    stmt:bind_value(1, sequence_id)
+    if not stmt:exec() then
+        stmt:finalize()
+        error("sync_grades.walk_ledger_for_stale: exec failed for "
+            .. "sequence " .. tostring(sequence_id))
+    end
+    local to_stale = {}
+    while stmt:next() do
+        local clip_id = stmt:value(0)
+        if seen_clip_ids[clip_id] == nil then
+            to_stale[#to_stale + 1] = clip_id
+        end
+    end
+    stmt:finalize()
+
+    for _, clip_id in ipairs(to_stale) do
+        local before = load_existing_row(clip_id, db)
+        if before ~= nil and before.stale == 0 then
+            captured.entries[#captured.entries + 1] = {
+                clip_id = clip_id,
+                before  = before,
+            }
+            local staled = {
+                cdl       = before.cdl,
+                lut_ref   = before.lut_ref,
+                fidelity  = before.fidelity,
+                source    = before.source,
+                stale     = 1,
+                synced_at = before.synced_at,
+            }
+            ClipGrade.upsert(clip_id, staled, db)
+        end
+    end
+end
+
 --- Apply a helper read_grades response. Returns a captured table that
---- restore() consumes to undo the change.
-function M.apply(response, db, synced_at)
+--- restore() consumes to undo the change. `sequence_id` scopes the
+--- FR-013a stale walk to the sequence the call was about.
+function M.apply(response, sequence_id, db, synced_at)
     assert_response_shape(response)
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "sync_grades.apply: sequence_id required (FR-013a scope)")
     assert(db, "sync_grades.apply: db required")
     assert(type(synced_at) == "number" and synced_at >= 0,
         "sync_grades.apply: synced_at unix timestamp required")
 
     local captured = { entries = {} }
+    local seen_clip_ids = {}
     for _, row in ipairs(response.grades) do
         local clip_id = row.jve_guid
+        seen_clip_ids[clip_id] = true
         local before = load_existing_row(clip_id, db)
         captured.entries[#captured.entries + 1] = {
             clip_id = clip_id,
@@ -93,8 +148,12 @@ function M.apply(response, db, synced_at)
             }, db)
         end
     end
-    log.event("SyncGradesFromResolve.apply: %d grade(s) synced",
-        #response.grades)
+
+    walk_ledger_for_stale(sequence_id, seen_clip_ids, db, captured)
+
+    log.event("SyncGradesFromResolve.apply: %d grade(s) synced, "
+        .. "%d stale-marked", #response.grades,
+        #captured.entries - #response.grades)
     return captured
 end
 
@@ -116,16 +175,19 @@ function M.restore(captured, db)
         #captured.entries)
 end
 
+local database = require("core.database")
+
 --- Full command path: pulls grades from helper, applies them, fires
 --- on_complete. Non-blocking — on_complete carries success/error.
 function M.execute(args)
     assert(type(args) == "table", "SyncGradesFromResolve: args required")
+    assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
+        "SyncGradesFromResolve: sequence_id required (FR-013a scope)")
     assert(type(args.on_complete) == "function",
         "SyncGradesFromResolve: on_complete callback required")
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
 
-    local database = require("core.database")
     local db = database.get_connection()
     assert(db, "SyncGradesFromResolve: no database connection")
 
@@ -137,22 +199,22 @@ function M.execute(args)
 
     local helper_args = {}
     if args.item_ids then helper_args.item_ids = args.item_ids end
+    local sequence_id = args.sequence_id
     client:request("read_grades", helper_args,
         function(response, code, message)
             if response == nil then
                 args.on_complete(nil, code, message)
                 return
             end
-            local ok, captured_or_err = pcall(M.apply,
-                response.result, db, os.time())
-            if not ok then
-                args.on_complete(nil, "resolve_api_error",
-                    tostring(captured_or_err))
-                return
-            end
+            -- No pcall around M.apply: a JVE-side assert failure (DB,
+            -- schema, response shape) is an internal invariant violation,
+            -- not a Resolve-API failure. Fail-fast (rule 1.14) — masking
+            -- it as `resolve_api_error` would conflate origin (rule 2.21).
+            local captured = M.apply(response.result, sequence_id, db,
+                os.time())
             args.on_complete({
                 applied_count = #response.result.grades,
-                captured = captured_or_err,
+                captured      = captured,
             }, nil, nil)
         end)
 end
@@ -161,6 +223,7 @@ local SPEC = {
     undoable      = true,
     mutates_clips = false,  -- mutates clip_grade, not clips table
     args = {
+        sequence_id = { required = true,  kind = "string" },
         item_ids    = { required = false, kind = "table" },
         on_complete = { required = true,  kind = "function" },
     },
@@ -177,11 +240,16 @@ function M.register(command_executors, command_undoers, _db, set_last_error)
         return true
     end
     command_undoers["SyncGradesFromResolve"] = function(command)
+        -- captured is produced by the async on_complete in M.execute and
+        -- must be persisted onto the command before undo. A missing
+        -- captured means the command was logged before apply() ran, or
+        -- the framework didn't merge the on_complete result back —
+        -- either is a contract break, not a silent no-op (rule 2.13/2.32).
         local args = command:get_all_parameters()
-        if args.captured then
-            local database = require("core.database")
-            M.restore(args.captured, database.get_connection())
-        end
+        assert(args.captured, "SyncGradesFromResolve undoer: args.captured "
+            .. "required (apply() must persist captured before undo is "
+            .. "reachable — see todo_sync_grades_undo_capture)")
+        M.restore(args.captured, database.get_connection())
         return true
     end
     return {

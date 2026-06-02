@@ -6,9 +6,9 @@
 --- clips (FR-011c) `resolve_item_id` is matched positionally/by content at
 --- connect time.
 ---
---- This module owns read/write ONLY. Reconcile (blade-fragment recognition
---- by content identity) lands whole in T036 — no stub here, per ENGINEERING
---- 2.17 (no partial implementations).
+--- This module owns read/write of `resolve_bridge_link` AND the pure-data
+--- reconcile algorithm (M.reconcile — direct / content_match /
+--- blade_inherit, no DB writes; callers persist via M.upsert).
 
 local M = {}
 
@@ -41,12 +41,23 @@ end
 --- @param link    table {resolve_item_id, [grade_fingerprint],
 ---                       [edit_fingerprint]}
 --- @param db      table  open SQLite connection
+local LINK_KEYS = {
+    resolve_item_id   = true,
+    grade_fingerprint = true,
+    edit_fingerprint  = true,
+}
+
 function M.upsert(clip_id, link, db)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "identity_ledger.upsert: clip_id required")
     assert(db, "identity_ledger.upsert: db connection required")
     assert(type(link) == "table",
         "identity_ledger.upsert: link table required")
+    for k in pairs(link) do
+        assert(LINK_KEYS[k], string.format(
+            "identity_ledger.upsert: unknown link key %q (closed set: "
+            .. "resolve_item_id, grade_fingerprint, edit_fingerprint)", k))
+    end
     assert(type(link.resolve_item_id) == "string"
         and link.resolve_item_id ~= "",
         "identity_ledger.upsert: link.resolve_item_id required")

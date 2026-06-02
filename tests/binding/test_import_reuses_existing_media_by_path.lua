@@ -25,7 +25,8 @@ local function scalar(sql, value)
     local stmt = assert(db:prepare(sql), "Failed to prepare: " .. sql)
     if value ~= nil then stmt:bind_value(1, value) end
     assert(stmt:exec() and stmt:next(), "Failed to execute scalar")
-    local result = stmt:value(0) or 0
+    local result = stmt:value(0)
+    assert(result ~= nil, "scalar: query returned nil row")
     stmt:finalize()
     return result
 end

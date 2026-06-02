@@ -80,11 +80,12 @@ function M.execute(args)
             args.on_complete(nil, code, message)
             return
         end
-        local mapping = response.result and response.result.mapping
-        local unrelinked = (response.result and response.result.unrelinked)
-            or {}
+        local mapping = response.result.mapping
+        local unrelinked = response.result.unrelinked
         assert(type(mapping) == "table",
             "SendToResolve: helper response missing result.mapping")
+        assert(type(unrelinked) == "table",
+            "SendToResolve: helper response missing result.unrelinked")
         for _, row in ipairs(mapping) do
             assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
                 "SendToResolve: mapping row missing jve_guid")
@@ -93,7 +94,6 @@ function M.execute(args)
                 "SendToResolve: mapping row missing resolve_item_id")
             identity_ledger.upsert(row.jve_guid, {
                 resolve_item_id = row.resolve_item_id,
-                resolve_project = args.project_id,
             }, db)
         end
         log.event("SendToResolve: mapped %d clips, %d unrelinked",

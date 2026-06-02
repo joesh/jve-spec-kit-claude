@@ -74,6 +74,21 @@ def make_error(envelope_id, code, message):
     }
 
 
+def _recover_envelope_id(line):
+    # Best-effort `id` recovery for the crash-during-dispatch path:
+    # we want the JVE client to correlate a crash response to its in-flight
+    # request rather than drop it as "unknown id". Returns "" if the line
+    # isn't parseable as a JSON object with a string id.
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    candidate = obj.get("id")
+    return candidate if isinstance(candidate, str) else ""
+
+
 def handle_line(line, handle, ledger):
     # Returns (response_envelope, idempotency_key_or_None).
     # bad_request errors carry the empty correlation id ("") when the
@@ -133,12 +148,18 @@ def serve(sock, handle, ledger):
                     line, buf = buf.split(b"\n", 1)
                     if not line.strip():
                         continue
+                    decoded = line.decode("utf-8")
                     try:
                         response, idem_key = handle_line(
-                            line.decode("utf-8"), handle, ledger)
+                            decoded, handle, ledger)
                     except Exception as exc:
-                        log.exception("dispatch crashed")
-                        response = make_error("", "resolve_api_error",
+                        # Recover correlation id so the JVE client can
+                        # match the crash to its in-flight request rather
+                        # than drop it as "unknown id" (rule 2.32 — no
+                        # silent failure of the dispatch crash detail).
+                        crash_id = _recover_envelope_id(decoded)
+                        log.exception("dispatch crashed (id=%r)", crash_id)
+                        response = make_error(crash_id, "resolve_api_error",
                             f"helper crashed: {exc}")
                         idem_key = None
                     write_envelope(conn, response)
