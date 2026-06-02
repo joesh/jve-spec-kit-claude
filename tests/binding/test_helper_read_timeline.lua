@@ -3,19 +3,25 @@
 --
 -- read_timeline is read-only (FR-024): manual-pull live edit state.
 -- Args: `{ item_ids?: [string] }`; omit ⇒ all items. Result:
--- `{ items: [{ resolve_item_id, track_id, record_start,
--- record_duration, source_in, source_out, enabled }] }`. Video items
--- carry integer TC frames; audio items carry `{frame, subframe}` for
--- each TC field. Locale-rate guard (FR-020) applies.
+-- `{ items: [{ resolve_item_id, track_type, track_index,
+-- record_start, record_duration, source_in, source_out, enabled }] }`.
+-- Track identity is positional (`track_type` ∈ {"video","audio"} +
+-- 1-based `track_index`) — Resolve preserves DRT track order through
+-- import, so JVE-side callers translate via
+-- `Track.find_by_sequence(seq_id, track_type)[track_index]`. The
+-- helper has no JVE state and deliberately doesn't invent JVE ids.
+-- Video items carry integer TC frames; audio items carry
+-- `{frame, subframe}` for each TC field. Locale-rate guard (FR-020)
+-- applies.
 --
 -- This is the RED test that drives T052 — the helper-side
 -- implementation that must:
 --   1. Validate args at the wire boundary (bad_request for malformed
 --      item_ids — wrong outer type or non-string element).
 --   2. Honour the "omit ⇒ all" vs "empty list ⇒ zero" distinction.
---   3. Return the documented per-item shape (track_id is the JVE id
---      string, not a Resolve index; each TC field is integer-frame
---      for video items / {frame, subframe} for audio items).
+--   3. Return the documented per-item shape: closed-set track_type,
+--      1-based integer track_index, each TC field integer-frame for
+--      video items / {frame, subframe} for audio items.
 --
 -- Helper read-only contract: the helper inspects timeline state and
 -- never mutates the Resolve project. The test can run against a live
@@ -58,6 +64,8 @@ local function is_audio_tc(v)
         and type(v.subframe) == "number"
 end
 
+local TRACK_TYPES = { video = true, audio = true }
+
 local function assert_items_shape(items, label)
     assert(type(items) == "table",
         label .. ": result.items must be an array")
@@ -66,10 +74,19 @@ local function assert_items_shape(items, label)
             and item.resolve_item_id ~= "", string.format(
             "%s items[%d].resolve_item_id must be non-empty string",
             label, i))
-        assert(type(item.track_id) == "string"
-            and item.track_id ~= "", string.format(
-            "%s items[%d].track_id must be non-empty string "
-            .. "(JVE id, not Resolve index)", label, i))
+        -- Per contract: track identity is positional (track_type +
+        -- 1-based track_index), not a carried id. JVE-side translates
+        -- via Track.find_by_sequence; helper does not invent JVE ids.
+        assert(type(item.track_type) == "string"
+            and TRACK_TYPES[item.track_type], string.format(
+            "%s items[%d].track_type %q not in closed set {video, audio}",
+            label, i, tostring(item.track_type)))
+        assert(type(item.track_index) == "number"
+            and item.track_index >= 1
+            and item.track_index == math.floor(item.track_index),
+            string.format("%s items[%d].track_index must be 1-based "
+                .. "integer, got %s",
+                label, i, tostring(item.track_index)))
         for _, fld in ipairs({"record_start", "record_duration",
                               "source_in", "source_out"}) do
             assert(is_video_tc(item[fld]) or is_audio_tc(item[fld]),

@@ -56,11 +56,88 @@ local UNMATCHED_REASONS = {
 }
 
 -- Required item fields the classifier asserts up-front (V1 video shape;
--- audio item shape lands with `todo_t054_audio_support`). track_id is
--- the JVE track id — see `contracts/helper-protocol.md` §read_timeline.
+-- audio item shape lands with `todo_t054_audio_support`). track_id at
+-- the classifier layer is the JVE track id — produced by the wire→
+-- classifier translation (`M.translate_wire_response`) which maps
+-- helper-protocol's `(track_type, track_index)` onto JVE track UUIDs.
 local REQUIRED_ITEM_NUMBER_FIELDS = {
     "source_in", "source_out", "record_start", "record_duration",
 }
+
+-- Wire-layer track-type set (helper-protocol.md §read_timeline). JVE's
+-- own `tracks.track_type` column is uppercase; the helper returns
+-- Resolve's lowercase convention. `translate_wire_response` upcases on
+-- the way in.
+local WIRE_TRACK_TYPES = { video = "VIDEO", audio = "AUDIO" }
+
+-- Sentinel produced when a Resolve-side track has no JVE equivalent
+-- (e.g. user added a track in Resolve since send). The classifier's
+-- existing `classify_track_change` branch calls Track.load(row.track_id)
+-- and emits `missing_target_track_in_jve` when nil — so any string
+-- guaranteed-not-to-collide with a real JVE track UUID flows through
+-- that path. Format encodes the original wire info for debugging.
+local function missing_track_sentinel(track_type, track_index)
+    return string.format("resolve-missing-track:%s:%d",
+        track_type, track_index)
+end
+
+--- Translate a helper `read_timeline` wire response into the shape
+--- `classify_all` consumes. The helper returns positional track
+--- identity (`track_type`, `track_index`) because Resolve preserves DRT
+--- track order through import (helper-protocol.md §read_timeline). JVE
+--- resolves the pair to a JVE `track_id` via `Track.find_at`; items
+--- whose Resolve track has no JVE counterpart get a sentinel string
+--- that flows through the classifier's existing
+--- `missing_target_track_in_jve` path.
+---
+--- @param wire_response table  `{items: [{resolve_item_id, track_type,
+---                              track_index, record_start,
+---                              record_duration, source_in, source_out,
+---                              enabled}]}`
+--- @param sequence_id   string JVE sequence the response describes
+--- @return table        `{items: [{resolve_item_id, track_id, ...}]}`
+---                      with all non-track fields carried verbatim.
+function M.translate_wire_response(wire_response, sequence_id)
+    assert(type(wire_response) == "table"
+            and type(wire_response.items) == "table",
+        "sync_edits.translate_wire_response: wire_response.items "
+        .. "array required")
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "sync_edits.translate_wire_response: sequence_id required")
+
+    local out_items = {}
+    for i, w in ipairs(wire_response.items) do
+        local jve_track_type = WIRE_TRACK_TYPES[w.track_type]
+        assert(jve_track_type ~= nil, string.format(
+            "sync_edits.translate_wire_response: item[%d] track_type %q "
+            .. "not in closed set {video, audio}", i, tostring(w.track_type)))
+        assert(type(w.track_index) == "number"
+                and w.track_index >= 1
+                and w.track_index == math.floor(w.track_index),
+            string.format(
+                "sync_edits.translate_wire_response: item[%d] "
+                .. "track_index must be 1-based integer, got %s",
+                i, tostring(w.track_index)))
+
+        local jve_track_id = Track.find_at(sequence_id, jve_track_type,
+            w.track_index)
+        if jve_track_id == nil then
+            jve_track_id = missing_track_sentinel(w.track_type,
+                w.track_index)
+        end
+
+        out_items[i] = {
+            resolve_item_id = w.resolve_item_id,
+            track_id        = jve_track_id,
+            record_start    = w.record_start,
+            record_duration = w.record_duration,
+            source_in       = w.source_in,
+            source_out      = w.source_out,
+            enabled         = w.enabled,
+        }
+    end
+    return { items = out_items }
+end
 
 local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.items) == "table",
@@ -814,6 +891,12 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
         .. "nil (conflicts surface as skipped with reason "
         .. "no_modal_v1_unhandled_conflict)")
 
+    -- M.apply consumes the classifier-shape response (per-item
+    -- `track_id` in JVE namespace). The wire→classifier translation
+    -- (`M.translate_wire_response`) is the responsibility of the caller
+    -- — `M.execute` runs it on the helper response before invoking
+    -- M.apply, and tests can either pass classifier shape directly or
+    -- call translate_wire_response first.
     local classified = M.classify_all(response, sequence_id, db, nil)
 
     local result = {
@@ -882,12 +965,17 @@ function M.execute(args)
                 args.on_complete(nil, code, message)
                 return
             end
+            -- Wire→classifier translation at the boundary between the
+            -- helper response and JVE-side processing. M.apply consumes
+            -- classifier shape (per-item JVE track_id).
+            local translated = M.translate_wire_response(response.result,
+                args.sequence_id)
             -- No pcall around M.apply: a JVE-side assert failure (DB,
             -- schema, response shape, classifier invariant) is an
             -- internal violation, not a Resolve-API failure. Fail-fast
             -- (rule 1.14) — masking it as `resolve_api_error` would
             -- conflate origin (rule 2.21).
-            local result = M.apply(response.result, args.sequence_id,
+            local result = M.apply(translated, args.sequence_id,
                 args.project_id, db, args.user_choices)
             args.on_complete(result, nil, nil)
         end)

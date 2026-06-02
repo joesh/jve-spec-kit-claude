@@ -324,6 +324,129 @@ check("V1 audio clip asserts", not ok_audio)
 check("V1 audio assert message names VIDEO or AUDIO",
     err_audio and (err_audio:find("VIDEO") or err_audio:find("AUDIO")))
 
+-- ============ translate_wire_response (T052) ============
+-- Wire shape from helper read_timeline: (track_type, track_index)
+-- positional identity. Translator looks up each pair via
+-- Track.find_at to produce classifier shape (track_id).
+
+local function wire_item(rid, ttype, tidx)
+    return { resolve_item_id = rid,
+             track_type       = ttype,
+             track_index      = tidx,
+             source_in        = 1000,
+             source_out       = 1200,
+             record_start     = 5000,
+             record_duration  = 200,
+             enabled          = true }
+end
+
+-- Happy: sequence 's' has V1='t' at index 1 and V2='t2' at index 2.
+do
+    local wire = { items = {
+        wire_item("rs-1", "video", 1),
+        wire_item("rs-2", "video", 2),
+    } }
+    local translated = sync_edits.translate_wire_response(wire, "s")
+    check("translate: item count preserved",
+        #translated.items == 2)
+    check("translate: video track 1 → JVE track 't'",
+        translated.items[1].track_id == "t")
+    check("translate: video track 2 → JVE track 't2'",
+        translated.items[2].track_id == "t2")
+end
+
+-- Resolve track has no JVE counterpart → sentinel string flows through
+-- the classifier's missing_target_track_in_jve conflict path.
+do
+    local wire = { items = {
+        wire_item("rs-ghost-v", "video", 99),
+        wire_item("rs-ghost-a", "audio", 1),  -- sequence has no audio
+    } }
+    local translated = sync_edits.translate_wire_response(wire, "s")
+    check("translate: missing video track yields sentinel string",
+        translated.items[1].track_id == "resolve-missing-track:video:99")
+    check("translate: missing audio track yields sentinel string",
+        translated.items[2].track_id == "resolve-missing-track:audio:1")
+end
+
+-- Non-track fields preserved verbatim through translation.
+do
+    local wire = { items = {{
+        resolve_item_id = "rs-preserve", track_type = "video",
+        track_index = 1,
+        source_in = 12345, source_out = 67890,
+        record_start = 11111, record_duration = 22222,
+        enabled = false,
+    }} }
+    local out = sync_edits.translate_wire_response(wire, "s").items[1]
+    check("translate: resolve_item_id preserved",
+        out.resolve_item_id == "rs-preserve")
+    check("translate: source_in preserved",      out.source_in == 12345)
+    check("translate: source_out preserved",     out.source_out == 67890)
+    check("translate: record_start preserved",   out.record_start == 11111)
+    check("translate: record_duration preserved",
+        out.record_duration == 22222)
+    check("translate: enabled preserved",        out.enabled == false)
+end
+
+-- Wire validation (fail-fast at the wire→classifier boundary).
+do
+    local bad_type = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", track_type="movie",
+            track_index=1, source_in=0, source_out=1,
+            record_start=0, record_duration=1, enabled=true }} }, "s")
+    check("translate: asserts on track_type outside closed set",
+        not bad_type)
+
+    local bad_idx_zero = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", track_type="video",
+            track_index=0, source_in=0, source_out=1,
+            record_start=0, record_duration=1, enabled=true }} }, "s")
+    check("translate: asserts on track_index=0 (1-based contract)",
+        not bad_idx_zero)
+
+    local bad_idx_float = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", track_type="video",
+            track_index=1.5, source_in=0, source_out=1,
+            record_start=0, record_duration=1, enabled=true }} }, "s")
+    check("translate: asserts on non-integer track_index",
+        not bad_idx_float)
+
+    local bad_seq = pcall(sync_edits.translate_wire_response,
+        { items = {} }, "")
+    check("translate: asserts on empty sequence_id",  not bad_seq)
+end
+
+-- End-to-end: wire response with missing-track sentinel flows through
+-- M.apply's translate→classify_all path, producing the documented
+-- missing_target_track_in_jve conflict (clip c_track_move_missing
+-- already has a ledger row for 'rs-c_track_move_missing').
+--
+-- Note: M.apply is invoked inside test_sync_edits_apply.lua; here we
+-- verify only the wire→classifier handoff via classify_all on the
+-- translated payload.
+do
+    local wire = { items = {
+        wire_item("rs-c_track_move_missing", "video", 99),
+    } }
+    local translated = sync_edits.translate_wire_response(wire, "s")
+    local trans_result = sync_edits.classify_all(translated, "s", db)
+    -- ledger walk surfaces every other 's' ledger row as deleted;
+    -- the wire item with the missing-track sentinel should land as a
+    -- missing_target_track_in_jve conflict (not deleted).
+    local found_missing = false
+    for _, c in ipairs(trans_result.conflicts) do
+        if c.clip_id == "c_track_move_missing"
+            and c.reason == "missing_target_track_in_jve" then
+            found_missing = true
+            check("translate→classify: live_track_id carries sentinel",
+                c.live_track_id == "resolve-missing-track:video:99")
+        end
+    end
+    check("translate→classify: missing-track item → missing_target_track_in_jve",
+        found_missing)
+end
+
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0, "test_sync_edits_classify_all.lua: failures present")
 print("✅ test_sync_edits_classify_all.lua passed")

@@ -132,7 +132,7 @@
 
 ## Phase 4e — Edit read-back (Resolve-side tweaks) (STOP gate)
 
-- [x] **T051** [P] `tests/binding/test_helper_read_timeline.lua` — asserts `read_timeline` result shape `{items:[{resolve_item_id, track_id, record_start, record_duration, source_in, source_out, enabled}]}`; per-item TC field shape (integer-frame video, `{frame, subframe}` audio); `bad_request` for malformed `item_ids`; empty `item_ids ⇒ 0 items` distinct from omit (⇒ all). Currently RED — verb wired to `_unimplemented`, returns `not_implemented`. Drives T052.
+- [x] **T051** [P] `tests/binding/test_helper_read_timeline.lua` — asserts `read_timeline` result shape `{items:[{resolve_item_id, track_type, track_index, record_start, record_duration, source_in, source_out, enabled}]}`; track identity is positional (closed-set `track_type ∈ {video,audio}` + 1-based integer `track_index`) — JVE-side translates via `Track.find_by_sequence`; per-item TC field shape (integer-frame video, `{frame, subframe}` audio); `bad_request` for malformed `item_ids`; empty `item_ids ⇒ 0 items` distinct from omit (⇒ all). RED until T052. Drives T052.
 - [ ] **T052** `tools/resolve-helper/` — implement `read_timeline` (live per-item edit state). Makes T051 pass.
 - [X] **T053** `src/lua/core/resolve_bridge/edit_diff.lua` + `tests/test_edit_diff.lua` — classify per-clip Resolve-changed / JVE-changed-local / both-changed conflict. **DONE** — commit `77e9a616`.
 - [X] **T054** Pass 1 `sync_edits.classify_all` bucketing (RED → fix using helper-protocol shape + ledger lookup). **DONE** — commits `b238ca43` (RED) → `c4cbf3b0` (GREEN).
