@@ -1,14 +1,15 @@
--- T054b-1 — sync_edits_from_resolve.apply skeleton + Phase 0
+-- T054b-1/2 — sync_edits_from_resolve.apply skeleton + Phase 0 + Phase A
 -- (spec 023 FR-024 / FR-025; data-model.md §SyncEditsFromResolve —
 -- classification + dispatch contract, V1 MVP).
 --
 -- Black-box: feed apply() a synthetic read_timeline response built to
 -- helper-protocol.md §read_timeline's exact shape; assert observable
--- outcomes — DB state (clip.track_id, ledger fingerprint) and the
--- result buckets (applied, failed, skipped, fingerprints_persisted).
+-- outcomes — DB state (clip.track_id, clip.enabled, ledger fingerprint)
+-- and the result buckets (applied, failed, skipped, fingerprints_persisted).
 --
--- B1 scope: bootstrap-fp persist, V1 no-modal conflict surface, Phase 0
--- (MoveClipToTrack). Phases A/B/C/D land in subsequent commits.
+-- T054b-2 scope: + Phase A (ToggleClipEnabled). T054b-1 scope: bootstrap-fp
+-- persist, V1 no-modal conflict surface, Phase 0 (MoveClipToTrack).
+-- Phases B/C/D land in T054b-3/4.
 
 require("test_env")
 
@@ -31,7 +32,8 @@ print("\n=== sync_edits.apply Tests (T054b-1) ===")
 local layout = ripple_layout.create({
     db_path = "/tmp/jve/test_sync_edits_apply.db",
     clips = {
-        order = {"c_boot", "c_conflict", "c_move"},
+        order = {"c_boot", "c_conflict", "c_move",
+                 "c_disable", "c_move_and_disable"},
         c_boot = {
             id = "c_boot", name = "Bootstrap",
             track_key = "v1", media_key = "main",
@@ -46,6 +48,17 @@ local layout = ripple_layout.create({
             id = "c_move", name = "Move",
             track_key = "v1", media_key = "main",
             sequence_start = 700, duration = 200, source_in = 3000,
+        },
+        -- Phase A scenarios:
+        c_disable = {
+            id = "c_disable", name = "Disable",
+            track_key = "v1", media_key = "main",
+            sequence_start = 1000, duration = 200, source_in = 4000,
+        },
+        c_move_and_disable = {
+            id = "c_move_and_disable", name = "MoveAndDisable",
+            track_key = "v1", media_key = "main",
+            sequence_start = 1300, duration = 200, source_in = 5000,
         },
     },
 })
@@ -93,6 +106,15 @@ identity_ledger.upsert("c_conflict",
 identity_ledger.upsert("c_move",
     { resolve_item_id = "rs-c_move",
       edit_fingerprint = current_fp("c_move") }, db)
+-- Phase A clips (T054b-2): fp matches current; only Δenabled in
+-- response will drive Phase A. c_move_and_disable adds Δtrack →
+-- Phase 0 + Phase A both fire.
+identity_ledger.upsert("c_disable",
+    { resolve_item_id = "rs-c_disable",
+      edit_fingerprint = current_fp("c_disable") }, db)
+identity_ledger.upsert("c_move_and_disable",
+    { resolve_item_id = "rs-c_move_and_disable",
+      edit_fingerprint = current_fp("c_move_and_disable") }, db)
 
 -- Diverge c_conflict locally (move record_start +50). This rebuilds the
 -- in-memory timeline_state too if we go through a command, but for a
@@ -214,7 +236,77 @@ check("c_move: appears in fingerprints_persisted",
     persisted_move ~= nil)
 
 ----------------------------------------------------------------------
--- Scenario 3: user_choices is V2; passing non-nil must assert.
+-- Scenario 3: Phase A (ToggleClipEnabled) — T054b-2.
+-- c_disable: live.enabled = false, current = true → Phase A only.
+-- c_move_and_disable: live track v2, live.enabled = false → Phase 0
+--                     then Phase A; applied entry must record both
+--                     verbs in dispatch order (0 before A).
+----------------------------------------------------------------------
+local response_a = { items = {
+    { resolve_item_id = "rs-c_disable", track_id = layout.tracks.v1.id,
+      source_in = 4000, source_out = 4200,
+      record_start = 1000, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_move_and_disable",
+      track_id = layout.tracks.v2.id,
+      source_in = 5000, source_out = 5200,
+      record_start = 1300, record_duration = 200, enabled = false },
+    -- Pre-apply ledger walk would emit deleted_in_resolve conflicts for
+    -- all OTHER seeded clips. Carry them through identical to current
+    -- to keep the response self-consistent — only the two A-scenario
+    -- clips should drive dispatches.
+    { resolve_item_id = "rs-c_boot", track_id = layout.tracks.v1.id,
+      source_in = 1000, source_out = 1200,
+      record_start = 100, record_duration = 200, enabled = true },
+    -- c_conflict is intentionally omitted (already diverged + handled
+    -- in scenario 2; ledger walk surfaces it as deleted_in_resolve →
+    -- result.skipped, fine).
+    -- c_move now lives on v2 after scenario 2; carry its current
+    -- state so classify_all sees no delta.
+    { resolve_item_id = "rs-c_move", track_id = layout.tracks.v2.id,
+      source_in = 3000, source_out = 3200,
+      record_start = 700, record_duration = 200, enabled = true },
+} }
+
+local r3 = sync_edits.apply(response_a, layout.sequence_id,
+    layout.project_id, db)
+
+-- Phase A only: c_disable
+local disabled = Clip.load("c_disable")
+check("c_disable: DB shows enabled=false",
+    disabled and disabled.enabled == false)
+local applied_disable = find(r3.applied, "c_disable")
+check("c_disable: in applied list",
+    applied_disable ~= nil)
+check("c_disable: applied verbs = [ToggleClipEnabled]",
+    applied_disable and #applied_disable.attempted_verbs == 1
+    and applied_disable.attempted_verbs[1] == "ToggleClipEnabled")
+check("c_disable: not in failed",
+    find(r3.failed, "c_disable") == nil)
+local link_disable = identity_ledger.load("c_disable", db)
+check("c_disable: ledger fp persisted",
+    link_disable and link_disable.edit_fingerprint
+    == current_fp("c_disable"))
+
+-- Phase 0 + Phase A: c_move_and_disable
+local moved_disabled = Clip.load("c_move_and_disable")
+check("c_move_and_disable: DB shows track=v2",
+    moved_disabled and moved_disabled.track_id == layout.tracks.v2.id)
+check("c_move_and_disable: DB shows enabled=false",
+    moved_disabled and moved_disabled.enabled == false)
+local applied_combo = find(r3.applied, "c_move_and_disable")
+check("c_move_and_disable: in applied list",
+    applied_combo ~= nil)
+check("c_move_and_disable: verbs = [MoveClipToTrack, ToggleClipEnabled]",
+    applied_combo and #applied_combo.attempted_verbs == 2
+    and applied_combo.attempted_verbs[1] == "MoveClipToTrack"
+    and applied_combo.attempted_verbs[2] == "ToggleClipEnabled")
+local link_combo = identity_ledger.load("c_move_and_disable", db)
+check("c_move_and_disable: ledger fp persisted post-success",
+    link_combo and link_combo.edit_fingerprint
+    == current_fp("c_move_and_disable"))
+
+----------------------------------------------------------------------
+-- Scenario 4: user_choices is V2; passing non-nil must assert.
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,

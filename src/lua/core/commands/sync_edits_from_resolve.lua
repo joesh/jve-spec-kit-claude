@@ -445,17 +445,50 @@ local function dispatch_verb(verb, params)
     return false, exec_result.error_message or ""
 end
 
--- Phase 0: MoveClipToTrack for every to_apply entry with
--- requires_track_move = true. Returns a per-clip status table:
---   per_clip[clip_id] = { phase0 = "ran_ok" | "ran_failed" | "not_needed" }
--- Phase 0 failure cascade-skips A/B/C — per data-model.md, the caller
--- treats `phase0 = "ran_failed"` as a hard stop for that clip's other
--- phases. B1 only runs Phase 0, so the per-clip table only carries
--- Phase 0's status today; later commits append phaseA/phaseB/phaseC.
-local function run_phase_0(to_apply_entries, project_id, sequence_id, result)
+-- Per-clip dispatch state, built up across phases. Each clip starts
+-- with `{ attempted_verbs = {}, all_succeeded = true, failed = nil }`
+-- and is mutated by run_phase_*; result.applied / result.failed get
+-- assembled from this state once dispatch finishes.
+local function new_per_clip_state(entry)
+    return {
+        entry          = entry,
+        attempted_verbs = {},
+        all_succeeded  = true,
+        phase0_status  = "not_needed",
+        phaseA_status  = "not_needed",
+    }
+end
+
+local function init_per_clip(to_apply_entries)
     local per_clip = {}
     for _, entry in ipairs(to_apply_entries) do
-        if entry.requires_track_move then
+        per_clip[entry.clip_id] = new_per_clip_state(entry)
+    end
+    return per_clip
+end
+
+local function record_failure(state, verb, args, err, result)
+    state.all_succeeded = false
+    table.insert(result.failed, {
+        clip_id         = state.entry.clip_id,
+        resolve_item_id = state.entry.resolve_item_id,
+        attempted_verb  = verb,
+        args            = args,
+        error           = err,
+    })
+end
+
+-- Phase 0: MoveClipToTrack for every to_apply entry with
+-- requires_track_move = true. Phase 0 failure cascade-skips A/B/C
+-- (data-model.md §apply step 8 failure cascade) — caller observes
+-- `state.phase0_status == "ran_failed"` and refuses subsequent phases
+-- for that clip.
+local function run_phase_0(per_clip, project_id, sequence_id, result)
+    for _, state in pairs(per_clip) do
+        local entry = state.entry
+        if not entry.requires_track_move then
+            state.phase0_status = "not_needed"
+        else
             assert(type(entry.target_track_id) == "string"
                     and entry.target_track_id ~= "",
                 "sync_edits.run_phase_0: requires_track_move entry "
@@ -468,23 +501,13 @@ local function run_phase_0(to_apply_entries, project_id, sequence_id, result)
                 sequence_id     = sequence_id,
             })
             if ok then
-                per_clip[entry.clip_id] = { phase0 = "ran_ok" }
-                table.insert(result.applied, {
-                    clip_id          = entry.clip_id,
-                    resolve_item_id  = entry.resolve_item_id,
-                    attempted_verbs  = { "MoveClipToTrack" },
-                })
+                state.phase0_status = "ran_ok"
+                table.insert(state.attempted_verbs, "MoveClipToTrack")
             else
-                per_clip[entry.clip_id] = { phase0 = "ran_failed" }
-                table.insert(result.failed, {
-                    clip_id         = entry.clip_id,
-                    resolve_item_id = entry.resolve_item_id,
-                    attempted_verb  = "MoveClipToTrack",
-                    args = {
-                        target_track_id = entry.target_track_id,
-                    },
-                    error = err,
-                })
+                state.phase0_status = "ran_failed"
+                record_failure(state, "MoveClipToTrack",
+                    { target_track_id = entry.target_track_id },
+                    err, result)
                 table.insert(result.skipped, {
                     clip_id         = entry.clip_id,
                     resolve_item_id = entry.resolve_item_id,
@@ -494,30 +517,72 @@ local function run_phase_0(to_apply_entries, project_id, sequence_id, result)
                     .. "for clip %s: %s", tostring(entry.clip_id),
                     tostring(err))
             end
-        else
-            per_clip[entry.clip_id] = { phase0 = "not_needed" }
         end
     end
-    return per_clip
 end
 
--- For each to_apply entry whose every executed phase succeeded,
--- persist the post-success fingerprint to the ledger. B1 only runs
--- Phase 0, and Phase 0 only addresses track changes (fingerprint
--- excludes track_id), so a successful Phase 0 means the live state's
--- geometric/enabled fields already match current — the persisted
--- fingerprint equals fingerprint(live). Entries with `phase0 =
--- "not_needed"` are NOT persisted in B1: those entries carry an
--- edit-diff residual that Phases A/B/C will resolve in later commits;
--- persisting now would mark the residual as "applied" while it has
--- not been (data-model.md §apply step 13 — partial-success clips
--- retain prior fingerprint so the next sync retries).
-local function persist_phase_success_fingerprints(per_clip,
-                                                    to_apply_entries,
-                                                    db, result)
+-- Phase A: ToggleClipEnabled for every to_apply entry where
+-- live.enabled ≠ current.enabled. Skipped for any clip whose Phase 0
+-- failed (cascade per data-model.md §apply failure cascade — Phase 0
+-- failure cascade-skips A/B/C). Phase A failure is INDEPENDENT — it
+-- does not cascade-skip later phases because `enabled` is
+-- geometrically inert. Dispatched via explicit `clip_toggles` form
+-- (idempotent: sets exact enabled_after; not a blind flip).
+local function run_phase_a(per_clip, project_id, sequence_id, result)
+    for _, state in pairs(per_clip) do
+        local entry = state.entry
+        local delta = entry.live.enabled ~= entry.current.enabled
+        if not delta then
+            state.phaseA_status = "not_needed"
+        elseif state.phase0_status == "ran_failed" then
+            state.phaseA_status = "skipped_phase0_failed"
+        else
+            local ok, err = dispatch_verb("ToggleClipEnabled", {
+                project_id  = project_id,
+                sequence_id = sequence_id,
+                clip_toggles = { {
+                    clip_id        = entry.clip_id,
+                    enabled_before = entry.current.enabled,
+                    enabled_after  = entry.live.enabled,
+                } },
+            })
+            if ok then
+                state.phaseA_status = "ran_ok"
+                table.insert(state.attempted_verbs, "ToggleClipEnabled")
+            else
+                state.phaseA_status = "ran_failed"
+                record_failure(state, "ToggleClipEnabled",
+                    { enabled_after = entry.live.enabled },
+                    err, result)
+                log.warn("sync_edits: Phase A ToggleClipEnabled failed "
+                    .. "for clip %s: %s", tostring(entry.clip_id),
+                    tostring(err))
+            end
+        end
+    end
+end
+
+-- Assemble result.applied + fingerprints_persisted from per_clip.
+-- A clip lands in applied[] iff it dispatched ≥ 1 verb successfully.
+-- Its fingerprint persists iff ALL attempted phases succeeded
+-- (data-model.md §apply step 14 — partial-success clips retain prior
+-- fingerprint so the next sync retries).
+local function finalize_per_clip(per_clip, to_apply_entries, db, result)
+    -- Walk to_apply_entries (not pairs(per_clip)) to keep applied[] /
+    -- fingerprints_persisted[] ordering deterministic — Lua pairs is
+    -- unordered and tests rely on response-order semantics.
     for _, entry in ipairs(to_apply_entries) do
-        local status = per_clip[entry.clip_id]
-        if status and status.phase0 == "ran_ok" then
+        local state = per_clip[entry.clip_id]
+        if #state.attempted_verbs > 0 then
+            table.insert(result.applied, {
+                clip_id         = entry.clip_id,
+                resolve_item_id = entry.resolve_item_id,
+                attempted_verbs = state.attempted_verbs,
+            })
+        end
+        if state.all_succeeded
+            and (state.phase0_status == "ran_ok"
+                 or state.phaseA_status == "ran_ok") then
             local fp = fingerprint_for_persist(entry)
             identity_ledger.upsert(entry.clip_id, {
                 resolve_item_id  = entry.resolve_item_id,
@@ -533,21 +598,28 @@ local function persist_phase_success_fingerprints(per_clip,
     end
 end
 
--- B1-scoping assert: any to_apply entry that B1 cannot dispatch
--- (no requires_track_move; needs Phases A/B/C/D not yet implemented)
--- aborts apply() with a clear message. This is a deliberate "honest
--- incompleteness" guard, not a stub (2.17) — the dispatcher truthfully
--- refuses work it cannot perform. Later commits (B2/B3/B4) relax the
--- check by wiring the corresponding phase, and the check disappears
--- once Phase D is in place.
-local function assert_phase0_only(to_apply_entries)
+-- Stage guard: reject to_apply entries that need phases not yet
+-- implemented in this commit. T054b-2 wires Phase 0 + Phase A; any
+-- residual on source_in / source_out / record_start / record_dur
+-- needs Phase B/C/D and aborts apply() with a clear staging message.
+-- Not a stub (2.17) — the dispatcher truthfully refuses work it
+-- cannot perform. T054b-3/4 relax and finally remove this guard.
+local function assert_no_unimplemented_phases(to_apply_entries)
     for _, entry in ipairs(to_apply_entries) do
-        if not entry.requires_track_move then
+        local live = entry.live
+        local cur  = entry.current
+        local geom_delta =
+            live.source_in    ~= cur.source_in
+            or live.source_out  ~= cur.source_out
+            or live.record_start ~= cur.record_start
+            or live.record_dur   ~= cur.record_dur
+        if geom_delta then
             error(string.format(
                 "sync_edits.apply: to_apply entry for clip %s has "
-                .. "non-Phase-0 work (edit-diff residual); Phases A/B/C/D "
-                .. "land in subsequent T054b commits. B1 dispatches "
-                .. "Phase 0 (track move) only.",
+                .. "geometric residual (Δ source_in/out or record_*); "
+                .. "Phases B/C/D land in subsequent T054b commits. "
+                .. "T054b-2 dispatches Phase 0 (track move) + Phase A "
+                .. "(enabled toggle) only.",
                 tostring(entry.clip_id)))
         end
     end
@@ -563,9 +635,11 @@ end
 --- @param user_choices table? V2; V1 MVP must pass nil
 --- @return table {applied, failed, skipped, fingerprints_persisted}
 ---
---- V1 MVP scope (this commit): Phase 0 (`MoveClipToTrack`) + bootstrap
---- fingerprint persist + V1 no-modal conflict surface. Other phases
---- assert until their commits land.
+--- V1 MVP scope (T054b-1 + T054b-2): Phase 0 (`MoveClipToTrack`) +
+--- Phase A (`ToggleClipEnabled`) + bootstrap fingerprint persist + V1
+--- no-modal conflict surface. Entries with geometric residual on
+--- source_in/source_out/record_start/record_dur abort with a staging
+--- message; Phases B/C/D land in T054b-3/4.
 function M.apply(response, sequence_id, project_id, db, user_choices)
     assert(type(project_id) == "string" and project_id ~= "",
         "sync_edits.apply: project_id required")
@@ -589,15 +663,15 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
 
     if #classified.to_apply == 0 then return result end
 
-    assert_phase0_only(classified.to_apply)
+    assert_no_unimplemented_phases(classified.to_apply)
 
+    local per_clip = init_per_clip(classified.to_apply)
     command_manager.begin_undo_group("Sync Edits from Resolve")
-    local per_clip = run_phase_0(classified.to_apply, project_id,
-        sequence_id, result)
+    run_phase_0(per_clip, project_id, sequence_id, result)
+    run_phase_a(per_clip, project_id, sequence_id, result)
     command_manager.end_undo_group()
 
-    persist_phase_success_fingerprints(per_clip, classified.to_apply,
-        db, result)
+    finalize_per_clip(per_clip, classified.to_apply, db, result)
     return result
 end
 
