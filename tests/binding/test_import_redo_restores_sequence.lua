@@ -28,6 +28,15 @@ local info = blank_project.open_fresh("/tmp/jve/test_import_redo_restores_sequen
 local db = database.get_connection()
 command_manager.activate_timeline_stack(info.sequence_id)
 
+-- Capture the post-template, pre-import state. The Film 24fps template ships
+-- with one sequence and a fixed set of V/A tracks (no clips). Undo must
+-- restore TO this state — not to a row-empty state.
+local pre_import_counts = {
+    sequences = count_rows(db, "sequences"),
+    tracks    = count_rows(db, "tracks"),
+    clips     = count_rows(db, "clips"),
+}
+
 local import_cmd = Command.create("ImportFCP7XML", info.project_id)
 import_cmd:set_parameter("project_id", info.project_id)
 import_cmd:set_parameter("xml_path", test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml"))
@@ -71,10 +80,17 @@ local after_undo_counts = {
     tracks = count_rows(db, "tracks"),
     clips = count_rows(db, "clips")
 }
--- Template provides 1 sequence ("Sequence 1"); import added more; undo removes them.
-assert(after_undo_counts.sequences == 1, "Undo should remove imported sequence")
-assert(after_undo_counts.tracks == 0, "Undo should remove imported tracks")
-assert(after_undo_counts.clips == 0, "Undo should remove imported clips")
+-- Undo must restore the template's post-OpenProject state — sequence,
+-- track, and clip counts back to what blank_project.open_fresh left.
+assert(after_undo_counts.sequences == pre_import_counts.sequences,
+    string.format("Undo should restore sequence count (%d vs pre=%d)",
+        after_undo_counts.sequences, pre_import_counts.sequences))
+assert(after_undo_counts.tracks == pre_import_counts.tracks,
+    string.format("Undo should restore track count (%d vs pre=%d)",
+        after_undo_counts.tracks, pre_import_counts.tracks))
+assert(after_undo_counts.clips == pre_import_counts.clips,
+    string.format("Undo should restore clip count (%d vs pre=%d)",
+        after_undo_counts.clips, pre_import_counts.clips))
 
 -- UI would still be focused on the (now deleted) imported timeline stack.
 command_manager.activate_timeline_stack(imported_sequence_id)
