@@ -18,6 +18,7 @@ Response (exactly one per request, same `id`):
 
 - `v` — protocol version, present from the first message; bump on any breaking change.
 - `id` — JVE's correlation id. Its **only** job is to match a response to its request; it carries no semantics. Idempotency is keyed on `args.change_token`, not `id` (separation of concerns).
+- `args`, `result`, `error` are **always JSON objects** (never arrays, never null), even when empty (`args: {}`). The helper validates `isinstance(args, dict)` and rejects anything else as `bad_request`; JVE's `protocol.lua` tags empty Lua tables with `__jsontype="object"` so `dkjson` encodes `{}` not `[]`.
 - Errors are structured (machine `code` + human `message`); never bare strings, never swallowed. A dead Resolve handle is an `error`, not a crash and not a silent reconnect (FR-006, constitution VI/VII).
 
 ### Change token (idempotency key, FR-008)

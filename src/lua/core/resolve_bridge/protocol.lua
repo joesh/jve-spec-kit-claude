@@ -33,6 +33,17 @@ function M.is_known_error_code(code)
     return KNOWN_ERROR_CODES[code] == true
 end
 
+-- Per contracts/helper-protocol.md the envelope is always a JSON object,
+-- and so are `args` / `result` / `error`. dkjson encodes an empty Lua
+-- table as `[]` (array) by default; tag it so the helper's strict
+-- `isinstance(args, dict)` check passes when args carries no fields.
+local OBJECT_META = { __jsontype = "object" }
+local function as_object(t)
+    assert(type(t) == "table", "protocol.as_object: table required")
+    if getmetatable(t) == nil then setmetatable(t, OBJECT_META) end
+    return t
+end
+
 local function encode_line(tbl)
     local s = json.encode(tbl)
     assert(s and not s:find("\n"),
@@ -55,7 +66,7 @@ function M.build_request(req)
         v    = PROTOCOL_VERSION,
         id   = req.id,
         verb = req.verb,
-        args = req.args,
+        args = as_object(req.args),
     })
 end
 
@@ -91,7 +102,8 @@ function M.build_response_ok(id, result)
     assert(type(result) == "table",
         "protocol.build_response_ok: result table required")
     return encode_line({
-        v = PROTOCOL_VERSION, id = id, ok = true, result = result,
+        v = PROTOCOL_VERSION, id = id, ok = true,
+        result = as_object(result),
     })
 end
 
