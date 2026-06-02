@@ -14,6 +14,9 @@
 #                                  the .app by design, drives it)
 #   - tests/binding/              (Lua --test scripts dispatched via _run_in_vm.sh)
 #   - tests/integration/          (Lua --test scripts dispatched via _run_in_vm.sh)
+#   - tools/resolve-helper/       (Python helper.py spawned by helper_fixture.lua
+#                                  in spec-023 binding tests — without this the
+#                                  helper-* binding tests fail to bind socket)
 #   - tests/test_env.lua          (test bootstrap; sets package.path)
 #   - tests/import_schema.lua     (loads src/lua/schema.sql via io.open)
 #   - tests/fixtures/resolve/     (small DRP fixtures consumed by the
@@ -90,6 +93,7 @@ rsync -az --delete \
     tests/import_schema.lua \
     tests/helpers \
     tests/fixtures/resolve \
+    tools/resolve-helper \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
     "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
     src/lua \

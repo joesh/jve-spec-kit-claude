@@ -22,7 +22,7 @@
 --- Importer prohibition: this writer NEVER probes media. Every value comes
 --- from the payload (feedback_importers_no_media_probe — symmetric outbound).
 
-local M = {}
+local M = { _uuid_counter = 0 }
 
 local enc = require("exporters.drt_binary")
 
@@ -119,7 +119,7 @@ local function hash_uint24(s)
 end
 
 local function fresh_uuid(seed_byte)
-    M._uuid_counter = (M._uuid_counter or 0) + 1
+    M._uuid_counter = M._uuid_counter + 1
     local k = M._uuid_counter
     -- (counter, seed) embedded directly so two calls with different seeds
     -- or different counters can never collide. Format: 8-4-4-4-12;
@@ -607,21 +607,19 @@ local function basename(path)
     return b
 end
 
--- A005 baked-in constants. The kitchen-sink-borrowed
--- full_reference_mp_video_clip_a005.xml carries A005's BtVideoInfo /
--- BtAudioInfo blobs verbatim. Those blobs encode native_rate, duration
--- (in frames at native_rate), and frame size as binary fields the writer
--- does NOT yet rewrite. Any media whose probed values don't match A005
--- would silently emit the wrong rate/duration/resolution to Resolve, and
--- the imported clip would either fail to render or render with wrong
--- timing. Fail fast until we synthesize the Mp video item from payload
--- (tracked in todo_drt_writer_resolve_canonical_shape.md).
-local A005_NATIVE_RATE     = 24000 / 1001
-local A005_DURATION_FRAMES = 108
--- A005 width/height are baked in the BtVideoInfo blob; the writer's
--- payload exposes seq.width/seq.height but NOT per-media_ref width/
--- height (media table doesn't carry them). When media_ref gains
--- width/height fields, assert against the A005-baked values here too.
+-- The full_reference_mp_video_clip_a005.xml template carries A005's
+-- BtVideoInfo with a baked Time blob (NumFrames=108, FrameRate=23.976,
+-- UniqueId=85fba73b-...). We rewrite the Time blob per payload via
+-- exporters.drt_binary.encode_bt_video_time so JVE parses back the
+-- correct media duration/rate (test_drt_writer_file_roundtrip).
+--
+-- Other A005-baked fields not yet rewritten (BtVideoInfo/Clip path,
+-- Geometry/Resolution, BtAudioInfo/TracksBA, outer FieldsBlob/
+-- MediaExtents) are invisible to JVE's parser but visible to Resolve.
+-- All tracked in todo_drt_writer_resolve_canonical_shape.md with the
+-- per-field status updated after the Time-blob rewrite.
+
+local TIME_ELEM_PATTERN = "<Time>([0-9a-f]+)</Time>"
 
 local function build_media_pool_video_item(media, dbids)
     assert(type(media.file_uuid) == "string" and media.file_uuid ~= "",
@@ -634,26 +632,13 @@ local function build_media_pool_video_item(media, dbids)
         .. "supported by this writer pass (phase0-findings §K3); got '"
         .. tostring(ext) .. "' for " .. media.file_path
         .. ". Audio (Sm2MpAudioClip) deferred per §K4.")
-    assert(type(media.native_rate) == "number"
-        and math.abs(media.native_rate - A005_NATIVE_RATE) < 1e-6,
-        string.format(
-            "drt_writer.build_media_pool_video_item: media.native_rate "
-            .. "%s differs from A005 baked-in template native_rate %s. "
-            .. "The Mp video item template carries A005's BtVideoInfo "
-            .. "and BtAudioInfo verbatim — emitting it for a different-"
-            .. "rate file would corrupt the media descriptor. Synthesize "
-            .. "the Mp video item from payload before authoring non-A005 "
-            .. "media (todo_drt_writer_resolve_canonical_shape.md).",
-            tostring(media.native_rate), tostring(A005_NATIVE_RATE)))
+    assert(type(media.native_rate) == "number" and media.native_rate > 0,
+        "drt_writer.build_media_pool_video_item: media.native_rate "
+        .. "required (positive number); got " .. tostring(media.native_rate))
     assert(type(media.duration_frames) == "number"
-        and media.duration_frames == A005_DURATION_FRAMES,
-        string.format(
-            "drt_writer.build_media_pool_video_item: media.duration_"
-            .. "frames %s differs from A005 baked-in template duration "
-            .. "%d frames. The template carries A005's duration in its "
-            .. "embedded blobs; mismatched payload would emit the wrong "
-            .. "duration to Resolve.",
-            tostring(media.duration_frames), A005_DURATION_FRAMES))
+        and media.duration_frames > 0 and media.duration_frames % 1 == 0,
+        "drt_writer.build_media_pool_video_item: media.duration_frames "
+        .. "required (positive integer); got " .. tostring(media.duration_frames))
 
     local tpl = load_template("full_reference_mp_video_clip_a005.xml")
     tpl = plain_gsub_required(tpl,
@@ -662,6 +647,21 @@ local function build_media_pool_video_item(media, dbids)
         A005_TEMPLATE_MP_FOLDER_BACKREF, dbids.mp_folder)
     tpl = plain_gsub_required(tpl,
         A005_TEMPLATE_UNIQUE_MP_ITEM_ID, fresh_uuid(0xa0))
+
+    -- Rewrite BtVideoInfo/Time blob from payload. Per-media UniqueId is
+    -- minted so two media in one DRT can't collide on the Time blob's
+    -- own UUID field (decoded back by drp_binary.decode_bt_video_time).
+    local new_time_hex = enc.encode_bt_video_time({
+        num_frames = media.duration_frames,
+        frame_rate = media.native_rate,
+        unique_id  = fresh_uuid(0xa1),
+    })
+    local replaced
+    tpl, replaced = tpl:gsub(TIME_ELEM_PATTERN,
+        "<Time>" .. new_time_hex .. "</Time>", 1)
+    assert(replaced == 1,
+        "drt_writer.build_media_pool_video_item: failed to substitute "
+        .. "<Time> blob in A005 template — template structure changed?")
 
     local name = basename(media.file_path)
     if name ~= A005_TEMPLATE_NAME then

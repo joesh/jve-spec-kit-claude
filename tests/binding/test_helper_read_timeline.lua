@@ -99,6 +99,36 @@ local function assert_items_shape(items, label)
     end
 end
 
+-- ─── bad_request: item_ids wrong outer type ─────────────────────────
+-- Wire-discipline paths (don't need a live Resolve handle).
+do
+    local r = fixture.request(fix, "read_timeline", {
+        item_ids = "not-a-list",
+    })
+    assert_structured_error(r, "bad_request",
+        "item_ids wrong outer type")
+    assert(r.error.message:find("item_ids", 1, true),
+        "bad_request should name the wrong-typed arg: "
+        .. r.error.message)
+    print("  ✓ item_ids wrong outer type → bad_request")
+end
+
+-- ─── bad_request: item_ids list with non-string element ─────────────
+do
+    local r = fixture.request(fix, "read_timeline", {
+        item_ids = { "valid-id", 42 },
+    })
+    assert_structured_error(r, "bad_request",
+        "item_ids non-string element")
+    assert(r.error.message:find("item_ids", 1, true),
+        "bad_request should name the wrong-typed arg: "
+        .. r.error.message)
+    print("  ✓ item_ids non-string element → bad_request")
+end
+
+-- Live-Resolve section gate.
+fixture.skip_unless_resolve(fix, "test_helper_read_timeline.lua")
+
 -- ─── omit item_ids ⇒ ok with items array of documented shape ────────
 do
     local r = fixture.request(fix, "read_timeline", {})
@@ -124,32 +154,6 @@ do
         "empty item_ids must return zero items, got %d",
         #r.result.items))
     print("  ✓ empty item_ids → 0 items")
-end
-
--- ─── bad_request: item_ids wrong outer type ─────────────────────────
-do
-    local r = fixture.request(fix, "read_timeline", {
-        item_ids = "not-a-list",
-    })
-    assert_structured_error(r, "bad_request",
-        "item_ids wrong outer type")
-    assert(r.error.message:find("item_ids", 1, true),
-        "bad_request should name the wrong-typed arg: "
-        .. r.error.message)
-    print("  ✓ item_ids wrong outer type → bad_request")
-end
-
--- ─── bad_request: item_ids list with non-string element ─────────────
-do
-    local r = fixture.request(fix, "read_timeline", {
-        item_ids = { "valid-id", 42 },
-    })
-    assert_structured_error(r, "bad_request",
-        "item_ids non-string element")
-    assert(r.error.message:find("item_ids", 1, true),
-        "bad_request should name the wrong-typed arg: "
-        .. r.error.message)
-    print("  ✓ item_ids non-string element → bad_request")
 end
 
 fixture.stop(fix)

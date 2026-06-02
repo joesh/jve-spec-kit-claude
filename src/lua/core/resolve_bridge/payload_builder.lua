@@ -144,15 +144,29 @@ function M.build(db, project_id, sequence_id)
     }
     local media_seen = {}
 
-    local video_tracks = Track.find_by_sequence(sequence_id, "video")
-    local audio_tracks = Track.find_by_sequence(sequence_id, "audio")
+    -- schema CHECK(track_type IN ('VIDEO','AUDIO')) so query is uppercase;
+    -- drt_writer's wire contract uses lowercase 'video'/'audio', so we
+    -- normalise on emit.
+    local video_tracks = Track.find_by_sequence(sequence_id, "VIDEO")
+    local audio_tracks = Track.find_by_sequence(sequence_id, "AUDIO")
+    assert(type(video_tracks) == "table",
+        "payload_builder: Track.find_by_sequence(VIDEO) returned non-table "
+        .. "for sequence " .. tostring(sequence_id))
+    assert(type(audio_tracks) == "table",
+        "payload_builder: Track.find_by_sequence(AUDIO) returned non-table "
+        .. "for sequence " .. tostring(sequence_id))
     local all_tracks = {}
-    for _, t in ipairs(video_tracks or {}) do all_tracks[#all_tracks+1] = t end
-    for _, t in ipairs(audio_tracks or {}) do all_tracks[#all_tracks+1] = t end
+    for _, t in ipairs(video_tracks) do all_tracks[#all_tracks+1] = t end
+    for _, t in ipairs(audio_tracks) do all_tracks[#all_tracks+1] = t end
 
     for _, t in ipairs(all_tracks) do
+        assert(t.track_type == "VIDEO" or t.track_type == "AUDIO",
+            string.format("payload_builder: unexpected track_type %q on "
+                .. "track %s (schema CHECK should make this impossible)",
+                tostring(t.track_type), tostring(t.id)))
+        local wire_type = (t.track_type == "VIDEO") and "video" or "audio"
         local track_payload = {
-            type  = t.track_type,
+            type  = wire_type,
             clips = load_clips_for_track(db, t.id),
         }
         payload.sequence.tracks[#payload.sequence.tracks+1] = track_payload

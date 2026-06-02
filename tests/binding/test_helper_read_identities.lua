@@ -58,6 +58,25 @@ local function assert_structured_error(parsed, expected_code, label)
         label, expected_code, parsed.error.code, parsed.error.message))
 end
 
+-- ─── bad_request: extraneous args ───────────────────────────────────
+-- Contract: `args: none`. Any field is extraneous and must be rejected
+-- at the wire boundary rather than silently ignored (rule 2.32).
+-- Runs unconditionally — exercises closed-set discipline that doesn't
+-- depend on a live Resolve handle.
+do
+    local r = fixture.request(fix, "read_identities", {
+        item_ids = { "stray-id" },
+    })
+    assert_structured_error(r, "bad_request",
+        "extraneous args fields")
+    print("  ✓ extraneous args → bad_request")
+end
+
+-- Live-Resolve section gate: skip cleanly when the helper reports the
+-- Resolve handle is absent (no Resolve Studio process, or
+-- DaVinciResolveScript module unavailable in the helper's environment).
+fixture.skip_unless_resolve(fix, "test_helper_read_identities.lua")
+
 -- ─── empty args ⇒ ok with documented shape ──────────────────────────
 do
     local r = fixture.request(fix, "read_identities", {})
@@ -91,17 +110,6 @@ do
     print(string.format(
         "  ✓ read_identities → %d keyed item(s), %d unkeyed",
         #r.result.items, r.result.unkeyed_count))
-end
-
--- ─── bad_request: extraneous args ───────────────────────────────────
--- Contract: `args: none`. Any field is extraneous and must be rejected
--- at the wire boundary rather than silently ignored (rule 2.32).
-do
-    local r = fixture.request(fix, "read_identities", {
-        item_ids = { "stray-id" },
-    })
-    assert_structured_error(r, "bad_request",
-        "extraneous args fields")
 end
 
 fixture.stop(fix)

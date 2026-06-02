@@ -945,12 +945,28 @@ def _unimplemented(verb_name):
     return thunk
 
 
+def verb_read_grades(args, handle, envelope_id, helper_version):
+    # Stub until T029b lands CDL extraction. Wire-boundary validation
+    # MUST run before returning not_implemented so malformed callers
+    # see bad_request (architectural rule: arg validation precedes
+    # handler implementation regardless of stub state). Shares
+    # _validate_item_ids with verb_read_timeline so the bad_request
+    # surface is identical.
+    del handle, helper_version
+    validation = _validate_item_ids(args)
+    if validation[0] != "ok":
+        return _error(envelope_id, "bad_request", validation[1])
+    return _error(envelope_id, "not_implemented",
+        "verb 'read_grades' not yet implemented in this helper build "
+        "(T029b — CDL extraction)")
+
+
 VERB_TABLE = {
     "ping": verb_ping,
     "import_timeline": verb_import_timeline,
     "read_identities": verb_read_identities,
     "read_timeline":   verb_read_timeline,
-    "read_grades":     _unimplemented("read_grades"),
+    "read_grades":     verb_read_grades,
     "queue_render":    verb_queue_render,
     "render_status":   verb_render_status,
     "stamp_identity_marker": verb_stamp_identity_marker,

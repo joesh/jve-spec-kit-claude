@@ -111,6 +111,42 @@ local function assert_grade_row(row, i)
     end
 end
 
+-- ─── bad_request: item_ids wrong outer type ────────────────────────
+-- Wire-discipline paths first — these don't need a live Resolve handle
+-- and don't depend on the read_grades verb being implemented.
+do
+    local r = fixture.request(fix, "read_grades", {
+        item_ids = "not-a-list",
+    })
+    assert_structured_error(r, "bad_request",
+        "item_ids wrong outer type")
+    assert(r.error.message:find("item_ids", 1, true),
+        "bad_request should name the wrong-typed arg: "
+        .. r.error.message)
+    print("  ✓ item_ids wrong outer type → bad_request")
+end
+
+-- ─── bad_request: item_ids list with non-string element ────────────
+do
+    local r = fixture.request(fix, "read_grades", {
+        item_ids = { "valid-id", 42 },
+    })
+    assert_structured_error(r, "bad_request",
+        "item_ids non-string element")
+    assert(r.error.message:find("item_ids", 1, true),
+        "bad_request should name the wrong-typed arg: "
+        .. r.error.message)
+    print("  ✓ item_ids non-string element → bad_request")
+end
+
+-- Live-Resolve + verb-implemented gates. The ok-path sections below
+-- require both a connected Resolve handle AND a real read_grades
+-- implementation (verb is wired to _unimplemented → returns
+-- not_implemented until T029b lands the CDL extraction; see tasks.md).
+fixture.skip_unless_resolve(fix, "test_helper_read_grades.lua")
+fixture.skip_if_verb_unimplemented(fix, "read_grades",
+    "test_helper_read_grades.lua")
+
 -- ─── omit item_ids ⇒ ok with grades array of documented shape ──────
 do
     local r = fixture.request(fix, "read_grades", {})
@@ -138,32 +174,6 @@ do
         "empty item_ids must return zero grades, got %d",
         #r.result.grades))
     print("  ✓ empty item_ids → 0 grades")
-end
-
--- ─── bad_request: item_ids wrong outer type ────────────────────────
-do
-    local r = fixture.request(fix, "read_grades", {
-        item_ids = "not-a-list",
-    })
-    assert_structured_error(r, "bad_request",
-        "item_ids wrong outer type")
-    assert(r.error.message:find("item_ids", 1, true),
-        "bad_request should name the wrong-typed arg: "
-        .. r.error.message)
-    print("  ✓ item_ids wrong outer type → bad_request")
-end
-
--- ─── bad_request: item_ids list with non-string element ────────────
-do
-    local r = fixture.request(fix, "read_grades", {
-        item_ids = { "valid-id", 42 },
-    })
-    assert_structured_error(r, "bad_request",
-        "item_ids non-string element")
-    assert(r.error.message:find("item_ids", 1, true),
-        "bad_request should name the wrong-typed arg: "
-        .. r.error.message)
-    print("  ✓ item_ids non-string element → bad_request")
 end
 
 fixture.stop(fix)

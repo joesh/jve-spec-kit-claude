@@ -117,6 +117,7 @@ fi
 # UI tests — each is its own process, fine to run alongside non-perf batches.
 for t in \
   test_zstd_bindings.lua \
+  test_drt_writer_file_roundtrip.lua \
   test_layout_sanity.lua \
   test_widget_lifecycle.lua \
   test_keyboard_qshortcut_integration.lua \
