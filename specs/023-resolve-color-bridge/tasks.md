@@ -84,7 +84,7 @@
 ## Phase 3 — Color model + grade read-back (STOP gate)
 
 - [ ] **T027** [P] `tests/contract/test_helper_read_grades.lua` — assert `read_grades` shape: `cdl?` present only when representable, mandatory `fidelity` enum, `lut?.ref`. FAIL first.
-- [ ] **T028** [P] `tests/contract/test_helper_read_identities.lua` — assert `{items[], unkeyed_count}`; unkeyed items omitted but counted. FAIL first.
+- [x] **T028** [P] `tests/binding/test_helper_read_identities.lua` — asserts `{items: [{resolve_item_id, jve_guid}], unkeyed_count}` shape (per-item non-empty strings; non-negative integer count); bidirectional reconciliation per T047 (marker channel + content match — neither raw id equality); `bad_request` on extraneous args (contract is `args: none`). Currently RED — verb wired to `_unimplemented`. Drives T029.
 - [ ] **T029** `tools/resolve-helper/` — implement `read_grades` (honest fidelity downgrade for node graphs beyond CDL, FR-015) + `read_identities`. Makes T027/T028 pass.
 - [X] **T030** `tests/test_sync_grades_command.lua` — black-box undo round-trip. **DONE** — commit `c251fe24`.
 - [X] **T031** `src/lua/core/commands/sync_grades_from_resolve.lua` — `SyncGradesFromResolve` (undoable; upsert `clip_grade`, update ledger fingerprint; before-state captured for undo). **DONE** — commit `c251fe24`.
