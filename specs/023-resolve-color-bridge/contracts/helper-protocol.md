@@ -2,7 +2,7 @@
 
 The testable boundary between JVE (client) and the helper process (owns the Resolve handle). Transport: Unix domain socket under JVE's app-support dir; one JSON object per line (`\n`-terminated). JVE spawns/supervises the helper via QProcess and connects as a `QLocalSocket` client.
 
-Source: spec.md FR-005..010, FR-013, FR-015, FR-018/019, FR-020; research.md §4.
+Source: spec.md FR-005..010, FR-013, FR-015, FR-020; research.md §4.
 
 ## Envelope
 
@@ -75,16 +75,7 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 - **result**: `{ grades: [{ jve_guid, cdl?: { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat }, lut?: { ref }, fidelity }] }`
 - `fidelity` ∈ `primary|partial|unrepresentable`, mandatory and honest (FR-015): a node graph exceeding CDL/LUT is downgraded, never approximated. `cdl` present only when representable; `lut.ref` is a local path. Manual-pull only (no server-push).
 
-### `queue_render` *(state-changing; idempotent on change token + spec hash)*
-- **args**: `{ spec, change_token }`
-- `spec` is a JSON object — minimum required: `{ preset_name: string, target_dir: string }`. `preset_name` is a Resolve render-preset name (created in Resolve's Deliver page); `target_dir` is a local absolute path (same-machine topology) where Resolve writes the rendered files. Optional `file_prefix` (string) sets the per-clip filename prefix; absent ⇒ Resolve's default.
-- **result**: `{ job_id }` — opaque non-empty string handle used by `render_status`. Re-sending the same `(change_token, spec)` returns the prior `job_id` (idempotency).
-
-### `render_status`
-- **args**: `{ job_id }`
-- **result**: `{ state, progress, output_paths? }` — pollable to completion; JVE then relinks to `output_paths` (FR-019).
-- `state` is a closed-set enum: `"queued" | "rendering" | "completed" | "failed"`. `progress` is a non-negative number, semantically a percent 0–100 (clamped by the helper).
-- `output_paths` is an array of absolute local file paths, present only when `state == "completed"` (and non-empty when present). When `state == "failed"`, the structured error carries the reason; `render_status` itself stays ok=true with `state="failed"` — render failure is reported as a state value, not a protocol error.
+> **Carved out 2026-06-02**: `queue_render` and `render_status` were part of the v1 contract until the render+relink path was scoped out (see spec.md §Locked decisions "Roundtrip depth"). Their wire contract is preserved at git tag `spec023-render-relink-deferred`.
 
 ## Test obligations (constitution III, spec §9)
 - **Contract tests** assert request/response *shape* per verb (envelope, required result fields, error-code set). May run against a recorded, regenerable real-Resolve fixture.

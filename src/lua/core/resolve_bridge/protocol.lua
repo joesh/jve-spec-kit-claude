@@ -161,7 +161,6 @@ end
 
 local STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
     import_timeline        = true,
-    queue_render           = true,
     stamp_identity_marker  = true,
 }
 

@@ -107,15 +107,9 @@
 
 ---
 
-## Phase 5 — Render + relink (STOP gate)
+## Phase 5 — REMOVED (render + relink carved out 2026-06-02)
 
-- [x] **T038** [P] `tests/binding/test_helper_render.lua` — asserts `queue_render` happy-path `{job_id}` non-empty string; bad_request for missing/malformed spec (preset_name, target_dir); FR-008 client-side change_token gate; `render_status` closed-set `state ∈ {queued, rendering, completed, failed}`, `progress ∈ [0,100]`, `output_paths` STRICTLY gated on `state=="completed"` (absent otherwise; non-empty absolute paths when present); bad_request for missing/wrong-typed `job_id`. RED until T039.
-- [x] **T039** `tools/resolve-helper/verbs.py::verb_queue_render` + `verb_render_status` + `ledger.py` spec-hash idempotency — LoadRenderPreset → SetRenderSettings → AddRenderJob → StartRendering with structured `resolve_api_error` on each failure mode; render_status maps Resolve `JobStatus` to closed-set state enum, type-validates `CompletionPercentage`, composes `output_paths` only on `state=="completed"` from the cached spec + `GetRenderJobList` lookup. `compute_key` rewritten as non-asserting cache-layer (returns None on malformed args); FR-008 change_token enforcement moved into per-verb `_validate_change_token`. T038 GREEN (8/8 bad_request gates); T013/T014/T028/T051 unchanged. Commit `0dc8712a`.
-- [x] **T040a** `src/lua/core/commands/queue_resolve_render.lua` — `QueueResolveRender`: builds spec + change_token, queues via helper, polls render_status every N ms (default 2000, configurable) until terminal state (`completed`/`failed`), surfaces `{job_id, state, progress, output_paths?}` to `on_complete`. Not undoable (FR-017 is for sync, not render). Registered command (FR-023).
-- [ ] **T040b** Auto-relink after render — consume T040a's `output_paths`, dispatch `RelinkClips` with the clip→output mapping per FR-019. Blocked on `t040_render_probe.py` live-Resolve spike to pin the output-filename field on `GetRenderJobList` + decide single-output vs per-clip mapping strategy. See `todo_render_relink_clip_mapping`.
-- [ ] **T041** 🟢 LIVE `tests/live/test_render_relink.lua` — queue, poll to completion, assert the output file exists, JVE relinks and plays the graded master (quickstart step 7).
-
-> **STOP GATE 5** — full-fidelity render path delivers a graded master into JVE.
+The render-and-relink path (former T038/T039/T040a/T040b/T041) was carved out 2026-06-02 because it was a Claude-inferred extension of Joe's original /specify input ("send → grade → bring grade back"), not something Joe asked for. The historic decision in plan.md §Complexity Tracking ("Render-and-relink only was offered and Joe chose store+display") rejected render-only in favor of store+display; render-and-relink was then quietly added on top as a "later phase" without an explicit Q&A. Preserved at git tag `spec023-render-relink-deferred` for future revival.
 
 ---
 
@@ -153,7 +147,7 @@
 ## Phase 6 — Edge cases + polish
 
 - [ ] **T042** [P] 🟢 LIVE `tests/live/test_edge_cases.lua` — free (non-Studio) Resolve ⇒ `not_studio` and nothing destructive; stale handle on project switch ⇒ `handle_stale`; locale fractional-rate read as integer ⇒ `locale_rate_corruption`, conform refused (FR-010/009/020; quickstart edge checks).
-- [ ] **T043** [P] Register `SendToResolve`/`SyncGradesFromResolve`/`QueueResolveRender` in the menu + keymap; tooltips on non-obvious controls (3.11). Inspector fidelity badge + "full grade requires Resolve render" affordance for non-primary clips (spec §5.5 — minimal; full inspector UI is a later spec).
+- [ ] **T043** [P] Register `SendToResolve`/`SyncGradesFromResolve`/`SyncEditsFromResolve`/`ConnectToResolveProject` in the menu + keymap; tooltips on non-obvious controls (3.11). Inspector fidelity badge for non-primary clips (spec §5.5 — minimal; full inspector UI is a later spec).
 - [ ] **T044** [P] `tests/binding/test_test_mode_*` and luacheck: zero warnings; ensure `make -j4` is green (2.4) — capture to `/tmp/make.log`, grep for `warning:|error:|FAILED`.
 - [ ] **T045** Run `quickstart.md` end-to-end against a real Resolve Studio; record observed results. Do not mark the feature done until every scenario passes as an observable fact (constitution 0.1, `feedback_always_run_smoke_test`).
 
@@ -167,7 +161,6 @@
 - Phase 2: T009 → {T010,T011 [P]}; T009 → T015,T016; T012→T018; T018+T020→T022; T019→T023; {T007,T016,T021,T022}→T024→T025→T026. T021 needs T008's join field (helper language already decided: Python).
 - Phase 3: T009→T015→T030→T031; T029 before T033/T034; T032 needs T015 (model) + T031 (data to display).
 - Phase 4: T016→T036→T035→T037.
-- Phase 5: T039→T040→T041; T040 reuses existing `RelinkClips`.
 - Polish (T042–T045) after their feature phases; T045 is the final gate.
 
 ## Parallel execution examples
@@ -187,7 +180,7 @@ Task: "src/qt_bindings/process_bindings.cpp"         # T019
 Task: "src/qt_bindings/local_socket_bindings.cpp"    # T020
 ```
 
-Note: 🟢 LIVE tasks (T025, T026, T033, T034, T037, T041, T042, T045) cannot run in parallel headlessly — they need a single foregrounded Resolve Studio and a human-launched runner; serialize them.
+Note: 🟢 LIVE tasks (T025, T026, T033, T034, T037, T042, T045) cannot run in parallel headlessly — they need a single foregrounded Resolve Studio and a human-launched runner; serialize them.
 
 ## Requirement → task traceability
 *Every spec FR maps to at least one task. (Implementation tasks listed; each is preceded by its test task per TDD.)*
@@ -200,20 +193,20 @@ Note: 🟢 LIVE tasks (T025, T026, T033, T034, T037, T041, T042, T045) cannot ru
 | FR-004 importer round-trip validation | T004 | FR-015 fidelity honest | T029, T034 |
 | FR-005 separate process | T021 | FR-016 display pull (MVC) | T032, T033 |
 | FR-006 socket / JSON / structured errors | T018, T020, T022 | FR-017 undoable sync | T031 |
-| FR-007 spawn + supervise | T023 | FR-018 queue render + poll | T039, T040 |
-| FR-008 idempotency on token | T017, T026 | FR-019 relink to render | T040, T041 |
+| FR-007 spawn + supervise | T023 | FR-018 queue render + poll | CARVED OUT (tag spec023-render-relink-deferred) |
+| FR-008 idempotency on token | T017, T026 | FR-019 relink to render | CARVED OUT (tag spec023-render-relink-deferred) |
 | FR-009 per-verb handle revalidation | T021, T042 | FR-020 locale-rate guard | T042 |
 | FR-010 Studio required | T042 | FR-021 helper holds no model | T021 |
 | FR-011 record mapping | T016, T024 | FR-022 test discipline | conventions + all test tasks |
-| FR-011b inbound id adoption | T046, T048 | FR-023 commands invocable | T024, T031, T040, T043, T049, T054b-1..4 |
+| FR-011b inbound id adoption | T046, T048 | FR-023 commands invocable | T024, T031, T043, T049, T054b-1..4 |
 | FR-011c connect imported (id + positional) | T047, T049, T050 | FR-024 pull Resolve edits | T052, T054a, T054b-1..4, T055 |
 | FR-012 reconcile (bladed inherit) | T036, T037 | FR-025 edit conflict detection | T053, T054a, T054b-1..4, T055 |
 
 ## Validation checklist
-- [x] Every contract verb has a contract test (T013/T014/T027/T028/T038/T051) before its helper impl (T021/T029/T039/T052).
+- [x] Every contract verb has a contract test (T013/T014/T027/T028/T051) before its helper impl (T021/T029/T052).
 - [x] Every spec FR (001–025, incl. 011b/c, 013a) maps to a task — see traceability matrix above.
 - [x] Every entity has a model task (T015 clip_grade, T016 resolve_bridge_link) gated by schema T009.
-- [x] Every quickstart scenario has a 🟢 LIVE test (steps 1–7 → T025,T033,T034,T031-undo,T037,T026,T041; edges → T042).
+- [x] Every quickstart scenario has a 🟢 LIVE test (steps 1–6 → T025,T033,T034,T031-undo,T037,T026; edges → T042; scenario 7 / render+relink carved out — see Phase 5 note).
 - [x] Tests precede their implementation (TDD); spikes precede code that assumes them.
 - [x] [P] tasks touch distinct files; no two [P] tasks edit the same file.
 - [x] Resolve behavior is asserted only by live tests; no mock-asserts-mock.

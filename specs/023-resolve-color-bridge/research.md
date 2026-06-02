@@ -1,8 +1,10 @@
 # 023 — JVE ⇄ DaVinci Resolve Color Roundtrip Bridge
 
+> **Carve-out note (2026-06-02):** this research doc was authored before the render-and-relink path was carved out. The "(later phase) Render" / "render-and-relink" prose throughout this document describes an extension that was added by Claude during the original /specify+/plan run but was never explicitly requested by Joe. Render+relink was removed from the active spec on 2026-06-02 — preserved at git tag `spec023-render-relink-deferred`. See `feedback_render_relink_carved_out`. The rest of this document (helper architecture, identity model, DRT writer, CDL color model, renderer stage) remains the active design.
+
 **Target executor:** Claude Code (any session)
 **Status:** spec — no implementation yet. Phased, STOP-gated (see §10).
-**Scope:** the *live* roundtrip — JVE authors a `.drt`, a persistent helper process drives a running **Resolve Studio** over the external scripting bridge, grades are read back into a **new JVE color model** and displayed in JVE's viewer; rendering graded masters is a later phase.
+**Scope:** the *live* roundtrip — JVE authors a `.drt`, a persistent helper process drives a running **Resolve Studio** over the external scripting bridge, grades are read back into a **new JVE color model** and displayed in JVE's viewer.
 **Out of scope (designed-for, not built here):** the free-tier in-Resolve-script path; full node-graph color fidelity (power windows, secondaries, multi-node trees — only CDL + LUT-ref survive read-back); linking `fusionscript` into JVE's C++ process (forbidden — §4).
 
 > This spec supersedes the generic `jve-resolve-bridge-spec.md` draft. That draft was sound on transport and discipline but made three claims about JVE that are **false** (see §1.1). This version is grounded in JVE's actual code.

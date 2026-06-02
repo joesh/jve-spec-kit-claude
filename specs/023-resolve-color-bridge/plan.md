@@ -5,7 +5,7 @@
 
 ## Summary
 
-Send a JVE cut to DaVinci Resolve Studio, grade it there, and bring the grade back into JVE. A persistent helper process owns the Resolve scripting connection; JVE spawns/supervises it (QProcess) and talks to it over a Unix domain socket with line-delimited JSON. JVE gains its first export path (a `.drt` writer mirroring the existing DRP binary *decoder*), a new persisted color model (CDL + LUT-ref per clip, read-only, displayed via a renderer CDL stage), and a persisted identity ledger that survives JVE re-edits so re-conform doesn't scramble grades. Grade read-back is asymmetric and honest: primary CDL syncs live; complex node graphs are flagged and only fully realized via a Resolve render that JVE relinks to. Identity is **bidirectional, two channels** (corrected by 2026-05-29 inbound spike T047, see spec §"Session 2026-05-29"): **file↔file** uses the DRP-persisted `Sm2Ti DbId` adopted on import as `clip.id` (mirrors `media.id`); **live API** uses a clip marker holding `clip.id` (`TimelineItem:AddMarker`/`GetMarkers`). DRP `DbId` does NOT bridge to the live scripting API (proven 0/1003). Outbound DRT carries `clip.id` via both carriers (DbId for the next file↔file import + marker for live read-back). First-connect of an already-imported project uses positional/content match (`name + record-TC + source-TC + media identity`) until a user-consented marker stamp pass converts to id-anchored sync. Beyond grades, JVE can pull **Resolve-side edit tweaks** (record/source/track/enabled) back via an explicit, undoable, conflict-aware command (JVE stays the edit authority of record). Topology is same-machine; one Resolve target per JVE project; grades read-only; manual sync; deletion cascades with stale-flagging.
+Send a JVE cut to DaVinci Resolve Studio, grade it there, and bring the grade back into JVE. A persistent helper process owns the Resolve scripting connection; JVE spawns/supervises it (QProcess) and talks to it over a Unix domain socket with line-delimited JSON. JVE gains its first export path (a `.drt` writer mirroring the existing DRP binary *decoder*), a new persisted color model (CDL + LUT-ref per clip, read-only, displayed via a renderer CDL stage), and a persisted identity ledger that survives JVE re-edits so re-conform doesn't scramble grades. Grade read-back is asymmetric and honest: primary CDL syncs live; complex node graphs are flagged via the fidelity classification (partial / unrepresentable) but not reproduced — the render-and-relink path was carved out 2026-06-02 (preserved at tag `spec023-render-relink-deferred`). Identity is **bidirectional, two channels** (corrected by 2026-05-29 inbound spike T047, see spec §"Session 2026-05-29"): **file↔file** uses the DRP-persisted `Sm2Ti DbId` adopted on import as `clip.id` (mirrors `media.id`); **live API** uses a clip marker holding `clip.id` (`TimelineItem:AddMarker`/`GetMarkers`). DRP `DbId` does NOT bridge to the live scripting API (proven 0/1003). Outbound DRT carries `clip.id` via both carriers (DbId for the next file↔file import + marker for live read-back). First-connect of an already-imported project uses positional/content match (`name + record-TC + source-TC + media identity`) until a user-consented marker stamp pass converts to id-anchored sync. Beyond grades, JVE can pull **Resolve-side edit tweaks** (record/source/track/enabled) back via an explicit, undoable, conflict-aware command (JVE stays the edit authority of record). Topology is same-machine; one Resolve target per JVE project; grades read-only; manual sync; deletion cascades with stale-flagging.
 
 The detailed engineering design lives in [research.md](./research.md) (architecture, wire protocol internals, DRT-writer format notes, phased de-risk plan with STOP gates). This plan is the bridge from spec → tasks.
 
@@ -75,7 +75,6 @@ src/
         connect_to_resolve_project.lua # NEW — connect an imported jvp: id match + positional fallback (FR-011c)
         sync_grades_from_resolve.lua   # NEW — read_grades + upsert clip_grade (undoable, FR-017)
         sync_edits_from_resolve.lua    # NEW — read_timeline + apply edit deltas, conflict-aware (undoable, FR-024/025)
-        queue_resolve_render.lua       # NEW — queue_render + poll + relink (FR-018/019)
     schema.sql                  # MODIFIED — V12: clip_grade, resolve_bridge_link (+ edit_fingerprint)
   qt_bindings/
     zstd_bindings.cpp           # MODIFIED — add qt_zstd_compress (mirror qt_zstd_decompress)
@@ -84,14 +83,14 @@ src/
   editor_media_platform/        # MODIFIED — renderer CDL stage (per-pixel slope/offset/power+sat, then LUT)
 tools/
   resolve-helper/               # NEW — the sidecar process (Python, resolved by Phase 0)
-    helper main + Resolve-API adapter (import/read_identities/read_grades/queue_render/render_status)
+    helper main + Resolve-API adapter (import/read_identities/read_timeline/read_grades/stamp_identity_marker)
 tests/
   test_drt_writer_roundtrip.lua            # NEW — encode→decode equality via existing reader
   test_clip_grade_model.lua                # NEW — CDL store/load, fidelity, stale, cascade
   test_sync_grades_command.lua             # NEW — execute/undo restores prior grade
   integration/
     test_resolve_bridge_socket.lua         # NEW (--test) — client↔helper envelope round-trip
-  live/                                    # NEW — gated live-Resolve tests (identity join, grade read-back, idempotency, render)
+  live/                                    # NEW — gated live-Resolve tests (identity join, grade read-back, idempotency)
 ```
 
 **Structure Decision**: single JVE project (the existing `src/lua` + `src/` C++ tree) plus one sidecar under `tools/resolve-helper/`. The JVE-side bridge code is a cohesive `core/resolve_bridge/` module; **all bridge policy lives in Lua**. The C++ touch is minimal and **generic** — thin QProcess/QLocalSocket FFI (reusable, not Resolve-aware), one zstd function, and the renderer CDL stage. No Resolve-specific code crosses into C++, which both satisfies ENGINEERING 2.18 (FFI = one-to-one Qt, no business logic) / 1.10 (stay in layer) and reinforces the spec's isolation goal. This matches existing conventions (`importers/`, `core/commands/`, `qt_bindings/`). Naming note: `resolve_bridge` refers to the DaVinci Resolve *app* integration (consistent with existing `import_resolve_project.lua`, `resolve_database_importer.lua`); `feedback_no_resolve_word` bans "resolve" as a *verb* in code names, not the app noun.
@@ -111,8 +110,8 @@ Captured in [research.md](./research.md). No `NEEDS CLARIFICATION` markers remai
 Outputs generated in `$SPECS_DIR`:
 
 1. **`data-model.md`** — `clip_grade` and `resolve_bridge_link` (schema V12), field types, validation rules (fidelity enum, CDL nullability, stale semantics), lifecycle (sync upsert, FK cascade on clip delete, stale-on-missing-item), and the in-flight identity-ledger reconcile rules.
-2. **`contracts/helper-protocol.md`** — the JVE⇄helper wire contract: versioned envelope, the six verbs (`ping`, `import_timeline`, `read_identities`, `read_grades`, `queue_render`, `render_status`), result/error shapes, idempotency on the change token, per-verb handle revalidation, locale-rate guard. This is the testable boundary (contract tests assert request/response shape; live tests assert observable Resolve state).
-3. **`quickstart.md`** — the seven acceptance scenarios as an executable walkthrough against a real Resolve Studio (send → verify N items + join key → grade → sync → display/pixel-check → blade+re-send → render+relink), plus the idempotency double-send check.
+2. **`contracts/helper-protocol.md`** — the JVE⇄helper wire contract: versioned envelope, the verbs (`ping`, `import_timeline`, `read_identities`, `read_timeline`, `read_grades`, `stamp_identity_marker`), result/error shapes, idempotency on the change token, per-verb handle revalidation, locale-rate guard. This is the testable boundary (contract tests assert request/response shape; live tests assert observable Resolve state). Render-queue verbs (`queue_render` / `render_status`) were carved out 2026-06-02 — preserved at git tag `spec023-render-relink-deferred`.
+3. **`quickstart.md`** — the acceptance scenarios as an executable walkthrough against a real Resolve Studio (send → verify N items + join key → grade → sync → display/pixel-check → blade+re-send), plus the idempotency double-send check.
 
 **Agent context**: ran `.specify/scripts/bash/update-agent-context.sh claude` — registered the new tech (Resolve bridge, DRT export, color model) in `CLAUDE.md` for future sessions.
 
@@ -127,7 +126,7 @@ Outputs generated in `$SPECS_DIR`:
 - **Entity → model task [P]:** `clip_grade`, `resolve_bridge_link` + `schema.sql` V12; model tests first (store/load/cascade/stale).
 - **DRT writer:** `drt_binary.lua` encoders mirroring each decoder, each with a decode∘encode round-trip test BEFORE Resolve sees a file; then full-file importer round-trip.
 - **User story → integration/live test:** each acceptance scenario in quickstart.md becomes a gated live test.
-- **Implementation tasks** make the failing tests pass, in dependency order: schema/model → DRT writer → thin QProcess/QLocalSocket FFI → Lua helper-supervisor + socket client → `SendToResolve` → renderer CDL stage + `SyncGradesFromResolve` → identity reconcile → render + relink.
+- **Implementation tasks** make the failing tests pass, in dependency order: schema/model → DRT writer → thin QProcess/QLocalSocket FFI → Lua helper-supervisor + socket client → `SendToResolve` → renderer CDL stage + `SyncGradesFromResolve` → identity reconcile.
 
 **Ordering**: TDD throughout; models before commands before UI; helper-protocol contract tests before helper impl; mark [P] for independent files. Branch is cut at the start of /implement (`start-feature-branch.sh`).
 

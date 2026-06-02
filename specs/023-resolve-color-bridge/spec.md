@@ -16,7 +16,7 @@
 - Q: Deployment topology for v1? → A: Same machine — JVE and Resolve Studio run on one box; media, LUT, and render paths are a shared local filesystem that resolves identically on both sides. No cross-machine asset transport in scope.
 - Q: Are grades read-only in JVE, or editable in JVE too? → A: Read-only in JVE — Resolve is the sole grade authority. JVE stores + displays; never edits. Re-sync overwrites. No conflict/merge model, no grade-editing UI or commands.
 - Q: One Resolve target per JVE project, or many? → A: One target — a JVE project roundtrips to exactly one Resolve project/timeline at a time. Identity link and clip grade are keyed on `jve_clip_uuid` alone (no `target_id` dimension).
-- Q: Grade read-back trigger — manual or auto-poll? → A: Manual pull — the editor explicitly triggers a sync; JVE does one `read_grades` + apply per action. No background polling for grades (the render path still polls render status — that is a different operation).
+- Q: Grade read-back trigger — manual or auto-poll? → A: Manual pull — the editor explicitly triggers a sync; JVE does one `read_grades` + apply per action. No background polling.
 - Q: Orphan handling on deletion? → A: Cascade + flag stale — deleting a JVE clip drops its grade and identity link (FK cascade from `clips`). A JVE clip whose Resolve item is gone at read-back keeps its last-synced grade but is marked stale (not cleared, not silently current).
 - Q: How does an *imported* JVE project (DRP→JVP) connect to its live Resolve project, which never received JVE ids? → A: The identity model is **bidirectional**. On DRP import JVE adopts the Resolve timeline-item id as its own `clip.id` when present (mirroring how `media.id` already adopts the Resolve `MediaRef DbId`), else mints a UUID. So for imported clips, `clip.id` **is** the Resolve id — connect is a direct lookup, no injected ids needed. Outbound (JVE-authored sequences) still embeds `clip.id` in the DRT. Clips JVE created after import (blades, UUID ids) match positionally (`media.file_uuid` + source TC + timeline position).
 - Q: Should Resolve-side edit tweaks (a colorist trims/slips/moves/enables a clip) come back to JVE too, or only grades? → A: Yes — pull edit changes back as well. An explicit, undoable, reviewable command reads the live timeline and applies record/source/track/enabled deltas to the matched JVE clips. JVE remains the edit authority of record (the pull is a reconcile, not auto-sync); a clip JVE edited since the last sync surfaces as a conflict for the user to resolve rather than being silently overwritten.
@@ -37,7 +37,7 @@ These were proven against live Resolve Studio 20.3.2.9; they **correct** the loc
 
 ### Primary User Story
 
-An editor finishes a cut in JVE and wants it graded by a colorist working in DaVinci Resolve Studio. From JVE they send the cut to Resolve; Resolve receives the timeline with media correctly relinked and every clip carrying a stable identity tying it back to its JVE clip. The colorist grades. The editor pulls the grades back into JVE: simple primary grades (lift/gamma/gain-style CDL) appear live in JVE's viewer; complex grades that exceed what a CDL can express are flagged as such, and their full look is realized only when Resolve renders graded masters that JVE relinks to. Later the editor re-edits in JVE and sends again — existing grades stay attached to the right shots rather than scrambling.
+An editor finishes a cut in JVE and wants it graded by a colorist working in DaVinci Resolve Studio. From JVE they send the cut to Resolve; Resolve receives the timeline with media correctly relinked and every clip carrying a stable identity tying it back to its JVE clip. The colorist grades. The editor pulls the grades back into JVE: simple primary grades (lift/gamma/gain-style CDL) appear live in JVE's viewer; complex grades that exceed what a CDL can express are flagged as such (the editor knows JVE's display is partial / unrepresentable for those clips). Later the editor re-edits in JVE and sends again — existing grades stay attached to the right shots rather than scrambling.
 
 ### Acceptance Scenarios
 
@@ -47,7 +47,6 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 4. **Given** grades have been synced into JVE, **When** the editor undoes the sync, **Then** the prior grade state is restored.
 5. **Given** a graded Resolve timeline, **When** the editor blades a graded JVE clip into two and re-sends, **Then** both halves inherit the original clip's grade.
 6. **Given** the bridge sent a state-changing request whose reply was lost, **When** JVE re-sends the same request, **Then** Resolve's state changed exactly once and the second response equals the first.
-7. **Given** a colorist render completes in Resolve, **When** the editor pulls the result, **Then** JVE relinks the affected clips to the rendered masters and plays the graded footage.
 
 ### Edge Cases
 
@@ -75,7 +74,7 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **FR-005**: All Resolve scripting access MUST live in a separate helper process; JVE MUST NOT link Resolve's scripting module into its own process.
 - **FR-006**: JVE MUST communicate with the helper over a local (Unix domain) socket using line-delimited JSON with a versioned envelope and structured (non-string) errors.
 - **FR-007**: JVE MUST spawn and supervise the helper's lifecycle (start, restart on crash, stop), then connect to it as a client; helper-start and connect failures surface as structured errors, never silent retry.
-- **FR-008**: State-changing operations MUST be idempotent on a JVE-supplied change token, so a retried request does not re-import or re-render.
+- **FR-008**: State-changing operations MUST be idempotent on a JVE-supplied change token, so a retried request does not re-import.
 - **FR-009**: Every operation MUST cheaply revalidate the Resolve handle and reacquire if stale, or return a structured error if it cannot.
 - **FR-010**: The feature MUST require Resolve Studio and MUST NOT add a free-tier fallback.
 
@@ -93,10 +92,6 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **FR-016**: JVE's viewer MUST display the stored primary grade (apply CDL, then LUT if present); display MUST be pull-based from model state (MVC), not dependent on an imperative push.
 - **FR-017**: Applying read-back grades MUST go through the command system (undoable), restoring prior grade state on undo.
 
-**Render (full-fidelity path)**
-- **FR-018**: JVE MUST be able to queue a Resolve render of the graded timeline and poll its status to completion.
-- **FR-019**: On render completion, JVE MUST relink the affected clips to the rendered masters via the existing relink path, delivering full grade fidelity that CDL read-back cannot represent.
-
 **Edit read-back (Resolve-side tweaks)**
 - **FR-024**: JVE MUST be able to read the live Resolve timeline's per-item edit state (record start/duration, source in/out, track, enabled) and apply the deltas to the matched JVE clips (FR-011c) by composing JVE's **existing** edit commands (move/trim/enable/…) under one undo group — not a new parallel edit-mutation path. This is an explicit, reviewable user action — never automatic. JVE remains the edit authority of record; the pull is a reconcile.
 - **FR-025**: A JVE clip edited locally since the last sync MUST surface as a conflict for the user to resolve (keep JVE / take Resolve), never be silently overwritten by the pull. Clips with no local change since last sync apply directly.
@@ -107,11 +102,11 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 - **FR-022**: Tests MUST assert observable Resolve state, a regenerable real-Resolve fixture, or a JVE-importer round-trip; no test may pass solely by its own setup (no mocks-assert-mock).
 
 **Invocation**
-- **FR-023**: All bridge actions — send-to-Resolve, connect-imported-project, sync-grades, sync-edits, queue-render — MUST be user-invocable through the command system (menu / shortcut / programmatic), consistent with how every JVE operation is dispatched. No bridge action is a hidden or implicit side effect.
+- **FR-023**: All bridge actions — send-to-Resolve, connect-imported-project, sync-grades, sync-edits — MUST be user-invocable through the command system (menu / shortcut / programmatic), consistent with how every JVE operation is dispatched. No bridge action is a hidden or implicit side effect.
 
 ### Clarifications (locked decisions)
 
-- **Roundtrip depth**: build a real JVE color model — store AND display grades (not render-and-relink only).
+- **Roundtrip depth**: build a real JVE color model — store AND display grades. Render-and-relink (FR-018/019 in earlier drafts) was carved out 2026-06-02 as out of scope for v1 — preserved at git tag `spec023-render-relink-deferred` for future revival.
 - **Export format**: author native `.drt` (over FCP7 XML / AAF / EDL), using JVE's existing DRP binary reader as the format oracle.
 - **Helper lifecycle**: JVE spawns + supervises via QProcess; connects as a socket client.
 - **Grade-sync**: undoable.

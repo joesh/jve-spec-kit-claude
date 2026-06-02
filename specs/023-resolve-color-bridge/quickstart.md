@@ -26,7 +26,7 @@ Validates the seven acceptance scenarios (spec.md) against a **real Resolve Stud
 
 ## 3. Grade a complex node graph, sync, fidelity honesty (FR-015 — Scenario 3)
 - In Resolve, add a power window / secondary (exceeds CDL) to another clip. Sync.
-- **Assert**: that clip's `fidelity` is `partial` or `unrepresentable`; JVE does **not** claim to reproduce the full look (UX shows the "full grade requires Resolve render" affordance).
+- **Assert**: that clip's `fidelity` is `partial` or `unrepresentable`; JVE does **not** claim to reproduce the full look (UX shows the fidelity badge).
 
 ## 4. Undo the sync (FR-017 — Scenario 4)
 - Undo after step 2/3.
@@ -40,9 +40,8 @@ Validates the seven acceptance scenarios (spec.md) against a **real Resolve Stud
 - Re-send `import_timeline` bearing the **same `change_token`** (simulate a dropped reply; `id` may be fresh).
 - **Assert**: Resolve timeline item count unchanged (state changed exactly once); the second response equals the first.
 
-## 7. Render + relink (FR-018, 019 — Scenario 7)
-- Run `QueueResolveRender`; poll `render_status` to completion.
-- **Assert**: the output file exists at `output_paths`; JVE relinks the affected clips to the rendered masters (existing relink path) and plays the graded footage.
+## 7. ~~Render + relink~~ — CARVED OUT 2026-06-02
+Former scenario covering `QueueResolveRender` + auto-relink. Preserved at git tag `spec023-render-relink-deferred`. See `feedback_render_relink_carved_out` for the rationale.
 
 ## 8. Pull Resolve-side edit tweaks (FR-024/025)
 - In Resolve, trim/slip/move a connected clip; run `SyncEditsFromResolve`.
