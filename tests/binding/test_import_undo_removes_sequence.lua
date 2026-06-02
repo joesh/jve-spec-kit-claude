@@ -3,45 +3,24 @@
 -- Regression: importing a sequence and undoing back to the root should remove
 -- the imported timeline and its media instead of leaving an empty shell behind.
 
-package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;./?/init.lua"
-
 local test_env = require("test_env")
+local ui       = require("integration.ui_test_env")
 
-local database = require("core.database")
+print("=== test_import_undo_removes_sequence ===")
+
+local DB = "/tmp/jve/test_import_undo_removes_sequence.jvp"
+local _, info = ui.launch({
+    db_path      = DB,
+    project_name = "Default Project",
+})
+
 local command_manager = require("core.command_manager")
-local timeline_state = require("ui.timeline.timeline_state")
-local Command = require("command")
+local Command         = require("command")
+local database        = require("core.database")
 
-local function stub_timeline_state()
-    timeline_state.capture_viewport = function()
-        return {start_value = 0, duration_value = 300, timebase_type = "video_frames", timebase_rate = 30.0}
-    end
-    timeline_state.push_viewport_guard = function() end
-    timeline_state.pop_viewport_guard = function() end
-    timeline_state.restore_viewport = function(_) end
-    timeline_state.set_selection = function(_) end
-    timeline_state.set_edge_selection = function(_) end
-    timeline_state.set_gap_selection = function(_) end
-    timeline_state.get_selected_clips = function() return {} end
-    timeline_state.get_selected_edges = function() return {} end
-    timeline_state.set_playhead_position = function(_) end
-    timeline_state.get_playhead_position = function() return 0 end
-    timeline_state.get_sequence_frame_rate = function() return 30 end
-    timeline_state.get_project_id = function() return "default_project" end
-    timeline_state.reload_clips = function(_sequence_id) end
-end
-
-local function exec(db, sql)
-    local ok, err = db:exec(sql)
-    assert(ok, err)
-end
-
-local function scalar(db, sql, value)
-    local stmt = db:prepare(sql)
-    assert(stmt, "Failed to prepare statement: " .. sql)
-    if value ~= nil then
-        stmt:bind_value(1, value)
-    end
+local function scalar(sql)
+    local db = database.get_connection()
+    local stmt = assert(db:prepare(sql), "Failed to prepare: " .. sql)
     local result = 0
     if stmt:exec() and stmt:next() then
         result = stmt:value(0) or 0
@@ -50,69 +29,49 @@ local function scalar(db, sql, value)
     return result
 end
 
-local tmp_db = "/tmp/jve/test_import_undo_removes_sequence.db"
-os.remove(tmp_db)
-assert(database.init(tmp_db))
-local db = database.get_connection()
+local pre_import_sequences = scalar(
+    "SELECT COUNT(*) FROM sequences WHERE kind = 'sequence'")
+local pre_import_media = scalar("SELECT COUNT(*) FROM media")
 
-local SCHEMA_SQL = require("import_schema")
-exec(db, SCHEMA_SQL)
+command_manager.activate_timeline_stack(info.sequences[1].id)
 
-local now = os.time()
-exec(db, string.format([[
-    INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy)
-    VALUES ('default_project', 'Default Project', %d, %d, 'passthrough');
+local fixture_path = test_env.require_fixture(
+    "tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
 
-    INSERT INTO sequences (
-        id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_sample_rate,
-        width, height,
-        view_start_frame, view_duration_frames, playhead_frame,
-        selected_clip_ids, selected_edge_infos, selected_gap_infos,
-        current_sequence_number, created_at, modified_at
-    )
-    VALUES (
-        'default_sequence', 'default_project', 'Sequence 1', 'sequence',
-        30, 1, 48000,
-        1920, 1080,
-        0, 240, 0,
-        '[]', '[]', '[]',
-        0, %d, %d
-    );
-]], now, now, now, now))
-
-stub_timeline_state()
-
-command_manager.init("default_sequence", "default_project")
-command_manager.activate_timeline_stack("default_sequence")
-
-local fixture_path = test_env.require_fixture("tests/fixtures/resolve/sample_timeline_fcp7xml.xml")
-
-local import_cmd = Command.create("ImportFCP7XML", "default_project")
-import_cmd:set_parameter("project_id", "default_project")
+local import_cmd = Command.create("ImportFCP7XML", info.project.id)
+import_cmd:set_parameter("project_id", info.project.id)
 import_cmd:set_parameter("xml_path", fixture_path)
 
 local exec_result = command_manager.execute(import_cmd)
 assert(exec_result.success, "ImportFCP7XML command should succeed")
 
-local baseline_sequences = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'sequence'")
-assert(baseline_sequences == 2, "Import should create an additional timeline sequence")
+local post_import_sequences = scalar(
+    "SELECT COUNT(*) FROM sequences WHERE kind = 'sequence'")
+assert(post_import_sequences > pre_import_sequences,
+    string.format("Import should add timeline sequences (pre=%d post=%d)",
+        pre_import_sequences, post_import_sequences))
 
-local imported_exists = scalar(db, "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")
-assert(imported_exists == 1, "Imported sequence should be present after import")
+local imported_named = scalar(
+    "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")
+assert(imported_named == 1, "Imported sequence should be present after import")
 
 local undo_result = command_manager.undo()
 assert(undo_result.success, "Undoing the import should succeed: " ..
     tostring(undo_result.error_message or undo_result.error))
 
-local sequences_after = scalar(db, "SELECT COUNT(*) FROM sequences WHERE kind = 'sequence'")
-assert(sequences_after == 1, "Undo should remove the imported timeline sequence")
+local sequences_after = scalar(
+    "SELECT COUNT(*) FROM sequences WHERE kind = 'sequence'")
+assert(sequences_after == pre_import_sequences,
+    string.format("Undo should restore sequence count (%d vs pre=%d)",
+        sequences_after, pre_import_sequences))
 
-local imported_after = scalar(db, "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")
-assert(imported_after == 0, "Imported sequence should be gone after undo")
+local imported_named_after = scalar(
+    "SELECT COUNT(*) FROM sequences WHERE name = 'Timeline 1 (Resolve)'")
+assert(imported_named_after == 0, "Imported sequence should be gone after undo")
 
-local media_after = scalar(db, "SELECT COUNT(*) FROM media")
-assert(media_after == 0, "Imported media should be removed after undo")
+local media_after = scalar("SELECT COUNT(*) FROM media")
+assert(media_after == pre_import_media,
+    string.format("Undo should restore media count (%d vs pre=%d)",
+        media_after, pre_import_media))
 
-os.remove(tmp_db)
 print("✅ Import undo removes generated timeline and media")
