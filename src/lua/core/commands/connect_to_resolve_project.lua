@@ -23,11 +23,17 @@
 --- `identity_ledger.upsert`. Unmatched JVE clips are reported, never
 --- silently skipped (FR-011c).
 ---
---- Marker stamping for newly-matched clips (the user-consented mutation
---- that converts position match → marker match for subsequent syncs)
---- is T048 territory; T049 does NOT stamp. Today's flow: connect,
---- review the unmatched list, decide whether to re-do markers / fix
---- positions before SyncGradesFromResolve / SyncEditsFromResolve.
+--- Marker stamping is the user-consented mutation that converts a
+--- position match into a marker-anchored link so subsequent syncs are
+--- id-anchored. Driven by `args.stamp_position_matches`:
+---   • nil / false (default): pure discovery. No mutation.
+---   • true: after persisting the ledger, dispatch
+---     `stamp_identity_marker` (T048) for every `pos_matched` pair.
+---     Marker-matched pairs are skipped (already id-anchored).
+---     Stamps surface as `result.stamped / skipped / failures` in
+---     `on_complete`. Failures are surfaced verbatim (rule 2.32) —
+---     a `resolve_api_error` from the helper (conflicting customData
+---     etc.) does NOT cascade into bypassing remaining stamps.
 ---
 --- Not undoable — this command writes a discovery result to the
 --- ledger; reverting would be "forget what we just learned about
@@ -41,6 +47,8 @@
 local M = {}
 
 local Track           = require("models.track")
+local Sequence        = require("models.sequence")
+local change_token    = require("core.resolve_bridge.change_token")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local supervisor      = require("core.resolve_bridge.helper_supervisor")
 local log             = require("core.logger").for_area("commands")
@@ -51,6 +59,10 @@ local function validate_args(args)
         "ConnectToResolveProject: project_id required")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "ConnectToResolveProject: sequence_id required")
+    assert(args.stamp_position_matches == nil
+        or type(args.stamp_position_matches) == "boolean",
+        "ConnectToResolveProject: stamp_position_matches must be boolean "
+        .. "(user-consented marker mutation per FR-011c)")
     assert(type(args.on_complete) == "function",
         "ConnectToResolveProject: on_complete callback required")
 end
@@ -266,6 +278,66 @@ local function load_resolve_state(client, on_done)
         end)
 end
 
+-- Asynchronously stamp customData markers on each pos_matched
+-- (clip_id, resolve_item_id) pair using the helper's
+-- stamp_identity_marker verb. Each stamp is one helper roundtrip;
+-- we fan them in sequence to keep the result accumulation simple
+-- and to surface the first hard failure clearly. Calls `done(stamped,
+-- skipped, failures)` once every pair has been processed.
+--
+--   stamped:  array of {clip_id, resolve_item_id} that were freshly
+--             stamped (helper returned stamped=true).
+--   skipped:  array of {clip_id, resolve_item_id} that were already
+--             stamped with the matching customData (stamped=false —
+--             idempotent no-op).
+--   failures: array of {clip_id, resolve_item_id, code, message} for
+--             any stamp the helper refused (conflicting customData,
+--             handle_stale, etc.). Surfaced verbatim — never silenced.
+local function stamp_each(client, token, pairs_list, done)
+    local stamped, skipped, failures = {}, {}, {}
+    local idx = 0
+
+    local function step()
+        idx = idx + 1
+        if idx > #pairs_list then
+            done(stamped, skipped, failures); return
+        end
+        local pair = pairs_list[idx]
+        client:request("stamp_identity_marker", {
+            resolve_item_id = pair.resolve_item_id,
+            custom_data     = pair.clip_id,
+            change_token    = token,
+        }, function(response, code, message)
+            if response == nil then
+                failures[#failures + 1] = {
+                    clip_id         = pair.clip_id,
+                    resolve_item_id = pair.resolve_item_id,
+                    code            = code,
+                    message         = message,
+                }
+            elseif response.result.stamped == true then
+                stamped[#stamped + 1] = pair
+            else
+                skipped[#skipped + 1] = pair
+            end
+            step()
+        end)
+    end
+
+    step()
+end
+
+local function pos_matched_pairs(matched)
+    local out = {}
+    for clip_id, resolve_item_id in pairs(matched.pos_matched) do
+        out[#out + 1] = {
+            clip_id         = clip_id,
+            resolve_item_id = resolve_item_id,
+        }
+    end
+    return out
+end
+
 function M.execute(args, db)
     validate_args(args)
     assert(db, "ConnectToResolveProject: db required (passed by "
@@ -273,6 +345,16 @@ function M.execute(args, db)
         .. "the global DB lookup out of commands)")
 
     local jve_clips = load_jve_clips_for_sequence(args.sequence_id, db)
+
+    -- Sequence load up-front so a missing sequence fails BEFORE the
+    -- helper request is queued (rule 1.14). Also needed for
+    -- change_token when stamp_position_matches=true.
+    local seq = Sequence.load(args.sequence_id)
+    assert(seq, "ConnectToResolveProject: sequence not found: "
+        .. args.sequence_id)
+    assert(seq.mutation_generation,
+        "ConnectToResolveProject: sequence missing mutation_generation "
+        .. "— schema expected V12+ (FU-2)")
 
     local client, supervisor_err = supervisor.ensure_client()
     if not client then
@@ -305,11 +387,41 @@ function M.execute(args, db)
             table_len(matched.pos_matched),
             #matched.unmatched, #matched.ambiguous)
 
-        args.on_complete({
+        local result = {
             matched   = matched_log,
             unmatched = matched.unmatched,
             ambiguous = matched.ambiguous,
-        }, nil, nil)
+        }
+
+        if args.stamp_position_matches ~= true then
+            args.on_complete(result, nil, nil)
+            return
+        end
+
+        -- Stamp every position match. Marker-channel hits don't need
+        -- stamping (they're already id-anchored by the existing
+        -- marker that read_identities surfaced).
+        local pairs_to_stamp = pos_matched_pairs(matched)
+        if #pairs_to_stamp == 0 then
+            result.stamped  = {}
+            result.skipped  = {}
+            result.failures = {}
+            args.on_complete(result, nil, nil)
+            return
+        end
+
+        local token = change_token.build(args.project_id,
+            args.sequence_id, seq.mutation_generation)
+        stamp_each(client, token, pairs_to_stamp,
+            function(stamped, skipped, failures)
+                result.stamped  = stamped
+                result.skipped  = skipped
+                result.failures = failures
+                log.event("ConnectToResolveProject: stamped %d, "
+                    .. "skipped %d (already-stamped), %d failures",
+                    #stamped, #skipped, #failures)
+                args.on_complete(result, nil, nil)
+            end)
     end)
 end
 
@@ -317,9 +429,10 @@ local SPEC = {
     undoable      = false,
     mutates_clips = false,  -- writes resolve_bridge_link, not clips
     args = {
-        project_id  = { required = true },
-        sequence_id = { required = true },
-        on_complete = { required = true, kind = "function" },
+        project_id              = { required = true },
+        sequence_id             = { required = true },
+        stamp_position_matches  = { required = false, kind = "boolean" },
+        on_complete             = { required = true, kind = "function" },
     },
 }
 
