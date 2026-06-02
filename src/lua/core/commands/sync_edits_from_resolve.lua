@@ -451,6 +451,7 @@ local function new_per_clip_state(entry)
         all_succeeded  = true,
         phase0_status  = "not_needed",
         phaseA_status  = "not_needed",
+        phaseB_status  = "not_needed",
     }
 end
 
@@ -563,6 +564,105 @@ local function run_phase_a(to_apply_entries, per_clip, project_id,
     end
 end
 
+-- Phase B: pure-trim convergence via OverwriteTrimEdge per nonzero
+-- edge delta. Algebra (forward clip):
+--   LEFT  edge by L: Δsource_in=+L, Δsource_out=0, Δrecord_start=+L,
+--                    Δrecord_dur=-L
+--   RIGHT edge by R: Δsource_in=0,  Δsource_out=+R, Δrecord_start=0,
+--                    Δrecord_dur=+R
+-- So L = Δsource_in, R = Δsource_out. The trim-decomposability gate
+-- (assert_no_unimplemented_phases) has already rejected residuals
+-- where Δrecord_start ≠ L or Δrecord_dur ≠ R - L.
+--
+-- V1 dispatches OverwriteTrimEdge (not RippleTrimEdge): Resolve gives
+-- us per-clip absolute live positions, so single-clip overwrite
+-- converges each entry to its live target independently. RippleTrim
+-- would shift OTHER to_apply clips off their targets — wrong here.
+-- The data-model's "blanket reload after each RippleTrim" caveat
+-- therefore does not apply in V1 (no RippleTrim dispatched).
+--
+-- Cascade: phase0_failed → skip B (geom ops on a wrong-track clip are
+-- meaningless). phaseB_failed → push `phaseB_failed` to result.skipped
+-- and cascade-skip C (data-model.md §apply failure cascade). Within a
+-- clip: left dispatched before right; if left fails, right is skipped
+-- (clip didn't converge — no point further mutating it). Reloads
+-- current state per clip so Phase 0's track-move doesn't stale-shadow
+-- the source/record snapshot taken at classify time.
+local function run_phase_b(to_apply_entries, per_clip, project_id,
+                            sequence_id, result)
+    for _, entry in ipairs(to_apply_entries) do
+        local state = per_clip[entry.clip_id]
+        if state.phase0_status == "ran_failed" then
+            state.phaseB_status = "skipped_phase0_failed"
+        else
+            local cur = load_current_state(entry.clip_id)
+            assert(cur ~= nil, string.format(
+                "sync_edits.run_phase_b: clip %s vanished mid-dispatch "
+                .. "(FK CASCADE or concurrent delete)",
+                tostring(entry.clip_id)))
+            local L = entry.live.source_in  - cur.source_in
+            local R = entry.live.source_out - cur.source_out
+            if L == 0 and R == 0 then
+                state.phaseB_status = "not_needed"
+            else
+                local left_ok = true
+                if L ~= 0 then
+                    local ok, err = dispatch_verb("OverwriteTrimEdge", {
+                        clip_id      = entry.clip_id,
+                        edge         = "left",
+                        delta_frames = L,
+                        sequence_id  = sequence_id,
+                        project_id   = project_id,
+                    })
+                    if ok then
+                        table.insert(state.attempted_verbs, "OverwriteTrimEdge")
+                    else
+                        left_ok = false
+                        state.phaseB_status = "ran_failed"
+                        record_failure(state, "OverwriteTrimEdge",
+                            { edge = "left", delta_frames = L }, err, result)
+                        table.insert(result.skipped, {
+                            clip_id         = entry.clip_id,
+                            resolve_item_id = entry.resolve_item_id,
+                            reason          = "phaseB_failed",
+                        })
+                        log.warn("sync_edits: Phase B left-trim failed "
+                            .. "for clip %s: %s", tostring(entry.clip_id),
+                            tostring(err))
+                    end
+                end
+                if left_ok and R ~= 0 then
+                    local ok, err = dispatch_verb("OverwriteTrimEdge", {
+                        clip_id      = entry.clip_id,
+                        edge         = "right",
+                        delta_frames = R,
+                        sequence_id  = sequence_id,
+                        project_id   = project_id,
+                    })
+                    if ok then
+                        table.insert(state.attempted_verbs, "OverwriteTrimEdge")
+                    else
+                        state.phaseB_status = "ran_failed"
+                        record_failure(state, "OverwriteTrimEdge",
+                            { edge = "right", delta_frames = R }, err, result)
+                        table.insert(result.skipped, {
+                            clip_id         = entry.clip_id,
+                            resolve_item_id = entry.resolve_item_id,
+                            reason          = "phaseB_failed",
+                        })
+                        log.warn("sync_edits: Phase B right-trim failed "
+                            .. "for clip %s: %s", tostring(entry.clip_id),
+                            tostring(err))
+                    end
+                end
+                if state.phaseB_status == "not_needed" then
+                    state.phaseB_status = "ran_ok"
+                end
+            end
+        end
+    end
+end
+
 -- Assemble result.applied + fingerprints_persisted from per_clip.
 -- A clip lands in applied[] iff it dispatched ≥ 1 verb successfully.
 -- Its fingerprint persists iff ALL attempted phases succeeded
@@ -583,7 +683,8 @@ local function finalize_per_clip(per_clip, to_apply_entries, db, result)
         end
         if state.all_succeeded
             and (state.phase0_status == "ran_ok"
-                 or state.phaseA_status == "ran_ok") then
+                 or state.phaseA_status == "ran_ok"
+                 or state.phaseB_status == "ran_ok") then
             local fp = fingerprint_for_persist(entry)
             identity_ledger.upsert(entry.clip_id, {
                 resolve_item_id  = entry.resolve_item_id,
@@ -599,31 +700,31 @@ local function finalize_per_clip(per_clip, to_apply_entries, db, result)
     end
 end
 
--- Stage guard: reject to_apply entries whose deltas need phases not
--- yet wired. Currently dispatched: Phase 0 (track move) + Phase A
--- (enabled toggle). Any residual on source_in/source_out/record_start/
--- record_dur needs Phase B (trim fixpoint), C (Nudge), or D (shape
--- residual surface) and aborts apply() with a loud staging message.
--- Not a stub (2.17) — the dispatcher truthfully refuses work it cannot
--- perform rather than silently no-op'ing. Removed entirely once Phase
--- B/C/D land.
+-- Stage guard: Phase B handles pure-trim residuals (Δrecord_start ==
+-- Δsource_in AND Δrecord_dur == Δsource_out − Δsource_in). Anything
+-- else — pure record_start shifts (MOVE, Phase C territory), slip,
+-- speed change, anything where the four deltas don't satisfy that
+-- algebra — aborts with a loud staging message until Phase C (Nudge)
+-- and Phase D (shape-fail surface) land.
+-- Not a stub (2.17): the dispatcher truthfully refuses work it cannot
+-- perform rather than silently no-op'ing.
 local function assert_no_unimplemented_phases(to_apply_entries)
     for _, entry in ipairs(to_apply_entries) do
         local live = entry.live
         local cur  = entry.current
-        local geom_delta =
-            live.source_in    ~= cur.source_in
-            or live.source_out  ~= cur.source_out
-            or live.record_start ~= cur.record_start
-            or live.record_dur   ~= cur.record_dur
-        if geom_delta then
+        local dsi = live.source_in    - cur.source_in
+        local dso = live.source_out   - cur.source_out
+        local drs = live.record_start - cur.record_start
+        local drd = live.record_dur   - cur.record_dur
+        local trim_decomposable = (drs == dsi) and (drd == (dso - dsi))
+        if not trim_decomposable then
             error(string.format(
-                "sync_edits.apply: to_apply entry for clip %s has "
-                .. "geometric residual on source_in/source_out/"
-                .. "record_start/record_dur; Phases B (trim) / C "
-                .. "(Nudge) / D (shape-fail surface) not yet "
-                .. "implemented in this dispatcher.",
-                tostring(entry.clip_id)))
+                "sync_edits.apply: clip %s residual not pure-trim "
+                .. "decomposable (Δsource_in=%d, Δsource_out=%d, "
+                .. "Δrecord_start=%d, Δrecord_dur=%d); Phase C (Nudge "
+                .. "for pure record_start shifts) and Phase D (shape-"
+                .. "fail surface) not yet implemented.",
+                tostring(entry.clip_id), dsi, dso, drs, drd))
         end
     end
 end
@@ -639,11 +740,12 @@ end
 --- @return table {applied, failed, skipped, fingerprints_persisted}
 ---
 --- V1 MVP scope currently wired: Phase 0 (`MoveClipToTrack`) +
---- Phase A (`ToggleClipEnabled`) + bootstrap fingerprint persist + V1
---- no-modal conflict surface. Entries with geometric residual on
---- source_in/source_out/record_start/record_dur abort with a staging
---- message until Phase B (trim) / C (Nudge) / D (shape-fail surface)
---- land.
+--- Phase A (`ToggleClipEnabled`) + Phase B (`OverwriteTrimEdge` per
+--- nonzero edge delta — Δsource_in left, Δsource_out right) +
+--- bootstrap fingerprint persist + V1 no-modal conflict surface.
+--- Entries whose deltas are not pure-trim decomposable (i.e. need
+--- Phase C Nudge for pure record_start shifts, or Phase D shape-fail
+--- surface) abort with a staging message until those phases land.
 function M.apply(response, sequence_id, project_id, db, user_choices)
     assert(type(project_id) == "string" and project_id ~= "",
         "sync_edits.apply: project_id required")
@@ -673,6 +775,7 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
     command_manager.begin_undo_group("Sync Edits from Resolve")
     run_phase_0(classified.to_apply, per_clip, project_id, sequence_id, result)
     run_phase_a(classified.to_apply, per_clip, project_id, sequence_id, result)
+    run_phase_b(classified.to_apply, per_clip, project_id, sequence_id, result)
     command_manager.end_undo_group()
 
     finalize_per_clip(per_clip, classified.to_apply, db, result)

@@ -27,13 +27,15 @@ end
 
 print("\n=== sync_edits.apply Tests ===")
 
--- Two video tracks (v1, v2) come from ripple_layout's defaults; we
--- override clips to be the four scenarios B1 exercises.
+-- Two video tracks (v1, v2) come from ripple_layout's defaults.
+-- Phase B trim clips live on v2 with wide separation so OverwriteTrim's
+-- occlusion resolver doesn't touch unrelated fixture clips.
 local layout = ripple_layout.create({
     db_path = "/tmp/jve/test_sync_edits_apply.db",
     clips = {
         order = {"c_boot", "c_conflict", "c_move",
-                 "c_disable", "c_move_and_disable"},
+                 "c_disable", "c_move_and_disable",
+                 "c_trim_right", "c_trim_left", "c_trim_both"},
         c_boot = {
             id = "c_boot", name = "Bootstrap",
             track_key = "v1", media_key = "main",
@@ -59,6 +61,22 @@ local layout = ripple_layout.create({
             id = "c_move_and_disable", name = "MoveAndDisable",
             track_key = "v1", media_key = "main",
             sequence_start = 1300, duration = 200, source_in = 5000,
+        },
+        -- Phase B scenarios — placed on v2, wide separation:
+        c_trim_right = {
+            id = "c_trim_right", name = "TrimRight",
+            track_key = "v2", media_key = "main",
+            sequence_start = 2000, duration = 300, source_in = 6000,
+        },
+        c_trim_left = {
+            id = "c_trim_left", name = "TrimLeft",
+            track_key = "v2", media_key = "main",
+            sequence_start = 2500, duration = 300, source_in = 7000,
+        },
+        c_trim_both = {
+            id = "c_trim_both", name = "TrimBoth",
+            track_key = "v2", media_key = "main",
+            sequence_start = 3000, duration = 300, source_in = 8000,
         },
     },
 })
@@ -106,15 +124,26 @@ identity_ledger.upsert("c_conflict",
 identity_ledger.upsert("c_move",
     { resolve_item_id = "rs-c_move",
       edit_fingerprint = current_fp("c_move") }, db)
--- Phase A clips (T054b-2): fp matches current; only Δenabled in
--- response will drive Phase A. c_move_and_disable adds Δtrack →
--- Phase 0 + Phase A both fire.
+-- Phase A clips: fp matches current; only Δenabled in response will
+-- drive Phase A. c_move_and_disable adds Δtrack → Phase 0 + Phase A
+-- both fire.
 identity_ledger.upsert("c_disable",
     { resolve_item_id = "rs-c_disable",
       edit_fingerprint = current_fp("c_disable") }, db)
 identity_ledger.upsert("c_move_and_disable",
     { resolve_item_id = "rs-c_move_and_disable",
       edit_fingerprint = current_fp("c_move_and_disable") }, db)
+-- Phase B clips: fp matches current; live will diverge geometrically
+-- in scenario 5 to drive OverwriteTrimEdge.
+identity_ledger.upsert("c_trim_right",
+    { resolve_item_id = "rs-c_trim_right",
+      edit_fingerprint = current_fp("c_trim_right") }, db)
+identity_ledger.upsert("c_trim_left",
+    { resolve_item_id = "rs-c_trim_left",
+      edit_fingerprint = current_fp("c_trim_left") }, db)
+identity_ledger.upsert("c_trim_both",
+    { resolve_item_id = "rs-c_trim_both",
+      edit_fingerprint = current_fp("c_trim_both") }, db)
 
 -- Diverge c_conflict locally (move record_start +50). This rebuilds the
 -- in-memory timeline_state too if we go through a command, but for a
@@ -289,8 +318,105 @@ check("c_move_and_disable: ledger fp persisted post-success",
     == current_fp("c_move_and_disable"))
 
 ----------------------------------------------------------------------
--- Scenario 4: user_choices is V2; passing non-nil must assert.
+-- Scenario 4: Phase B — OverwriteTrimEdge trim decomposition.
+--
+-- For a forward clip, edges decompose as:
+--   LEFT  edge by L: Δsource_in=+L, Δsource_out=0,  Δrecord_start=+L, Δrecord_dur=-L
+--   RIGHT edge by R: Δsource_in=0,  Δsource_out=+R, Δrecord_start=0,  Δrecord_dur=+R
+-- Combining: L = Δsource_in, R = Δsource_out, Δrecord_dur = R - L.
+-- Phase B dispatches OverwriteTrimEdge per nonzero edge.
 ----------------------------------------------------------------------
+
+-- c_trim_right: right-edge trim in by 50 source frames.
+-- live.source_out = 6300 - 50 = 6250; live.record_dur = 250.
+-- c_trim_left:  left-edge trim in by 30 source frames.
+-- live.source_in = 7000 + 30 = 7030; live.record_start = 2530;
+-- live.record_dur = 270.
+-- c_trim_both:  left +20, right -40.
+-- live.source_in = 8020; live.source_out = 8260; live.record_start = 3020;
+-- live.record_dur = 240.
+local response_b = { items = {
+    { resolve_item_id = "rs-c_trim_right", track_id = layout.tracks.v2.id,
+      source_in = 6000, source_out = 6250,
+      record_start = 2000, record_duration = 250, enabled = true },
+    { resolve_item_id = "rs-c_trim_left", track_id = layout.tracks.v2.id,
+      source_in = 7030, source_out = 7300,
+      record_start = 2530, record_duration = 270, enabled = true },
+    { resolve_item_id = "rs-c_trim_both", track_id = layout.tracks.v2.id,
+      source_in = 8020, source_out = 8260,
+      record_start = 3020, record_duration = 240, enabled = true },
+    -- Carry already-converged clips through so the ledger walk does not
+    -- emit deleted_in_resolve noise. Phases preceding should see no delta.
+    { resolve_item_id = "rs-c_boot", track_id = layout.tracks.v1.id,
+      source_in = 1000, source_out = 1200,
+      record_start = 100, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_move", track_id = layout.tracks.v2.id,
+      source_in = 3000, source_out = 3200,
+      record_start = 700, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_disable", track_id = layout.tracks.v1.id,
+      source_in = 4000, source_out = 4200,
+      record_start = 1000, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_move_and_disable",
+      track_id = layout.tracks.v2.id,
+      source_in = 5000, source_out = 5200,
+      record_start = 1300, record_duration = 200, enabled = false },
+} }
+
+local r4 = sync_edits.apply(response_b, layout.sequence_id,
+    layout.project_id, db)
+
+-- c_trim_right: right-only
+local trim_right = Clip.load("c_trim_right")
+check("c_trim_right: DB source_out converged to live (6250)",
+    trim_right and trim_right.source_out == 6250)
+check("c_trim_right: DB source_in unchanged (6000)",
+    trim_right and trim_right.source_in == 6000)
+check("c_trim_right: DB sequence_start unchanged (2000)",
+    trim_right and trim_right.sequence_start == 2000)
+check("c_trim_right: DB duration converged to live (250)",
+    trim_right and trim_right.duration == 250)
+local applied_right = find(r4.applied, "c_trim_right")
+check("c_trim_right: applied verbs = [OverwriteTrimEdge]",
+    applied_right and #applied_right.attempted_verbs == 1
+    and applied_right.attempted_verbs[1] == "OverwriteTrimEdge")
+local link_trim_right = identity_ledger.load("c_trim_right", db)
+check("c_trim_right: ledger fp persisted post-success",
+    link_trim_right and link_trim_right.edit_fingerprint
+    == current_fp("c_trim_right"))
+
+-- c_trim_left: left-only
+local trim_left = Clip.load("c_trim_left")
+check("c_trim_left: DB source_in converged to live (7030)",
+    trim_left and trim_left.source_in == 7030)
+check("c_trim_left: DB source_out unchanged (7300)",
+    trim_left and trim_left.source_out == 7300)
+check("c_trim_left: DB sequence_start converged to live (2530)",
+    trim_left and trim_left.sequence_start == 2530)
+check("c_trim_left: DB duration converged to live (270)",
+    trim_left and trim_left.duration == 270)
+local applied_left = find(r4.applied, "c_trim_left")
+check("c_trim_left: applied verbs = [OverwriteTrimEdge]",
+    applied_left and #applied_left.attempted_verbs == 1
+    and applied_left.attempted_verbs[1] == "OverwriteTrimEdge")
+
+-- c_trim_both: left and right
+local trim_both = Clip.load("c_trim_both")
+check("c_trim_both: DB source_in converged (8020)",
+    trim_both and trim_both.source_in == 8020)
+check("c_trim_both: DB source_out converged (8260)",
+    trim_both and trim_both.source_out == 8260)
+check("c_trim_both: DB sequence_start converged (3020)",
+    trim_both and trim_both.sequence_start == 3020)
+check("c_trim_both: DB duration converged (240)",
+    trim_both and trim_both.duration == 240)
+local applied_both = find(r4.applied, "c_trim_both")
+check("c_trim_both: applied records two trim dispatches",
+    applied_both and #applied_both.attempted_verbs == 2
+    and applied_both.attempted_verbs[1] == "OverwriteTrimEdge"
+    and applied_both.attempted_verbs[2] == "OverwriteTrimEdge")
+
+----------------------------------------------------------------------
+-- Scenario 5: user_choices is V2; passing non-nil must assert.
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,
@@ -301,7 +427,7 @@ do
 end
 
 ----------------------------------------------------------------------
--- Scenario 5: missing project_id asserts (rule 2.29 / 1.14).
+-- Scenario 6: missing project_id asserts (rule 2.29 / 1.14).
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,
