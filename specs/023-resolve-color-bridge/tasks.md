@@ -83,7 +83,7 @@
 
 ## Phase 3 — Color model + grade read-back (STOP gate)
 
-- [ ] **T027** [P] `tests/contract/test_helper_read_grades.lua` — assert `read_grades` shape: `cdl?` present only when representable, mandatory `fidelity` enum, `lut?.ref`. FAIL first.
+- [x] **T027** [P] `tests/binding/test_helper_read_grades.lua` — asserts `{grades: [{jve_guid, cdl?, lut?, fidelity}]}` shape: fidelity closed-set enum `{primary, partial, unrepresentable}` mandatory; `cdl` strictly gated on `fidelity == "primary"` with RGB-triple slope/offset/power + sat number (FR-015 honest downgrade, never approximated); `lut.ref` non-empty path when present; `bad_request` for malformed `item_ids`; empty `item_ids ⇒ 0 grades` distinct from omit. Currently RED — verb wired to `_unimplemented`. Drives T029.
 - [x] **T028** [P] `tests/binding/test_helper_read_identities.lua` — asserts `{items: [{resolve_item_id, jve_guid}], unkeyed_count}` shape (per-item non-empty strings; non-negative integer count); bidirectional reconciliation per T047 (marker channel + content match — neither raw id equality); `bad_request` on extraneous args (contract is `args: none`). Currently RED — verb wired to `_unimplemented`. Drives T029.
 - [ ] **T029** `tools/resolve-helper/` — implement `read_grades` (honest fidelity downgrade for node graphs beyond CDL, FR-015) + `read_identities`. Makes T027/T028 pass.
 - [X] **T030** `tests/test_sync_grades_command.lua` — black-box undo round-trip. **DONE** — commit `c251fe24`.
