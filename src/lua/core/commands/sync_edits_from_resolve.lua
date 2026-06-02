@@ -21,6 +21,7 @@ local Clip            = require("models.clip")
 local Track           = require("models.track")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local edit_diff       = require("core.resolve_bridge.edit_diff")
+local supervisor      = require("core.resolve_bridge.helper_supervisor")
 local command_manager = require("core.command_manager")
 local log             = require("core.logger").for_area("commands")
 
@@ -33,7 +34,6 @@ local CONFLICT_REASONS = {
     deleted_in_resolve            = true,
     fps_mismatch_unsupported      = true,
     subframe_unsupported          = true,
-    unknown_delta_shape           = true,
     composite_undecomposable      = true,
     mutual_composite              = true,
     overwrite_absorb_inconsistent = true,
@@ -49,6 +49,7 @@ local SKIP_REASONS = {
     stale_user_choice              = true,
     phase0_failed                  = true,
     phaseB_failed                  = true,
+    unknown_delta_shape            = true,
 }
 local UNMATCHED_REASONS = {
     ledger_missing = true,
@@ -452,6 +453,7 @@ local function new_per_clip_state(entry)
         phase0_status  = "not_needed",
         phaseA_status  = "not_needed",
         phaseB_status  = "not_needed",
+        phaseC_status  = "not_needed",
     }
 end
 
@@ -663,6 +665,55 @@ local function run_phase_b(to_apply_entries, per_clip, project_id,
     end
 end
 
+-- Phase C: Nudge residual record_start shift left over after Phase B.
+-- Decomposition: a clip's residual decomposes (Phase B + Phase C) as
+-- L = Δsource_in, R = Δsource_out, M = Δrecord_start − L; Phase B
+-- handles L/R, Phase C nudges by M. By the partition gate
+-- (see surface_shape_failures), every runnable entry already
+-- satisfies Δrecord_dur == R − L; Phase B has applied L/R, so the
+-- reloaded Δrecord_start is exactly the leftover M. Cascade:
+-- phase0_failed → skipped_phase0_failed; phaseB_failed →
+-- skipped_phaseB_failed.
+local function run_phase_c(to_apply_entries, per_clip, project_id,
+                            sequence_id, result)
+    for _, entry in ipairs(to_apply_entries) do
+        local state = per_clip[entry.clip_id]
+        if state.phase0_status == "ran_failed" then
+            state.phaseC_status = "skipped_phase0_failed"
+        elseif state.phaseB_status == "ran_failed" then
+            state.phaseC_status = "skipped_phaseB_failed"
+        else
+            local cur = load_current_state(entry.clip_id)
+            assert(cur ~= nil, string.format(
+                "sync_edits.run_phase_c: clip %s vanished mid-dispatch "
+                .. "(FK CASCADE or concurrent delete)",
+                tostring(entry.clip_id)))
+            local nudge_amount = entry.live.record_start - cur.record_start
+            if nudge_amount == 0 then
+                state.phaseC_status = "not_needed"
+            else
+                local ok, err = dispatch_verb("Nudge", {
+                    selected_clip_ids = { entry.clip_id },
+                    nudge_amount      = nudge_amount,
+                    sequence_id       = sequence_id,
+                    project_id        = project_id,
+                })
+                if ok then
+                    state.phaseC_status = "ran_ok"
+                    table.insert(state.attempted_verbs, "Nudge")
+                else
+                    state.phaseC_status = "ran_failed"
+                    record_failure(state, "Nudge",
+                        { nudge_amount = nudge_amount }, err, result)
+                    log.warn("sync_edits: Phase C Nudge failed for clip "
+                        .. "%s: %s", tostring(entry.clip_id),
+                        tostring(err))
+                end
+            end
+        end
+    end
+end
+
 -- Assemble result.applied + fingerprints_persisted from per_clip.
 -- A clip lands in applied[] iff it dispatched ≥ 1 verb successfully.
 -- Its fingerprint persists iff ALL attempted phases succeeded
@@ -684,7 +735,8 @@ local function finalize_per_clip(per_clip, to_apply_entries, db, result)
         if state.all_succeeded
             and (state.phase0_status == "ran_ok"
                  or state.phaseA_status == "ran_ok"
-                 or state.phaseB_status == "ran_ok") then
+                 or state.phaseB_status == "ran_ok"
+                 or state.phaseC_status == "ran_ok") then
             local fp = fingerprint_for_persist(entry)
             identity_ledger.upsert(entry.clip_id, {
                 resolve_item_id  = entry.resolve_item_id,
@@ -700,33 +752,35 @@ local function finalize_per_clip(per_clip, to_apply_entries, db, result)
     end
 end
 
--- Stage guard: Phase B handles pure-trim residuals (Δrecord_start ==
--- Δsource_in AND Δrecord_dur == Δsource_out − Δsource_in). Anything
--- else — pure record_start shifts (MOVE, Phase C territory), slip,
--- speed change, anything where the four deltas don't satisfy that
--- algebra — aborts with a loud staging message until Phase C (Nudge)
--- and Phase D (shape-fail surface) land.
--- Not a stub (2.17): the dispatcher truthfully refuses work it cannot
--- perform rather than silently no-op'ing.
-local function assert_no_unimplemented_phases(to_apply_entries)
+-- Phase D: partition `to_apply` into dispatch-runnable entries and
+-- shape-failed entries. An entry is decomposable into Phase B (trim)
+-- + Phase C (Nudge) verbs iff Δrecord_dur == Δsource_out − Δsource_in
+-- (the record_start residual after B is exactly the Phase C nudge
+-- amount M = Δrecord_start − Δsource_in; M is unconstrained). Anything
+-- else (speed change, slip + duration-extend, anything where the
+-- record-duration delta doesn't match the trim-only contribution) is
+-- not representable as the closed verb set and gets surfaced
+-- immediately as skipped[unknown_delta_shape] — no dispatch, no clip
+-- mutation. Per data-model.md §apply step 12 / `Closed-set reasons`.
+local function surface_shape_failures(to_apply_entries, result)
+    local runnable = {}
     for _, entry in ipairs(to_apply_entries) do
         local live = entry.live
         local cur  = entry.current
-        local dsi = live.source_in    - cur.source_in
-        local dso = live.source_out   - cur.source_out
-        local drs = live.record_start - cur.record_start
-        local drd = live.record_dur   - cur.record_dur
-        local trim_decomposable = (drs == dsi) and (drd == (dso - dsi))
-        if not trim_decomposable then
-            error(string.format(
-                "sync_edits.apply: clip %s residual not pure-trim "
-                .. "decomposable (Δsource_in=%d, Δsource_out=%d, "
-                .. "Δrecord_start=%d, Δrecord_dur=%d); Phase C (Nudge "
-                .. "for pure record_start shifts) and Phase D (shape-"
-                .. "fail surface) not yet implemented.",
-                tostring(entry.clip_id), dsi, dso, drs, drd))
+        local dsi = live.source_in  - cur.source_in
+        local dso = live.source_out - cur.source_out
+        local drd = live.record_dur - cur.record_dur
+        if drd == (dso - dsi) then
+            table.insert(runnable, entry)
+        else
+            table.insert(result.skipped, {
+                clip_id         = entry.clip_id,
+                resolve_item_id = entry.resolve_item_id,
+                reason          = "unknown_delta_shape",
+            })
         end
     end
+    return runnable
 end
 
 --- Pull Resolve-side edit deltas back into JVE (data-model.md
@@ -739,13 +793,14 @@ end
 --- @param user_choices table? V2; V1 MVP must pass nil
 --- @return table {applied, failed, skipped, fingerprints_persisted}
 ---
---- V1 MVP scope currently wired: Phase 0 (`MoveClipToTrack`) +
---- Phase A (`ToggleClipEnabled`) + Phase B (`OverwriteTrimEdge` per
---- nonzero edge delta — Δsource_in left, Δsource_out right) +
---- bootstrap fingerprint persist + V1 no-modal conflict surface.
---- Entries whose deltas are not pure-trim decomposable (i.e. need
---- Phase C Nudge for pure record_start shifts, or Phase D shape-fail
---- surface) abort with a staging message until those phases land.
+--- V1 MVP scope: Phase 0 (`MoveClipToTrack`) + Phase A
+--- (`ToggleClipEnabled`) + Phase B (`OverwriteTrimEdge` per nonzero
+--- edge delta — Δsource_in left, Δsource_out right) + Phase C
+--- (`Nudge` for residual record_start shift M = Δrecord_start −
+--- Δsource_in) + Phase D (surface non-decomposable residuals as
+--- skipped[unknown_delta_shape], no dispatch) + bootstrap fingerprint
+--- persist + V1 no-modal conflict surface. Decomposability gate:
+--- Δrecord_dur == Δsource_out − Δsource_in.
 function M.apply(response, sequence_id, project_id, db, user_choices)
     assert(type(project_id) == "string" and project_id ~= "",
         "sync_edits.apply: project_id required")
@@ -769,17 +824,99 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
 
     if #classified.to_apply == 0 then return result end
 
-    assert_no_unimplemented_phases(classified.to_apply)
+    -- Phase D first: partition runnable entries from shape-failed
+    -- (non-decomposable) entries. Shape-failed entries are surfaced as
+    -- skipped[unknown_delta_shape] now and never enter dispatch.
+    local runnable = surface_shape_failures(classified.to_apply, result)
+    if #runnable == 0 then return result end
 
-    local per_clip = init_per_clip(classified.to_apply)
+    local per_clip = init_per_clip(runnable)
     command_manager.begin_undo_group("Sync Edits from Resolve")
-    run_phase_0(classified.to_apply, per_clip, project_id, sequence_id, result)
-    run_phase_a(classified.to_apply, per_clip, project_id, sequence_id, result)
-    run_phase_b(classified.to_apply, per_clip, project_id, sequence_id, result)
+    run_phase_0(runnable, per_clip, project_id, sequence_id, result)
+    run_phase_a(runnable, per_clip, project_id, sequence_id, result)
+    run_phase_b(runnable, per_clip, project_id, sequence_id, result)
+    run_phase_c(runnable, per_clip, project_id, sequence_id, result)
     command_manager.end_undo_group()
 
-    finalize_per_clip(per_clip, classified.to_apply, db, result)
+    finalize_per_clip(per_clip, runnable, db, result)
     return result
+end
+
+--- Full command path: pulls the live timeline via the helper, runs
+--- M.apply, fires `on_complete`. Mirrors SyncGradesFromResolve.execute
+--- (T031) — non-blocking; success / error surface through on_complete.
+--- The inner phase dispatches happen inside the apply() undo group, so
+--- the command itself is not separately undoable (one Cmd-Z reverts
+--- the whole sync via the group entries).
+function M.execute(args)
+    assert(type(args) == "table", "SyncEditsFromResolve: args required")
+    assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
+        "SyncEditsFromResolve: sequence_id required")
+    assert(type(args.project_id) == "string" and args.project_id ~= "",
+        "SyncEditsFromResolve: project_id required")
+    assert(type(args.on_complete) == "function",
+        "SyncEditsFromResolve: on_complete callback required")
+    assert(args.user_choices == nil or type(args.user_choices) == "table",
+        "SyncEditsFromResolve: user_choices must be a table or nil")
+
+    local database = require("core.database")
+    local db = database.get_connection()
+    assert(db, "SyncEditsFromResolve: no database connection")
+
+    local client, err = supervisor.ensure_client()
+    if not client then
+        args.on_complete(nil, "helper_unavailable", err)
+        return
+    end
+
+    client:request("read_timeline",
+        { sequence_id = args.sequence_id, project_id = args.project_id },
+        function(response, code, message)
+            if response == nil then
+                args.on_complete(nil, code, message)
+                return
+            end
+            local ok, result_or_err = pcall(M.apply,
+                response.result, args.sequence_id, args.project_id, db,
+                args.user_choices)
+            if not ok then
+                args.on_complete(nil, "resolve_api_error",
+                    tostring(result_or_err))
+                return
+            end
+            args.on_complete(result_or_err, nil, nil)
+        end)
+end
+
+local SPEC = {
+    -- Inner phase verbs are dispatched under a `begin_undo_group`, so
+    -- one Cmd-Z reverts the whole sync. The outer command does not
+    -- need its own undo entry — set undoable=false to avoid a phantom
+    -- entry that would be a no-op for the user.
+    undoable      = false,
+    mutates_clips = true,
+    args = {
+        sequence_id  = { required = true,  kind = "string" },
+        project_id   = { required = true,  kind = "string" },
+        on_complete  = { required = true,  kind = "function" },
+        user_choices = { required = false, kind = "table" },
+    },
+}
+
+function M.register(command_executors, _command_undoers, _db, set_last_error)
+    command_executors["SyncEditsFromResolve"] = function(command)
+        local args = command:get_all_parameters()
+        local ok, err = pcall(M.execute, args)
+        if not ok then
+            set_last_error("SyncEditsFromResolve: " .. tostring(err))
+            return false, tostring(err)
+        end
+        return true
+    end
+    return {
+        executor = command_executors["SyncEditsFromResolve"],
+        spec     = SPEC,
+    }
 end
 
 return M

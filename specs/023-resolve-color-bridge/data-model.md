@@ -157,7 +157,7 @@ Iteration order is response order, not contractual; callers key bucket entries b
 CONFLICT_REASONS = {
     diverged_both_sides, deleted_in_resolve,
     fps_mismatch_unsupported, subframe_unsupported,
-    unknown_delta_shape, composite_undecomposable,
+    composite_undecomposable,
     mutual_composite, overwrite_absorb_inconsistent,
     slip_unsupported, roll_unsupported,
     multi_mapped_ambiguous, missing_target_track_in_jve,
@@ -165,7 +165,7 @@ CONFLICT_REASONS = {
 SKIP_REASONS = {
     neither_changed, only_jve_changed,
     no_modal_v1_unhandled_conflict, stale_user_choice,
-    phase0_failed, phaseB_failed,
+    phase0_failed, phaseB_failed, unknown_delta_shape,
 }
 UNMATCHED_REASONS = { ledger_missing }
 ```
@@ -187,8 +187,8 @@ Internal flow:
 8. **Phase 0** — `MoveClipToTrack` per `to_apply` entry with `requires_track_move = true`.
 9. **Phase A** — `ToggleClipEnabled` per clip with Δenabled.
 10. **Phase B** — pure-trim convergence per `to_apply` entry. Algebra (forward clip): LEFT edge delta L = Δsource_in (also moves record_start by +L, duration by −L); RIGHT edge delta R = Δsource_out (moves duration by +R). So a residual is **trim-decomposable** iff Δrecord_start == Δsource_in AND Δrecord_dur == Δsource_out − Δsource_in; otherwise it's Phase C/D territory and rejected upstream by the staging guard. **V1 dispatches `OverwriteTrimEdge`** (left then right, each only when nonzero) — *not* `RippleTrimEdge`. Rationale: Resolve gives absolute per-clip positions for every clip in the response, so single-clip overwrite converges each entry to its live target independently. RippleTrim would shift other `to_apply` clips off their targets. The earlier "blanket reload after each `RippleTrimEdge`" caveat therefore does not apply in V1; a future variant that infers ripple intent would reintroduce it. Per-clip cascade: `phase0_failed` → skip B (geom on a wrong-track clip is meaningless); `phaseB_failed` → push `phaseB_failed` to skipped[] and cascade-skip C. Within a clip: left dispatched before right; left failure skips right (clip didn't converge).
-11. **Phase C** — `Nudge` for residual pure-record-start shifts.
-12. **Phase D** — surface unmatched shape-residuals into `apply.skipped[]` with `reason = unknown_delta_shape`.
+11. **Phase C** — `Nudge` for residual record_start shift M = (live.record_start − cur.record_start) reloaded *after* Phase B. The combined trim+move algebra is L = Δsource_in, R = Δsource_out, M = Δrecord_start − L; Phase B handles L/R and leaves M as the leftover record_start residual. Dispatched as `Nudge{selected_clip_ids=[clip_id], nudge_amount=M}` per entry where M ≠ 0. Cascade: `phase0_failed` → `skipped_phase0_failed`; `phaseB_failed` → `skipped_phaseB_failed`. Phase C failure does NOT cascade further (Phase D is classification, not dispatch).
+12. **Phase D** — **runs first** (before init/begin_undo_group), as a partition: any entry whose deltas are non-decomposable (Δrecord_dur ≠ Δsource_out − Δsource_in) gets surfaced as `apply.skipped[]` with `reason = unknown_delta_shape` immediately; only decomposable entries enter the dispatch ladder. No clip mutation, no fingerprint persist for shape-failed entries — next sync re-classifies and re-surfaces until the user resolves out-of-band.
 13. `end_undo_group`.
 14. Persist post-dispatch fingerprints for clips whose every dispatched verb succeeded (outside undo group).
 

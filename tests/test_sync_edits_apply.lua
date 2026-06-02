@@ -35,7 +35,8 @@ local layout = ripple_layout.create({
     clips = {
         order = {"c_boot", "c_conflict", "c_move",
                  "c_disable", "c_move_and_disable",
-                 "c_trim_right", "c_trim_left", "c_trim_both"},
+                 "c_trim_right", "c_trim_left", "c_trim_both",
+                 "c_move_only", "c_trim_and_move", "c_shape_fail"},
         c_boot = {
             id = "c_boot", name = "Bootstrap",
             track_key = "v1", media_key = "main",
@@ -77,6 +78,24 @@ local layout = ripple_layout.create({
             id = "c_trim_both", name = "TrimBoth",
             track_key = "v2", media_key = "main",
             sequence_start = 3000, duration = 300, source_in = 8000,
+        },
+        -- Phase C scenarios (Nudge for residual record_start shift):
+        c_move_only = {
+            id = "c_move_only", name = "MoveOnly",
+            track_key = "v2", media_key = "main",
+            sequence_start = 3500, duration = 200, source_in = 9000,
+        },
+        c_trim_and_move = {
+            id = "c_trim_and_move", name = "TrimAndMove",
+            track_key = "v2", media_key = "main",
+            sequence_start = 4000, duration = 300, source_in = 10000,
+        },
+        -- Phase D scenario (non-decomposable residual surfaces as
+        -- skipped[unknown_delta_shape]; no dispatch):
+        c_shape_fail = {
+            id = "c_shape_fail", name = "ShapeFail",
+            track_key = "v2", media_key = "main",
+            sequence_start = 4500, duration = 200, source_in = 11000,
         },
     },
 })
@@ -144,6 +163,16 @@ identity_ledger.upsert("c_trim_left",
 identity_ledger.upsert("c_trim_both",
     { resolve_item_id = "rs-c_trim_both",
       edit_fingerprint = current_fp("c_trim_both") }, db)
+-- Phase C / D clips: fp matches current.
+identity_ledger.upsert("c_move_only",
+    { resolve_item_id = "rs-c_move_only",
+      edit_fingerprint = current_fp("c_move_only") }, db)
+identity_ledger.upsert("c_trim_and_move",
+    { resolve_item_id = "rs-c_trim_and_move",
+      edit_fingerprint = current_fp("c_trim_and_move") }, db)
+identity_ledger.upsert("c_shape_fail",
+    { resolve_item_id = "rs-c_shape_fail",
+      edit_fingerprint = current_fp("c_shape_fail") }, db)
 
 -- Diverge c_conflict locally (move record_start +50). This rebuilds the
 -- in-memory timeline_state too if we go through a command, but for a
@@ -416,7 +445,162 @@ check("c_trim_both: applied records two trim dispatches",
     and applied_both.attempted_verbs[2] == "OverwriteTrimEdge")
 
 ----------------------------------------------------------------------
--- Scenario 5: user_choices is V2; passing non-nil must assert.
+-- Scenario 5: Phase C — Nudge for residual record_start shift after
+-- (optional) Phase B trim. Decomposition: L = Δsource_in,
+-- R = Δsource_out, M = Δrecord_start - L. Decomposable iff
+-- Δrecord_dur == R - L; M is the leftover record_start shift Phase C
+-- nudges by.
+--
+-- c_move_only:     pure move +40, no trim. → Nudge only.
+-- c_trim_and_move: left-trim L=15 + move M=25. → Phase B left then C.
+----------------------------------------------------------------------
+local response_c = { items = {
+    { resolve_item_id = "rs-c_move_only", track_id = layout.tracks.v2.id,
+      source_in = 9000, source_out = 9200,
+      record_start = 3540, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_trim_and_move", track_id = layout.tracks.v2.id,
+      source_in = 10015, source_out = 10300,
+      record_start = 4040, record_duration = 285, enabled = true },
+    -- Carry already-converged clips through to suppress
+    -- deleted_in_resolve noise.
+    { resolve_item_id = "rs-c_boot", track_id = layout.tracks.v1.id,
+      source_in = 1000, source_out = 1200,
+      record_start = 100, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_move", track_id = layout.tracks.v2.id,
+      source_in = 3000, source_out = 3200,
+      record_start = 700, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_disable", track_id = layout.tracks.v1.id,
+      source_in = 4000, source_out = 4200,
+      record_start = 1000, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_move_and_disable",
+      track_id = layout.tracks.v2.id,
+      source_in = 5000, source_out = 5200,
+      record_start = 1300, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_trim_right", track_id = layout.tracks.v2.id,
+      source_in = 6000, source_out = 6250,
+      record_start = 2000, record_duration = 250, enabled = true },
+    { resolve_item_id = "rs-c_trim_left", track_id = layout.tracks.v2.id,
+      source_in = 7030, source_out = 7300,
+      record_start = 2530, record_duration = 270, enabled = true },
+    { resolve_item_id = "rs-c_trim_both", track_id = layout.tracks.v2.id,
+      source_in = 8020, source_out = 8260,
+      record_start = 3020, record_duration = 240, enabled = true },
+} }
+
+local r5 = sync_edits.apply(response_c, layout.sequence_id,
+    layout.project_id, db)
+
+-- c_move_only: pure record_start shift via Nudge
+local moved_only = Clip.load("c_move_only")
+check("c_move_only: DB sequence_start converged (3540)",
+    moved_only and moved_only.sequence_start == 3540)
+check("c_move_only: DB source_in unchanged (9000)",
+    moved_only and moved_only.source_in == 9000)
+check("c_move_only: DB source_out unchanged (9200)",
+    moved_only and moved_only.source_out == 9200)
+check("c_move_only: DB duration unchanged (200)",
+    moved_only and moved_only.duration == 200)
+local applied_move_only = find(r5.applied, "c_move_only")
+check("c_move_only: applied verbs = [Nudge]",
+    applied_move_only and #applied_move_only.attempted_verbs == 1
+    and applied_move_only.attempted_verbs[1] == "Nudge")
+local link_move_only = identity_ledger.load("c_move_only", db)
+check("c_move_only: ledger fp persisted",
+    link_move_only and link_move_only.edit_fingerprint
+    == current_fp("c_move_only"))
+
+-- c_trim_and_move: left-trim then Nudge, in that order
+local trim_move = Clip.load("c_trim_and_move")
+check("c_trim_and_move: DB source_in converged (10015)",
+    trim_move and trim_move.source_in == 10015)
+check("c_trim_and_move: DB source_out unchanged (10300)",
+    trim_move and trim_move.source_out == 10300)
+check("c_trim_and_move: DB sequence_start converged (4040)",
+    trim_move and trim_move.sequence_start == 4040)
+check("c_trim_and_move: DB duration converged (285)",
+    trim_move and trim_move.duration == 285)
+local applied_trim_move = find(r5.applied, "c_trim_and_move")
+check("c_trim_and_move: verbs = [OverwriteTrimEdge, Nudge]",
+    applied_trim_move and #applied_trim_move.attempted_verbs == 2
+    and applied_trim_move.attempted_verbs[1] == "OverwriteTrimEdge"
+    and applied_trim_move.attempted_verbs[2] == "Nudge")
+
+----------------------------------------------------------------------
+-- Scenario 6: Phase D — non-decomposable residual surfaces as
+-- skipped[unknown_delta_shape]; no dispatch, no clip mutation.
+--
+-- c_shape_fail: Δsource_in=10, Δsource_out=10, Δrecord_start=0,
+-- Δrecord_dur=20 — violates trim/move decomposition (Δrecord_dur ≠
+-- Δsource_out − Δsource_in = 0). Could be a speed change or a slip+
+-- duration-extend — not representable as Phase B/C verbs.
+----------------------------------------------------------------------
+local response_d = { items = {
+    { resolve_item_id = "rs-c_shape_fail", track_id = layout.tracks.v2.id,
+      source_in = 11010, source_out = 11210,
+      record_start = 4500, record_duration = 220, enabled = true },
+    -- Carry every other clip through at its current state to suppress
+    -- ledger-walk noise.
+    { resolve_item_id = "rs-c_boot", track_id = layout.tracks.v1.id,
+      source_in = 1000, source_out = 1200,
+      record_start = 100, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_move", track_id = layout.tracks.v2.id,
+      source_in = 3000, source_out = 3200,
+      record_start = 700, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_disable", track_id = layout.tracks.v1.id,
+      source_in = 4000, source_out = 4200,
+      record_start = 1000, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_move_and_disable",
+      track_id = layout.tracks.v2.id,
+      source_in = 5000, source_out = 5200,
+      record_start = 1300, record_duration = 200, enabled = false },
+    { resolve_item_id = "rs-c_trim_right", track_id = layout.tracks.v2.id,
+      source_in = 6000, source_out = 6250,
+      record_start = 2000, record_duration = 250, enabled = true },
+    { resolve_item_id = "rs-c_trim_left", track_id = layout.tracks.v2.id,
+      source_in = 7030, source_out = 7300,
+      record_start = 2530, record_duration = 270, enabled = true },
+    { resolve_item_id = "rs-c_trim_both", track_id = layout.tracks.v2.id,
+      source_in = 8020, source_out = 8260,
+      record_start = 3020, record_duration = 240, enabled = true },
+    { resolve_item_id = "rs-c_move_only", track_id = layout.tracks.v2.id,
+      source_in = 9000, source_out = 9200,
+      record_start = 3540, record_duration = 200, enabled = true },
+    { resolve_item_id = "rs-c_trim_and_move", track_id = layout.tracks.v2.id,
+      source_in = 10015, source_out = 10300,
+      record_start = 4040, record_duration = 285, enabled = true },
+} }
+
+local r6 = sync_edits.apply(response_d, layout.sequence_id,
+    layout.project_id, db)
+
+local before_shape = Clip.load("c_shape_fail")
+local skipped_shape = find(r6.skipped, "c_shape_fail")
+check("c_shape_fail: in skipped",
+    skipped_shape ~= nil)
+check("c_shape_fail: reason=unknown_delta_shape",
+    skipped_shape and skipped_shape.reason == "unknown_delta_shape")
+check("c_shape_fail: NOT in applied (no dispatch)",
+    find(r6.applied, "c_shape_fail") == nil)
+check("c_shape_fail: NOT in failed",
+    find(r6.failed, "c_shape_fail") == nil)
+check("c_shape_fail: DB source_in unchanged (11000, no mutation)",
+    before_shape and before_shape.source_in == 11000)
+check("c_shape_fail: DB source_out unchanged (11200)",
+    before_shape and before_shape.source_out == 11200)
+check("c_shape_fail: DB sequence_start unchanged (4500)",
+    before_shape and before_shape.sequence_start == 4500)
+check("c_shape_fail: DB duration unchanged (200)",
+    before_shape and before_shape.duration == 200)
+-- Fingerprint must NOT be persisted (next sync should re-classify and
+-- re-surface as Phase D until the user resolves out-of-band).
+local link_shape = identity_ledger.load("c_shape_fail", db)
+local seeded_shape_fp = link_shape and link_shape.edit_fingerprint
+check("c_shape_fail: ledger fp unchanged (still equals current)",
+    seeded_shape_fp ~= nil
+    and seeded_shape_fp == current_fp("c_shape_fail"))
+
+----------------------------------------------------------------------
+-- Scenario 7: user_choices is V2; passing non-nil must assert.
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,
@@ -427,7 +611,32 @@ do
 end
 
 ----------------------------------------------------------------------
--- Scenario 6: missing project_id asserts (rule 2.29 / 1.14).
+-- Scenario 9: M.register installs SyncEditsFromResolve into the
+-- command_executors table and the SPEC declares correct arg metadata
+-- (FR-023 — bridge actions invocable via command system).
+----------------------------------------------------------------------
+do
+    local executors, undoers = {}, {}
+    local function set_err(_msg) end
+    local reg = sync_edits.register(executors, undoers, db, set_err)
+    check("register: returns {executor, spec}",
+        type(reg) == "table"
+        and type(reg.executor) == "function"
+        and type(reg.spec) == "table")
+    check("register: installs SyncEditsFromResolve executor",
+        type(executors["SyncEditsFromResolve"]) == "function")
+    check("SPEC: required args (sequence_id, project_id, on_complete)",
+        reg.spec.args.sequence_id.required == true
+        and reg.spec.args.project_id.required == true
+        and reg.spec.args.on_complete.required == true)
+    check("SPEC: user_choices is optional",
+        reg.spec.args.user_choices.required == false)
+    check("SPEC: undoable=false (inner group provides undo)",
+        reg.spec.undoable == false)
+end
+
+----------------------------------------------------------------------
+-- Scenario 10: missing project_id asserts (rule 2.29 / 1.14).
 ----------------------------------------------------------------------
 do
     local ok, err = pcall(sync_edits.apply,
