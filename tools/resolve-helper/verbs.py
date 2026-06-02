@@ -94,6 +94,145 @@ def verb_ping(args, handle, envelope_id, helper_version):
     return _error(envelope_id, code, msg)
 
 
+_TRACK_TYPES_LOWER = {"video", "audio"}
+
+
+def _validate_clip_positions(value):
+    # `clip_positions` is JVE's [(clip.id, track_type, track_index,
+    # record_start), ...] map — supplied because the helper has no JVE
+    # state (FR-021). Each entry must be a JSON object with the four
+    # documented fields. Returns ("ok", list[dict]) | ("error", msg).
+    if not isinstance(value, list):
+        return ("error",
+            "clip_positions must be list of {clip_id, track_type, "
+            "track_index, record_start}")
+    out = []
+    for i, entry in enumerate(value):
+        if not isinstance(entry, dict):
+            return ("error",
+                f"clip_positions[{i}] must be JSON object")
+        clip_id = entry.get("clip_id")
+        track_type = entry.get("track_type")
+        track_index = entry.get("track_index")
+        record_start = entry.get("record_start")
+        if not isinstance(clip_id, str) or not clip_id:
+            return ("error",
+                f"clip_positions[{i}].clip_id must be non-empty string")
+        if track_type not in _TRACK_TYPES_LOWER:
+            return ("error",
+                f"clip_positions[{i}].track_type must be 'video' or "
+                f"'audio' (got {track_type!r})")
+        if not isinstance(track_index, int) or isinstance(
+                track_index, bool) or track_index < 1:
+            return ("error",
+                f"clip_positions[{i}].track_index must be 1-based "
+                f"integer (got {track_index!r})")
+        if not isinstance(record_start, int) or isinstance(
+                record_start, bool) or record_start < 0:
+            return ("error",
+                f"clip_positions[{i}].record_start must be "
+                f"non-negative integer (got {record_start!r})")
+        out.append({
+            "clip_id":      clip_id,
+            "track_type":   track_type,
+            "track_index":  track_index,
+            "record_start": record_start,
+        })
+    # No duplicate position keys — would make matching ambiguous.
+    seen = set()
+    for entry in out:
+        key = (entry["track_type"], entry["track_index"],
+            entry["record_start"])
+        if key in seen:
+            return ("error",
+                f"clip_positions has duplicate position key "
+                f"(track_type={entry['track_type']!r}, "
+                f"track_index={entry['track_index']}, "
+                f"record_start={entry['record_start']}) — JVE clips "
+                "may not stack at the same position on one track")
+        seen.add(key)
+    return ("ok", out)
+
+
+def _find_imported_timeline(project, prev_timeline_ids):
+    # ImportTimelineFromFile returns the imported Timeline handle on
+    # newer Resolve versions and a bool on older ones. We rely on the
+    # post-import delta against the pre-import GetTimelineByIndex list
+    # to find the new timeline either way (timelines are 1-indexed).
+    try:
+        n = project.GetTimelineCount()
+    except Exception as exc:
+        raise RuntimeError(
+            f"GetTimelineCount raised: {exc}") from exc
+    for i in range(1, n + 1):
+        try:
+            tl = project.GetTimelineByIndex(i)
+        except Exception as exc:
+            raise RuntimeError(
+                f"GetTimelineByIndex({i}) raised: {exc}") from exc
+        if tl is None:
+            continue
+        try:
+            tl_id = tl.GetUniqueId()
+        except Exception as exc:
+            raise RuntimeError(
+                f"timeline.GetUniqueId raised: {exc}") from exc
+        if tl_id not in prev_timeline_ids:
+            return tl
+    return None
+
+
+def _snapshot_timeline_ids(project):
+    try:
+        n = project.GetTimelineCount()
+    except Exception as exc:
+        raise RuntimeError(
+            f"GetTimelineCount raised: {exc}") from exc
+    ids = set()
+    for i in range(1, n + 1):
+        try:
+            tl = project.GetTimelineByIndex(i)
+            if tl is None:
+                continue
+            ids.add(tl.GetUniqueId())
+        except Exception as exc:
+            raise RuntimeError(
+                f"timeline snapshot raised at index {i}: {exc}") from exc
+    return ids
+
+
+def _build_position_index(clip_positions):
+    return {
+        (c["track_type"], c["track_index"], c["record_start"]): c["clip_id"]
+        for c in clip_positions
+    }
+
+
+def _stamp_marker_safe(item, clip_id):
+    # Idempotent per the §stamp_identity_marker convention. Skips if
+    # the item already carries the matching customData; raises on
+    # conflict or AddMarker failure.
+    existing = _recover_jve_guid(item)  # may raise on ambiguity
+    if existing == clip_id:
+        return False
+    if existing is not None:
+        raise RuntimeError(
+            f"item already carries conflicting marker "
+            f"(customData={existing!r}, would-stamp={clip_id!r})")
+    added = item.AddMarker(
+        _IDENTITY_MARKER_FRAME,
+        _IDENTITY_MARKER_COLOR,
+        _IDENTITY_MARKER_NAME,
+        _IDENTITY_MARKER_NOTE,
+        _IDENTITY_MARKER_DURATION_FRAMES,
+        clip_id,
+    )
+    if not added:
+        raise RuntimeError(
+            f"item.AddMarker(customData={clip_id!r}) returned False")
+    return True
+
+
 def verb_import_timeline(args, handle, envelope_id, helper_version):
     del helper_version
 
@@ -112,20 +251,104 @@ def verb_import_timeline(args, handle, envelope_id, helper_version):
     if not os.path.exists(drt_path):
         return _error(envelope_id, "bad_request",
             f"drt_path does not exist: {drt_path}")
+    positions_check = _validate_clip_positions(args.get("clip_positions"))
+    if positions_check[0] != "ok":
+        return _error(envelope_id, "bad_request", positions_check[1])
+    clip_positions = positions_check[1]
 
     handle_result = _revalidate(handle, envelope_id)
     if handle_result[0] != "ok":
         return handle_result[1]
+    _, _resolve, project = handle_result
 
-    # State-changing verbs must not mutate Resolve state before they can
-    # report success. ImportTimelineFromFile + mapping + relink are not
-    # yet wired (T029 follow-on); calling the import alone would leave a
-    # ghost timeline in Resolve while JVE saw a failure. Return early
-    # WITHOUT touching the Resolve API.
-    return _error(envelope_id, "not_implemented",
-        "import_timeline: mapping + relink not yet wired (T029); "
-        "Resolve-side import deliberately not performed so state stays "
-        "consistent")
+    try:
+        prev_ids = _snapshot_timeline_ids(project)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
+    media_pool = project.GetMediaPool()
+    if media_pool is None:
+        return _error(envelope_id, "resolve_api_error",
+            "GetMediaPool() returned None")
+
+    try:
+        imported = media_pool.ImportTimelineFromFile(drt_path)
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"ImportTimelineFromFile raised: {exc}")
+    if not imported:
+        return _error(envelope_id, "relink_failed",
+            "ImportTimelineFromFile returned falsy (Resolve refused .drt)")
+
+    try:
+        timeline = _find_imported_timeline(project, prev_ids)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+    if timeline is None:
+        return _error(envelope_id, "resolve_api_error",
+            "post-import timeline scan: no new timeline appeared "
+            "(GetTimelineCount delta empty)")
+
+    pos_to_clip_id = _build_position_index(clip_positions)
+    mapping = []
+    unkeyed_resolve_items = []
+    try:
+        for track_type, tidx, item in _iter_all_timeline_items(timeline):
+            try:
+                resolve_item_id = item.GetUniqueId()
+                record_start = item.GetStart()
+            except Exception as exc:
+                return _error(envelope_id, "resolve_api_error",
+                    f"item attribute read raised: {exc}")
+            if not isinstance(resolve_item_id, str) or not resolve_item_id:
+                return _error(envelope_id, "resolve_api_error",
+                    "item.GetUniqueId() returned empty/non-string")
+            if not isinstance(record_start, int):
+                return _error(envelope_id, "resolve_api_error",
+                    f"item.GetStart() must be int, got "
+                    f"{type(record_start).__name__}")
+            key = (track_type, tidx, record_start)
+            jve_guid = pos_to_clip_id.get(key)
+            if jve_guid is None:
+                unkeyed_resolve_items.append({
+                    "resolve_item_id": resolve_item_id,
+                    "track_type":      track_type,
+                    "track_index":     tidx,
+                    "record_start":    record_start,
+                })
+                continue
+            try:
+                _stamp_marker_safe(item, jve_guid)
+            except RuntimeError as exc:
+                return _error(envelope_id, "resolve_api_error",
+                    f"stamping clip_id={jve_guid!r} at {key}: {exc}")
+            mapping.append({
+                "jve_guid":        jve_guid,
+                "resolve_item_id": resolve_item_id,
+            })
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
+    # JVE clip_ids whose position has no live counterpart. The most
+    # common cause is Resolve silently dropping a clip whose media
+    # couldn't be relinked (FR-001/007 intent), but the helper can't
+    # distinguish that from "DRT didn't actually contain the clip"
+    # without parsing the DRT — so the reason names what the helper
+    # actually observed.
+    matched_clip_ids = {row["jve_guid"] for row in mapping}
+    unrelinked = []
+    for entry in clip_positions:
+        if entry["clip_id"] not in matched_clip_ids:
+            unrelinked.append({
+                "jve_guid": entry["clip_id"],
+                "reason":   "absent_from_live_timeline",
+            })
+
+    return _ok(envelope_id, {
+        "mapping":               mapping,
+        "unrelinked":            unrelinked,
+        "unkeyed_resolve_items": unkeyed_resolve_items,
+    })
 
 
 def _iter_all_timeline_items(timeline):

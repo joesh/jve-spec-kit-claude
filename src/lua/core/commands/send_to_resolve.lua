@@ -35,6 +35,43 @@ local function out_path_for_export(sequence_id)
     return string.format("/tmp/jve-resolve-%s.drp", sequence_id)
 end
 
+-- Build the `clip_positions` payload the helper consumes to derive its
+-- identity mapping (helper-protocol.md §import_timeline). The helper
+-- has no JVE state (FR-021), so JVE supplies the (clip.id ↔ position)
+-- map; the helper looks up live items by `(track_type, track_index,
+-- record_start)`. Track index assignment must mirror `drt_writer`'s
+-- partition (VideoTrackVec then AudioTrackVec preserving JVE order
+-- within each type) so the index the helper observes on the imported
+-- timeline matches.
+local function build_clip_positions(payload)
+    local positions = {}
+    local video_idx, audio_idx = 0, 0
+    for _, track in ipairs(payload.sequence.tracks) do
+        local track_index
+        if track.type == "video" then
+            video_idx = video_idx + 1
+            track_index = video_idx
+        elseif track.type == "audio" then
+            audio_idx = audio_idx + 1
+            track_index = audio_idx
+        else
+            error(string.format(
+                "SendToResolve: unknown track.type %q "
+                .. "(payload_builder contract violation)",
+                tostring(track.type)))
+        end
+        for _, clip in ipairs(track.clips) do
+            positions[#positions + 1] = {
+                clip_id      = clip.id,
+                track_type   = track.type,
+                track_index  = track_index,
+                record_start = clip.sequence_start,
+            }
+        end
+    end
+    return positions
+end
+
 function M.execute(args, db)
     assert(type(args) == "table", "SendToResolve: args required")
     assert(db, "SendToResolve: db required (passed by register's "
@@ -68,12 +105,14 @@ function M.execute(args, db)
         return
     end
 
+    local clip_positions = build_clip_positions(payload)
     local token = change_token.build(args.project_id, args.sequence_id,
         seq.mutation_generation)
     client:request("import_timeline", {
-        drt_path     = out_path,
-        media_roots  = args.media_roots,
-        change_token = token,
+        drt_path        = out_path,
+        media_roots     = args.media_roots,
+        clip_positions  = clip_positions,
+        change_token    = token,
     }, function(response, code, message)
         if response == nil then
             args.on_complete(nil, code, message)
@@ -81,10 +120,14 @@ function M.execute(args, db)
         end
         local mapping = response.result.mapping
         local unrelinked = response.result.unrelinked
+        local unkeyed_resolve_items = response.result.unkeyed_resolve_items
         assert(type(mapping) == "table",
             "SendToResolve: helper response missing result.mapping")
         assert(type(unrelinked) == "table",
             "SendToResolve: helper response missing result.unrelinked")
+        assert(type(unkeyed_resolve_items) == "table",
+            "SendToResolve: helper response missing "
+            .. "result.unkeyed_resolve_items")
         for _, row in ipairs(mapping) do
             assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
                 "SendToResolve: mapping row missing jve_guid")
@@ -95,8 +138,9 @@ function M.execute(args, db)
                 resolve_item_id = row.resolve_item_id,
             }, db)
         end
-        log.event("SendToResolve: mapped %d clips, %d unrelinked",
-            #mapping, #unrelinked)
+        log.event("SendToResolve: mapped %d clips, %d unrelinked, "
+            .. "%d unkeyed Resolve items",
+            #mapping, #unrelinked, #unkeyed_resolve_items)
         args.on_complete(response, nil, nil)
     end)
 end

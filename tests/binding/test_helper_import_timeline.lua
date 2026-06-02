@@ -108,6 +108,94 @@ do
     print("  ✓ missing change_token → client-side assertion (FR-008)")
 end
 
+-- ─── bad_request: missing clip_positions ───────────────────────────────
+-- clip_positions is the JVE-side position map the helper uses to derive
+-- the identity mapping (FR-021: helper holds no JVE state). Missing →
+-- the helper can't determine which Resolve item is which JVE clip.
+do
+    -- Real .drt path so the drt_path-exists check passes; helper then
+    -- gets to the clip_positions check.
+    local tmp_drt = "/tmp/jve-contract-import-positions.drt"
+    local f = io.open(tmp_drt, "w")
+    assert(f, "fixture: couldn't create scratch DRT")
+    f:write("not really a DRT but the path exists\n")
+    f:close()
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path     = tmp_drt,
+        media_roots  = {},
+        change_token = VALID_TOKEN,
+    })
+    os.remove(tmp_drt)
+    assert_structured_error(r, "bad_request", "missing clip_positions")
+    assert(r.error.message:find("clip_positions", 1, true),
+        "bad_request should name clip_positions: " .. r.error.message)
+    print("  ✓ missing clip_positions → bad_request")
+end
+
+-- ─── bad_request: clip_positions wrong outer type ──────────────────────
+do
+    local tmp_drt = "/tmp/jve-contract-import-positions.drt"
+    local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path        = tmp_drt,
+        media_roots     = {},
+        clip_positions  = "not-a-list",
+        change_token    = VALID_TOKEN,
+    })
+    os.remove(tmp_drt)
+    assert_structured_error(r, "bad_request",
+        "clip_positions wrong outer type")
+    assert(r.error.message:find("clip_positions", 1, true),
+        "bad_request should name clip_positions: " .. r.error.message)
+    print("  ✓ clip_positions wrong outer type → bad_request")
+end
+
+-- ─── bad_request: clip_positions entry malformed ───────────────────────
+do
+    local tmp_drt = "/tmp/jve-contract-import-positions.drt"
+    local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path        = tmp_drt,
+        media_roots     = {},
+        clip_positions  = {
+            { clip_id = "c1", track_type = "purple",
+              track_index = 1, record_start = 0 },
+        },
+        change_token    = VALID_TOKEN,
+    })
+    os.remove(tmp_drt)
+    assert_structured_error(r, "bad_request",
+        "clip_positions invalid track_type")
+    assert(r.error.message:find("track_type", 1, true),
+        "bad_request should name track_type: " .. r.error.message)
+    print("  ✓ clip_positions invalid track_type → bad_request")
+end
+
+-- ─── bad_request: clip_positions duplicate position key ────────────────
+-- JVE clips MUST NOT stack at the same (track, record_start) — that's
+-- a JVE timeline invariant. Helper rejects defensively.
+do
+    local tmp_drt = "/tmp/jve-contract-import-positions.drt"
+    local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path        = tmp_drt,
+        media_roots     = {},
+        clip_positions  = {
+            { clip_id = "c1", track_type = "video",
+              track_index = 1, record_start = 0 },
+            { clip_id = "c2", track_type = "video",
+              track_index = 1, record_start = 0 },  -- duplicate key
+        },
+        change_token    = VALID_TOKEN,
+    })
+    os.remove(tmp_drt)
+    assert_structured_error(r, "bad_request",
+        "clip_positions duplicate position key")
+    assert(r.error.message:find("duplicate", 1, true),
+        "bad_request should name duplicate: " .. r.error.message)
+    print("  ✓ clip_positions duplicate position key → bad_request")
+end
+
 fixture.stop(fix)
 
 print("✅ test_helper_import_timeline.lua passed")

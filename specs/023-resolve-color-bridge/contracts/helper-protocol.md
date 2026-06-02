@@ -47,9 +47,10 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 - Liveness + version surface JVE gates on. `resolve_version` is logged (API-drift landmine).
 
 ### `import_timeline` *(state-changing; idempotent on change token)*
-- **args**: `{ drt_path, media_roots: [string], change_token }`
-- **result**: `{ mapping: [{ jve_guid, resolve_item_id }], unrelinked: [{ jve_guid, reason }] }`
-- Imports the JVE-authored `.drt`, relinks media against `media_roots`, returns the identity join (FR-002). Media it cannot relink is reported in `unrelinked` (FR-001/007) — never silently dropped. Re-send with the same token returns the prior mapping.
+- **args**: `{ drt_path, media_roots: [string], clip_positions: [{clip_id, track_type, track_index, record_start}], change_token }`
+- **result**: `{ mapping: [{ jve_guid, resolve_item_id }], unrelinked: [{ jve_guid, reason }], unkeyed_resolve_items: [{ resolve_item_id, track_type, track_index, record_start }] }`
+- Imports the JVE-authored `.drt`, relinks media against `media_roots`, returns the identity join (FR-002). JVE clips that don't appear on the imported timeline are reported in `unrelinked` (FR-001/007) — never silently dropped. `unrelinked[].reason` is a closed-set string: `"absent_from_live_timeline"` (helper observed no item at the JVE-supplied position — most commonly Resolve dropping a clip whose media couldn't be relinked). Re-send with the same token returns the prior mapping.
+- **Identity derivation (post-T047)**: the helper resolves `jve_guid → resolve_item_id` by matching JVE-supplied `clip_positions` against the imported timeline's items by `(track_type, track_index, record_start)`. Resolve preserves DRT track order through import (see §read_timeline), so the position tuple is stable. JVE supplies `clip_positions` because the helper holds no JVE state (FR-021); the JVE side already knows where it wrote each clip in the DRT. Matched items are stamped with a marker (`customData == clip.id`) so subsequent §read_identities / §read_timeline calls are id-anchored — no more position dependency once stamped. Resolve items that don't match any JVE position (user added/modified content in Resolve between JVE writing the DRT and the helper importing) flow into `unkeyed_resolve_items` for JVE-side review.
 
 ### `read_identities`
 - **args**: none
