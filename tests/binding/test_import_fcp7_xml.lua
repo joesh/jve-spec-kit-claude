@@ -6,20 +6,6 @@
 
 local test_env = require('test_env')
 
--- No-op timer: prevent debounced persistence from firing mid-command
-_G.qt_create_single_shot_timer = function() end
-
--- project_browser stub: load-time satisfier for `find_master_clip_in_browser`.
--- Not asserted on by this test. project_browser owns a QTreeView built by
--- layout.lua bootstrap, which --test mode does not run; standing up a real
--- one here would multiply the test's scope without changing what's verified.
-local project_browser = {}
-function project_browser.refresh() end
-function project_browser.focus_master_clip() return true end
-function project_browser.get_selected_master_clip() return nil end
-function project_browser.focus_bin() end
-package.loaded['ui.project_browser'] = project_browser
-
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local command_impl = require('core.command_implementations')

@@ -7,9 +7,6 @@
 local test_env = require('test_env')
 local ui       = require('integration.ui_test_env')
 
--- No-op timer: prevent debounced persistence from firing mid-command.
-_G.qt_create_single_shot_timer = function() end
-
 print("=== test_import_undo_skips_replay ===")
 
 local DB = "/tmp/jve/test_import_undo_skips_replay.jvp"

@@ -7,8 +7,6 @@
 local test_env = require("test_env")
 local ui       = require("integration.ui_test_env")
 
-_G.qt_create_single_shot_timer = function() end
-
 print("=== test_import_reuses_existing_media_by_path ===")
 
 local DB = "/tmp/jve/test_import_reuses_existing_media_by_path.jvp"

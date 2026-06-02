@@ -6,9 +6,6 @@
 
 require('test_env')
 
--- No-op timer: prevent debounced persistence from firing mid-command
-_G.qt_create_single_shot_timer = function() end
-
 local test_env = require('test_env')
 local database = require('core.database')
 local command_manager = require('core.command_manager')
