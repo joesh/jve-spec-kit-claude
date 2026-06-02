@@ -60,8 +60,7 @@ end
 -- and RootFolderRef in project.xml must equal the mp_folder DbId.
 -- Both DbIds are observable as the <Sm2SequenceContainer> XML attribute and
 -- <Sm2MpFolder> XML attribute in their respective files.
-local seq_container_dbid = mpf:match('<Sm2MpFolder DbId="[^"]+">.-<Sm2Sequence DbId="[^"]+">.-<SeqRef')
-    -- SeqRef is inside FieldsBlob hex, not as an element — derive its UTF-16BE form.
+-- SeqRef is inside FieldsBlob hex, not as an element — derive its UTF-16BE form.
 local seq_container_xml = fixture.unzip_member(OUT, "SeqContainer/*.xml")
 local seq_container_dbid_from_seq =
     seq_container_xml:match('<Sm2SequenceContainer DbId="([^"]+)"')

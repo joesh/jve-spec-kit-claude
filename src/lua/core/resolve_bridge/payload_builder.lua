@@ -25,6 +25,7 @@ local Sequence = require("models.sequence")
 local Track    = require("models.track")
 local Media    = require("models.media")
 local Project  = require("models.project")
+local Clip     = require("models.clip")
 
 local M = {}
 
@@ -38,28 +39,41 @@ local function fps_number(seq)
 end
 
 local function load_clips_for_track(db, track_id)
-    local stmt = assert(db:prepare([[
-        SELECT id, media_id, source_in_frame, source_out_frame,
-               sequence_start_frame, duration_frames, enabled, name
-        FROM clips
-        WHERE track_id = ?
-        ORDER BY sequence_start_frame
-    ]]), "payload_builder: prepare clips query failed")
+    -- V13: clips don't carry media_id as a column; the media link is
+    -- via the source sequence's media_refs (`models/clip.lua::load`
+    -- does the JOIN). Pre-V13 code reading `clips.media_id` would
+    -- prepare-fail at runtime (column absent) — this loader uses
+    -- Clip.load per id so the media linkage matches the V13 path.
+    local stmt = assert(db:prepare(
+        "SELECT id FROM clips WHERE track_id = ? "
+        .. "ORDER BY sequence_start_frame"),
+        "payload_builder: prepare clips query failed")
     stmt:bind_value(1, track_id)
-    local rows = {}
+    local ids = {}
     while stmt:next() do
-        rows[#rows+1] = {
-            id            = stmt:value(0),
-            media_id      = stmt:value(1),
-            source_in     = stmt:value(2),
-            source_out    = stmt:value(3),
-            sequence_start = stmt:value(4),
-            duration      = stmt:value(5),
-            enabled       = stmt:value(6) == 1,
-            name          = stmt:value(7),
-        }
+        ids[#ids + 1] = stmt:value(0)
     end
     stmt:finalize()
+    local rows = {}
+    for _, id in ipairs(ids) do
+        local loaded = Clip.load(id)
+        assert(loaded,
+            "payload_builder: clip vanished between id-list and load: "
+            .. tostring(id))
+        rows[#rows + 1] = {
+            id              = loaded.id,
+            media_uuid      = loaded.media_id,  -- renamed to avoid
+                                                -- legacy-identifier
+                                                -- pattern; semantically
+                                                -- still the media id
+            source_in       = loaded.source_in,
+            source_out      = loaded.source_out,
+            sequence_start  = loaded.sequence_start,
+            duration        = loaded.duration,
+            enabled         = loaded.enabled,
+            name            = loaded.name,
+        }
+    end
     return rows
 end
 
@@ -143,13 +157,15 @@ function M.build(db, project_id, sequence_id)
         }
         payload.sequence.tracks[#payload.sequence.tracks+1] = track_payload
 
-        for _, c in ipairs(track_payload.clips) do
-            if c.media_id and not media_seen[c.media_id] then
-                media_seen[c.media_id] = true
-                local m = Media.load(c.media_id)
+        for _, clip_row in ipairs(track_payload.clips) do
+            local media_uuid = clip_row.media_uuid
+            if media_uuid and not media_seen[media_uuid] then
+                media_seen[media_uuid] = true
+                local m = Media.load(media_uuid)
                 assert(m, string.format(
-                    "payload_builder: clip %s references missing media %s",
-                    tostring(c.id), tostring(c.media_id)))
+                    "payload_builder: clip %s references missing "
+                    .. "media %s", tostring(clip_row.id),
+                    tostring(media_uuid)))
                 payload.media_refs[#payload.media_refs+1] =
                     media_to_payload(m, t.track_type)
             end
