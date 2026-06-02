@@ -147,33 +147,6 @@ function M.skip_unless_resolve(fix, test_name)
     os.exit(0)
 end
 
---- Skip the rest of the test if the helper returns `not_implemented`
---- for `verb` with empty args. Used for endpoints (`read_grades` →
---- T029b CDL extraction) that are wired to `_unimplemented` until a
---- future task lands the real handler — the contract test was authored
---- RED, and remains useful as a regression check once the verb lands,
---- but should not block the binding batch in the meantime.
----
---- Probes via `{verb, {}}` — only safe to call when empty args is a
---- valid (non-bad_request) shape for the verb. The known-implemented
---- vs known-not-implemented distinction lives in the verb itself, not
---- in client-side feature flags.
-function M.skip_if_verb_unimplemented(fix, verb, test_name)
-    assert(type(verb) == "string" and verb ~= "",
-        "skip_if_verb_unimplemented: verb required")
-    assert(type(test_name) == "string" and test_name ~= "",
-        "skip_if_verb_unimplemented: test_name required")
-    local r = M.request(fix, verb, {})
-    if r.ok then return end
-    if not (r.error and r.error.code == "not_implemented") then return end
-    io.write(string.format(
-        "[SKIP %s] verb %q returns not_implemented (handler "
-        .. "stubbed until its implementing task lands)\n",
-        test_name, verb))
-    M.stop(fix)
-    os.exit(0)
-end
-
 function M.stop(fix)
     if not fix then return end
     if fix.sock then

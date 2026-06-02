@@ -139,13 +139,11 @@ do
     print("  ✓ item_ids non-string element → bad_request")
 end
 
--- Live-Resolve + verb-implemented gates. The ok-path sections below
--- require both a connected Resolve handle AND a real read_grades
--- implementation (verb is wired to _unimplemented → returns
--- not_implemented until T029b lands the CDL extraction; see tasks.md).
+-- Live-Resolve gate. The ok-path sections below require a connected
+-- Resolve handle (T029b landed the CDL extraction via
+-- timeline.Export(EDL+CDL) per spec.md:30; no longer wired to
+-- _unimplemented).
 fixture.skip_unless_resolve(fix, "test_helper_read_grades.lua")
-fixture.skip_if_verb_unimplemented(fix, "read_grades",
-    "test_helper_read_grades.lua")
 
 -- ─── omit item_ids ⇒ ok with grades array of documented shape ──────
 do

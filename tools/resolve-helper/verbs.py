@@ -39,6 +39,14 @@
 # todo_read_grades_cdl_extraction).
 
 import os
+import tempfile
+
+from cdl_edl import (
+    CdlEdlParseError,
+    classify_fidelity,
+    integer_frame_rate_from_setting,
+    parse_cdl_edl,
+)
 
 PROTOCOL_VERSION = 1
 
@@ -945,20 +953,226 @@ def _unimplemented(verb_name):
     return thunk
 
 
+def _export_edl_cdl(timeline, resolve, integer_rate):
+    # Resolve's `Timeline.Export(fileName, EXPORT_EDL, EXPORT_CDL)`
+    # emits a CMX-3600 EDL annotated with ASC_SOP/ASC_SAT per event
+    # (spec.md:30). Returns the parsed `{record_in_frame → cdl}` dict.
+    # Cleans up the temp file unconditionally.
+    fd, edl_path = tempfile.mkstemp(prefix="jve-read-grades-", suffix=".edl")
+    os.close(fd)
+    try:
+        try:
+            ok = timeline.Export(
+                edl_path, resolve.EXPORT_EDL, resolve.EXPORT_CDL)
+        except Exception as exc:
+            raise RuntimeError(
+                f"timeline.Export(EDL+CDL) raised: {exc}") from exc
+        if not ok:
+            raise RuntimeError(
+                "timeline.Export(EDL+CDL) returned False — Resolve "
+                "refused to write the EDL")
+        try:
+            with open(edl_path, "r", encoding="utf-8") as f:
+                edl_text = f.read()
+        except OSError as exc:
+            raise RuntimeError(
+                f"reading exported EDL at {edl_path!r}: {exc}") from exc
+        try:
+            return parse_cdl_edl(edl_text, integer_rate)
+        except CdlEdlParseError as exc:
+            raise RuntimeError(
+                f"parsing exported EDL at {edl_path!r}: {exc}") from exc
+    finally:
+        try:
+            os.unlink(edl_path)
+        except OSError:
+            # Best-effort cleanup; the leak is bounded to one temp file
+            # per call. Don't mask the real error with a cleanup failure.
+            pass
+
+
+def _timeline_integer_frame_rate(project):
+    # Project.GetSetting('timelineFrameRate') returns the fractional
+    # rate as a string ("23.976", "24", "24.0", "29.97", "59.94"…).
+    # Convert to the TC-counter integer rate (24 for 23.976, etc.).
+    try:
+        setting = project.GetSetting("timelineFrameRate")
+    except Exception as exc:
+        raise RuntimeError(
+            f"project.GetSetting('timelineFrameRate') raised: {exc}"
+            ) from exc
+    try:
+        return integer_frame_rate_from_setting(setting)
+    except CdlEdlParseError as exc:
+        raise RuntimeError(
+            f"timelineFrameRate {setting!r}: {exc}") from exc
+
+
+def _item_lut_ref(item):
+    # TimelineItem.GetLUT() returns a local path string when an
+    # item-level LUT is bound, None otherwise. Empty string is treated
+    # as None (defensive — Resolve sometimes returns "" for no LUT).
+    try:
+        lut = item.GetLUT()
+    except Exception as exc:
+        raise RuntimeError(
+            f"item.GetLUT() raised: {exc}") from exc
+    if lut is None:
+        return None
+    if isinstance(lut, str):
+        return lut if lut != "" else None
+    raise RuntimeError(
+        f"item.GetLUT() returned non-string non-None: "
+        f"{type(lut).__name__} = {lut!r}")
+
+
+def _any_non_cdl_tools(item):
+    # Walk the item's node graph; GetToolsInNode(n) returns the list of
+    # NON-primary tools attached to node n (curves, qualifier, OFX,
+    # masks). An empty list per node = primary-only correction.
+    try:
+        graph = item.GetNodeGraph()
+    except Exception as exc:
+        raise RuntimeError(
+            f"item.GetNodeGraph() raised: {exc}") from exc
+    if graph is None:
+        # Item has no color graph at all — treat as primary-only
+        # (degenerate; the EDL will still carry identity CDL).
+        return False
+    try:
+        num_nodes = graph.GetNumNodes()
+    except Exception as exc:
+        raise RuntimeError(
+            f"graph.GetNumNodes() raised: {exc}") from exc
+    if not isinstance(num_nodes, int) or num_nodes < 0:
+        raise RuntimeError(
+            f"graph.GetNumNodes() returned non-int / negative: "
+            f"{num_nodes!r}")
+    for n in range(1, num_nodes + 1):
+        try:
+            tools = graph.GetToolsInNode(n)
+        except Exception as exc:
+            raise RuntimeError(
+                f"graph.GetToolsInNode({n}) raised: {exc}") from exc
+        if tools is None:
+            continue
+        if not isinstance(tools, list):
+            raise RuntimeError(
+                f"graph.GetToolsInNode({n}) returned non-list: "
+                f"{type(tools).__name__}")
+        if tools:
+            return True
+    return False
+
+
+def _cdl_to_wire(cdl_entry):
+    # Translate the parser's `{slope:[r,g,b], offset:[r,g,b],
+    # power:[r,g,b], sat:float}` to the helper-protocol.md §read_grades
+    # wire shape. Same content, same field names — the contract IS the
+    # parser's output shape.
+    return {
+        "slope":  cdl_entry["slope"],
+        "offset": cdl_entry["offset"],
+        "power":  cdl_entry["power"],
+        "sat":    cdl_entry["sat"],
+    }
+
+
 def verb_read_grades(args, handle, envelope_id, helper_version):
-    # Stub until T029b lands CDL extraction. Wire-boundary validation
-    # MUST run before returning not_implemented so malformed callers
-    # see bad_request (architectural rule: arg validation precedes
-    # handler implementation regardless of stub state). Shares
-    # _validate_item_ids with verb_read_timeline so the bad_request
-    # surface is identical.
-    del handle, helper_version
+    # spec.md:30 / helper-protocol.md §read_grades — read per-clip
+    # grade state via `timeline.Export(EDL+CDL)` (CDL primaries) +
+    # `GetNodeGraph().GetToolsInNode()` (fidelity). cdl_edl.py owns
+    # the pure-data EDL parser; this verb owns the Resolve-API
+    # plumbing + per-item classification.
+    del helper_version
+
     validation = _validate_item_ids(args)
     if validation[0] != "ok":
         return _error(envelope_id, "bad_request", validation[1])
-    return _error(envelope_id, "not_implemented",
-        "verb 'read_grades' not yet implemented in this helper build "
-        "(T029b — CDL extraction)")
+    item_id_filter = validation[1]  # None = all; set = whitelist
+
+    handle_result = _revalidate(handle, envelope_id)
+    if handle_result[0] != "ok":
+        return handle_result[1]
+    _, resolve, project = handle_result
+
+    try:
+        timeline = project.GetCurrentTimeline()
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetCurrentTimeline raised: {exc}")
+    if timeline is None:
+        return _error(envelope_id, "handle_stale",
+            "no current timeline — open one in Resolve")
+
+    try:
+        integer_rate = _timeline_integer_frame_rate(project)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
+    try:
+        cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
+    grades = []
+    try:
+        for _track_type, _tidx, item in _iter_all_timeline_items(timeline):
+            try:
+                resolve_item_id = item.GetUniqueId()
+            except Exception as exc:
+                return _error(envelope_id, "resolve_api_error",
+                    f"item.GetUniqueId() raised: {exc}")
+            if not isinstance(resolve_item_id, str) or not resolve_item_id:
+                return _error(envelope_id, "resolve_api_error",
+                    "item.GetUniqueId() returned empty/non-string — "
+                    "Resolve API contract broken")
+            if (item_id_filter is not None
+                    and resolve_item_id not in item_id_filter):
+                continue
+            jve_guid = _recover_jve_guid(item)
+            if jve_guid is None:
+                # No identity carrier — caller can't map the grade back
+                # to a JVE clip. Omit from `grades` (mirrors
+                # read_identities' "lacking join key" discipline).
+                continue
+            try:
+                record_start = item.GetStart()
+            except Exception as exc:
+                return _error(envelope_id, "resolve_api_error",
+                    f"item.GetStart() raised: {exc}")
+            if not isinstance(record_start, int):
+                return _error(envelope_id, "resolve_api_error",
+                    f"item.GetStart() non-int: {record_start!r}")
+            cdl_entry = cdl_by_rec_in.get(record_start)
+            if cdl_entry is None:
+                return _error(envelope_id, "resolve_api_error",
+                    f"item jve_guid={jve_guid!r} at record_start frame "
+                    f"{record_start} has no CDL block in the EDL "
+                    "export — Resolve emits CDL for every clip, so a "
+                    "missing block is an API anomaly")
+            try:
+                item_lut = _item_lut_ref(item)
+                any_tools = _any_non_cdl_tools(item)
+            except RuntimeError as exc:
+                return _error(envelope_id, "resolve_api_error", str(exc))
+            try:
+                fidelity = classify_fidelity(
+                    any_non_cdl_tools=any_tools,
+                    item_lut_ref=item_lut,
+                    cdl_present=True)
+            except CdlEdlParseError as exc:
+                return _error(envelope_id, "resolve_api_error", str(exc))
+            row = {"jve_guid": jve_guid, "fidelity": fidelity}
+            if fidelity == "primary":
+                row["cdl"] = _cdl_to_wire(cdl_entry)
+            if item_lut is not None:
+                row["lut"] = {"ref": item_lut}
+            grades.append(row)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
+    return _ok(envelope_id, {"grades": grades})
 
 
 VERB_TABLE = {
