@@ -62,11 +62,38 @@ function M.connect(socket_path, opts)
         _request_timeout_ms = request_timeout_ms,
     }
 
+    -- Forward-declared so the malformed-line branch in dispatch_line
+    -- can close the socket; self:close is the canonical teardown that
+    -- already drains in_flight with a structured error.
+    local self_close
+
+    local function fail_all_in_flight(code, message)
+        for corr_id, slot in pairs(in_flight) do
+            in_flight[corr_id] = nil
+            slot.on_complete(nil, code, message)
+        end
+    end
+
     local function dispatch_line(line)
         if line == "" then return end
         local ok, parsed = pcall(protocol.parse_response, line .. "\n")
         if not ok then
-            log.error("client: malformed response line: %s", tostring(parsed))
+            -- Wire-level corruption: the helper sent bytes the parser
+            -- can't interpret. Don't silently log and continue — the
+            -- helper is broken or the socket is desynced, and any
+            -- subsequent line could be misattributed. Fail every
+            -- in-flight caller with a structured error and close
+            -- (rule 2.32 — no silent failure of an entire response
+            -- stream; review item #10).
+            log.error("client: malformed response line: %s",
+                tostring(parsed))
+            fail_all_in_flight("resolve_api_error",
+                string.format(
+                    "client: malformed wire response from helper "
+                    .. "(%s); closing socket — every in-flight request "
+                    .. "now surfaces as a structured error",
+                    tostring(parsed)))
+            if self_close then self_close() end
             return
         end
         local slot = in_flight[parsed.id]
@@ -203,6 +230,11 @@ function M.connect(socket_path, opts)
         end
         qt_local_socket_destroy(handle)
     end
+
+    -- Bind the forward declaration used by dispatch_line's malformed-
+    -- response branch (Lua closures can't reach a method defined later
+    -- in the constructor unless we stash the reference here).
+    self_close = function() self:close() end
 
     return self
 end

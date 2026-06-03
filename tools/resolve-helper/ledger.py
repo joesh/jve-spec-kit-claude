@@ -1,11 +1,11 @@
 # Idempotency ledger — replay slot for state-changing verbs (FR-008).
 #
-# Key derives from (verb, change_token) for state-changing verbs. NOT
-# from correlation id. A re-sent request with the same key returns the
-# cached response. Process-local: the ledger evaporates on helper
-# restart (FR-021 — helper holds no persistent model). Re-importing
-# after a restart is correct: JVE's change_token updates on the next
-# user action; the helper happily redoes the work.
+# Key derives from (verb, change_token, per-verb arg digest) for state-
+# changing verbs. NOT from correlation id. A re-sent request with the
+# same key returns the cached response. Process-local: the ledger
+# evaporates on helper restart (FR-021 — helper holds no persistent
+# model). Re-importing after a restart is correct: JVE's change_token
+# updates on the next user action; the helper happily redoes the work.
 
 # The "state-changing verbs require a token" gate IS enforced — but in
 # two real places: each verb's body calls `_validate_change_token` which
@@ -16,6 +16,35 @@
 # remove dead code (review #34). Documentation-only mirroring of the
 # JVE list adds no value; the two enforcement sites already cover both
 # directions.
+
+import hashlib
+import json
+
+# Per-verb args that participate in the cache key beyond change_token.
+# Two stamp_identity_marker calls at the same change_token but for
+# different (resolve_item_id, custom_data) would otherwise COLLIDE —
+# the second would silently return the first's cached response, a
+# replay lie (review items #18 + #19). Same class for import_timeline:
+# two imports with the same token but different drt_path / media_roots
+# / clip_positions would conflate.
+_VERB_EXTRA_KEY_FIELDS = {
+    "stamp_identity_marker": ["resolve_item_id", "custom_data"],
+    "import_timeline":       ["drt_path", "media_roots", "clip_positions"],
+    # delete_timeline carries its own resolve_timeline_id discriminator
+    # — two delete_timeline calls with the same change_token but
+    # different uids would otherwise collide.
+    "delete_timeline":       ["resolve_timeline_id"],
+}
+
+
+def _digest_extra(verb, args):
+    fields = _VERB_EXTRA_KEY_FIELDS.get(verb)
+    if not fields:
+        return None
+    payload = {k: args.get(k) for k in fields}
+    encoded = json.dumps(payload, sort_keys=True,
+        separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode()).hexdigest()[:16]
 
 
 class IdempotencyLedger:
@@ -30,9 +59,11 @@ class IdempotencyLedger:
         # just means "no caching" and the verb's bad_request flows
         # through normally.
         #
-        # Key mirrors `src/lua/core/resolve_bridge/protocol.lua::
-        # idempotency_key`: (verb, change_token) for every state-
-        # changing verb.
+        # Key shape:
+        #   "<verb>|<project>|<seq>|<mut_gen>"
+        #   "<verb>|<project>|<seq>|<mut_gen>|<sha256-of-extra-args>"
+        # The second form applies to verbs registered in
+        # `_VERB_EXTRA_KEY_FIELDS`.
         if not isinstance(args, dict):
             return None
         ct = args.get("change_token")
@@ -50,12 +81,16 @@ class IdempotencyLedger:
             and isinstance(ct.get("mutation_generation"), int)
         ):
             return None
-        return "|".join([
+        parts = [
             verb,
             ct["project_id"],
             ct["sequence_id"],
             str(ct["mutation_generation"]),
-        ])
+        ]
+        extra = _digest_extra(verb, args)
+        if extra is not None:
+            parts.append(extra)
+        return "|".join(parts)
 
     def lookup(self, key):
         return self._cache.get(key)
