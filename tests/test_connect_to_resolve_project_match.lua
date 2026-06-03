@@ -44,12 +44,30 @@ end
 local function tl_item(rid, ti, rec_start, dur, src_in, src_out)
     return {
         resolve_item_id = rid,
+        kind            = "media",
         track_type      = "video",
         track_index     = ti,
         record_start    = rec_start,
         record_duration = dur,
         source_in       = src_in,
         source_out      = src_out,
+        enabled         = true,
+    }
+end
+
+-- Non-media timeline items (generators, transitions, adjustment clips,
+-- some Fusion comps) — helper omits source_in/source_out because there's
+-- no indexable source frame range. Matcher must skip these BEFORE
+-- applying the position-match key (otherwise a non_media item at the
+-- same (track, record_start) as a JVE clip would falsely match).
+local function tl_item_non_media(rid, ti, rec_start, dur)
+    return {
+        resolve_item_id = rid,
+        kind            = "non_media",
+        track_type      = "video",
+        track_index     = ti,
+        record_start    = rec_start,
+        record_duration = dur,
         enabled         = true,
     }
 end
@@ -195,6 +213,72 @@ do
         m.marker_matched["c_in_seq"] == nil)
     check("scenario 6: c_in_seq position-matches R_strange",
         m.pos_matched["c_in_seq"] == "R_strange")
+end
+
+-- ── Scenario 7: non_media items are skipped before position match ──
+do
+    local jve_clips = {
+        clip("c_a", 1, 0,   0, 100),
+        clip("c_b", 1, 100, 0, 100),
+    }
+    local identities = {}
+    -- A generator sits at the same (track, record_start) as c_a's
+    -- intended position match. If the matcher didn't filter by kind,
+    -- the position key would collide; with kind filtering, the
+    -- generator is invisible to position match and c_a position-matches
+    -- the real media item.
+    local timeline = {
+        tl_item_non_media("R_gen", 1, 0, 50),   -- generator at (V1, 0)
+        tl_item("R_a", 1, 0,   100, 0, 100),    -- real media at (V1, 0)
+        tl_item("R_b", 1, 100, 100, 0, 100),    -- real media at (V1, 100)
+    }
+    local m = connect.match(jve_clips, identities, timeline)
+    check("scenario 7: c_a position-matches the media item, not generator",
+        m.pos_matched["c_a"] == "R_a")
+    check("scenario 7: c_b position-matches",
+        m.pos_matched["c_b"] == "R_b")
+    check("scenario 7: zero unmatched",   #m.unmatched  == 0)
+    check("scenario 7: zero ambiguous",   #m.ambiguous  == 0)
+end
+
+-- ── Scenario 7b: two non_media items at the SAME position do NOT
+--    trip the duplicate-position-key assert. The assert exists to
+--    catch Resolve invariant breaks among matchable items; two
+--    generators stacked at the same record_start is a normal user
+--    timeline (composited title over a transition, etc.). ─────────────
+do
+    local jve_clips = { clip("c_a", 1, 100, 0, 100) }
+    local identities = {}
+    local timeline = {
+        tl_item_non_media("R_gen1", 1, 0, 50),
+        tl_item_non_media("R_gen2", 1, 0, 50),  -- same position, ok
+        tl_item("R_a", 1, 100, 100, 0, 100),
+    }
+    local m = connect.match(jve_clips, identities, timeline)
+    check("scenario 7b: stacked non_media at same pos does not assert",
+        m.pos_matched["c_a"] == "R_a")
+end
+
+-- ── Scenario 7c: items missing `kind` field must fail-fast (rule 2.32
+--    no silent failure — the helper protocol requires kind). ──────────
+do
+    local jve_clips = { clip("c_a", 1, 0, 0, 100) }
+    local identities = {}
+    local bad_item = {
+        resolve_item_id = "R_bad",
+        -- kind omitted
+        track_type      = "video",
+        track_index     = 1,
+        record_start    = 0,
+        record_duration = 100,
+        source_in       = 0,
+        source_out      = 100,
+        enabled         = true,
+    }
+    local ok, err = pcall(connect.match, jve_clips, identities, { bad_item })
+    check("scenario 7c: missing kind asserts", not ok)
+    check("scenario 7c: error names 'kind'",
+        ok or tostring(err):find("kind", 1, true) ~= nil)
 end
 
 -- ── Failure paths: validate args (rule 2.32) ────────────────────────

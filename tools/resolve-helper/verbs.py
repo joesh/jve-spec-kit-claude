@@ -544,16 +544,31 @@ def _validate_item_ids(args):
 
 
 def _read_video_item(item):
-    # Per helper-protocol.md §read_timeline (video items): integer frames
-    # for every TC field. Resolve docs (Developer/Scripting/README.txt
-    # §TimelineItem):
+    # Per helper-protocol.md §read_timeline. Resolve docs
+    # (Developer/Scripting/README.txt §TimelineItem):
     #   GetStart()          → start frame on timeline (record-side)
     #   GetDuration()       → duration in frames
-    #   GetSourceStartFrame → start frame in source media
-    #   GetSourceEndFrame   → end frame in source media
+    #   GetSourceStartFrame → start frame in source media (None for
+    #                         items with no indexable source — generators,
+    #                         Text+, transitions, adjustment clips, some
+    #                         Fusion comps)
+    #   GetSourceEndFrame   → end frame in source media (mirror of above)
     #   GetClipEnabled      → bool
-    # Each Resolve call is gated with try/except so a Resolve API
-    # surprise becomes resolve_api_error, never a silent failure.
+    #
+    # Discriminator for `kind`: presence of integer source TC on BOTH
+    # source_in and source_out. This is what JVE actually needs (a source
+    # range to index into) — not the higher-level "is this a media-pool
+    # item" question, which mis-classifies generators (have a media-pool
+    # entry but no source range) and compound clips (DO have a source
+    # range and should be matchable once DRP importer covers them).
+    #
+    # • kind="media" → source_in / source_out included, both ints
+    # • kind="non_media" → source_in / source_out omitted
+    # Record-side fields (record_start, record_duration, enabled) are
+    # present for both kinds — those Resolve API calls work on every
+    # timeline-item type. Each Resolve call is gated with try/except so
+    # an API surprise becomes resolve_api_error, never a silent failure
+    # (rule 2.32).
     resolve_item_id = _safe_uid(item)
     try:
         record_start    = item.GetStart()
@@ -567,24 +582,41 @@ def _read_video_item(item):
     for field_name, value in (
         ("record_start",    record_start),
         ("record_duration", record_duration),
-        ("source_in",       source_in),
-        ("source_out",      source_out),
     ):
-        if not isinstance(value, int):
+        if not isinstance(value, int) or isinstance(value, bool):
             raise RuntimeError(
-                f"item.{field_name} must be int (Resolve video items "
-                f"are integer-frame); got {type(value).__name__} = "
-                f"{value!r}")
+                f"item.{field_name} must be int (Resolve timeline items "
+                f"are integer-frame on the record side); got "
+                f"{type(value).__name__} = {value!r}")
     if not isinstance(enabled, bool):
         raise RuntimeError(
             f"item.GetClipEnabled() must return bool; got "
             f"{type(enabled).__name__} = {enabled!r}")
+    src_in_is_int  = isinstance(source_in,  int) and not isinstance(source_in,  bool)
+    src_out_is_int = isinstance(source_out, int) and not isinstance(source_out, bool)
+    if src_in_is_int and src_out_is_int:
+        return {
+            "resolve_item_id": resolve_item_id,
+            "kind":            "media",
+            "record_start":    record_start,
+            "record_duration": record_duration,
+            "source_in":       source_in,
+            "source_out":      source_out,
+            "enabled":         enabled,
+        }
+    if src_in_is_int or src_out_is_int:
+        # Partial-int source TC is a Resolve API surprise, not a kind
+        # boundary — surface loudly. Silent downgrade to non_media would
+        # hide a real regression (rule 2.32).
+        raise RuntimeError(
+            f"timeline-item source TC partially present: "
+            f"source_in={source_in!r} source_out={source_out!r} — "
+            f"expected both int or both None")
     return {
         "resolve_item_id": resolve_item_id,
+        "kind":            "non_media",
         "record_start":    record_start,
         "record_duration": record_duration,
-        "source_in":       source_in,
-        "source_out":      source_out,
         "enabled":         enabled,
     }
 

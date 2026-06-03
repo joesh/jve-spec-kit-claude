@@ -114,35 +114,57 @@ function M.translate_wire_response(wire_response, sequence_id)
         "sync_edits.translate_wire_response: sequence_id required")
 
     local out_items = {}
+    local non_media_skipped = 0
     for i, w in ipairs(wire_response.items) do
-        local jve_track_type = WIRE_TRACK_TYPES[w.track_type]
-        assert(jve_track_type ~= nil, string.format(
-            "sync_edits.translate_wire_response: item[%d] track_type %q "
-            .. "not in closed set {video, audio}", i, tostring(w.track_type)))
-        assert(type(w.track_index) == "number"
-                and w.track_index >= 1
-                and w.track_index == math.floor(w.track_index),
-            string.format(
+        -- kind is required at the wire boundary (helper-protocol.md
+        -- §read_timeline). Non-media items (generators, transitions,
+        -- adjustment clips, some Fusion comps) carry no source range
+        -- and cannot participate in edit-fingerprint diffing — filter
+        -- them out here at the translate seam so classify_all stays
+        -- strict on source_in/source_out presence.
+        assert(w.kind == "media" or w.kind == "non_media", string.format(
+            "sync_edits.translate_wire_response: item[%d] missing or "
+            .. "invalid kind (got %q) — helper-protocol §read_timeline "
+            .. "requires kind ∈ {\"media\",\"non_media\"}",
+            i, tostring(w.kind)))
+        if w.kind == "non_media" then
+            non_media_skipped = non_media_skipped + 1
+        else
+            local jve_track_type = WIRE_TRACK_TYPES[w.track_type]
+            assert(jve_track_type ~= nil, string.format(
                 "sync_edits.translate_wire_response: item[%d] "
-                .. "track_index must be 1-based integer, got %s",
-                i, tostring(w.track_index)))
+                .. "track_type %q not in closed set {video, audio}",
+                i, tostring(w.track_type)))
+            assert(type(w.track_index) == "number"
+                    and w.track_index >= 1
+                    and w.track_index == math.floor(w.track_index),
+                string.format(
+                    "sync_edits.translate_wire_response: item[%d] "
+                    .. "track_index must be 1-based integer, got %s",
+                    i, tostring(w.track_index)))
 
-        local jve_track_id = Track.find_at(sequence_id, jve_track_type,
-            w.track_index)
-        if jve_track_id == nil then
-            jve_track_id = missing_track_sentinel(w.track_type,
-                w.track_index)
+            local jve_track_id = Track.find_at(sequence_id,
+                jve_track_type, w.track_index)
+            if jve_track_id == nil then
+                jve_track_id = missing_track_sentinel(w.track_type,
+                    w.track_index)
+            end
+
+            out_items[#out_items + 1] = {
+                resolve_item_id = w.resolve_item_id,
+                track_id        = jve_track_id,
+                record_start    = w.record_start,
+                record_duration = w.record_duration,
+                source_in       = w.source_in,
+                source_out      = w.source_out,
+                enabled         = w.enabled,
+            }
         end
-
-        out_items[i] = {
-            resolve_item_id = w.resolve_item_id,
-            track_id        = jve_track_id,
-            record_start    = w.record_start,
-            record_duration = w.record_duration,
-            source_in       = w.source_in,
-            source_out      = w.source_out,
-            enabled         = w.enabled,
-        }
+    end
+    if non_media_skipped > 0 then
+        log.event("sync_edits.translate_wire_response: skipped %d "
+            .. "non-media item(s) (generators/transitions/etc.)",
+            non_media_skipped)
     end
     return { items = out_items }
 end

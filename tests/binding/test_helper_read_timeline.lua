@@ -87,8 +87,9 @@ local function assert_items_shape(items, label)
             string.format("%s items[%d].track_index must be 1-based "
                 .. "integer, got %s",
                 label, i, tostring(item.track_index)))
-        for _, fld in ipairs({"record_start", "record_duration",
-                              "source_in", "source_out"}) do
+        -- record-side fields are present on every item (every Resolve
+        -- TimelineItem has a record-side position, even generators).
+        for _, fld in ipairs({"record_start", "record_duration"}) do
             assert(is_video_tc(item[fld]) or is_audio_tc(item[fld]),
                 string.format("%s items[%d].%s must be integer frame "
                     .. "(video) or {frame, subframe} (audio)",
@@ -96,6 +97,26 @@ local function assert_items_shape(items, label)
         end
         assert(type(item.enabled) == "boolean", string.format(
             "%s items[%d].enabled must be boolean", label, i))
+        -- kind discriminator: source_in/source_out present iff
+        -- kind=="media" (helper-protocol.md §read_timeline). Non-media
+        -- items (generators, transitions, adjustment clips, some
+        -- Fusion comps) carry no indexable source range.
+        assert(item.kind == "media" or item.kind == "non_media",
+            string.format("%s items[%d].kind must be \"media\" or "
+                .. "\"non_media\", got %q",
+                label, i, tostring(item.kind)))
+        if item.kind == "media" then
+            for _, fld in ipairs({"source_in", "source_out"}) do
+                assert(is_video_tc(item[fld]) or is_audio_tc(item[fld]),
+                    string.format("%s items[%d].%s must be integer "
+                        .. "frame (video) or {frame, subframe} (audio) "
+                        .. "for kind=media", label, i, fld))
+            end
+        else
+            assert(item.source_in == nil and item.source_out == nil,
+                string.format("%s items[%d] kind=non_media must NOT "
+                    .. "carry source_in/source_out", label, i))
+        end
     end
 end
 

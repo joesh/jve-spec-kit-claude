@@ -331,10 +331,21 @@ check("V1 audio assert message names VIDEO or AUDIO",
 
 local function wire_item(rid, ttype, tidx)
     return { resolve_item_id = rid,
+             kind             = "media",
              track_type       = ttype,
              track_index      = tidx,
              source_in        = 1000,
              source_out       = 1200,
+             record_start     = 5000,
+             record_duration  = 200,
+             enabled          = true }
+end
+
+local function wire_item_non_media(rid, ttype, tidx)
+    return { resolve_item_id = rid,
+             kind             = "non_media",
+             track_type       = ttype,
+             track_index      = tidx,
              record_start     = 5000,
              record_duration  = 200,
              enabled          = true }
@@ -372,8 +383,8 @@ end
 -- Non-track fields preserved verbatim through translation.
 do
     local wire = { items = {{
-        resolve_item_id = "rs-preserve", track_type = "video",
-        track_index = 1,
+        resolve_item_id = "rs-preserve", kind = "media",
+        track_type = "video", track_index = 1,
         source_in = 12345, source_out = 67890,
         record_start = 11111, record_duration = 22222,
         enabled = false,
@@ -389,26 +400,59 @@ do
     check("translate: enabled preserved",        out.enabled == false)
 end
 
+-- Non-media items filtered before reaching the classifier (it requires
+-- source_in/source_out — non_media items don't carry them).
+do
+    local wire = { items = {
+        wire_item("rs-real", "video", 1),
+        wire_item_non_media("rs-gen", "video", 1),
+        wire_item_non_media("rs-trans", "video", 2),
+    } }
+    local translated = sync_edits.translate_wire_response(wire, "s")
+    check("translate: non_media items filtered out",
+        #translated.items == 1)
+    check("translate: media item survives",
+        translated.items[1].resolve_item_id == "rs-real")
+end
+
 -- Wire validation (fail-fast at the wire→classifier boundary).
 do
-    local bad_type = pcall(sync_edits.translate_wire_response,
-        { items = {{ resolve_item_id="x", track_type="movie",
+    local bad_kind_missing = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", track_type="video",
             track_index=1, source_in=0, source_out=1,
             record_start=0, record_duration=1, enabled=true }} }, "s")
+    check("translate: asserts on missing kind",
+        not bad_kind_missing)
+
+    local bad_kind_value = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", kind="generator",
+            track_type="video", track_index=1, source_in=0,
+            source_out=1, record_start=0, record_duration=1,
+            enabled=true }} }, "s")
+    check("translate: asserts on kind outside closed set",
+        not bad_kind_value)
+
+    local bad_type = pcall(sync_edits.translate_wire_response,
+        { items = {{ resolve_item_id="x", kind="media",
+            track_type="movie", track_index=1, source_in=0,
+            source_out=1, record_start=0, record_duration=1,
+            enabled=true }} }, "s")
     check("translate: asserts on track_type outside closed set",
         not bad_type)
 
     local bad_idx_zero = pcall(sync_edits.translate_wire_response,
-        { items = {{ resolve_item_id="x", track_type="video",
-            track_index=0, source_in=0, source_out=1,
-            record_start=0, record_duration=1, enabled=true }} }, "s")
+        { items = {{ resolve_item_id="x", kind="media",
+            track_type="video", track_index=0, source_in=0,
+            source_out=1, record_start=0, record_duration=1,
+            enabled=true }} }, "s")
     check("translate: asserts on track_index=0 (1-based contract)",
         not bad_idx_zero)
 
     local bad_idx_float = pcall(sync_edits.translate_wire_response,
-        { items = {{ resolve_item_id="x", track_type="video",
-            track_index=1.5, source_in=0, source_out=1,
-            record_start=0, record_duration=1, enabled=true }} }, "s")
+        { items = {{ resolve_item_id="x", kind="media",
+            track_type="video", track_index=1.5, source_in=0,
+            source_out=1, record_start=0, record_duration=1,
+            enabled=true }} }, "s")
     check("translate: asserts on non-integer track_index",
         not bad_idx_float)
 

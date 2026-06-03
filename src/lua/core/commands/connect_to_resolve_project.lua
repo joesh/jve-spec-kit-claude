@@ -162,26 +162,50 @@ local function load_jve_clips_for_sequence(sequence_id, db)
 end
 
 -- Position-match: (track_type, track_index, record_start) keys are
--- unique per timeline (Resolve enforces non-overlap). For each Resolve
--- item, index by that triple; for each JVE clip with no marker match
--- yet, look up the triple and link if found.
+-- unique per timeline (Resolve enforces non-overlap among media items).
+-- For each Resolve media item, index by that triple; for each JVE clip
+-- with no marker match yet, look up the triple and link if found.
+--
+-- Non-media items (kind="non_media": generators, Text+, transitions,
+-- adjustment clips, some Fusion comps — per helper-protocol.md
+-- §read_timeline) carry no source range JVE can match against, and
+-- Resolve allows them to stack at the same (track, record_start) as
+-- media items or each other (compositing). Skip them BEFORE the
+-- position-key collision check — otherwise a generator stacked over a
+-- media clip would falsely trip the duplicate-key assert.
+--
+-- Returns the index + the count of non_media items skipped (logged by
+-- the caller). `kind` is required (rule 2.32 — closed-set discipline
+-- at the wire boundary; no silent default).
 local function index_items_by_position(items)
     local by_pos = {}
+    local non_media_skipped = 0
     for _, item in ipairs(items) do
-        local key = string.format("%s:%d:%d",
-            item.track_type, item.track_index, item.record_start)
-        -- Two items at the same (track, record_start) would be a
-        -- Resolve invariant break; surface defensively rather than
-        -- silently picking the second.
-        assert(by_pos[key] == nil, string.format(
-            "ConnectToResolveProject: duplicate position key %q on "
-            .. "Resolve side (resolve_item_id=%s and %s) — Resolve "
-            .. "invariant violated", key,
-            tostring(by_pos[key] and by_pos[key].resolve_item_id),
-            tostring(item.resolve_item_id)))
-        by_pos[key] = item
+        assert(item.kind == "media" or item.kind == "non_media",
+            string.format(
+                "ConnectToResolveProject: read_timeline item %s missing "
+                .. "or invalid kind (got %q) — helper-protocol "
+                .. "§read_timeline requires kind ∈ "
+                .. "{\"media\",\"non_media\"}",
+                tostring(item.resolve_item_id), tostring(item.kind)))
+        if item.kind == "non_media" then
+            non_media_skipped = non_media_skipped + 1
+        else
+            local key = string.format("%s:%d:%d",
+                item.track_type, item.track_index, item.record_start)
+            -- Two MEDIA items at the same (track, record_start) would
+            -- be a Resolve invariant break; surface defensively rather
+            -- than silently picking the second.
+            assert(by_pos[key] == nil, string.format(
+                "ConnectToResolveProject: duplicate position key %q on "
+                .. "Resolve side (resolve_item_id=%s and %s) — Resolve "
+                .. "invariant violated", key,
+                tostring(by_pos[key] and by_pos[key].resolve_item_id),
+                tostring(item.resolve_item_id)))
+            by_pos[key] = item
+        end
     end
-    return by_pos
+    return by_pos, non_media_skipped
 end
 
 local function match_by_marker(jve_clips, identities_items)
@@ -278,7 +302,14 @@ function M.match(jve_clips, identities_items, timeline_items)
         "ConnectToResolveProject.match: timeline_items array required")
 
     local marker_matched  = match_by_marker(jve_clips, identities_items)
-    local items_by_pos    = index_items_by_position(timeline_items)
+    local items_by_pos, non_media_skipped =
+        index_items_by_position(timeline_items)
+    if non_media_skipped > 0 then
+        log.event("ConnectToResolveProject: skipping %d non-media "
+            .. "timeline item(s) (generators/transitions/etc. — DRP "
+            .. "importer does not yet cover these kinds)",
+            non_media_skipped)
+    end
     local already_claimed = {}
     for _, rid in pairs(marker_matched) do
         already_claimed[rid] = true
@@ -405,12 +436,14 @@ function M.execute(args, db, _command)
     assert(seq.mutation_generation,
         "ConnectToResolveProject: sequence missing mutation_generation "
         .. "— schema expected V12+ (FU-2)")
-    assert(type(seq.fps_numerator) == "number" and seq.fps_numerator > 0
-        and type(seq.fps_denominator) == "number"
-        and seq.fps_denominator > 0,
-        "ConnectToResolveProject: sequence missing fps_numerator/"
-        .. "fps_denominator — required for the rate-mismatch guard "
-        .. "before position match (rule 1.14)")
+    assert(type(seq.frame_rate) == "table"
+        and type(seq.frame_rate.fps_numerator) == "number"
+        and seq.frame_rate.fps_numerator > 0
+        and type(seq.frame_rate.fps_denominator) == "number"
+        and seq.frame_rate.fps_denominator > 0,
+        "ConnectToResolveProject: sequence missing frame_rate."
+        .. "fps_numerator/fps_denominator — required for the "
+        .. "rate-mismatch guard before position match (rule 1.14)")
 
     local client, sv_code, sv_msg = supervisor.ensure_client()
     if not client then
@@ -443,7 +476,7 @@ function M.execute(args, db, _command)
         -- ("change Resolve's timeline rate back"), not an internal
         -- invariant violation.
         local jve_integer_rate = math.ceil(
-            seq.fps_numerator / seq.fps_denominator)
+            seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator)
         local resolve_integer_rate = state.timeline_integer_rate
         assert(type(resolve_integer_rate) == "number"
             and resolve_integer_rate > 0,
@@ -457,7 +490,8 @@ function M.execute(args, db, _command)
                 .. "rate-relative; rates must agree before "
                 .. "ConnectToResolveProject can proceed.",
                 args.sequence_id, jve_integer_rate,
-                seq.fps_numerator, seq.fps_denominator,
+                seq.frame_rate.fps_numerator,
+                seq.frame_rate.fps_denominator,
                 resolve_integer_rate))
             return
         end
