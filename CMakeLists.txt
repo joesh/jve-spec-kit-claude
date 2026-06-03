@@ -83,6 +83,7 @@ set(EMP_SOURCES
     src/editor_media_platform/src/impl/braw_dispatch.cpp
     src/editor_media_platform/src/emp_peak_file.cpp
     src/editor_media_platform/src/emp_peak_generator.cpp
+    src/editor_media_platform/src/emp_cdl.cpp
 )
 
 add_library(EditorMediaPlatform STATIC ${EMP_SOURCES})

@@ -80,7 +80,7 @@ src/
     zstd_bindings.cpp           # MODIFIED — add qt_zstd_compress (mirror qt_zstd_decompress)
     process_bindings.cpp        # NEW — thin QProcess FFI (qt_process_start/terminate/state); generic, not Resolve-specific
     local_socket_bindings.cpp   # NEW — thin QLocalSocket client FFI (qt_local_socket_connect/write + readyRead signal)
-  editor_media_platform/        # MODIFIED — renderer CDL stage (per-pixel slope/offset/power+sat, then LUT)
+  editor_media_platform/        # MODIFIED — renderer CDL stage: emp_cdl.{h,cpp} (apply_cdl_rgb + apply_cdl_bgra8_inplace, ASC S-2014-009-01 + BT.709 luma). Mirrored in src/gpu_video_surface.mm Metal shader; called from src/cpu_video_surface.cpp. LUT-after-CDL deferred — V1 displays primary-fidelity only; non-primary shows ungraded + fidelity badge per FR-015.
 tools/
   resolve-helper/               # NEW — the sidecar process (Python, resolved by Phase 0)
     helper main + Resolve-API adapter (import/read_identities/read_timeline/read_grades/stamp_identity_marker)

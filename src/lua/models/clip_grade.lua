@@ -18,6 +18,8 @@
 --- from "last-known good." `stale` has no SQL default — the writer always
 --- sets it explicitly (per ENGINEERING 2.13).
 
+local database = require("core.database")
+
 local M = {}
 
 local CDL_CHANNELS = {
@@ -145,10 +147,15 @@ function M.fingerprint(grade)
 end
 
 --- Load a grade by clip_id; returns nil if no row.
+--- `db` is optional — model layer owns SQL access (per the SQL-isolation
+--- policy in core/database.lua), so views/pull-helpers can call
+--- `ClipGrade.load(clip_id)` without threading a connection through.
+--- Command callers still pass their dispatch-supplied db.
 function M.load(clip_id, db)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "ClipGrade.load: clip_id required")
-    assert(db, "ClipGrade.load: db connection required")
+    db = db or database.get_connection()
+    assert(db, "ClipGrade.load: no active database connection")
     local stmt = assert(db:prepare([[
         SELECT slope_r, slope_g, slope_b, offset_r, offset_g, offset_b,
                power_r, power_g, power_b, saturation,

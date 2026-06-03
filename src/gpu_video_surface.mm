@@ -94,6 +94,35 @@ struct VertexOut {
     float2 texCoord;
 };
 
+// ASC CDL primary grade uniform (spec 023 T032 / FR-016).
+// Layout MUST match emp::CdlParams in editor_media_platform/emp_cdl.h
+// (slope[3], offset[3], power[3], saturation, enabled). Uploaded each
+// draw via setFragmentBytes at buffer index 0 — no allocation.
+struct CdlUniform {
+    float slope[3];
+    float offset[3];
+    float power[3];
+    float saturation;
+    int enabled;
+};
+
+// Mirrors emp::apply_cdl_rgb byte-for-byte semantically:
+//   sop  = max(in*slope+offset, 0)        -- negative-clamp before pow
+//   cdl  = sop^power
+//   luma = dot(cdl, BT.709 weights)
+//   out  = saturate(luma + (cdl-luma)*sat)
+// When uniform.enabled == 0, returns rgb unchanged (passthrough).
+float3 apply_cdl(float3 rgb, constant CdlUniform& cdl) {
+    if (cdl.enabled == 0) return rgb;
+    float3 s = float3(cdl.slope[0],  cdl.slope[1],  cdl.slope[2]);
+    float3 o = float3(cdl.offset[0], cdl.offset[1], cdl.offset[2]);
+    float3 p = float3(cdl.power[0],  cdl.power[1],  cdl.power[2]);
+    float3 sop = max(rgb * s + o, 0.0);
+    float3 c = pow(sop, p);
+    float luma = dot(c, float3(0.2126, 0.7152, 0.0722));  // BT.709
+    return saturate(float3(luma) + (c - float3(luma)) * cdl.saturation);
+}
+
 vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
     VertexOut out;
     out.position = float4(in.position, 0.0, 1.0);
@@ -105,7 +134,8 @@ vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
 // Works for both 8-bit (NV12) and 10-bit (P010) - texture formats handle normalization
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> texY [[texture(0)]],
-                               texture2d<float> texUV [[texture(1)]]) {
+                               texture2d<float> texUV [[texture(1)]],
+                               constant CdlUniform& cdl [[buffer(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
 
     float y = texY.sample(s, in.texCoord).r;
@@ -122,15 +152,18 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     float g = y - 0.1873 * u - 0.4681 * v;
     float b = y + 1.8556 * u;
 
-    return float4(saturate(float3(r, g, b)), 1.0);
+    float3 rgb = saturate(float3(r, g, b));
+    return float4(apply_cdl(rgb, cdl), 1.0);
 }
 
 // BGRA passthrough for sw-decoded frames (PNG, JPEG, etc.)
 // MTLPixelFormatBGRA8Unorm swizzles on read, so sampling returns RGBA directly.
 fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
-                                   texture2d<float> tex [[texture(0)]]) {
+                                   texture2d<float> tex [[texture(0)]],
+                                   constant CdlUniform& cdl [[buffer(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
-    return tex.sample(s, in.texCoord);
+    float4 rgba = tex.sample(s, in.texCoord);
+    return float4(apply_cdl(rgba.rgb, cdl), rgba.a);
 }
 
 // Packed 4:4:4:4 AYUV (y416 from ProRes 4444 with alpha).
@@ -138,7 +171,8 @@ fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
 // Metal RGBA16Unorm maps to: R=A, G=Y, B=Cb, A=Cr (all [0,1] normalized).
 // Full-range BT.709 conversion (ProRes is full-range).
 fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
-                                        texture2d<float> tex [[texture(0)]]) {
+                                        texture2d<float> tex [[texture(0)]],
+                                        constant CdlUniform& cdl [[buffer(0)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     float4 ayuv = tex.sample(s, in.texCoord);
 
@@ -152,7 +186,8 @@ fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
     float g = y - 0.1873 * cb - 0.4681 * cr;
     float b = y + 1.8556 * cb;
 
-    return float4(saturate(float3(r, g, b)), alpha);
+    float3 rgb = saturate(float3(r, g, b));
+    return float4(apply_cdl(rgb, cdl), alpha);
 }
 )";
 
@@ -694,6 +729,20 @@ void GPUVideoSurface::clearFrameImpl() {
     if (m_initialized) renderTexture();
 }
 
+void GPUVideoSurface::setGrade(const emp::CdlParams& cdl) {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::setGrade: must be on main thread");
+    m_cdl = cdl;
+    // No re-render here; the next setFrame will draw with the new grade.
+    // View contract: push grade BEFORE pushing frame.
+}
+
+void GPUVideoSurface::clearGrade() {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::clearGrade: must be on main thread");
+    m_cdl = emp::CdlParams{};  // zero-init ⇒ enabled = 0 (passthrough)
+}
+
 void GPUVideoSurface::renderTexture() {
     if (!m_initialized) return;
     // Guard against 0x0 drawable size (widget not yet laid out by window manager).
@@ -775,6 +824,13 @@ void GPUVideoSurface::renderTexture() {
                 [encoder setRenderPipelineState:m_impl->bgraPipelineState];
                 [encoder setFragmentTexture:m_impl->bgraTexture atIndex:0];
             }
+
+            // CDL color stage uniform (T032 / FR-016). All three shaders
+            // bind it at fragment buffer index 0. setFragmentBytes is the
+            // Apple-blessed zero-alloc path for ≤4KB structs; CdlParams
+            // is 44 bytes. apply_cdl is a no-op when enabled==0, so
+            // ungraded surfaces are bit-identical to pre-T032 output.
+            [encoder setFragmentBytes:&m_cdl length:sizeof(m_cdl) atIndex:0];
 
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }

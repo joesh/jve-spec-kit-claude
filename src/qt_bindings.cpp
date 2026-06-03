@@ -23,6 +23,7 @@
 #include "lua/qt_bindings/input_bindings.cpp"
 #include "lua/qt_bindings/xml_bindings.cpp"
 #include "lua/qt_bindings/zstd_bindings.cpp"
+#include "lua/qt_bindings/cdl_bindings.cpp"
 #include "lua/qt_bindings/process_bindings.cpp"
 #include "lua/qt_bindings/local_socket_bindings.cpp"
 
@@ -418,6 +419,11 @@ void registerQtBindings(lua_State* L)
     // Register zstd decompression (qt_zstd_decompress — used by DRP importer
     // to decode Sm2Mp FieldsBlob payloads for synced-clip resolution).
     register_zstd_bindings(L);
+
+    // Register CDL pixel-math test binding (spec 023 T032). The math itself
+    // lives in EMP (emp::apply_cdl_rgb); this exposes it to Lua so the
+    // binding test can pin the math against ASC-derived domain values.
+    register_cdl_bindings(L);
 
     // Register QProcess + QLocalSocket primitives (spec 023 T019/T020) for
     // the Resolve helper supervisor. Supervision policy lives in

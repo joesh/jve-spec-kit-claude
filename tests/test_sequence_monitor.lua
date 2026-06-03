@@ -50,6 +50,11 @@ package.loaded["core.qt_constants"] = {
                 type = "set_frame", surface = surface, frame = frame,
             }
         end,
+        SURFACE_SET_GRADE = function(surface, grade)
+            qt_log[#qt_log + 1] = {
+                type = "set_grade", surface = surface, grade = grade,
+            }
+        end,
         SURFACE_SET_ROTATION = function(surface, deg)
             qt_log[#qt_log + 1] = {
                 type = "set_rotation", surface = surface, degrees = deg,

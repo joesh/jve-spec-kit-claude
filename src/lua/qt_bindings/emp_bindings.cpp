@@ -10,6 +10,7 @@
 #include <editor_media_platform/emp_timeline_media_buffer.h>
 #include <editor_media_platform/emp_peak_file.h>
 #include <editor_media_platform/emp_peak_generator.h>
+#include <editor_media_platform/emp_cdl.h>
 
 #include "../../editor_media_platform/src/impl/braw_decode.h"
 #include "gpu_video_surface.h"
@@ -1564,6 +1565,61 @@ static int lua_emp_surface_on_error(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_SET_GRADE(surface_widget, grade_table|nil)
+// Push the View-pulled CDL params to the surface's color stage (spec
+// 023 T032 / FR-016). grade_table is `{slope_r, slope_g, slope_b,
+// offset_r, offset_g, offset_b, power_r, power_g, power_b, saturation}`
+// matching the `clip_grade.cdl` shape. nil clears (surface displays
+// ungraded). Validation: every field is luaL_checknumber. Works with
+// both GPUVideoSurface and CPUVideoSurface.
+static int lua_emp_surface_set_grade(lua_State* L) {
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L,
+        "EMP.SURFACE_SET_GRADE: widget is null or destroyed");
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
+    if (!gpu_surface && !cpu_surface) {
+        return luaL_error(L,
+            "EMP.SURFACE_SET_GRADE: widget is not a video surface (GPU or CPU)");
+    }
+
+    // nil ⇒ clear (passthrough display)
+    if (lua_isnil(L, 2)) {
+        if (gpu_surface) gpu_surface->clearGrade();
+        if (cpu_surface) cpu_surface->clearGrade();
+        return 0;
+    }
+
+    luaL_checktype(L, 2, LUA_TTABLE);
+    emp::CdlParams cdl{};
+    auto get_num = [&](const char* key) -> float {
+        lua_getfield(L, 2, key);
+        if (!lua_isnumber(L, -1)) {
+            lua_pop(L, 1);
+            luaL_error(L, "EMP.SURFACE_SET_GRADE: cdl.%s must be number", key);
+        }
+        float v = static_cast<float>(lua_tonumber(L, -1));
+        lua_pop(L, 1);
+        return v;
+    };
+    cdl.slope[0]  = get_num("slope_r");
+    cdl.slope[1]  = get_num("slope_g");
+    cdl.slope[2]  = get_num("slope_b");
+    cdl.offset[0] = get_num("offset_r");
+    cdl.offset[1] = get_num("offset_g");
+    cdl.offset[2] = get_num("offset_b");
+    cdl.power[0]  = get_num("power_r");
+    cdl.power[1]  = get_num("power_g");
+    cdl.power[2]  = get_num("power_b");
+    cdl.saturation = get_num("saturation");
+    cdl.enabled = 1;
+
+    if (gpu_surface) gpu_surface->setGrade(cdl);
+    if (cpu_surface) cpu_surface->setGrade(cdl);
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -2477,6 +2533,8 @@ void register_emp_bindings(lua_State* L) {
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);
     lua_setfield(L, -2, "SURFACE_SET_FRAME");
+    lua_pushcfunction(L, lua_emp_surface_set_grade);
+    lua_setfield(L, -2, "SURFACE_SET_GRADE");
     lua_pushcfunction(L, lua_emp_surface_set_rotation);
     lua_setfield(L, -2, "SURFACE_SET_ROTATION");
     lua_pushcfunction(L, lua_emp_surface_set_par);

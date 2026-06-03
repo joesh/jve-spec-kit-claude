@@ -8,6 +8,8 @@
 #include <memory>
 #include <string>
 
+#include <editor_media_platform/emp_cdl.h>
+
 namespace emp { class Frame; }
 
 #ifdef __APPLE__
@@ -44,6 +46,15 @@ public:
 
     // Clear display to black. Thread-safe (same dispatch + generation logic).
     void clearFrame();
+
+    // CDL color stage (spec 023 T032 / FR-016). The View pulls the
+    // clip's grade from the model and pushes the CDL params here
+    // BEFORE setFrame; subsequent frames apply the math in the Metal
+    // fragment shader (uniform binding) before the final saturate.
+    // Main-thread only. clearGrade flips enabled=0 (passthrough).
+    void setGrade(const emp::CdlParams& cdl);
+    void clearGrade();
+    const emp::CdlParams& grade() const { return m_cdl; }
 
     // Set rotation (0, 90, 180, 270 degrees)
     void setRotation(int degrees);
@@ -111,6 +122,11 @@ private:
     // if its captured generation still matches current — stale dispatches
     // (from earlier ticks) become no-ops.
     std::atomic<uint64_t> m_generation{0};
+
+    // CDL color stage state (T032). Zero-init ⇒ enabled = 0 (passthrough),
+    // so untouched surfaces behave bit-identically to pre-T032 builds.
+    // Uploaded to the fragment shader via setFragmentBytes each draw.
+    emp::CdlParams m_cdl{};
 };
 
 #else
@@ -126,6 +142,8 @@ public:
     void setErrorCallback(ErrorCallback) {}
     void setFrame(const std::shared_ptr<emp::Frame>&) { assert(false && "GPUVideoSurface not available on this platform"); }
     void clearFrame() {}
+    void setGrade(const emp::CdlParams&) {}
+    void clearGrade() {}
     void setRotation(int) {}
     int rotation() const { return 0; }
     void setPixelAspectRatio(int, int) {}

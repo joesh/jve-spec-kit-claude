@@ -39,6 +39,9 @@ globals = {
     "qt_xml_parse_string",
     "qt_zstd_decompress",
     "qt_zstd_compress",
+    -- spec 023 T032 — ASC CDL math test binding (regression target for
+    -- both emp::apply_cdl_rgb and the mirrored Metal fragment shader).
+    "qt_cdl_apply_pixel",
     -- spec 023 T019/T020 — QProcess + QLocalSocket FFI for Resolve bridge.
     "qt_process_create",
     "qt_process_start",

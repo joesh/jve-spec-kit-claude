@@ -39,7 +39,24 @@ void CPUVideoSurface::setFrameData(const uint8_t* data, int width, int height, i
         std::memcpy(m_image.scanLine(y), data + y * stride, width * 4);
     }
 
+    // CDL color stage (T032 / FR-016). No-op when m_cdl.enabled == 0
+    // (the View hasn't pushed a primary grade for the current clip).
+    // BGRA8 in place; alpha preserved.
+    emp::apply_cdl_bgra8_inplace(m_image.bits(), width, height,
+                                  static_cast<int>(m_image.bytesPerLine()),
+                                  m_cdl);
+
     update();
+}
+
+void CPUVideoSurface::setGrade(const emp::CdlParams& cdl) {
+    m_cdl = cdl;
+    // No update() — the next setFrame/setFrameData will re-render
+    // with the new grade. The View pushes grade BEFORE frame.
+}
+
+void CPUVideoSurface::clearGrade() {
+    m_cdl = emp::CdlParams{};  // zero-init ⇒ enabled = 0
 }
 
 void CPUVideoSurface::clearFrame() {
