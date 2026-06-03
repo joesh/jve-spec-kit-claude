@@ -2,57 +2,111 @@ local M = {}
 
 local log = require("core.logger").for_area("media")
 
--- Is the existing SHM file owned by a live JVE process other than us?
+-- ============================================================================
+-- Pidlock-based SHM staleness check.
 --
--- True semantics: "is there another jve running that might be holding
--- this SHM?" If yes, SHM is real — leave it. If no (we are the only
--- jve), SHM is stale from a prior crash — safe to delete so SQLite
--- can recover the WAL.
+-- Why not pgrep / lsof / fuser:
+--   macOS Hardened-Runtime / adhoc-codesigned .app processes are invisible
+--   to other process' KERN_PROCARGS2 / lsof fd-table queries (verified
+--   2026-06-03: from inside a .app, `lsof <shm>`, `pgrep -f jve`, and
+--   `fuser <shm>` all return empty even when another JVE is actively
+--   holding the file). The kernel hides .app process introspection from
+--   peer .apps. Process-name detection is fundamentally unreliable here.
 --
--- Replaced an earlier `lsof "<path>" | wc -l` shellout. lsof's output
--- is large/variable and at least once (2026-06-03 TSO) returned a nil
--- read from io.popen, asserting the OpenProject path. pgrep output is
--- one PID per line — tiny, deterministic, matches the invariant
--- documented in CLAUDE.md ("pgrep -x jve || rm -f ...-shm").
-local function another_jve_is_running()
-    -- Use absolute pgrep path. The .app bundle launched via Finder/Dock/
-    -- LaunchServices runs with a stripped env (no user shell PATH), so
-    -- a bare "pgrep" may not resolve and io.popen returns an empty
-    -- stdout — which previously asserted with "returned 0 matches but
-    -- we are running" (2026-06-03 screenshot, OpenProject crash).
-    local handle = assert(io.popen("/usr/bin/pgrep -x jve"),
-        "project_open.another_jve_is_running: io.popen(pgrep) failed")
-    local out = handle:read("*a")
-    handle:close()
-    assert(out ~= nil,
-        "project_open.another_jve_is_running: pgrep pipe read returned nil")
-    -- Count non-empty lines. Inside a running JVE process pgrep finds
-    -- at least our own pid, so >= 2 means a second jve is alive.
-    local n = 0
-    for _ in out:gmatch("[^\n]+") do n = n + 1 end
-    assert(n >= 1, string.format(
-        "project_open.another_jve_is_running: /usr/bin/pgrep -x jve returned 0 "
-        .. "matches but we are running — output=%q", out))
-    return n >= 2
+-- What we do instead:
+--   On every successful project open, JVE writes its own PID to
+--   `<project>.jvp-pidlock`. On next open, if SHM exists we read the
+--   pidlock and `kill -0` it:
+--     • pidlock missing / PID dead  →  prior JVE crashed without cleanup.
+--       SHM may be stale; safe to delete (SQLite will recover the WAL).
+--     • PID alive                   →  another JVE has this project open.
+--       Leave SHM in place; set_path will fail and the user gets a clear
+--       "already open" indication.
+--
+--   No process-introspection needed — kill(pid, 0) works regardless of
+--   the .app introspection wall because the kernel grants `joe` the right
+--   to signal-test his own processes.
+--
+--   The pidlock is per-project, which is the correct scope: the question
+--   we actually care about is "did the JVE that owned THIS project's SHM
+--   exit cleanly?", not "is JVE running anywhere".
+-- ============================================================================
+
+local function pidlock_path(project_path) return project_path .. "-jve-pidlock" end
+
+local function our_pid()
+    -- Get JVE's own PID without a C binding: the shell that io.popen
+    -- spawns has us as its parent; ppid of $$ is our pid. Works under
+    -- the introspection wall because it's the kernel telling us about
+    -- the parent of our own immediate child.
+    local h = assert(io.popen("/bin/ps -o ppid= -p $$"),
+        "project_open.our_pid: io.popen(ps) failed")
+    local raw = h:read("*l")
+    h:close()
+    assert(raw, "project_open.our_pid: ps returned nil")
+    local pid = tonumber((raw:gsub("%s+", "")))
+    assert(pid and pid > 0, string.format(
+        "project_open.our_pid: ps returned non-numeric ppid: %q", raw))
+    return pid
+end
+
+local function pid_is_alive(pid)
+    assert(type(pid) == "number" and pid > 0,
+        "project_open.pid_is_alive: pid must be a positive number")
+    -- /bin/kill -0 returns 0 if the process exists and we can signal it.
+    -- LuaJIT's os.execute returns exit_code directly (not the
+    -- (ok, "exit", code) tuple of stock 5.2+); 0 means alive.
+    local rc = os.execute("/bin/kill -0 " .. tostring(pid) .. " 2>/dev/null")
+    return rc == 0 or rc == true
+end
+
+local function read_pidlock(project_path)
+    local f = io.open(pidlock_path(project_path), "r")
+    if not f then return nil end
+    local s = f:read("*l")
+    f:close()
+    if not s then return nil end
+    return tonumber((s:gsub("%s+", "")))
+end
+
+local function write_pidlock(project_path)
+    local path = pidlock_path(project_path)
+    local f, err = io.open(path, "w")
+    assert(f, string.format(
+        "project_open.write_pidlock: open %q failed: %s",
+        path, tostring(err)))
+    f:write(tostring(our_pid()))
+    f:close()
+end
+
+-- Returns true iff a live, non-self process owns this project's pidlock.
+-- Self-PID match is impossible during a fresh open (we haven't written
+-- our lock yet) but defended against anyway — a leftover lock from a
+-- prior session of THIS process is by definition stale, not held.
+local function another_jve_owns_project(project_path)
+    local prior = read_pidlock(project_path)
+    if not prior then return false end
+    if prior == our_pid() then return false end
+    return pid_is_alive(prior)
 end
 
 function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, project_path, parent_window)
     assert(db_module and db_module.set_path, "project_open: db_module.set_path is required")
     assert(type(project_path) == "string" and project_path ~= "", "project_open: project_path is required")
 
-    -- Check for stale SHM file BEFORE trying to open (sqlite3_open can hang with stale SHM locks)
-    -- Note: WAL file contains actual transaction data and must NOT be deleted - SQLite will recover it.
-    -- SHM file is just a shared memory index/cache - safe to delete, SQLite recreates it.
+    -- Check for stale SHM BEFORE sqlite3_open (which can hang on stale
+    -- WAL locks during ftruncate). WAL itself stays — SQLite recovers
+    -- transactions from it; only SHM (shared-mem index) is touched here.
     local shm_path = project_path .. "-shm"
     local shm_file = io.open(shm_path, "rb")
     if shm_file then
         shm_file:close()
-        -- SHM exists - if we are the only jve process, it's stale
-        if not another_jve_is_running() then
+        if another_jve_owns_project(project_path) then
+            log.event("Another jve process owns %s (pidlock alive) — leaving SHM in place",
+                project_path)
+        else
             log.event("Removing stale SHM file (WAL will be recovered): %s", shm_path)
             os.remove(shm_path)
-        else
-            log.event("Another jve process is running — leaving SHM in place: %s", shm_path)
         end
     end
 
@@ -65,6 +119,9 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
         return false
     end
 
+    -- Record that THIS JVE process now owns this project's SHM so the
+    -- next open can tell stale-from-crash apart from concurrent-open.
+    write_pidlock(project_path)
     return true
 end
 
