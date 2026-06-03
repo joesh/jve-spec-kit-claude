@@ -105,7 +105,23 @@ function M.connect(socket_path, opts)
         end
     end)
 
+    -- Capture the last QLocalSocket error so the connect-failure branch
+    -- below can surface what actually happened instead of always saying
+    -- "timed out". QLocalSocket::waitForConnected returns false in
+    -- multiple distinct cases:
+    --   • ServerNotFoundError — socket file doesn't exist (fires
+    --     INSTANTLY, NOT after the timeout — cost ~1hr session time
+    --     during the spec-023 spawn-race investigation before the real
+    --     cause was found; the misleading "timed out" message sent the
+    --     debugger after a phantom slow-path).
+    --   • ConnectionRefusedError — socket file exists but no listen().
+    --   • PeerClosedError — disconnected during handshake.
+    --   • SocketTimeoutError / no error cb fired — the genuine timeout.
+    -- We branch on err_name so each failure mode self-describes (rule
+    -- 2.32 — no silent failure of the actual cause).
+    local last_socket_error = nil
     qt_local_socket_set_error_cb(handle, function(err_name)
+        last_socket_error = err_name
         log.event("client: socket error: %s", err_name)
     end)
 
@@ -114,9 +130,38 @@ function M.connect(socket_path, opts)
         handle, connect_timeout_ms)
     if not connected then
         qt_local_socket_destroy(handle)
+        local err = last_socket_error
+        if err == "ServerNotFoundError" then
+            return nil, string.format(
+                "client.connect: socket file %s does not exist — "
+                .. "QLocalSocket fired ServerNotFoundError instantly "
+                .. "(it does NOT retry within its %dms timeout for "
+                .. "this error; the caller owns wait-for-bind)",
+                socket_path, connect_timeout_ms)
+        end
+        if err == "ConnectionRefusedError" then
+            return nil, string.format(
+                "client.connect: connection refused on %s — socket "
+                .. "file exists but the helper is not listen()ing",
+                socket_path)
+        end
+        if err == "PeerClosedError" then
+            return nil, string.format(
+                "client.connect: helper disconnected during connect "
+                .. "handshake on %s", socket_path)
+        end
+        if err then
+            return nil, string.format(
+                "client.connect: %s on %s (waited up to %dms)",
+                err, socket_path, connect_timeout_ms)
+        end
+        -- No QLocalSocket error cb fired before wait timed out: the
+        -- helper accepted then never replied, or the kernel queued
+        -- the connect indefinitely. This is the genuine timeout.
         return nil, string.format(
-            "client.connect: timed out after %dms (helper not listening?)",
-            connect_timeout_ms)
+            "client.connect: timed out after %dms with no "
+            .. "QLocalSocket error (helper unresponsive on %s?)",
+            connect_timeout_ms, socket_path)
     end
 
     function self:request(verb, args, on_complete)  -- luacheck: ignore self
