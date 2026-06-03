@@ -21,6 +21,7 @@
 --- helper.py` (Joe's decision — Python binary discovered via env/PATH).
 
 local client = require("core.resolve_bridge.client")
+local qt_constants = require("core.qt_constants")
 local log = require("core.logger").for_area("commands")
 
 local M = {}
@@ -28,6 +29,16 @@ local M = {}
 local CONNECT_TIMEOUT_MS = 5000
 local REQUEST_TIMEOUT_MS = 30000
 local STARTUP_GRACE_MS = 3000
+-- qt_process_wait_for_started returns when posix_spawn's fork+exec syscall
+-- completes (~1ms). The helper still has to load bash/python, run imports,
+-- and call socket.bind — ~70ms cold on a fast machine, longer under load.
+-- QLocalSocket::waitForConnected does NOT retry on ServerNotFoundError; its
+-- timeout only covers an in-progress connection. So we poll for the
+-- socket file ourselves before handing off to client.connect, with a
+-- budget separate from the per-connect budget (FR-007: structured error
+-- on failure, no silent retry of the underlying request).
+local BIND_READY_TIMEOUT_MS = 5000
+local BIND_READY_POLL_MS = 25
 
 local state = {
     process_handle = nil,
@@ -99,6 +110,48 @@ local function _teardown()
     end
 end
 
+-- Block until the helper has actually called socket.bind on `socket_path`,
+-- OR the process has died, OR we've exceeded the budget. Returns nil on
+-- success and an error string on failure (so the caller can pass it
+-- through to a structured (code, message) failure per FR-007).
+--
+-- Why this is necessary: qt_process_wait_for_started's "started"
+-- semantic is "fork+exec syscall returned"; the helper still has to
+-- load bash/python and run imports before reaching socket.bind. The
+-- delta is ~70ms cold. QLocalSocket::waitForConnected fires
+-- ServerNotFoundError instantly when the socket file doesn't exist and
+-- does NOT retry within its own timeout, so we own the readiness wait
+-- here at the supervisor seam — the supervisor's job is to hand the
+-- caller a helper that *is* listening (rule 1.14 — fail fast or
+-- succeed, never half-state).
+--
+-- `os.execute("test -S")` is reliable for socket files (which
+-- io.open/stat-as-regular-file are not); same probe the binding
+-- fixture uses (tests/binding/helper_fixture.lua) so prod and test
+-- agree on what "ready" means.
+local function wait_for_bind(proc, socket_path, timeout_ms)
+    local elapsed = 0
+    while elapsed < timeout_ms do
+        if os.execute("test -S " .. socket_path) == 0 then
+            return nil
+        end
+        -- If the helper died mid-startup, fail with a distinct message
+        -- so log readers don't chase a phantom "slow bind". finished_cb
+        -- has already cleared state.process_handle by this point — we
+        -- query the QProcess slot directly via the local proc handle.
+        if qt_process_state(proc) == "not_running" then
+            return "helper exited during startup before binding socket "
+                .. socket_path
+        end
+        qt_constants.CONTROL.PROCESS_EVENTS()
+        os.execute(string.format("sleep %f", BIND_READY_POLL_MS / 1000))
+        elapsed = elapsed + BIND_READY_POLL_MS
+    end
+    return string.format(
+        "helper did not bind socket %s within %dms",
+        socket_path, timeout_ms)
+end
+
 local function spawn_helper()
     assert(state.helper_script_path,
         "helper_supervisor: configure() must be called first")
@@ -150,6 +203,13 @@ local function spawn_helper()
         _teardown()
         return nil, "helper_unavailable", string.format(
             "helper process failed to start within %dms", STARTUP_GRACE_MS)
+    end
+
+    local ready_err = wait_for_bind(proc, socket_path,
+        BIND_READY_TIMEOUT_MS)
+    if ready_err then
+        _teardown()
+        return nil, "helper_unavailable", ready_err
     end
     return socket_path
 end
