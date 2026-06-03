@@ -159,6 +159,11 @@ function M.execute(args, db, _command)
             notify(args, nil, code, message)
             return
         end
+        -- Async-tail asserts (response shape, ledger upsert) crash by
+        -- design — bridge_completion.lua's executor pcall only catches
+        -- sync-phase asserts. The contract lives in bridge_completion's
+        -- docstring; mirror it here so a reader of this file sees the
+        -- rule without grep.
         local mapping = response.result.mapping
         local unrelinked = response.result.unrelinked
         local unkeyed_resolve_items = response.result.unkeyed_resolve_items

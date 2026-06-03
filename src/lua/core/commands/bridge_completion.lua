@@ -19,13 +19,14 @@
 --- SYNC-phase asserts (input validation, payload_builder, Sequence.load,
 --- round-trip validator, anything inside `M.execute` BEFORE
 --- `client:request(...)` returns). ASYNC-phase asserts (failures inside
---- the response callback — e.g. `M.apply` invariant violations) are
---- deliberately NOT pcall-wrapped (see the inline rationale at
---- sync_grades_from_resolve.lua / sync_edits_from_resolve.lua: those
---- are internal-invariant violations that must crash hard per rule
---- 1.14, not be downgraded to a toast). If a future debugger sees a
---- frozen UI + no counter advance, the async response handler is the
---- thing to check — not a regression in this contract.
+--- the response callback — e.g. `M.apply` invariant violations, ledger
+--- upsert, response-shape checks) are deliberately NOT pcall-wrapped:
+--- those are internal-invariant violations that must crash hard per
+--- rule 1.14, not be downgraded to a toast. The four command files
+--- each carry a brief in-callback comment pointing at this docstring.
+--- If a future debugger sees a frozen UI + no counter advance, the
+--- async response handler is the thing to check — not a regression in
+--- this contract.
 ---
 --- `notify()` is one place that:
 ---   1. emits the OP-SPECIFIC completion signal

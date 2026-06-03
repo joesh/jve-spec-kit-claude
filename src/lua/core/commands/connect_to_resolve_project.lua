@@ -420,7 +420,11 @@ function M.execute(args, db, _command)
             notify(args, nil, code, message)
             return
         end
-
+        -- Async-tail asserts (M.match invariants, duplicate position
+        -- keys, ledger upsert) crash by design — bridge_completion.lua's
+        -- executor pcall only catches sync-phase asserts. Contract lives
+        -- in bridge_completion's docstring; mirror it here so a reader
+        -- of this file sees the rule without grep.
         local matched = M.match(jve_clips, state.identities, state.items)
 
         local matched_log = {}

@@ -983,11 +983,12 @@ function M.execute(args, db, _command)
             -- classifier shape (per-item JVE track_id).
             local translated = M.translate_wire_response(response.result,
                 args.sequence_id)
-            -- No pcall around M.apply: a JVE-side assert failure (DB,
-            -- schema, response shape, classifier invariant) is an
-            -- internal violation, not a Resolve-API failure. Fail-fast
-            -- (rule 1.14) — masking it as `resolve_api_error` would
-            -- conflate origin (rule 2.21).
+            -- Async-tail asserts crash by design — see the contract
+            -- documented in bridge_completion.lua (executor's pcall only
+            -- catches sync-phase asserts before client:request returns;
+            -- this callback runs after that pcall has popped). Masking
+            -- an internal invariant violation as resolve_api_error would
+            -- conflate origin (rule 2.21) and downgrade rule 1.14.
             local result = M.apply(translated, args.sequence_id,
                 args.project_id, db, args.user_choices)
             notify(args, result, nil, nil)

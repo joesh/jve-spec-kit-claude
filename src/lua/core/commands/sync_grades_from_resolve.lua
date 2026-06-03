@@ -245,10 +245,12 @@ function M.execute(args, db, command)
                 notify(args, nil, code, message)
                 return
             end
-            -- No pcall around M.apply: a JVE-side assert failure (DB,
-            -- schema, response shape) is an internal invariant violation,
-            -- not a Resolve-API failure. Fail-fast (rule 1.14) — masking
-            -- it as `resolve_api_error` would conflate origin (rule 2.21).
+            -- Async-tail asserts crash by design — see the contract
+            -- documented in bridge_completion.lua (executor's pcall only
+            -- catches sync-phase asserts before client:request returns;
+            -- this callback runs after that pcall has popped). Masking
+            -- an internal invariant violation as resolve_api_error would
+            -- conflate origin (rule 2.21) and downgrade rule 1.14.
             local captured = M.apply(response.result, sequence_id, db,
                 os.time())
             -- Persist captured onto the live command so the undoer can
