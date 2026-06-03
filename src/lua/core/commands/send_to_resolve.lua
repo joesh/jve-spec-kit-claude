@@ -26,6 +26,7 @@ local change_token      = require("core.resolve_bridge.change_token")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local drt_writer        = require("exporters.drt_writer")
+local drt_round_trip    = require("exporters.drt_round_trip")
 local Sequence          = require("models.sequence")
 local log               = require("core.logger").for_area("commands")
 
@@ -98,6 +99,19 @@ function M.execute(args, db)
     local out_path = out_path_for_export(args.sequence_id)
     drt_writer.author(out_path, payload)
     log.event("SendToResolve: authored %s", out_path)
+
+    -- FR-004: round-trip the just-authored file through JVE's own
+    -- importer BEFORE handing it to Resolve. Without this gate a
+    -- writer regression (e.g. dropped DbId, malformed XML) ships
+    -- silent corruption straight to the colorist.
+    local rt_ok, rt_code, rt_message = drt_round_trip.validate(
+        out_path, payload)
+    if not rt_ok then
+        log.error("SendToResolve: FR-004 round-trip validation failed "
+            .. "for %s: %s", out_path, rt_message)
+        args.on_complete(nil, rt_code, rt_message)
+        return
+    end
 
     local client, supervisor_err = supervisor.ensure_client()
     if not client then
