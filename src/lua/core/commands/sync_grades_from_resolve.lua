@@ -26,16 +26,13 @@ local M = {}
 local ClipGrade         = require("models.clip_grade")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
-local bridge_completion = require("core.commands.bridge_completion")
+local bridge_command    = require("core.commands.bridge_command")
 local Signals           = require("core.signals")
 local log               = require("core.logger").for_area("commands")
 
-local OP_NAME = "SyncGradesFromResolve"
-bridge_completion.register_op(OP_NAME, "sync_grades_from_resolve_completed")
-
-local function notify(args, result, code, message)
-    bridge_completion.notify(OP_NAME, args, result, code, message)
-end
+local OP = bridge_command.declare(
+    "SyncGradesFromResolve", "sync_grades_from_resolve_completed")
+local notify = OP.notify
 
 local function load_existing_row(clip_id, db)
     return ClipGrade.load(clip_id, db)
@@ -281,9 +278,9 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local executor = bridge_completion.register_executor(
-        command_executors, OP_NAME, M.execute, db, set_last_error)
-    command_undoers[OP_NAME] = function(command)
+    local registered = OP.make_register(M.execute, SPEC)(
+        command_executors, command_undoers, db, set_last_error)
+    command_undoers[OP.op_name] = function(command)
         -- captured is produced by the async on_complete in M.execute and
         -- must be persisted onto the command before undo. A missing
         -- captured means the command was logged before apply() ran, or
@@ -297,8 +294,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
     return {
-        executor = executor,
-        undoer   = command_undoers[OP_NAME],
+        executor = registered.executor,
+        undoer   = command_undoers[OP.op_name],
         spec     = SPEC,
     }
 end

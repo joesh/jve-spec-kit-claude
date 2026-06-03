@@ -23,15 +23,12 @@ local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local edit_diff         = require("core.resolve_bridge.edit_diff")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local command_manager   = require("core.command_manager")
-local bridge_completion = require("core.commands.bridge_completion")
+local bridge_command    = require("core.commands.bridge_command")
 local log               = require("core.logger").for_area("commands")
 
-local OP_NAME = "SyncEditsFromResolve"
-bridge_completion.register_op(OP_NAME, "sync_edits_from_resolve_completed")
-
-local function notify(args, result, code, message)
-    bridge_completion.notify(OP_NAME, args, result, code, message)
-end
+local OP = bridge_command.declare(
+    "SyncEditsFromResolve", "sync_edits_from_resolve_completed")
+local notify = OP.notify
 
 -- Closed-set reasons (module-local; tests assert literal strings, no
 -- public exposure needed). Every emit asserts the reason it carries is
@@ -1032,10 +1029,6 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, db, set_last_error)
-    local executor = bridge_completion.register_executor(
-        command_executors, OP_NAME, M.execute, db, set_last_error)
-    return { executor = executor, spec = SPEC }
-end
+M.register = OP.make_register(M.execute, SPEC)
 
 return M

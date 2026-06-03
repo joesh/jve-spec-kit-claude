@@ -29,18 +29,15 @@ local payload_builder   = require("core.resolve_bridge.payload_builder")
 local change_token      = require("core.resolve_bridge.change_token")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
-local bridge_completion = require("core.commands.bridge_completion")
+local bridge_command    = require("core.commands.bridge_command")
 local drt_writer        = require("exporters.drt_writer")
 local drt_round_trip    = require("exporters.drt_round_trip")
 local Sequence          = require("models.sequence")
 local log               = require("core.logger").for_area("commands")
 
-local OP_NAME = "SendToResolve"
-bridge_completion.register_op(OP_NAME, "send_to_resolve_completed")
-
-local function notify(args, result, code, message)
-    bridge_completion.notify(OP_NAME, args, result, code, message)
-end
+local OP = bridge_command.declare(
+    "SendToResolve", "send_to_resolve_completed")
+local notify = OP.notify
 
 local function out_path_for_export(sequence_id)
     -- Stable per-sequence path: re-sending the same sequence overwrites
@@ -202,10 +199,6 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, db, set_last_error)
-    local executor = bridge_completion.register_executor(
-        command_executors, OP_NAME, M.execute, db, set_last_error)
-    return { executor = executor, spec = SPEC }
-end
+M.register = OP.make_register(M.execute, SPEC)
 
 return M

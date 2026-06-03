@@ -52,15 +52,12 @@ local database          = require("core.database")
 local change_token      = require("core.resolve_bridge.change_token")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
-local bridge_completion = require("core.commands.bridge_completion")
+local bridge_command    = require("core.commands.bridge_command")
 local log               = require("core.logger").for_area("commands")
 
-local OP_NAME = "ConnectToResolveProject"
-bridge_completion.register_op(OP_NAME, "connect_to_resolve_project_completed")
-
-local function notify(args, result, code, message)
-    bridge_completion.notify(OP_NAME, args, result, code, message)
-end
+local OP = bridge_command.declare(
+    "ConnectToResolveProject", "connect_to_resolve_project_completed")
+local notify = OP.notify
 
 local function validate_args(args)
     assert(type(args) == "table", "ConnectToResolveProject: args required")
@@ -562,10 +559,6 @@ local SPEC = {
     },
 }
 
-function M.register(command_executors, _command_undoers, db, set_last_error)
-    local executor = bridge_completion.register_executor(
-        command_executors, OP_NAME, M.execute, db, set_last_error)
-    return { executor = executor, spec = SPEC }
-end
+M.register = OP.make_register(M.execute, SPEC)
 
 return M
