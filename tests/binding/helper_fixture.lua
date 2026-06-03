@@ -1,28 +1,19 @@
 --- Shared fixture for helper contract tests (T013/T014/T051).
 ---
---- Spawns the real Python helper as a subprocess, connects via
---- qt_local_socket, exposes a single request() entrypoint that builds
---- the envelope through src/lua/core/resolve_bridge/protocol.lua (so
---- tests verify the live wire, not a hand-rolled string), pumps Qt
---- events while waiting, parses the response through the same
---- protocol module, and tears the helper down at the end.
+--- Spawns the real Python helper, connects via qt_local_socket,
+--- exposes single request() entrypoint, parses through protocol.
 ---
---- Requires `jve --test` (needs qt_process_* / qt_local_socket_*).
+--- Transport mechanics (start/request/stop loop) live in
+--- `binding._helper_transport` — review item #6 lifted the common
+--- code so this file owns only contract-test-side policy: shorter
+--- request deadline, "corr-" correlation prefix, helper at WARNING
+--- log level, and the contract-side helpers `assert_structured_error`
+--- + `skip_unless_resolve`.
 
-local protocol = require("core.resolve_bridge.protocol")
+local transport = require("binding._helper_transport")
+local protocol  = require("core.resolve_bridge.protocol")
 
 local M = {}
-
-local function source_dir()
-    -- This file is read by `dofile` from the binding batch runner; use
-    -- debug.getinfo to find ourselves regardless of CWD.
-    return debug.getinfo(1, "S").source:match("^@(.+)/[^/]+$")
-end
-
-local function repo_root()
-    return source_dir():match("^(.+)/tests/binding$")
-        or assert(nil, "helper_fixture: cannot locate repo root")
-end
 
 local function pump(milliseconds)
     local ticks = math.max(1, math.floor(milliseconds / 20))
@@ -32,98 +23,30 @@ local function pump(milliseconds)
     end
 end
 
+local function repo_root()
+    return transport.repo_root_from(
+        debug.getinfo(1, "S").source, "tests/binding")
+end
+
 function M.start(sock_path)
-    assert(type(sock_path) == "string" and sock_path ~= "",
-        "helper_fixture.start: sock_path required")
-    os.remove(sock_path)
-
-    local proc = qt_process_create()
-    qt_process_set_stderr_cb(proc, function(chunk)
-        io.write("[helper stderr] " .. chunk)
-    end)
-    qt_process_start(proc, "python3", {
-        repo_root() .. "/tools/resolve-helper/helper.py",
-        "--socket", sock_path,
-        "--log-level", "WARNING",
+    return transport.start({
+        sock_path             = sock_path,
+        repo_root             = repo_root(),
+        log_level             = "WARNING",
+        started_timeout_ms    = 5000,
+        bind_poll_count       = 100,        -- 100 * 50ms = 5s
+        corr_prefix           = "corr",
+        request_timeout_ticks = 500,        -- 500 * 20ms = 10s
     })
-    assert(qt_process_wait_for_started(proc, 5000),
-        "helper did not start within 5s")
-
-    local bind_ok = false
-    for _ = 1, 100 do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-        if os.execute("test -S " .. sock_path) == 0 then
-            bind_ok = true; break
-        end
-        os.execute("sleep 0.05")
-    end
-    assert(bind_ok, "helper never bound socket at " .. sock_path)
-
-    local sock = qt_local_socket_create()
-    local chunks = {}
-    qt_local_socket_set_ready_read_cb(sock, function()
-        chunks[#chunks + 1] = qt_local_socket_read_all(sock)
-    end)
-    qt_local_socket_connect(sock, sock_path)
-    assert(qt_local_socket_wait_for_connected(sock, 5000),
-        "could not connect to helper socket within 5s")
-
-    return {
-        proc      = proc,
-        sock      = sock,
-        sock_path = sock_path,
-        _chunks   = chunks,
-    }
 end
 
-local NEXT_ID = 0
-local function new_correlation_id()
-    NEXT_ID = NEXT_ID + 1
-    return string.format("corr-%d-%d", NEXT_ID, math.floor(os.clock() * 1e6))
-end
-
---- Send `{verb, args}` to the helper, await one response, return the
---- parsed envelope (whatever protocol.parse_response returns).
-function M.request(fix, verb, args)
-    assert(type(fix) == "table" and fix.sock, "request: fixture required")
-    assert(type(verb) == "string", "request: verb required")
-    assert(type(args) == "table",
-        "request: args table required (pass {} for no-arg verbs)")
-    local corr = new_correlation_id()
-    local line = protocol.build_request({
-        id = corr, verb = verb, args = args,
-    })
-    -- Reset accumulator before write — fixture is single-flight.
-    while #fix._chunks > 0 do table.remove(fix._chunks) end
-
-    local written = qt_local_socket_write(fix.sock, line)
-    assert(written == #line, string.format(
-        "request: partial write %d/%d", written, #line))
-    qt_local_socket_flush(fix.sock)
-
-    local deadline = 500  -- ~10s @ 20ms
-    while #fix._chunks == 0 and deadline > 0 do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-        os.execute("sleep 0.02")
-        deadline = deadline - 1
-    end
-    assert(#fix._chunks > 0, "no response within 10s for verb=" .. verb)
-
-    local response = table.concat(fix._chunks)
-    assert(response:sub(-1) == "\n",
-        "response missing newline terminator")
-    local parsed = protocol.parse_response(response:sub(1, -2))
-    assert(parsed.id == corr, string.format(
-        "correlation mismatch: sent %s, got %s", corr, parsed.id))
-    return parsed
-end
+M.request = transport.request
 
 --- Skip the rest of the test if the helper's `ping` reports
 --- `resolve_connected=false` (Resolve Studio not running OR the
---- DaVinciResolveScript module isn't importable wherever the helper
---- lives). Tears the fixture down and exits 0 so the batch runner
---- sees a pass; prints `[SKIP <test_name>] reason` so the line is
---- traceable in the build log.
+--- DaVinciResolveScript module isn't importable). Tears the fixture
+--- down and exits 0 so the batch runner sees a pass; prints
+--- `[SKIP <test_name>] reason` so the line is traceable in the build log.
 ---
 --- Use at the top of any helper contract test that exercises live
 --- Resolve state (read_identities, read_timeline, read_grades, etc.).
@@ -148,12 +71,8 @@ function M.skip_unless_resolve(fix, test_name)
 end
 
 --- Assert a wire response is a closed-set structured error.
---- @param parsed         table   parsed envelope from fixture.request
---- @param expected_code  string  the error.code value the test expects
---- @param label          string  human label for failure message
 --- Was copy-pasted into 6 helper contract tests; lifted here so a
---- contract change (e.g. adding a required field to the error
---- envelope) updates one place (review item #1).
+--- contract change updates one place (review item #1).
 function M.assert_structured_error(parsed, expected_code, label)
     assert(parsed.ok == false, label .. ": expected ok=false")
     assert(type(parsed.error) == "table",
@@ -174,18 +93,9 @@ function M.assert_structured_error(parsed, expected_code, label)
 end
 
 function M.stop(fix)
-    if not fix then return end
-    if fix.sock then
-        qt_local_socket_close(fix.sock)
-        qt_local_socket_destroy(fix.sock)
-    end
-    if fix.proc then
-        qt_process_terminate(fix.proc)
-        qt_process_destroy(fix.proc)
-    end
-    os.remove(fix.sock_path)
+    transport.stop(fix)
     -- Tiny pump to drain stderr cb so logs flush before teardown.
-    pump(50)
+    if fix then pump(50) end
 end
 
 return M
