@@ -15,7 +15,12 @@ local log = require("core.logger").for_area("media")
 -- one PID per line — tiny, deterministic, matches the invariant
 -- documented in CLAUDE.md ("pgrep -x jve || rm -f ...-shm").
 local function another_jve_is_running()
-    local handle = assert(io.popen("pgrep -x jve"),
+    -- Use absolute pgrep path. The .app bundle launched via Finder/Dock/
+    -- LaunchServices runs with a stripped env (no user shell PATH), so
+    -- a bare "pgrep" may not resolve and io.popen returns an empty
+    -- stdout — which previously asserted with "returned 0 matches but
+    -- we are running" (2026-06-03 screenshot, OpenProject crash).
+    local handle = assert(io.popen("/usr/bin/pgrep -x jve"),
         "project_open.another_jve_is_running: io.popen(pgrep) failed")
     local out = handle:read("*a")
     handle:close()
@@ -26,7 +31,7 @@ local function another_jve_is_running()
     local n = 0
     for _ in out:gmatch("[^\n]+") do n = n + 1 end
     assert(n >= 1, string.format(
-        "project_open.another_jve_is_running: pgrep -x jve returned 0 "
+        "project_open.another_jve_is_running: /usr/bin/pgrep -x jve returned 0 "
         .. "matches but we are running — output=%q", out))
     return n >= 2
 end
