@@ -48,6 +48,7 @@ local M = {}
 
 local Track             = require("models.track")
 local Sequence          = require("models.sequence")
+local database          = require("core.database")
 local change_token      = require("core.resolve_bridge.change_token")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
@@ -93,44 +94,38 @@ local TRACK_TYPE_TO_WIRE = {
     AUDIO = "audio",
 }
 
--- Iterate JVE clips on a track via direct SQL (mirrors
--- payload_builder.lua::load_clips_for_track — same prepare-step shape;
--- both are tracked under todo_spec023_dry_and_file_splits item #4 for
--- consolidation into a shared `identity_ledger.list_for_sequence`
--- helper). Returns lightweight tables in matcher-input shape.
+-- Iterate JVE clips on a track via the database.select_rows helper.
+-- The helper guarantees prepare → bind → exec → next → finalize so a
+-- caller cannot recreate the missing-exec bug that originally produced
+-- "0 JVE clip(s)" here (2026-06-03 fix). Returns lightweight tables in
+-- matcher-input shape.
 local function load_clips_on_track(db, track)
-    local stmt = assert(db:prepare([[
+    local wire_track_type = TRACK_TYPE_TO_WIRE[track.track_type] or error(
+        "ConnectToResolveProject: unsupported track.track_type "
+        .. tostring(track.track_type))
+    return database.select_rows(db, [[
         SELECT id, name, sequence_start_frame, duration_frames,
                source_in_frame, source_out_frame
         FROM clips
         WHERE track_id = ?
         ORDER BY sequence_start_frame
-    ]]), "ConnectToResolveProject: prepare clips query failed")
-    stmt:bind_value(1, track.id)
-    local out = {}
-    while stmt:next() do
-        out[#out + 1] = {
+    ]], { track.id }, function(stmt)
+        return {
             id              = stmt:value(0),
             name            = stmt:value(1),
             track_id        = track.id,
-            -- Derive the wire-side track_type from the schema value
+            -- Wire-side track_type derived from the schema value
             -- (uppercase "VIDEO"/"AUDIO") so a future widening that
-            -- removes the V1 video-only filter automatically tags
-            -- audio clips correctly. Literal "video" here previously
-            -- would have silently mislabelled audio if the filter
-            -- moved (rule 2.13 — no hidden assumptions).
-            track_type      = TRACK_TYPE_TO_WIRE[track.track_type] or error(
-                "ConnectToResolveProject: unsupported track.track_type "
-                .. tostring(track.track_type)),
+            -- drops the V1 video-only filter automatically tags audio
+            -- correctly (rule 2.13 — no hidden assumptions).
+            track_type      = wire_track_type,
             track_index     = track.track_index,
             sequence_start  = stmt:value(2),
             duration        = stmt:value(3),
             source_in       = stmt:value(4),
             source_out      = stmt:value(5),
         }
-    end
-    stmt:finalize()
-    return out
+    end)
 end
 
 -- Build the list of JVE clips the matcher walks AND the list of audio
@@ -160,6 +155,12 @@ local function load_jve_clips_for_sequence(sequence_id, db)
     end
     return video_clips, audio_skipped
 end
+
+-- Exported for black-box regression coverage of the JVE-side load
+-- (e.g. the missing-stmt:exec() bug that returned 0 clips on a
+-- populated sequence). Production callers should keep going through
+-- M.execute.
+M.load_jve_clips_for_sequence = load_jve_clips_for_sequence
 
 -- Position-match: (track_type, track_index, record_start) keys are
 -- unique per timeline (Resolve enforces non-overlap among media items).

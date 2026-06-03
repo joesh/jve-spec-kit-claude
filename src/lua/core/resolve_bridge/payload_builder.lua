@@ -26,6 +26,7 @@ local Track    = require("models.track")
 local Media    = require("models.media")
 local Project  = require("models.project")
 local Clip     = require("models.clip")
+local database = require("core.database")
 
 local M = {}
 
@@ -33,9 +34,15 @@ local function fps_number(seq)
     -- drt_writer accepts a fps number; sequences store num/den. We keep
     -- it exact for integer rates and division for fractional. Callers
     -- needing exact rationals work directly with seq.frame_rate.
-    assert(seq.fps_numerator and seq.fps_denominator,
-        "payload_builder: sequence missing fps_numerator/denominator")
-    return seq.fps_numerator / seq.fps_denominator
+    -- Sequence.load returns the rate nested under seq.frame_rate (see
+    -- models/sequence.lua); flat seq.fps_* fields don't exist on the
+    -- loaded object (rule 2.13 — no hidden shape assumptions).
+    assert(type(seq.frame_rate) == "table"
+            and seq.frame_rate.fps_numerator
+            and seq.frame_rate.fps_denominator,
+        "payload_builder: sequence missing frame_rate.fps_numerator/"
+        .. "fps_denominator")
+    return seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator
 end
 
 local function load_clips_for_track(db, track_id)
@@ -44,16 +51,14 @@ local function load_clips_for_track(db, track_id)
     -- does the JOIN). Pre-V13 code reading `clips.media_id` would
     -- prepare-fail at runtime (column absent) — this loader uses
     -- Clip.load per id so the media linkage matches the V13 path.
-    local stmt = assert(db:prepare(
+    --
+    -- Uses database.select_rows so the prepare-bind-exec-iter pattern
+    -- is structurally enforced (the pre-2026-06-03 hand-rolled version
+    -- skipped exec() and silently iterated 0 rows).
+    local ids = database.select_rows(db,
         "SELECT id FROM clips WHERE track_id = ? "
-        .. "ORDER BY sequence_start_frame"),
-        "payload_builder: prepare clips query failed")
-    stmt:bind_value(1, track_id)
-    local ids = {}
-    while stmt:next() do
-        ids[#ids + 1] = stmt:value(0)
-    end
-    stmt:finalize()
+        .. "ORDER BY sequence_start_frame",
+        { track_id }, function(stmt) return stmt:value(0) end)
     local rows = {}
     for _, id in ipairs(ids) do
         local loaded = Clip.load(id)

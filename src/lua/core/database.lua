@@ -741,6 +741,52 @@ function M.get_connection()
     return db_connection
 end
 
+-- Run a parameterized SELECT and return rows as a list. Internally
+-- does prepare → bind → exec → step → finalize so callers cannot skip
+-- exec() (the bug fixed 2026-06-03 — `load_clips_on_track` had
+-- prepare→bind→next() without exec(), silently iterating zero rows and
+-- producing "0 JVE clip(s)" on populated sequences). This helper is
+-- the structurally-safe alternative; new readers should use it.
+--
+-- @param conn       sqlite3 connection (from get_connection() or
+--                   passed explicitly per SQL-isolation policy)
+-- @param sql        prepared-statement SQL with `?` positional placeholders
+-- @param params     array of values to bind, in order (may be nil/empty)
+-- @param row_mapper function(stmt) → row value (called per result row).
+--                   Receives the live statement; should not retain it.
+-- @return list of values produced by row_mapper.
+function M.select_rows(conn, sql, params, row_mapper)
+    assert(conn, "database.select_rows: conn required")
+    assert(type(sql) == "string" and sql ~= "",
+        "database.select_rows: sql required")
+    assert(type(row_mapper) == "function",
+        "database.select_rows: row_mapper function required")
+    local stmt = assert(conn:prepare(sql), string.format(
+        "database.select_rows: prepare failed for sql=%q", sql))
+    if params ~= nil then
+        assert(type(params) == "table",
+            "database.select_rows: params, if supplied, must be an array")
+        for i, p in ipairs(params) do
+            stmt:bind_value(i, p)
+        end
+    end
+    -- exec() is mandatory: without it stmt:next() returns false from
+    -- the start. Surfacing a Lua error here is preferable to silent
+    -- empty iteration (rule 2.32 — no silent failure).
+    local exec_ok = stmt:exec()
+    if not exec_ok then
+        stmt:finalize()
+        error(string.format(
+            "database.select_rows: exec failed for sql=%q", sql))
+    end
+    local rows = {}
+    while stmt:next() do
+        rows[#rows + 1] = row_mapper(stmt)
+    end
+    stmt:finalize()
+    return rows
+end
+
 -- Transaction management API
 function M.begin_transaction()
     assert(db_connection, "database.begin_transaction: no connection")

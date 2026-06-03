@@ -151,6 +151,48 @@ lint_lua() {
             fi
         fi
     fi
+
+    # R012: prepare → next without exec. lsqlite3 requires
+    # `stmt:exec()` between bind and the first `stmt:next()`; without
+    # it `next()` is false from the start and the iterator silently
+    # returns zero rows (2026-06-03 "0 JVE clip(s)" bug in
+    # connect_to_resolve_project + payload_builder). Safe alternative:
+    # `database.select_rows(conn, sql, params, row_mapper)` which
+    # encapsulates the full prepare→bind→exec→iter→finalize cycle.
+    # Per-prepare opt-out: `-- lint-allow: R012 reason` on the
+    # prepare line. Multi-line scan in python3 because prepare and
+    # next are usually on different lines.
+    if command -v python3 >/dev/null 2>&1; then
+        local r012_out
+        r012_out=$(python3 - "$f" <<'PY' 2>/dev/null
+import re, sys
+path = sys.argv[1]
+try:
+    src = open(path).read()
+except Exception:
+    sys.exit(0)
+lines = src.splitlines()
+for m in re.finditer(r':prepare\b', src):
+    start = m.start()
+    tail = src[start:start+2000]
+    fin_idx = tail.find(':finalize(')
+    block = tail[:fin_idx] if fin_idx > 0 else tail[:1200]
+    if (':next()' in block or ':next ' in block) and ':exec()' not in block:
+        line_no = src[:start].count('\n') + 1
+        line_text = lines[line_no - 1] if line_no - 1 < len(lines) else ''
+        if re.search(r'lint-allow:\s*R012', line_text):
+            continue
+        print(f"{line_no}")
+PY
+        )
+        if [ -n "$r012_out" ]; then
+            while IFS= read -r ln; do
+                [ -z "$ln" ] && continue
+                emit "$f" "$ln" R012 \
+                    "prepare → next() without exec(); use database.select_rows(...) or call stmt:exec() before stmt:next() (annotate lint-allow: R012 with reason if intentional)"
+            done <<< "$r012_out"
+        fi
+    fi
 }
 
 lint_cpp() {

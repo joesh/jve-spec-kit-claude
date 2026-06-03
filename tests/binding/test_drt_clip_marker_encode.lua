@@ -12,7 +12,7 @@
 -- Runs via `jve --test` because the encoder requires qt_zstd_compress and
 -- the decoder requires qt_zstd_decompress.
 
-local test_env        = require("test_env")
+require("test_env")  -- path setup (side-effect only)
 local drt_binary      = require("exporters.drt_binary")
 local drp_binary      = require("importers.drp_binary")
 local identity_marker = require("exporters.drt_identity_marker")
