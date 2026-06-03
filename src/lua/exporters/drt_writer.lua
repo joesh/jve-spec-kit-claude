@@ -707,6 +707,73 @@ end
 -- Both files are loaded verbatim from drt_canonical/ and have their reference
 -- DbIds + reference names swapped for freshly minted ones / payload values.
 
+-- Identity-marker constants — MUST mirror tools/resolve-helper/verbs.py
+-- _IDENTITY_MARKER_* (lines 633-637). The helper's _stamp_marker_safe
+-- (verbs.py:223-228) is idempotent ONLY when the existing customData
+-- equals the would-stamp clip_id; differing color/name/note/duration on
+-- the same item would not change that check, but keeping the constants
+-- aligned means a Resolve UI inspection of a JVE-authored marker is
+-- visually indistinguishable from a helper-stamped one (single carrier,
+-- single appearance — no "which side stamped it?" forensics later).
+local IDENTITY_MARKER_COLOR    = "Purple"
+local IDENTITY_MARKER_NAME     = "JVE clip identity"
+local IDENTITY_MARKER_NOTE     = ""
+local IDENTITY_MARKER_DURATION = 1
+local IDENTITY_MARKER_FRAME    = 0
+
+local function identity_marker(clip_id)
+    return {
+        frame       = IDENTITY_MARKER_FRAME,
+        color       = IDENTITY_MARKER_COLOR,
+        name        = IDENTITY_MARKER_NAME,
+        note        = IDENTITY_MARKER_NOTE,
+        duration    = IDENTITY_MARKER_DURATION,
+        custom_data = clip_id,
+    }
+end
+
+-- One <Element><Sm2TiItemLockableBlob>…</Sm2TiItemLockableBlob></Element>
+-- carrying the identity marker for `clip_id`. Mirrors the template's
+-- existing <Sm2MediaPoolLockableBlob> child shape: FieldsBlob, BlobOwner,
+-- DbSavedTime. <BlobOwner> = clip_id = the Sm2Ti DbId we emit at
+-- build_clip_element (drt_writer.lua:509), so drp_importer's
+-- parse_resolve_markers links the marker to the right clip on re-import,
+-- and for a fresh export `Sm2Ti DbId == live GetUniqueId()` so the
+-- helper-side GetMarkerByCustomData finds the same identity marker via
+-- the live API (inbound-findings.md §2 + §5).
+local function build_identity_marker_element(clip_id, item_dbid)
+    local fields_blob_hex = enc.encode_clip_marker_fields_blob({
+        identity_marker(clip_id),
+    })
+    return elem("Element", elem("Sm2TiItemLockableBlob", table.concat({
+        text_elem("FieldsBlob", fields_blob_hex),
+        text_elem("BlobOwner", clip_id),
+        text_elem("DbSavedTime", "0"),
+    }), {DbId = item_dbid}))
+end
+
+-- All clip ids in payload-order across the sequence's tracks. The DRT
+-- writer is single-sequence by design (spec 023 T008 scope) so there's
+-- no cross-sequence dedup concern; within one sequence each clip.id is
+-- unique by JVE's model invariant (clips.id PRIMARY KEY).
+local function collect_clip_ids(seq)
+    assert(type(seq.tracks) == "table",
+        "drt_writer.collect_clip_ids: sequence.tracks required")
+    local ids = {}
+    for _, track in ipairs(seq.tracks) do
+        assert(type(track.clips) == "table",
+            "drt_writer.collect_clip_ids: track.clips array required "
+            .. "(track.type=" .. tostring(track.type) .. ")")
+        for _, c in ipairs(track.clips) do
+            assert(type(c.id) == "string" and c.id ~= "",
+                "drt_writer.collect_clip_ids: every clip needs an id "
+                .. "(identity marker carrier — FR-002)")
+            ids[#ids + 1] = c.id
+        end
+    end
+    return ids
+end
+
 local function build_project_xml(template, payload, dbids)
     -- Required scalars (template drift = silent leak of reference content).
     -- Order: longer `.Cfg` form replaces first because it contains
@@ -715,6 +782,24 @@ local function build_project_xml(template, payload, dbids)
         REFERENCE_PROJECT_CFG, payload.project.name .. ".Cfg")
     template = plain_gsub_required(template,
         REFERENCE_PROJECT_NAME, payload.project.name)
+    -- Inject one identity-marker Sm2TiItemLockableBlob per clip into the
+    -- template's <LocableBlobSet>. This is the file-level carrier of the
+    -- live-API identity (spec.md:116 — "DRT carries `clip.id` via both
+    -- carriers"). The Sm2Ti DbId carrier was already emitted at
+    -- build_clip_element:509 via DbId=clip.id; this completes the pair.
+    -- After Resolve imports the DRT, GetMarkerByCustomData(clip_id)
+    -- returns the marker → live-API identity is anchored without
+    -- requiring the helper's post-import stamp pass to mutate state.
+    local marker_elements = {}
+    for _, clip_id in ipairs(collect_clip_ids(payload.sequence)) do
+        marker_elements[#marker_elements + 1] =
+            build_identity_marker_element(clip_id, fresh_uuid(0x06))
+    end
+    if #marker_elements > 0 then
+        template = plain_gsub_required(template,
+            "</LocableBlobSet>",
+            table.concat(marker_elements) .. "</LocableBlobSet>")
+    end
     return sweep_reference_dbids(template, dbids)
 end
 

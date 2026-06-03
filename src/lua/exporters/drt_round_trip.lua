@@ -11,6 +11,11 @@
 ---   3. the set of clip.ids the writer was given equals the set of
 ---      DbIds the parser reads off Sm2Ti{Video,Audio}Clip elements
 ---      (FR-011b — identity carrier round-trips).
+---   4. every clip carries the identity marker
+---      (color="Purple", name="JVE clip identity", custom_data=clip.id)
+---      so the live-API carrier reads back via the same parser the
+---      helper's `read_identities` uses (spec.md:116 — DRT carries
+---      clip.id via BOTH carriers).
 ---
 --- Deeper invariants (per-clip TC / duration / file_uuid byte-equality)
 --- are the long-running T004 integration test's job. Here we want a
@@ -73,6 +78,29 @@ local function collect_parsed_clip_ids(parsed_timeline)
     return ids, n
 end
 
+-- Identity marker fingerprint — MUST mirror drt_writer.lua's
+-- IDENTITY_MARKER_* + tools/resolve-helper/verbs.py:_IDENTITY_MARKER_*.
+-- If these drift, the helper's idempotent stamp check
+-- (verbs.py:_stamp_marker_safe) re-stamps on every Send and we get
+-- duplicate markers; a round-trip mismatch here catches that drift
+-- before anything reaches Resolve.
+local IDENTITY_MARKER_COLOR = "Purple"
+local IDENTITY_MARKER_NAME  = "JVE clip identity"
+
+-- Find the identity marker on a parsed clip, or nil if none. parse_resolve_markers
+-- attaches the array as clip.markers (drp_importer.lua:2103); a clip without
+-- an Sm2TiItemLockableBlob for its DbId gets no .markers field at all.
+local function identity_marker_of(clip)
+    if type(clip.markers) ~= "table" then return nil end
+    for _, m in ipairs(clip.markers) do
+        if m.color == IDENTITY_MARKER_COLOR
+            and m.name == IDENTITY_MARKER_NAME then
+            return m
+        end
+    end
+    return nil
+end
+
 --- Validate the .drt at `out_path` round-trips against `payload`.
 --- @param out_path string  absolute path to the just-authored .drt
 --- @param payload  table   the same payload handed to drt_writer.author
@@ -122,6 +150,32 @@ function M.validate(out_path, payload)
             return false, "drt_round_trip_failed", string.format(
                 "parsed timeline carries DbId %s the payload did not "
                 .. "supply (cross-wired or invented identity)", id)
+        end
+    end
+
+    -- Identity-marker carrier check (FR-002, spec.md:116 — "both carriers").
+    -- The DbId carrier is verified above; the live-API carrier is the
+    -- clip identity marker. parse_resolve_markers populates clip.markers
+    -- by matching <BlobOwner> to clip.clip_id (the Sm2Ti DbId), so a
+    -- missing identity marker here means either the writer dropped the
+    -- Sm2TiItemLockableBlob or the BlobOwner mismatches. Either ships
+    -- silent corruption: the helper's read_identities sees an unkeyed
+    -- item, first sync falls back to positional match, and grades land
+    -- on the wrong clip if positions drift between Send and Read.
+    for _, track in ipairs(parsed.timelines[1].tracks) do
+        for _, clip in ipairs(track.clips) do
+            local mk = identity_marker_of(clip)
+            if not mk then
+                return false, "drt_round_trip_failed", string.format(
+                    "clip %s lacks identity marker (live-API carrier "
+                    .. "dropped — FR-002)", clip.clip_id)
+            end
+            if mk.custom_data ~= clip.clip_id then
+                return false, "drt_round_trip_failed", string.format(
+                    "clip %s identity marker custom_data=%q does not "
+                    .. "match clip.id (carrier mis-stamped)",
+                    clip.clip_id, tostring(mk.custom_data))
+            end
         end
     end
     return true

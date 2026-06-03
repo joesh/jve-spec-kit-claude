@@ -279,19 +279,170 @@ end
 -- ---------------------------------------------------------------------------
 
 --- @param payload string: raw bytes to compress and wrap
---- @param version integer: wrapper version (1 or 2 — pinned by observed Resolve blobs)
+--- @param version integer: wrapper version. Resolve uses 1/2 for Sm2Mp
+---   FieldsBlobs and 10001 for the Sm2TiItemLockableBlob marker payload
+---   (inbound-findings.md §5). Decoder is version-agnostic (strips fixed
+---   9-byte prefix); this assertion just pins the known-good values so a
+---   drifted caller fails fast rather than emitting unreadable bytes.
 --- @return string: hex-encoded FieldsBlob
 function M.encode_fields_blob(payload, version)
     assert(type(payload) == "string", "encode_fields_blob: payload bytes required")
-    assert(version == 1 or version == 2,
-        "encode_fields_blob: version must be 1 or 2 (Resolve's known wrappers), got "
-        .. tostring(version))
+    assert(version == 1 or version == 2 or version == 10001,
+        "encode_fields_blob: version must be 1, 2, or 10001 "
+        .. "(Resolve's known wrappers), got " .. tostring(version))
     assert(type(qt_zstd_compress) == "function",
         "encode_fields_blob: qt_zstd_compress binding not available")
     local frame, zstd_err = qt_zstd_compress(payload)
     assert(frame, "encode_fields_blob: qt_zstd_compress failed: " .. tostring(zstd_err))
     local wrapper = M.write_be32(version) .. M.write_be32(#payload) .. string.char(0x81)
     return to_hex(wrapper .. frame)
+end
+
+-- ---------------------------------------------------------------------------
+-- Protobuf varint + field encoders — inverse of drp_binary's decoders.
+-- Used by the clip-marker FieldsBlob encoder below; kept module-local so
+-- the public surface stays the marker-blob entry point.
+-- ---------------------------------------------------------------------------
+
+local PB_WIRE_VARINT = 0
+local PB_WIRE_LEN    = 2
+
+local function encode_pb_varint(n)
+    assert(type(n) == "number" and n >= 0 and n % 1 == 0,
+        "encode_pb_varint: non-negative integer required, got " .. tostring(n))
+    if n == 0 then return string.char(0) end
+    local bytes = {}
+    while n > 0 do
+        local b = n % 128
+        n = math.floor(n / 128)
+        if n > 0 then b = b + 128 end
+        bytes[#bytes + 1] = string.char(b)
+    end
+    return table.concat(bytes)
+end
+
+local function encode_pb_tag(field_num, wire_type)
+    return encode_pb_varint(field_num * 8 + wire_type)
+end
+
+local function encode_pb_varint_field(field_num, value)
+    return encode_pb_tag(field_num, PB_WIRE_VARINT) .. encode_pb_varint(value)
+end
+
+local function encode_pb_len_field(field_num, payload)
+    return encode_pb_tag(field_num, PB_WIRE_LEN)
+        .. encode_pb_varint(#payload) .. payload
+end
+
+-- ---------------------------------------------------------------------------
+-- Clip-marker FieldsBlob (Sm2TiItemLockableBlob) — inverse of
+-- drp_binary.decode_clip_markers. Schema is pinned by inbound-findings.md
+-- §5 and verified against 111 real gold markers (drp_binary decoder tests).
+--
+-- One marker collection per blob; outer Fields TLV carries a single
+-- "BlobData" field whose payload is [BE32 ver=10001][BE32 size][0x81][zstd]
+-- wrapping the marker protobuf:
+--
+--   f2 LEN  = collection
+--     repeated f1 LEN = one per marker:
+--       f1 varint = frame
+--       f2 LEN    = [BE32 ver=2][BE32 size] + f1 LEN color-message:
+--           f1 varint = color value (drp_binary.MARKER_COLOR_VALUES)
+--           f3 str    = note
+--           f3 str    = duration (decimal string)
+--           f3 str    = name
+--           f6 str    = customData (omitted by Resolve when empty;
+--                                   we always emit since clip identity
+--                                   is the carrier and required)
+-- ---------------------------------------------------------------------------
+
+local drp_binary = require("importers.drp_binary")
+
+local function encode_marker_color_message(marker)
+    local color_value = drp_binary.MARKER_COLOR_VALUES[marker.color]
+    assert(color_value, "encode_marker_color_message: unknown color "
+        .. tostring(marker.color)
+        .. " (closed set: drp_binary.MARKER_COLOR_VALUES)")
+    assert(type(marker.note) == "string",
+        "encode_marker_color_message: marker.note must be string (may be empty)")
+    assert(type(marker.duration) == "number" and marker.duration >= 0
+        and marker.duration % 1 == 0,
+        "encode_marker_color_message: marker.duration must be non-negative integer")
+    assert(type(marker.name) == "string" and marker.name ~= "",
+        "encode_marker_color_message: marker.name required "
+        .. "(Resolve rejects empty-name markers)")
+    assert(type(marker.custom_data) == "string"
+        and marker.custom_data ~= "",
+        "encode_marker_color_message: marker.custom_data required for "
+        .. "identity markers (this carrier IS the JVE clip.id)")
+    return encode_pb_varint_field(1, color_value)
+        .. encode_pb_len_field(3, marker.note)
+        .. encode_pb_len_field(3, tostring(marker.duration))
+        .. encode_pb_len_field(3, marker.name)
+        .. encode_pb_len_field(6, marker.custom_data)
+end
+
+local function encode_marker_entry(marker)
+    assert(type(marker.frame) == "number" and marker.frame >= 0
+        and marker.frame % 1 == 0,
+        "encode_marker_entry: marker.frame must be non-negative integer")
+    local color_msg = encode_marker_color_message(marker)
+    -- Inner record: [BE32 ver=2][BE32 inner_size] + f1 LEN color-message.
+    local inner = encode_pb_len_field(1, color_msg)
+    local record = M.write_be32(2) .. M.write_be32(#inner) .. inner
+    -- Entry body: f1 varint frame, f2 LEN record. The outer f1 LEN tag
+    -- wrapping each entry is emitted by encode_clip_markers below.
+    return encode_pb_varint_field(1, marker.frame)
+        .. encode_pb_len_field(2, record)
+end
+
+--- Encode a clip-marker collection to raw protobuf bytes (no FieldsBlob
+--- wrapper). Inverse of drp_binary.decode_marker_protobuf.
+--- @param markers table: array of {frame, color, name, note, duration, custom_data}
+--- @return string: protobuf bytes
+function M.encode_clip_markers(markers)
+    assert(type(markers) == "table" and #markers >= 1,
+        "encode_clip_markers: non-empty markers array required")
+    local entries = {}
+    for i, m in ipairs(markers) do
+        entries[i] = encode_pb_len_field(1, encode_marker_entry(m))
+    end
+    local collection = table.concat(entries)
+    return encode_pb_len_field(2, collection)
+end
+
+--- Encode a clip-marker collection to a hex FieldsBlob suitable for the
+--- <FieldsBlob> child of a <Sm2TiItemLockableBlob>. Round-trips through
+--- drp_binary.decode_clip_markers (semantic — zstd compression bytes are
+--- not byte-identical to Resolve's output but decompress to the same
+--- payload, which is what the decoder + Resolve's importer consume).
+---
+--- Inner wrapper version is 10001 per inbound-findings.md §5 (the value
+--- Resolve writes for marker payloads); decoder is version-agnostic.
+---
+--- Outer Fields TLV: one "BlobData" field (0x000c payload) wrapping the
+--- 9-byte-prefixed zstd frame. The 0x000c payload encoder requires payload
+--- length >= 8 (encode_tlv_fields: payload header is BE32 aux + 1 byte
+--- val, first 8 bytes of payload read as LE-double then ignored). A
+--- single-marker payload is well above 8 bytes so this is never tight,
+--- but the assertion is there in encode_value already.
+---
+--- @param markers table: array of marker tables (see encode_clip_markers)
+--- @return string: hex-encoded FieldsBlob
+function M.encode_clip_marker_fields_blob(markers)
+    local protobuf = M.encode_clip_markers(markers)
+    local inner = M.encode_fields_blob(protobuf, 10001)
+    -- inner is hex; the TLV "BlobData" field carries raw bytes, so
+    -- convert hex → bytes for the TLV payload.
+    local inner_bytes = (inner:gsub("..", function(h)
+        return string.char(tonumber(h, 16))
+    end))
+    local fields = M.encode_tlv_fields({
+        { name = "BlobData", kind = "payload", value = inner_bytes },
+    })
+    -- Outer Fields TLV header: [BE32 version=1][BE32 field_count=1].
+    local header = M.write_be32(1) .. M.write_be32(1)
+    return to_hex(header .. fields)
 end
 
 return M

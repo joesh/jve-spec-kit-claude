@@ -9,8 +9,9 @@ require("test_env")
 -- non-trivial values) so a future change to the writer that breaks the
 -- round-trip is caught here before it hits the bridge command path.
 
-local writer = require("exporters.drt_writer")
-local rt     = require("exporters.drt_round_trip")
+local writer   = require("exporters.drt_writer")
+local rt       = require("exporters.drt_round_trip")
+local importer = require("importers.drp_importer")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -74,6 +75,46 @@ do
     check("happy path: valid file + matching payload → ok=true", ok)
     check("happy path: no failure code returned", code == nil)
     check("happy path: no failure message returned", msg == nil)
+end
+
+-- ─── identity-marker carrier present on disk (FR-002, spec.md:116) ──
+-- Independent of the validator: parse the just-authored file through
+-- the production drp_importer and confirm every clip carries its own
+-- identity marker with custom_data == clip.id. If the writer ever
+-- regresses to dropping the Sm2TiItemLockableBlob, this catches it
+-- even if the validator's marker check were itself broken.
+do
+    os.remove(OUT)
+    local payload = fresh_payload()
+    writer.author(OUT, payload)
+    local parsed = importer.parse_drp_file(OUT)
+    check("identity carrier: parse_drp_file succeeded", parsed.success)
+    check("identity carrier: exactly one parsed timeline",
+        type(parsed.timelines) == "table" and #parsed.timelines == 1)
+    local seen_ids = {}
+    for _, track in ipairs(parsed.timelines[1].tracks) do
+        for _, clip in ipairs(track.clips) do
+            local found
+            if type(clip.markers) == "table" then
+                for _, m in ipairs(clip.markers) do
+                    if m.color == "Purple"
+                        and m.name == "JVE clip identity"
+                        and m.custom_data == clip.clip_id then
+                        found = m
+                        break
+                    end
+                end
+            end
+            check("identity carrier: clip " .. tostring(clip.clip_id)
+                  .. " has identity marker with matching custom_data",
+                found ~= nil)
+            seen_ids[clip.clip_id] = true
+        end
+    end
+    check("identity carrier: payload clip 'aaaa...' appears in parse",
+        seen_ids["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"])
+    check("identity carrier: payload clip 'bbbb...' appears in parse",
+        seen_ids["bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"])
 end
 
 -- ─── parse failure: nonexistent file ─────────────────────────────────
