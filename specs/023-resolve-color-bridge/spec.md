@@ -73,7 +73,7 @@ An editor finishes a cut in JVE and wants it graded by a colorist working in DaV
 **Transport / isolation**
 - **FR-005**: All Resolve scripting access MUST live in a separate helper process; JVE MUST NOT link Resolve's scripting module into its own process.
 - **FR-006**: JVE MUST communicate with the helper over a local (Unix domain) socket using line-delimited JSON with a versioned envelope and structured (non-string) errors.
-- **FR-007**: JVE MUST spawn and supervise the helper's lifecycle (start, restart on crash, stop), then connect to it as a client; helper-start and connect failures surface as structured errors, never silent retry.
+- **FR-007**: JVE MUST spawn and supervise the helper's lifecycle (start, restart on crash, stop), then connect to it as a client; helper-start and connect failures surface as structured errors, never silent retry. Each in-flight request additionally arms a single-shot reply-timeout timer (default `REQUEST_TIMEOUT_MS` 30 s, set at `client.connect`-opts time); on expiry, the request's `on_complete` fires with a structured `resolve_api_error` — never a silent drop. Wire-level corruption (malformed response line) fails every in-flight caller with the same closed-set error and closes the socket; the supervisor's next request respawns.
 - **FR-008**: State-changing operations MUST be idempotent on a JVE-supplied change token, so a retried request does not re-import.
 - **FR-009**: Every operation MUST cheaply revalidate the Resolve handle and reacquire if stale, or return a structured error if it cannot.
 - **FR-010**: The feature MUST require Resolve Studio and MUST NOT add a free-tier fallback.
