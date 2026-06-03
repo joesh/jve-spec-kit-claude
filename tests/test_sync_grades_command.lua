@@ -19,6 +19,7 @@ local database = require("core.database")
 local ClipGrade = require("models.clip_grade")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local sync_grades = require("core.commands.sync_grades_from_resolve")
+local Signals = require("core.signals")
 
 local pass = 0
 local fail = 0
@@ -168,6 +169,27 @@ check("re-apply: c_pre slope_r is post-state again",
         and reapplied_pre.cdl.slope_r == POST_CDL_pre.slope_r)
 check("re-apply captured the post-restore state",
     captured2 ~= nil and #captured2.entries == 2)
+
+-- ─── grades_changed signal (FR-016): apply()/restore() MUST notify
+-- the View layer so a parked monitor re-pulls. Regression — without
+-- this, the per-clip cache in sequence_monitor kept showing the
+-- pre-sync grade until the next scrub/play. ──────────────────────────
+local emissions = {}
+local conn = Signals.connect("grades_changed", function(seq_id)
+    emissions[#emissions + 1] = seq_id
+end)
+
+local sig_captured = sync_grades.apply(response, "s", db, now + 180)
+check("grades_changed fires on apply()", #emissions == 1)
+check("grades_changed payload is the synced sequence_id",
+    emissions[1] == "s")
+
+sync_grades.restore(sig_captured, db)
+check("grades_changed fires on restore()", #emissions == 2)
+check("grades_changed restore payload is the synced sequence_id",
+    emissions[2] == "s")
+
+Signals.disconnect(conn)
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0, "test_sync_grades_command.lua: failures present")

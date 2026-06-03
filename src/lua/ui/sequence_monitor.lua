@@ -22,6 +22,7 @@ local Sequence = require("models.sequence")
 local monitor_mark_bar = require("ui.monitor_mark_bar")
 local database = require("core.database")
 local project_gen = require("core.project_generation")
+local view_grade_pull = require("core.view_grade_pull")
 
 local Signals = require("core.signals")
 local timecode = require("core.timecode")
@@ -249,6 +250,18 @@ function SequenceMonitor.new(config)
         if canonical == self.engine then return end
         bind_to_engine(self, canonical)
     end, 60)
+
+    -- SyncGradesFromResolve (spec 023 FR-016/FR-017) writes clip_grade
+    -- rows out-of-band from any content/playhead change; without this
+    -- subscriber a parked viewer keeps showing the pre-sync look until
+    -- the user scrubs or plays. on_model_changed re-pulls the parked
+    -- frame, which runs _apply_clip_grade against the now-fresh row.
+    -- No-op during playback (engine.on_model_changed gates on parked
+    -- state) — the live tick loop already pulls fresh grades per frame.
+    self._grades_changed_id = Signals.connect("grades_changed", function(sequence_id)
+        if self.sequence_id ~= sequence_id then return end
+        self:on_model_changed()
+    end)
 
     -- Media file bytes changed (in-place rewrite) OR status flipped
     -- (e.g. file came back online). PlaybackEngine already purged TMB
@@ -942,7 +955,7 @@ end
 -- Engine Callbacks
 --------------------------------------------------------------------------------
 
-function SequenceMonitor:_on_show_frame(frame_handle, _metadata)
+function SequenceMonitor:_on_show_frame(frame_handle, metadata)
     self._frame_count = (self._frame_count or 0) + 1
     if self._frame_count % 30 == 0 then
         log.detail("show_frame: view=%s count=%d", self.view_id, self._frame_count)
@@ -954,14 +967,40 @@ function SequenceMonitor:_on_show_frame(frame_handle, _metadata)
         self._surface_error = nil
         self:_notify()
     end
+    -- MVC pull: ask the model for this clip's display grade, push to the
+    -- surface BEFORE the frame so the shader's CDL uniform is in place
+    -- when the new frame draws (spec 023 T032 / FR-016).
+    self:_apply_clip_grade(metadata and metadata.clip_id)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
     if self._frame_mirror then
         qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, frame_handle)
     end
 end
 
+--- Pull display grade for clip_id and push to the surface(s).
+--- nil clip_id ⇒ gap or no active clip ⇒ clear grade (passthrough).
+--- No clip_id cache: caching by clip_id alone hid SyncGradesFromResolve
+--- updates (cache key unchanged when the underlying row mutated). The
+--- per-frame ClipGrade.load is one indexed SELECT and is dwarfed by
+--- decode cost; if it ever shows on a profile, invalidate on the
+--- grades_changed signal we already wire below rather than reintroducing
+--- a key-only cache.
+function SequenceMonitor:_apply_clip_grade(clip_id)
+    -- view_grade_pull is a thin wrapper over the model; the model owns
+    -- SQL access (SQL-isolation policy in core/database.lua). The view
+    -- does not touch the connection.
+    local cdl = view_grade_pull.pull_for_clip(clip_id)
+    qt_constants.EMP.SURFACE_SET_GRADE(self._video_surface, cdl)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_GRADE(self._frame_mirror, cdl)
+    end
+end
+
 function SequenceMonitor:_on_show_gap()
     log.event("show_gap: view=%s", self.view_id)
+    -- Drop any previously-pushed grade so the next graded clip's grade
+    -- doesn't linger across the gap (T032 / FR-016).
+    self:_apply_clip_grade(nil)
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
     if self._frame_mirror then
         qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, nil)
@@ -1119,6 +1158,10 @@ function SequenceMonitor:destroy()
     if self._media_content_changed_id then
         Signals.disconnect(self._media_content_changed_id)
         self._media_content_changed_id = nil
+    end
+    if self._grades_changed_id then
+        Signals.disconnect(self._grades_changed_id)
+        self._grades_changed_id = nil
     end
 end
 

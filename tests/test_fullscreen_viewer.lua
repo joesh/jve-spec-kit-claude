@@ -88,6 +88,9 @@ local mock_qt_constants = {
         SURFACE_SET_FRAME = function(surface, frame_handle)
             record_surface_call("SET_FRAME", surface, frame_handle)
         end,
+        SURFACE_SET_GRADE = function(surface, grade)
+            record_surface_call("SET_GRADE", surface, grade)
+        end,
         SURFACE_SET_ROTATION = function(surface, degrees)
             record_surface_call("SET_ROTATION", surface, degrees)
         end,

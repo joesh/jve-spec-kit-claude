@@ -26,6 +26,7 @@ local M = {}
 local ClipGrade       = require("models.clip_grade")
 local identity_ledger = require("core.resolve_bridge.identity_ledger")
 local supervisor      = require("core.resolve_bridge.helper_supervisor")
+local Signals         = require("core.signals")
 local log             = require("core.logger").for_area("commands")
 
 local function load_existing_row(clip_id, db)
@@ -151,9 +152,20 @@ function M.apply(response, sequence_id, db, synced_at)
 
     walk_ledger_for_stale(sequence_id, seen_clip_ids, db, captured)
 
+    -- Stash sequence_id so restore() can emit grades_changed for the same
+    -- scope without the caller having to thread it back through.
+    captured.sequence_id = sequence_id
+
     log.event("SyncGradesFromResolve.apply: %d grade(s) synced, "
         .. "%d stale-marked", #response.grades,
         #captured.entries - #response.grades)
+
+    -- FR-016: the View pulls grades from model state. Until now nothing
+    -- told a parked monitor that its model row changed; the next
+    -- _on_show_frame only fires on playback or content_changed, so the
+    -- viewer kept the pre-sync grade. Emit so subscribers can re-pull.
+    Signals.emit("grades_changed", sequence_id)
+
     return captured
 end
 
@@ -162,6 +174,10 @@ function M.restore(captured, db)
     assert(type(captured) == "table"
         and type(captured.entries) == "table",
         "sync_grades.restore: captured.entries required")
+    assert(type(captured.sequence_id) == "string"
+        and captured.sequence_id ~= "",
+        "sync_grades.restore: captured.sequence_id required "
+        .. "(apply() stashes it for the grades_changed emit)")
     assert(db, "sync_grades.restore: db required")
 
     for _, entry in ipairs(captured.entries) do
@@ -173,6 +189,10 @@ function M.restore(captured, db)
     end
     log.event("SyncGradesFromResolve.restore: %d grade(s) reverted",
         #captured.entries)
+
+    -- Symmetric to apply(): undo of a sync rewinds clip_grade rows; the
+    -- View pulls from those rows, so notify it (FR-016 / FR-017).
+    Signals.emit("grades_changed", captured.sequence_id)
 end
 
 --- Full command path: pulls grades from helper, applies them, fires

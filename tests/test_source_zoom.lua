@@ -39,6 +39,7 @@ package.loaded["core.qt_constants"] = {
         SURFACE_SET_FRAME = function(surface, frame)
             qt_log[#qt_log + 1] = { type = "set_frame", surface = surface, frame = frame }
         end,
+        SURFACE_SET_GRADE = function() end,
         SURFACE_SET_ROTATION = function() end,
         SURFACE_SET_PAR = function() end,
     },
