@@ -26,23 +26,6 @@ local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-stamp.sock")
 
-local function assert_structured_error(parsed, expected_code, label)
-    assert(parsed.ok == false, label .. ": expected ok=false")
-    assert(type(parsed.error) == "table", label .. ": missing error table")
-    assert(type(parsed.error.code) == "string"
-        and parsed.error.code ~= "",
-        label .. ": error.code must be non-empty string")
-    assert(type(parsed.error.message) == "string"
-        and parsed.error.message ~= "",
-        label .. ": error.message must be non-empty string (never bare)")
-    assert(protocol.is_known_error_code(parsed.error.code), string.format(
-        "%s: error code %q is not in the closed set",
-        label, parsed.error.code))
-    assert(parsed.error.code == expected_code, string.format(
-        "%s: expected code %q, got %q (%s)",
-        label, expected_code, parsed.error.code, parsed.error.message))
-end
-
 local VALID_TOKEN = {
     project_id = "p-test",
     sequence_id = "s-test",
@@ -55,7 +38,7 @@ do
         custom_data  = "some-clip-uuid",
         change_token = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "missing resolve_item_id")
     assert(r.error.message:find("resolve_item_id", 1, true),
         "bad_request should name the missing arg: " .. r.error.message)
@@ -68,7 +51,7 @@ do
         resolve_item_id = "1003",
         change_token    = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "missing custom_data")
+    fixture.assert_structured_error(r, "bad_request", "missing custom_data")
     assert(r.error.message:find("custom_data", 1, true),
         "bad_request should name the missing arg: " .. r.error.message)
     print("  ✓ missing custom_data → bad_request")
@@ -81,7 +64,7 @@ do
         custom_data     = "x",
         change_token    = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "empty resolve_item_id")
     print("  ✓ empty resolve_item_id → bad_request")
 end
@@ -93,7 +76,7 @@ do
         custom_data     = "",
         change_token    = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "empty custom_data")
+    fixture.assert_structured_error(r, "bad_request", "empty custom_data")
     print("  ✓ empty custom_data → bad_request")
 end
 
@@ -104,7 +87,7 @@ do
         custom_data     = "ok-clip-uuid",
         change_token    = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "resolve_item_id non-string")
     print("  ✓ resolve_item_id non-string → bad_request")
 end

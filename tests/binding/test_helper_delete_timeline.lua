@@ -23,23 +23,6 @@ local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-delete-timeline.sock")
 
-local function assert_structured_error(parsed, expected_code, label)
-    assert(parsed.ok == false, label .. ": expected ok=false")
-    assert(type(parsed.error) == "table", label .. ": missing error table")
-    assert(type(parsed.error.code) == "string"
-        and parsed.error.code ~= "",
-        label .. ": error.code must be non-empty string")
-    assert(type(parsed.error.message) == "string"
-        and parsed.error.message ~= "",
-        label .. ": error.message must be non-empty string (never bare)")
-    assert(protocol.is_known_error_code(parsed.error.code), string.format(
-        "%s: error code %q is not in the closed set",
-        label, parsed.error.code))
-    assert(parsed.error.code == expected_code, string.format(
-        "%s: expected code %q, got %q (%s)",
-        label, expected_code, parsed.error.code, parsed.error.message))
-end
-
 local VALID_TOKEN = {
     project_id = "p-test",
     sequence_id = "s-test",
@@ -51,7 +34,7 @@ do
     local r = fixture.request(fix, "delete_timeline", {
         change_token = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "missing resolve_timeline_id")
+    fixture.assert_structured_error(r, "bad_request", "missing resolve_timeline_id")
     assert(r.error.message:find("resolve_timeline_id", 1, true),
         "bad_request should name the missing arg: " .. r.error.message)
     print("  ✓ missing resolve_timeline_id → bad_request")
@@ -63,7 +46,7 @@ do
         resolve_timeline_id = "",
         change_token        = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "empty resolve_timeline_id")
+    fixture.assert_structured_error(r, "bad_request", "empty resolve_timeline_id")
     print("  ✓ empty resolve_timeline_id → bad_request")
 end
 
@@ -73,7 +56,7 @@ do
         resolve_timeline_id = 42,
         change_token        = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "resolve_timeline_id non-string")
     print("  ✓ resolve_timeline_id non-string → bad_request")
 end
@@ -85,7 +68,7 @@ do
         change_token        = VALID_TOKEN,
         nonsense_field      = true,
     })
-    assert_structured_error(r, "bad_request", "unknown args field")
+    fixture.assert_structured_error(r, "bad_request", "unknown args field")
     print("  ✓ unknown args field → bad_request")
 end
 
@@ -107,7 +90,7 @@ do
         resolve_timeline_id = "tl-xxx",
         change_token = { project_id = "p", sequence_id = "s" },  -- no mut_gen
     })
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "change_token missing mutation_generation")
     assert(r.error.message:find("mutation_generation", 1, true),
         "bad_request should name the missing token field: "

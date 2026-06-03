@@ -147,6 +147,32 @@ function M.skip_unless_resolve(fix, test_name)
     os.exit(0)
 end
 
+--- Assert a wire response is a closed-set structured error.
+--- @param parsed         table   parsed envelope from fixture.request
+--- @param expected_code  string  the error.code value the test expects
+--- @param label          string  human label for failure message
+--- Was copy-pasted into 6 helper contract tests; lifted here so a
+--- contract change (e.g. adding a required field to the error
+--- envelope) updates one place (review item #1).
+function M.assert_structured_error(parsed, expected_code, label)
+    assert(parsed.ok == false, label .. ": expected ok=false")
+    assert(type(parsed.error) == "table",
+        label .. ": missing error table")
+    assert(type(parsed.error.code) == "string"
+        and parsed.error.code ~= "",
+        label .. ": error.code must be non-empty string")
+    assert(type(parsed.error.message) == "string"
+        and parsed.error.message ~= "",
+        label .. ": error.message must be non-empty string (never bare)")
+    assert(protocol.is_known_error_code(parsed.error.code),
+        string.format("%s: error code %q is not in the closed set",
+            label, parsed.error.code))
+    assert(parsed.error.code == expected_code,
+        string.format("%s: expected code %q, got %q (%s)",
+            label, expected_code, parsed.error.code,
+            parsed.error.message))
+end
+
 function M.stop(fix)
     if not fix then return end
     if fix.sock then

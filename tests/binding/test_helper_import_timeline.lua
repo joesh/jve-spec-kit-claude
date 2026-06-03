@@ -26,23 +26,6 @@ local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-import.sock")
 
-local function assert_structured_error(parsed, expected_code, label)
-    assert(parsed.ok == false, label .. ": expected ok=false")
-    assert(type(parsed.error) == "table", label .. ": missing error table")
-    assert(type(parsed.error.code) == "string"
-        and parsed.error.code ~= "",
-        label .. ": error.code must be non-empty string")
-    assert(type(parsed.error.message) == "string"
-        and parsed.error.message ~= "",
-        label .. ": error.message must be non-empty string (never bare)")
-    assert(protocol.is_known_error_code(parsed.error.code), string.format(
-        "%s: error code %q is not in the closed set",
-        label, parsed.error.code))
-    assert(parsed.error.code == expected_code, string.format(
-        "%s: expected code %q, got %q (%s)",
-        label, expected_code, parsed.error.code, parsed.error.message))
-end
-
 local VALID_TOKEN = {
     project_id = "p-test",
     sequence_id = "s-test",
@@ -55,7 +38,7 @@ do
         media_roots = { "/tmp" },
         change_token = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "missing drt_path")
+    fixture.assert_structured_error(r, "bad_request", "missing drt_path")
     assert(r.error.message:find("drt_path", 1, true),
         "bad_request message should name the missing arg: "
         .. r.error.message)
@@ -69,7 +52,7 @@ do
         media_roots = "/tmp",  -- string, contract says list[string]
         change_token = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "media_roots wrong type")
+    fixture.assert_structured_error(r, "bad_request", "media_roots wrong type")
     assert(r.error.message:find("media_roots", 1, true),
         "bad_request should name the wrong-typed arg: "
         .. r.error.message)
@@ -85,7 +68,7 @@ do
         media_roots = {},
         change_token = VALID_TOKEN,
     })
-    assert_structured_error(r, "bad_request", "drt_path nonexistent")
+    fixture.assert_structured_error(r, "bad_request", "drt_path nonexistent")
     assert(r.error.message:find(missing, 1, true)
         or r.error.message:find("does not exist", 1, true),
         "message should explain the path doesn't exist: "
@@ -126,7 +109,7 @@ do
         change_token = VALID_TOKEN,
     })
     os.remove(tmp_drt)
-    assert_structured_error(r, "bad_request", "missing clip_positions")
+    fixture.assert_structured_error(r, "bad_request", "missing clip_positions")
     assert(r.error.message:find("clip_positions", 1, true),
         "bad_request should name clip_positions: " .. r.error.message)
     print("  ✓ missing clip_positions → bad_request")
@@ -143,7 +126,7 @@ do
         change_token    = VALID_TOKEN,
     })
     os.remove(tmp_drt)
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "clip_positions wrong outer type")
     assert(r.error.message:find("clip_positions", 1, true),
         "bad_request should name clip_positions: " .. r.error.message)
@@ -164,7 +147,7 @@ do
         change_token    = VALID_TOKEN,
     })
     os.remove(tmp_drt)
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "clip_positions invalid track_type")
     assert(r.error.message:find("track_type", 1, true),
         "bad_request should name track_type: " .. r.error.message)
@@ -189,7 +172,7 @@ do
         change_token    = VALID_TOKEN,
     })
     os.remove(tmp_drt)
-    assert_structured_error(r, "bad_request",
+    fixture.assert_structured_error(r, "bad_request",
         "clip_positions duplicate position key")
     assert(r.error.message:find("duplicate", 1, true),
         "bad_request should name duplicate: " .. r.error.message)
