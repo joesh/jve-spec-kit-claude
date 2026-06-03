@@ -10,13 +10,23 @@ namespace emp {
 
 // Peak file binary format constants
 static constexpr char     PEAK_MAGIC[4] = {'J','V','P','K'};
-static constexpr uint32_t PEAK_VERSION  = 1;
+// v2 (2026-06-03): header carries source_size + content_hash so the
+// load-time verifier can answer "did the bytes change?" instead of
+// "did the inode get rewritten?" (mtime alone false-positives on cp,
+// touch, rsync-without-t, fixture refreshes, fs migrations). See
+// peak_cache.try_load_existing for the hybrid policy. v1 files are
+// rejected at PeakFileReader::Open and regenerated.
+static constexpr uint32_t PEAK_VERSION  = 2;
 static constexpr uint32_t BASE_SAMPLES_PER_PEAK = 256;
 static constexpr uint16_t MIPMAP_LEVELS = 4;
 static constexpr uint32_t SAMPLES_PER_LEVEL[4] = {256, 512, 1024, 2048};
-static constexpr size_t   PEAK_HEADER_SIZE = 64;
+static constexpr size_t   PEAK_HEADER_SIZE = 80;
 
-// 64-byte fixed header (packed to avoid padding)
+// Byte offset of source_mtime — exposed because the verifier pwrites
+// just this field when bytes are unchanged but mtime drifted.
+static constexpr size_t   PEAK_HEADER_MTIME_OFFSET = 8;
+
+// 80-byte fixed header (packed to avoid padding)
 #pragma pack(push, 1)
 struct PeakFileHeader {
     char     magic[4];             //  4 bytes  (offset  0)
@@ -27,11 +37,38 @@ struct PeakFileHeader {
     uint32_t base_spp;             //  4 bytes  (offset 22)
     uint16_t num_levels;           //  2 bytes  (offset 26)
     uint64_t bins_per_level[4];    // 32 bytes  (offset 28)
-    uint8_t  reserved[4];          //  4 bytes  (offset 60) = 64 total
+    int64_t  source_size;          //  8 bytes  (offset 60) — v2
+    uint64_t content_hash;         //  8 bytes  (offset 68) — v2: FNV-1a-64
+                                   //   of fingerprint windows (see
+                                   //   ComputeContentHash). Identity of
+                                   //   bytes, not cryptographic.
+    uint8_t  reserved[4];          //  4 bytes  (offset 76) = 80 total
 };
 #pragma pack(pop)
 static_assert(sizeof(PeakFileHeader) == PEAK_HEADER_SIZE,
-    "PeakFileHeader must be exactly 64 bytes");
+    "PeakFileHeader must be exactly 80 bytes");
+static_assert(offsetof(PeakFileHeader, source_mtime) == PEAK_HEADER_MTIME_OFFSET,
+    "PEAK_HEADER_MTIME_OFFSET must match source_mtime field offset");
+
+// FNV-1a-64 content fingerprint of a media file. Reads up to 64KB
+// from the start and 64KB from the end (or the whole file if smaller
+// than 128KB). Cheap to compute, collision-resistant enough for
+// "did the bytes change" identity — not cryptographic.
+//
+// expected_size is the file size at the time of generation, used as
+// the read budget so a partial-write race during fixture setup cannot
+// trick the verifier into accepting a truncated file. On I/O failure
+// returns 0 — callers MUST treat 0 as "no fingerprint available" and
+// regenerate (do not silently equate two zero hashes).
+uint64_t ComputeContentHash(const std::string& media_path, int64_t expected_size);
+
+// Rewrite source_mtime in an existing peak file's header (pwrite at
+// PEAK_HEADER_MTIME_OFFSET). Used by the load-time verifier when the
+// content hash matches but stored mtime drifted — accept the cached
+// peaks and re-sync the mtime so the fast path takes effect on next
+// open. Returns true on success. Does not validate magic/version;
+// caller is expected to have opened the file via PeakFileReader first.
+bool RefreshHeaderMtime(const std::string& peak_path, int64_t new_mtime);
 
 // ============================================================================
 // PeakFileWriter — writes peak data atomically (write to .tmp, rename)

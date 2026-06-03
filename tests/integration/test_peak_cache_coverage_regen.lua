@@ -127,7 +127,7 @@ local expected_samples = true_bins * true_hdr.base_spp
 
 -- Half-coverage file must be rejected.
 local loaded_truncated = peak_cache._try_load_existing_for_test(
-    media_id, reported_mtime, expected_samples)
+    media_id, SCRATCH, reported_mtime, expected_samples)
 assert(loaded_truncated == false,
     "a peak file covering half the media's samples must not be loaded "
     .. "as authoritative — it must be rejected and deleted")
@@ -150,7 +150,7 @@ assert(wait_for_complete(control_media_id, 30),
     "control peak generation did not complete within 30s")
 
 local loaded_complete = peak_cache._try_load_existing_for_test(
-    control_media_id, reported_mtime, expected_samples)
+    control_media_id, SCRATCH, reported_mtime, expected_samples)
 assert(loaded_complete == true,
     "a peak file with full coverage and matching mtime must be loaded")
 os.remove(control_peak_path)

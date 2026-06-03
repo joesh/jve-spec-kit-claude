@@ -27,6 +27,8 @@
 #include <QColor>
 #include <QLinearGradient>
 #include "binding_macros.h"
+#include <cstdio>
+#include <sys/stat.h>
 
 #include "codec_probe_worker.h"
 
@@ -2355,6 +2357,19 @@ static int lua_emp_peak_header(lua_State* L) {
     lua_setfield(L, -2, "base_spp");
     lua_pushinteger(L, hdr.num_levels);
     lua_setfield(L, -2, "num_levels");
+    lua_pushinteger(L, static_cast<lua_Integer>(hdr.source_size));
+    lua_setfield(L, -2, "source_size");
+    // content_hash is uint64 — pushed as a 16-char lowercase hex string
+    // because LuaJIT's lua_Integer is platform-dependent and we don't
+    // want hash bits truncated to 53-bit float mantissa. Lua side
+    // compares as strings.
+    {
+        char hex[17];
+        std::snprintf(hex, sizeof(hex), "%016llx",
+            static_cast<unsigned long long>(hdr.content_hash));
+        lua_pushstring(L, hex);
+        lua_setfield(L, -2, "content_hash");
+    }
 
     lua_newtable(L);
     for (int i = 0; i < emp::MIPMAP_LEVELS; ++i) {
@@ -2363,6 +2378,49 @@ static int lua_emp_peak_header(lua_State* L) {
     }
     lua_setfield(L, -2, "bins_per_level");
 
+    return 1;
+}
+
+// EMP.MEDIA_CONTENT_HASH(media_path) -> table {size, hash} | nil
+//
+// Computes the content fingerprint of a media file without loading
+// any peak data. Used by peak_cache.try_load_existing to verify a
+// cached peak file against the current bytes on disk when mtime has
+// drifted. Returns nil if the file is missing / unreadable / empty.
+static int lua_emp_media_content_hash(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+
+    struct stat st;
+    if (::stat(path, &st) != 0 || st.st_size <= 0) {
+        return 0;  // nil — caller treats as "no fingerprint available"
+    }
+    uint64_t h = emp::ComputeContentHash(path, st.st_size);
+    if (h == 0) return 0;
+
+    lua_newtable(L);
+    lua_pushinteger(L, static_cast<lua_Integer>(st.st_size));
+    lua_setfield(L, -2, "size");
+    {
+        char hex[17];
+        std::snprintf(hex, sizeof(hex), "%016llx",
+            static_cast<unsigned long long>(h));
+        lua_pushstring(L, hex);
+        lua_setfield(L, -2, "hash");
+    }
+    return 1;
+}
+
+// EMP.PEAK_REFRESH_HEADER_MTIME(peak_path, new_mtime) -> bool
+//
+// Rewrites just the source_mtime field of an existing peak file.
+// Used after a content-hash check confirms the bytes are unchanged
+// but the file's mtime has drifted (cp / touch / fixture refresh).
+// Avoids regenerating GB of peaks for spurious mtime changes.
+static int lua_emp_peak_refresh_header_mtime(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    lua_Integer new_mtime = luaL_checkinteger(L, 2);
+    bool ok = emp::RefreshHeaderMtime(path, static_cast<int64_t>(new_mtime));
+    lua_pushboolean(L, ok);
     return 1;
 }
 
@@ -2581,6 +2639,10 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "PEAK_HEADER");
     lua_pushcfunction(L, lua_emp_peak_release);
     lua_setfield(L, -2, "PEAK_RELEASE");
+    lua_pushcfunction(L, lua_emp_media_content_hash);
+    lua_setfield(L, -2, "MEDIA_CONTENT_HASH");
+    lua_pushcfunction(L, lua_emp_peak_refresh_header_mtime);
+    lua_setfield(L, -2, "PEAK_REFRESH_HEADER_MTIME");
 
     lua_setfield(L, -2, "EMP");
 

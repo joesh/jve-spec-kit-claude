@@ -416,6 +416,22 @@ static bool WriteOutputFile(const PeakBuffer& buf, const MediaFileInfo& info,
         return false;
     }
     header.source_mtime = st.st_mtime;
+    header.source_size  = static_cast<int64_t>(st.st_size);
+    // Fingerprint at gen time. If it returns 0 (I/O failure on a file we
+    // just stat'd) something is wrong — fail the job rather than writing
+    // a peak file whose verifier will always miss the cache (mtime
+    // mismatches would force regen; hash=0 means "no fingerprint" so
+    // can't rescue them either). Same fail-loud discipline as the
+    // stat-failed branch above.
+    header.content_hash = ComputeContentHash(media_path, header.source_size);
+    if (header.content_hash == 0) {
+        JVE_LOG_ERROR(Media,
+            "PeakGenerator::WriteOutputFile: ComputeContentHash returned 0 "
+            "for %s (size=%lld) — refusing to write peak file without a "
+            "fingerprint (would never verify on next open). Failing this job.",
+            media_path.c_str(), static_cast<long long>(header.source_size));
+        return false;
+    }
 
     header.sample_rate = static_cast<uint32_t>(info.audio_sample_rate);
     header.channels = static_cast<uint16_t>(info.audio_channels);

@@ -10,6 +10,86 @@
 namespace emp {
 
 // ============================================================================
+// Content fingerprint — FNV-1a-64 over up to 64KB at start + 64KB at end.
+//
+// "Did the bytes of this media file change?" The mtime alone false-
+// positives on every cp/touch/rsync-without-t. Comparing the actual
+// bytes via a fixed-size sample window is the architecturally correct
+// signal: invariant under inode rewrites that preserve content, AND
+// catches real edits (overwrite-in-place, BWF metadata rewrites).
+// ============================================================================
+namespace {
+constexpr uint64_t FNV1A_OFFSET_BASIS = 0xcbf29ce484222325ULL;
+constexpr uint64_t FNV1A_PRIME        = 0x100000001b3ULL;
+constexpr size_t   FINGERPRINT_WINDOW = 64 * 1024;  // 64KB head + 64KB tail
+
+inline void FnvAccumulate(uint64_t& h, const uint8_t* buf, size_t n) {
+    for (size_t i = 0; i < n; ++i) {
+        h ^= buf[i];
+        h *= FNV1A_PRIME;
+    }
+}
+}  // namespace
+
+uint64_t ComputeContentHash(const std::string& media_path, int64_t expected_size) {
+    if (expected_size <= 0) return 0;
+
+    int fd = ::open(media_path.c_str(), O_RDONLY);
+    if (fd < 0) return 0;
+
+    uint64_t h = FNV1A_OFFSET_BASIS;
+    // Fold expected_size into the hash so two files of different sizes
+    // whose sample windows happen to coincide still get different hashes.
+    {
+        uint64_t s = static_cast<uint64_t>(expected_size);
+        FnvAccumulate(h, reinterpret_cast<const uint8_t*>(&s), sizeof(s));
+    }
+
+    uint8_t buf[FINGERPRINT_WINDOW];
+    const size_t head_len = (expected_size < static_cast<int64_t>(FINGERPRINT_WINDOW))
+        ? static_cast<size_t>(expected_size)
+        : FINGERPRINT_WINDOW;
+
+    ssize_t got = ::pread(fd, buf, head_len, 0);
+    if (got < 0 || static_cast<size_t>(got) != head_len) {
+        ::close(fd);
+        return 0;
+    }
+    FnvAccumulate(h, buf, head_len);
+
+    // Tail window — only if the file is larger than head_len (otherwise
+    // we've already hashed everything).
+    if (static_cast<int64_t>(head_len) < expected_size) {
+        const size_t tail_len = (expected_size - static_cast<int64_t>(head_len)
+                                    < static_cast<int64_t>(FINGERPRINT_WINDOW))
+            ? static_cast<size_t>(expected_size - head_len)
+            : FINGERPRINT_WINDOW;
+        const off_t tail_off = static_cast<off_t>(expected_size - tail_len);
+        got = ::pread(fd, buf, tail_len, tail_off);
+        if (got < 0 || static_cast<size_t>(got) != tail_len) {
+            ::close(fd);
+            return 0;
+        }
+        FnvAccumulate(h, buf, tail_len);
+    }
+
+    ::close(fd);
+    // Avoid the sentinel: if a real fingerprint happens to be 0
+    // (statistically negligible), bump it so callers can use 0 ==
+    // "no fingerprint available" unambiguously.
+    return h == 0 ? 1 : h;
+}
+
+bool RefreshHeaderMtime(const std::string& peak_path, int64_t new_mtime) {
+    int fd = ::open(peak_path.c_str(), O_WRONLY);
+    if (fd < 0) return false;
+    ssize_t written = ::pwrite(fd, &new_mtime, sizeof(new_mtime),
+                               static_cast<off_t>(PEAK_HEADER_MTIME_OFFSET));
+    ::close(fd);
+    return written == static_cast<ssize_t>(sizeof(new_mtime));
+}
+
+// ============================================================================
 // PeakFileWriter
 // ============================================================================
 

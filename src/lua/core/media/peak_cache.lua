@@ -64,19 +64,22 @@ local PEAK_COVERAGE_MIN_FRACTION = 0.95
 --- Try loading an existing peak file and validate it against the media
 --- it claims to describe.
 ---
---- Two checks must pass for a peak file to be trusted:
----   1. Header mtime matches the media's current mtime at second resolution.
----      (Header stores int64_t source_mtime from st.st_mtime; fs_utils
----      returns nanosecond-precision float, so we floor.)
----   2. Header's level-0 bin count covers at least PEAK_COVERAGE_MIN_FRACTION
----      of the media's expected audio sample count. expected_samples nil
----      means "caller doesn't know"; coverage check is skipped in that
----      case (preserves callers outside init_for_project).
+--- Verification policy (v2 hybrid — 2026-06-03):
+---   FAST: mtime matches header → accept (skip hash work).
+---   SLOW: mtime mismatch + size matches → fingerprint check.
+---           hash matches → bytes unchanged (cp/touch/fixture refresh) —
+---             refresh stored mtime in place and accept.
+---           hash mismatches → real edit — regenerate.
+---   FAIL: size mismatch / coverage not ok / hash unavailable → regenerate.
 ---
---- On failure, releases the handle, deletes the file, returns false so
---- the caller triggers regeneration.
+--- Coverage check (independent): header's level-0 bin count must cover
+--- at least PEAK_COVERAGE_MIN_FRACTION of the media's expected audio
+--- sample count. expected_samples nil → coverage check skipped.
+---
+--- On verification failure, releases the handle, deletes the file,
+--- returns false so the caller triggers regeneration.
 --- @return boolean true if loaded and valid
-local function try_load_existing(media_id, source_mtime, expected_samples)
+local function try_load_existing(media_id, media_path, source_mtime, expected_samples)
     local path = peak_file_path(media_id)
     local handle = EMP.PEAK_LOAD(path)
     if not handle then return false end
@@ -85,7 +88,9 @@ local function try_load_existing(media_id, source_mtime, expected_samples)
     assert(hdr, string.format(
         "peak_cache: PEAK_HEADER returned nil for valid handle (media_id=%s)", media_id))
 
-    local mtime_matches = (hdr.source_mtime == math.floor(source_mtime))
+    local floored_mtime = math.floor(source_mtime)
+    local mtime_matches = (hdr.source_mtime == floored_mtime)
+
     local coverage_ok = true
     if expected_samples and expected_samples > 0 then
         -- bins_per_level[1] is level 0 (Lua 1-indexed); covered samples
@@ -111,7 +116,27 @@ local function try_load_existing(media_id, source_mtime, expected_samples)
         end
     end
 
-    if mtime_matches and coverage_ok then
+    -- Hash-rescue path: mtime drifted but coverage ok and we have a
+    -- media_path to fingerprint. If size + content hash both match the
+    -- header, the bytes are unchanged — accept and refresh the stored
+    -- mtime so next session's fast path takes effect.
+    local hash_rescued = false
+    if (not mtime_matches) and coverage_ok and media_path
+            and hdr.source_size and hdr.content_hash then
+        local fp = EMP.MEDIA_CONTENT_HASH(media_path)
+        if fp and fp.size == hdr.source_size and fp.hash == hdr.content_hash then
+            local ok = EMP.PEAK_REFRESH_HEADER_MTIME(path, floored_mtime)
+            assert(ok, string.format(
+                "peak_cache: PEAK_REFRESH_HEADER_MTIME failed for %s — "
+                .. "content matched but in-place mtime rewrite refused", path))
+            hash_rescued = true
+            log.event("peak_cache: bytes unchanged for %s — refreshed stored "
+                .. "mtime %d → %d (cp/touch absorbed, no regen)",
+                media_id, hdr.source_mtime, floored_mtime)
+        end
+    end
+
+    if (mtime_matches or hash_rescued) and coverage_ok then
         peak_handles[media_id] = handle
         generation_status[media_id] = "complete"
         return true
@@ -120,9 +145,11 @@ local function try_load_existing(media_id, source_mtime, expected_samples)
     -- Stale or truncated — release, delete, and let caller regenerate
     EMP.PEAK_RELEASE(handle)
     os.remove(path)
-    if not mtime_matches then
-        log.event("peak_cache: stale peaks for %s (mtime %d vs %s), regenerating",
-            media_id, hdr.source_mtime, tostring(source_mtime))
+    if not mtime_matches and not hash_rescued then
+        log.event("peak_cache: stale peaks for %s (mtime %d vs %s, "
+            .. "size %s vs ?, hash mismatch or unavailable), regenerating",
+            media_id, hdr.source_mtime, tostring(source_mtime),
+            tostring(hdr.source_size))
     end
     return false
 end
@@ -130,8 +157,10 @@ end
 --- Test hook: exposes try_load_existing for integration tests that
 --- install hand-crafted peak files and verify load-time rejection.
 --- Not part of the public API; production callers go through ensure_peaks.
-function M._try_load_existing_for_test(media_id, source_mtime, expected_samples)
-    return try_load_existing(media_id, source_mtime, expected_samples)
+--- media_path may be nil — disables the hash-rescue path for tests
+--- that want to exercise the strict mtime-only behavior.
+function M._try_load_existing_for_test(media_id, media_path, source_mtime, expected_samples)
+    return try_load_existing(media_id, media_path, source_mtime, expected_samples)
 end
 
 -- ============================================================================
@@ -336,7 +365,7 @@ function M.ensure_peaks(media_id, media_path, source_mtime, expected_samples)
         return
     end
 
-    if try_load_existing(media_id, source_mtime, expected_samples) then return end
+    if try_load_existing(media_id, media_path, source_mtime, expected_samples) then return end
 
     request_generation(media_id, media_path)
 end
