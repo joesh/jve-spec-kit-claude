@@ -219,9 +219,9 @@ function M.execute(args, db)
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
 
-    local client, err = supervisor.ensure_client()
+    local client, sv_code, sv_msg = supervisor.ensure_client()
     if not client then
-        notify(args, nil, "helper_unavailable", err)
+        notify(args, nil, sv_code, sv_msg)
         return
     end
 
@@ -258,23 +258,9 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    command_executors["SyncGradesFromResolve"] = function(command)
-        local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args, db)
-        if not ok then
-            -- FR-023 completion contract: route the pcall-caught error
-            -- through bridge_completion.notify so the *_completed signal
-            -- + subscriber counter fire even for internal asserts.
-            -- set_last_error still runs for command_manager's executor
-            -- (ok, err) protocol.
-            bridge_completion.notify(OP_NAME, args, nil,
-                "internal_error", tostring(err))
-            set_last_error("SyncGradesFromResolve: " .. tostring(err))
-            return false, tostring(err)
-        end
-        return true
-    end
-    command_undoers["SyncGradesFromResolve"] = function(command)
+    local executor = bridge_completion.register_executor(
+        command_executors, OP_NAME, M.execute, db, set_last_error)
+    command_undoers[OP_NAME] = function(command)
         -- captured is produced by the async on_complete in M.execute and
         -- must be persisted onto the command before undo. A missing
         -- captured means the command was logged before apply() ran, or
@@ -288,8 +274,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         return true
     end
     return {
-        executor = command_executors["SyncGradesFromResolve"],
-        undoer   = command_undoers["SyncGradesFromResolve"],
+        executor = executor,
+        undoer   = command_undoers[OP_NAME],
         spec     = SPEC,
     }
 end

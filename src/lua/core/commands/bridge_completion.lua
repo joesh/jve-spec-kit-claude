@@ -148,6 +148,57 @@ function M.notify(op_name, args, result, code, message)
     end
 end
 
+--- Build + install the standard bridge-command executor.
+---
+--- Every bridge command needs the same executor shape: invoke
+--- `execute_fn(args, db)` under pcall, and on a caught error route
+--- through notify() so the *_completed signal + counter fire (rule
+--- 2.32 — no silent failures: an assert in payload_builder /
+--- Sequence.load / round-trip validator must not escape via pcall
+--- without the completion contract being satisfied). set_last_error
+--- still runs so command_manager's executor (ok, err) protocol stays
+--- intact.
+---
+--- Async (helper response) terminal paths route through notify()
+--- directly from inside M.execute and bypass this wrapper. Those are
+--- uncatchable on the response thread by design (rule 1.14):
+--- invariant violations in the async tail are real internal bugs that
+--- must crash, not be downgraded.
+---
+--- @param command_executors table  executors registry to install into
+--- @param op_name string           the command's registered op name
+--- @param execute_fn function      M.execute (receives args, db)
+--- @param db table|nil             open SQLite connection
+--- @param set_last_error function  command_manager error-slot callback
+--- @return function the installed executor closure
+function M.register_executor(
+        command_executors, op_name, execute_fn, db, set_last_error)
+    assert(type(command_executors) == "table",
+        "bridge_completion.register_executor: command_executors required")
+    assert(type(op_name) == "string" and op_name ~= "",
+        "bridge_completion.register_executor: op_name (non-empty) required")
+    assert(_signals_by_op[op_name],
+        "bridge_completion.register_executor: op '" .. op_name
+        .. "' not registered — call register_op first")
+    assert(type(execute_fn) == "function",
+        "bridge_completion.register_executor: execute_fn required")
+    assert(type(set_last_error) == "function",
+        "bridge_completion.register_executor: set_last_error required")
+
+    local closure = function(command)
+        local args = command:get_all_parameters()
+        local ok, err = pcall(execute_fn, args, db)
+        if not ok then
+            M.notify(op_name, args, nil, "internal_error", tostring(err))
+            set_last_error(op_name .. ": " .. tostring(err))
+            return false, tostring(err)
+        end
+        return true
+    end
+    command_executors[op_name] = closure
+    return closure
+end
+
 --- Monotonic per-op completion counter. Smokes snap before, settle, snap
 --- after; the delta is the "the async tail actually reached notify"
 --- assertion that "no Lua error in log slice" alone can't provide.

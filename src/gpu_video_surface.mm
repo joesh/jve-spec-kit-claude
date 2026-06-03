@@ -19,6 +19,25 @@ struct Vertex {
     float texCoord[2];
 };
 
+// The Metal shader's CdlUniform (defined in the shader source string below)
+// must agree byte-for-byte with emp::CdlParams — setFragmentBytes uploads
+// the C++ struct directly into the shader's uniform slot, no marshaling.
+// Pin the size + member offsets on the C++ side so a field reorder in
+// emp_cdl.h fails the build instead of silently scrambling the shader read.
+// 3+3+3 = 9 floats SOP + 1 float saturation + 1 int32 enabled = 11 × 4 bytes.
+static_assert(sizeof(emp::CdlParams) == 11 * sizeof(float),
+              "CdlParams size drift breaks Metal shader CdlUniform layout");
+static_assert(offsetof(emp::CdlParams, slope)      == 0,
+              "CdlParams.slope offset drift");
+static_assert(offsetof(emp::CdlParams, offset)     == 3 * sizeof(float),
+              "CdlParams.offset offset drift");
+static_assert(offsetof(emp::CdlParams, power)      == 6 * sizeof(float),
+              "CdlParams.power offset drift");
+static_assert(offsetof(emp::CdlParams, saturation) == 9 * sizeof(float),
+              "CdlParams.saturation offset drift");
+static_assert(offsetof(emp::CdlParams, enabled)    == 10 * sizeof(float),
+              "CdlParams.enabled offset drift");
+
 // Which render path the current frame uses
 enum class FrameMode { None, YUV, BGRA, PackedYUV };
 
@@ -152,8 +171,12 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
     float g = y - 0.1873 * u - 0.4681 * v;
     float b = y + 1.8556 * u;
 
-    float3 rgb = saturate(float3(r, g, b));
-    return float4(apply_cdl(rgb, cdl), 1.0);
+    // Studio-range YCbCr→RGB overshoots [0,1] at boundary luma/chroma values.
+    // Hand the raw triple to apply_cdl so slope/offset can pull super-white
+    // and sub-black back into range; saturate once on output so passthrough
+    // (enabled==0) still clamps for 8-bit display storage.
+    float3 rgb = float3(r, g, b);
+    return float4(saturate(apply_cdl(rgb, cdl)), 1.0);
 }
 
 // BGRA passthrough for sw-decoded frames (PNG, JPEG, etc.)
@@ -181,13 +204,16 @@ fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
     float cb = ayuv.b - 0.5;
     float cr = ayuv.a - 0.5;
 
-    // BT.709 full-range YCbCr to RGB
+    // BT.709 full-range YCbCr to RGB. See studio-range note in
+    // fragmentShader: hand the raw triple to apply_cdl so slope/offset has
+    // headroom; saturate once on output so passthrough still clamps for
+    // 8-bit display storage.
     float r = y + 1.5748 * cr;
     float g = y - 0.1873 * cb - 0.4681 * cr;
     float b = y + 1.8556 * cb;
 
-    float3 rgb = saturate(float3(r, g, b));
-    return float4(apply_cdl(rgb, cdl), alpha);
+    float3 rgb = float3(r, g, b);
+    return float4(saturate(apply_cdl(rgb, cdl)), alpha);
 }
 )";
 

@@ -127,9 +127,9 @@ function M.execute(args, db)
         return
     end
 
-    local client, supervisor_err = supervisor.ensure_client()
+    local client, sv_code, sv_msg = supervisor.ensure_client()
     if not client then
-        notify(args, nil, "helper_unavailable", supervisor_err)
+        notify(args, nil, sv_code, sv_msg)
         return
     end
 
@@ -188,28 +188,9 @@ local SPEC = {
 }
 
 function M.register(command_executors, _command_undoers, db, set_last_error)
-    command_executors["SendToResolve"] = function(command)
-        local args = command:get_all_parameters()
-        local ok, err = pcall(M.execute, args, db)
-        if not ok then
-            -- FR-023 completion contract: every terminal path — async
-            -- helper errors AND synchronous internal asserts — routes
-            -- through bridge_completion.notify. Without this, an assert
-            -- in payload_builder / Sequence.load / round-trip validator
-            -- escapes via pcall, hits set_last_error only, and the
-            -- *_completed signal never fires. set_last_error still runs
-            -- so command_manager keeps its (ok, err) executor protocol.
-            bridge_completion.notify(OP_NAME, args, nil,
-                "internal_error", tostring(err))
-            set_last_error("SendToResolve: " .. tostring(err))
-            return false, tostring(err)
-        end
-        return true
-    end
-    return {
-        executor = command_executors["SendToResolve"],
-        spec     = SPEC,
-    }
+    local executor = bridge_completion.register_executor(
+        command_executors, OP_NAME, M.execute, db, set_last_error)
+    return { executor = executor, spec = SPEC }
 end
 
 return M

@@ -112,18 +112,30 @@ local function spawn_helper()
     if not started then
         qt_process_destroy(proc)
         state.process_handle = nil
-        return nil, "helper_failed_to_start"
+        state.socket_path = nil
+        return nil, "helper_unavailable", string.format(
+            "helper process failed to start within %dms", STARTUP_GRACE_MS)
     end
     return socket_path
 end
 
 --- Get a connected client. Spawns the helper if needed.
---- Returns (client, nil) on success or (nil, err_message) on failure.
+---
+--- Returns one of:
+---   (client_handle)               on success
+---   (nil, code, message)          on failure — code is a closed-set code
+---                                 (helper-protocol KNOWN_ERROR_CODES); the
+---                                 only one this layer emits today is
+---                                 "helper_unavailable" (spawn or socket
+---                                 unreachable). Callers pass code+message
+---                                 through to bridge_completion.notify;
+---                                 closure is enforced by the protocol
+---                                 module, not invented here.
 function M.ensure_client()
-    if state.client_handle then return state.client_handle, nil end
+    if state.client_handle then return state.client_handle end
 
-    local socket_path, spawn_err = spawn_helper()
-    if not socket_path then return nil, spawn_err end
+    local socket_path, spawn_code, spawn_msg = spawn_helper()
+    if not socket_path then return nil, spawn_code, spawn_msg end
 
     local c, connect_err = client.connect(socket_path, {
         connect_timeout_ms = CONNECT_TIMEOUT_MS,
@@ -134,10 +146,10 @@ function M.ensure_client()
         if state.process_handle then
             qt_process_terminate(state.process_handle)
         end
-        return nil, connect_err
+        return nil, "helper_unavailable", connect_err
     end
     state.client_handle = c
-    return c, nil
+    return c
 end
 
 --- Shut down — terminate helper, close client. Idempotent.

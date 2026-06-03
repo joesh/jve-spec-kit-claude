@@ -9,6 +9,7 @@
 #include "editor_media_platform/emp_cdl.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace emp {
@@ -50,8 +51,17 @@ void apply_cdl_rgb(float& r, float& g, float& b, const CdlParams& cdl) {
 
 void apply_cdl_bgra8_inplace(uint8_t* data, int width, int height, int stride,
                               const CdlParams& cdl) {
+    // Geometry is a caller contract, not a graceful fallback: a nil pointer
+    // or non-positive width/height means the caller passed garbage; silently
+    // returning would hide the bug (rule 1.14 / 2.32). Stride must fit the
+    // row width (BGRA8 = 4 bytes/px) to prevent out-of-bounds writes.
+    assert(data != nullptr && "apply_cdl_bgra8_inplace: null data");
+    assert(width  > 0 && "apply_cdl_bgra8_inplace: width must be positive");
+    assert(height > 0 && "apply_cdl_bgra8_inplace: height must be positive");
+    assert(stride >= width * 4 &&
+           "apply_cdl_bgra8_inplace: stride < width*4 (row overflow)");
+
     if (cdl.enabled == 0) return;
-    if (!data || width <= 0 || height <= 0) return;
 
     const float kInv255 = 1.0f / 255.0f;
 

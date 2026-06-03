@@ -24,7 +24,8 @@
 
 local M = { _uuid_counter = 0 }
 
-local enc = require("exporters.drt_binary")
+local enc            = require("exporters.drt_binary")
+local identity_marker = require("exporters.drt_identity_marker")
 
 -- ─── Canonical-template loading ─────────────────────────────────────────────
 --
@@ -707,31 +708,6 @@ end
 -- Both files are loaded verbatim from drt_canonical/ and have their reference
 -- DbIds + reference names swapped for freshly minted ones / payload values.
 
--- Identity-marker constants — MUST mirror tools/resolve-helper/verbs.py
--- _IDENTITY_MARKER_* (lines 633-637). The helper's _stamp_marker_safe
--- (verbs.py:223-228) is idempotent ONLY when the existing customData
--- equals the would-stamp clip_id; differing color/name/note/duration on
--- the same item would not change that check, but keeping the constants
--- aligned means a Resolve UI inspection of a JVE-authored marker is
--- visually indistinguishable from a helper-stamped one (single carrier,
--- single appearance — no "which side stamped it?" forensics later).
-local IDENTITY_MARKER_COLOR    = "Purple"
-local IDENTITY_MARKER_NAME     = "JVE clip identity"
-local IDENTITY_MARKER_NOTE     = ""
-local IDENTITY_MARKER_DURATION = 1
-local IDENTITY_MARKER_FRAME    = 0
-
-local function identity_marker(clip_id)
-    return {
-        frame       = IDENTITY_MARKER_FRAME,
-        color       = IDENTITY_MARKER_COLOR,
-        name        = IDENTITY_MARKER_NAME,
-        note        = IDENTITY_MARKER_NOTE,
-        duration    = IDENTITY_MARKER_DURATION,
-        custom_data = clip_id,
-    }
-end
-
 -- One <Element><Sm2TiItemLockableBlob>…</Sm2TiItemLockableBlob></Element>
 -- carrying the identity marker for `clip_id`. Mirrors the template's
 -- existing <Sm2MediaPoolLockableBlob> child shape: FieldsBlob, BlobOwner,
@@ -743,7 +719,7 @@ end
 -- the live API (inbound-findings.md §2 + §5).
 local function build_identity_marker_element(clip_id, item_dbid)
     local fields_blob_hex = enc.encode_clip_marker_fields_blob({
-        identity_marker(clip_id),
+        identity_marker.for_clip(clip_id),
     })
     return elem("Element", elem("Sm2TiItemLockableBlob", table.concat({
         text_elem("FieldsBlob", fields_blob_hex),

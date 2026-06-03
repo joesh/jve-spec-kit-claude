@@ -4,35 +4,18 @@
 -- after the helper's import_timeline + idempotent _stamp_marker_safe pass.
 --
 -- Encoder verified by decode(encode(x)) == x against the same drp_binary
--- module Resolve's importer reads at parse_resolve_markers. Identity-marker
--- constants must match tools/resolve-helper/verbs.py:_IDENTITY_MARKER_*
--- or the helper's idempotency check (existing == clip_id) fails and we
--- get duplicate markers on each Send → Resolve roundtrip.
+-- module Resolve's importer reads at parse_resolve_markers. The identity-
+-- marker shape comes from the shared exporters.drt_identity_marker module
+-- (single Lua source) and must match the Python helper's _IDENTITY_MARKER_*
+-- — drift there breaks idempotent re-stamp.
 --
 -- Runs via `jve --test` because the encoder requires qt_zstd_compress and
 -- the decoder requires qt_zstd_decompress.
 
-local test_env = require("test_env")
-local drt_binary = require("exporters.drt_binary")
-local drp_binary = require("importers.drp_binary")
-
--- Helper-side identity marker shape (verbs.py:633-637).
-local IDENTITY_MARKER_COLOR = "Purple"
-local IDENTITY_MARKER_NAME  = "JVE clip identity"
-local IDENTITY_MARKER_NOTE  = ""
-local IDENTITY_MARKER_DURATION = 1
-local IDENTITY_MARKER_FRAME = 0
-
-local function identity_marker(clip_id)
-    return {
-        frame       = IDENTITY_MARKER_FRAME,
-        color       = IDENTITY_MARKER_COLOR,
-        name        = IDENTITY_MARKER_NAME,
-        note        = IDENTITY_MARKER_NOTE,
-        duration    = IDENTITY_MARKER_DURATION,
-        custom_data = clip_id,
-    }
-end
+local test_env        = require("test_env")
+local drt_binary      = require("exporters.drt_binary")
+local drp_binary      = require("importers.drp_binary")
+local identity_marker = require("exporters.drt_identity_marker")
 
 local function assert_marker_eq(got, want, label)
     assert(got.frame == want.frame,
@@ -54,7 +37,7 @@ end
 -- ─── Happy path: single identity marker ─────────────────────────────────────
 do
     local clip_id = "11111111-2222-3333-4444-555555555555"
-    local want = identity_marker(clip_id)
+    local want = identity_marker.for_clip(clip_id)
     local hex = drt_binary.encode_clip_marker_fields_blob({ want })
     assert(type(hex) == "string" and #hex > 0,
         "encoder must return non-empty hex string")
@@ -72,7 +55,7 @@ do
     -- Resolve item DbId form (used both ways: Sm2Ti DbId on file side,
     -- live customData on API side).
     local clip_id = "abc12345-6789-abcd-ef01-234567890abc"
-    local want = identity_marker(clip_id)
+    local want = identity_marker.for_clip(clip_id)
     local hex = drt_binary.encode_clip_marker_fields_blob({ want })
     local got = drp_binary.decode_clip_markers(hex)
     assert_marker_eq(got[1], want, "uuid_form_clip_id")
@@ -82,9 +65,9 @@ end
 -- but the schema supports many; encoder must walk all entries) ──────────────
 do
     local markers = {
-        identity_marker("clip-A"),
-        identity_marker("clip-B-with-longer-id-1234567890"),
-        identity_marker("c"),
+        identity_marker.for_clip("clip-A"),
+        identity_marker.for_clip("clip-B-with-longer-id-1234567890"),
+        identity_marker.for_clip("c"),
     }
     local hex = drt_binary.encode_clip_marker_fields_blob(markers)
     local got = drp_binary.decode_clip_markers(hex)

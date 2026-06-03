@@ -27,7 +27,8 @@
 --- `false, code (string), message (string)` matching the
 --- on_complete(nil, code, message) shape SendToResolve already uses.
 
-local importer = require("importers.drp_importer")
+local importer        = require("importers.drp_importer")
+local identity_marker = require("exporters.drt_identity_marker")
 
 local M = {}
 
@@ -78,25 +79,13 @@ local function collect_parsed_clip_ids(parsed_timeline)
     return ids, n
 end
 
--- Identity marker fingerprint — MUST mirror drt_writer.lua's
--- IDENTITY_MARKER_* + tools/resolve-helper/verbs.py:_IDENTITY_MARKER_*.
--- If these drift, the helper's idempotent stamp check
--- (verbs.py:_stamp_marker_safe) re-stamps on every Send and we get
--- duplicate markers; a round-trip mismatch here catches that drift
--- before anything reaches Resolve.
-local IDENTITY_MARKER_COLOR = "Purple"
-local IDENTITY_MARKER_NAME  = "JVE clip identity"
-
 -- Find the identity marker on a parsed clip, or nil if none. parse_resolve_markers
 -- attaches the array as clip.markers (drp_importer.lua:2103); a clip without
 -- an Sm2TiItemLockableBlob for its DbId gets no .markers field at all.
 local function identity_marker_of(clip)
     if type(clip.markers) ~= "table" then return nil end
     for _, m in ipairs(clip.markers) do
-        if m.color == IDENTITY_MARKER_COLOR
-            and m.name == IDENTITY_MARKER_NAME then
-            return m
-        end
+        if identity_marker.matches(m) then return m end
     end
     return nil
 end
