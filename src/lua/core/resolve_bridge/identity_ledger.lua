@@ -188,14 +188,44 @@ local function find_content_match(jve_clip, resolve_items)
     return nil
 end
 
-local function find_parent_with_direct(jve_clip, jve_clips, direct_by_clip)
+-- Build the file_uuid → directly-matched-candidates index used by
+-- find_parent_with_direct. Building once and bucketing collapses the
+-- naive O(N²) outer×inner scan into O(N + Σ children_per_file): each
+-- unmatched child consults only the candidates that share its file
+-- (bladed children always share the parent's source file, so each
+-- bucket is typically tiny — one parent spawning a handful of
+-- children, not the whole timeline).
+local function build_direct_candidates_by_file_uuid(jve_clips,
+                                                     direct_by_clip)
+    local by_file = {}
     for _, candidate in ipairs(jve_clips) do
+        local rid = direct_by_clip[candidate.id]
+        if rid then
+            local bucket = by_file[candidate.file_uuid]
+            if bucket == nil then
+                bucket = {}
+                by_file[candidate.file_uuid] = bucket
+            end
+            bucket[#bucket + 1] = {
+                id              = candidate.id,
+                source_in       = candidate.source_in,
+                source_out      = candidate.source_out,
+                resolve_item_id = rid,
+            }
+        end
+    end
+    return by_file
+end
+
+local function find_parent_with_direct(jve_clip,
+                                        direct_candidates_by_file_uuid)
+    local bucket = direct_candidates_by_file_uuid[jve_clip.file_uuid]
+    if bucket == nil then return nil end
+    for _, candidate in ipairs(bucket) do
         if candidate.id ~= jve_clip.id
-            and candidate.file_uuid == jve_clip.file_uuid
-            and direct_by_clip[candidate.id]
             and range_contains(candidate.source_in, candidate.source_out,
                 jve_clip.source_in, jve_clip.source_out) then
-            return direct_by_clip[candidate.id]
+            return candidate.resolve_item_id
         end
     end
     return nil
@@ -234,6 +264,12 @@ function M.reconcile(jve_clips, resolve_items)
     end
 
     -- Pass 2: for unresolved clips try content_match, then blade_inherit.
+    -- Pre-build the per-file_uuid bucket of directly-matched candidates
+    -- ONCE so blade_inherit lookups cost O(bucket) per child instead of
+    -- O(jve_clips) — bladed children always share their parent's
+    -- file_uuid, so buckets stay small in realistic timelines.
+    local direct_candidates_by_file_uuid =
+        build_direct_candidates_by_file_uuid(jve_clips, direct_by_clip)
     local unmatched = {}
     for _, jve_clip in ipairs(pending_no_direct) do
         local content = find_content_match(jve_clip, resolve_items)
@@ -245,7 +281,7 @@ function M.reconcile(jve_clips, resolve_items)
             }
         else
             local parent_resolve_id = find_parent_with_direct(
-                jve_clip, jve_clips, direct_by_clip)
+                jve_clip, direct_candidates_by_file_uuid)
             if parent_resolve_id then
                 mapped[#mapped+1] = {
                     clip_id         = jve_clip.id,
