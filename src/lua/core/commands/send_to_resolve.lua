@@ -52,43 +52,6 @@ local function out_path_for_export(sequence_id)
     return string.format("%s/%s.drt", dir, sequence_id)
 end
 
--- Build the `clip_positions` payload the helper consumes to derive its
--- identity mapping (helper-protocol.md §import_timeline). The helper
--- has no JVE state (FR-021), so JVE supplies the (clip.id ↔ position)
--- map; the helper looks up live items by `(track_type, track_index,
--- record_start)`. Track index assignment must mirror `drt_writer`'s
--- partition (VideoTrackVec then AudioTrackVec preserving JVE order
--- within each type) so the index the helper observes on the imported
--- timeline matches.
-local function build_clip_positions(payload)
-    local positions = {}
-    local video_idx, audio_idx = 0, 0
-    for _, track in ipairs(payload.sequence.tracks) do
-        local track_index
-        if track.type == "video" then
-            video_idx = video_idx + 1
-            track_index = video_idx
-        elseif track.type == "audio" then
-            audio_idx = audio_idx + 1
-            track_index = audio_idx
-        else
-            error(string.format(
-                "SendToResolve: unknown track.type %q "
-                .. "(payload_builder contract violation)",
-                tostring(track.type)))
-        end
-        for _, clip in ipairs(track.clips) do
-            positions[#positions + 1] = {
-                clip_id      = clip.id,
-                track_type   = track.type,
-                track_index  = track_index,
-                record_start = clip.sequence_start,
-            }
-        end
-    end
-    return positions
-end
-
 -- `_command` accepted for register_executor's executor signature; not
 -- used here because SendToResolve is non-undoable (no captured state
 -- to persist back onto the command).
@@ -118,7 +81,7 @@ function M.execute(args, db, _command)
     local payload = payload_builder.build(db,
         args.project_id, args.sequence_id)
     local out_path = out_path_for_export(args.sequence_id)
-    drt_writer.author(out_path, payload)
+    local authored = drt_writer.author(out_path, payload)
     log.event("SendToResolve: authored %s", out_path)
 
     -- FR-004: round-trip the just-authored file through JVE's own
@@ -135,7 +98,6 @@ function M.execute(args, db, _command)
     end
 
     supervisor.with_client(notify, args, function(client)
-        local clip_positions = build_clip_positions(payload)
         local token = change_token.build(args.project_id, args.sequence_id,
             seq.mutation_generation)
         -- Per the media_roots contract above: nil maps to the empty
@@ -144,7 +106,7 @@ function M.execute(args, db, _command)
         client:request("import_timeline", {
             drt_path        = out_path,
             media_roots     = helper_media_roots,
-            clip_positions  = clip_positions,
+            clip_positions  = authored.emit_order,
             change_token    = token,
         }, function(response, code, message)
             if response == nil then

@@ -987,7 +987,55 @@ function M.author(out_path, payload)
     assert(rc == 0, "drt_writer.author: zip exited non-zero (" .. tostring(rc)
         .. ") — is `zip` on PATH?")
 
-    return { path = out_path, stage = stage, dbids = dbids }
+    return {
+        path = out_path,
+        stage = stage,
+        dbids = dbids,
+        emit_order = M.compute_emit_order(seq),
+    }
+end
+
+--- The canonical (clip_id, track_type, track_index, record_start) list
+--- in the order the writer emits clips into the DRT.
+---
+--- Single source of truth for the position-match key the helper uses on
+--- the other side of import_timeline (helper-protocol §import_timeline:
+--- helper looks up live items by `(track_type, track_index,
+--- record_start)`). SendToResolve used to re-derive this in its own
+--- `build_clip_positions`, which had to mirror this partition by hand —
+--- a writer regression that changed emit order would have silently
+--- broken every position-match.
+---
+--- Track index assignment: VideoTrackVec then AudioTrackVec, preserving
+--- JVE order within each type — matches `build_seq_container_xml`'s
+--- partition above.
+function M.compute_emit_order(seq)
+    assert(type(seq) == "table" and type(seq.tracks) == "table",
+        "drt_writer.compute_emit_order: seq.tracks (array) required")
+    local order = {}
+    local video_idx, audio_idx = 0, 0
+    for _, track in ipairs(seq.tracks) do
+        assert(track.type == "video" or track.type == "audio",
+            "drt_writer.compute_emit_order: track.type must be 'video' "
+            .. "or 'audio', got " .. tostring(track.type))
+        local track_index
+        if track.type == "video" then
+            video_idx = video_idx + 1
+            track_index = video_idx
+        else
+            audio_idx = audio_idx + 1
+            track_index = audio_idx
+        end
+        for _, clip in ipairs(track.clips) do
+            order[#order + 1] = {
+                clip_id      = clip.id,
+                track_type   = track.type,
+                track_index  = track_index,
+                record_start = clip.sequence_start,
+            }
+        end
+    end
+    return order
 end
 
 return M
