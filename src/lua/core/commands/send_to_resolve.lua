@@ -45,7 +45,14 @@ end
 local function out_path_for_export(sequence_id)
     -- Stable per-sequence path: re-sending the same sequence overwrites
     -- the same file so the helper's idempotency check actually matches.
-    return string.format("/tmp/jve-resolve-%s.drp", sequence_id)
+    -- Lives under ~/.jve/ alongside the rest of JVE's per-user state
+    -- (probe_cache.json, recent_projects.json, etc.) — /tmp was macOS-
+    -- shaped and inconsistent with the rest of the codebase.
+    local home = assert(os.getenv("HOME"),
+        "SendToResolve: HOME env var required for export path")
+    local dir = home .. "/.jve/resolve-exports"
+    os.execute(string.format("mkdir -p %q", dir))
+    return string.format("%s/%s.drp", dir, sequence_id)
 end
 
 -- Build the `clip_positions` payload the helper consumes to derive its

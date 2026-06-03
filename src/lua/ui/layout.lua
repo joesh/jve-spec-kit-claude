@@ -424,14 +424,6 @@ assert(menu_success, string.format(
 -- when the .app bundle ships the bridge — currently dev-only).
 local helper_supervisor = require("core.resolve_bridge.helper_supervisor")
 local helper_script_path = layout_dir .. "../../../tools/resolve-helper/helper.py"
-do
-    local f = io.open(helper_script_path, "r")
-    assert(f, string.format(
-        "layout: Resolve bridge helper script not found at %s — "
-        .. "check tools/resolve-helper/helper.py exists in the repo",
-        helper_script_path))
-    f:close()
-end
 helper_supervisor.configure(helper_script_path)
 log.event("Resolve bridge supervisor configured: %s", helper_script_path)
 -- SPEC.keyboard metadata for non-menu commands surfaces in the dialog
@@ -810,7 +802,6 @@ _G.__jve_shutdown = function()
     -- spec 023 — terminate the Resolve helper process (if any) and
     -- close its socket. Idempotent: no-op when supervisor was never
     -- asked to spawn (e.g. user never invoked a bridge command).
-    local helper_supervisor = require("core.resolve_bridge.helper_supervisor")
     helper_supervisor.shutdown()
 end
 

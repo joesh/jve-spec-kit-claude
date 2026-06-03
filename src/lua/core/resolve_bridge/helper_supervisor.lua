@@ -59,6 +59,20 @@ function M.configure(helper_script_path)
     assert(type(helper_script_path) == "string"
         and helper_script_path ~= "",
         "helper_supervisor.configure: helper_script_path required")
+    -- Fail-fast (rule 1.14): existence check happens here so the only
+    -- caller path (layout.lua → first Send/Connect) surfaces a useful
+    -- error at app-start, not as a runtime qt_process_start "no such
+    -- file" on first menu click. Bundle layout: helper.py expected at
+    -- jve.app/Contents/Resources/resolve-helper/helper.py in release,
+    -- tools/resolve-helper/helper.py in dev.
+    local f = io.open(helper_script_path, "r")
+    assert(f, string.format(
+        "helper_supervisor.configure: helper.py not found at %s — "
+        .. "in dev expected at tools/resolve-helper/helper.py; in a "
+        .. "packaged build at jve.app/Contents/Resources/resolve-helper"
+        .. "/helper.py (check spec 023 packaging)",
+        helper_script_path))
+    f:close()
     state.helper_script_path = helper_script_path
 end
 
