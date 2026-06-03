@@ -944,7 +944,11 @@ end
 --- The inner phase dispatches happen inside the apply() undo group, so
 --- the command itself is not separately undoable (one Cmd-Z reverts
 --- the whole sync via the group entries).
-function M.execute(args, db)
+-- `_command` accepted for register_executor's executor signature; not
+-- used here because SyncEditsFromResolve is non-undoable at this
+-- command level — its inner ripple/insert/delete commands carry the
+-- undo entries.
+function M.execute(args, db, _command)
     assert(type(args) == "table", "SyncEditsFromResolve: args required")
     assert(db, "SyncEditsFromResolve: db required (passed by register's "
         .. "executor closure; SQL isolation policy keeps "

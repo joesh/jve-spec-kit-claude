@@ -84,6 +84,15 @@ local function table_len(t)
     return n
 end
 
+-- Schema-level track_type values are uppercase ("VIDEO"/"AUDIO"); the
+-- helper's read_timeline wire shape (and the matcher key) uses
+-- lowercase ("video"/"audio"). Single source of truth — adding a new
+-- track type tomorrow only needs an entry here.
+local TRACK_TYPE_TO_WIRE = {
+    VIDEO = "video",
+    AUDIO = "audio",
+}
+
 -- Iterate JVE clips on a track via direct SQL (mirrors
 -- payload_builder.lua::load_clips_for_track — same prepare-step shape;
 -- both are tracked under todo_spec023_dry_and_file_splits item #4 for
@@ -104,7 +113,15 @@ local function load_clips_on_track(db, track)
             id              = stmt:value(0),
             name            = stmt:value(1),
             track_id        = track.id,
-            track_type      = "video",
+            -- Derive the wire-side track_type from the schema value
+            -- (uppercase "VIDEO"/"AUDIO") so a future widening that
+            -- removes the V1 video-only filter automatically tags
+            -- audio clips correctly. Literal "video" here previously
+            -- would have silently mislabelled audio if the filter
+            -- moved (rule 2.13 — no hidden assumptions).
+            track_type      = TRACK_TYPE_TO_WIRE[track.track_type] or error(
+                "ConnectToResolveProject: unsupported track.track_type "
+                .. tostring(track.track_type)),
             track_index     = track.track_index,
             sequence_start  = stmt:value(2),
             duration        = stmt:value(3),
@@ -116,18 +133,32 @@ local function load_clips_on_track(db, track)
     return out
 end
 
--- Build the list of JVE clips the matcher walks. V1 scope is video
--- only (data-model.md §SyncEditsFromResolve / V1 scope); audio is
--- skipped to stay symmetric with read_timeline's V1 video-only
--- response. Audio support pairs with T054.
+-- Build the list of JVE clips the matcher walks AND the list of audio
+-- clips deliberately skipped under V1 scope (FR-024 — read_timeline's
+-- V1 response is video-only; T054 widens to audio). The skipped list
+-- is surfaced on the result so the user sees "audio not connected
+-- because V1", not silent omission (rule 2.32). Returns (video_clips,
+-- audio_skipped) where audio_skipped is a list of {clip_id, track_id,
+-- clip_name, reason} entries.
 local function load_jve_clips_for_sequence(sequence_id, db)
-    local clips = {}
+    local video_clips = {}
     for _, track in ipairs(Track.find_by_sequence(sequence_id, "VIDEO")) do
         for _, c in ipairs(load_clips_on_track(db, track)) do
-            clips[#clips + 1] = c
+            video_clips[#video_clips + 1] = c
         end
     end
-    return clips
+    local audio_skipped = {}
+    for _, track in ipairs(Track.find_by_sequence(sequence_id, "AUDIO")) do
+        for _, c in ipairs(load_clips_on_track(db, track)) do
+            audio_skipped[#audio_skipped + 1] = {
+                clip_id   = c.id,
+                track_id  = c.track_id,
+                clip_name = c.name,
+                reason    = "audio_v1_unsupported",
+            }
+        end
+    end
+    return video_clips, audio_skipped
 end
 
 -- Position-match: (track_type, track_index, record_start) keys are
@@ -348,13 +379,21 @@ local function pos_matched_pairs(matched)
     return out
 end
 
-function M.execute(args, db)
+-- `_command` accepted for register_executor's executor signature; not
+-- used here because ConnectToResolveProject is non-undoable.
+function M.execute(args, db, _command)
     validate_args(args)
     assert(db, "ConnectToResolveProject: db required (passed by "
         .. "register's executor closure; SQL isolation policy keeps "
         .. "the global DB lookup out of commands)")
 
-    local jve_clips = load_jve_clips_for_sequence(args.sequence_id, db)
+    local jve_clips, audio_skipped = load_jve_clips_for_sequence(
+        args.sequence_id, db)
+    if #audio_skipped > 0 then
+        log.event("ConnectToResolveProject: skipping %d audio clip(s) "
+            .. "(audio_v1_unsupported — FR-024 V1 video-only scope)",
+            #audio_skipped)
+    end
 
     -- Sequence load up-front so a missing sequence fails BEFORE the
     -- helper request is queued (rule 1.14). Also needed for
@@ -398,9 +437,10 @@ function M.execute(args, db)
             #matched.unmatched, #matched.ambiguous)
 
         local result = {
-            matched   = matched_log,
-            unmatched = matched.unmatched,
-            ambiguous = matched.ambiguous,
+            matched       = matched_log,
+            unmatched     = matched.unmatched,
+            ambiguous     = matched.ambiguous,
+            audio_skipped = audio_skipped,
         }
 
         if args.stamp_position_matches ~= true then

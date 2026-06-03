@@ -167,10 +167,21 @@ end
 ---
 --- @param command_executors table  executors registry to install into
 --- @param op_name string           the command's registered op name
---- @param execute_fn function      M.execute (receives args, db)
+--- @param execute_fn function      M.execute (receives args, db, command)
 --- @param db table|nil             open SQLite connection
 --- @param set_last_error function  command_manager error-slot callback
 --- @return function the installed executor closure
+---
+--- Why the closure threads `command` through to execute_fn (not just
+--- `args`): undoable bridge commands need to persist async-callback
+--- results back onto the command parameters so the undoer can find them
+--- (SyncGradesFromResolve persists `captured` via
+--- `command:set_parameter("captured", ...)` in its read_grades
+--- response handler). command_manager holds the same command-object
+--- reference in the undo stack, so a late set_parameter is visible to
+--- the undoer when the user eventually presses undo. Non-undoable
+--- bridge commands (SendToResolve, ConnectToResolveProject) ignore the
+--- third argument.
 function M.register_executor(
         command_executors, op_name, execute_fn, db, set_last_error)
     assert(type(command_executors) == "table",
@@ -187,7 +198,7 @@ function M.register_executor(
 
     local closure = function(command)
         local args = command:get_all_parameters()
-        local ok, err = pcall(execute_fn, args, db)
+        local ok, err = pcall(execute_fn, args, db, command)
         if not ok then
             M.notify(op_name, args, nil, "internal_error", tostring(err))
             set_last_error(op_name .. ": " .. tostring(err))

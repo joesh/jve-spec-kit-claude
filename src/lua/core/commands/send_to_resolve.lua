@@ -85,7 +85,10 @@ local function build_clip_positions(payload)
     return positions
 end
 
-function M.execute(args, db)
+-- `_command` accepted for register_executor's executor signature; not
+-- used here because SendToResolve is non-undoable (no captured state
+-- to persist back onto the command).
+function M.execute(args, db, _command)
     assert(type(args) == "table", "SendToResolve: args required")
     assert(db, "SendToResolve: db required (passed by register's "
         .. "executor closure; SQL isolation policy keeps "

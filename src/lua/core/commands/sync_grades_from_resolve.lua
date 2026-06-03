@@ -205,11 +205,22 @@ end
 
 --- Full command path: pulls grades from helper, applies them, fires
 --- on_complete. Non-blocking — on_complete carries success/error.
-function M.execute(args, db)
+---
+--- `command` is the live Command object that command_manager holds in
+--- the undo stack. The async read_grades response handler persists the
+--- captured-state snapshot back onto it via
+--- `command:set_parameter("captured", captured)` BEFORE notify() fires
+--- — without this, the undoer's args.captured is nil and undo asserts
+--- (contract break, not silent no-op; see register's undoer body).
+function M.execute(args, db, command)
     assert(type(args) == "table", "SyncGradesFromResolve: args required")
     assert(db, "SyncGradesFromResolve: db required (passed by "
         .. "register's executor closure; SQL isolation policy keeps "
         .. "the global DB lookup out of commands)")
+    assert(command and command.set_parameter,
+        "SyncGradesFromResolve: command handle required (passed by "
+        .. "register_executor's closure; needed to persist captured "
+        .. "state back onto the command before undo is reachable)")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SyncGradesFromResolve: sequence_id required (FR-013a scope)")
     assert(args.on_complete == nil or type(args.on_complete) == "function",
@@ -240,6 +251,16 @@ function M.execute(args, db)
             -- it as `resolve_api_error` would conflate origin (rule 2.21).
             local captured = M.apply(response.result, sequence_id, db,
                 os.time())
+            -- Persist captured onto the live command so the undoer can
+            -- find it. command_manager holds this same command-object
+            -- reference in the undo stack; a late set_parameter from
+            -- the async response handler is visible to the undoer when
+            -- the user eventually presses undo. Without this, undo
+            -- would hit the undoer's "args.captured required" assert
+            -- (contract break per 2.13/2.32 — fail-loud is correct;
+            -- a silent no-op would leave the user with a broken
+            -- "undo did nothing" state).
+            command:set_parameter("captured", captured)
             notify(args, {
                 applied_count = #response.result.grades,
                 captured      = captured,

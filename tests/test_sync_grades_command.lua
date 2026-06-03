@@ -191,6 +191,70 @@ check("grades_changed restore payload is the synced sequence_id",
 
 Signals.disconnect(conn)
 
+-- ─── M.execute persists captured back onto the live Command ─────────
+-- Regression: prior code returned captured only via notify() result; the
+-- async read_grades handler never wrote it onto the command, so the
+-- undoer's `args.captured` was always nil and undo asserted. The fix
+-- threads the command handle through register_executor and the async
+-- tail calls command:set_parameter("captured", captured) before notify.
+-- This test would have failed pre-fix because the supervisor wasn't
+-- invoked at all — we inject one to make the test hermetic.
+local supervisor = require("core.resolve_bridge.helper_supervisor")
+local orig_ensure_client = supervisor.ensure_client
+
+-- Reset c_pre + ensure c_none ungraded (prior section left both graded).
+ClipGrade.upsert("c_pre", {
+    cdl = PRE_CDL, lut_ref = nil, fidelity = "primary",
+    source = "user", stale = 0, synced_at = now,
+}, db)
+db:exec("DELETE FROM clip_grade WHERE clip_id = 'c_none'")
+
+-- Fake client whose request() invokes cb synchronously with the response
+-- a real helper would deliver. Matches `helper-protocol.md §read_grades`.
+local fake_client = {}
+function fake_client:request(verb, _, cb)
+    assert(verb == "read_grades",
+        "fake_client: unexpected verb " .. tostring(verb))
+    cb({ result = response }, nil, nil)
+end
+supervisor.ensure_client = function() return fake_client end
+
+-- Minimal Command stand-in matching command_manager's get/set API.
+local fake_command = { parameters = { sequence_id = "s" } }
+function fake_command:get_all_parameters() return self.parameters end
+function fake_command:set_parameter(key, value)
+    self.parameters[key] = value
+end
+
+local sync_grades_module = require("core.commands.sync_grades_from_resolve")
+sync_grades_module.execute({ sequence_id = "s" }, db, fake_command)
+
+check("M.execute persists captured onto command.parameters",
+    type(fake_command.parameters.captured) == "table")
+check("captured.entries non-empty (apply() ran via async tail)",
+    fake_command.parameters.captured
+        and #fake_command.parameters.captured.entries >= 2)
+check("captured.sequence_id stashed for restore()'s grades_changed emit",
+    fake_command.parameters.captured
+        and fake_command.parameters.captured.sequence_id == "s")
+
+-- Sanity: apply() actually mutated the model via the async tail.
+local c_pre_after = ClipGrade.load("c_pre", db)
+check("c_pre took the POST grade after M.execute via fake client",
+    c_pre_after and c_pre_after.cdl
+        and c_pre_after.cdl.slope_r == POST_CDL_pre.slope_r)
+
+-- Now exercise the undoer path: it reads command:get_all_parameters()
+-- and calls M.restore(args.captured, db). Pre-fix this asserted because
+-- captured was never written back.
+sync_grades_module.restore(fake_command.parameters.captured, db)
+local c_pre_undone = ClipGrade.load("c_pre", db)
+check("undo restored c_pre to PRE_CDL (captured was persisted+honored)",
+    c_pre_undone and c_pre_undone.cdl
+        and c_pre_undone.cdl.slope_r == PRE_CDL.slope_r)
+
+supervisor.ensure_client = orig_ensure_client
+
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0, "test_sync_grades_command.lua: failures present")
 print("✅ test_sync_grades_command.lua passed")
