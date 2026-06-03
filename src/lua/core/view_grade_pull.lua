@@ -18,8 +18,14 @@
 ---     graded look.
 ---
 --- Pure pull: takes a clip_id + open DB connection, returns or nils.
---- No side effects, no caching here — caching by clip_id is the View's
---- concern (it knows when the clip at the playhead changes).
+--- No caching here AND none in the View either (per FR-016: the View
+--- pulls every show-frame; see SequenceMonitor._apply_clip_grade and
+--- the rationale captured in commit a480c891 — a clip-id-keyed View
+--- cache hid SyncGradesFromResolve mutations because the key didn't
+--- change when the underlying row did). Per-frame indexed SELECT is
+--- intentional; decode cost dwarfs it. If a profile ever shows it,
+--- the correct optimization is a cache invalidated on the wired
+--- `grades_changed` signal — not a key-only cache.
 ---
 --- The DB connection is supplied by the caller so this module stays
 --- inside the SQL-isolation policy (commands and pull helpers receive
