@@ -386,6 +386,48 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
     })
 
 
+def _require_current_timeline(project, envelope_id):
+    # Shared guard for verbs that operate on the project's current
+    # timeline. Returns (timeline, None) on success, or (None, error
+    # response) when the API call fails or no timeline is open. Lifted
+    # from four near-identical try/except + None-check stanzas across
+    # read_identities / read_timeline / stamp_identity_marker /
+    # read_grades.
+    try:
+        timeline = project.GetCurrentTimeline()
+    except Exception as exc:
+        return None, _error(envelope_id, "resolve_api_error",
+            f"GetCurrentTimeline raised: {exc}")
+    if timeline is None:
+        return None, _error(envelope_id, "handle_stale",
+            "no current timeline — open one in Resolve")
+    return timeline, None
+
+
+def _safe_uid(item):
+    # Shared "read item.GetUniqueId and assert it's a non-empty string"
+    # for the three verbs that follow that exact pattern (read_identities,
+    # read_video_item, read_grades). Each caller wraps a broader for-
+    # loop in `try/except RuntimeError` and converts to a structured
+    # resolve_api_error; raising here lets that single conversion catch
+    # both the Resolve-API surprise and the empty-result anomaly.
+    #
+    # Two callsites are deliberately NOT routed through this helper:
+    # verb_import_timeline bundles GetUniqueId + GetStart in one try,
+    # and _find_timeline_item_by_uid doesn't do the non-empty check.
+    # Don't invent a fan-out signature to shoehorn them in.
+    try:
+        uid = item.GetUniqueId()
+    except Exception as exc:
+        raise RuntimeError(
+            f"item.GetUniqueId() raised: {exc}") from exc
+    if not isinstance(uid, str) or not uid:
+        raise RuntimeError(
+            "item.GetUniqueId() returned empty/non-string — "
+            "Resolve API contract broken")
+    return uid
+
+
 def _iter_all_timeline_items(timeline):
     # Walk every (track_type, track_index, item) of the current timeline.
     # Resolve indexes tracks from 1; track types are the strings "video"
@@ -453,28 +495,15 @@ def verb_read_identities(args, _resolve, project, envelope_id, helper_version):
         return _error(envelope_id, "bad_request",
             f"read_identities takes no args; got: {sorted(args.keys())}")
 
-    try:
-        timeline = project.GetCurrentTimeline()
-    except Exception as exc:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetCurrentTimeline raised: {exc}")
-    if timeline is None:
-        return _error(envelope_id, "handle_stale",
-            "no current timeline — open one in Resolve")
+    timeline, err = _require_current_timeline(project, envelope_id)
+    if err is not None:
+        return err
 
     items = []
     unkeyed_count = 0
     try:
         for _track_type, _tidx, item in _iter_all_timeline_items(timeline):
-            try:
-                resolve_item_id = item.GetUniqueId()
-            except Exception as exc:
-                return _error(envelope_id, "resolve_api_error",
-                    f"item.GetUniqueId() raised: {exc}")
-            if not isinstance(resolve_item_id, str) or not resolve_item_id:
-                return _error(envelope_id, "resolve_api_error",
-                    "item.GetUniqueId() returned empty/non-string — "
-                    "Resolve API contract broken")
+            resolve_item_id = _safe_uid(item)
             jve_guid = _recover_jve_guid(item)
             if jve_guid is None:
                 unkeyed_count += 1
@@ -525,14 +554,7 @@ def _read_video_item(item):
     #   GetClipEnabled      → bool
     # Each Resolve call is gated with try/except so a Resolve API
     # surprise becomes resolve_api_error, never a silent failure.
-    try:
-        resolve_item_id = item.GetUniqueId()
-    except Exception as exc:
-        raise RuntimeError(f"item.GetUniqueId() raised: {exc}") from exc
-    if not isinstance(resolve_item_id, str) or not resolve_item_id:
-        raise RuntimeError(
-            "item.GetUniqueId() returned empty/non-string — "
-            "Resolve API contract broken")
+    resolve_item_id = _safe_uid(item)
     try:
         record_start    = item.GetStart()
         record_duration = item.GetDuration()
@@ -576,14 +598,9 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
         return _error(envelope_id, "bad_request", validation[1])
     item_id_filter = validation[1]  # None = all; set = whitelist
 
-    try:
-        timeline = project.GetCurrentTimeline()
-    except Exception as exc:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetCurrentTimeline raised: {exc}")
-    if timeline is None:
-        return _error(envelope_id, "handle_stale",
-            "no current timeline — open one in Resolve")
+    timeline, err = _require_current_timeline(project, envelope_id)
+    if err is not None:
+        return err
 
     items = []
     try:
@@ -688,14 +705,9 @@ def verb_stamp_identity_marker(args, _resolve, project, envelope_id,
             "stamp_identity_marker args.custom_data required "
             "(non-empty string, typically the JVE clip.id)")
 
-    try:
-        timeline = project.GetCurrentTimeline()
-    except Exception as exc:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetCurrentTimeline raised: {exc}")
-    if timeline is None:
-        return _error(envelope_id, "handle_stale",
-            "no current timeline — open one in Resolve")
+    timeline, err = _require_current_timeline(project, envelope_id)
+    if err is not None:
+        return err
 
     try:
         item = _find_timeline_item_by_uid(timeline, resolve_item_id)
@@ -890,14 +902,9 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
         return _error(envelope_id, "bad_request", validation[1])
     item_id_filter = validation[1]  # None = all; set = whitelist
 
-    try:
-        timeline = project.GetCurrentTimeline()
-    except Exception as exc:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetCurrentTimeline raised: {exc}")
-    if timeline is None:
-        return _error(envelope_id, "handle_stale",
-            "no current timeline — open one in Resolve")
+    timeline, err = _require_current_timeline(project, envelope_id)
+    if err is not None:
+        return err
 
     try:
         integer_rate = _timeline_integer_frame_rate(project)
@@ -911,16 +918,16 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
 
     grades = []
     try:
-        for _track_type, _tidx, item in _iter_all_timeline_items(timeline):
-            try:
-                resolve_item_id = item.GetUniqueId()
-            except Exception as exc:
-                return _error(envelope_id, "resolve_api_error",
-                    f"item.GetUniqueId() raised: {exc}")
-            if not isinstance(resolve_item_id, str) or not resolve_item_id:
-                return _error(envelope_id, "resolve_api_error",
-                    "item.GetUniqueId() returned empty/non-string — "
-                    "Resolve API contract broken")
+        for track_type, _tidx, item in _iter_all_timeline_items(timeline):
+            # V1 video-only scope (mirrors verb_read_timeline). The EDL
+            # carries only video CDL events; an audio item sharing a
+            # record_start with a video item would otherwise look up the
+            # video clip's CDL and surface it as the audio clip's grade.
+            # Per helper-protocol.md §read_grades, audio fidelity is V1-
+            # deferred along with audio-channel read_timeline.
+            if track_type != "video":
+                continue
+            resolve_item_id = _safe_uid(item)
             if (item_id_filter is not None
                     and resolve_item_id not in item_id_filter):
                 continue

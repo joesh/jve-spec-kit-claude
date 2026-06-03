@@ -74,6 +74,7 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)
 - **result**: `{ grades: [{ jve_guid, cdl?: { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat }, lut?: { ref }, fidelity }] }`
 - `fidelity` ∈ `primary|partial|unrepresentable`, mandatory and honest (FR-015): a node graph exceeding CDL/LUT is downgraded, never approximated. `cdl` present only when representable; `lut.ref` is a local path. Manual-pull only (no server-push).
+- **V1 scope**: video items only — mirrors §read_timeline's V1-video-only restriction. The EDL export carries one CDL block per video event; audio items at the same record-frame would otherwise look up the video clip's CDL and mis-report it as the audio item's grade. Audio fidelity reads land with T054 alongside audio read_timeline.
 
 > **Carved out 2026-06-02**: `queue_render` and `render_status` were part of the v1 contract until the render+relink path was scoped out (see spec.md §Locked decisions "Roundtrip depth"). Their wire contract is preserved at git tag `spec023-render-relink-deferred`.
 
