@@ -8,7 +8,9 @@
 # user action; the helper happily redoes the work.
 
 STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
-    "import_timeline": True,
+    "import_timeline":        True,
+    "stamp_identity_marker":  True,
+    "delete_timeline":        True,
 }
 
 

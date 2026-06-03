@@ -77,6 +77,12 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 - `fidelity` ∈ `primary|partial|unrepresentable`, mandatory and honest (FR-015): a node graph exceeding CDL/LUT is downgraded, never approximated. `cdl` present only when representable; `lut.ref` is a local path. Manual-pull only (no server-push).
 - **V1 scope**: video items only — mirrors §read_timeline's V1-video-only restriction. The EDL export carries one CDL block per video event; audio items at the same record-frame would otherwise look up the video clip's CDL and mis-report it as the audio item's grade. Audio fidelity reads land with T054 alongside audio read_timeline.
 
+### `delete_timeline` *(state-changing; idempotent; test-only)*
+- **args**: `{ resolve_timeline_id, change_token }` — `resolve_timeline_id` is the live Resolve `Timeline.GetUniqueId` of the timeline to remove from the project.
+- **result**: `{ deleted: bool }` — `true` when the helper called `Project.DeleteTimelines([handle])` successfully; `false` when no timeline with the supplied uid is present (idempotent — re-sending after a successful delete returns `deleted=false` rather than `handle_stale`, so test teardowns work on clean re-runs).
+- **Test-only surface.** There is intentionally NO JVE-side command for this verb. It exists so the SendToResolve end-to-end live test (T025b) can delete the timeline it just imported, preventing fixture timelines from accumulating in the colorist's project across test runs. Production callers must not invoke it directly; misuse protection is the absence of a JVE command surface plus the standard state-changing-verb gate (change_token).
+- Closed-set errors: `bad_request` (missing/empty args, unknown args fields, missing change_token), `resolve_api_error` (Resolve API throws), `handle_stale` (revalidation fails per `_stateful_verb`).
+
 > **Carved out 2026-06-02**: `queue_render` and `render_status` were part of the v1 contract until the render+relink path was scoped out (see spec.md §Locked decisions "Roundtrip depth"). Their wire contract is preserved at git tag `spec023-render-relink-deferred`.
 
 ## Test obligations (constitution III, spec §9)

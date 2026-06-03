@@ -801,6 +801,89 @@ def verb_stamp_identity_marker(args, _resolve, project, envelope_id,
     return _ok(envelope_id, {"stamped": True})
 
 
+# ─── Timeline delete (T025b test cleanup; FR-024 follow-on) ──────────
+#
+# State-changing. Exposed PRIMARILY for the SendToResolve end-to-end
+# live test (T025b), which needs to delete the timeline it just
+# imported so consecutive runs don't accumulate fixture timelines in
+# the colorist's project. There is intentionally no JVE-side command
+# for this verb — production callers should never see it. Misuse
+# protection lives in the same place as every other state-changing
+# verb: change_token, idempotency ledger, the user's awareness that
+# the helper sits beside Resolve and edits its state.
+@_stateful_verb
+def verb_delete_timeline(args, _resolve, project, envelope_id,
+                          helper_version):
+    del helper_version
+
+    token_check = _validate_change_token(args, "delete_timeline")
+    if token_check[0] != "ok":
+        return _error(envelope_id, "bad_request", token_check[1])
+
+    resolve_timeline_id = args.get("resolve_timeline_id")
+    if not isinstance(resolve_timeline_id, str) or not resolve_timeline_id:
+        return _error(envelope_id, "bad_request",
+            "delete_timeline args.resolve_timeline_id required "
+            "(non-empty string — the live Resolve timeline UID from "
+            "Timeline.GetUniqueId)")
+
+    extras = sorted(k for k in args.keys()
+        if k not in ("resolve_timeline_id", "change_token"))
+    if extras:
+        return _error(envelope_id, "bad_request",
+            f"delete_timeline: unknown args fields: {extras}")
+
+    # Walk the project's timelines to find the one whose GetUniqueId
+    # matches. Resolve provides no GetTimelineById; iterate.
+    try:
+        count = project.GetTimelineCount()
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetTimelineCount raised: {exc}")
+    if not isinstance(count, int) or count < 0:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetTimelineCount returned non-int / negative: {count!r}")
+
+    target = None
+    for i in range(1, count + 1):
+        try:
+            tl = project.GetTimelineByIndex(i)
+        except Exception as exc:
+            return _error(envelope_id, "resolve_api_error",
+                f"GetTimelineByIndex({i}) raised: {exc}")
+        if tl is None:
+            continue
+        try:
+            uid = tl.GetUniqueId()
+        except Exception as exc:
+            return _error(envelope_id, "resolve_api_error",
+                f"timeline[{i}].GetUniqueId raised: {exc}")
+        if uid == resolve_timeline_id:
+            target = tl
+            break
+
+    if target is None:
+        # Idempotent: a re-sent delete after the timeline is already
+        # gone returns deleted=False rather than handle_stale, so the
+        # caller's teardown doesn't fail on a clean second run.
+        return _ok(envelope_id, {"deleted": False})
+
+    try:
+        ok = project.DeleteTimelines([target])
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"DeleteTimelines raised: {exc}")
+    if not isinstance(ok, bool):
+        return _error(envelope_id, "resolve_api_error",
+            f"DeleteTimelines returned non-bool: {ok!r}")
+    if not ok:
+        return _error(envelope_id, "resolve_api_error",
+            f"DeleteTimelines({resolve_timeline_id!r}) returned False "
+            "— Resolve refused")
+
+    return _ok(envelope_id, {"deleted": True})
+
+
 def _unimplemented(verb_name):
     def thunk(args, handle, envelope_id, helper_version):
         del args, handle, helper_version
@@ -1029,6 +1112,7 @@ VERB_TABLE = {
     "read_timeline":   verb_read_timeline,
     "read_grades":     verb_read_grades,
     "stamp_identity_marker": verb_stamp_identity_marker,
+    "delete_timeline": verb_delete_timeline,
 }
 
 

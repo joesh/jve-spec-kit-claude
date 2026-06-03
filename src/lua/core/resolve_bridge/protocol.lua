@@ -163,6 +163,7 @@ end
 local STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
     import_timeline        = true,
     stamp_identity_marker  = true,
+    delete_timeline        = true,
 }
 
 function M.idempotency_key(parsed_request)
