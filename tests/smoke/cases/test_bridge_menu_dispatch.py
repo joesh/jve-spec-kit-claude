@@ -57,18 +57,15 @@ FORBIDDEN_MARKERS: tuple[bytes, ...] = (
 )
 
 # Each menu pick can schedule deferred work via single_shot_timer; give
-# the timer queue a moment to flush before reading the log slice. Same
-# margin as the L2 dispatch gate uses.
-#
-# This is tight enough for the no-Resolve case: helper_supervisor.ensure_client
-# fails fast (~5s timeout configured upstream, but the failure surface lands
-# in notify() synchronously after that). When this smoke runs against a live
-# Resolve + helper, the Python handshake + verb round-trip can exceed 300ms
-# and the counter-advance check would false-fail. If you're iterating with a
-# real helper, either bump this to ~3s or guard the test class with a "skip
-# when helper is reachable" precondition. The spec.md regression-gate
-# paragraph documents this expected use as "Resolve not running."
-SETTLE_AFTER_PICK_S = 0.30
+# Poll ceiling for the bridge_completion counter to tick after a menu pick.
+# Replaces an earlier fixed 0.30s sleep that was both wasteful on a fast
+# local run AND too short for a real-Resolve handshake (where the verb
+# roundtrip + helper_supervisor.ensure_client can exceed 300ms easily).
+# Poll-with-ceiling means: snap fast when the counter advances, and surface
+# a clean timeout error if it doesn't — instead of false-failing on the
+# wrong axis. 6s covers helper_supervisor's 5s CONNECT_TIMEOUT_MS plus a
+# little slack for the notify path to land.
+BRIDGE_COUNTER_POLL_TIMEOUT_S = 6.0
 
 BRIDGE_MENU_ITEMS: tuple[str, ...] = (
     "Color > Send Sequence to Resolve...",
@@ -155,7 +152,15 @@ class TestBridgeMenuDispatch(JVESmokeCase):
                 f"or the menu hasn't been built yet (check that the "
                 f"anamnesis template opens successfully — see "
                 f"suite.log).")
-        time.sleep(SETTLE_AFTER_PICK_S)
+        # Poll the per-op completion counter instead of sleeping a fixed
+        # margin. The existing post-loop assertion (below) surfaces the
+        # "counter never advanced" case with full log context, so on
+        # timeout we just fall through.
+        poll_deadline = time.monotonic() + BRIDGE_COUNTER_POLL_TIMEOUT_S
+        while time.monotonic() < poll_deadline:
+            if self._bridge_count(op_name) > count_before:
+                break
+            time.sleep(0.05)
         new_bytes = self._suite_log_slice(before)
         markers_hit = self._scan_forbidden(new_bytes)
         if markers_hit:
