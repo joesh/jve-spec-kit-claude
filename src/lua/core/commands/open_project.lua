@@ -53,7 +53,7 @@ end
 -- ---------------------------------------------------------------------------
 -- DRP → JVP conversion (private to OpenProject)
 -- ---------------------------------------------------------------------------
--- The convert orchestration lives here, not in drp_importer, because it
+-- The convert lifecycle lives here, not in drp_importer, because it
 -- owns DB-lifecycle: filesystem wipe + active-connection swap + signal
 -- cascade. drp_importer is the format-knowledge layer (parse + merge +
 -- derive); see specs/020-debug-terminal/phase1-test-overhaul.md for the
@@ -259,7 +259,7 @@ M._convert_prproj_to_jvp = convert_prproj_to_jvp  -- exported for tests
 -- Route a non-native format through the user-facing conversion dialog:
 -- show metadata + destination chooser, then drive the lifecycle via
 -- convert_to_jvp. Returns the resolved .jvp path or nil on cancel.
--- The convert orchestration lives in this module — importers are format-
+-- The convert lifecycle lives in this module — importers are format-
 -- knowledge only; lifecycle (DB swap + signal cascade) belongs to
 -- OpenProject.
 local FILE_FILTER_JVP = "JVE Project Files (*.jvp)"
