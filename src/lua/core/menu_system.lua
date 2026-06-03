@@ -30,6 +30,7 @@ local actions_by_command = {}
 local undo_listener_token = nil
 local update_undo_redo_actions       -- forward declaration
 local update_per_sequence_actions    -- forward declaration
+local update_per_project_actions     -- forward declaration
 
 -- Commands that target the currently-active sequence. When no sequence is
 -- active (feature 010: close last tab, open project without tab info),
@@ -52,11 +53,23 @@ local PER_SEQUENCE_COMMAND_NAMES = {
     "TimelineZoomFit", "TimelineZoomIn", "TimelineZoomOut",
     "TimelineZoomInAtMouse", "TimelineZoomOutAtMouse",
     -- spec 023 — bridge commands that act on the active sequence; grey out
-    -- when no sequence is active (ConnectToResolveProject is project-scope,
-    -- so it stays enabled whenever a project is open).
+    -- when no sequence is active.
     "SendToResolve",
     "SyncGradesFromResolve",
     "SyncEditsFromResolve",
+}
+
+-- Commands that target the currently-active project (any sequence under
+-- it). Greyed when no project is open. ConnectToResolveProject is the
+-- one bridge command that doesn't need an active sequence (it walks
+-- every sequence on the project's helper-side timeline) but DOES need
+-- a project; without this gate, clicking it with no project open would
+-- hard-assert on `project_id required`. Per-sequence implies per-
+-- project, so the SendToResolve / SyncGradesFromResolve /
+-- SyncEditsFromResolve entries don't need to be listed here (their
+-- per-sequence gate already covers it).
+local PER_PROJECT_COMMAND_NAMES = {
+    "ConnectToResolveProject",
 }
 
 -- Qt bindings (loaded from qt_constants global)
@@ -119,6 +132,18 @@ function M.init(window, cmd_mgr, proj_browser)
     end
     if update_per_sequence_actions then
         update_per_sequence_actions()
+    end
+
+    -- Per-project menu grey-out: refresh on project_changed (open / new /
+    -- close all emit it; open_project.lua:50 onward documents the
+    -- registered consumers). Without this hook the Color > Connect item
+    -- would stay enabled after a project is closed and crash on click.
+    local Signals = require("core.signals")
+    Signals.connect("project_changed", function(_project_id)
+        update_per_project_actions()
+    end, 50)
+    if update_per_project_actions then
+        update_per_project_actions()
     end
 end
 
@@ -373,6 +398,19 @@ local function get_active_project_id()
     return nil
 end
 
+-- Grey PER_PROJECT_COMMAND_NAMES when no project is open. Driven by the
+-- project_changed signal (fired by open_project / new_project / close)
+-- plus a one-shot at init. Mirrors the per-sequence gate so a Color-menu
+-- pick with no project loaded greys instead of hard-asserting on
+-- `project_id required` deep inside the command schema validator.
+update_per_project_actions = function()
+    local pid = get_active_project_id()
+    local has_project = pid ~= nil and pid ~= ""
+    for _, command_name in ipairs(PER_PROJECT_COMMAND_NAMES) do
+        set_actions_enabled_for_command(command_name, has_project)
+    end
+end
+
 --- Create menu action callback - Pure command dispatch
 -- @param command_name string: Command to execute
 -- @param params table: Command parameters
@@ -519,6 +557,7 @@ function M.load_from_file(xml_path)
     log.event("Loaded %d menus from %s", #menus_elem.children, tostring(xml_path))
     update_undo_redo_actions()
     update_per_sequence_actions()
+    update_per_project_actions()
     return true
 end
 
