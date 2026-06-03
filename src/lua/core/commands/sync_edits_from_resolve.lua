@@ -428,7 +428,7 @@ end
 ---
 --- Trust assumptions (data-model.md §SyncEditsFromResolve → Scope):
 ---   - One Resolve timeline per response (helper-protocol guarantee).
----   - Schema V12+ (resolve_bridge_link table + resolve_item_id index).
+---   - Schema V13+ (resolve_bridge_link table + resolve_item_id index).
 ---   - V1 VIDEO only; AUDIO clips assert.
 --- Iteration order through buckets is response order, NOT contractual;
 --- callers key by clip_id (or resolve_item_id for unmatched).

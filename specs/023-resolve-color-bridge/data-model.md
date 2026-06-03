@@ -1,6 +1,6 @@
-# Data Model: Resolve Color Roundtrip Bridge (schema V11 → V12)
+# Data Model: Resolve Color Roundtrip Bridge (schema V11 → V13)
 
-Two new persisted tables in `src/lua/schema.sql`. No migration — bump `schema_version` to 12; Joe regenerates the `.jvp` (`feedback_schema_bump_freely`). The helper's idempotency ledger is **not** persisted here (process-local).
+Two new persisted tables in `src/lua/schema.sql`. No migration — bump `schema_version` to 13; Joe regenerates the `.jvp` (`feedback_schema_bump_freely`). The helper's idempotency ledger is **not** persisted here (process-local). Version goes straight from 11 to 13 because the spec-013 clip-shape changes (clips.media_id removal, media linkage now via `media_refs`) also live in this schema without an interim on-disk bump — V12 never shipped in the post-013 codebase, so this bump syncs `schema_version` to the actual shape (review item #16).
 
 Source: spec.md FR-011..017, FR-013a; clarifications 2026-05-29 (same-machine, read-only, one target, manual sync, cascade+stale). Mirrors research.md §5.1.
 
@@ -126,7 +126,7 @@ The `read_timeline` response from the helper (`contracts/helper-protocol.md` §`
 
 - **V1 ships VIDEO only.** Audio support — subframe-aware fingerprint, table-typed positional fields, sample-rate mismatch handling — lands separately (`todo_t054_audio_support`).
 - **One Resolve timeline per response** (helper-protocol guarantee). The classifier does not detect cross-timeline contamination from response shape alone; it asserts each clip's `owner_sequence_id` matches the supplied `sequence_id`.
-- **Schema V12+** required (`resolve_bridge_link` table and its `resolve_item_id` index).
+- **Schema V13+** required (`resolve_bridge_link` table and its `resolve_item_id` index).
 
 ### `classify_all(response, sequence_id, db, take_resolve_set?) → {to_apply, conflicts, skipped, unmatched}`
 

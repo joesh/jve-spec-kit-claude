@@ -7,7 +7,7 @@
 ---
 --- Flow:
 ---   1. payload_builder.build → drt_writer-shaped payload.
----   2. drt_writer.author → a .drp/.drt on disk.
+---   2. drt_writer.author → a .drt on disk.
 ---   3. helper_supervisor.ensure_client → connected client.
 ---   4. client:request("import_timeline", {drt_path, media_roots,
 ---        change_token}) — change_token computed from active sequence.
@@ -52,7 +52,7 @@ local function out_path_for_export(sequence_id)
         "SendToResolve: HOME env var required for export path")
     local dir = home .. "/.jve/resolve-exports"
     os.execute(string.format("mkdir -p %q", dir))
-    return string.format("%s/%s.drp", dir, sequence_id)
+    return string.format("%s/%s.drt", dir, sequence_id)
 end
 
 -- Build the `clip_positions` payload the helper consumes to derive its
@@ -116,7 +116,7 @@ function M.execute(args, db, _command)
     assert(seq, "SendToResolve: sequence not found: " .. args.sequence_id)
     assert(seq.mutation_generation,
         "SendToResolve: sequence missing mutation_generation — schema "
-        .. "expected V12+ (FU-2)")
+        .. "expected V13+ (FU-2)")
 
     local payload = payload_builder.build(db,
         args.project_id, args.sequence_id)

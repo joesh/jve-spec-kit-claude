@@ -100,14 +100,16 @@ assert(cnt_after == 0, string.format(
     "FAIL: CASCADE delete did not remove patches — %d rows remain", cnt_after))
 print("  CASCADE on sequence delete — OK")
 
--- ── schema_version == 12 (023 bumped V11→V12: clip_grade +
---    resolve_bridge_link tables for Resolve color bridge) ─────────────────
+-- ── schema_version == 13 (023 bumped V11→V13: clip_grade +
+--    resolve_bridge_link tables for Resolve color bridge; V12 never
+--    shipped on-disk because spec-013 clip-shape changes were already
+--    in V11 schema files) ──────────────────────────────────────────────
 local sv_stmt = db:prepare("SELECT MAX(version) FROM schema_version")
 assert(sv_stmt); sv_stmt:exec(); sv_stmt:next()
 local sv = sv_stmt:value(0)
 sv_stmt:finalize()
-assert(sv == 12, string.format("FAIL: schema_version=%s, expected 12", tostring(sv)))
-print("  schema_version=12 — OK")
+assert(sv == 13, string.format("FAIL: schema_version=%s, expected 13", tostring(sv)))
+print("  schema_version=13 — OK")
 
 -- ── snapshots table unchanged (no regressions) ───────────────────────────
 local snap_col = db:prepare(

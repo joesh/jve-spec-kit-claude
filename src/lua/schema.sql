@@ -1,4 +1,4 @@
--- JVE Database Schema V12
+-- JVE Database Schema V13
 -- Feature 023: Resolve Color Roundtrip Bridge (clip_grade + resolve_bridge_link).
 --   - clip_grade: per-clip CDL primaries + LUT ref + fidelity enum + stale flag;
 --     CASCADE on clips delete (FR-013a). NO SQL default on `stale` — writer
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (12);
+INSERT OR IGNORE INTO schema_version (version) VALUES (13);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -841,7 +841,7 @@ BEGIN
 END;
 
 -- ============================================================================
--- RESOLVE COLOR BRIDGE (Feature 023, V12)
+-- RESOLVE COLOR BRIDGE (Feature 023, V13)
 -- ============================================================================
 
 -- Per-clip color grade read back from Resolve (FR-014, FR-013a, FR-015).

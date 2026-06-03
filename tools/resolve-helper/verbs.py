@@ -48,8 +48,7 @@ from cdl_edl import (
     integer_frame_rate_from_setting,
     parse_cdl_edl,
 )
-
-PROTOCOL_VERSION = 1
+from protocol import PROTOCOL_VERSION
 
 
 def _ok(envelope_id, result):

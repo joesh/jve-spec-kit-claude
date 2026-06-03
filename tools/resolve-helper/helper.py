@@ -23,10 +23,10 @@ THIS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(THIS_DIR))
 
 from ledger import IdempotencyLedger      # noqa: E402
+from protocol import PROTOCOL_VERSION     # noqa: E402
 from resolve_handle import ResolveHandle  # noqa: E402
 from verbs import dispatch                # noqa: E402
 
-PROTOCOL_VERSION = 1
 HELPER_VERSION = "0.1.0"
 
 

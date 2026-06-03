@@ -7,11 +7,15 @@
 # after a restart is correct: JVE's change_token updates on the next
 # user action; the helper happily redoes the work.
 
-STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
-    "import_timeline":        True,
-    "stamp_identity_marker":  True,
-    "delete_timeline":        True,
-}
+# The "state-changing verbs require a token" gate IS enforced — but in
+# two real places: each verb's body calls `_validate_change_token` which
+# returns bad_request if the token is missing/malformed (verbs.py), and
+# the JVE-side `protocol.lua::idempotency_key` asserts on the way out
+# (caller side). There used to be a `STATE_CHANGING_VERBS_REQUIRE_TOKEN`
+# dict here that wasn't consulted anywhere — deleted 2026-06-03 to
+# remove dead code (review #34). Documentation-only mirroring of the
+# JVE list adds no value; the two enforcement sites already cover both
+# directions.
 
 
 class IdempotencyLedger:
