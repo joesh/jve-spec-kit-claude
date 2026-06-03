@@ -76,6 +76,29 @@ function M.configure(helper_script_path)
     state.helper_script_path = helper_script_path
 end
 
+-- Tear down whatever supervisor state may exist. Shared by three
+-- callers: spawn_helper's wait_for_started timeout (helper never came
+-- up), ensure_client's connect-failed branch (helper came up but
+-- socket unreachable / handshake stuck), and public M.shutdown (app
+-- teardown). Idempotent — each clause guards its own state slot, so
+-- partial state from a half-built spawn cleans up the same way as a
+-- fully-running supervisor.
+local function _teardown()
+    if state.client_handle then
+        state.client_handle:close()
+        state.client_handle = nil
+    end
+    if state.process_handle then
+        qt_process_terminate(state.process_handle)
+        qt_process_destroy(state.process_handle)
+        state.process_handle = nil
+    end
+    if state.socket_path then
+        os.remove(state.socket_path)
+        state.socket_path = nil
+    end
+end
+
 local function spawn_helper()
     assert(state.helper_script_path,
         "helper_supervisor: configure() must be called first")
@@ -124,9 +147,7 @@ local function spawn_helper()
     })
     local started = qt_process_wait_for_started(proc, STARTUP_GRACE_MS)
     if not started then
-        qt_process_destroy(proc)
-        state.process_handle = nil
-        state.socket_path = nil
+        _teardown()
         return nil, "helper_unavailable", string.format(
             "helper process failed to start within %dms", STARTUP_GRACE_MS)
     end
@@ -157,9 +178,11 @@ function M.ensure_client()
     })
     if not c then
         log.error("client.connect failed: %s", connect_err)
-        if state.process_handle then
-            qt_process_terminate(state.process_handle)
-        end
+        -- Was leaking: prior code only terminated the proc and left
+        -- process_handle / socket_path populated, so the next
+        -- ensure_client returned a dead state. Full _teardown clears
+        -- every slot so the next call respawns clean.
+        _teardown()
         return nil, "helper_unavailable", connect_err
     end
     state.client_handle = c
@@ -168,19 +191,7 @@ end
 
 --- Shut down — terminate helper, close client. Idempotent.
 function M.shutdown()
-    if state.client_handle then
-        state.client_handle:close()
-        state.client_handle = nil
-    end
-    if state.process_handle then
-        qt_process_terminate(state.process_handle)
-        qt_process_destroy(state.process_handle)
-        state.process_handle = nil
-    end
-    if state.socket_path then
-        os.remove(state.socket_path)
-        state.socket_path = nil
-    end
+    _teardown()
 end
 
 return M
