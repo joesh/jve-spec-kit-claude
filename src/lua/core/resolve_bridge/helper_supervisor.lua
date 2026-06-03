@@ -11,12 +11,12 @@
 --- NOT responsible for: protocol framing (client.lua), idempotency
 --- (helper-side ledger), reconcile algorithm (T036).
 ---
---- Socket path: `/tmp/jve-resolve-bridge-<n>.sock` where <n> is a
---- per-process spawn counter that increments per re-spawn. /tmp keeps
---- the path stable across reboots. NOTE: two parallel JVE processes
---- both start at n=1 and would collide on the same socket — multi-
---- instance support needs a real pid (or mktemp) in the path;
---- tracked in todo_helper_supervisor_pid_socket.
+--- Socket path: per-spawn unique path under /tmp produced by
+--- `os.tmpname()` (mktemp-style) with a `.sock` suffix. Joe runs
+--- parallel JVE sessions; the prior `/tmp/jve-resolve-bridge-<n>.sock`
+--- scheme started <n>=1 in every process and collided. mktemp gives
+--- per-process per-spawn uniqueness without a getpid binding and
+--- without re-using a socket path on the rare re-spawn race.
 --- Helper script: bundled at `jve.app/Contents/Resources/resolve-helper/
 --- helper.py` (Joe's decision — Python binary discovered via env/PATH).
 
@@ -67,8 +67,15 @@ local function spawn_helper()
         "helper_supervisor: configure() must be called first")
 
     state.spawn_sequence = state.spawn_sequence + 1
+    -- os.tmpname yields a fresh unique /tmp/lua_XXXXXX path per call;
+    -- remove it (we want the path, not the empty placeholder file —
+    -- QLocalServer creates its own socket inode), then re-suffix to
+    -- something the user can recognize in `lsof -U` while keeping the
+    -- mktemp uniqueness guarantee.
+    local base = os.tmpname()
+    os.remove(base)
     local socket_path = string.format(
-        "/tmp/jve-resolve-bridge-%d.sock", state.spawn_sequence)
+        "%s-jve-resolve-bridge-%d.sock", base, state.spawn_sequence)
     state.socket_path = socket_path
 
     local proc = qt_process_create()
