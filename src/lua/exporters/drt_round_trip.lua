@@ -79,15 +79,21 @@ local function collect_parsed_clip_ids(parsed_timeline)
     return ids, n
 end
 
--- Find the identity marker on a parsed clip, or nil if none. parse_resolve_markers
--- attaches the array as clip.markers (drp_importer.lua:2103); a clip without
--- an Sm2TiItemLockableBlob for its DbId gets no .markers field at all.
-local function identity_marker_of(clip)
-    if type(clip.markers) ~= "table" then return nil end
+-- Collect every identity marker on a parsed clip. parse_resolve_markers
+-- attaches the array as clip.markers (drp_importer.lua:2103); a clip
+-- without an Sm2TiItemLockableBlob for its DbId gets no .markers field
+-- at all. Returning a list (not the first match) lets the validator
+-- catch the "two identity markers stacked on the same clip" regression
+-- — symptom of a writer re-stamp bug where the idempotent dedup broke.
+local function identity_markers_of(clip)
+    local found = {}
+    if type(clip.markers) ~= "table" then return found end
     for _, m in ipairs(clip.markers) do
-        if identity_marker.matches(m) then return m end
+        if identity_marker.matches(m) then
+            found[#found + 1] = m
+        end
     end
-    return nil
+    return found
 end
 
 --- Validate the .drt at `out_path` round-trips against `payload`.
@@ -151,20 +157,61 @@ function M.validate(out_path, payload)
     -- silent corruption: the helper's read_identities sees an unkeyed
     -- item, first sync falls back to positional match, and grades land
     -- on the wrong clip if positions drift between Send and Read.
+    --
+    -- Beyond presence + custom_data, the validator enforces:
+    --   (a) exactly ONE identity marker per clip — two-stack means an
+    --       idempotency regression in the writer or stamp helper;
+    --   (b) frame + duration match the canonical (FRAME=0, DURATION=1)
+    --       — drift here breaks the helper's idempotent re-stamp check
+    --       and the visual-dedup contract in drt_identity_marker.lua;
+    --   (c) custom_data is unique across the whole timeline — a writer
+    --       that mis-stamps two clips with the same jve_guid lands all
+    --       Resolve-side grades back on a single JVE clip silently.
+    local seen_custom_data = {}
     for _, track in ipairs(parsed.timelines[1].tracks) do
         for _, clip in ipairs(track.clips) do
-            local mk = identity_marker_of(clip)
-            if not mk then
+            local markers = identity_markers_of(clip)
+            if #markers == 0 then
                 return false, "drt_round_trip_failed", string.format(
                     "clip %s lacks identity marker (live-API carrier "
                     .. "dropped — FR-002)", clip.clip_id)
             end
+            if #markers > 1 then
+                return false, "drt_round_trip_failed", string.format(
+                    "clip %s has %d identity markers stacked — writer "
+                    .. "or stamp idempotency regression (FR-002)",
+                    clip.clip_id, #markers)
+            end
+            local mk = markers[1]
             if mk.custom_data ~= clip.clip_id then
                 return false, "drt_round_trip_failed", string.format(
                     "clip %s identity marker custom_data=%q does not "
                     .. "match clip.id (carrier mis-stamped)",
                     clip.clip_id, tostring(mk.custom_data))
             end
+            if mk.frame ~= identity_marker.FRAME then
+                return false, "drt_round_trip_failed", string.format(
+                    "clip %s identity marker frame=%s, canonical=%d "
+                    .. "(writer drifted FRAME — breaks helper re-stamp "
+                    .. "idempotency)", clip.clip_id,
+                    tostring(mk.frame), identity_marker.FRAME)
+            end
+            if mk.duration ~= identity_marker.DURATION_FRAMES then
+                return false, "drt_round_trip_failed", string.format(
+                    "clip %s identity marker duration=%s, canonical=%d "
+                    .. "(writer drifted DURATION — breaks helper "
+                    .. "re-stamp idempotency)", clip.clip_id,
+                    tostring(mk.duration), identity_marker.DURATION_FRAMES)
+            end
+            if seen_custom_data[mk.custom_data] then
+                return false, "drt_round_trip_failed", string.format(
+                    "identity marker custom_data %q appears on both "
+                    .. "clip %s and clip %s — writer cross-wired "
+                    .. "identity (FR-002 stable-identity violation)",
+                    mk.custom_data,
+                    seen_custom_data[mk.custom_data], clip.clip_id)
+            end
+            seen_custom_data[mk.custom_data] = clip.clip_id
         end
     end
     return true

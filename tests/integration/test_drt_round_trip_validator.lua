@@ -154,6 +154,47 @@ do
              or msg:find("cccccccc-cccc-4ccc-8ccc-cccccccccccc", 1, true)))
 end
 
+-- ─── frame drift: canonical FRAME bumped → validator must catch ─────
+-- The validator should compare each clip's identity-marker .frame
+-- against drt_identity_marker.FRAME. Mutating the canonical here
+-- simulates a writer regression where the .drt was authored with a
+-- drifted FRAME relative to the canonical; the validator must surface
+-- it. The check also proves the validator uses the constant (not a
+-- hardcoded zero) — a future canonical bump would otherwise pass
+-- silently.
+do
+    os.remove(OUT)
+    local payload = fresh_payload()
+    writer.author(OUT, payload)
+    local canon = require("exporters.drt_identity_marker")
+    local orig = canon.FRAME
+    canon.FRAME = 99
+    local ok, code, msg = rt.validate(OUT, payload)
+    canon.FRAME = orig
+    check("frame drift: ok=false", ok == false)
+    check("frame drift: code=drt_round_trip_failed",
+        code == "drt_round_trip_failed")
+    check("frame drift: msg names the field",
+        type(msg) == "string" and msg:find("frame=", 1, true))
+end
+
+-- ─── duration drift: same shape as frame drift ───────────────────────
+do
+    os.remove(OUT)
+    local payload = fresh_payload()
+    writer.author(OUT, payload)
+    local canon = require("exporters.drt_identity_marker")
+    local orig = canon.DURATION_FRAMES
+    canon.DURATION_FRAMES = 7
+    local ok, code, msg = rt.validate(OUT, payload)
+    canon.DURATION_FRAMES = orig
+    check("duration drift: ok=false", ok == false)
+    check("duration drift: code=drt_round_trip_failed",
+        code == "drt_round_trip_failed")
+    check("duration drift: msg names the field",
+        type(msg) == "string" and msg:find("duration=", 1, true))
+end
+
 os.remove(OUT)
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
