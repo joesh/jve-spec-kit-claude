@@ -23,11 +23,19 @@
 
 local M = {}
 
-local ClipGrade       = require("models.clip_grade")
-local identity_ledger = require("core.resolve_bridge.identity_ledger")
-local supervisor      = require("core.resolve_bridge.helper_supervisor")
-local Signals         = require("core.signals")
-local log             = require("core.logger").for_area("commands")
+local ClipGrade         = require("models.clip_grade")
+local identity_ledger   = require("core.resolve_bridge.identity_ledger")
+local supervisor        = require("core.resolve_bridge.helper_supervisor")
+local bridge_completion = require("core.commands.bridge_completion")
+local Signals           = require("core.signals")
+local log               = require("core.logger").for_area("commands")
+
+local OP_NAME = "SyncGradesFromResolve"
+bridge_completion.register_op(OP_NAME, "sync_grades_from_resolve_completed")
+
+local function notify(args, result, code, message)
+    bridge_completion.notify(OP_NAME, args, result, code, message)
+end
 
 local function load_existing_row(clip_id, db)
     return ClipGrade.load(clip_id, db)
@@ -204,14 +212,16 @@ function M.execute(args, db)
         .. "the global DB lookup out of commands)")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SyncGradesFromResolve: sequence_id required (FR-013a scope)")
-    assert(type(args.on_complete) == "function",
-        "SyncGradesFromResolve: on_complete callback required")
+    assert(args.on_complete == nil or type(args.on_complete) == "function",
+        "SyncGradesFromResolve: on_complete, when supplied, must be a "
+        .. "function — terminal results also surface via the "
+        .. "sync_grades_from_resolve_completed signal (FR-023).")
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
 
     local client, err = supervisor.ensure_client()
     if not client then
-        args.on_complete(nil, "helper_unavailable", err)
+        notify(args, nil, "helper_unavailable", err)
         return
     end
 
@@ -221,7 +231,7 @@ function M.execute(args, db)
     client:request("read_grades", helper_args,
         function(response, code, message)
             if response == nil then
-                args.on_complete(nil, code, message)
+                notify(args, nil, code, message)
                 return
             end
             -- No pcall around M.apply: a JVE-side assert failure (DB,
@@ -230,7 +240,7 @@ function M.execute(args, db)
             -- it as `resolve_api_error` would conflate origin (rule 2.21).
             local captured = M.apply(response.result, sequence_id, db,
                 os.time())
-            args.on_complete({
+            notify(args, {
                 applied_count = #response.result.grades,
                 captured      = captured,
             }, nil, nil)
@@ -243,7 +253,7 @@ local SPEC = {
     args = {
         sequence_id = { required = true,  kind = "string" },
         item_ids    = { required = false, kind = "table" },
-        on_complete = { required = true,  kind = "function" },
+        on_complete = { required = false, kind = "function" },
     },
 }
 
@@ -252,6 +262,13 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         local ok, err = pcall(M.execute, args, db)
         if not ok then
+            -- FR-023 completion contract: route the pcall-caught error
+            -- through bridge_completion.notify so the *_completed signal
+            -- + subscriber counter fire even for internal asserts.
+            -- set_last_error still runs for command_manager's executor
+            -- (ok, err) protocol.
+            bridge_completion.notify(OP_NAME, args, nil,
+                "internal_error", tostring(err))
             set_last_error("SyncGradesFromResolve: " .. tostring(err))
             return false, tostring(err)
         end

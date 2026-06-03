@@ -51,6 +51,12 @@ local PER_SEQUENCE_COMMAND_NAMES = {
     "CloseGap",
     "TimelineZoomFit", "TimelineZoomIn", "TimelineZoomOut",
     "TimelineZoomInAtMouse", "TimelineZoomOutAtMouse",
+    -- spec 023 — bridge commands that act on the active sequence; grey out
+    -- when no sequence is active (ConnectToResolveProject is project-scope,
+    -- so it stays enabled whenever a project is open).
+    "SendToResolve",
+    "SyncGradesFromResolve",
+    "SyncEditsFromResolve",
 }
 
 -- Qt bindings (loaded from qt_constants global)

@@ -46,12 +46,20 @@
 
 local M = {}
 
-local Track           = require("models.track")
-local Sequence        = require("models.sequence")
-local change_token    = require("core.resolve_bridge.change_token")
-local identity_ledger = require("core.resolve_bridge.identity_ledger")
-local supervisor      = require("core.resolve_bridge.helper_supervisor")
-local log             = require("core.logger").for_area("commands")
+local Track             = require("models.track")
+local Sequence          = require("models.sequence")
+local change_token      = require("core.resolve_bridge.change_token")
+local identity_ledger   = require("core.resolve_bridge.identity_ledger")
+local supervisor        = require("core.resolve_bridge.helper_supervisor")
+local bridge_completion = require("core.commands.bridge_completion")
+local log               = require("core.logger").for_area("commands")
+
+local OP_NAME = "ConnectToResolveProject"
+bridge_completion.register_op(OP_NAME, "connect_to_resolve_project_completed")
+
+local function notify(args, result, code, message)
+    bridge_completion.notify(OP_NAME, args, result, code, message)
+end
 
 local function validate_args(args)
     assert(type(args) == "table", "ConnectToResolveProject: args required")
@@ -63,8 +71,10 @@ local function validate_args(args)
         or type(args.stamp_position_matches) == "boolean",
         "ConnectToResolveProject: stamp_position_matches must be boolean "
         .. "(user-consented marker mutation per FR-011c)")
-    assert(type(args.on_complete) == "function",
-        "ConnectToResolveProject: on_complete callback required")
+    assert(args.on_complete == nil or type(args.on_complete) == "function",
+        "ConnectToResolveProject: on_complete, when supplied, must be a "
+        .. "function — terminal results also surface via the "
+        .. "connect_to_resolve_project_completed signal (FR-023).")
 end
 
 -- Hashmap count (#t doesn't work on string-keyed tables).
@@ -358,7 +368,7 @@ function M.execute(args, db)
 
     local client, supervisor_err = supervisor.ensure_client()
     if not client then
-        args.on_complete(nil, "helper_unavailable", supervisor_err)
+        notify(args, nil, "helper_unavailable", supervisor_err)
         return
     end
 
@@ -368,7 +378,7 @@ function M.execute(args, db)
 
     load_resolve_state(client, function(state, code, message)
         if state == nil then
-            args.on_complete(nil, code, message)
+            notify(args, nil, code, message)
             return
         end
 
@@ -394,7 +404,7 @@ function M.execute(args, db)
         }
 
         if args.stamp_position_matches ~= true then
-            args.on_complete(result, nil, nil)
+            notify(args, result, nil, nil)
             return
         end
 
@@ -406,7 +416,7 @@ function M.execute(args, db)
             result.stamped  = {}
             result.skipped  = {}
             result.failures = {}
-            args.on_complete(result, nil, nil)
+            notify(args, result, nil, nil)
             return
         end
 
@@ -420,7 +430,7 @@ function M.execute(args, db)
                 log.event("ConnectToResolveProject: stamped %d, "
                     .. "skipped %d (already-stamped), %d failures",
                     #stamped, #skipped, #failures)
-                args.on_complete(result, nil, nil)
+                notify(args, result, nil, nil)
             end)
     end)
 end
@@ -432,7 +442,7 @@ local SPEC = {
         project_id              = { required = true },
         sequence_id             = { required = true },
         stamp_position_matches  = { required = false, kind = "boolean" },
-        on_complete             = { required = true, kind = "function" },
+        on_complete             = { required = false, kind = "function" },
     },
 }
 
@@ -441,6 +451,13 @@ function M.register(command_executors, _command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         local ok, err = pcall(M.execute, args, db)
         if not ok then
+            -- FR-023 completion contract: route the pcall-caught error
+            -- through bridge_completion.notify so the *_completed signal
+            -- + subscriber counter fire even for internal asserts.
+            -- set_last_error still runs for command_manager's (ok, err)
+            -- executor protocol.
+            bridge_completion.notify(OP_NAME, args, nil,
+                "internal_error", tostring(err))
             set_last_error("ConnectToResolveProject: " .. tostring(err))
             return false, tostring(err)
         end

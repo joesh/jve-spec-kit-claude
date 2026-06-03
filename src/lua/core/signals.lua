@@ -236,6 +236,20 @@ function Signals.emit(signal_name, ...)
     local results = {}
     local args = {...}
     
+    -- Slow-handler telemetry. Logs any subscriber whose synchronous body
+    -- runs longer than the threshold, with the connection's creation
+    -- trace so the culprit is identifiable without re-instrumenting.
+    -- 2026-06-02: rescued the relink/apply 163s "beachball" hunt —
+    -- the cost was iCloud eviction of stat-targeted files, not an
+    -- architectural fanout regression. Kept permanent: the timing
+    -- overhead is a single monotonic-clock read per handler call (and
+    -- is no-op when qt_monotonic_s is unbound, e.g. pure-Lua test
+    -- harnesses), and the threshold-gated event log is silent on
+    -- healthy emits. Raise the threshold rather than removing the block.
+    local SLOW_HANDLER_THRESHOLD_S = 0.050
+    local can_time = type(qt_monotonic_s) == "function"
+    local slow_log = nil
+
     -- Execute handlers in priority order
     for i, handler_record in ipairs(handlers) do
         if handler_record.handler == nil then
@@ -249,7 +263,24 @@ function Signals.emit(signal_name, ...)
             ))
         end
 
+        local t_start = can_time and qt_monotonic_s() or nil
         local success, result = pcall(handler_record.handler, unpack(args))
+        if can_time then
+            local elapsed = qt_monotonic_s() - t_start
+            if elapsed >= SLOW_HANDLER_THRESHOLD_S then
+                if not slow_log then
+                    slow_log = require("core.logger").for_area("commands")
+                end
+                slow_log.event(
+                    "SLOW handler: signal=%s elapsed=%.3fs priority=%s conn=%s trace=%s",
+                    signal_name, elapsed,
+                    tostring(handler_record.priority),
+                    tostring(handler_record.id),
+                    (handler_record.creation_trace
+                        and handler_record.creation_trace:match("([^\n]+)")
+                        or "(no trace)"))
+            end
+        end
 
         local handler_result = {
             connection_id = handler_record.id,

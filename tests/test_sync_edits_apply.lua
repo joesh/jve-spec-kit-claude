@@ -625,10 +625,13 @@ do
         and type(reg.spec) == "table")
     check("register: installs SyncEditsFromResolve executor",
         type(executors["SyncEditsFromResolve"]) == "function")
-    check("SPEC: required args (sequence_id, project_id, on_complete)",
+    check("SPEC: required args (sequence_id, project_id); on_complete "
+        .. "optional per FR-023 — menu/shortcut dispatch can't supply "
+        .. "a callback, terminal results surface via the "
+        .. "sync_edits_from_resolve_completed signal",
         reg.spec.args.sequence_id.required == true
         and reg.spec.args.project_id.required == true
-        and reg.spec.args.on_complete.required == true)
+        and reg.spec.args.on_complete.required == false)
     check("SPEC: user_choices is optional",
         reg.spec.args.user_choices.required == false)
     check("SPEC: undoable=false (inner group provides undo)",

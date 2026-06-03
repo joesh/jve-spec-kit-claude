@@ -413,6 +413,27 @@ local menu_path = layout_dir .. "../../../menus.xml"
 local menu_success, menu_error = menu_system.load_from_file(menu_path)
 assert(menu_success, string.format(
     "layout: failed to load menu system from %s: %s", menu_path, tostring(menu_error)))
+
+-- spec 023 — configure the Resolve bridge helper supervisor with the
+-- path to tools/resolve-helper/helper.py. The supervisor only spawns
+-- the Python helper on first request (lazy); configure() just records
+-- the path so SendToResolve / SyncGradesFromResolve / etc. don't
+-- assert "configure() must be called first" when invoked. Path is
+-- repo-relative; bundle deploys must rsync tools/resolve-helper/ next
+-- to src/lua under Contents/Resources/ for parity (CMakeLists addition
+-- when the .app bundle ships the bridge — currently dev-only).
+local helper_supervisor = require("core.resolve_bridge.helper_supervisor")
+local helper_script_path = layout_dir .. "../../../tools/resolve-helper/helper.py"
+do
+    local f = io.open(helper_script_path, "r")
+    assert(f, string.format(
+        "layout: Resolve bridge helper script not found at %s — "
+        .. "check tools/resolve-helper/helper.py exists in the repo",
+        helper_script_path))
+    f:close()
+end
+helper_supervisor.configure(helper_script_path)
+log.event("Resolve bridge supervisor configured: %s", helper_script_path)
 -- SPEC.keyboard metadata for non-menu commands surfaces in the dialog
 -- via ShowKeyboardCustomization's eager load on open. No eager startup
 -- load needed — keymap dispatch and dialog discovery are both fed
@@ -786,6 +807,11 @@ _G.__jve_shutdown = function()
     local media_status = require("core.media.media_status")
     media_status.cancel_background_probe()
     media_status.persist_now()
+    -- spec 023 — terminate the Resolve helper process (if any) and
+    -- close its socket. Idempotent: no-op when supervisor was never
+    -- asked to spawn (e.g. user never invoked a bridge command).
+    local helper_supervisor = require("core.resolve_bridge.helper_supervisor")
+    helper_supervisor.shutdown()
 end
 
 -- Export widget references for UI tests (main.cpp uses s_lastCreatedMainWindow, not this return value)

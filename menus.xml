@@ -101,6 +101,15 @@
     <item name="Manage Tags..." command="ManageTags"/>
   </menu>
 
+  <!-- Color Menu — DaVinci Resolve color roundtrip bridge (spec 023) -->
+  <menu name="Color">
+    <item name="Send Sequence to Resolve..." command="SendToResolve"/>
+    <item name="Connect to Resolve Project" command="ConnectToResolveProject"/>
+    <separator/>
+    <item name="Sync Grades from Resolve" command="SyncGradesFromResolve"/>
+    <item name="Sync Edits from Resolve" command="SyncEditsFromResolve"/>
+  </menu>
+
   <!-- Window Menu -->
   <menu name="Window">
     <item name="Show Project Browser" command="ShowProjectBrowser" checkable="true"/>

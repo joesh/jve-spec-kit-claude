@@ -17,13 +17,21 @@
 
 local M = {}
 
-local Clip            = require("models.clip")
-local Track           = require("models.track")
-local identity_ledger = require("core.resolve_bridge.identity_ledger")
-local edit_diff       = require("core.resolve_bridge.edit_diff")
-local supervisor      = require("core.resolve_bridge.helper_supervisor")
-local command_manager = require("core.command_manager")
-local log             = require("core.logger").for_area("commands")
+local Clip              = require("models.clip")
+local Track             = require("models.track")
+local identity_ledger   = require("core.resolve_bridge.identity_ledger")
+local edit_diff         = require("core.resolve_bridge.edit_diff")
+local supervisor        = require("core.resolve_bridge.helper_supervisor")
+local command_manager   = require("core.command_manager")
+local bridge_completion = require("core.commands.bridge_completion")
+local log               = require("core.logger").for_area("commands")
+
+local OP_NAME = "SyncEditsFromResolve"
+bridge_completion.register_op(OP_NAME, "sync_edits_from_resolve_completed")
+
+local function notify(args, result, code, message)
+    bridge_completion.notify(OP_NAME, args, result, code, message)
+end
 
 -- Closed-set reasons (module-local; tests assert literal strings, no
 -- public exposure needed). Every emit asserts the reason it carries is
@@ -945,14 +953,16 @@ function M.execute(args, db)
         "SyncEditsFromResolve: sequence_id required")
     assert(type(args.project_id) == "string" and args.project_id ~= "",
         "SyncEditsFromResolve: project_id required")
-    assert(type(args.on_complete) == "function",
-        "SyncEditsFromResolve: on_complete callback required")
+    assert(args.on_complete == nil or type(args.on_complete) == "function",
+        "SyncEditsFromResolve: on_complete, when supplied, must be a "
+        .. "function — terminal results also surface via the "
+        .. "sync_edits_from_resolve_completed signal (FR-023).")
     assert(args.user_choices == nil or type(args.user_choices) == "table",
         "SyncEditsFromResolve: user_choices must be a table or nil")
 
     local client, err = supervisor.ensure_client()
     if not client then
-        args.on_complete(nil, "helper_unavailable", err)
+        notify(args, nil, "helper_unavailable", err)
         return
     end
 
@@ -961,7 +971,7 @@ function M.execute(args, db)
     client:request("read_timeline", {},
         function(response, code, message)
             if response == nil then
-                args.on_complete(nil, code, message)
+                notify(args, nil, code, message)
                 return
             end
             -- Wire→classifier translation at the boundary between the
@@ -976,7 +986,7 @@ function M.execute(args, db)
             -- conflate origin (rule 2.21).
             local result = M.apply(translated, args.sequence_id,
                 args.project_id, db, args.user_choices)
-            args.on_complete(result, nil, nil)
+            notify(args, result, nil, nil)
         end)
 end
 
@@ -990,7 +1000,7 @@ local SPEC = {
     args = {
         sequence_id  = { required = true,  kind = "string" },
         project_id   = { required = true,  kind = "string" },
-        on_complete  = { required = true,  kind = "function" },
+        on_complete  = { required = false, kind = "function" },
         user_choices = { required = false, kind = "table" },
     },
 }
@@ -1000,6 +1010,13 @@ function M.register(command_executors, _command_undoers, db, set_last_error)
         local args = command:get_all_parameters()
         local ok, err = pcall(M.execute, args, db)
         if not ok then
+            -- FR-023 completion contract: route the pcall-caught error
+            -- through bridge_completion.notify so the *_completed signal
+            -- + subscriber counter fire even for internal asserts.
+            -- set_last_error still runs for command_manager's executor
+            -- (ok, err) protocol.
+            bridge_completion.notify(OP_NAME, args, nil,
+                "internal_error", tostring(err))
             set_last_error("SyncEditsFromResolve: " .. tostring(err))
             return false, tostring(err)
         end
