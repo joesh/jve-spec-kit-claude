@@ -38,6 +38,7 @@
 # 2026-06-02 — preserved at tag `spec023-render-relink-deferred`.
 # See `feedback_render_relink_carved_out` for the rationale.
 
+import functools
 import os
 import tempfile
 
@@ -75,6 +76,36 @@ def _revalidate(handle, envelope_id):
         return ("ok", status[1], status[2])
     _, code, msg = status
     return ("error", _error(envelope_id, code, msg))
+
+
+def _stateful_verb(fn):
+    """Decorator for verbs that require a live Resolve handle (FR-009).
+
+    Revalidates the handle before dispatching to the verb body. On
+    revalidation failure, returns the error envelope verbatim. On
+    success, invokes `fn(args, resolve, project, envelope_id,
+    helper_version)`.
+
+    Why a decorator (and not a helper call repeated per verb): the
+    4-line revalidation block was duplicated verbatim across every
+    state-changing verb. Each verb's body opened with logic unrelated
+    to the verb itself; lifting that into the decorator means each
+    verb body starts with the verb's actual work.
+
+    `ping` is NOT decorated — it downgrades to alive=True on certain
+    handle errors and needs the raw status tuple to choose between
+    error envelope and downgraded ok. `_unimplemented` thunks aren't
+    decorated either — they must NOT touch the handle (so a coverage
+    gap reads as `not_implemented`, never `resolve_api_error`).
+    """
+    @functools.wraps(fn)
+    def wrapper(args, handle, envelope_id, helper_version):
+        handle_result = _revalidate(handle, envelope_id)
+        if handle_result[0] != "ok":
+            return handle_result[1]
+        _, resolve, project = handle_result
+        return fn(args, resolve, project, envelope_id, helper_version)
+    return wrapper
 
 
 def verb_ping(args, handle, envelope_id, helper_version):
@@ -241,7 +272,8 @@ def _stamp_marker_safe(item, clip_id):
     return True
 
 
-def verb_import_timeline(args, handle, envelope_id, helper_version):
+@_stateful_verb
+def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
     del helper_version
 
     token_check = _validate_change_token(args, "import_timeline")
@@ -263,11 +295,6 @@ def verb_import_timeline(args, handle, envelope_id, helper_version):
     if positions_check[0] != "ok":
         return _error(envelope_id, "bad_request", positions_check[1])
     clip_positions = positions_check[1]
-
-    handle_result = _revalidate(handle, envelope_id)
-    if handle_result[0] != "ok":
-        return handle_result[1]
-    _, _resolve, project = handle_result
 
     try:
         prev_ids = _snapshot_timeline_ids(project)
@@ -416,7 +443,8 @@ def _recover_jve_guid(item):
     return found
 
 
-def verb_read_identities(args, handle, envelope_id, helper_version):
+@_stateful_verb
+def verb_read_identities(args, _resolve, project, envelope_id, helper_version):
     del helper_version
     # Contract: args is none. Reject any field so closed-set discipline
     # holds at the wire boundary — silently ignoring extras would let a
@@ -424,11 +452,6 @@ def verb_read_identities(args, handle, envelope_id, helper_version):
     if args:
         return _error(envelope_id, "bad_request",
             f"read_identities takes no args; got: {sorted(args.keys())}")
-
-    handle_result = _revalidate(handle, envelope_id)
-    if handle_result[0] != "ok":
-        return handle_result[1]
-    _, _resolve, project = handle_result
 
     try:
         timeline = project.GetCurrentTimeline()
@@ -544,18 +567,14 @@ def _read_video_item(item):
     }
 
 
-def verb_read_timeline(args, handle, envelope_id, helper_version):
+@_stateful_verb
+def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     del helper_version
 
     validation = _validate_item_ids(args)
     if validation[0] != "ok":
         return _error(envelope_id, "bad_request", validation[1])
     item_id_filter = validation[1]  # None = all; set = whitelist
-
-    handle_result = _revalidate(handle, envelope_id)
-    if handle_result[0] != "ok":
-        return handle_result[1]
-    _, _resolve, project = handle_result
 
     try:
         timeline = project.GetCurrentTimeline()
@@ -649,7 +668,9 @@ def _find_timeline_item_by_uid(timeline, resolve_item_id):
     return None
 
 
-def verb_stamp_identity_marker(args, handle, envelope_id, helper_version):
+@_stateful_verb
+def verb_stamp_identity_marker(args, _resolve, project, envelope_id,
+                                helper_version):
     del helper_version
 
     token_check = _validate_change_token(args, "stamp_identity_marker")
@@ -666,11 +687,6 @@ def verb_stamp_identity_marker(args, handle, envelope_id, helper_version):
         return _error(envelope_id, "bad_request",
             "stamp_identity_marker args.custom_data required "
             "(non-empty string, typically the JVE clip.id)")
-
-    handle_result = _revalidate(handle, envelope_id)
-    if handle_result[0] != "ok":
-        return handle_result[1]
-    _, _resolve, project = handle_result
 
     try:
         timeline = project.GetCurrentTimeline()
@@ -860,7 +876,8 @@ def _cdl_to_wire(cdl_entry):
     }
 
 
-def verb_read_grades(args, handle, envelope_id, helper_version):
+@_stateful_verb
+def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # spec.md:30 / helper-protocol.md §read_grades — read per-clip
     # grade state via `timeline.Export(EDL+CDL)` (CDL primaries) +
     # `GetNodeGraph().GetToolsInNode()` (fidelity). cdl_edl.py owns
@@ -872,11 +889,6 @@ def verb_read_grades(args, handle, envelope_id, helper_version):
     if validation[0] != "ok":
         return _error(envelope_id, "bad_request", validation[1])
     item_id_filter = validation[1]  # None = all; set = whitelist
-
-    handle_result = _revalidate(handle, envelope_id)
-    if handle_result[0] != "ok":
-        return handle_result[1]
-    _, resolve, project = handle_result
 
     try:
         timeline = project.GetCurrentTimeline()
