@@ -30,6 +30,7 @@ local KNOWN_ERROR_CODES = {
     handle_stale = true,
     relink_failed = true,
     locale_rate_corruption = true,
+    timeline_rate_mismatch = true,
     identity_field_missing = true,
     bad_request = true,
     resolve_api_error = true,

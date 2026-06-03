@@ -312,8 +312,9 @@ local function load_resolve_state(client, on_done)
                         return
                     end
                     on_done({
-                        identities = id_items,
-                        items      = rtr.result.items,
+                        identities            = id_items,
+                        items                 = rtr.result.items,
+                        timeline_integer_rate = rtr.result.timeline_integer_rate,
                     }, nil, nil)
                 end)
         end)
@@ -404,6 +405,12 @@ function M.execute(args, db, _command)
     assert(seq.mutation_generation,
         "ConnectToResolveProject: sequence missing mutation_generation "
         .. "— schema expected V12+ (FU-2)")
+    assert(type(seq.fps_numerator) == "number" and seq.fps_numerator > 0
+        and type(seq.fps_denominator) == "number"
+        and seq.fps_denominator > 0,
+        "ConnectToResolveProject: sequence missing fps_numerator/"
+        .. "fps_denominator — required for the rate-mismatch guard "
+        .. "before position match (rule 1.14)")
 
     local client, sv_code, sv_msg = supervisor.ensure_client()
     if not client then
@@ -425,6 +432,36 @@ function M.execute(args, db, _command)
         -- executor pcall only catches sync-phase asserts. Contract lives
         -- in bridge_completion's docstring; mirror it here so a reader
         -- of this file sees the rule without grep.
+
+        -- Position-match key `(track_type, track_index, record_start)`
+        -- is rate-relative. If Resolve's timeline rate disagrees with
+        -- JVE's sequence rate, the SAME numeric record_start refers to
+        -- DIFFERENT real times on the two sides and the match would
+        -- silently fire false positives. Surface as a structured
+        -- closed-set error (see helper-protocol.md error table) rather
+        -- than asserting — this is a user-recoverable condition
+        -- ("change Resolve's timeline rate back"), not an internal
+        -- invariant violation.
+        local jve_integer_rate = math.ceil(
+            seq.fps_numerator / seq.fps_denominator)
+        local resolve_integer_rate = state.timeline_integer_rate
+        assert(type(resolve_integer_rate) == "number"
+            and resolve_integer_rate > 0,
+            "ConnectToResolveProject: helper response missing "
+            .. "result.timeline_integer_rate — helper-protocol "
+            .. "§read_timeline contract violation")
+        if jve_integer_rate ~= resolve_integer_rate then
+            notify(args, nil, "timeline_rate_mismatch", string.format(
+                "JVE sequence %s is at TC rate %d (%d/%d); Resolve "
+                .. "timeline is at TC rate %d. Position match is "
+                .. "rate-relative; rates must agree before "
+                .. "ConnectToResolveProject can proceed.",
+                args.sequence_id, jve_integer_rate,
+                seq.fps_numerator, seq.fps_denominator,
+                resolve_integer_rate))
+            return
+        end
+
         local matched = M.match(jve_clips, state.identities, state.items)
 
         local matched_log = {}

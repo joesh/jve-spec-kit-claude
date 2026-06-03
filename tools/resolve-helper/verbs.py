@@ -602,6 +602,17 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     if err is not None:
         return err
 
+    # JVE-side ConnectToResolveProject uses `(track_type, track_index,
+    # record_start)` as the position-match key. record_start is in
+    # frames; if Resolve's timeline rate disagrees with the JVE
+    # sequence's rate, frames at the same numeric record_start refer to
+    # different real times → false-positive matches. Surface the
+    # integer TC counter so the caller asserts equality before matching.
+    try:
+        integer_rate = _timeline_integer_frame_rate(project)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
     items = []
     try:
         for track_type, tidx, item in _iter_all_timeline_items(timeline):
@@ -625,7 +636,10 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     except RuntimeError as exc:
         return _error(envelope_id, "resolve_api_error", str(exc))
 
-    return _ok(envelope_id, {"items": items})
+    return _ok(envelope_id, {
+        "items": items,
+        "timeline_integer_rate": integer_rate,
+    })
 
 
 def _validate_change_token(args, verb_name):
