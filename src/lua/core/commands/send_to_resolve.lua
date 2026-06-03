@@ -134,57 +134,53 @@ function M.execute(args, db, _command)
         return
     end
 
-    local client, sv_code, sv_msg = supervisor.ensure_client()
-    if not client then
-        notify(args, nil, sv_code, sv_msg)
-        return
-    end
-
-    local clip_positions = build_clip_positions(payload)
-    local token = change_token.build(args.project_id, args.sequence_id,
-        seq.mutation_generation)
-    -- Per the media_roots contract above: nil maps to the empty filter
-    -- set at the wire boundary (helper expects an array).
-    local helper_media_roots = args.media_roots or {}
-    client:request("import_timeline", {
-        drt_path        = out_path,
-        media_roots     = helper_media_roots,
-        clip_positions  = clip_positions,
-        change_token    = token,
-    }, function(response, code, message)
-        if response == nil then
-            notify(args, nil, code, message)
-            return
-        end
-        -- Async-tail asserts (response shape, ledger upsert) crash by
-        -- design — bridge_completion.lua's executor pcall only catches
-        -- sync-phase asserts. The contract lives in bridge_completion's
-        -- docstring; mirror it here so a reader of this file sees the
-        -- rule without grep.
-        local mapping = response.result.mapping
-        local unrelinked = response.result.unrelinked
-        local unkeyed_resolve_items = response.result.unkeyed_resolve_items
-        assert(type(mapping) == "table",
-            "SendToResolve: helper response missing result.mapping")
-        assert(type(unrelinked) == "table",
-            "SendToResolve: helper response missing result.unrelinked")
-        assert(type(unkeyed_resolve_items) == "table",
-            "SendToResolve: helper response missing "
-            .. "result.unkeyed_resolve_items")
-        for _, row in ipairs(mapping) do
-            assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
-                "SendToResolve: mapping row missing jve_guid")
-            assert(type(row.resolve_item_id) == "string"
-                and row.resolve_item_id ~= "",
-                "SendToResolve: mapping row missing resolve_item_id")
-            identity_ledger.upsert(row.jve_guid, {
-                resolve_item_id = row.resolve_item_id,
-            }, db)
-        end
-        log.event("SendToResolve: mapped %d clips, %d unrelinked, "
-            .. "%d unkeyed Resolve items",
-            #mapping, #unrelinked, #unkeyed_resolve_items)
-        notify(args, response, nil, nil)
+    supervisor.with_client(notify, args, function(client)
+        local clip_positions = build_clip_positions(payload)
+        local token = change_token.build(args.project_id, args.sequence_id,
+            seq.mutation_generation)
+        -- Per the media_roots contract above: nil maps to the empty
+        -- filter set at the wire boundary (helper expects an array).
+        local helper_media_roots = args.media_roots or {}
+        client:request("import_timeline", {
+            drt_path        = out_path,
+            media_roots     = helper_media_roots,
+            clip_positions  = clip_positions,
+            change_token    = token,
+        }, function(response, code, message)
+            if response == nil then
+                notify(args, nil, code, message)
+                return
+            end
+            -- Async-tail asserts (response shape, ledger upsert) crash by
+            -- design — bridge_completion.lua's executor pcall only catches
+            -- sync-phase asserts. The contract lives in bridge_completion's
+            -- docstring; mirror it here so a reader of this file sees the
+            -- rule without grep.
+            local mapping = response.result.mapping
+            local unrelinked = response.result.unrelinked
+            local unkeyed_resolve_items = response.result.unkeyed_resolve_items
+            assert(type(mapping) == "table",
+                "SendToResolve: helper response missing result.mapping")
+            assert(type(unrelinked) == "table",
+                "SendToResolve: helper response missing result.unrelinked")
+            assert(type(unkeyed_resolve_items) == "table",
+                "SendToResolve: helper response missing "
+                .. "result.unkeyed_resolve_items")
+            for _, row in ipairs(mapping) do
+                assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
+                    "SendToResolve: mapping row missing jve_guid")
+                assert(type(row.resolve_item_id) == "string"
+                    and row.resolve_item_id ~= "",
+                    "SendToResolve: mapping row missing resolve_item_id")
+                identity_ledger.upsert(row.jve_guid, {
+                    resolve_item_id = row.resolve_item_id,
+                }, db)
+            end
+            log.event("SendToResolve: mapped %d clips, %d unrelinked, "
+                .. "%d unkeyed Resolve items",
+                #mapping, #unrelinked, #unkeyed_resolve_items)
+            notify(args, response, nil, nil)
+        end)
     end)
 end
 

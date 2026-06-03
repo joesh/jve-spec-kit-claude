@@ -249,6 +249,37 @@ function M.ensure_client()
     return c
 end
 
+--- Run `body(client)` with a connected helper client, or route the
+--- structured (code, message) failure straight to the command's notify.
+---
+--- Lifted from 4 identical 4-line early-returns at the top of every
+--- bridge command. The bridge command's body is invariably async-with-
+--- callback (client:request inside `body`), so there is no caller code
+--- after the with_client call that needs to run on the failure path.
+---
+--- Contract:
+---   notify : function(args, result, code, message) — the per-command
+---            closure from bridge_command.declare(...).notify
+---   args   : the command's args table (threaded to notify on failure)
+---   body   : function(client) — invoked with the connected client on
+---            success; not invoked on failure.
+--- The function returns nothing — bridge commands are async, terminal
+--- result flows through notify, not through the return value.
+function M.with_client(notify, args, body)
+    assert(type(notify) == "function",
+        "helper_supervisor.with_client: notify (function) required")
+    assert(type(args) == "table",
+        "helper_supervisor.with_client: args (table) required")
+    assert(type(body) == "function",
+        "helper_supervisor.with_client: body (function) required")
+    local connected, code, msg = M.ensure_client()
+    if not connected then
+        notify(args, nil, code, msg)
+        return
+    end
+    body(connected)
+end
+
 --- Shut down — terminate helper, close client. Idempotent.
 function M.shutdown()
     _teardown()

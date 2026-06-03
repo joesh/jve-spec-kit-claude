@@ -983,35 +983,33 @@ function M.execute(args, db, _command)
     assert(args.user_choices == nil or type(args.user_choices) == "table",
         "SyncEditsFromResolve: user_choices must be a table or nil")
 
-    local client, sv_code, sv_msg = supervisor.ensure_client()
-    if not client then
-        notify(args, nil, sv_code, sv_msg)
-        return
-    end
-
-    -- read_timeline contract args is `{item_ids?}`; sequence_id/project_id
-    -- are caller-side state used by apply() below, not wire args.
-    client:request("read_timeline", {},
-        function(response, code, message)
-            if response == nil then
-                notify(args, nil, code, message)
-                return
-            end
-            -- Wire→classifier translation at the boundary between the
-            -- helper response and JVE-side processing. M.apply consumes
-            -- classifier shape (per-item JVE track_id).
-            local translated = M.translate_wire_response(response.result,
-                args.sequence_id)
-            -- Async-tail asserts crash by design — see the contract
-            -- documented in bridge_completion.lua (executor's pcall only
-            -- catches sync-phase asserts before client:request returns;
-            -- this callback runs after that pcall has popped). Masking
-            -- an internal invariant violation as resolve_api_error would
-            -- conflate origin (rule 2.21) and downgrade rule 1.14.
-            local result = M.apply(translated, args.sequence_id,
-                args.project_id, db, args.user_choices)
-            notify(args, result, nil, nil)
-        end)
+    supervisor.with_client(notify, args, function(client)
+        -- read_timeline contract args is `{item_ids?}`; sequence_id/
+        -- project_id are caller-side state used by apply() below, not
+        -- wire args.
+        client:request("read_timeline", {},
+            function(response, code, message)
+                if response == nil then
+                    notify(args, nil, code, message)
+                    return
+                end
+                -- Wire→classifier translation at the boundary between
+                -- the helper response and JVE-side processing. M.apply
+                -- consumes classifier shape (per-item JVE track_id).
+                local translated = M.translate_wire_response(response.result,
+                    args.sequence_id)
+                -- Async-tail asserts crash by design — see the contract
+                -- documented in bridge_completion.lua (executor's pcall
+                -- only catches sync-phase asserts before client:request
+                -- returns; this callback runs after that pcall has
+                -- popped). Masking an internal invariant violation as
+                -- resolve_api_error would conflate origin (rule 2.21)
+                -- and downgrade rule 1.14.
+                local result = M.apply(translated, args.sequence_id,
+                    args.project_id, db, args.user_choices)
+                notify(args, result, nil, nil)
+            end)
+    end)
 end
 
 local SPEC = {

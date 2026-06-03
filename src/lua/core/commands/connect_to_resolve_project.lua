@@ -443,16 +443,11 @@ function M.execute(args, db, _command)
         .. "fps_numerator/fps_denominator — required for the "
         .. "rate-mismatch guard before position match (rule 1.14)")
 
-    local client, sv_code, sv_msg = supervisor.ensure_client()
-    if not client then
-        notify(args, nil, sv_code, sv_msg)
-        return
-    end
-
     log.event("ConnectToResolveProject: loading Resolve state for "
         .. "sequence %s (%d JVE clip(s))",
         args.sequence_id, #jve_clips)
 
+    supervisor.with_client(notify, args, function(client)
     load_resolve_state(client, function(state, code, message)
         if state == nil then
             notify(args, nil, code, message)
@@ -545,6 +540,7 @@ function M.execute(args, db, _command)
                     #stamped, #skipped, #failures)
                 notify(args, result, nil, nil)
             end)
+    end)
     end)
 end
 

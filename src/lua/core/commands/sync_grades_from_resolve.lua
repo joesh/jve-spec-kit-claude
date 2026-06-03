@@ -227,44 +227,42 @@ function M.execute(args, db, command)
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
 
-    local client, sv_code, sv_msg = supervisor.ensure_client()
-    if not client then
-        notify(args, nil, sv_code, sv_msg)
-        return
-    end
-
-    local helper_args = {}
-    if args.item_ids then helper_args.item_ids = args.item_ids end
-    local sequence_id = args.sequence_id
-    client:request("read_grades", helper_args,
-        function(response, code, message)
-            if response == nil then
-                notify(args, nil, code, message)
-                return
-            end
-            -- Async-tail asserts crash by design — see the contract
-            -- documented in bridge_completion.lua (executor's pcall only
-            -- catches sync-phase asserts before client:request returns;
-            -- this callback runs after that pcall has popped). Masking
-            -- an internal invariant violation as resolve_api_error would
-            -- conflate origin (rule 2.21) and downgrade rule 1.14.
-            local captured = M.apply(response.result, sequence_id, db,
-                os.time())
-            -- Persist captured onto the live command so the undoer can
-            -- find it. command_manager holds this same command-object
-            -- reference in the undo stack; a late set_parameter from
-            -- the async response handler is visible to the undoer when
-            -- the user eventually presses undo. Without this, undo
-            -- would hit the undoer's "args.captured required" assert
-            -- (contract break per 2.13/2.32 — fail-loud is correct;
-            -- a silent no-op would leave the user with a broken
-            -- "undo did nothing" state).
-            command:set_parameter("captured", captured)
-            notify(args, {
-                applied_count = #response.result.grades,
-                captured      = captured,
-            }, nil, nil)
-        end)
+    supervisor.with_client(notify, args, function(client)
+        local helper_args = {}
+        if args.item_ids then helper_args.item_ids = args.item_ids end
+        local sequence_id = args.sequence_id
+        client:request("read_grades", helper_args,
+            function(response, code, message)
+                if response == nil then
+                    notify(args, nil, code, message)
+                    return
+                end
+                -- Async-tail asserts crash by design — see the contract
+                -- documented in bridge_completion.lua (executor's pcall
+                -- only catches sync-phase asserts before client:request
+                -- returns; this callback runs after that pcall has
+                -- popped). Masking an internal invariant violation as
+                -- resolve_api_error would conflate origin (rule 2.21)
+                -- and downgrade rule 1.14.
+                local captured = M.apply(response.result, sequence_id, db,
+                    os.time())
+                -- Persist captured onto the live command so the undoer
+                -- can find it. command_manager holds this same command-
+                -- object reference in the undo stack; a late
+                -- set_parameter from the async response handler is
+                -- visible to the undoer when the user eventually presses
+                -- undo. Without this, undo would hit the undoer's
+                -- "args.captured required" assert (contract break per
+                -- 2.13/2.32 — fail-loud is correct; a silent no-op
+                -- would leave the user with a broken "undo did
+                -- nothing" state).
+                command:set_parameter("captured", captured)
+                notify(args, {
+                    applied_count = #response.result.grades,
+                    captured      = captured,
+                }, nil, nil)
+            end)
+    end)
 end
 
 local SPEC = {
