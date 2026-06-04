@@ -48,12 +48,20 @@ local function delete_grade(clip_id, db)
     assert(ok, "sync_grades: DELETE failed for clip " .. clip_id)
 end
 
+-- Helper response row shape (post-FR-021 architectural fix): keyed on
+-- the helper's NATIVE id (`resolve_item_id`), NOT on jve_guid. The
+-- helper holds no JVE state (FR-021); attribution to a JVE clip_id is
+-- a Lua-side join through `identity_ledger` (populated by
+-- ConnectToResolveProject's positional or marker-channel match per
+-- FR-011c). See helper-protocol.md §read_grades.
 local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.grades) == "table",
         "sync_grades.apply: response.grades array required")
     for i, row in ipairs(response.grades) do
-        assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
-            string.format("sync_grades.apply: grade[%d] missing jve_guid",
+        assert(type(row.resolve_item_id) == "string"
+                and row.resolve_item_id ~= "",
+            string.format(
+                "sync_grades.apply: grade[%d] missing resolve_item_id",
                 i))
         assert(type(row.fidelity) == "string",
             string.format("sync_grades.apply: grade[%d] missing fidelity",
@@ -130,23 +138,42 @@ function M.apply(response, sequence_id, db, synced_at)
     assert(type(synced_at) == "number" and synced_at >= 0,
         "sync_grades.apply: synced_at unix timestamp required")
 
-    local captured = { entries = {} }
+    local captured = {
+        entries                 = {},
+        unmatched_resolve_items = {},
+    }
     local seen_clip_ids = {}
     for _, row in ipairs(response.grades) do
-        local clip_id = row.jve_guid
-        seen_clip_ids[clip_id] = true
-        local before = load_existing_row(clip_id, db)
-        captured.entries[#captured.entries + 1] = {
-            clip_id = clip_id,
-            before  = before,  -- nil if clip had no grade
-        }
-        local new_grade = new_grade_from_response_row(row, synced_at)
-        ClipGrade.upsert(clip_id, new_grade, db)
+        -- Ledger-driven attribution (FR-021): helper emits its native
+        -- resolve_item_id; JVE owns the join to clip.id. Connect must
+        -- have populated the ledger first (positional per FR-011c, or
+        -- by marker for re-syncs). A row whose resolve_item_id has no
+        -- ledger entry is REPORTED, not silently dropped — symmetric
+        -- with the FR-011c unmatched-JVE-clip discipline. Typical
+        -- cause: colorist added a clip in Resolve after import; user
+        -- needs to re-Connect to pick it up.
+        local clip_id = identity_ledger.lookup_clip_id(
+            row.resolve_item_id, db)
+        if clip_id == nil then
+            captured.unmatched_resolve_items[
+                #captured.unmatched_resolve_items + 1] = row.resolve_item_id
+        else
+            seen_clip_ids[clip_id] = true
+            local before = load_existing_row(clip_id, db)
+            captured.entries[#captured.entries + 1] = {
+                clip_id = clip_id,
+                before  = before,  -- nil if clip had no grade
+            }
+            local new_grade = new_grade_from_response_row(row, synced_at)
+            ClipGrade.upsert(clip_id, new_grade, db)
 
-        -- Update ledger fingerprint so subsequent SyncGrades can detect
-        -- whether Resolve drifted vs JVE-local edits (FR-025).
-        local existing_link = identity_ledger.load(clip_id, db)
-        if existing_link then
+            -- Update ledger fingerprint so subsequent SyncGrades can detect
+            -- whether Resolve drifted vs JVE-local edits (FR-025).
+            local existing_link = identity_ledger.load(clip_id, db)
+            assert(existing_link, string.format(
+                "sync_grades.apply: lookup_clip_id %q→%q but load(%q) "
+                .. "returned nil — identity_ledger consistency violation",
+                row.resolve_item_id, clip_id, clip_id))
             identity_ledger.upsert(clip_id, {
                 resolve_item_id   = existing_link.resolve_item_id,
                 grade_fingerprint = ClipGrade.fingerprint(new_grade),
@@ -161,9 +188,16 @@ function M.apply(response, sequence_id, db, synced_at)
     -- scope without the caller having to thread it back through.
     captured.sequence_id = sequence_id
 
-    log.event("SyncGradesFromResolve.apply: %d grade(s) synced, "
-        .. "%d stale-marked", #response.grades,
-        #captured.entries - #response.grades)
+    -- Accounting (FR-011c report-not-skip discipline):
+    --   applied      = response rows whose resolve_item_id is in the ledger.
+    --   stale_marked = FR-013a walk added (ledger-linked clip absent from response).
+    --   unmatched    = helper rows with no ledger entry (colorist added a
+    --                  clip Resolve-side after import; user must re-Connect).
+    local applied      = #response.grades - #captured.unmatched_resolve_items
+    local stale_marked = #captured.entries - applied
+    log.event("SyncGradesFromResolve.apply: %d grade(s) applied, "
+        .. "%d stale-marked, %d unmatched resolve_item_id(s)",
+        applied, stale_marked, #captured.unmatched_resolve_items)
 
     -- FR-016: the View pulls grades from model state. Until now nothing
     -- told a parked monitor that its model row changed; the next
@@ -257,9 +291,16 @@ function M.execute(args, db, command)
                 -- would leave the user with a broken "undo did
                 -- nothing" state).
                 command:set_parameter("captured", captured)
+                -- applied_count = response rows that landed on a JVE
+                -- clip (via ledger). Subtract unmatched so callers see
+                -- the count that actually mutated state, not the raw
+                -- helper row count (which can include unmatched
+                -- resolve_item_ids per FR-011c report-not-skip).
                 notify(args, {
-                    applied_count = #response.result.grades,
-                    captured      = captured,
+                    applied_count           = #response.result.grades
+                        - #captured.unmatched_resolve_items,
+                    unmatched_resolve_items = captured.unmatched_resolve_items,
+                    captured                = captured,
                 }, nil, nil)
             end)
     end)

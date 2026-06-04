@@ -3,12 +3,12 @@
 --
 -- read_grades pulls per-clip grade state from Resolve back into JVE
 -- (FR-013/FR-014/FR-015). Args: `{ item_ids?: [string] }` (omit ⇒ all).
--- Result: `{ grades: [{ jve_guid, cdl?, lut?, fidelity }] }`.
+-- Result: `{ grades: [{ resolve_item_id, cdl?, lut?, fidelity }] }`.
 --
 -- Per-row fields:
---   • `jve_guid` — non-empty string (matches the JVE clip id; recovered
---     via the same marker/content channels as §read_identities — NOT
---     raw id equality with `clip.id`, per the T047 spike correction).
+--   • `resolve_item_id` — non-empty string, the helper's native id
+--     (TimelineItem:GetUniqueId()). The Lua side joins to JVE clip.id
+--     via identity_ledger (FR-021: helper holds no JVE state).
 --   • `cdl?` — present only when the node graph is representable as
 --     primary CDL. Shape: `{slope:[r,g,b], offset:[r,g,b], power:[r,g,b],
 --     sat}` (helper-protocol.md). Absent when fidelity is `partial`
@@ -39,7 +39,6 @@
 -- Run via `jve --test`.
 
 local fixture  = require("binding.helper_fixture")
-local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-read-grades.sock")
 
@@ -61,8 +60,10 @@ local function assert_rgb_triple(t, label)
 end
 
 local function assert_grade_row(row, i)
-    assert(type(row.jve_guid) == "string" and row.jve_guid ~= "",
-        string.format("grades[%d].jve_guid must be non-empty string", i))
+    assert(type(row.resolve_item_id) == "string"
+            and row.resolve_item_id ~= "",
+        string.format(
+            "grades[%d].resolve_item_id must be non-empty string", i))
     assert(type(row.fidelity) == "string",
         string.format("grades[%d].fidelity must be string", i))
     assert(FIDELITY_VALUES[row.fidelity], string.format(

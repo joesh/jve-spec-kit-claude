@@ -79,6 +79,15 @@ ClipGrade.upsert("c_pre", {
     source = "user", stale = 0, synced_at = now,
 }, db)
 
+-- Ledger seeding: ConnectToResolveProject would have populated these
+-- rows. Post-FR-021 architectural fix, sync_grades joins helper
+-- response rows (keyed on resolve_item_id) to clip.id via the ledger
+-- — no ledger row ⇒ unmatched. The runtime resolve_item_id is NOT
+-- equal to clip.id even when clip.id is the adopted DRP DbId
+-- (spec.md T047 spike, 0/1003 match).
+identity_ledger.upsert("c_pre",  { resolve_item_id = "live_pre"  }, db)
+identity_ledger.upsert("c_none", { resolve_item_id = "live_none" }, db)
+
 -- ─── apply: a sync delivers fresh grades for both clips ─────────────
 local POST_CDL_pre = {
     slope_r = 1.20, slope_g = 1.15, slope_b = 1.10,
@@ -94,9 +103,9 @@ local POST_CDL_none = {
 }
 local response = {
     grades = {
-        { jve_guid = "c_pre",  cdl = POST_CDL_pre,
+        { resolve_item_id = "live_pre",  cdl = POST_CDL_pre,
           fidelity = "primary", lut = nil },
-        { jve_guid = "c_none", cdl = POST_CDL_none,
+        { resolve_item_id = "live_none", cdl = POST_CDL_none,
           fidelity = "primary", lut = nil },
     },
 }
@@ -132,10 +141,9 @@ check("c_none restored has NO grade row (was ungraded before sync)",
 -- Restore first so we're back to {c_pre graded, c_none ungraded}.
 sync_grades.restore(captured, db)
 
--- FR-013a only applies to ledger-linked clips ("a JVE clip whose Resolve
--- item is absent at read-back" implies a prior link). Stamp the link
--- the SendToResolve roundtrip would have produced.
-identity_ledger.upsert("c_pre", { resolve_item_id = "resolve_pre" }, db)
+-- FR-013a only applies to ledger-linked clips (the prior-link
+-- contract). Both c_pre and c_none were seeded into identity_ledger
+-- at the top of this test (mapping to live_pre / live_none).
 
 -- Resolve also lost c_pre between syncs (absent from response.grades).
 -- c_pre had a grade; FR-013a requires it survives, marked stale=1.

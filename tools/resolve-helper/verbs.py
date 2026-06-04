@@ -1059,12 +1059,12 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             if (item_id_filter is not None
                     and resolve_item_id not in item_id_filter):
                 continue
-            jve_guid = _recover_jve_guid(item)
-            if jve_guid is None:
-                # No identity carrier — caller can't map the grade back
-                # to a JVE clip. Omit from `grades` (mirrors
-                # read_identities' "lacking join key" discipline).
-                continue
+            # FR-021: helper holds no JVE state. We emit our native
+            # `resolve_item_id` (= TimelineItem:GetUniqueId()); the
+            # Lua side joins to JVE clip.id via identity_ledger. No
+            # marker recovery here — marker-as-join was the pre-fix
+            # design, broken because it required a stamping pre-pass
+            # before the first sync (helper-protocol.md §read_grades).
             try:
                 record_start = item.GetStart()
             except Exception as exc:
@@ -1076,10 +1076,10 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             cdl_entry = cdl_by_rec_in.get(record_start)
             if cdl_entry is None:
                 return _error(envelope_id, "resolve_api_error",
-                    f"item jve_guid={jve_guid!r} at record_start frame "
-                    f"{record_start} has no CDL block in the EDL "
-                    "export — Resolve emits CDL for every clip, so a "
-                    "missing block is an API anomaly")
+                    f"item resolve_item_id={resolve_item_id!r} at "
+                    f"record_start frame {record_start} has no CDL "
+                    "block in the EDL export — Resolve emits CDL for "
+                    "every clip, so a missing block is an API anomaly")
             try:
                 item_lut = _item_lut_ref(item)
                 any_tools = _any_non_cdl_tools(item)
@@ -1092,7 +1092,7 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                     cdl_present=True)
             except CdlEdlParseError as exc:
                 return _error(envelope_id, "resolve_api_error", str(exc))
-            row = {"jve_guid": jve_guid, "fidelity": fidelity}
+            row = {"resolve_item_id": resolve_item_id, "fidelity": fidelity}
             if fidelity == "primary":
                 row["cdl"] = _cdl_to_wire(cdl_entry)
             if item_lut is not None:

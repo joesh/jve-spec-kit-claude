@@ -73,7 +73,8 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 
 ### `read_grades`
 - **args**: `{ item_ids?: [string] }` (omit ⇒ all)
-- **result**: `{ grades: [{ jve_guid, cdl?: { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat }, lut?: { ref }, fidelity }] }`
+- **result**: `{ grades: [{ resolve_item_id, cdl?: { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat }, lut?: { ref }, fidelity }] }`
+- `resolve_item_id` is the helper's NATIVE id (`TimelineItem:GetUniqueId()`), not a JVE id. JVE owns the join to its own `clip.id` via `identity_ledger.lookup_clip_id(resolve_item_id)`, populated by `ConnectToResolveProject` (positional or marker channel, FR-011c). This honors FR-021 (helper holds no JVE state) and makes `SyncGradesFromResolve` work end-to-end after a positional-only Connect — marker stamping is *durability* for surviving Resolve-side mutations (FR-012 bladed-inherit), NOT a prerequisite for the first sync. A row whose `resolve_item_id` has no ledger entry is surfaced by the Lua side as `unmatched_resolve_items` (FR-011c report-not-skip discipline), never silently dropped.
 - `fidelity` ∈ `primary|partial|unrepresentable`, mandatory and honest (FR-015): a node graph exceeding CDL/LUT is downgraded, never approximated. `cdl` present only when representable; `lut.ref` is a local path. Manual-pull only (no server-push).
 - **V1 scope**: video items only — mirrors §read_timeline's V1-video-only restriction. The EDL export carries one CDL block per video event; audio items at the same record-frame would otherwise look up the video clip's CDL and mis-report it as the audio item's grade. Audio fidelity reads land with T054 alongside audio read_timeline.
 
