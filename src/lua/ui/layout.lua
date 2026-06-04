@@ -803,6 +803,9 @@ _G.__jve_shutdown = function()
     -- close its socket. Idempotent: no-op when supervisor was never
     -- asked to spawn (e.g. user never invoked a bridge command).
     helper_supervisor.shutdown()
+    -- Release the project pidlock so the next JVE launch sees the SHM
+    -- as recoverable rather than concurrently-held by a now-dead PID.
+    require("core.project_open").release_current_pidlock()
 end
 
 -- Export widget references for UI tests (main.cpp uses s_lastCreatedMainWindow, not this return value)

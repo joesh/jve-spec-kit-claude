@@ -169,6 +169,48 @@ do
 end
 
 -- ============================================================
+-- Pidlock lifecycle: written on open, deleted on release,
+-- and the outgoing project's lock is released when switching.
+-- ============================================================
+print("\n--- pidlock cleanup ---")
+do
+    local function read_pidlock_file(p)
+        local f = io.open(p .. "-jve-pidlock", "rb")
+        if not f then return nil end
+        local s = f:read("*a"); f:close()
+        return tonumber((s:gsub("%s+", "")))
+    end
+
+    local p1 = "/tmp/jve/test_pidlock_A_" .. os.time() .. ".jvp"
+    local p2 = "/tmp/jve/test_pidlock_B_" .. os.time() .. ".jvp"
+    os.remove(p1 .. "-jve-pidlock")
+    os.remove(p2 .. "-jve-pidlock")
+
+    local mock_db = { set_path = function() return true end }
+
+    -- Open A → pidlock A written with our PID.
+    project_open.open_project_database_or_prompt_cleanup(mock_db, nil, p1, nil)
+    local pid_a = read_pidlock_file(p1)
+    check("open A: pidlock written", pid_a ~= nil and pid_a > 0)
+
+    -- Switch to B → A's pidlock must be removed; B's must be written.
+    project_open.open_project_database_or_prompt_cleanup(mock_db, nil, p2, nil)
+    check("switch to B: A's pidlock removed", read_pidlock_file(p1) == nil)
+    local pid_b = read_pidlock_file(p2)
+    check("switch to B: B's pidlock written", pid_b ~= nil and pid_b > 0)
+
+    -- Explicit release on shutdown → B's pidlock gone.
+    project_open.release_current_pidlock()
+    check("shutdown: B's pidlock removed", read_pidlock_file(p2) == nil)
+
+    -- Release with nothing held → no-op, no error.
+    project_open.release_current_pidlock()
+    check("release with nothing held: no-op", read_pidlock_file(p2) == nil)
+
+    os.remove(p1); os.remove(p2)
+end
+
+-- ============================================================
 -- Summary
 -- ============================================================
 print(string.format("\n=== Project Open: %d passed, %d failed ===", pass_count, fail_count))

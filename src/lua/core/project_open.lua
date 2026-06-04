@@ -69,6 +69,11 @@ local function read_pidlock(project_path)
     return tonumber((s:gsub("%s+", "")))
 end
 
+-- Path of the project whose pidlock THIS process currently holds, or nil
+-- when none. Tracked so project-switch and shutdown can release it without
+-- the caller having to remember what was open.
+local current_locked_path = nil
+
 local function write_pidlock(project_path)
     local path = pidlock_path(project_path)
     local f, err = io.open(path, "w")
@@ -77,6 +82,26 @@ local function write_pidlock(project_path)
         path, tostring(err)))
     f:write(tostring(our_pid()))
     f:close()
+    current_locked_path = project_path
+end
+
+--- Release the pidlock for the currently-held project, if any.
+-- Safe to call multiple times; no-op when nothing is held.
+function M.release_current_pidlock()
+    if not current_locked_path then return end
+    local path = pidlock_path(current_locked_path)
+    -- Only remove if it still points at us — defends against the rare case
+    -- where another process has already claimed this project (its pidlock
+    -- now contains their PID, not ours) and we'd otherwise yank their lock.
+    local prior = read_pidlock(current_locked_path)
+    if prior == our_pid() then
+        local ok, err = os.remove(path)
+        if not ok then
+            log.warn("release_current_pidlock: os.remove(%q) failed: %s",
+                path, tostring(err))
+        end
+    end
+    current_locked_path = nil
 end
 
 -- Returns true iff a live, non-self process owns this project's pidlock.
@@ -93,6 +118,13 @@ end
 function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, project_path, parent_window)
     assert(db_module and db_module.set_path, "project_open: db_module.set_path is required")
     assert(type(project_path) == "string" and project_path ~= "", "project_open: project_path is required")
+
+    -- Switching projects: release the outgoing project's pidlock so a
+    -- second JVE can immediately tell its SHM is stale rather than
+    -- waiting for our process to exit. No-op on first open.
+    if current_locked_path and current_locked_path ~= project_path then
+        M.release_current_pidlock()
+    end
 
     -- Check for stale SHM BEFORE sqlite3_open (which can hang on stale
     -- WAL locks during ftruncate). WAL itself stays — SQLite recovers
