@@ -24,11 +24,25 @@
 local M = {}
 
 local ClipGrade         = require("models.clip_grade")
+local Sequence          = require("models.sequence")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local bridge_command    = require("core.commands.bridge_command")
 local Signals           = require("core.signals")
 local log               = require("core.logger").for_area("commands")
+
+-- LUT bake cache root. Per-project subdir keeps bakes scoped to the
+-- project that produced them; survives JVE relaunches; cheap to GC by
+-- removing files whose `resolve_item_id` is no longer in the live
+-- timeline (handled by ConnectToResolveProject — separate commit).
+local function bake_lut_dir_for_project(project_id)
+    assert(type(project_id) == "string" and project_id ~= "",
+        "bake_lut_dir_for_project: project_id required")
+    local home = os.getenv("HOME")
+    assert(home and home ~= "",
+        "bake_lut_dir_for_project: $HOME not set")
+    return home .. "/.jve/resolve_bake/" .. project_id
+end
 
 local OP = bridge_command.declare(
     "SyncGradesFromResolve", "sync_grades_from_resolve_completed")
@@ -361,8 +375,20 @@ function M.execute(args, db, command)
     assert(args.item_ids == nil or type(args.item_ids) == "table",
         "SyncGradesFromResolve: item_ids must be array if present")
 
+    -- Look up project_id from the sequence so the LUT bake cache is
+    -- per-project (~/.jve/resolve_bake/<project_id>/). Resolves sync's
+    -- only-sees-sequence_id surface against the bake dir's per-project
+    -- scope without making callers thread project_id through args.
+    local seq = Sequence.load(args.sequence_id)
+    assert(seq, "SyncGradesFromResolve: sequence not found: "
+        .. args.sequence_id)
+    assert(type(seq.project_id) == "string" and seq.project_id ~= "",
+        "SyncGradesFromResolve: sequence missing project_id "
+        .. "(schema invariant)")
+    local bake_lut_dir = bake_lut_dir_for_project(seq.project_id)
+
     supervisor.with_client(notify, args, function(client)
-        local helper_args = {}
+        local helper_args = { bake_lut_dir = bake_lut_dir }
         if args.item_ids then helper_args.item_ids = args.item_ids end
         local sequence_id = args.sequence_id
         client:request("read_grades", helper_args,

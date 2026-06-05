@@ -40,6 +40,7 @@
 
 import functools
 import os
+import sys
 import tempfile
 
 from cdl_edl import (
@@ -1003,6 +1004,45 @@ def _any_non_cdl_tools(item):
     return False
 
 
+def _bake_item_lut(item, resolve_item_id, bake_lut_dir, resolve):
+    # Resolve's TimelineItem.ExportLUT bakes the full node-graph result
+    # (primaries + curves + CST/ACES + Gamut Mapping). Qualifiers,
+    # windows, blurs and other neighborhood operations are silently
+    # dropped by the bake (Resolve documented behavior, V1-accepted
+    # fidelity limit). Returns the absolute path on success, or None
+    # on failure (per-clip skip — bake failure does not abort the
+    # whole sync; see verb_read_grades docstring).
+    #
+    # 33pt CUBE is the industry default carrier (Premiere/FCP/Nuke
+    # expect it). 17pt is too coarse for shadows; 65pt is overkill.
+    try:
+        cube_kind = resolve.EXPORT_LUT_33PTCUBE
+    except AttributeError as exc:
+        sys.stderr.write(
+            f"[read_grades] resolve.EXPORT_LUT_33PTCUBE unavailable: "
+            f"{exc}\n")
+        return None
+    out_path = os.path.join(bake_lut_dir, f"{resolve_item_id}.cube")
+    try:
+        ok = item.ExportLUT(cube_kind, out_path)
+    except Exception as exc:
+        sys.stderr.write(
+            f"[read_grades] ExportLUT raised for "
+            f"resolve_item_id={resolve_item_id!r}: {exc}\n")
+        return None
+    if not ok:
+        sys.stderr.write(
+            f"[read_grades] ExportLUT returned falsy for "
+            f"resolve_item_id={resolve_item_id!r} → {out_path!r}\n")
+        return None
+    if not os.path.isfile(out_path):
+        sys.stderr.write(
+            f"[read_grades] ExportLUT claimed success but file absent: "
+            f"{out_path!r}\n")
+        return None
+    return out_path
+
+
 def _cdl_to_wire(cdl_entry):
     # Translate the parser's `{slope:[r,g,b], offset:[r,g,b],
     # power:[r,g,b], sat:float}` to the helper-protocol.md §read_grades
@@ -1016,6 +1056,39 @@ def _cdl_to_wire(cdl_entry):
     }
 
 
+def _validate_read_grades_args(args):
+    # read_grades extends `_validate_item_ids` with the optional
+    # bake_lut_dir arg (absolute path JVE supplies; helper writes
+    # `<dir>/<resolve_item_id>.cube` per non-CDL-graded clip). FR-021
+    # — JVE owns path discipline; the helper just writes where told.
+    allowed = {"item_ids", "bake_lut_dir"}
+    extras = sorted(k for k in args.keys() if k not in allowed)
+    if extras:
+        return ("error", f"unknown args fields: {extras}")
+    item_ids = args.get("item_ids")
+    if item_ids is not None:
+        if not isinstance(item_ids, list):
+            return ("error",
+                "item_ids must be a list of strings (got "
+                f"{type(item_ids).__name__})")
+        for i, x in enumerate(item_ids):
+            if not isinstance(x, str) or x == "":
+                return ("error",
+                    f"item_ids[{i}] must be non-empty string (got "
+                    f"{type(x).__name__})")
+        item_ids = set(item_ids)
+    bake_lut_dir = args.get("bake_lut_dir")
+    if bake_lut_dir is not None:
+        if not isinstance(bake_lut_dir, str) or bake_lut_dir == "":
+            return ("error",
+                f"bake_lut_dir must be non-empty string when present "
+                f"(got {type(bake_lut_dir).__name__})")
+        if not os.path.isabs(bake_lut_dir):
+            return ("error",
+                f"bake_lut_dir must be absolute path (got {bake_lut_dir!r})")
+    return ("ok", {"item_ids": item_ids, "bake_lut_dir": bake_lut_dir})
+
+
 @_stateful_verb
 def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # spec.md:30 / helper-protocol.md §read_grades — read per-clip
@@ -1023,19 +1096,35 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # `GetNodeGraph().GetToolsInNode()` (fidelity). cdl_edl.py owns
     # the pure-data EDL parser; this verb owns the Resolve-API
     # plumbing + per-item classification.
+    #
+    # bake_lut_dir (optional): when set, partial/unrepresentable clips
+    # are baked via `item.ExportLUT(EXPORT_LUT_33PTCUBE, …)` into
+    # `<dir>/<resolve_item_id>.cube` and emitted with lut.ref set to
+    # that path. Resolve's bake captures primaries + curves + CST/ACES
+    # gamut nodes; qualifiers / windows / blurs are silently dropped
+    # (V1 fidelity limit, Joe-accepted). Bake failures are logged and
+    # the clip falls back to its no-LUT classification — never fails
+    # the whole sync (rule 1.14 with proportional scope).
     del helper_version
 
-    validation = _validate_item_ids(args)
+    validation = _validate_read_grades_args(args)
     if validation[0] != "ok":
         return _error(envelope_id, "bad_request", validation[1])
-    item_id_filter = validation[1]  # None = all; set = whitelist
+    item_id_filter = validation[1]["item_ids"]
+    bake_lut_dir = validation[1]["bake_lut_dir"]
+    if bake_lut_dir is not None:
+        try:
+            os.makedirs(bake_lut_dir, exist_ok=True)
+        except OSError as exc:
+            return _error(envelope_id, "bad_request",
+                f"bake_lut_dir {bake_lut_dir!r} not creatable: {exc}")
 
     timeline, err = _require_current_timeline(project, envelope_id)
     if err is not None:
         return err
 
     try:
-        integer_rate = _timeline_integer_frame_rate(project)
+        integer_rate = _timeline_integer_frame_rate(timeline)
     except RuntimeError as exc:
         return _error(envelope_id, "resolve_api_error", str(exc))
 
@@ -1095,7 +1184,22 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             row = {"resolve_item_id": resolve_item_id, "fidelity": fidelity}
             if fidelity == "primary":
                 row["cdl"] = _cdl_to_wire(cdl_entry)
-            if item_lut is not None:
+            # LUT reference precedence (when populated):
+            #   1. Successful bake (overrides user item_lut — bake captures
+            #      user LUT + grade together, so it's strictly more
+            #      complete).
+            #   2. User-applied item-level LUT from Resolve.
+            # Bake gate: only fidelity in {partial, unrepresentable}.
+            # Primaries already carry full grade via CDL; ungraded
+            # ("none") has nothing to bake.
+            baked_path = None
+            if (bake_lut_dir is not None
+                    and fidelity in ("partial", "unrepresentable")):
+                baked_path = _bake_item_lut(
+                    item, resolve_item_id, bake_lut_dir, resolve)
+            if baked_path is not None:
+                row["lut"] = {"ref": baked_path}
+            elif item_lut is not None:
                 row["lut"] = {"ref": item_lut}
             grades.append(row)
     except RuntimeError as exc:
