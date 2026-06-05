@@ -9,6 +9,7 @@
 #include <string>
 
 #include <editor_media_platform/emp_cdl.h>
+#include <editor_media_platform/emp_lut3d.h>
 
 namespace emp { class Frame; }
 
@@ -55,6 +56,18 @@ public:
     void setGrade(const emp::CdlParams& cdl);
     void clearGrade();
     const emp::CdlParams& grade() const { return m_cdl; }
+
+    // LUT3D color stage (spec 023 Piece 3 / FR-016 — partial / unrepresentable
+    // fidelity path). Same View contract as setGrade: push BEFORE setFrame.
+    // CDL and LUT are mutually exclusive per clip per FR-015's closed-set
+    // fidelity discriminator — view_grade_pull guarantees only one is
+    // enabled at a time, so the shader can apply both in series with
+    // either flag flipped off without conflict. Uploads the cube data as
+    // an MTLTextureType3D RGBA16F texture; hardware MTLSamplerStateLinear
+    // gives trilinear matching emp::apply_lut3d_rgb. Main-thread only.
+    void setLut3D(const emp::Lut3d& lut);
+    void clearLut3D();
+    int lut3dSize() const { return m_lut_size; }
 
     // Set rotation (0, 90, 180, 270 degrees)
     void setRotation(int degrees);
@@ -127,6 +140,15 @@ private:
     // so untouched surfaces behave bit-identically to pre-T032 builds.
     // Uploaded to the fragment shader via setFragmentBytes each draw.
     emp::CdlParams m_cdl{};
+
+    // LUT3D color stage state (Piece 3 of spec 023). Cube data + size is
+    // owned by the impl's MTLTexture (uploaded RGBA16F at setLut3D); the
+    // shader-side gate is this enabled flag, uploaded as a 4-byte
+    // LutUniform via setFragmentBytes each draw. Zero-init ⇒ disabled
+    // (passthrough), so untouched surfaces behave identically to pre-
+    // Piece-3 builds.
+    int32_t m_lut_enabled = 0;
+    int     m_lut_size    = 0;  // tracked separately for setLut3D reuse
 };
 
 #else
@@ -144,6 +166,9 @@ public:
     void clearFrame() {}
     void setGrade(const emp::CdlParams&) {}
     void clearGrade() {}
+    void setLut3D(const emp::Lut3d&) {}
+    void clearLut3D() {}
+    int lut3dSize() const { return 0; }
     void setRotation(int) {}
     int rotation() const { return 0; }
     void setPixelAspectRatio(int, int) {}

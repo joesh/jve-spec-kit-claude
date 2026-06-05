@@ -1,21 +1,45 @@
---- view_grade_pull — MVC pull rule for the per-clip display grade (T032).
+--- view_grade_pull — MVC pull rule for the per-clip display grade
+--- (T032 CDL + Piece 3 LUT).
 ---
 --- The viewer (SequenceMonitor, SourceViewer) calls this on every frame
---- show. Given a clip_id, it returns either a CDL params table to apply
---- in the surface's CDL stage, or nil meaning "passthrough" (the surface
---- shows the ungraded image).
+--- show. Given a clip_id, it returns either a stage table `{cdl,
+--- lut_ref}` (one or both fields set) describing what to push to the
+--- surface, or nil meaning "passthrough" (surface shows the ungraded
+--- image).
 ---
---- Rule (FR-016 / data-model.md):
----   • clip.id with a `clip_grade` row of fidelity == 'primary' AND a
----     non-nil CDL  → return the CDL table.
----   • fidelity == 'partial' or 'unrepresentable'                   → nil
----     The grade exceeds CDL/LUT — applying a fragment of it would be
----     dishonest (FR-015 — "never approximated").
----   • No `clip_grade` row                                          → nil
----   • stale=1 PRIMARY still applies (FR-013a — "retained, marked stale,
----     never silently cleared"). The fidelity badge UX (spec §5.5)
----     communicates staleness to the user; display keeps the last-known
----     graded look.
+--- Rule (FR-014 / FR-015 / FR-016 / data-model.md):
+---
+---   • primary + CDL                  → return {cdl = ...}
+---     The full grade fits CDL. Display it directly.
+---
+---   • primary + CDL + LUT (rare)     → return {cdl = ..., lut_ref = ...}
+---     User had an item-LUT bound to a primary-only graph.
+---     FR-016: "apply CDL, then LUT if present" — the surface stacks
+---     them in series; either stage is a no-op when its flag is 0.
+---
+---   • partial + lut_ref              → return {lut_ref = ...}
+---     The bake captured primaries + curves + CST/ACES nodes; secondary
+---     tools (qualifiers, windows, blurs) dropped. Honest partial
+---     approximation (FR-015 — the badge UX flags it).
+---
+---   • unrepresentable + lut_ref      → return {lut_ref = ...}
+---     The bake still preserves what CDL+LUT can carry; even more of
+---     the graph is silently dropped than `partial`. Same display
+---     route, distinct badge.
+---
+---   • partial / unrepresentable without lut_ref → return nil
+---     Bake should always produce one when fidelity is partial/
+---     unrepresentable (helper-protocol.md §read_grades). Reaching
+---     here means the bake failed and the helper surfaced the row
+---     anyway. Caller sees ungraded; the fidelity badge still tells
+---     the user the grade exists but couldn't load.
+---
+---   • fidelity == 'none' OR no row   → return nil
+---     Ungraded clip — pass through.
+---
+---   • stale = 1 PRIMARY still applies (FR-013a — "retained, marked
+---     stale, never silently cleared"). Badge UX communicates the
+---     staleness.
 ---
 --- Pure pull: takes a clip_id + open DB connection, returns or nils.
 --- No caching here AND none in the View either (per FR-016: the View
@@ -35,14 +59,14 @@ local ClipGrade = require("models.clip_grade")
 
 local M = {}
 
---- Pull the display CDL for a clip, or nil if no graded display.
+--- Pull the display grade stages for a clip.
 --- @param clip_id string|nil   clip id (nil/empty ⇒ no clip, returns nil)
 --- @param db      table|nil    optional open SQLite connection; when nil
 ---                              the model layer grabs the active connection
 ---                              (the model layer is the only place allowed
 ---                              to call `database.get_connection()` under
 ---                              the SQL-isolation policy).
---- @return table|nil  the CDL params table, or nil for passthrough
+--- @return table|nil  stage table `{cdl?, lut_ref?}`, or nil for passthrough
 function M.pull_for_clip(clip_id, db)
     if clip_id == nil or clip_id == "" then return nil end
     assert(type(clip_id) == "string",
@@ -51,17 +75,36 @@ function M.pull_for_clip(clip_id, db)
 
     local grade = ClipGrade.load(clip_id, db)
     if not grade then return nil end
-    if grade.fidelity ~= "primary" then return nil end
-    if not grade.cdl then
-        -- Defensive: a 'primary' row should always have a complete CDL
-        -- (the model's all-or-none invariant). If both hold, this branch
-        -- is unreachable; if we ever reach it, the schema invariant is
-        -- broken and the caller should know.
-        error(string.format(
-            "view_grade_pull.pull_for_clip: clip %s has fidelity='primary' "
-            .. "but no CDL row — model invariant violated", clip_id))
+
+    if grade.fidelity == "primary" then
+        if not grade.cdl then
+            -- A 'primary' row must always have a complete CDL (the
+            -- model's all-or-none invariant). Unreachable if invariant
+            -- holds; if reached, schema invariant is broken.
+            error(string.format(
+                "view_grade_pull.pull_for_clip: clip %s has "
+                .. "fidelity='primary' but no CDL row — model invariant "
+                .. "violated", clip_id))
+        end
+        -- LUT may co-exist with primary CDL when the user had an
+        -- item-level LUT bound; FR-016 stacks them: CDL then LUT.
+        return { cdl = grade.cdl, lut_ref = grade.lut_ref }
     end
-    return grade.cdl
+
+    if grade.fidelity == "partial" or grade.fidelity == "unrepresentable" then
+        -- Honest partial approximation via the baked LUT (FR-015).
+        -- A missing lut_ref means the bake failed; surface as
+        -- passthrough (the fidelity badge still tells the user the
+        -- grade exists but couldn't load).
+        if grade.lut_ref then
+            return { lut_ref = grade.lut_ref }
+        end
+        return nil
+    end
+
+    -- fidelity == 'none' (or unknown enum value the schema CHECK would
+    -- have rejected): pass through.
+    return nil
 end
 
 return M

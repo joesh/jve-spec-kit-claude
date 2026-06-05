@@ -1,6 +1,7 @@
 #include "cpu_video_surface.h"
 #include <editor_media_platform/emp_frame.h>
 #include <QPainter>
+#include <cassert>
 #include <cstring>
 
 CPUVideoSurface::CPUVideoSurface(QWidget* parent)
@@ -46,6 +47,14 @@ void CPUVideoSurface::setFrameData(const uint8_t* data, int width, int height, i
                                   static_cast<int>(m_image.bytesPerLine()),
                                   m_cdl);
 
+    // LUT3D color stage (Piece 3 / FR-016). Applied AFTER CDL because
+    // FR-015 makes them mutually exclusive per clip: at most one of
+    // the two has enabled==1 at any moment (view_grade_pull enforces).
+    // BGRA8 in place; alpha preserved by apply_lut3d_bgra8_inplace.
+    emp::apply_lut3d_bgra8_inplace(m_image.bits(), width, height,
+                                    static_cast<int>(m_image.bytesPerLine()),
+                                    m_lut);
+
     update();
 }
 
@@ -57,6 +66,20 @@ void CPUVideoSurface::setGrade(const emp::CdlParams& cdl) {
 
 void CPUVideoSurface::clearGrade() {
     m_cdl = emp::CdlParams{};  // zero-init ⇒ enabled = 0
+}
+
+void CPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
+    assert(lut.enabled == 1 &&
+        "CPUVideoSurface::setLut3D: lut not loaded (use clearLut3D to disable)");
+    assert(lut.size >= 2 && lut.size <= 256 &&
+        "CPUVideoSurface::setLut3D: lut.size out of [2,256]");
+    m_lut = lut;
+    // No update() — the next setFrame/setFrameData will re-render
+    // with the new LUT. The View pushes LUT BEFORE frame.
+}
+
+void CPUVideoSurface::clearLut3D() {
+    m_lut = emp::Lut3d{};  // default-init ⇒ enabled = 0
 }
 
 void CPUVideoSurface::clearFrame() {

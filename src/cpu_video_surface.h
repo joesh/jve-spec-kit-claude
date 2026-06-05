@@ -6,6 +6,7 @@
 #include <memory>
 
 #include <editor_media_platform/emp_cdl.h>
+#include <editor_media_platform/emp_lut3d.h>
 
 namespace emp { class Frame; }
 
@@ -43,6 +44,15 @@ public:
     void clearGrade();
     const emp::CdlParams& grade() const { return m_cdl; }
 
+    // LUT3D color stage (spec 023 Piece 3 / FR-016 — partial /
+    // unrepresentable fidelity path). Same View contract as setGrade:
+    // push BEFORE setFrame. CDL and LUT are mutually exclusive per clip
+    // per FR-015 — the pull layer (view_grade_pull) guarantees only one
+    // is enabled at a time, but the math is applied in series and the
+    // disabled stage is a no-op via its `enabled` flag. Main thread.
+    void setLut3D(const emp::Lut3d& lut);
+    void clearLut3D();
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -52,4 +62,5 @@ private:
     int m_frameHeight = 0;
     int m_rotation = 0;  // 0, 90, 180, 270
     emp::CdlParams m_cdl{};  // zero-init ⇒ enabled = 0 (passthrough)
+    emp::Lut3d m_lut{};      // default-init ⇒ enabled = 0 (passthrough)
 };

@@ -60,9 +60,12 @@ db:exec(string.format([[
         ('c_partial',  'p', 'c_partial',  't', 's', 's', 96,  96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
         ('c_unrepr',   'p', 'c_unrepr',   't', 's', 's', 192, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
         ('c_nograde',  'p', 'c_nograde',  't', 's', 's', 288, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
-        ('c_stale_p',  'p', 'c_stale_p',  't', 's', 's', 384, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
+        ('c_stale_p',  'p', 'c_stale_p',  't', 's', 's', 384, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+        ('c_unrepr_with_lut',  'p', 'c_uwl',  't', 's', 's', 480, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0),
+        ('c_primary_with_lut', 'p', 'c_pwl',  't', 's', 's', 576, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now,
-    now, now,  now, now,  now, now,  now, now,  now, now))
+    now, now,  now, now,  now, now,  now, now,  now, now,
+    now, now,  now, now))
 
 local CDL = {
     slope_r = 1.05, slope_g = 0.98, slope_b = 0.92,
@@ -86,39 +89,84 @@ ClipGrade.upsert("c_stale_p",
     { cdl = CDL, lut_ref = nil, fidelity = "primary",
       source = "resolve_readback", stale = 1, synced_at = now }, db)
 
--- ─── primary grade is returned for display ───────────────────────────
+-- ─── primary grade returns {cdl=...} stage table ─────────────────────
 do
-    local cdl = view_grade_pull.pull_for_clip("c_primary", db)
-    check("primary grade returns CDL table", type(cdl) == "table")
-    check("slope_r forwards",      cdl and cdl.slope_r == 1.05)
-    check("offset_b forwards",     cdl and cdl.offset_b == -0.02)
-    check("saturation forwards",   cdl and cdl.saturation == 0.85)
+    local stages = view_grade_pull.pull_for_clip("c_primary", db)
+    check("primary returns stage table",
+        type(stages) == "table" and type(stages.cdl) == "table")
+    check("primary has no LUT (c_primary seeded with lut_ref=nil)",
+        stages and stages.lut_ref == nil)
+    check("slope_r forwards",      stages.cdl and stages.cdl.slope_r == 1.05)
+    check("offset_b forwards",     stages.cdl and stages.cdl.offset_b == -0.02)
+    check("saturation forwards",   stages.cdl and stages.cdl.saturation == 0.85)
 end
 
--- ─── partial-fidelity grade does NOT light up CDL display ────────────
+-- ─── partial + lut_ref → display the bake (Piece 3 / FR-015) ─────────
 do
-    local cdl = view_grade_pull.pull_for_clip("c_partial", db)
-    check("partial fidelity → nil (ungraded display)", cdl == nil)
+    local stages = view_grade_pull.pull_for_clip("c_partial", db)
+    check("partial returns stage table",
+        type(stages) == "table")
+    check("partial has lut_ref",
+        stages and stages.lut_ref == "/tmp/jve/grade.cube")
+    check("partial has no CDL",
+        stages and stages.cdl == nil)
 end
 
--- ─── unrepresentable grade also returns nil ──────────────────────────
+-- ─── unrepresentable WITHOUT lut_ref → nil (bake failed) ─────────────
+-- Seed (line 83) sets c_unrepr with lut_ref=nil; the fidelity badge
+-- alone tells the user the grade exists but couldn't load.
 do
-    local cdl = view_grade_pull.pull_for_clip("c_unrepr", db)
-    check("unrepresentable fidelity → nil", cdl == nil)
+    local stages = view_grade_pull.pull_for_clip("c_unrepr", db)
+    check("unrepresentable without lut → nil", stages == nil)
 end
 
 -- ─── clip without a grade row → nil ──────────────────────────────────
 do
-    local cdl = view_grade_pull.pull_for_clip("c_nograde", db)
-    check("no grade row → nil", cdl == nil)
+    local stages = view_grade_pull.pull_for_clip("c_nograde", db)
+    check("no grade row → nil", stages == nil)
 end
 
 -- ─── stale=1 primary still applies (FR-013a) ─────────────────────────
 do
-    local cdl = view_grade_pull.pull_for_clip("c_stale_p", db)
-    check("stale primary still applies (FR-013a)", type(cdl) == "table")
+    local stages = view_grade_pull.pull_for_clip("c_stale_p", db)
+    check("stale primary still applies (FR-013a)",
+        type(stages) == "table" and type(stages.cdl) == "table")
     check("stale primary slope_g forwards",
-        cdl and cdl.slope_g == 0.98)
+        stages and stages.cdl and stages.cdl.slope_g == 0.98)
+end
+
+-- ─── unrepresentable WITH lut_ref → display the bake (Piece 3) ───────
+-- Same FR-015 rule as partial: the bake captures primaries + curves +
+-- CST/ACES; if it was emitted at all, display it (badge communicates
+-- the lossiness).
+ClipGrade.upsert("c_unrepr_with_lut",
+    { cdl = nil, lut_ref = "/tmp/jve/unrepr.cube",
+      fidelity = "unrepresentable",
+      source = "resolve_readback", stale = 0, synced_at = now }, db)
+do
+    local stages = view_grade_pull.pull_for_clip("c_unrepr_with_lut", db)
+    check("unrepresentable + lut → stage table",
+        type(stages) == "table")
+    check("unrepresentable + lut → lut_ref forwards",
+        stages and stages.lut_ref == "/tmp/jve/unrepr.cube")
+    check("unrepresentable + lut → no CDL",
+        stages and stages.cdl == nil)
+end
+
+-- ─── primary + item-LUT → BOTH stages forwarded (FR-016 stacking) ────
+-- Rare case: user had an item-level LUT bound to a primary-only graph.
+ClipGrade.upsert("c_primary_with_lut",
+    { cdl = CDL, lut_ref = "/tmp/jve/itemlut.cube", fidelity = "primary",
+      source = "resolve_readback", stale = 0, synced_at = now }, db)
+do
+    local stages = view_grade_pull.pull_for_clip("c_primary_with_lut", db)
+    check("primary + lut → stage table",
+        type(stages) == "table")
+    check("primary + lut → CDL forwards",
+        stages and type(stages.cdl) == "table"
+        and stages.cdl.slope_r == 1.05)
+    check("primary + lut → LUT forwards",
+        stages and stages.lut_ref == "/tmp/jve/itemlut.cube")
 end
 
 -- ─── nil/empty clip_id → nil (gap frame, no clip context) ────────────

@@ -11,6 +11,7 @@
 #include <editor_media_platform/emp_peak_file.h>
 #include <editor_media_platform/emp_peak_generator.h>
 #include <editor_media_platform/emp_cdl.h>
+#include <editor_media_platform/emp_lut3d.h>
 
 #include "../../editor_media_platform/src/impl/braw_decode.h"
 #include "gpu_video_surface.h"
@@ -1622,6 +1623,46 @@ static int lua_emp_surface_set_grade(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_SET_LUT3D(surface_widget, lut_path|nil)
+// Push the View-pulled .cube LUT file to the surface's LUT3D stage
+// (spec 023 Piece 3 / FR-016 — partial / unrepresentable fidelity
+// path). `lut_path` is an absolute path to a .cube file emitted by
+// SyncGradesFromResolve's per-clip bake (~/.jve/resolve_bake/<proj>/
+// <resolve_item_id>.cube). nil clears (surface displays ungraded).
+// Parser failures surface as luaL_error so the caller — the View's
+// pull layer — can decide UX (FR-015's badge: "LUT couldn't load").
+// Works with both GPUVideoSurface and CPUVideoSurface.
+static int lua_emp_surface_set_lut3d(lua_State* L) {
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L,
+        "EMP.SURFACE_SET_LUT3D: widget is null or destroyed");
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
+    if (!gpu_surface && !cpu_surface) {
+        return luaL_error(L,
+            "EMP.SURFACE_SET_LUT3D: widget is not a video surface (GPU or CPU)");
+    }
+
+    if (lua_isnil(L, 2)) {
+        if (gpu_surface) gpu_surface->clearLut3D();
+        if (cpu_surface) cpu_surface->clearLut3D();
+        return 0;
+    }
+
+    const char* path = luaL_checkstring(L, 2);
+    emp::Lut3d lut;
+    std::string err;
+    if (!emp::load_cube_file(path, lut, err)) {
+        return luaL_error(L,
+            "EMP.SURFACE_SET_LUT3D: load failed for %s: %s",
+            path, err.c_str());
+    }
+    if (gpu_surface) gpu_surface->setLut3D(lut);
+    if (cpu_surface) cpu_surface->setLut3D(lut);
+    return 0;
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -2591,6 +2632,8 @@ void register_emp_bindings(lua_State* L) {
     // Surface functions
     lua_pushcfunction(L, lua_emp_surface_set_frame);
     lua_setfield(L, -2, "SURFACE_SET_FRAME");
+    lua_pushcfunction(L, lua_emp_surface_set_lut3d);
+    lua_setfield(L, -2, "SURFACE_SET_LUT3D");
     lua_pushcfunction(L, lua_emp_surface_set_grade);
     lua_setfield(L, -2, "SURFACE_SET_GRADE");
     lua_pushcfunction(L, lua_emp_surface_set_rotation);

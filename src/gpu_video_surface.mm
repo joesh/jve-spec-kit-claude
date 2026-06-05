@@ -67,6 +67,19 @@ public:
     // CVMetalTextureRef for zero-copy non-planar HW paths (BGRA or packed YUV)
     CVMetalTextureRef textureNonPlanar = nullptr;
 
+    // LUT3D color stage (spec 023 Piece 3). 3D RGBA16F texture sampled
+    // with a linear sampler in the fragment shader; HW trilinear matches
+    // emp::apply_lut3d_rgb. lut3dSize is the grid edge length (33 for
+    // Resolve's 33PTCUBE bakes); 0 means no LUT loaded.
+    id<MTLTexture> lut3dTexture = nil;
+    id<MTLSamplerState> lut3dSampler = nil;
+    int lut3dSize = 0;
+    // 1×1×1 placeholder so Metal validation has a bound texture when no
+    // LUT is loaded (the shader's apply_lut3d returns its input verbatim
+    // via the enabled gate, so the placeholder is never sampled — it
+    // exists purely to satisfy resource binding).
+    id<MTLTexture> lut3dPlaceholder = nil;
+
     // Which pipeline is active for the current frame
     FrameMode frameMode = FrameMode::None;
 
@@ -82,6 +95,10 @@ public:
         yuvPipelineState = nil;
         bgraPipelineState = nil;
         packedYuvPipelineState = nil;
+        lut3dTexture = nil;
+        lut3dSampler = nil;
+        lut3dPlaceholder = nil;
+        lut3dSize = 0;
         commandQueue = nil;
         device = nil;
         metalLayer = nil;
@@ -125,6 +142,18 @@ struct CdlUniform {
     int enabled;
 };
 
+// LUT3D color stage gate (spec 023 Piece 3 / FR-016). The cube data is
+// uploaded as a separate texture3d (sampled with a linear sampler for
+// HW trilinear); this uniform carries only the enable flag. When
+// enabled == 0, apply_lut3d returns its input unchanged. The shader
+// assumes domain [0,1] — Resolve's ExportLUT emits the default domain;
+// GPUVideoSurface::setLut3D asserts on non-default DOMAIN_MIN/MAX to
+// keep the assumption honest (rule 1.14 — surface the assumption
+// break, do NOT silently mis-color the pixel).
+struct LutUniform {
+    int enabled;
+};
+
 // Mirrors emp::apply_cdl_rgb byte-for-byte semantically:
 //   sop  = max(in*slope+offset, 0)        -- negative-clamp before pow
 //   cdl  = sop^power
@@ -142,6 +171,21 @@ float3 apply_cdl(float3 rgb, constant CdlUniform& cdl) {
     return saturate(float3(luma) + (c - float3(luma)) * cdl.saturation);
 }
 
+// Mirrors emp::apply_lut3d_rgb semantically. HW trilinear via the
+// linear sampler matches the CPU 8-corner-lerp algorithm. Input is
+// expected in [0,1] (display-space Rec.709 — setLut3D asserts the
+// default DOMAIN_MIN/MAX). The sampler's clamp_to_edge address mode
+// handles out-of-range inputs by snapping to the nearest grid edge.
+// texture3d sample takes a 3D coord; .rgb is the LUT output.
+// When uniform.enabled == 0, returns rgb unchanged (passthrough).
+float3 apply_lut3d(float3 rgb,
+                   texture3d<float> lut3d,
+                   sampler lutSamp,
+                   constant LutUniform& lut) {
+    if (lut.enabled == 0) return rgb;
+    return lut3d.sample(lutSamp, saturate(rgb)).rgb;
+}
+
 vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
     VertexOut out;
     out.position = float4(in.position, 0.0, 1.0);
@@ -154,7 +198,10 @@ vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> texY [[texture(0)]],
                                texture2d<float> texUV [[texture(1)]],
-                               constant CdlUniform& cdl [[buffer(0)]]) {
+                               texture3d<float> lut3d [[texture(2)]],
+                               sampler lutSamp [[sampler(0)]],
+                               constant CdlUniform& cdl [[buffer(0)]],
+                               constant LutUniform& lut [[buffer(1)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
 
     float y = texY.sample(s, in.texCoord).r;
@@ -173,20 +220,29 @@ fragment float4 fragmentShader(VertexOut in [[stage_in]],
 
     // Studio-range YCbCr→RGB overshoots [0,1] at boundary luma/chroma values.
     // Hand the raw triple to apply_cdl so slope/offset can pull super-white
-    // and sub-black back into range; saturate once on output so passthrough
-    // (enabled==0) still clamps for 8-bit display storage.
+    // and sub-black back into range. Then apply LUT3D (passthrough when
+    // either stage's enabled flag is 0 — view_grade_pull guarantees at
+    // most one is on per clip per FR-015's closed-set fidelity).
+    // saturate once on output so 8-bit display storage is clamped.
     float3 rgb = float3(r, g, b);
-    return float4(saturate(apply_cdl(rgb, cdl)), 1.0);
+    rgb = apply_cdl(rgb, cdl);
+    rgb = apply_lut3d(rgb, lut3d, lutSamp, lut);
+    return float4(saturate(rgb), 1.0);
 }
 
 // BGRA passthrough for sw-decoded frames (PNG, JPEG, etc.)
 // MTLPixelFormatBGRA8Unorm swizzles on read, so sampling returns RGBA directly.
 fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
                                    texture2d<float> tex [[texture(0)]],
-                                   constant CdlUniform& cdl [[buffer(0)]]) {
+                                   texture3d<float> lut3d [[texture(2)]],
+                                   sampler lutSamp [[sampler(0)]],
+                                   constant CdlUniform& cdl [[buffer(0)]],
+                                   constant LutUniform& lut [[buffer(1)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     float4 rgba = tex.sample(s, in.texCoord);
-    return float4(apply_cdl(rgba.rgb, cdl), rgba.a);
+    float3 rgb = apply_cdl(rgba.rgb, cdl);
+    rgb = apply_lut3d(rgb, lut3d, lutSamp, lut);
+    return float4(saturate(rgb), rgba.a);
 }
 
 // Packed 4:4:4:4 AYUV (y416 from ProRes 4444 with alpha).
@@ -195,7 +251,10 @@ fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
 // Full-range BT.709 conversion (ProRes is full-range).
 fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
                                         texture2d<float> tex [[texture(0)]],
-                                        constant CdlUniform& cdl [[buffer(0)]]) {
+                                        texture3d<float> lut3d [[texture(2)]],
+                                        sampler lutSamp [[sampler(0)]],
+                                        constant CdlUniform& cdl [[buffer(0)]],
+                                        constant LutUniform& lut [[buffer(1)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     float4 ayuv = tex.sample(s, in.texCoord);
 
@@ -206,14 +265,16 @@ fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
 
     // BT.709 full-range YCbCr to RGB. See studio-range note in
     // fragmentShader: hand the raw triple to apply_cdl so slope/offset has
-    // headroom; saturate once on output so passthrough still clamps for
-    // 8-bit display storage.
+    // headroom; then apply LUT3D (passthrough when its enabled is 0).
+    // saturate once on output so 8-bit display storage is clamped.
     float r = y + 1.5748 * cr;
     float g = y - 0.1873 * cb - 0.4681 * cr;
     float b = y + 1.8556 * cb;
 
     float3 rgb = float3(r, g, b);
-    return float4(saturate(apply_cdl(rgb, cdl)), alpha);
+    rgb = apply_cdl(rgb, cdl);
+    rgb = apply_lut3d(rgb, lut3d, lutSamp, lut);
+    return float4(saturate(rgb), alpha);
 }
 )";
 
@@ -339,6 +400,34 @@ void GPUVideoSurface::initMetal() {
         };
         m_impl->vertexBuffer = [m_impl->device newBufferWithBytes:vertices
             length:sizeof(vertices) options:MTLResourceStorageModeShared];
+
+        // LUT3D sampler: linear min/mag, clamp_to_edge address (out-of-
+        // domain inputs snap to the nearest grid edge — matches the CPU
+        // implementation's saturate-then-sample contract).
+        MTLSamplerDescriptor* lutSampDesc = [MTLSamplerDescriptor new];
+        lutSampDesc.minFilter = MTLSamplerMinMagFilterLinear;
+        lutSampDesc.magFilter = MTLSamplerMinMagFilterLinear;
+        lutSampDesc.mipFilter = MTLSamplerMipFilterNotMipmapped;
+        lutSampDesc.sAddressMode = MTLSamplerAddressModeClampToEdge;
+        lutSampDesc.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        lutSampDesc.rAddressMode = MTLSamplerAddressModeClampToEdge;
+        m_impl->lut3dSampler =
+            [m_impl->device newSamplerStateWithDescriptor:lutSampDesc];
+        JVE_ASSERT(m_impl->lut3dSampler,
+            "GPUVideoSurface::initMetal: LUT3D sampler creation failed");
+
+        // 1×1×1 placeholder 3D texture (RGBA16F). Bound when no LUT is
+        // loaded so Metal validation passes; never sampled because the
+        // shader's lut.enabled gate skips the sample call.
+        MTLTextureDescriptor* lutPhDesc = [MTLTextureDescriptor new];
+        lutPhDesc.textureType = MTLTextureType3D;
+        lutPhDesc.pixelFormat = MTLPixelFormatRGBA16Float;
+        lutPhDesc.width = 1; lutPhDesc.height = 1; lutPhDesc.depth = 1;
+        lutPhDesc.usage = MTLTextureUsageShaderRead;
+        m_impl->lut3dPlaceholder =
+            [m_impl->device newTextureWithDescriptor:lutPhDesc];
+        JVE_ASSERT(m_impl->lut3dPlaceholder,
+            "GPUVideoSurface::initMetal: LUT3D placeholder texture failed");
 
         m_initialized = true;
         JVE_LOG_EVENT(Video, "GPUVideoSurface: Metal initialized");
@@ -769,6 +858,88 @@ void GPUVideoSurface::clearGrade() {
     m_cdl = emp::CdlParams{};  // zero-init ⇒ enabled = 0 (passthrough)
 }
 
+void GPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::setLut3D: must be on main thread");
+    JVE_ASSERT(m_initialized,
+        "GPUVideoSurface::setLut3D: Metal not yet initialized");
+    JVE_ASSERT(lut.enabled == 1,
+        "GPUVideoSurface::setLut3D: caller passed an unloaded lut "
+        "(enabled==0) — use clearLut3D() to disable");
+    JVE_ASSERT(lut.size >= 2 && lut.size <= 256,
+        "GPUVideoSurface::setLut3D: lut.size out of [2,256]");
+    JVE_ASSERT(static_cast<size_t>(lut.size) * lut.size * lut.size * 3
+                == lut.data.size(),
+        "GPUVideoSurface::setLut3D: lut.data size mismatches grid");
+    // Domain assumption: shader samples saturate(rgb) ∈ [0,1] against
+    // the cube, so non-default domains would silently mis-map colors.
+    // Surface the assumption break (rule 1.14 / 2.32).
+    JVE_ASSERT(lut.domain_min[0] == 0.0f && lut.domain_min[1] == 0.0f
+                && lut.domain_min[2] == 0.0f,
+        "GPUVideoSurface::setLut3D: non-default DOMAIN_MIN not "
+        "supported (V1 scope: display-space LUTs only)");
+    JVE_ASSERT(lut.domain_max[0] == 1.0f && lut.domain_max[1] == 1.0f
+                && lut.domain_max[2] == 1.0f,
+        "GPUVideoSurface::setLut3D: non-default DOMAIN_MAX not "
+        "supported (V1 scope: display-space LUTs only)");
+
+    @autoreleasepool {
+        // Reuse the existing 3D texture if its size matches — same
+        // allocation-churn rationale as the bgraTexture reuse path
+        // (setFrameSW). Switching grade or even reloading the same LUT
+        // is rare relative to per-frame draws, but allocations on the
+        // main thread block UI.
+        const int N = lut.size;
+        if (!m_impl->lut3dTexture || m_impl->lut3dSize != N) {
+            MTLTextureDescriptor* desc = [MTLTextureDescriptor new];
+            desc.textureType = MTLTextureType3D;
+            desc.pixelFormat = MTLPixelFormatRGBA16Float;
+            desc.width = N; desc.height = N; desc.depth = N;
+            desc.usage = MTLTextureUsageShaderRead;
+            m_impl->lut3dTexture =
+                [m_impl->device newTextureWithDescriptor:desc];
+            JVE_ASSERT(m_impl->lut3dTexture,
+                "GPUVideoSurface::setLut3D: 3D texture creation failed");
+            m_impl->lut3dSize = N;
+        }
+
+        // Convert float RGB triples → half-float RGBA16 rows. Metal's
+        // RGBA16F upload expects 4 channels per texel; we set A=1.0
+        // (unused — the shader samples .rgb).
+        // Use __fp16 (Apple half) for the conversion — Metal-defined
+        // type, no extra dependency. Allocation is per-setLut3D, not
+        // per-frame, so it doesn't violate the hot-loop alloc rule.
+        const size_t texel_count = static_cast<size_t>(N) * N * N;
+        std::vector<__fp16> half_rgba(texel_count * 4);
+        for (size_t i = 0; i < texel_count; ++i) {
+            half_rgba[i * 4 + 0] = static_cast<__fp16>(lut.data[i * 3 + 0]);
+            half_rgba[i * 4 + 1] = static_cast<__fp16>(lut.data[i * 3 + 1]);
+            half_rgba[i * 4 + 2] = static_cast<__fp16>(lut.data[i * 3 + 2]);
+            half_rgba[i * 4 + 3] = static_cast<__fp16>(1.0f);
+        }
+        const size_t bytes_per_row = N * 4 * sizeof(__fp16);
+        const size_t bytes_per_slice = N * bytes_per_row;
+        MTLRegion region = MTLRegionMake3D(0, 0, 0, N, N, N);
+        [m_impl->lut3dTexture replaceRegion:region
+            mipmapLevel:0 slice:0
+            withBytes:half_rgba.data()
+            bytesPerRow:bytes_per_row
+            bytesPerImage:bytes_per_slice];
+    }
+    m_lut_enabled = 1;
+    m_lut_size = lut.size;
+    // No re-render here; view contract: push LUT BEFORE setFrame.
+}
+
+void GPUVideoSurface::clearLut3D() {
+    JVE_ASSERT([NSThread isMainThread],
+        "GPUVideoSurface::clearLut3D: must be on main thread");
+    m_lut_enabled = 0;
+    m_lut_size = 0;
+    // Keep lut3dTexture around for reuse on a future setLut3D of the
+    // same size — freeing it would force an allocation on next set.
+}
+
 void GPUVideoSurface::renderTexture() {
     if (!m_initialized) return;
     // Guard against 0x0 drawable size (widget not yet laid out by window manager).
@@ -857,6 +1028,30 @@ void GPUVideoSurface::renderTexture() {
             // is 44 bytes. apply_cdl is a no-op when enabled==0, so
             // ungraded surfaces are bit-identical to pre-T032 output.
             [encoder setFragmentBytes:&m_cdl length:sizeof(m_cdl) atIndex:0];
+
+            // LUT3D color stage (Piece 3 of spec 023 / FR-016). texture(2)
+            // + sampler(0) are declared in every shader. Metal validation
+            // requires every declared resource be bound, so when no LUT
+            // is loaded we bind a 1×1×1 placeholder texture and pass
+            // enabled=0 — apply_lut3d returns its input unchanged.
+            id<MTLTexture> bound_lut = m_impl->lut3dTexture
+                ? m_impl->lut3dTexture : m_impl->lut3dPlaceholder;
+            JVE_ASSERT(bound_lut,
+                "GPUVideoSurface::renderTexture: lut3d placeholder "
+                "missing (initMetal didn't create it?)");
+            [encoder setFragmentTexture:bound_lut atIndex:2];
+            [encoder setFragmentSamplerState:m_impl->lut3dSampler
+                                     atIndex:0];
+            // C++ mirror of the Metal-side LutUniform struct. Layout
+            // MUST match — a single int32 `enabled` (4 bytes). Kept
+            // local to the draw call since it's 4 bytes and the
+            // setFragmentBytes path is zero-alloc per Apple docs.
+            struct LutUniformCpp { int32_t enabled; };
+            LutUniformCpp lut_uniform{};
+            lut_uniform.enabled = m_lut_enabled;
+            [encoder setFragmentBytes:&lut_uniform
+                               length:sizeof(lut_uniform)
+                              atIndex:1];
 
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }

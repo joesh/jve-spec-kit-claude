@@ -989,10 +989,16 @@ function SequenceMonitor:_apply_clip_grade(clip_id)
     -- view_grade_pull is a thin wrapper over the model; the model owns
     -- SQL access (SQL-isolation policy in core/database.lua). The view
     -- does not touch the connection.
-    local cdl = view_grade_pull.pull_for_clip(clip_id)
+    local stages = view_grade_pull.pull_for_clip(clip_id)
+    local cdl     = stages and stages.cdl     or nil
+    local lut_ref = stages and stages.lut_ref or nil
+    -- FR-016: apply CDL, then LUT if present. Either stage is a no-op
+    -- when its arg is nil (SURFACE_SET_* with nil clears the stage).
     qt_constants.EMP.SURFACE_SET_GRADE(self._video_surface, cdl)
+    qt_constants.EMP.SURFACE_SET_LUT3D(self._video_surface, lut_ref)
     if self._frame_mirror then
         qt_constants.EMP.SURFACE_SET_GRADE(self._frame_mirror, cdl)
+        qt_constants.EMP.SURFACE_SET_LUT3D(self._frame_mirror, lut_ref)
     end
 end
 
