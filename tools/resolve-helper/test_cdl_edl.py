@@ -397,13 +397,33 @@ class ClassifyFidelityTests(unittest.TestCase):
                 cdl_present=True),
             "unrepresentable")
 
-    def test_cdl_absent_raises(self):
-        # CDL absent for a known item is a Resolve API anomaly.
-        with self.assertRaises(CdlEdlParseError) as cm:
+    def test_cdl_absent_no_tools_no_lut_returns_none(self):
+        # Ungraded clip: no CDL block AND no LUT AND no non-CDL tools.
+        # Empirically observed on the Anamnesis sequence (frame 92682),
+        # disproved the "Resolve emits CDL for every clip" assumption.
+        self.assertEqual(
             classify_fidelity(
                 any_non_cdl_tools=False, item_lut_ref=None,
-                cdl_present=False)
-        self.assertIn("resolve_api_error", str(cm.exception))
+                cdl_present=False),
+            "none")
+
+    def test_cdl_absent_lut_only_returns_partial(self):
+        # LUT-only clip: no CDL but a baked LUT IS the grade carrier.
+        self.assertEqual(
+            classify_fidelity(
+                any_non_cdl_tools=False,
+                item_lut_ref="/path/to/lut.cube",
+                cdl_present=False),
+            "partial")
+
+    def test_cdl_absent_non_cdl_tools_no_lut_returns_unrepresentable(self):
+        # Non-CDL graph (curves/qualifier/OFX) without LUT carrier —
+        # nothing CDL+LUT can honestly represent.
+        self.assertEqual(
+            classify_fidelity(
+                any_non_cdl_tools=True, item_lut_ref=None,
+                cdl_present=False),
+            "unrepresentable")
 
     def test_non_bool_any_tools_raises(self):
         with self.assertRaises(CdlEdlParseError):

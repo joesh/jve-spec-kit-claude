@@ -54,6 +54,24 @@ end
 -- a Lua-side join through `identity_ledger` (populated by
 -- ConnectToResolveProject's positional or marker-channel match per
 -- FR-011c). See helper-protocol.md §read_grades.
+--
+-- fidelity closed set: primary | partial | unrepresentable | none.
+-- "none" — Resolve item is PRESENT but observed to have no CDL block
+-- AND no LUT AND no non-CDL tools. Distinct from FR-013a item-absent
+-- (row omitted from response). Apply DROPS any prior clip_grade row
+-- for the matched clip (FR-014 re-sync overwrite).
+local FIDELITIES = {
+    primary = true, partial = true,
+    unrepresentable = true, none = true,
+}
+
+-- Ledger grade_fingerprint sentinel for fidelity=="none". Distinct from
+-- nil (which would preserve the existing fingerprint per ledger.upsert's
+-- omit-means-preserve contract) AND distinct from any CDL fingerprint
+-- (which is a hex digest, never "<…>" shaped). Drift detection compares
+-- stored vs current fingerprint; "<none>" lets a removed-then-re-added
+-- Resolve grade trip the drift bit.
+local UNGRADED_FINGERPRINT = "<ungraded>"
 local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.grades) == "table",
         "sync_grades.apply: response.grades array required")
@@ -63,9 +81,22 @@ local function assert_response_shape(response)
             string.format(
                 "sync_grades.apply: grade[%d] missing resolve_item_id",
                 i))
-        assert(type(row.fidelity) == "string",
-            string.format("sync_grades.apply: grade[%d] missing fidelity",
-                i))
+        assert(FIDELITIES[row.fidelity], string.format(
+            "sync_grades.apply: grade[%d] fidelity %q not in closed "
+            .. "set {primary, partial, unrepresentable, none}",
+            i, tostring(row.fidelity)))
+        -- cdl is gated on fidelity=="primary" (FR-015 honest, never
+        -- approximated). Reject malformed combinations at the boundary.
+        if row.fidelity == "primary" then
+            assert(type(row.cdl) == "table", string.format(
+                "sync_grades.apply: grade[%d] fidelity=primary "
+                .. "requires cdl table", i))
+        else
+            assert(row.cdl == nil, string.format(
+                "sync_grades.apply: grade[%d] fidelity=%q must not "
+                .. "carry cdl (FR-015 honest downgrade)",
+                i, row.fidelity))
+        end
     end
 end
 
@@ -164,21 +195,50 @@ function M.apply(response, sequence_id, db, synced_at)
                 clip_id = clip_id,
                 before  = before,  -- nil if clip had no grade
             }
-            local new_grade = new_grade_from_response_row(row, synced_at)
-            ClipGrade.upsert(clip_id, new_grade, db)
 
-            -- Update ledger fingerprint so subsequent SyncGrades can detect
-            -- whether Resolve drifted vs JVE-local edits (FR-025).
-            local existing_link = identity_ledger.load(clip_id, db)
-            assert(existing_link, string.format(
-                "sync_grades.apply: lookup_clip_id %q→%q but load(%q) "
-                .. "returned nil — identity_ledger consistency violation",
-                row.resolve_item_id, clip_id, clip_id))
-            identity_ledger.upsert(clip_id, {
-                resolve_item_id   = existing_link.resolve_item_id,
-                grade_fingerprint = ClipGrade.fingerprint(new_grade),
-                edit_fingerprint  = existing_link.edit_fingerprint,
-            }, db)
+            if row.fidelity == "none" then
+                -- Resolve item present + observed ungraded.
+                -- FR-014 re-sync overwrite: drop any prior grade row.
+                -- restore() handles before==nil (no-op) and
+                -- before~=nil (re-upsert) symmetrically. Clear ledger
+                -- grade_fingerprint so the next sync sees the
+                -- baseline change (Resolve grade went from X to none).
+                if before ~= nil then
+                    delete_grade(clip_id, db)
+                end
+                local existing_link = identity_ledger.load(clip_id, db)
+                assert(existing_link, string.format(
+                    "sync_grades.apply: lookup_clip_id %q→%q but "
+                    .. "load(%q) returned nil — identity_ledger "
+                    .. "consistency violation",
+                    row.resolve_item_id, clip_id, clip_id))
+                -- identity_ledger.upsert preserves existing
+                -- grade_fingerprint when the key is omitted; passing
+                -- "<none>" explicitly records the ungraded baseline
+                -- so the next sync's drift detection is right.
+                identity_ledger.upsert(clip_id, {
+                    resolve_item_id   = existing_link.resolve_item_id,
+                    grade_fingerprint = UNGRADED_FINGERPRINT,
+                    edit_fingerprint  = existing_link.edit_fingerprint,
+                }, db)
+            else
+                local new_grade = new_grade_from_response_row(row, synced_at)
+                ClipGrade.upsert(clip_id, new_grade, db)
+
+                -- Update ledger fingerprint so subsequent SyncGrades can
+                -- detect whether Resolve drifted vs JVE-local edits (FR-025).
+                local existing_link = identity_ledger.load(clip_id, db)
+                assert(existing_link, string.format(
+                    "sync_grades.apply: lookup_clip_id %q→%q but "
+                    .. "load(%q) returned nil — identity_ledger "
+                    .. "consistency violation",
+                    row.resolve_item_id, clip_id, clip_id))
+                identity_ledger.upsert(clip_id, {
+                    resolve_item_id   = existing_link.resolve_item_id,
+                    grade_fingerprint = ClipGrade.fingerprint(new_grade),
+                    edit_fingerprint  = existing_link.edit_fingerprint,
+                }, db)
+            end
         end
     end
 

@@ -235,20 +235,30 @@ def classify_fidelity(any_non_cdl_tools, item_lut_ref, cdl_present):
       cdl_present: True if the EDL+CDL export emitted an
         `*ASC_SOP`/`*ASC_SAT` block for this item.
 
-    Returns one of `"primary" | "partial" | "unrepresentable"`.
-    `cdl_present == False` is a Resolve anomaly (the API emits CDL for
-    every clip) — caller MUST handle that branch and surface
-    `resolve_api_error` rather than calling this with `cdl_present=False`.
+    Returns one of `"primary" | "partial" | "unrepresentable" | "none"`.
+
+    `cdl_present` is a real signal, not an anomaly: ungraded clips and
+    LUT-only / non-CDL-only graphs do NOT produce ASC_SOP/ASC_SAT in
+    the EDL+CDL export (empirically disproved on the Anamnesis
+    sequence, 2026-06-04). The earlier "Resolve emits CDL for every
+    clip" assumption was wrong.
 
     Semantics:
-      - only CDL (no extra tools, no LUT) → primary.
-      - CDL + LUT (no extra tools) → partial — the LUT carrier is the
-        partial representation; CDL alone misrepresents the look.
-      - CDL + non-CDL tools + LUT carrier → partial — same shape; the
-        LUT bake captures what CDL alone cannot.
-      - CDL + non-CDL tools + NO LUT carrier → unrepresentable — the
-        Resolve grade exceeds what CDL+LUT can represent and we have
-        no honest carrier to ship.
+      cdl_present == True:
+        - only CDL (no extra tools, no LUT) → primary.
+        - CDL + LUT (no extra tools) → partial — the LUT carrier is
+          the partial representation; CDL alone misrepresents the look.
+        - CDL + non-CDL tools + LUT carrier → partial — same shape;
+          the LUT bake captures what CDL alone cannot.
+        - CDL + non-CDL tools + NO LUT carrier → unrepresentable —
+          the Resolve grade exceeds what CDL+LUT can represent and we
+          have no honest carrier to ship.
+      cdl_present == False:
+        - no LUT, no non-CDL tools → none — clip is genuinely
+          ungraded. Distinct from "Resolve item absent" (FR-013a),
+          which the caller models by OMITTING the row entirely.
+        - LUT present → partial — LUT alone represents the grade.
+        - non-CDL tools present, no LUT → unrepresentable.
     """
     if not isinstance(any_non_cdl_tools, bool):
         raise CdlEdlParseError(
@@ -263,17 +273,17 @@ def classify_fidelity(any_non_cdl_tools, item_lut_ref, cdl_present):
         raise CdlEdlParseError(
             f"classify_fidelity: item_lut_ref must be None or non-empty "
             f"string, got {item_lut_ref!r}")
-    if not cdl_present:
-        raise CdlEdlParseError(
-            "classify_fidelity: cdl_present=False is a Resolve anomaly; "
-            "caller must surface resolve_api_error before calling "
-            "classify_fidelity (the EDL+CDL export emits CDL for every "
-            "clip)")
+    if cdl_present:
+        if not any_non_cdl_tools and item_lut_ref is None:
+            return "primary"
+        if item_lut_ref is not None:
+            return "partial"
+        return "unrepresentable"
+    # cdl_present == False — Resolve item observed without a CDL block.
     if not any_non_cdl_tools and item_lut_ref is None:
-        return "primary"
+        return "none"
     if item_lut_ref is not None:
         return "partial"
-    # any_non_cdl_tools=True, item_lut_ref=None — exceeds CDL/LUT.
     return "unrepresentable"
 
 

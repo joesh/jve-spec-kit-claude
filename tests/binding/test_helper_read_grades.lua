@@ -46,6 +46,7 @@ local FIDELITY_VALUES = {
     primary         = true,
     partial         = true,
     unrepresentable = true,
+    none            = true,  -- ungraded clip observed; no CDL/LUT/tools.
 }
 
 local function assert_rgb_triple(t, label)

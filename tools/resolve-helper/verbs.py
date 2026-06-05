@@ -1073,13 +1073,13 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             if not isinstance(record_start, int):
                 return _error(envelope_id, "resolve_api_error",
                     f"item.GetStart() non-int: {record_start!r}")
+            # cdl_entry may be None — ungraded clips and LUT-only /
+            # non-CDL-only graphs produce no ASC_SOP/ASC_SAT in the
+            # EDL+CDL export. classify_fidelity handles the
+            # cdl_present=False branch and returns one of
+            # {"none", "partial", "unrepresentable"} accordingly
+            # (helper-protocol.md §read_grades, spec.md FR-015).
             cdl_entry = cdl_by_rec_in.get(record_start)
-            if cdl_entry is None:
-                return _error(envelope_id, "resolve_api_error",
-                    f"item resolve_item_id={resolve_item_id!r} at "
-                    f"record_start frame {record_start} has no CDL "
-                    "block in the EDL export — Resolve emits CDL for "
-                    "every clip, so a missing block is an API anomaly")
             try:
                 item_lut = _item_lut_ref(item)
                 any_tools = _any_non_cdl_tools(item)
@@ -1089,7 +1089,7 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                 fidelity = classify_fidelity(
                     any_non_cdl_tools=any_tools,
                     item_lut_ref=item_lut,
-                    cdl_present=True)
+                    cdl_present=(cdl_entry is not None))
             except CdlEdlParseError as exc:
                 return _error(envelope_id, "resolve_api_error", str(exc))
             row = {"resolve_item_id": resolve_item_id, "fidelity": fidelity}
