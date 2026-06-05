@@ -52,6 +52,9 @@ public:
     // disabled stage is a no-op via its `enabled` flag. Main thread.
     void setLut3D(const emp::Lut3d& lut);
     void clearLut3D();
+    // Grid edge length of the currently-loaded LUT (0 when disabled).
+    // Symmetric with GPUVideoSurface::lut3dSize().
+    int lut3dSize() const { return m_lut.enabled ? m_lut.size : 0; }
 
 protected:
     void paintEvent(QPaintEvent* event) override;

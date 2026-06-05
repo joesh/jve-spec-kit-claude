@@ -1663,6 +1663,32 @@ static int lua_emp_surface_set_lut3d(lua_State* L) {
     return 0;
 }
 
+// EMP.SURFACE_LUT3D_SIZE(surface_widget) → integer
+// Test/inspection getter: returns the grid edge length of the currently
+// loaded LUT (0 if none). Used by integration tests to assert that
+// SURFACE_SET_LUT3D successfully uploaded a cube. Works only on GPU
+// surface today (CPUVideoSurface has no equivalent — it owns the
+// Lut3d struct directly; tests on CPU path inspect via the stage table
+// at the pull layer).
+static int lua_emp_surface_lut3d_size(lua_State* L) {
+    QWidget* qwidget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    if (!qwidget) return luaL_error(L,
+        "EMP.SURFACE_LUT3D_SIZE: widget is null or destroyed");
+
+    GPUVideoSurface* gpu_surface = qobject_cast<GPUVideoSurface*>(qwidget);
+    CPUVideoSurface* cpu_surface = qobject_cast<CPUVideoSurface*>(qwidget);
+    if (gpu_surface) {
+        lua_pushinteger(L, gpu_surface->lut3dSize());
+        return 1;
+    }
+    if (cpu_surface) {
+        lua_pushinteger(L, cpu_surface->lut3dSize());
+        return 1;
+    }
+    return luaL_error(L,
+        "EMP.SURFACE_LUT3D_SIZE: widget is not a video surface (GPU or CPU)");
+}
+
 // EMP.SURFACE_SET_FRAME(surface_widget, frame|nil)
 // Works with both GPUVideoSurface and CPUVideoSurface
 static int lua_emp_surface_set_frame(lua_State* L) {
@@ -2634,6 +2660,8 @@ void register_emp_bindings(lua_State* L) {
     lua_setfield(L, -2, "SURFACE_SET_FRAME");
     lua_pushcfunction(L, lua_emp_surface_set_lut3d);
     lua_setfield(L, -2, "SURFACE_SET_LUT3D");
+    lua_pushcfunction(L, lua_emp_surface_lut3d_size);
+    lua_setfield(L, -2, "SURFACE_LUT3D_SIZE");
     lua_pushcfunction(L, lua_emp_surface_set_grade);
     lua_setfield(L, -2, "SURFACE_SET_GRADE");
     lua_pushcfunction(L, lua_emp_surface_set_rotation);
