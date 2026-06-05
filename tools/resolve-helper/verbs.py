@@ -1119,6 +1119,27 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             return _error(envelope_id, "bad_request",
                 f"bake_lut_dir {bake_lut_dir!r} not creatable: {exc}")
 
+    # ExportLUT requires the Color page to be the active Resolve page —
+    # empirically confirmed by t033_probe_export_lut.py (without
+    # OpenPage("color") every call returns False; with it, items with
+    # real node graphs bake successfully). The API doesn't document
+    # this prerequisite. We switch only when a bake is actually
+    # requested, and restore the user's prior page afterwards so the
+    # observed Resolve state is unchanged when read_grades returns.
+    prior_page = None
+    if bake_lut_dir is not None:
+        try:
+            prior_page = resolve.GetCurrentPage()
+        except Exception as exc:
+            sys.stderr.write(
+                f"[read_grades] resolve.GetCurrentPage raised: {exc}\n")
+        try:
+            resolve.OpenPage("color")
+        except Exception as exc:
+            sys.stderr.write(
+                f"[read_grades] resolve.OpenPage('color') raised: "
+                f"{exc} — bakes will likely fail\n")
+
     timeline, err = _require_current_timeline(project, envelope_id)
     if err is not None:
         return err
@@ -1202,10 +1223,23 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             elif item_lut is not None:
                 row["lut"] = {"ref": item_lut}
             grades.append(row)
+        response = _ok(envelope_id, {"grades": grades})
     except RuntimeError as exc:
-        return _error(envelope_id, "resolve_api_error", str(exc))
+        response = _error(envelope_id, "resolve_api_error", str(exc))
+    finally:
+        # Restore the user's Resolve page if we switched it. Done in
+        # finally so success, RuntimeError, and any future early-return
+        # all leave Resolve in the page the user invoked us from.
+        if bake_lut_dir is not None and prior_page is not None \
+                and prior_page != "color":
+            try:
+                resolve.OpenPage(prior_page)
+            except Exception as exc:
+                sys.stderr.write(
+                    f"[read_grades] OpenPage({prior_page!r}) restore "
+                    f"raised: {exc}\n")
 
-    return _ok(envelope_id, {"grades": grades})
+    return response
 
 
 VERB_TABLE = {
