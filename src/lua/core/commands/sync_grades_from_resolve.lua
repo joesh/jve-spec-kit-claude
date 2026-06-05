@@ -100,9 +100,49 @@ local function assert_response_shape(response)
     end
 end
 
-local function new_grade_from_response_row(row, synced_at)
+-- Translate the helper-protocol §read_grades WIRE CDL shape
+--   { slope:[r,g,b], offset:[r,g,b], power:[r,g,b], sat: float }
+-- into JVE's clip_grade MODEL shape
+--   { slope_r, slope_g, slope_b, offset_r, offset_g, offset_b,
+--     power_r, power_g, power_b, saturation }
+-- This IS the wire/model boundary; concentrating the rename in one
+-- function keeps the model layer ignorant of the wire and vice versa
+-- (FR-021 cleanliness). Asserts every triple has 3 numbers and sat is
+-- a number — malformed input fails at the boundary (rule 1.14).
+local function cdl_wire_to_model(wire, row_index)
+    assert(type(wire) == "table", string.format(
+        "sync_grades.apply: grade[%d].cdl must be table, got %s",
+        row_index, type(wire)))
+    local function check_triple(name)
+        local t = wire[name]
+        assert(type(t) == "table" and #t == 3, string.format(
+            "sync_grades.apply: grade[%d].cdl.%s must be 3-element "
+            .. "array, got %s", row_index, name, type(t)))
+        for i = 1, 3 do
+            assert(type(t[i]) == "number", string.format(
+                "sync_grades.apply: grade[%d].cdl.%s[%d] must be number, "
+                .. "got %s", row_index, name, i, type(t[i])))
+        end
+        return t
+    end
+    local slope  = check_triple("slope")
+    local offset = check_triple("offset")
+    local power  = check_triple("power")
+    assert(type(wire.sat) == "number", string.format(
+        "sync_grades.apply: grade[%d].cdl.sat must be number, got %s",
+        row_index, type(wire.sat)))
     return {
-        cdl       = row.cdl,           -- may be nil (non-primary fidelity)
+        slope_r  = slope[1],  slope_g  = slope[2],  slope_b  = slope[3],
+        offset_r = offset[1], offset_g = offset[2], offset_b = offset[3],
+        power_r  = power[1],  power_g  = power[2],  power_b  = power[3],
+        saturation = wire.sat,
+    }
+end
+
+local function new_grade_from_response_row(row, row_index, synced_at)
+    return {
+        cdl       = row.cdl and cdl_wire_to_model(row.cdl, row_index)
+                            or nil,
         lut_ref   = row.lut and row.lut.ref,
         fidelity  = row.fidelity,
         source    = "resolve",
@@ -174,7 +214,7 @@ function M.apply(response, sequence_id, db, synced_at)
         unmatched_resolve_items = {},
     }
     local seen_clip_ids = {}
-    for _, row in ipairs(response.grades) do
+    for i, row in ipairs(response.grades) do
         -- Ledger-driven attribution (FR-021): helper emits its native
         -- resolve_item_id; JVE owns the join to clip.id. Connect must
         -- have populated the ledger first (positional per FR-011c, or
@@ -222,7 +262,7 @@ function M.apply(response, sequence_id, db, synced_at)
                     edit_fingerprint  = existing_link.edit_fingerprint,
                 }, db)
             else
-                local new_grade = new_grade_from_response_row(row, synced_at)
+                local new_grade = new_grade_from_response_row(row, i, synced_at)
                 ClipGrade.upsert(clip_id, new_grade, db)
 
                 -- Update ledger fingerprint so subsequent SyncGrades can

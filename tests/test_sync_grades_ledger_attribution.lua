@@ -100,11 +100,12 @@ local CDL_B = {
     saturation = 1.12,
 }
 
+local to_wire = require("test_helpers_grade_wire").cdl_model_to_wire
 local response = {
     grades = {
-        { resolve_item_id = "live_uid_111", cdl = CDL_A,
+        { resolve_item_id = "live_uid_111", cdl = to_wire(CDL_A),
           fidelity = "primary", lut = nil },
-        { resolve_item_id = "live_uid_222", cdl = CDL_B,
+        { resolve_item_id = "live_uid_222", cdl = to_wire(CDL_B),
           fidelity = "primary", lut = nil },
     },
 }
@@ -143,9 +144,9 @@ check("restore removes clip B grade row (was ungraded before)",
 -- side after import; reconnect to pick it up").
 local response_with_unknown = {
     grades = {
-        { resolve_item_id = "live_uid_111", cdl = CDL_A,
+        { resolve_item_id = "live_uid_111", cdl = to_wire(CDL_A),
           fidelity = "primary", lut = nil },
-        { resolve_item_id = "live_uid_999", cdl = CDL_B,  -- no ledger entry
+        { resolve_item_id = "live_uid_999", cdl = to_wire(CDL_B),  -- no ledger entry
           fidelity = "primary", lut = nil },
     },
 }

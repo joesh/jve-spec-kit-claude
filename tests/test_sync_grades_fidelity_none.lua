@@ -133,10 +133,11 @@ local NEW_CDL = {
     power_r  = 0.98, power_g  = 1.06, power_b  = 1.01,
     saturation = 1.12,
 }
+local to_wire = require("test_helpers_grade_wire").cdl_model_to_wire
 local mixed = {
     grades = {
         { resolve_item_id = "live_g", fidelity = "none" },
-        { resolve_item_id = "live_n", cdl = NEW_CDL,
+        { resolve_item_id = "live_n", cdl = to_wire(NEW_CDL),
           fidelity = "primary" },
     },
 }

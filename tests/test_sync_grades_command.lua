@@ -101,11 +101,12 @@ local POST_CDL_none = {
     power_r  = 1.20,  power_g  = 1.10, power_b  = 1.00,
     saturation = 1.10,
 }
+local to_wire = require("test_helpers_grade_wire").cdl_model_to_wire
 local response = {
     grades = {
-        { resolve_item_id = "live_pre",  cdl = POST_CDL_pre,
+        { resolve_item_id = "live_pre",  cdl = to_wire(POST_CDL_pre),
           fidelity = "primary", lut = nil },
-        { resolve_item_id = "live_none", cdl = POST_CDL_none,
+        { resolve_item_id = "live_none", cdl = to_wire(POST_CDL_none),
           fidelity = "primary", lut = nil },
     },
 }
