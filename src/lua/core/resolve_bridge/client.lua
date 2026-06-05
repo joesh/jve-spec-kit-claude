@@ -191,10 +191,30 @@ function M.connect(socket_path, opts)
             connect_timeout_ms, socket_path)
     end
 
-    function self:request(verb, args, on_complete)  -- luacheck: ignore self
+    -- opts.timeout_ms (optional): override the client's default
+    -- request_timeout_ms for THIS request only. Used by long-running
+    -- verbs that legitimately exceed the conservative default (e.g.
+    -- read_grades with bake_lut_dir bakes 1000+ LUTs over several
+    -- minutes; the default 30s would trip mid-bake and the helper
+    -- would then post an "unknown id" reply when it eventually
+    -- finished). Must be a positive number; rejected otherwise to
+    -- keep the closed-set discipline at the boundary (rule 2.32).
+    function self:request(verb, args, on_complete, opts)  -- luacheck: ignore self
         assert(not closed, "client:request: socket is closed")
         assert(type(on_complete) == "function",
             "client:request: on_complete required")
+        local effective_timeout_ms = request_timeout_ms
+        if opts ~= nil then
+            assert(type(opts) == "table",
+                "client:request: opts must be table when supplied")
+            if opts.timeout_ms ~= nil then
+                assert(type(opts.timeout_ms) == "number"
+                        and opts.timeout_ms > 0,
+                    "client:request: opts.timeout_ms must be positive "
+                    .. "number")
+                effective_timeout_ms = opts.timeout_ms
+            end
+        end
         local corr_id = mint_correlation_id()
         in_flight[corr_id] = { on_complete = on_complete }
         local line = protocol.build_request({
@@ -210,13 +230,13 @@ function M.connect(socket_path, opts)
             return
         end
         qt_local_socket_flush(handle)
-        qt_create_single_shot_timer(request_timeout_ms, function()
+        qt_create_single_shot_timer(effective_timeout_ms, function()
             local slot = in_flight[corr_id]
             if slot == nil then return end
             in_flight[corr_id] = nil
             slot.on_complete(nil, "resolve_api_error", string.format(
                 "request timed out after %dms (verb=%s)",
-                request_timeout_ms, verb))
+                effective_timeout_ms, verb))
         end)
     end
 

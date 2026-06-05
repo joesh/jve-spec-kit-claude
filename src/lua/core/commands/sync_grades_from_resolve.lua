@@ -391,6 +391,17 @@ function M.execute(args, db, command)
         local helper_args = { bake_lut_dir = bake_lut_dir }
         if args.item_ids then helper_args.item_ids = args.item_ids end
         local sequence_id = args.sequence_id
+        -- Per-request timeout: read_grades with bake_lut_dir bakes one
+        -- LUT per timeline-item. t033 measured ~30 ms median per bake on
+        -- Anamnesis (~1069 clips ≈ 32 s for the bake alone); add Resolve
+        -- API latency for GetClipsInTimeline/EDL export and the verb
+        -- comfortably runs minutes on a large project. The client-wide
+        -- default request_timeout_ms (30 s, set by helper_supervisor)
+        -- would trip mid-bake, then the helper's eventual reply would
+        -- arrive against a cleared in-flight slot and log "unknown id".
+        -- 15 minutes is sized for 30k clips at the measured rate with
+        -- headroom — well above any real Anamnesis-class timeline.
+        local BAKE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
         client:request("read_grades", helper_args,
             function(response, code, message)
                 if response == nil then
@@ -428,7 +439,8 @@ function M.execute(args, db, command)
                     unmatched_resolve_items = captured.unmatched_resolve_items,
                     captured                = captured,
                 }, nil, nil)
-            end)
+            end,
+            { timeout_ms = BAKE_REQUEST_TIMEOUT_MS })
     end)
 end
 

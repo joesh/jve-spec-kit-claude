@@ -81,10 +81,12 @@ sync_grades.restore(captured, db)
 -- ─── M.execute: helper_args MUST carry bake_lut_dir derived from
 -- ~/.jve/resolve_bake/<project_id>/ ─────────────────────────────────
 local captured_helper_args = nil
+local captured_request_opts = nil
 local fake_client = {}
-function fake_client:request(verb, helper_args, cb)
+function fake_client:request(verb, helper_args, cb, opts)
     assert(verb == "read_grades", "unexpected verb " .. tostring(verb))
     captured_helper_args = helper_args
+    captured_request_opts = opts
     -- Return empty grades; we're testing the OUTGOING shape.
     cb({ result = { grades = {} } }, nil, nil)
 end
@@ -112,6 +114,23 @@ check("helper_args.bake_lut_dir under ~/.jve/resolve_bake",
         and captured_helper_args.bake_lut_dir
         and captured_helper_args.bake_lut_dir:find(
             "/.jve/resolve_bake/", 1, true))
+
+-- Per-request timeout override: when baking, the helper may spend
+-- several minutes inside ExportLUT (1069 clips × hundreds of ms each
+-- on Anamnesis). The default REQUEST_TIMEOUT_MS (30 s) trips long
+-- before bake finishes — JVE then logs "request timed out" while the
+-- helper continues working in the background, leading to an "unknown
+-- id" response when it eventually replies. Sync must pass a
+-- bake-sized timeout to override the default for THIS verb call.
+check("client:request received opts table when baking",
+    type(captured_request_opts) == "table")
+check("opts.timeout_ms is a positive number",
+    captured_request_opts
+        and type(captured_request_opts.timeout_ms) == "number"
+        and captured_request_opts.timeout_ms > 0)
+check("opts.timeout_ms is at least 10 minutes (bake-sized)",
+    captured_request_opts
+        and captured_request_opts.timeout_ms >= 600000)
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0, "test_sync_grades_lut_bake_path.lua: failures present")
