@@ -139,9 +139,25 @@ class JVERunner:
         if self.startup_project is not None:
             args.append(str(self.startup_project))
 
+        # Sandbox HOME so the JVE-under-test cannot scribble on the
+        # developer's real ~/.jve (recent_projects.json, probe_cache.json,
+        # file_browser_paths.json, persistent_widget state, etc.). When
+        # tests respawn JVE under fixture paths, those writes used to
+        # push the developer's actual project off the MRU list and
+        # cause Cmd-O launches to land on the smoke fixture instead.
+        # Caller-supplied env takes precedence — if the test wants to
+        # exercise the real HOME path explicitly, it sets env=... itself.
+        if self.env is None:
+            sandbox_home = Path("/tmp/jve_smoke/sandbox-home")
+            sandbox_home.mkdir(parents=True, exist_ok=True)
+            launch_env = os.environ.copy()
+            launch_env["HOME"] = str(sandbox_home)
+        else:
+            launch_env = self.env
+
         self._log_fh = self.stdout_log.open("wb")
         self._proc = subprocess.Popen(
-            args, stdout=self._log_fh, stderr=subprocess.STDOUT, env=self.env)
+            args, stdout=self._log_fh, stderr=subprocess.STDOUT, env=launch_env)
 
         self._wait_for_socket()
         self._connect()
