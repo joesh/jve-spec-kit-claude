@@ -21,6 +21,10 @@ local _active = false
 local _current_view_id = nil
 local _window = nil
 local _surface = nil
+-- View_id the user had fullscreen when JVE last lost frontmost status.
+-- nil means there's nothing to restore on re-activation. Set in
+-- _on_app_state_changed(false) and consumed by _on_app_state_changed(true).
+local _paused_view_id = nil
 -- Qt::Window | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus
 local FRAMELESS_ONTOP_FLAGS = 0x00000001 + 0x00000800 + 0x00040000 + 0x00200000  -- 0x240801
 
@@ -204,5 +208,34 @@ Signals.connect("project_changed", function(_new_project_id)
         M.exit()
     end
 end, 5)  -- priority 5: before playback_controller (10)
+
+--------------------------------------------------------------------------------
+-- app frontmost transitions: pause fullscreen when JVE loses focus so the
+-- borderless top-most window doesn't block the user's view of the foreground
+-- app (typically Resolve for color A/B). Restore on re-activation.
+--------------------------------------------------------------------------------
+
+--- Bound as the qt SET_APP_STATE_HANDLER callback.
+-- @param is_active boolean — true when JVE became frontmost, false on deactivate.
+function _G._fullscreen_viewer_on_app_state(is_active)
+    if is_active then
+        if _paused_view_id then
+            local view_id = _paused_view_id
+            _paused_view_id = nil
+            log.event("fullscreen: re-entering on app activate view=%s",
+                tostring(view_id))
+            M.enter(view_id)
+        end
+    else
+        if _active then
+            _paused_view_id = _current_view_id
+            log.event("fullscreen: pausing on app deactivate view=%s",
+                tostring(_paused_view_id))
+            M.exit()
+        end
+    end
+end
+
+qt_constants.SIGNAL.SET_APP_STATE_HANDLER("_fullscreen_viewer_on_app_state")
 
 return M

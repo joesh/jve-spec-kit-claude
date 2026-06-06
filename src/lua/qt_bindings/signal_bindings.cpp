@@ -1366,6 +1366,48 @@ private:
     std::string handler_name;
 };
 
+// Application active/inactive handler — fires when JVE becomes the
+// frontmost macOS app or loses that status. Used by fullscreen_viewer
+// to drop its fullscreen window when the user Cmd+Tabs to Resolve
+// (so the other app's frontmost-fullscreen routing isn't blocked) and
+// restore it when JVE comes back. One-time connection per process —
+// re-registering replaces the handler name.
+//
+// Handler signature: handler(is_active: boolean).
+static QMetaObject::Connection g_app_state_conn;
+static std::string g_app_state_handler;
+
+int lua_set_app_state_handler(lua_State* L) {
+    const char* handler_name = luaL_checkstring(L, 1);
+    g_app_state_handler = handler_name;
+
+    if (g_app_state_conn) return 0;  // already wired
+
+    g_app_state_conn = QObject::connect(
+        qApp, &QGuiApplication::applicationStateChanged,
+        [L](Qt::ApplicationState state) {
+            if (g_app_state_handler.empty()) return;
+            // Only forward the binary active/inactive transitions —
+            // Suspended/Hidden are mobile-only and shouldn't affect
+            // the desktop fullscreen lifecycle.
+            bool is_active;
+            if (state == Qt::ApplicationActive) {
+                is_active = true;
+            } else if (state == Qt::ApplicationInactive) {
+                is_active = false;
+            } else {
+                return;
+            }
+            LuaHandlerCaller cb(L, g_app_state_handler.c_str(),
+                                "signal.app_state");
+            if (cb.ready()) {
+                lua_pushboolean(L, is_active);
+                cb.invoke(1, 0);
+            }
+        });
+    return 0;
+}
+
 int lua_set_close_handler(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
     const char* handler_name = luaL_checkstring(L, 2);

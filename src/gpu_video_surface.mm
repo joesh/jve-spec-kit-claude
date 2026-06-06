@@ -154,6 +154,32 @@ struct LutUniform {
     int enabled;
 };
 
+// Color-space conversion uniform — replaces the per-shader hardcoded
+// YUV→RGB math. A 3x4 affine matrix:
+//   R = dot(row_r, float4(Y, Cb, Cr, 1))
+//   G = dot(row_g, ...)
+//   B = dot(row_b, ...)
+// The CPU side composes the matrix from the source CVPixelBuffer's
+// format and range (limited vs full) and the colorimetry primaries
+// (today BT.709 only; BT.2020 lands when 4K HDR comes through).
+// Composing on the CPU lets one shader cover every YUV path:
+// biplanar Y+UV (NV12/P010/sv44) and packed AYUV (y416).
+struct CscUniform {
+    float4 row_r;
+    float4 row_g;
+    float4 row_b;
+};
+
+// Apply the 3x4 CSC affine matrix to a raw YCbCr triple from the
+// source texture. The matrix carries both the BT.{601,709,2020}
+// coefficients AND the range scaling (limited→full or pure full),
+// so the same shader works for every YUV pixel format the renderer
+// supports. CPU side composes the right matrix per source format.
+float3 apply_csc(float3 ycbcr, constant CscUniform& csc) {
+    float4 v = float4(ycbcr, 1.0);
+    return float3(dot(csc.row_r, v), dot(csc.row_g, v), dot(csc.row_b, v));
+}
+
 // Mirrors emp::apply_cdl_rgb byte-for-byte semantically:
 //   sop  = max(in*slope+offset, 0)        -- negative-clamp before pow
 //   cdl  = sop^power
@@ -173,17 +199,86 @@ float3 apply_cdl(float3 rgb, constant CdlUniform& cdl) {
 
 // Mirrors emp::apply_lut3d_rgb semantically. HW trilinear via the
 // linear sampler matches the CPU 8-corner-lerp algorithm. Input is
-// expected in [0,1] (display-space Rec.709 — setLut3D asserts the
-// default DOMAIN_MIN/MAX). The sampler's clamp_to_edge address mode
-// handles out-of-range inputs by snapping to the nearest grid edge.
-// texture3d sample takes a 3D coord; .rgb is the LUT output.
+// expected in [0,1] (display-space — setLut3D asserts the default
+// DOMAIN_MIN/MAX). The sampler's clamp_to_edge address mode handles
+// out-of-range inputs by snapping to the nearest grid edge.
 // When uniform.enabled == 0, returns rgb unchanged (passthrough).
+//
+// Tetrahedral interpolation. Replaced HW trilinear sampler 2026-06-05
+// to chase the residual green/dark mismatch vs Resolve preview. Two
+// transfer-function experiments (2.2/2.4 fudge and full Rec.709
+// EOTF/OETF round-trip) both proved the LUT operates in display-
+// encoded space, so the input math is right. Remaining suspect is
+// the interp algorithm: ffmpeg lut3d defaults to tetrahedral and
+// Resolve's internal LUT engine uses it too; trilinear sampling
+// can introduce subtle hue artifacts in the diamond regions of the
+// cube (visible as a slight green cast on near-neutrals).
+//
+// Algorithm: 6 tetrahedra of the unit cube, picked by sorting the
+// fractional offsets (dr, dg, db). Each tetra has 4 vertices and
+// affine-weights summing to 1. Identity LUT remains passthrough
+// because the affine combination at each tet reconstructs base+d.
+// Uses texture3d.read() with integer coords — sampler is no longer
+// needed for sampling but its binding/declaration is kept so the
+// host-side draw code doesn't need to change.
+//
+// V1 scope unchanged: this is an interpolation upgrade only. Color
+// management (per-project transfer functions, gamut mapping) is
+// still punted to a later feature.
 float3 apply_lut3d(float3 rgb,
                    texture3d<float> lut3d,
                    sampler lutSamp,
                    constant LutUniform& lut) {
     if (lut.enabled == 0) return rgb;
-    return lut3d.sample(lutSamp, saturate(rgb)).rgb;
+
+    float3 sat = saturate(rgb);
+    int N = int(lut3d.get_width());
+    float3 grid = sat * float(N - 1);
+    int3 base = clamp(int3(floor(grid)), int3(0), int3(N - 2));
+    float3 d = grid - float3(base);
+
+    // 8 corners of the surrounding cube.
+    float3 v000 = lut3d.read(uint3(base + int3(0,0,0))).rgb;
+    float3 v100 = lut3d.read(uint3(base + int3(1,0,0))).rgb;
+    float3 v010 = lut3d.read(uint3(base + int3(0,1,0))).rgb;
+    float3 v001 = lut3d.read(uint3(base + int3(0,0,1))).rgb;
+    float3 v110 = lut3d.read(uint3(base + int3(1,1,0))).rgb;
+    float3 v101 = lut3d.read(uint3(base + int3(1,0,1))).rgb;
+    float3 v011 = lut3d.read(uint3(base + int3(0,1,1))).rgb;
+    float3 v111 = lut3d.read(uint3(base + int3(1,1,1))).rgb;
+
+    float dr = d.r, dg = d.g, db = d.b;
+    float3 result;
+    if (dr >= dg) {
+        if (dg >= db) {
+            // R >= G >= B  — tet 000-100-110-111
+            result = (1 - dr) * v000 + (dr - dg) * v100
+                   + (dg - db) * v110 + db * v111;
+        } else if (dr >= db) {
+            // R >= B > G   — tet 000-100-101-111
+            result = (1 - dr) * v000 + (dr - db) * v100
+                   + (db - dg) * v101 + dg * v111;
+        } else {
+            // B > R >= G   — tet 000-001-101-111
+            result = (1 - db) * v000 + (db - dr) * v001
+                   + (dr - dg) * v101 + dg * v111;
+        }
+    } else {
+        if (db >= dg) {
+            // B >= G > R   — tet 000-001-011-111
+            result = (1 - db) * v000 + (db - dg) * v001
+                   + (dg - dr) * v011 + dr * v111;
+        } else if (db >= dr) {
+            // G > B >= R   — tet 000-010-011-111
+            result = (1 - dg) * v000 + (dg - db) * v010
+                   + (db - dr) * v011 + dr * v111;
+        } else {
+            // G > R > B    — tet 000-010-110-111
+            result = (1 - dg) * v000 + (dg - dr) * v010
+                   + (dr - db) * v110 + db * v111;
+        }
+    }
+    return result;
 }
 
 vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
@@ -193,38 +288,35 @@ vertex VertexOut vertexShader(VertexIn in [[stage_in]]) {
     return out;
 }
 
-// NV12/P010 YUV to RGB conversion (BT.709 for HD content)
-// Works for both 8-bit (NV12) and 10-bit (P010) - texture formats handle normalization
+// Biplanar YUV→RGB (NV12, P010, sv44, and all 4:2:0 / 4:2:2 / 4:4:4
+// biplanar variants). Texture format already normalizes 8/10/16-bit
+// storage to [0,1]; range scaling (limited→full) lives in the CSC
+// matrix uniform built CPU-side from the source pixel format.
+//
+// Pre-CSC builds hardcoded BT.709 limited-range math in the shader,
+// which silently mis-colored full-range biplanar sources (sv44 from
+// ProRes 4444 12-bit, the 444*FullRange formats). Matrix uniform
+// fixes that without per-format shader variants.
 fragment float4 fragmentShader(VertexOut in [[stage_in]],
                                texture2d<float> texY [[texture(0)]],
                                texture2d<float> texUV [[texture(1)]],
                                texture3d<float> lut3d [[texture(2)]],
                                sampler lutSamp [[sampler(0)]],
                                constant CdlUniform& cdl [[buffer(0)]],
-                               constant LutUniform& lut [[buffer(1)]]) {
+                               constant LutUniform& lut [[buffer(1)]],
+                               constant CscUniform& csc [[buffer(2)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
 
     float y = texY.sample(s, in.texCoord).r;
     float2 uv = texUV.sample(s, in.texCoord).rg;
 
-    // BT.709 YUV to RGB (video range: Y 16-235, UV 16-240)
-    // For normalized textures, video range is 16/255 to 235/255
-    y = (y - 0.0627) * 1.164;  // (y - 16/255) * 255/219
-    float u = uv.x - 0.5;
-    float v = uv.y - 0.5;
-
-    // BT.709 coefficients
-    float r = y + 1.5748 * v;
-    float g = y - 0.1873 * u - 0.4681 * v;
-    float b = y + 1.8556 * u;
-
-    // Studio-range YCbCr→RGB overshoots [0,1] at boundary luma/chroma values.
-    // Hand the raw triple to apply_cdl so slope/offset can pull super-white
-    // and sub-black back into range. Then apply LUT3D (passthrough when
-    // either stage's enabled flag is 0 — view_grade_pull guarantees at
-    // most one is on per clip per FR-015's closed-set fidelity).
-    // saturate once on output so 8-bit display storage is clamped.
-    float3 rgb = float3(r, g, b);
+    // YCbCr→RGB via uniform 3x4 affine. Limited-range scaling and
+    // chroma centering are baked into the matrix CPU-side. Output
+    // may overshoot [0,1] at boundary luma/chroma — apply_cdl runs
+    // on the raw triple so slope/offset can pull super-white and
+    // sub-black back into range; saturate once on output so 8-bit
+    // display storage is clamped.
+    float3 rgb = apply_csc(float3(y, uv.x, uv.y), csc);
     rgb = apply_cdl(rgb, cdl);
     rgb = apply_lut3d(rgb, lut3d, lutSamp, lut);
     return float4(saturate(rgb), 1.0);
@@ -248,30 +340,21 @@ fragment float4 bgraFragmentShader(VertexOut in [[stage_in]],
 // Packed 4:4:4:4 AYUV (y416 from ProRes 4444 with alpha).
 // CVPixelBuffer format: A(16) Y(16) Cb(16) Cr(16) per pixel, non-planar.
 // Metal RGBA16Unorm maps to: R=A, G=Y, B=Cb, A=Cr (all [0,1] normalized).
-// Full-range BT.709 conversion (ProRes is full-range).
+// Uses the same CSC uniform as fragmentShader — CPU side sets the
+// matrix to BT.709 full-range for y416 (the only format that hits
+// this path today).
 fragment float4 packedYuvFragmentShader(VertexOut in [[stage_in]],
                                         texture2d<float> tex [[texture(0)]],
                                         texture3d<float> lut3d [[texture(2)]],
                                         sampler lutSamp [[sampler(0)]],
                                         constant CdlUniform& cdl [[buffer(0)]],
-                                        constant LutUniform& lut [[buffer(1)]]) {
+                                        constant LutUniform& lut [[buffer(1)]],
+                                        constant CscUniform& csc [[buffer(2)]]) {
     constexpr sampler s(mag_filter::linear, min_filter::linear);
     float4 ayuv = tex.sample(s, in.texCoord);
 
     float alpha = ayuv.r;
-    float y = ayuv.g;
-    float cb = ayuv.b - 0.5;
-    float cr = ayuv.a - 0.5;
-
-    // BT.709 full-range YCbCr to RGB. See studio-range note in
-    // fragmentShader: hand the raw triple to apply_cdl so slope/offset has
-    // headroom; then apply LUT3D (passthrough when its enabled is 0).
-    // saturate once on output so 8-bit display storage is clamped.
-    float r = y + 1.5748 * cr;
-    float g = y - 0.1873 * cb - 0.4681 * cr;
-    float b = y + 1.8556 * cb;
-
-    float3 rgb = float3(r, g, b);
+    float3 rgb = apply_csc(float3(ayuv.g, ayuv.b, ayuv.a), csc);
     rgb = apply_cdl(rgb, cdl);
     rgb = apply_lut3d(rgb, lut3d, lutSamp, lut);
     return float4(saturate(rgb), alpha);
@@ -339,6 +422,15 @@ void GPUVideoSurface::initMetal() {
         m_impl->metalLayer.device = m_impl->device;
         m_impl->metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
         m_impl->metalLayer.framebufferOnly = YES;
+        // Tag the layer's pixels as Rec.709. Without this, macOS treats the
+        // layer's contents as already in the display's native gamut (Display
+        // P3 on modern Macs) and skips primaries conversion — Rec.709 greens
+        // get rendered as P3 greens (visibly more saturated). With the tag,
+        // WindowServer correctly converts Rec.709 → display gamut.
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_709);
+        JVE_ASSERT(cs, "CGColorSpaceCreateWithName(ITUR_709) failed");
+        m_impl->metalLayer.colorspace = cs;
+        CGColorSpaceRelease(cs);
         [view setLayer:m_impl->metalLayer];
         [view setWantsLayer:YES];
 
@@ -431,6 +523,17 @@ void GPUVideoSurface::initMetal() {
 
         m_initialized = true;
         JVE_LOG_EVENT(Video, "GPUVideoSurface: Metal initialized");
+
+        // Flush any LUT pushed by the View before Metal was ready
+        // (FR-016 pull contract fires on first clip load, which beats
+        // initMetal in the lifecycle). Calling setLut3D recursively
+        // is safe because m_initialized is now true so it takes the
+        // direct-upload path.
+        if (!m_pending_lut3d.data.empty()) {
+            emp::Lut3d pending = std::move(m_pending_lut3d);
+            m_pending_lut3d = emp::Lut3d{};  // ensure data.empty()
+            setLut3D(pending);
+        }
 
         // Render black immediately so the surface isn't showing uninitialized
         // memory. renderTexture() guards against 0x0 size internally.
@@ -580,6 +683,21 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
         size_t planeCount = CVPixelBufferGetPlaneCount(pixelBuffer);
         OSType pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer);
 
+        // Log the CVPixelBuffer fourCC on the first frame so the shader path
+        // (limited-range YUV / full-range packed YUV / BGRA) is recoverable
+        // from logs when a clip displays unexpectedly.
+        if (m_frame_count == 1) {
+            char fourcc[5] = {
+                static_cast<char>((pixelFormat >> 24) & 0xFF),
+                static_cast<char>((pixelFormat >> 16) & 0xFF),
+                static_cast<char>((pixelFormat >> 8) & 0xFF),
+                static_cast<char>(pixelFormat & 0xFF), '\0'
+            };
+            JVE_LOG_EVENT(Video,
+                "setFrameImpl: CVPixelBuffer fourcc='%s' (0x%x) planeCount=%zu %dx%d",
+                fourcc, pixelFormat, planeCount, w, h);
+        }
+
         m_impl->releaseTextures();
 
         if (planeCount == 0) {
@@ -598,6 +716,86 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
             snprintf(msg, sizeof(msg), "unexpected plane count %zu (format 0x%x)",
                      planeCount, pixelFormat);
             JVE_ASSERT(false, msg);
+        }
+    }
+}
+
+// Compose the 3x4 YCbCr→RGB matrix for a CVPixelBuffer pixel format.
+// Today we ship BT.709 only (HD primaries — every clip in the project
+// is HD ProRes / H.264 / DV). BT.2020 (4K HDR) will add a second
+// matrix family and a CVPixelBuffer attachment check; until then any
+// non-BT.709 source would silently mis-color, so we assert on
+// unrecognized formats rather than fall back.
+//
+// Range is selected from the format's range suffix:
+//   *FullRange → Y in [0,1], Cb/Cr centered at 0.5, no Y scaling.
+//   *VideoRange → Y in [16/255, 235/255], Cb/Cr in [16/255, 240/255],
+//                 inverse-scaled back to full range in the matrix.
+// Formats with no range suffix (4:4:4 8-bit packed, BGRA, etc.) are
+// assumed full-range — VideoToolbox never emits limited-range data
+// in those layouts.
+static GPUVideoSurface::CscParams composeBt709Csc(uint32_t pixelFormat) {
+    // BT.709 full-range affine. Derivation:
+    //   R = Y + 1.5748*(Cr - 0.5)
+    //   G = Y - 0.1873*(Cb - 0.5) - 0.4681*(Cr - 0.5)
+    //   B = Y + 1.8556*(Cb - 0.5)
+    // Constant column folds in the chroma -0.5 offsets.
+    GPUVideoSurface::CscParams full = {
+        { 1.0f,  0.0f,     1.5748f, -0.7874f },
+        { 1.0f, -0.1873f, -0.4681f,  0.3277f },
+        { 1.0f,  1.8556f,  0.0f,    -0.9278f },
+    };
+
+    // BT.709 limited-range affine. Y' = (Y - 16/255) * 255/219;
+    // chroma is centered AND scaled by 255/224 to put neutral chroma
+    // at 0 and reach ±0.5 at the format's stored extremes. Both
+    // scalings fold into the matrix.
+    //   Y_scale = 255/219 ≈ 1.16438
+    //   C_scale = 255/224 ≈ 1.13839
+    //   Y_offset_eff (constant col) = -1.16438 * 16/255 ≈ -0.07306
+    //   C_offset_eff = -C_scale * 128/255 = -0.57143
+    // Per-row constants compose chroma_coef * C_offset + Y_offset.
+    GPUVideoSurface::CscParams limited = {
+        { 1.16438f,  0.0f,      1.79274f, -0.97290f },
+        { 1.16438f, -0.21325f, -0.53291f,  0.30163f },
+        { 1.16438f,  2.11240f,  0.0f,     -1.13322f },
+    };
+
+    switch (pixelFormat) {
+        // 4:2:0 8-bit
+        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:    return limited;
+        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:     return full;
+        // 4:2:0 10-bit
+        case kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange:   return limited;
+        case kCVPixelFormatType_420YpCbCr10BiPlanarFullRange:    return full;
+        // 4:2:2 8/10/16-bit
+        case kCVPixelFormatType_422YpCbCr8BiPlanarVideoRange:    return limited;
+        case kCVPixelFormatType_422YpCbCr8BiPlanarFullRange:     return full;
+        case kCVPixelFormatType_422YpCbCr10BiPlanarVideoRange:   return limited;
+        case kCVPixelFormatType_422YpCbCr10BiPlanarFullRange:    return full;
+        case kCVPixelFormatType_422YpCbCr16BiPlanarVideoRange:   return limited;
+        // 4:4:4 8/10/16-bit
+        case kCVPixelFormatType_444YpCbCr8BiPlanarVideoRange:    return limited;
+        case kCVPixelFormatType_444YpCbCr8BiPlanarFullRange:     return full;
+        case kCVPixelFormatType_444YpCbCr10BiPlanarVideoRange:   return limited;
+        case kCVPixelFormatType_444YpCbCr10BiPlanarFullRange:    return full;
+        case kCVPixelFormatType_444YpCbCr16BiPlanarVideoRange:   return limited;
+        // Packed y416 — always full-range per Apple's spec.
+        case kCVPixelFormatType_4444AYpCbCr16:                   return full;
+        default: {
+            char fourcc[5] = {
+                static_cast<char>((pixelFormat >> 24) & 0xFF),
+                static_cast<char>((pixelFormat >> 16) & 0xFF),
+                static_cast<char>((pixelFormat >> 8) & 0xFF),
+                static_cast<char>(pixelFormat & 0xFF), '\0'
+            };
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                "composeBt709Csc: unrecognized YUV format '%s' (0x%x) — "
+                "add explicit range mapping (FullRange vs VideoRange).",
+                fourcc, pixelFormat);
+            JVE_ASSERT(false, msg);
+            return full;  // unreachable; assert aborts
         }
     }
 }
@@ -666,6 +864,7 @@ void GPUVideoSurface::setFrameHW_PackedYUV(void* hw_buffer, uint32_t pixelFormat
     m_impl->packedYuvTexture = CVMetalTextureGetTexture(m_impl->textureNonPlanar);
     JVE_ASSERT(m_impl->packedYuvTexture, "GPUVideoSurface::setFrameHW_PackedYUV: CVMetalTextureGetTexture returned nil");
     m_impl->frameMode = FrameMode::PackedYUV;
+    m_csc = composeBt709Csc(pixelFormat);
     renderTexture();
 }
 
@@ -776,6 +975,7 @@ void GPUVideoSurface::setFrameHW_YUV(void* hw_buffer, uint32_t pixelFormat) {
     m_impl->metalTextureUV = CVMetalTextureGetTexture(m_impl->textureUV);
     JVE_ASSERT(m_impl->metalTextureUV, "GPUVideoSurface::setFrameHW_YUV: CVMetalTextureGetTexture(UV) returned nil");
     m_impl->frameMode = FrameMode::YUV;
+    m_csc = composeBt709Csc(pixelFormat);
 
     renderTexture();
 }
@@ -861,8 +1061,6 @@ void GPUVideoSurface::clearGrade() {
 void GPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
     JVE_ASSERT([NSThread isMainThread],
         "GPUVideoSurface::setLut3D: must be on main thread");
-    JVE_ASSERT(m_initialized,
-        "GPUVideoSurface::setLut3D: Metal not yet initialized");
     JVE_ASSERT(lut.enabled == 1,
         "GPUVideoSurface::setLut3D: caller passed an unloaded lut "
         "(enabled==0) — use clearLut3D() to disable");
@@ -882,6 +1080,22 @@ void GPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
                 && lut.domain_max[2] == 1.0f,
         "GPUVideoSurface::setLut3D: non-default DOMAIN_MAX not "
         "supported (V1 scope: display-space LUTs only)");
+
+    // Race with deferred Metal init: the View pushes a grade as soon
+    // as a clip is loaded (FR-016 pull contract), which can happen
+    // BEFORE GPUVideoSurface::initMetal completes. Stash the lut and
+    // let initMetal flush it once the device exists. Until then the
+    // shader sees lut.enabled == 0 (placeholder texture bound) so the
+    // pipeline still draws correctly — ungraded — instead of crashing
+    // on an unmade texture (rule 1.14 satisfied by the JVE_ASSERTs
+    // above + the deferred flush asserting against init failure).
+    if (!m_initialized) {
+        m_pending_lut3d = lut;
+        m_lut_size = lut.size;  // expose via lut3dSize() right away
+        // m_lut_enabled stays 0 until initMetal flushes; shader is
+        // passthrough in the meantime.
+        return;
+    }
 
     @autoreleasepool {
         // Reuse the existing 3D texture if its size matches — same
@@ -936,6 +1150,9 @@ void GPUVideoSurface::clearLut3D() {
         "GPUVideoSurface::clearLut3D: must be on main thread");
     m_lut_enabled = 0;
     m_lut_size = 0;
+    // Drop any LUT stashed before Metal init so it doesn't surprise
+    // us by lighting up at the end of initMetal after clearLut3D.
+    m_pending_lut3d = emp::Lut3d{};
     // Keep lut3dTexture around for reuse on a future setLut3D of the
     // same size — freeing it would force an allocation on next set.
 }
@@ -1052,6 +1269,16 @@ void GPUVideoSurface::renderTexture() {
             [encoder setFragmentBytes:&lut_uniform
                                length:sizeof(lut_uniform)
                               atIndex:1];
+
+            // CSC matrix uniform — only YUV pipelines declare it; BGRA
+            // reads RGB straight from the texture so no matrix applies.
+            // Layout MUST match the Metal CscUniform struct.
+            if (m_impl->frameMode == FrameMode::YUV
+                || m_impl->frameMode == FrameMode::PackedYUV) {
+                [encoder setFragmentBytes:&m_csc
+                                   length:sizeof(m_csc)
+                                  atIndex:2];
+            }
 
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }

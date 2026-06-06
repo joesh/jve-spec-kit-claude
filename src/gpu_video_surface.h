@@ -85,6 +85,19 @@ public:
     // Stride-duplicated frames share the same PTS and don't increment this.
     int uniqueFrameCount() const { return m_unique_frame_count; }
 
+    // YCbCr→RGB color-space conversion matrix uniform. Layout MUST
+    // match the Metal CscUniform struct (three float4 rows = a 3x4
+    // affine matrix). Composed from the source CVPixelBuffer's
+    // pixel format in setFrameHW_YUV / setFrameHW_PackedYUV — picks
+    // BT.709 limited vs full range based on the format's range
+    // suffix. Public so the file-static composeBt709Csc helper in
+    // the .mm can construct one without friending it.
+    struct CscParams {
+        float row_r[4];
+        float row_g[4];
+        float row_b[4];
+    };
+
     // Check if GPU rendering is available
     static bool isAvailable();
 
@@ -149,6 +162,18 @@ private:
     // Piece-3 builds.
     int32_t m_lut_enabled = 0;
     int     m_lut_size    = 0;  // tracked separately for setLut3D reuse
+
+    // Deferred LUT upload: setLut3D may be called BEFORE Metal init
+    // completes (View pushes grade as soon as a clip is loaded, which
+    // races with the GPU surface's deferred Metal init). The Lut3d
+    // struct lands here; initMetal flushes it after creating the
+    // device + sampler + placeholder. Empty std::vector ⇒ no pending.
+    emp::Lut3d m_pending_lut3d{};
+
+    // Zero-init ⇒ all rows zero (would produce black) so every YUV
+    // setFrame MUST overwrite this before draw. See public CscParams
+    // declaration above for layout invariants.
+    CscParams m_csc{};
 };
 
 #else
