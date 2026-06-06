@@ -312,8 +312,16 @@ def integer_frame_rate_from_setting(timeline_frame_rate_setting):
                 "timelineFrameRate string must be non-empty")
             # (defensive: float("") raises but the message wouldn't
             # name the field; explicit assert is more actionable)
+        # Resolve appends " DF" to drop-frame rates (per Scripting
+        # README §timelineFrameRate: `"29.97 DF" will enable drop frame
+        # and "29.97" will disable drop frame`). DF-ness is orthogonal
+        # to the integer TC counter rate (29.97 DF and 29.97 NDF both
+        # round to 30), so strip the suffix before float conversion.
+        numeric = timeline_frame_rate_setting
+        if numeric.endswith(" DF"):
+            numeric = numeric[:-3]
         try:
-            f = float(timeline_frame_rate_setting)
+            f = float(numeric)
         except ValueError as exc:
             raise CdlEdlParseError(
                 f"timelineFrameRate {timeline_frame_rate_setting!r} not "

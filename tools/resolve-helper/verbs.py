@@ -641,7 +641,7 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     # different real times → false-positive matches. Surface the
     # integer TC counter so the caller asserts equality before matching.
     try:
-        integer_rate = _timeline_integer_frame_rate(project)
+        integer_rate = _timeline_integer_frame_rate(timeline)
     except RuntimeError as exc:
         return _error(envelope_id, "resolve_api_error", str(exc))
 
@@ -930,15 +930,23 @@ def _export_edl_cdl(timeline, resolve, integer_rate):
             pass
 
 
-def _timeline_integer_frame_rate(project):
-    # Project.GetSetting('timelineFrameRate') returns the fractional
+def _timeline_integer_frame_rate(timeline):
+    # Timeline.GetSetting('timelineFrameRate') returns the fractional
     # rate as a string ("23.976", "24", "24.0", "29.97", "59.94"…).
     # Convert to the TC-counter integer rate (24 for 23.976, etc.).
+    #
+    # MUST query the timeline, not the project: a Resolve project can
+    # hold timelines at mixed rates and the user-visible truth in the
+    # Timeline > Settings dialog is the timeline-level value. Querying
+    # project.GetSetting returned the project default and produced
+    # spurious `timeline_rate_mismatch` errors when the active timeline
+    # differed from the project default (anamnesis-gold-timeline,
+    # 2026-06-03: timeline 25, project 24).
     try:
-        setting = project.GetSetting("timelineFrameRate")
+        setting = timeline.GetSetting("timelineFrameRate")
     except Exception as exc:
         raise RuntimeError(
-            f"project.GetSetting('timelineFrameRate') raised: {exc}"
+            f"timeline.GetSetting('timelineFrameRate') raised: {exc}"
             ) from exc
     try:
         return integer_frame_rate_from_setting(setting)
