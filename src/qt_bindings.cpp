@@ -24,6 +24,7 @@
 #include "lua/qt_bindings/xml_bindings.cpp"
 #include "lua/qt_bindings/zstd_bindings.cpp"
 #include "lua/qt_bindings/cdl_bindings.cpp"
+#include "lua/qt_bindings/csc_bindings.cpp"
 #include "lua/qt_bindings/lut3d_bindings.cpp"
 #include "lua/qt_bindings/process_bindings.cpp"
 #include "lua/qt_bindings/local_socket_bindings.cpp"
@@ -425,6 +426,12 @@ void registerQtBindings(lua_State* L)
     // lives in EMP (emp::apply_cdl_rgb); this exposes it to Lua so the
     // binding test can pin the math against ASC-derived domain values.
     register_cdl_bindings(L);
+
+    // Register BT.709 CSC matrix binding (spec 023 Piece 3 — unified CSC).
+    // Math source-of-truth lives in GPUVideoSurface::composeBt709Csc; this
+    // exposes it to Lua so the binding test (tests/binding/test_compose_bt709_csc.lua)
+    // pins per-format/per-range matrices against BT.709-standard-derived values.
+    register_csc_bindings(L);
 
     // Register 3D LUT (.cube) parse + apply test binding (spec 023 Piece 3).
     // Math + parser live in EMP (emp::parse_cube, emp::apply_lut3d_rgb);

@@ -89,14 +89,17 @@ public:
     // match the Metal CscUniform struct (three float4 rows = a 3x4
     // affine matrix). Composed from the source CVPixelBuffer's
     // pixel format in setFrameHW_YUV / setFrameHW_PackedYUV — picks
-    // BT.709 limited vs full range based on the format's range
-    // suffix. Public so the file-static composeBt709Csc helper in
-    // the .mm can construct one without friending it.
+    // BT.709 limited vs full range based on the format's range suffix.
     struct CscParams {
         float row_r[4];
         float row_g[4];
         float row_b[4];
     };
+
+    // BT.709 YCbCr→RGB matrix composer keyed on CVPixelBuffer pixel
+    // format. Public for the qt_compose_bt709_csc binding test —
+    // production callers are member functions inside this class.
+    static CscParams composeBt709Csc(uint32_t pixelFormat);
 
     // Check if GPU rendering is available
     static bool isAvailable();

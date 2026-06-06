@@ -734,7 +734,7 @@ void GPUVideoSurface::setFrameHW(void* hw_buffer, int w, int h) {
 // Formats with no range suffix (4:4:4 8-bit packed, BGRA, etc.) are
 // assumed full-range — VideoToolbox never emits limited-range data
 // in those layouts.
-static GPUVideoSurface::CscParams composeBt709Csc(uint32_t pixelFormat) {
+GPUVideoSurface::CscParams GPUVideoSurface::composeBt709Csc(uint32_t pixelFormat) {
     // BT.709 full-range affine. Derivation:
     //   R = Y + 1.5748*(Cr - 0.5)
     //   G = Y - 0.1873*(Cb - 0.5) - 0.4681*(Cr - 0.5)
