@@ -136,9 +136,12 @@ local function do_find()
     log.event("do_find: %d matches, current=%s, active=%s", count, tostring(current), tostring(find_state.is_active()))
     update_status(string.format("%d match%s", count, count == 1 and "" or "es"))
 
+    -- Persist only value / replace text. Column + operator do NOT persist:
+    -- a prior session that left column=offline (boolean) traps the next
+    -- session because the dialog reopens with a non-text field selected
+    -- and the user's typed search can never match. The dialog's own
+    -- default (Any + contains) is the right starting state every open.
     save_settings({
-        last_column = column,
-        last_operator = operator,
         last_value = value,
         last_replace = ws.replace_edit and qt.PROPERTIES.GET_TEXT(ws.replace_edit) or nil,
     })
@@ -290,8 +293,14 @@ local function create_window()
     ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
     qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "search text")
     qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
-    -- Return in find field → Find Next (QLineEdit::returnPressed)
-    register_handler("__find_dlg_edit_return", do_find_next)
+    -- Return in find field → execute the search fresh. NOT do_find_next:
+    -- if a prior search left find_state active with 0 matches, do_find_next
+    -- sees is_active=true, calls find_state.next() (no-op on 0 matches),
+    -- and the user is stuck — typing new text + Enter does nothing.
+    -- "Enter in the search field = run this search" is also how every
+    -- macOS Find dialog behaves. Next button / Cmd+G stays for "cycle
+    -- within the active search."
+    register_handler("__find_dlg_edit_return", do_find)
     qt_set_line_edit_return_pressed_handler(ws.find_edit, "__find_dlg_edit_return")
     qt.LAYOUT.ADD_LAYOUT(layout, row1)
 
