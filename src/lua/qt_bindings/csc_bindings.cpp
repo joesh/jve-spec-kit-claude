@@ -15,7 +15,7 @@
 
 #include <lua.hpp>
 
-#include "../../gpu_video_surface.h"
+#include "gpu_video_surface.h"
 
 static int lua_qt_compose_bt709_csc(lua_State* L) {
     uint32_t pf = static_cast<uint32_t>(luaL_checkinteger(L, 1));

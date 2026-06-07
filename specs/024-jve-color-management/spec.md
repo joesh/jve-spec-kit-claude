@@ -18,7 +18,7 @@
 ## User Scenarios & Testing *(mandatory)*
 
 ### Primary User Story
-The colorist (Joe) opens a Resolve project in JVE via the bridge. The
+The colorist opens a Resolve project in JVE via the bridge. The
 source media is a mix of:
 - BT.709-tagged ProRes 422 (the common case — already works as of 023),
 - ProRes 4444 tagged `color_space=gbr` (matrix=identity, planes carry
@@ -242,12 +242,12 @@ and ACES are tracked so future work doesn't break the contract.
 - macOS / Metal / VideoToolbox — same platform constraints as 023.
 - ProRes 4444 + ProRes 4444 XQ are the immediate target source
   families for the gbr-decode-routing fix (FR-007).
-- Joe's source-of-truth for "what should it look like" is Resolve's
+- Source-of-truth for "what should it look like" is Resolve's
   preview on the same machine, with the QT-player gamma fudge OFF
   and "Use Mac display color profiles for viewers" OFF (project
   observations recorded in `todo_023_lut_color_mismatch.md`).
-- Schema may bump freely (per project rule); Joe regenerates the
-  `.jvp`. No migration story required.
+- Schema may bump freely (per project rule); project file is
+  regenerated. No migration story required.
 
 ---
 
@@ -279,39 +279,6 @@ and ACES are tracked so future work doesn't break the contract.
 - [x] Requirements generated
 - [x] Entities identified
 - [ ] Review checklist passed (gated on clarifications)
-
----
-
-## Original prompt
-
-> JVE color management — IDT/ODT, working color space, output transform
-> pipeline, per-clip color space override, and project color science
-> settings. Scope follows from spec 023 deferrals:
-> (1) matrix-aware decode routing — when a CVPixelBuffer source is
-> tagged AVCOL_SPC_RGB (color_space=gbr, common on ProRes 4444),
-> allocate AVHWFramesContext with sw_format=AV_PIX_FMT_BGRA so
-> VideoToolbox delivers native RGB instead of round-tripping through
-> YCbCr (today's residual green hue cast);
-> (2) CPU LUT3D path should match GPU — GPU was upgraded to tetrahedral
-> 2026-06-05, CPU emp_lut3d.cpp still trilinear, divergence will surface
-> in any pixel-precise CPU/GPU comparison;
-> (3) regression test for the GPU setLut3D deferred-upload init-race
-> fixed 2026-06-05 (View pushes grade before initMetal completes;
-> cold-start repros) — CPU-surface tests don't cover, no automated
-> test guards it today.
-> Project-level concepts the feature must introduce: color science mode
-> (vanilla DaVinci YRGB vs YRGB Color Managed vs ACES — initially just
-> enough to express "what does ExportLUT cover and what does it not"),
-> working color space, output color space, optional per-clip Input
-> Color Space override (mirrors Resolve's clip-level IDT).
-> UI implication: a Project Color Settings surface (Inspector section
-> or modal) for these.
-> Bridge interaction: when a Resolve project is in CM mode, ExportLUT
-> semantics change — the bridge must record the project's color science
-> mode in resolve_bridge_link and JVE's apply must match.
-> Out of scope (call out explicitly so a future Claude doesn't expand):
-> HDR mastering / tone mapping, gamut compression, ACES Reference Gamut
-> Compression, monitor calibration LUTs, scopes/false-color.
 
 ---
 
