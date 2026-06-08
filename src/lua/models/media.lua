@@ -12,6 +12,7 @@
 --
 -- @file media.lua
 local uuid = require("uuid")
+local watchers = require("core.watchers")
 local log = require("core.logger").for_area("media")
 
 local M = {}
@@ -1672,8 +1673,7 @@ function M:save()
 
     query:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_media(self.id)
+    watchers.notify_media(self.id)
 
     return true
 end
@@ -1745,8 +1745,7 @@ function M:delete()
     end
     del_media:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_media(self.id)
+    watchers.notify_media(self.id)
 
     log.event("Media:delete: deleted media %s", self.id)
     return true

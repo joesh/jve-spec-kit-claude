@@ -1,6 +1,7 @@
 --- Lua model for timeline tracks. Supports both video and audio variants.
 local database = require("core.database")
 local uuid = require("uuid")
+local watchers = require("core.watchers")
 
 local Track = {}
 Track.__index = Track
@@ -320,8 +321,7 @@ function Track:save()
 
     stmt:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_track(self.id, self.sequence_id)
+    watchers.notify_track(self.id, self.sequence_id)
 
     return true
 end
@@ -486,8 +486,7 @@ function Track.delete(track_id)
     assert(del:exec(), "Track.delete: delete exec failed")
     del:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_track(track_id, seq_id)
+    watchers.notify_track(track_id, seq_id)
 
     return true
 end

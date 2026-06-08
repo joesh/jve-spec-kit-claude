@@ -5,6 +5,7 @@
 --- queries) install methods onto Sequence at the bottom of this file.
 local database = require("core.database")
 local uuid = require("uuid")
+local watchers = require("core.watchers")
 
 local Sequence = {}
 Sequence.__index = Sequence
@@ -404,8 +405,7 @@ function Sequence:save()
     end
     stmt:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_sequence(self.id)
+    watchers.notify_sequence(self.id)
 
     return ok
 end
@@ -503,7 +503,6 @@ function Sequence.update_playhead(seq_id, playhead_frame)
         "Sequence.update_playhead: UPDATE failed for %s: %s",
         tostring(seq_id), tostring(err)))
 
-    -- FU-8: Notify entity watchers
     require("core.watchers").queue_notify("sequence:" .. seq_id, { kind = "playhead" })
 end
 

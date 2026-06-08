@@ -98,24 +98,19 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     end
 
     -- Resolve the working clip_ids list. Prefer args.clip_ids; fall back
-    -- to whatever timeline_state currently has selected. Selected entries
-    -- can be Clip rows, {clip_id=...} stubs, or bare id strings.
+    -- to timeline_state's current selection. set_selection (the only writer)
+    -- stores entries shaped {id = "..."}; we assert that contract here so
+    -- a divergent caller surfaces loudly instead of being silently dropped.
     local function resolve_clip_ids_from_selection(args)
         local clip_ids = args.clip_ids
         if clip_ids and #clip_ids > 0 then return clip_ids end
         if not (timeline_state and timeline_state.get_selected_clips) then return {} end
         local selected = timeline_state.get_selected_clips()
         local out = {}
-        for _, clip in ipairs(selected) do
-            if type(clip) == "table" then
-                if clip.id then
-                    out[#out + 1] = clip.id
-                elseif clip.clip_id then
-                    out[#out + 1] = clip.clip_id
-                end
-            elseif type(clip) == "string" then
-                out[#out + 1] = clip
-            end
+        for _, entry in ipairs(selected) do
+            assert(type(entry) == "table" and type(entry.id) == "string" and entry.id ~= "",
+                "RippleDeleteSelection: selection entry must be {id = string}")
+            out[#out + 1] = entry.id
         end
         return out
     end
@@ -522,27 +517,24 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     }
 end
 
-function M.execute(args, db, _command)
-    -- Wrap the command executor invocation to provide the standalone execute API
-    -- expected by the test fixtures.
-    assert(db, "RippleDeleteSelection.execute: test wrapper requires db connection")
-    local db_conn = db
+-- Test-only entry point used by tests/test_013_ripple_delete_link_group.lua
+-- to drive the executor without standing up the full command_manager
+-- dispatch. Production callers MUST go through command_manager.execute().
+-- See todo_migrate_test_013_to_command_manager.md.
+function M.execute(args, db)
+    assert(db, "RippleDeleteSelection.execute: db required")
     local Command = require("command")
     local cmd = Command.create("RippleDeleteSelection", args.project_id)
     cmd:set_parameters(args)
-    
+
     local executors = {}
-    local undoers = {}
-    local last_error = nil
-    local function set_error(msg) last_error = msg end
-    
-    M.register(executors, undoers, db_conn, set_error)
-    
+    local last_error
+    M.register(executors, {}, db, function(msg) last_error = msg end)
+
     local success, result = executors["RippleDeleteSelection"](cmd)
     if not success then
         return { success = false, error_message = last_error or "Execution failed" }
     end
-    
     if args.dry_run then
         return { success = true, result_data = result }
     end

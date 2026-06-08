@@ -76,6 +76,22 @@ local function assert_valid_grade(grade)
         "ClipGrade.upsert: synced_at required (unix timestamp)")
 end
 
+-- Schema columns in INSERT order: clip_id, then CDL_CHANNELS, then trailing.
+local TRAILING_COLUMNS = { "lut_ref", "fidelity", "source", "stale", "synced_at" }
+
+local function build_upsert_sql()
+    local cols = { "clip_id" }
+    for _, ch in ipairs(CDL_CHANNELS)     do cols[#cols + 1] = ch end
+    for _, ch in ipairs(TRAILING_COLUMNS) do cols[#cols + 1] = ch end
+    local placeholders = {}
+    for i = 1, #cols do placeholders[i] = "?" end
+    return string.format(
+        "INSERT OR REPLACE INTO clip_grade (%s) VALUES (%s)",
+        table.concat(cols, ", "), table.concat(placeholders, ", "))
+end
+
+local UPSERT_SQL = build_upsert_sql()
+
 --- Insert-or-replace a grade for a clip.
 --- @param clip_id string                          owning clip's id
 --- @param grade   table  {cdl, lut_ref, fidelity, source, stale, synced_at}
@@ -87,31 +103,18 @@ function M.upsert(clip_id, grade, db)
     assert(db, "ClipGrade.upsert: no active database connection")
     assert_valid_grade(grade)
 
-    local cdl = grade.cdl
-    local stmt = assert(db:prepare([[
-        INSERT OR REPLACE INTO clip_grade (
-            clip_id,
-            slope_r, slope_g, slope_b,
-            offset_r, offset_g, offset_b,
-            power_r, power_g, power_b,
-            saturation,
-            lut_ref, fidelity, source, stale, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ]]), "ClipGrade.upsert: prepare failed")
+    local stmt = assert(db:prepare(UPSERT_SQL), "ClipGrade.upsert: prepare failed")
     stmt:bind_value(1, clip_id)
-    if cdl then
-        stmt:bind_value(2,  cdl.slope_r);  stmt:bind_value(3,  cdl.slope_g);  stmt:bind_value(4,  cdl.slope_b)
-        stmt:bind_value(5,  cdl.offset_r); stmt:bind_value(6,  cdl.offset_g); stmt:bind_value(7,  cdl.offset_b)
-        stmt:bind_value(8,  cdl.power_r);  stmt:bind_value(9,  cdl.power_g);  stmt:bind_value(10, cdl.power_b)
-        stmt:bind_value(11, cdl.saturation)
-    else
-        for i = 2, 11 do stmt:bind_value(i, nil) end
+    local idx = 2
+    local cdl = grade.cdl
+    for _, ch in ipairs(CDL_CHANNELS) do
+        stmt:bind_value(idx, cdl and cdl[ch] or nil)
+        idx = idx + 1
     end
-    stmt:bind_value(12, grade.lut_ref)
-    stmt:bind_value(13, grade.fidelity)
-    stmt:bind_value(14, grade.source)
-    stmt:bind_value(15, grade.stale)
-    stmt:bind_value(16, grade.synced_at)
+    for _, col in ipairs(TRAILING_COLUMNS) do
+        stmt:bind_value(idx, grade[col])
+        idx = idx + 1
+    end
     local ok = stmt:exec()
     stmt:finalize()
     assert(ok, "ClipGrade.upsert: stmt:exec failed for clip " .. clip_id)

@@ -1,6 +1,7 @@
 --- Clip model: Lua wrapper around clip database operations
 -- Provides CRUD operations for clips following the Lua-for-logic, C++-for-performance architecture
 local uuid = require("uuid")
+local watchers = require("core.watchers")
 local krono_ok, krono = pcall(require, "core.krono")
 local log = require("core.logger").for_area("timeline")
 
@@ -475,8 +476,7 @@ local function save_internal(self, _opts)
     end
     query:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_clip(self.id, self.owner_sequence_id)
+    watchers.notify_clip(self.id, self.owner_sequence_id)
 
     if krono_enabled and krono_start and krono_exists and krono_exec then
         log.detail("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
@@ -529,8 +529,7 @@ function M:delete()
 
     query:finalize()
 
-    -- FU-8: Notify entity watchers
-    require("core.watchers").notify_clip(self.id, self.owner_sequence_id)
+    watchers.notify_clip(self.id, self.owner_sequence_id)
 
     return true
 end
