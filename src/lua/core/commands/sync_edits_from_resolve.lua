@@ -15,7 +15,6 @@
 --- V1 ships VIDEO ONLY (audio support deferred — see
 --- `todo_t054_audio_support`). The classifier asserts on AUDIO clips.
 
-local ledger         = require("core.resolve_bridge.identity_ledger")
 local wire           = require("core.resolve_bridge.wire_decode")
 
 local M = {}
@@ -393,7 +392,7 @@ end
 local function walk_ledger_for_deleted(sequence_id, seen_resolve_ids, db,
                                         result)
     -- Rule 2.5: Use centralized iterator for sequence links (review item #1).
-    local links = ledger.iter_links_for_sequence(sequence_id, db)
+    local links = identity_ledger.iter_links_for_sequence(sequence_id, db)
     for _, link in ipairs(links) do
         local clip_id  = link.clip_id
         local resolve_item_id = link.resolve_item_id

@@ -21,9 +21,6 @@
 --- helper running (T030), while M.execute is integration-level (T034 once
 --- T029 lands). FR-022 — no mocks; tests pass real data structures.
 
-local ledger         = require("core.resolve_bridge.identity_ledger")
-local wire           = require("core.resolve_bridge.wire_decode")
-
 local M = {}
 
 local ClipGrade         = require("models.clip_grade")
@@ -175,7 +172,7 @@ end
 local function walk_ledger_for_stale(sequence_id, seen_clip_ids, db,
                                       captured)
     -- Rule 2.5: Use centralized iterator for sequence links (review item #1).
-    local links = ledger.iter_links_for_sequence(sequence_id, db)
+    local links = identity_ledger.iter_links_for_sequence(sequence_id, db)
     for _, link in ipairs(links) do
         local clip_id = link.clip_id
         if seen_clip_ids[clip_id] == nil then
