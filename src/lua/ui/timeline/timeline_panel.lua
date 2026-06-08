@@ -158,8 +158,10 @@ local function update_tab_scroll_arrows()
 end
 
 -- The active sequence's frame rate, used by both format and parse paths
--- in the playhead TC entry. Asserts loudly when fps metadata is missing
--- (rule 1.14: required state, no silent default).
+-- in the playhead TC entry. Returns nil when no sequence is displayed
+-- (callers degrade to empty TC display / "No sequence displayed" error);
+-- asserts loudly when a sequence IS active but its fps metadata is
+-- malformed (rule 1.14 — never invent a default rate).
 local function get_sequence_frame_rate_for_timecode()
     local rate = state and state.get_sequence_frame_rate and state.get_sequence_frame_rate() or nil
     if not rate then return nil end

@@ -135,6 +135,49 @@ local function test_assign_and_remove_shortcut()
     assert_equals("alpha current_shortcuts empty", #alpha.current_shortcuts, 0)
 end
 
+-- Regression: a key matched by a registered binding is "consumed" — the caller
+-- (handle_key in keyboard_shortcuts.lua) treats a truthy return as "Qt should
+-- stop routing this key". The contract must be "matched binding = consumed",
+-- regardless of whether the dispatched command itself succeeded. Command
+-- failures are surfaced via the log.warn at the dispatch site; conflating
+-- them with the consumption signal causes a matched-but-failed key to leak
+-- to Qt's native handling (e.g. Cmd+S falling through to the OS).
+local function test_handle_key_event_consumed_even_when_command_fails()
+    reset_registry_state()
+
+    registry.register_command({
+        id = "test.failing",
+        category = "Testing",
+        name = "Failing",
+        description = "",
+    })
+
+    local dispatched = false
+    local fake_cmd_mgr = {
+        get_executor = function(_) return function() end end,
+        execute_interactive = function(_, _)
+            dispatched = true
+            return { success = false, error_message = "intentional failure" }
+        end,
+    }
+    registry.set_command_manager(fake_cmd_mgr)
+
+    local ok_assign = registry.assign_shortcut("test.failing", "Cmd+L")
+    assert_true("assign succeeded", ok_assign)
+
+    local parsed = registry.parse_shortcut("Cmd+L")
+    local consumed = registry.handle_key_event(parsed.key, parsed.modifiers, nil)
+    assert_true("matched binding consumes key even on command failure", consumed)
+    assert_true("matched binding actually dispatched the command", dispatched)
+
+    -- Discriminator: an unregistered combo must NOT consume (otherwise an
+    -- unconditional `return true` would trivially pass the assertion above).
+    local unmatched_parsed = registry.parse_shortcut("Cmd+J")
+    local unmatched_consumed = registry.handle_key_event(
+        unmatched_parsed.key, unmatched_parsed.modifiers, nil)
+    assert_true("unmatched key is not consumed", not unmatched_consumed)
+end
+
 local function test_reset_to_defaults_reloads_toml()
     reset_registry_state()
 
@@ -166,6 +209,7 @@ local tests = {
     test_register_command_contract,
     test_assign_shortcut_conflicts,
     test_assign_and_remove_shortcut,
+    test_handle_key_event_consumed_even_when_command_fails,
     test_reset_to_defaults_reloads_toml,
 }
 

@@ -904,13 +904,17 @@ local function decode_marker_color_message(bytes)
     end
 
     -- custom_data: field 6 is omitted on the wire when empty (Resolve's
-    -- encoding) — boundary fold, not a fallback.
+    -- encoding). Normalize the wire-absence to "" here at the decode
+    -- boundary — ClipMarker.new asserts custom_data is a string ("" is
+    -- the documented "absent" form, see clip_marker.lua:52-53), so a
+    -- raw nil would crash every DRP import without a marker custom data
+    -- field. This is boundary normalization, not a silent fallback.
     return {
         color = color_name,
         note = strings[1],
         duration = math.floor(duration),
         name = strings[3],
-        custom_data = custom_data,
+        custom_data = custom_data or "",
     }
 end
 
@@ -1014,6 +1018,16 @@ local function unwrap_marker_blob(fields_blob_hex)
     if not raw_payloads then return nil end
     local blob_data = raw_payloads["BlobData"]
     if not blob_data or type(blob_data) ~= "string" then return nil end
+
+    -- Three-state discriminator: peek the 0x81 wrapper byte BEFORE invoking
+    -- decode_fields_blob_bytes. Non-marker per-item BlobData (e.g. retime
+    -- curve, sibling state) is wrapped in a different envelope and must
+    -- be silently skipped, not surfaced as a marker-blob parse failure.
+    -- decode_fields_blob_bytes ALSO checks byte 9, but its err message
+    -- ("FieldsBlob wrapper byte 9 must be 0x81...") would be wrapped
+    -- and surfaced — breaking the documented (nil, nil) "not a marker
+    -- blob" contract above.
+    if #blob_data < 10 or blob_data:byte(9) ~= 0x81 then return nil end
 
     local payload, err = M.decode_fields_blob_bytes(blob_data)
     if not payload then

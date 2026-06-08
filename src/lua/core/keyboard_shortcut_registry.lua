@@ -852,7 +852,12 @@ function M.handle_key_event(key, modifiers, context, extra_params)
     if result and not result.success and result.error_message then
         log.warn("%s: %s", matched.command_name, result.error_message)
     end
-    return result and result.success or false
+    -- Matched binding = consumed. Command failure is surfaced via the log.warn
+    -- above; it MUST NOT propagate to the consumption signal, or Qt's native
+    -- handling will receive a key the registry already claimed (e.g. Cmd+S
+    -- falling through to the OS Save dialog when the JVE Save command
+    -- returned success=false).
+    return true
 end
 
 -------------------------------------------------------------------------------
