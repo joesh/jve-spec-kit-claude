@@ -9,7 +9,10 @@
 //
 // Globals:
 //   qt_process_create()                       -> id
-//   qt_process_start(id, program, args)       -> ok, err
+//   qt_process_start(id, program, args)       -> true | (nil, err)
+//     QProcess::start is void; bad-args validation returns (nil, err)
+//     synchronously, but spawn failures (ENOENT, EACCES, …) surface
+//     asynchronously through error_cb.
 //   qt_process_wait_for_started(id, ms)       -> bool
 //   qt_process_state(id)                      -> "not_running"|"starting"|"running"
 //   qt_process_terminate(id)                  -> nil

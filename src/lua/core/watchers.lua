@@ -14,6 +14,16 @@ local subscribers = {}
 -- { [key: string] = { full_refresh = boolean, fields = { [field: string] = true }, ... } }
 local pending_notifications = {}
 
+-- Set by command_manager.set_in_transaction() at execution_depth 0↔1.
+-- queue_notify uses this to decide defer-vs-immediate without reaching
+-- back into command_manager (one-way dependency: command_manager → watchers).
+local _in_transaction = false
+
+function M.set_in_transaction(flag)
+    assert(type(flag) == "boolean", "watchers.set_in_transaction: flag must be boolean")
+    _in_transaction = flag
+end
+
 --- Watch an entity key.
 --- Supported keys: "clip:<id>", "sequence:<id>", "track:<id>", "media:<id>"
 --- @param key string The entity key to watch.
@@ -93,10 +103,8 @@ end
 --- @param event_data table|nil Optional data about the mutation.
 function M.queue_notify(key, event_data)
     assert(type(key) == "string" and key ~= "", "watchers.queue_notify: key must be a non-empty string")
-    
-    -- Use package.loaded to avoid circular dependency if possible, or lazy require
-    local cm = package.loaded["core.command_manager"]
-    if not cm or not cm.is_executing() then
+
+    if not _in_transaction then
         M.notify(key, event_data)
         return
     end
@@ -203,6 +211,7 @@ end
 function M.clear_all()
     subscribers = {}
     pending_notifications = {}
+    _in_transaction = false
 end
 
 return M

@@ -1,13 +1,11 @@
--- Inspector change listeners.
---
--- Single-channel pull-on-notify (MVC rule 3.0). Only Signals.connect is
--- used — no timeline_state.add_listener subscription, no direct
--- imperative push paths. Rule 2.20 audit T054 greps for this.
+-- Inspector change listeners. Pull-on-notify only (MVC rule 3.0); no
+-- direct imperative push paths.
 --
 -- Handlers:
---   project_changed(new_project_id)  — clear Inspector state (FR-017)
---   content_changed(sequence_id)     — pull current inspectables and refresh
---                                      non-dirty fields (FR-016, FR-016a)
+--   project_changed(new_project_id) — clear Inspector state (FR-017)
+--   per-entity watchers (clip:<id>, sequence:<id>) — refresh non-dirty
+--     fields when the watched entity mutates (FR-016, FR-016a). Watch
+--     tokens are managed by update_watches() based on current selection.
 
 local Signals = require("core.signals")
 local qt_constants = require("core.qt_constants")

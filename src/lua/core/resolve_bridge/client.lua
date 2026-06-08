@@ -53,7 +53,7 @@ function M.connect(socket_path, opts)
     local request_timeout_ms = require_opt(opts, "request_timeout_ms")
 
     local handle = qt_local_socket_create()
-    local in_flight = {}      -- corr_id → { on_complete = fn, timer_id = ... }
+    local in_flight = {}      -- corr_id → { on_complete = fn }
     local recv_buffer = ""
     local closed = false
 

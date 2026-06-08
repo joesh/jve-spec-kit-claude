@@ -1638,6 +1638,9 @@ function M.execute(command_or_name, params)
 
     -- Track execution depth for nested command support
     execution_depth = execution_depth + 1
+    if execution_depth == 1 then
+        require("core.watchers").set_in_transaction(true)
+    end
 
     -- Guard: ensure execution_depth is always decremented even if the body throws
     local ok, result_or_err, command_out = xpcall(function()
@@ -1645,6 +1648,9 @@ function M.execute(command_or_name, params)
     end, debug.traceback)
 
     execution_depth = execution_depth - 1
+    if execution_depth == 0 then
+        require("core.watchers").set_in_transaction(false)
+    end
     -- Clear root tracking when top-level command finishes
     if execution_depth == 0 then
         root_command_sequence_number = nil
