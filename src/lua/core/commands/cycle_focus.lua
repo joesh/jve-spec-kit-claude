@@ -16,7 +16,7 @@ local SPEC = {
     },
 }
 
-function M.execute(_, args)
+function M.execute(args)
     local focus_manager = require("ui.focus_manager")
     local focused_panel = focus_manager.get_focused_panel()
     if not focused_panel then return false end
@@ -35,16 +35,14 @@ function M.execute(_, args)
     return false
 end
 
-function M.register(executors, _, _, _)
-    executors.CycleFocus = function(command)
-        local args = command:get_all_parameters()
-        local result = M.execute(nil, args)
-        return result
+function M.register(command_executors, _command_undoers, _db, _set_last_error)
+    command_executors.CycleFocus = function(command)
+        return M.execute(command:get_all_parameters())
     end
 
     return {
         CycleFocus = {
-            executor = executors.CycleFocus,
+            executor = command_executors.CycleFocus,
             spec = SPEC,
         }
     }

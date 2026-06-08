@@ -16,8 +16,8 @@ local SPEC = {
     },
 }
 
-function M.execute(args, _)
-    local focus_is_text_input = args and args.focus_is_text_input
+function M.execute(args)
+    local focus_is_text_input = args.focus_is_text_input
     local cancel = require("core.cancel")
     cancel.request()
     log.detail("Cancel command: request flag set (text_input=%s)", tostring(focus_is_text_input))
@@ -66,16 +66,14 @@ function M.execute(args, _)
     return false
 end
 
-function M.register(executors, _, _, _)
-    executors.Cancel = function(command)
-        local args = command:get_all_parameters()
-        local result = M.execute(args)
-        return result
+function M.register(command_executors, _command_undoers, _db, _set_last_error)
+    command_executors.Cancel = function(command)
+        return M.execute(command:get_all_parameters())
     end
 
     return {
         Cancel = {
-            executor = executors.Cancel,
+            executor = command_executors.Cancel,
             spec = SPEC,
         }
     }

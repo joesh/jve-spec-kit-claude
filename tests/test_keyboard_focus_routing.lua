@@ -154,7 +154,7 @@ function command_manager_stub.execute_interactive(command_name)
     table.insert(command_manager_stub.executed_commands, command_name)
     if command_name == "Cancel" then
         local Cancel = require("core.commands.cancel")
-        return { success = Cancel.execute(nil, {}) }
+        return { success = Cancel.execute({}) }
     end
     return {success = true}
 end

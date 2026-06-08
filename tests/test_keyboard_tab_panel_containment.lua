@@ -1,84 +1,126 @@
 #!/usr/bin/env luajit
--- Retroactive test: Tab/Backtab in the keyboard dispatcher never returns
--- false from the Tab branch (which would let Qt's native focusNextPrevChild
--- cycle across panel boundaries). Per Joe's rule: Tab NEVER escapes one
--- panel to another.
+-- Black-box invariant: Tab/Backtab never escapes one panel to another. The
+-- dispatcher must consume (return true) so Qt's native focusNextPrevChild
+-- doesn't fire. Exception: when focus is on a floating-window text field
+-- (find_dialog), native field cycling IS the right behavior — return false.
 --
--- The Tab branch MUST either:
---   - dispatch via registry (return true), or
---   - call qt_cycle_panel_focus on the focused panel widget (return true), or
---   - fall back to consume silently (return true).
--- The prior code had a `return false` fall-through that would trigger Qt
--- native cycling, causing Tab from Inspector to jump to timeline. This
--- source-inspection test guards that invariant at test time.
+-- This test drives keyboard_shortcuts.handle_key with synthetic Tab events
+-- in each case and asserts the return value. Pre-rewrite this was a regex
+-- grep over keyboard_shortcuts.lua — it pinned source formatting and would
+-- pass with the rule violated as long as the comment text matched.
 
-package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-local test_env = require("test_env")
+require('test_env')
 
-print("=== keyboard_shortcuts: Tab branch never returns false ===\n")
+_G.qt_create_single_shot_timer = function() end
 
-local ks_path = test_env.resolve_repo_path("src/lua/core/keyboard_shortcuts.lua")
-local fh = assert(io.open(ks_path, "r"), "cannot open " .. ks_path)
-local src = fh:read("*a"); fh:close()
+-- Stubs for Qt-dependent dispatchers reachable from handle_key. Tab dispatch
+-- itself does NOT route through these; they're loaded as deps.
+package.loaded["ui.panel_manager"] = {
+    toggle_active_panel = function() end,
+    get_active_sequence_monitor = function() return nil end,
+}
+package.loaded["ui.timeline.timeline_panel"] = {
+    is_dragging = function() return false end,
+    focus_timeline_view = function() return true end,
+    focus_timecode_entry = function() return true end,
+    cancel_timecode_entry = function() return false end,
+}
+package.loaded["ui.project_browser"] = {
+    add_selected_to_timeline = function() end,
+    find_bar = nil,
+    hide_find_bar = function() end,
+}
+package.loaded["ui.fullscreen_viewer"] = {
+    is_active = function() return false end,
+    exit = function() end,
+}
 
--- Extract the Tab branch: it now lives directly in the main dispatcher.
-local tab_branch_start, tab_branch_end
-do
-    local s = src:find("if key == KEY.Tab or key == KEY.Backtab then")
-    assert(s, "could not locate Tab handling block in keyboard_shortcuts.lua")
-    tab_branch_start = s
-    -- Find the closing 'end' for this block. It's the first 'end' at the same
-    -- indentation level (4 spaces).
-    local next_end = src:find("\n    end\n", s)
-    assert(next_end, "could not locate end of Tab handling block")
-    tab_branch_end = next_end + 8  -- include "\n    end\n"
-end
+local database = require("core.database")
+local command_manager = require("core.command_manager")
 
-local tab_branch = src:sub(tab_branch_start, tab_branch_end)
+local TEST_DB = "/tmp/jve/test_keyboard_tab_panel_containment.db"
+os.remove(TEST_DB); os.remove(TEST_DB .. "-wal"); os.remove(TEST_DB .. "-shm")
+assert(database.init(TEST_DB))
+local db = database.get_connection()
+db:exec(require("import_schema"))
+
+local now = os.time()
+db:exec(string.format([[
+    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES ('proj1', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
+    INSERT INTO sequences (
+        id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate,
+        width, height, view_start_frame, view_duration_frames, playhead_frame,
+        selected_clip_ids, selected_edge_infos, selected_gap_infos,
+        current_sequence_number, created_at, modified_at
+    ) VALUES (
+        'seq1', 'proj1', 'Seq', 'sequence', 24, 1, 48000,
+        1920, 1080, 0, 240, 100, '[]', '[]', '[]', 0, %d, %d
+    );
+    INSERT INTO tracks (id, sequence_id, name, track_type, track_index,
+        enabled, locked, muted, soloed, volume, pan)
+    VALUES ('track_v1', 'seq1', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
+]], now, now, now, now))
+
+command_manager.init('seq1', 'proj1')
+
+local keyboard_shortcuts = require("core.keyboard_shortcuts")
+local focus_manager = require("ui.focus_manager")
+
+keyboard_shortcuts.init(command_manager, nil,
+    package.loaded["ui.timeline.timeline_panel"])
+
+-- Literal Qt key codes
+local QT_KEY_TAB     = 16777217  -- 0x01000001
+local QT_MOD_NONE    = 0
+local QT_MOD_SHIFT   = 0x02000000
+
+-- The Tab branch reads focused_panel via focus_manager. Force a known
+-- non-nil panel so the dispatcher doesn't assert mid-test.
+focus_manager.set_focused_panel("timeline_monitor")
+
+print("=== Tab/Backtab panel-containment invariant ===\n")
 
 local pass, fail = 0, 0
-local function check(label, ok, msg) if ok then pass = pass + 1 else fail = fail + 1; print("FAIL: " .. label .. (msg and (": " .. msg) or "")) end end
-
--- The Tab branch must contain no standalone `return false` that would let
--- Qt's native focusNextPrevChild fire and escape the panel. Return-false on
--- Tab is forbidden under the panel-containment rule.
--- Allow `return false` ONLY in the floating-window text-input branch
--- (find_dialog's own field cycling — not a main-panel Tab).
-local returns_false_count = 0
-for line in tab_branch:gmatch("[^\n]+") do
-    -- Skip comments
-    local stripped = line:match("^%s*(.-)%s*$") or ""
-    if not stripped:find("^%-%-") then
-        if stripped:find("^return%s+false$") or stripped:find("^return%s+false%s*%-") then
-            returns_false_count = returns_false_count + 1
-        end
-    end
+local function check(label, ok)
+    if ok then pass = pass + 1
+    else fail = fail + 1; print("FAIL: " .. label) end
 end
 
--- Exactly ONE return false is allowed: the find_dialog floating-window
--- text-input case. That branch's preceding `if` mentions
--- `focus_outside_main_window and focus_is_text_input`. No more, no less.
-check("Tab branch has at most one `return false` (the find_dialog case)",
-    returns_false_count <= 1,
-    "found " .. returns_false_count .. " return-false lines; each one is a panel-escape hazard")
+-- Case 1: Tab inside main window must be consumed (return true) — never
+-- false, which would let Qt's native focusNextPrevChild escape the panel.
+local handled = keyboard_shortcuts.handle_key({
+    key = QT_KEY_TAB,
+    modifiers = QT_MOD_NONE,
+    text = "\t",
+    focus_widget_is_text_input = false,
+    focus_outside_main_window = false,
+})
+check("Tab in main window is consumed (true)", handled == true)
 
--- The Tab branch must mention handle_key_event (our containment path via registry).
-check("Tab branch calls registry.handle_key_event",
-    tab_branch:find("handle_key_event") ~= nil,
-    "expected handle_key_event (command-system dispatch) in Tab branch")
+-- Case 2: Shift+Tab in main window must also be consumed. (Qt sends a
+-- distinct Backtab key code on Shift+Tab in some contexts; the dispatcher
+-- branches on `key == KEY.Tab or key == KEY.Backtab`. We exercise the
+-- Shift modifier path here.)
+local handled_shift = keyboard_shortcuts.handle_key({
+    key = QT_KEY_TAB,
+    modifiers = QT_MOD_SHIFT,
+    text = "\t",
+    focus_widget_is_text_input = false,
+    focus_outside_main_window = false,
+})
+check("Shift+Tab in main window is consumed (true)", handled_shift == true)
 
--- The Tab branch must return true as a last resort to consume the event
--- rather than letting it escape to Qt native cycling.
-check("Tab branch ends with return true",
-    tab_branch:find("return true%s+end") ~= nil,
-    "expected terminal return true (last-resort consumption) in Tab branch")
-
--- focus_manager.focus_panel_widget must exist and be callable.
-local focus_manager = require("ui.focus_manager")
-check("focus_manager exposes focus_panel_widget",
-    type(focus_manager.focus_panel_widget) == "function")
-check("focus_manager.focus_panel_widget handles unknown panel_id cleanly",
-    focus_manager.focus_panel_widget("nonexistent") == nil)
+-- Case 3: Tab on floating-window text field (find_dialog) must return false
+-- so Qt's native field cycling fires — the only legitimate Tab escape.
+local handled_dlg = keyboard_shortcuts.handle_key({
+    key = QT_KEY_TAB,
+    modifiers = QT_MOD_NONE,
+    text = "\t",
+    focus_widget_is_text_input = true,
+    focus_outside_main_window = true,
+})
+check("Tab on floating text input lets Qt cycle (false)", handled_dlg == false)
 
 print(string.format("\n--- %d passed, %d failed ---", pass, fail))
 if fail > 0 then error(fail .. " failures") end

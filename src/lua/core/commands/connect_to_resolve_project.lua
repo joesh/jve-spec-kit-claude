@@ -434,138 +434,120 @@ local function pos_matched_pairs(matched)
     return out
 end
 
--- `_command` accepted for register_executor's executor signature; not
--- used here because ConnectToResolveProject is non-undoable.
-function M.execute(args, db, _command)
-    validate_args(args)
-    assert(db, "ConnectToResolveProject: db required (passed by "
-        .. "register's executor closure; SQL isolation policy keeps "
-        .. "the global DB lookup out of commands)")
-
-    local jve_clips, audio_skipped = load_jve_clips_for_sequence(
-        args.sequence_id, db)
-    if #audio_skipped > 0 then
-        log.event("ConnectToResolveProject: skipping %d audio clip(s) "
-            .. "(audio_v1_unsupported — FR-024 V1 video-only scope)",
-            #audio_skipped)
-    end
-
-    -- Sequence load up-front so a missing sequence fails BEFORE the
-    -- helper request is queued (rule 1.14). Also needed for
-    -- change_token when stamp_position_matches=true.
-    local seq = Sequence.load(args.sequence_id)
-    assert(seq, "ConnectToResolveProject: sequence not found: "
-        .. args.sequence_id)
+-- Verify the JVE sequence has the fields the rate-mismatch guard needs.
+-- Position-match keys on (track_type, track_index, record_start) which is
+-- rate-relative — if rates disagree the same numeric record_start refers
+-- to different real times on each side and matches go silently wrong.
+local function assert_sequence_shape(seq, sequence_id)
+    assert(seq, "ConnectToResolveProject: sequence not found: " .. sequence_id)
     assert(seq.mutation_generation,
         "ConnectToResolveProject: sequence missing mutation_generation "
-        .. "— schema expected V12+ (FU-2)")
+        .. "(schema V12+, FU-2)")
     assert(type(seq.frame_rate) == "table"
         and type(seq.frame_rate.fps_numerator) == "number"
         and seq.frame_rate.fps_numerator > 0
         and type(seq.frame_rate.fps_denominator) == "number"
         and seq.frame_rate.fps_denominator > 0,
-        "ConnectToResolveProject: sequence missing frame_rate."
-        .. "fps_numerator/fps_denominator — required for the "
-        .. "rate-mismatch guard before position match (rule 1.14)")
+        "ConnectToResolveProject: sequence missing frame_rate.fps_*")
+end
+
+-- Returns true if rates agree; otherwise calls `notify` with the
+-- closed-set error code `timeline_rate_mismatch` and returns false.
+-- User-recoverable ("change Resolve's timeline rate back"), so this is
+-- a structured error not an assert.
+local function check_timeline_rates(seq, state, args)
+    local jve_integer_rate = math.ceil(
+        seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator)
+    local resolve_integer_rate = state.timeline_integer_rate
+    assert(type(resolve_integer_rate) == "number" and resolve_integer_rate > 0,
+        "ConnectToResolveProject: helper missing result.timeline_integer_rate "
+        .. "(helper-protocol §read_timeline)")
+    if jve_integer_rate == resolve_integer_rate then return true end
+    notify(args, nil, "timeline_rate_mismatch", string.format(
+        "JVE sequence %s is at TC rate %d (%d/%d); Resolve timeline is at "
+        .. "TC rate %d. Position match is rate-relative; rates must agree.",
+        args.sequence_id, jve_integer_rate,
+        seq.frame_rate.fps_numerator, seq.frame_rate.fps_denominator,
+        resolve_integer_rate))
+    return false
+end
+
+-- Persist matched pairs to the identity_ledger and build the result table.
+local function commit_matches(matched, audio_skipped, db)
+    local matched_log = {}
+    persist_matches(matched.marker_matched, db, "marker",         matched_log)
+    persist_matches(matched.pos_matched,    db, "position_match", matched_log)
+    log.event("ConnectToResolveProject: %d matched "
+        .. "(%d marker, %d position), %d unmatched, %d ambiguous",
+        #matched_log,
+        table_len(matched.marker_matched),
+        table_len(matched.pos_matched),
+        #matched.unmatched, #matched.ambiguous)
+    return {
+        matched       = matched_log,
+        unmatched     = matched.unmatched,
+        ambiguous     = matched.ambiguous,
+        audio_skipped = audio_skipped,
+    }
+end
+
+-- Stamp every position match (marker hits are already id-anchored).
+-- Calls `notify` with the final result once stamping finishes.
+local function stamp_pos_matches_then_notify(client, args, seq, matched, result)
+    local pairs_to_stamp = pos_matched_pairs(matched)
+    if #pairs_to_stamp == 0 then
+        result.stamped, result.skipped, result.failures = {}, {}, {}
+        notify(args, result, nil, nil)
+        return
+    end
+    local token = change_token.build(args.project_id,
+        args.sequence_id, seq.mutation_generation)
+    stamp_each(client, token, pairs_to_stamp,
+        function(stamped, skipped, failures)
+            result.stamped, result.skipped, result.failures = stamped, skipped, failures
+            log.event("ConnectToResolveProject: stamped %d, skipped %d, %d failures",
+                #stamped, #skipped, #failures)
+            notify(args, result, nil, nil)
+        end)
+end
+
+-- `_command` accepted for register_executor's executor signature; not
+-- used here because ConnectToResolveProject is non-undoable. Async-tail
+-- asserts crash by design — bridge_completion.lua's executor pcall only
+-- catches sync-phase asserts.
+function M.execute(args, db, _command)
+    validate_args(args)
+    assert(db, "ConnectToResolveProject: db required")
+
+    local jve_clips, audio_skipped = load_jve_clips_for_sequence(
+        args.sequence_id, db)
+    if #audio_skipped > 0 then
+        log.event("ConnectToResolveProject: skipping %d audio clip(s) "
+            .. "(audio_v1_unsupported)", #audio_skipped)
+    end
+
+    local seq = Sequence.load(args.sequence_id)
+    assert_sequence_shape(seq, args.sequence_id)
 
     log.event("ConnectToResolveProject: loading Resolve state for "
         .. "sequence %s (%d JVE clip(s))",
         args.sequence_id, #jve_clips)
 
     supervisor.with_client(notify, args, function(client)
-    load_resolve_state(client, function(state, code, message)
-        if state == nil then
-            notify(args, nil, code, message)
-            return
-        end
-        -- Async-tail asserts (M.match invariants, duplicate position
-        -- keys, ledger upsert) crash by design — bridge_completion.lua's
-        -- executor pcall only catches sync-phase asserts. Contract lives
-        -- in bridge_completion's docstring; mirror it here so a reader
-        -- of this file sees the rule without grep.
-
-        -- Position-match key `(track_type, track_index, record_start)`
-        -- is rate-relative. If Resolve's timeline rate disagrees with
-        -- JVE's sequence rate, the SAME numeric record_start refers to
-        -- DIFFERENT real times on the two sides and the match would
-        -- silently fire false positives. Surface as a structured
-        -- closed-set error (see helper-protocol.md error table) rather
-        -- than asserting — this is a user-recoverable condition
-        -- ("change Resolve's timeline rate back"), not an internal
-        -- invariant violation.
-        local jve_integer_rate = math.ceil(
-            seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator)
-        local resolve_integer_rate = state.timeline_integer_rate
-        assert(type(resolve_integer_rate) == "number"
-            and resolve_integer_rate > 0,
-            "ConnectToResolveProject: helper response missing "
-            .. "result.timeline_integer_rate — helper-protocol "
-            .. "§read_timeline contract violation")
-        if jve_integer_rate ~= resolve_integer_rate then
-            notify(args, nil, "timeline_rate_mismatch", string.format(
-                "JVE sequence %s is at TC rate %d (%d/%d); Resolve "
-                .. "timeline is at TC rate %d. Position match is "
-                .. "rate-relative; rates must agree before "
-                .. "ConnectToResolveProject can proceed.",
-                args.sequence_id, jve_integer_rate,
-                seq.frame_rate.fps_numerator,
-                seq.frame_rate.fps_denominator,
-                resolve_integer_rate))
-            return
-        end
-
-        local matched = M.match(jve_clips, state.identities, state.items)
-
-        local matched_log = {}
-        persist_matches(matched.marker_matched, db, "marker",
-            matched_log)
-        persist_matches(matched.pos_matched,    db, "position_match",
-            matched_log)
-
-        log.event("ConnectToResolveProject: %d matched "
-            .. "(%d marker, %d position), %d unmatched, %d ambiguous",
-            #matched_log,
-            table_len(matched.marker_matched),
-            table_len(matched.pos_matched),
-            #matched.unmatched, #matched.ambiguous)
-
-        local result = {
-            matched       = matched_log,
-            unmatched     = matched.unmatched,
-            ambiguous     = matched.ambiguous,
-            audio_skipped = audio_skipped,
-        }
-
-        if args.stamp_position_matches ~= true then
-            notify(args, result, nil, nil)
-            return
-        end
-
-        -- Stamp every position match. Marker-channel hits don't need
-        -- stamping (they're already id-anchored by the existing
-        -- marker that read_identities surfaced).
-        local pairs_to_stamp = pos_matched_pairs(matched)
-        if #pairs_to_stamp == 0 then
-            result.stamped  = {}
-            result.skipped  = {}
-            result.failures = {}
-            notify(args, result, nil, nil)
-            return
-        end
-
-        local token = change_token.build(args.project_id,
-            args.sequence_id, seq.mutation_generation)
-        stamp_each(client, token, pairs_to_stamp,
-            function(stamped, skipped, failures)
-                result.stamped  = stamped
-                result.skipped  = skipped
-                result.failures = failures
-                log.event("ConnectToResolveProject: stamped %d, "
-                    .. "skipped %d (already-stamped), %d failures",
-                    #stamped, #skipped, #failures)
+        load_resolve_state(client, function(state, code, message)
+            if state == nil then
+                notify(args, nil, code, message)
+                return
+            end
+            if not check_timeline_rates(seq, state, args) then return end
+            local matched = M.match(jve_clips, state.identities, state.items)
+            local result = commit_matches(matched, audio_skipped, db)
+            if args.stamp_position_matches ~= true then
                 notify(args, result, nil, nil)
-            end)
-    end)
+                return
+            end
+            stamp_pos_matches_then_notify(client, args, seq, matched, result)
+        end)
     end)
 end
 
