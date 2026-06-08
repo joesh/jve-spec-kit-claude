@@ -1,0 +1,13 @@
+jve.resources: Lua package.path: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/src/lua
+jve.resources: Lua package.cpath: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/lua_modules
+=== test_codec_status_on_startup ===
+  verify: 3 clips in seq d8dedcb5 after insert
+  setup: 3 BRAW clips + 3 persisted DecodeFailed errors in DB
+[18:39:34] [ui] WARN: Keyboard shortcuts disabled (JVE_TEST_MODE set)
+  cache[fake_1.braw] = {offline=true, error=DecodeFailed}
+  cache[fake_2.braw] = {offline=true, error=DecodeFailed}
+  cache[fake_3.braw] = {offline=true, error=DecodeFailed}
+  OK: fake_1.braw offline=true error_code=DecodeFailed
+  OK: fake_2.braw offline=true error_code=DecodeFailed
+  OK: fake_3.braw offline=true error_code=DecodeFailed
+✅ test_codec_status_on_startup.lua passed

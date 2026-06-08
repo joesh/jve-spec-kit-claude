@@ -1,0 +1,5 @@
+jve.resources: Lua package.path: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/src/lua
+jve.resources: Lua package.cpath: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/lua_modules
+=== test_tmb_same_file_two_tracks.lua ===
+  SKIP: test file missing: /Users/joe/Local/Anamnesis/TEMP FOOTAGE/Alt Opening Anamnesis V2/A Little Seagull Production Title (transparent BG).mov
+  test_tmb_same_file_two_tracks.lua passed (skipped)

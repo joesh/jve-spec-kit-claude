@@ -1,0 +1,70 @@
+jve.resources: Lua package.path: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/src/lua
+jve.resources: Lua package.cpath: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/lua_modules
+[18:39:24] [ticks] WARN: Play: SLOW START 85ms at frame 122965 — prefetch=0ms SetPlayhead=0ms videoCache=0ms audio=85ms
+[18:39:26] [ticks] WARN: advancePosition: fractional_frames went negative (-0.0058) — PLL overcorrection? (elapsed=0.0002s speed=1.00 pll=0.0183)
+[18:39:28] [ticks] WARN: advancePosition: fractional_frames went negative (-0.0036) — PLL overcorrection? (elapsed=0.0003s speed=1.00 pll=0.0772)
+[18:39:28] [ticks] WARN: advancePosition: fractional_frames went negative (-0.0200) — PLL overcorrection? (elapsed=0.0018s speed=1.00 pll=0.1072)
+=== test_playback_av_sync.lua ===
+  ✓ Created GPU video surface
+  ✓ TMB created: video V1 + audio A1, 4 clips each
+  ✓ PlaybackController created and wired
+  ✓ Audio activated (AOP + SSE)
+
+-- 1. Forward playback through rapid cuts --
+  PASS: parked at frame 122965
+  PASS: video advanced: 122965 → 123061
+  PASS: surface delivered 96 frames
+  PASS: video frames monotonically non-decreasing
+  PASS: playback rate: 24.5fps (target 25±50%)
+  PASS: audio playhead advanced: 0 → 3829333 us
+  PASS: no audio underruns during playback
+    [drift-dump] peak idx=10 max=42.7ms baseline_offset=8.0ms — window:
+      t+ 0.000s vf=122995 vt=  1200.0ms au=  1226.7ms reldrift=  18.7ms
+      t+ 0.072s vf=122997 vt=  1280.0ms au=  1312.0ms reldrift=  24.0ms
+      t+ 0.142s vf=122999 vt=  1360.0ms au=  1354.7ms reldrift=  13.3ms
+      t+ 0.214s vf=123001 vt=  1440.0ms au=  1440.0ms reldrift=   8.0ms
+      t+ 0.288s vf=123003 vt=  1520.0ms au=  1525.3ms reldrift=   2.7ms
+      t+ 0.361s vf=123004 vt=  1560.0ms au=  1610.7ms reldrift=  42.7ms ◄ peak
+      t+ 0.437s vf=123006 vt=  1640.0ms au=  1653.3ms reldrift=   5.3ms
+      t+ 0.513s vf=123008 vt=  1720.0ms au=  1738.7ms reldrift=  10.7ms
+      t+ 0.589s vf=123010 vt=  1800.0ms au=  1824.0ms reldrift=  16.0ms
+      t+ 0.661s vf=123012 vt=  1880.0ms au=  1909.3ms reldrift=  21.3ms
+      t+ 0.739s vf=123014 vt=  1960.0ms au=  1952.0ms reldrift=  16.0ms
+  PASS: A/V drift max 42.7ms (limit 150ms)
+  PASS: A/V drift slope: 1.86 ms/s (limit 25.0 ms/s)
+    [info] 2 clip transitions, 37 position callbacks
+    [info] 96 frames in 3.9s = 24.5 fps
+  PASS: Test 1 forward: backward jumps ≤ 2 (got 0)
+  PASS: Test 1 forward: no emergency skips (got 0)
+  PASS: Test 1 forward: no emergency holds (got 0)
+  PASS: Test 1 forward: cadence p95 45.8ms < 80ms (2x frame period)
+  PASS: Test 1 forward: drift p95 0.038s < 0.15s
+  PASS: Test 1 forward: audio-master not engaged at stop
+    [diag] Test 1 forward: 610 ticks, cadence p50/p95=41.6/45.8ms, drift p50/p95=0.014/0.038s, skips=0 holds=0 backward=0
+
+-- 2. Seek accuracy + latency --
+  PASS: seek target: CURRENT_FRAME=123100 (expect 123100)
+  PASS: seek delivered frame: surface count 97 → 98
+  PASS: seek latency: 5.8ms (limit 500ms)
+    [bench] seek to 123100: 5.8ms
+
+-- 3. Seek + resume playback --
+  PASS: parked at clip boundary 123043
+  PASS: resumed forward: 123043 → 123075
+  PASS: surface frames delivered after resume: 99 → 118
+  PASS: no audio underruns after seek+resume
+    [info] resumed from 123043, advanced to 123075 (32 frames)
+  PASS: Test 3 seek+resume: backward jumps ≤ 2 (got 0)
+  PASS: Test 3 seek+resume: no emergency skips (got 0)
+  PASS: Test 3 seek+resume: no emergency holds (got 0)
+  PASS: Test 3 seek+resume: cadence p95 58.9ms < 80ms (2x frame period)
+  PASS: Test 3 seek+resume: drift p95 0.120s < 0.15s
+  PASS: Test 3 seek+resume: audio-master not engaged at stop
+    [diag] Test 3 seek+resume: 174 ticks, cadence p50/p95=34.1/58.9ms, drift p50/p95=0.037/0.120s, skips=0 holds=0 backward=0
+
+-- Cleanup --
+  ✓ Audio deactivated and closed
+  ✓ PlaybackController and TMB closed
+
+28/28 checks passed
+✅ test_playback_av_sync.lua passed

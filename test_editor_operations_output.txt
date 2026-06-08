@@ -1,0 +1,24 @@
+jve.resources: Lua package.path: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/src/lua
+jve.resources: Lua package.cpath: /Users/joe/Local/jve-spec-kit-claude/build/bin/jve.app/Contents/Resources/lua_modules
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for A005_05201652_C006 PT1 VFX_01.mov (4e45acc8-bb41-4a87-b019-857312e0207e): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for A005_05201848_C017 VFX_V3.mov (35549ee5-68f3-4c8c-8841-65a876f6889c): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for A026_11060045_C008 PT1 PT2 VFX_V2.mov (1ec0556f-24b9-46f3-aae8-c3e5f9bfeda8): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for A026_11060045_C008 PT3 VFX_V3.mov (98e22153-dca9-4b27-b464-fdbaf67ed432): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for A026_11060045_C008 PT3 VFX_V4.mov (98bb9f82-d484-42ad-83ee-2ccd1d698f04): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:04] [media] WARN: drp_importer: FieldsBlob decode failed for IMG_3270.MOV Render.mov (d8880f60-cb43-4410-abbe-f29bcfe088ef): FieldsBlob wrapper byte 9 must be 0x81, got 0x80
+[18:39:05] [media] WARN: pick_majority_audio_sample_rate: no audio media decoded; defaulting to 48000 Hz (Resolve standard default — TODO: decode Fairlight FieldsBlob)
+[integration] Validating initial state...
+[integration] Initial state valid. Running tests...
+  [PASS] roll_on_v1_doesnt_shift_downstream
+  [PASS] roll_on_audio_doesnt_shift_downstream
+  [PASS] ripple_on_v1_shifts_downstream
+  [PASS] roll_vs_ripple_produce_different_results
+  [PASS] roll_at_gap_boundary
+  [PASS] undo_redo_cycle_preserves_state
+  [PASS] split_clip_preserves_coverage
+  [PASS] toggle_clip_enabled
+  [PASS] nudge_clip_position
+  [PASS] roll_on_large_audio_track
+
+[integration] 10/10 tests passed, 0 failed
+✅ test_editor_operations.lua passed
