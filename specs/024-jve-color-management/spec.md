@@ -22,6 +22,7 @@
 - Q: V1 ambition for `davinci_yrgb_cm` and `aces` modes — record-only, YRGB CM apply, or both apply? → A: YRGB CM applies end-to-end; ACES is record-only with fidelity badge. Full ACES IDT/ODT apply deferred to a later spec.
 - Q: Per-clip Input Color Space override + outbound DRT round-trip? → A: **JVE is read-only for color in V1.** No user-facing edit surface — no per-clip ICS override, no project color-settings edit UI, no outbound color writes through the bridge. JVE READS color metadata (source tags, bridge-recorded modes) and applies the correct display pipeline. All color *editing* surfaces deferred to a later spec.
 - Q: Pixel-match tolerance — visual A/B vs Resolve, and CPU/GPU mirror? → A: **≤2/255 per channel visual (JVE preview vs Resolve preview); ≤1/255 per channel CPU/GPU mirror.** Visual tolerance sits at the edge of perceptibility on a calibrated display; mirror tolerance reflects what's achievable when both surfaces share tetrahedral interpolation and float32 math.
+- Q: Fidelity badge values — reuse `partial`/`unrepresentable` or add new ones? → A: **Reuse `partial`** for both 024 cases (ACES record-only and LUT-color-space mismatch). Each badge case carries a descriptive tooltip naming the specific gap ("ACES mode — IDT/ODT not applied in V1", "LUT expects working color space X, project working space is Y") so the user sees WHY the badge fired, not just that it did.
 
 ---
 
@@ -111,9 +112,10 @@ and ACES are tracked so future work doesn't break the contract.
   read-only for color in V1.)
 - A 3D LUT applied at a point in the pipeline where the working
   color space differs from what the LUT expects: the renderer MUST
-  surface this as a "color space mismatch" fidelity warning (badge
-  reuses spec 023 FR-015 vocabulary) rather than silently producing
-  wrong pixels.
+  surface a `partial` fidelity badge (reusing spec 023 FR-015
+  vocabulary) with a tooltip naming the specific gap ("LUT expects
+  working color space X, project working space is Y"), rather than
+  silently producing wrong pixels.
 
 ## Requirements *(mandatory)*
 
@@ -190,13 +192,18 @@ when JVE begins to support color writes.
     per-clip grade.
   - `aces`: **record-only**. Mode is persisted on the link and
     surfaced to the Inspector; pixel apply uses the per-clip grade
-    only (no IDT/ODT). Clips in ACES projects MUST surface the
-    fidelity badge per FR-014 so the user knows the preview is
-    incomplete.
+    only (no IDT/ODT). Clips in ACES projects MUST surface a
+    `partial` fidelity badge per FR-014 with the tooltip
+    "ACES mode — IDT/ODT not applied in V1" so the user sees
+    why the preview is incomplete, not just that it is.
 - **FR-014**: When the renderer can't faithfully reproduce Resolve's
-  preview for a recorded mode (V1: `aces` mode), the affected
-  clip MUST surface a fidelity badge (reusing spec 023 vocabulary)
-  — never a silent fallback.
+  preview for a recorded mode (V1: `aces` mode) OR a 3D LUT is
+  applied across a working-color-space mismatch (Edge Case), the
+  affected clip MUST surface a `partial` fidelity badge (reusing
+  spec 023 FR-015 vocabulary). Each badge case MUST carry a
+  descriptive tooltip naming the specific gap (e.g. "ACES mode —
+  IDT/ODT not applied in V1", "LUT expects working color space X,
+  project working space is Y"). Never a silent fallback.
 
 **UI surface**
 
@@ -313,4 +320,3 @@ when JVE begins to support color writes.
 
 - For YRGB CM apply (FR-013): does Resolve's `ExportLUT` in CM mode bake the full working→output transform, or only the node graph? Affects whether YRGB CM apply is "load baked LUT" (cheap) or "ship the transforms" (more work). Plan-phase spike.
 - Default Input Color Space for untagged sources when project is `davinci_yrgb` — Rec.709 obvious, confirm?
-- Fidelity badge — new value for "color-mode-mismatch" or reuse existing "partial"?
