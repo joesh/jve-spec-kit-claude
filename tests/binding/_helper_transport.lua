@@ -66,6 +66,9 @@ function M.start(opts)
     qt_process_set_stderr_cb(proc, function(chunk)
         io.write("[helper stderr] " .. chunk)
     end)
+    qt_process_set_finished_cb(proc, function(code, status)
+        io.write(string.format("[helper process] EXITED code=%d status=%s\n", code, tostring(status)))
+    end)
     qt_process_start(proc, "python3", {
         opts.repo_root .. "/tools/resolve-helper/helper.py",
         "--socket", opts.sock_path,
@@ -139,18 +142,23 @@ function M.request(fix, verb, args)
     qt_local_socket_flush(fix.sock)
 
     local deadline = fix._request_timeout_ticks
-    while #fix._chunks == 0 and deadline > 0 do
+    local response = ""
+    while deadline > 0 do
+        if #fix._chunks > 0 then
+            response = response .. table.concat(fix._chunks)
+            fix._chunks = {}
+        end
+        if response:sub(-1) == "\n" then
+            break
+        end
         qt_constants.CONTROL.PROCESS_EVENTS()
         os.execute("sleep 0.02")
         deadline = deadline - 1
     end
-    assert(#fix._chunks > 0, string.format(
-        "_helper_transport.request: no response within %d ticks for verb=%s",
-        fix._request_timeout_ticks, verb))
+    assert(response:sub(-1) == "\n", string.format(
+        "_helper_transport.request: response missing newline terminator for verb=%s (got %d bytes)",
+        verb, #response))
 
-    local response = table.concat(fix._chunks)
-    assert(response:sub(-1) == "\n",
-        "_helper_transport.request: response missing newline terminator")
     local parsed = protocol.parse_response(response:sub(1, -2))
     assert(parsed.id == corr, string.format(
         "_helper_transport.request: correlation mismatch (sent %s, got %s)",

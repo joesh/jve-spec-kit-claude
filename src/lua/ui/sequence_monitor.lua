@@ -88,6 +88,21 @@ function SequenceMonitor.new(config)
 
     local self = setmetatable({}, SequenceMonitor)
 
+    self:_init_state(config)
+
+    -- Create widgets. config.headless = true skips Qt widget construction
+    -- for unit tests that exercise the view-state surface (bound_engine,
+    -- cached_frame_for, etc.) without bootstrapping the full editor UI.
+    if config.headless ~= true then
+        self:_create_widgets()
+    end
+
+    self:_wire_signals()
+
+    return self
+end
+
+function SequenceMonitor:_init_state(config)
     self.view_id = config.view_id
 
     -- 017: role binds this view to a specific engine. Explicit config.role
@@ -133,21 +148,9 @@ function SequenceMonitor.new(config)
 
     -- 017 resource model: engines are role-bound singletons owned by
     -- core.playback.transport. Views are pure glass — they observe whichever
-    -- canonical engine matches their role. The local-engine fallback that
-    -- used to live here at startup (when layout.lua constructs monitors
-    -- before transport.init runs) was anti-pattern #5 in spec.md:
-    -- the orphan engine spent its life being discarded a few signals later,
-    -- and the rebind dance mutated the canonical engine's _on_* fields
-    -- from external code.
-    --
-    -- New shape: self.engine is nil until transport_ready (or until the
-    -- canonical engine already exists at construction time). All engine
-    -- derefs in this module guard with `if self.engine then`; widget
-    -- setup that needs the engine (set_surface) defers to the
-    -- transport_ready handler. Tests that need a working engine bootstrap
-    -- transport first OR stub package.loaded["core.playback.transport"]
-    -- with a fake that exposes is_bootstrapped()/engine_for_role().
+    -- canonical engine matches their role.
     local transport = require("core.playback.transport")
+    
     self._cb_table = {
         on_show_frame       = function(fh, meta) self:_on_show_frame(fh, meta) end,
         on_show_gap         = function()         self:_on_show_gap() end,
@@ -162,14 +165,9 @@ function SequenceMonitor.new(config)
         -- the canonical role engine when transport.init runs.
         self.engine = nil
     end
+end
 
-    -- Create widgets. config.headless = true skips Qt widget construction
-    -- for unit tests that exercise the view-state surface (bound_engine,
-    -- cached_frame_for, etc.) without bootstrapping the full editor UI.
-    if config.headless ~= true then
-        self:_create_widgets()
-    end
-
+function SequenceMonitor:_wire_signals()
     -- Re-read marks from model when mark commands execute
     self._marks_changed_id = Signals.connect("marks_changed", function(sequence_id)
         if self.sequence and self.sequence_id == sequence_id then
@@ -194,9 +192,10 @@ function SequenceMonitor.new(config)
     end)
 
     -- Refresh content bounds when clips change (insert, delete, undo, redo)
+    -- Priority 110: run AFTER PlaybackEngine's own content_changed handler (100)
+    -- so that self.engine.total_frames is already updated.
     self._content_changed_id = Signals.connect("content_changed", function(sequence_id)
         if self.sequence_id == sequence_id then
-            self.engine:notify_content_changed()
             self.total_frames = self.engine.total_frames
             -- Clamp viewport to new total_frames
             local physical = self.total_frames - self.start_frame
@@ -228,7 +227,7 @@ function SequenceMonitor.new(config)
             self:on_model_changed()
             self:_notify()
         end
-    end)
+    end, 110)
 
     -- Clear stale frame on project switch
     self._project_changed_id = Signals.connect("project_changed", function(_new_project_id)
@@ -239,12 +238,7 @@ function SequenceMonitor.new(config)
     end, 50)
 
     -- Bind to the role-bound transport engine once transport.init has
-    -- constructed the singletons. layout.lua creates monitor widgets at
-    -- app launch, before any project is open; at that point self.engine
-    -- is nil and views render the empty-state placeholder. When the user
-    -- opens a project, transport.init fires transport_ready and we bind
-    -- here. Idempotent: if we're already on the canonical engine
-    -- (constructor took the bootstrapped branch), no-op.
+    -- constructed the singletons.
     self._transport_ready_id = Signals.connect("transport_ready", function()
         local canonical = require("core.playback.transport").engine_for_role(self.role)
         if canonical == self.engine then return end
@@ -252,34 +246,20 @@ function SequenceMonitor.new(config)
     end, 60)
 
     -- SyncGradesFromResolve (spec 023 FR-016/FR-017) writes clip_grade
-    -- rows out-of-band from any content/playhead change; without this
-    -- subscriber a parked viewer keeps showing the pre-sync look until
-    -- the user scrubs or plays. on_model_changed re-pulls the parked
-    -- frame, which runs _apply_clip_grade against the now-fresh row.
-    -- No-op during playback (engine.on_model_changed gates on parked
-    -- state) — the live tick loop already pulls fresh grades per frame.
+    -- rows out-of-band from any content/playhead change.
     self._grades_changed_id = Signals.connect("grades_changed", function(sequence_id)
         if self.sequence_id ~= sequence_id then return end
         self:on_model_changed()
     end)
 
     -- Media file bytes changed (in-place rewrite) OR status flipped
-    -- (e.g. file came back online). PlaybackEngine already purged TMB
-    -- caches via its own subscribers; what the monitor still owns is
-    -- kicking a fresh pull at the parked playhead so the user sees
-    -- the new frame instead of whatever surface the last decode left
-    -- behind. During playback the tick loop handles this automatically.
-    --
     -- Priority 110: PlaybackEngine's subscribers run at default 100 —
-    -- we MUST fire after them, or the re-seek pulls from the still-stale
-    -- TMB and the surface keeps the old pixels.
+    -- we MUST fire after them.
     local function on_media_event(path) self:_on_media_event(path) end
     self._media_status_changed_id =
         Signals.connect("media_status_changed", on_media_event, 110)
     self._media_content_changed_id =
         Signals.connect("media_content_changed", on_media_event, 110)
-
-    return self
 end
 
 --- True when at least one clip at the current playhead references
@@ -533,26 +513,44 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
         "SequenceMonitor(%s):load_sequence: sequence_id required, got %s",
         self.view_id, tostring(sequence_id)))
 
+    self:_save_current_playhead(sequence_id)
+
+    opts = opts or {}
+    local seq = Sequence.load(sequence_id)
+    assert(seq, string.format(
+        "SequenceMonitor:load_sequence: sequence %s not found", sequence_id))
+
+    self:_sync_model(seq)
+    self:_sync_engine(sequence_id, opts, seq)
+    self:_init_viewport()
+    self:_restore_playhead(seq)
+    self:_update_title(seq)
+
+    self:_notify()
+
+    log.event("%s: loaded %s %s (%d frames @ %d/%d fps)",
+        self.view_id, seq.kind or "?", sequence_id:sub(1, 8),
+        self.total_frames, self.fps_num, self.fps_den)
+end
+
+function SequenceMonitor:_save_current_playhead(new_sequence_id)
     -- Save current masterclip playhead before switching to a DIFFERENT sequence.
     -- Skip when reloading the same sequence: external writers (e.g. MatchFrame)
     -- may have updated marks+playhead in DB — saving stale in-memory state would
     -- clobber those fresh values.
     if self.sequence and self.sequence:is_master()
-       and self.sequence_id ~= sequence_id then
+       and self.sequence_id ~= new_sequence_id then
         self:save_playhead_to_db()
     end
+end
 
-    opts = opts or {}
-
-    -- Load sequence model
-    local seq = Sequence.load(sequence_id)
-    assert(seq, string.format(
-        "SequenceMonitor:load_sequence: sequence %s not found", sequence_id))
-
-    self.sequence_id = sequence_id
+function SequenceMonitor:_sync_model(seq)
+    self.sequence_id = seq.id
     self.sequence = seq
     self._project_gen = project_gen.current()
+end
 
+function SequenceMonitor:_sync_engine(sequence_id, opts, seq)
     -- Resolve the audio bus rate THIS monitor will output at. Engine no longer
     -- infers from the sequence — it requires an explicit positive rate.
     local output_audio_rate = resolve_output_audio_rate(seq)
@@ -565,17 +563,21 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     self.total_frames = self.engine.total_frames
     self.fps_num = self.engine.fps_num
     self.fps_den = self.engine.fps_den
+end
 
+function SequenceMonitor:_init_viewport()
     -- Reset viewport to full extent (zoom-to-fit)
     self.viewport_start = self.start_frame
     self.viewport_duration = self.total_frames - self.start_frame
+end
 
+function SequenceMonitor:_restore_playhead(seq)
     -- Restore playhead from DB (both masterclips and timelines).
     -- Sequence.load() asserts playhead_position is NOT NULL — no fallback.
     local saved_playhead = seq.playhead_position
     assert(type(saved_playhead) == "number", string.format(
         "SequenceMonitor(%s):load_sequence: playhead_position must be number, got %s (seq=%s)",
-        self.view_id, type(saved_playhead), sequence_id:sub(1, 8)))
+        self.view_id, type(saved_playhead), seq.id:sub(1, 8)))
     -- Preserve the user's saved playhead in self.playhead (the value mirrored
     -- back into timeline_state and re-persisted on tab swap). monitor.playhead
     -- has no upper clamp — matches set_playhead/seek_to_frame contract
@@ -588,20 +590,16 @@ function SequenceMonitor:load_sequence(sequence_id, opts)
     if engine_target < self.start_frame then
         log.warn("load_sequence(%s): saved playhead %d below start_frame %d; "
             .. "seeking engine to start (self.playhead preserved at saved value)",
-            sequence_id:sub(1, 8), saved_playhead, self.start_frame)
+            seq.id:sub(1, 8), saved_playhead, self.start_frame)
         engine_target = self.start_frame
     end
     self.engine:seek(engine_target)
+end
 
+function SequenceMonitor:_update_title(seq)
     -- Update title
-    local title = seq:is_master() and "Source" or "Timeline"
-    self:_set_title(string.format("%s: %s", title, seq.name or sequence_id))
-
-    self:_notify()
-
-    log.event("%s: loaded %s %s (%d frames @ %d/%d fps)",
-        self.view_id, seq.kind or "?", sequence_id:sub(1, 8),
-        self.total_frames, self.fps_num, self.fps_den)
+    local kind_label = seq:is_master() and "Source" or "Timeline"
+    self:_set_title(string.format("%s: %s", kind_label, seq.name or seq.id))
 end
 
 --- Unload current sequence.

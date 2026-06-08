@@ -21,17 +21,17 @@ local ks_path = test_env.resolve_repo_path("src/lua/core/keyboard_shortcuts.lua"
 local fh = assert(io.open(ks_path, "r"), "cannot open " .. ks_path)
 local src = fh:read("*a"); fh:close()
 
--- Extract the Tab branch: it lives in the file-local helper
--- `try_handle_tab_key`. The function signature line is unique in this
--- file; scan forward to its closing `end` (top-level `end` at column 0).
+-- Extract the Tab branch: it now lives directly in the main dispatcher.
 local tab_branch_start, tab_branch_end
 do
-    local s = src:find("local function try_handle_tab_key%(")
-    assert(s, "could not locate try_handle_tab_key in keyboard_shortcuts.lua")
+    local s = src:find("if key == KEY.Tab or key == KEY.Backtab then")
+    assert(s, "could not locate Tab handling block in keyboard_shortcuts.lua")
     tab_branch_start = s
-    local next_end = src:find("\nend\n", s)
-    assert(next_end, "could not locate end of try_handle_tab_key")
-    tab_branch_end = next_end + 5  -- include "\nend\n"
+    -- Find the closing 'end' for this block. It's the first 'end' at the same
+    -- indentation level (4 spaces).
+    local next_end = src:find("\n    end\n", s)
+    assert(next_end, "could not locate end of Tab handling block")
+    tab_branch_end = next_end + 8  -- include "\n    end\n"
 end
 
 local tab_branch = src:sub(tab_branch_start, tab_branch_end)
@@ -62,16 +62,16 @@ check("Tab branch has at most one `return false` (the find_dialog case)",
     returns_false_count <= 1,
     "found " .. returns_false_count .. " return-false lines; each one is a panel-escape hazard")
 
--- The Tab branch must mention qt_cycle_panel_focus (our containment path).
-check("Tab branch calls qt_cycle_panel_focus",
-    tab_branch:find("qt_cycle_panel_focus") ~= nil,
-    "expected qt_cycle_panel_focus (panel-local focus cycling) in Tab branch")
+-- The Tab branch must mention handle_key_event (our containment path via registry).
+check("Tab branch calls registry.handle_key_event",
+    tab_branch:find("handle_key_event") ~= nil,
+    "expected handle_key_event (command-system dispatch) in Tab branch")
 
--- The Tab branch must mention focus_manager.focus_panel_widget — how we
--- resolve the focused panel's container widget to pass to cycle_panel_focus.
-check("Tab branch calls focus_manager.focus_panel_widget",
-    tab_branch:find("focus_panel_widget") ~= nil,
-    "expected focus_panel_widget lookup in Tab branch")
+-- The Tab branch must return true as a last resort to consume the event
+-- rather than letting it escape to Qt native cycling.
+check("Tab branch ends with return true",
+    tab_branch:find("return true%s+end") ~= nil,
+    "expected terminal return true (last-resort consumption) in Tab branch")
 
 -- focus_manager.focus_panel_widget must exist and be callable.
 local focus_manager = require("ui.focus_manager")

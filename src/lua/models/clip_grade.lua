@@ -79,11 +79,12 @@ end
 --- Insert-or-replace a grade for a clip.
 --- @param clip_id string                          owning clip's id
 --- @param grade   table  {cdl, lut_ref, fidelity, source, stale, synced_at}
---- @param db      table  open SQLite connection
+--- @param db      table|nil  optional SQLite connection
 function M.upsert(clip_id, grade, db)
     assert(type(clip_id) == "string" and clip_id ~= "",
         "ClipGrade.upsert: clip_id required")
-    assert(db, "ClipGrade.upsert: db connection required")
+    db = db or database.get_connection()
+    assert(db, "ClipGrade.upsert: no active database connection")
     assert_valid_grade(grade)
 
     local cdl = grade.cdl
@@ -156,42 +157,42 @@ function M.load(clip_id, db)
         "ClipGrade.load: clip_id required")
     db = db or database.get_connection()
     assert(db, "ClipGrade.load: no active database connection")
-    local stmt = assert(db:prepare([[
+    
+    local sql = [[
         SELECT slope_r, slope_g, slope_b, offset_r, offset_g, offset_b,
                power_r, power_g, power_b, saturation,
                lut_ref, fidelity, source, stale, synced_at
         FROM clip_grade WHERE clip_id = ?
-    ]]), "ClipGrade.load: prepare failed")
-    stmt:bind_value(1, clip_id)
-    if not stmt:exec() or not stmt:next() then
-        stmt:finalize(); return nil
-    end
-    local slope_r = stmt:value(0)
-    local cdl
-    if slope_r ~= nil then
-        cdl = {
-            slope_r    = slope_r,
-            slope_g    = stmt:value(1),
-            slope_b    = stmt:value(2),
-            offset_r   = stmt:value(3),
-            offset_g   = stmt:value(4),
-            offset_b   = stmt:value(5),
-            power_r    = stmt:value(6),
-            power_g    = stmt:value(7),
-            power_b    = stmt:value(8),
-            saturation = stmt:value(9),
+    ]]
+    
+    local rows = database.select_rows(db, sql, { clip_id }, function(stmt)
+        local slope_r = stmt:value(0)
+        local cdl
+        if slope_r ~= nil then
+            cdl = {
+                slope_r    = slope_r,
+                slope_g    = stmt:value(1),
+                slope_b    = stmt:value(2),
+                offset_r   = stmt:value(3),
+                offset_g   = stmt:value(4),
+                offset_b   = stmt:value(5),
+                power_r    = stmt:value(6),
+                power_g    = stmt:value(7),
+                power_b    = stmt:value(8),
+                saturation = stmt:value(9),
+            }
+        end
+        return {
+            cdl       = cdl,
+            lut_ref   = stmt:value(10),
+            fidelity  = stmt:value(11),
+            source    = stmt:value(12),
+            stale     = stmt:value(13),
+            synced_at = stmt:value(14),
         }
-    end
-    local out = {
-        cdl       = cdl,
-        lut_ref   = stmt:value(10),
-        fidelity  = stmt:value(11),
-        source    = stmt:value(12),
-        stale     = stmt:value(13),
-        synced_at = stmt:value(14),
-    }
-    stmt:finalize()
-    return out
+    end)
+    
+    return rows[1] -- returns nil if no row
 end
 
 return M

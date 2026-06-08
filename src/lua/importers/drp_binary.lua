@@ -693,6 +693,14 @@ end
 -- resolves to an audio pool item).
 -- ---------------------------------------------------------------------------
 
+local function require_string_size(s, min_len, label)
+    if type(s) ~= "string" or #s < min_len then
+        return nil, string.format("%s too short (expected >= %d)",
+            label or "string", min_len)
+    end
+    return true
+end
+
 --- Strip the [BE32 version][BE32 size][0x81] wrapper and zstd-decompress.
 -- The 9-byte wrapper is shared by Sm2Mp FieldsBlobs and the inner BlobData
 -- payload of marker blobs, so both decode paths share this helper.
@@ -700,9 +708,8 @@ end
 -- @return string|nil: decompressed payload on success
 -- @return string|nil: human-readable error on failure
 function M.decode_fields_blob_bytes(bytes)
-    if type(bytes) ~= "string" or #bytes < 10 then
-        return nil, "FieldsBlob bytes too short (< 9-byte wrapper + frame)"
-    end
+    local ok, err = require_string_size(bytes, 10, "FieldsBlob bytes")
+    if not ok then return nil, err end
 
     local marker = bytes:byte(9)
     if marker ~= 0x81 then
@@ -722,13 +729,12 @@ end
 -- @return string|nil: decompressed payload bytes on success
 -- @return string|nil: human-readable error on failure
 function M.decode_fields_blob(hex_str)
-    if type(hex_str) ~= "string" or #hex_str < 18 then
-        return nil, "FieldsBlob hex too short (< 9 bytes of wrapper)"
-    end
+    local ok, err = require_string_size(hex_str, 18, "FieldsBlob hex")
+    if not ok then return nil, err end
 
     local bytes = M.hex_to_bytes(hex_str)
-    if not bytes or #bytes < 9 then
-        return nil, "FieldsBlob hex is not valid hex or decoded < 9 bytes"
+    if not bytes then
+        return nil, "FieldsBlob hex is not valid hex"
     end
 
     return M.decode_fields_blob_bytes(bytes)
@@ -889,6 +895,14 @@ local function decode_marker_color_message(bytes)
     if not color_name then return nil end
     local duration = tonumber(strings[2])
     if not duration then return nil end
+    
+    -- Rule 2.13/1.14: enforce ClipMarker duration rule (>= 1) at the decoder.
+    if duration < 1 then
+        log.warn("DRP: marker %q has invalid duration %d; dropping marker",
+            strings[3], duration)
+        return nil
+    end
+
     -- custom_data: field 6 is omitted on the wire when empty (Resolve's
     -- encoding) — boundary fold, not a fallback.
     return {
@@ -896,7 +910,7 @@ local function decode_marker_color_message(bytes)
         note = strings[1],
         duration = math.floor(duration),
         name = strings[3],
-        custom_data = custom_data or "",
+        custom_data = custom_data,
     }
 end
 
@@ -999,13 +1013,7 @@ local function unwrap_marker_blob(fields_blob_hex)
     local _, raw_payloads = M.decode_tlv_fields(bytes, 8, field_count)
     if not raw_payloads then return nil end
     local blob_data = raw_payloads["BlobData"]
-    if not blob_data then return nil end
-
-    -- Peek the marker byte BEFORE attempting decompress so we distinguish
-    -- non-marker (skip) from marker-shaped-but-corrupted (surface).
-    if type(blob_data) ~= "string" or #blob_data < 10 or blob_data:byte(9) ~= 0x81 then
-        return nil  -- not a marker blob (different per-item state)
-    end
+    if not blob_data or type(blob_data) ~= "string" then return nil end
 
     local payload, err = M.decode_fields_blob_bytes(blob_data)
     if not payload then

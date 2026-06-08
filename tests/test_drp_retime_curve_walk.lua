@@ -45,12 +45,14 @@ local mtba_no_retime = "02405251eb851eb851"
 
 -- Build a synthetic Sequence XML element wrapping both clips on a single
 -- video track. Pattern matches tests/test_drp_retimed_clip_speed.lua.
-local function elem(tag, text, children)
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
     return {
         tag = tag,
-        attrs = {},
+        attrs = attrs,
         children = children or {},
-        text = text or "",
+        text = text,
     }
 end
 
@@ -67,7 +69,7 @@ local seq = elem("Sequence", "", {
         elem("Type", "0"),
         wrap_clips(
             -- Clip 1: retimed
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "01-333-2 retimed"),
                 elem("Start", "90000"),
                 elem("Duration", "132"),
@@ -78,7 +80,7 @@ local seq = elem("Sequence", "", {
                 elem("MediaFrameRate", "0000000000003940"),  -- 25fps LE double
             }),
             -- Clip 2: same content, retiming removed
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "01-333-2 unretimed"),
                 elem("Start", "90132"),
                 elem("Duration", "132"),
@@ -92,7 +94,7 @@ local seq = elem("Sequence", "", {
     }),
 })
 
-local video_tracks = drp_importer.parse_resolve_tracks(seq, 25)
+local video_tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25})
 assert(#video_tracks == 1, "expected 1 video track")
 assert(#video_tracks[1].clips == 2, string.format(
     "expected 2 clips, got %d", #video_tracks[1].clips))

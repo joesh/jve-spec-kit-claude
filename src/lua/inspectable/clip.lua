@@ -102,6 +102,19 @@ function ClipInspectable:get(field)
         end
     end
 
+    -- ClipGrade fields (spec 023).
+    if field == "fidelity" or field == "source" or field == "synced_at" then
+        local ClipGrade = require("models.clip_grade")
+        local grade = ClipGrade.load(self.clip_id)
+        if not grade then return nil end
+        if field == "synced_at" then
+            assert(type(grade.synced_at) == "number" and grade.synced_at >= 0,
+                "ClipGrade synced_at must be a non-negative number")
+            return os.date("%Y-%m-%d %H:%M:%S", grade.synced_at)
+        end
+        return grade[field]
+    end
+
     -- Edit-session overrides win.
     if self.metadata_overrides[field] ~= nil then
         return self.metadata_overrides[field]
@@ -194,6 +207,18 @@ end
 
 function ClipInspectable:supports_multi_edit()
     return true
+end
+
+function ClipInspectable:get_watcher_keys()
+    local keys = { "clip:" .. self.clip_id }
+    if self.sequence_id and self.sequence_id ~= "" then
+        table.insert(keys, "sequence:" .. self.sequence_id)
+    end
+    -- If we have a media_id (masterclip source), we should watch it too
+    if self.clip_ref and self.clip_ref.media_id then
+        table.insert(keys, "media:" .. self.clip_ref.media_id)
+    end
+    return keys
 end
 
 return ClipInspectable

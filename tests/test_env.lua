@@ -64,7 +64,7 @@ M.repo_root = repo_root
 -- fixtures: 588 GB anamnesis rushes, etc). Source code stays sync-based
 -- per specs/020-debug-terminal/phase1-test-overhaul.md (virtiofs cache
 -- staleness on host edits), so the synced tree wins when both have it.
-local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-spec-kit-claude"
+local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-workspace"
 
 function M.resolve_repo_path(relative)
     if not relative or relative == "" then return repo_root end
@@ -77,6 +77,25 @@ function M.resolve_repo_path(relative)
         return GUEST_REPO_MOUNT .. "/" .. relative
     end
     return synced
+end
+
+--- Assert that the database schema version matches database.SCHEMA_VERSION.
+-- @param db userdata: Database connection
+-- @param label string: Optional label for the assertion
+function M.assert_schema_version(db, label)
+    local database = require("core.database")
+    local stmt = db:prepare("SELECT MAX(version) FROM schema_version")
+    assert(stmt, (label or "assert_schema_version") .. ": schema_version table missing")
+    assert(stmt:exec(), (label or "assert_schema_version") .. ": query failed")
+    assert(stmt:next(), (label or "assert_schema_version") .. ": no version row")
+    local version = stmt:value(0)
+    stmt:finalize()
+
+    if version ~= database.SCHEMA_VERSION then
+        error(string.format(
+            "%s: Expected schema V%d, got V%d",
+            label or "FAIL", database.SCHEMA_VERSION, version))
+    end
 end
 
 --- Touch every path in the current DB's `media` table so that reachability

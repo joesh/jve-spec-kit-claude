@@ -774,7 +774,7 @@ end
 -- Handle a key event and execute matching command via TOML keybindings.
 -- Iterates all bindings for the combo key; picks first context match.
 -- Context-specific bindings are checked before global (no-context) bindings.
-function M.handle_key_event(key, modifiers, context)
+function M.handle_key_event(key, modifiers, context, extra_params)
     -- Strip non-significant modifiers (KeypadModifier, GroupSwitchModifier)
     -- that Qt adds to arrow keys, numpad keys, etc.
     local bit = require("bit")
@@ -834,6 +834,11 @@ function M.handle_key_event(key, modifiers, context)
             matched.command_name, matched.shortcut and matched.shortcut.string or combo_key))
 
     local params = {}
+    if extra_params then
+        for k, v in pairs(extra_params) do
+            params[k] = v
+        end
+    end
     for k, v in pairs(matched.named_params) do
         params[k] = v
     end
@@ -847,7 +852,7 @@ function M.handle_key_event(key, modifiers, context)
     if result and not result.success and result.error_message then
         log.warn("%s: %s", matched.command_name, result.error_message)
     end
-    return true
+    return result and result.success or false
 end
 
 -------------------------------------------------------------------------------

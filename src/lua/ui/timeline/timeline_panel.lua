@@ -162,7 +162,8 @@ end
 -- (rule 1.14: required state, no silent default).
 local function get_sequence_frame_rate_for_timecode()
     local rate = state and state.get_sequence_frame_rate and state.get_sequence_frame_rate() or nil
-    assert(rate and rate.fps_numerator and rate.fps_denominator,
+    if not rate then return nil end
+    assert(rate.fps_numerator and rate.fps_denominator,
         "timeline_panel: missing sequence fps metadata")
     return rate
 end
@@ -179,9 +180,11 @@ local function is_relative_timecode_input(text)
 end
 
 local function get_formatted_playhead_timecode()
+    local rate = get_sequence_frame_rate_for_timecode()
+    if not rate then return "" end
+    local playhead = assert(state.get_playhead_position(), "timeline_panel: get_playhead_position returned nil")
     local frame_utils = require("core.frame_utils")
-    return frame_utils.format_timecode(state.get_playhead_position(),
-        get_sequence_frame_rate_for_timecode())
+    return frame_utils.format_timecode(playhead, rate)
 end
 
 local function set_timecode_text_if_changed(text)
@@ -263,6 +266,7 @@ end
 -- frame. Relative input ("+10" / "-2s") is a delta off the current position.
 local function parse_typed_timecode_to_raw_frame(text)
     local rate = get_sequence_frame_rate_for_timecode()
+    if not rate then return nil, "No sequence displayed" end
     local current = state.get_playhead_position()
     local parsed, err = timecode_input.parse(text, rate, {base_time = current})
     if not parsed then return nil, err end

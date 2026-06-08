@@ -10,6 +10,10 @@ local log = require("core.logger").for_area("database")
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
 M.SCHEMA_VERSION = 13
+
+M.SCHEMA_INCOMPATIBLE_MSG =
+    "Project schema V%d is incompatible with this version of JVE (requires V%d).\n\n" ..
+    "Re-import from the original source (.drp) to create a compatible project."
 local path_utils = require("core.path_utils")
 
 local BIN_NAMESPACE = "bin"
@@ -621,9 +625,7 @@ function M.set_path(path)
             if existing_version and existing_version ~= M.SCHEMA_VERSION then
                 db_connection:close()
                 db_connection = nil
-                error(string.format(
-                    "Project schema V%d is incompatible with this version of JVE (requires V%d).\n\n" ..
-                    "Re-import from the original source (.drp) to create a compatible project.",
+                error(string.format(M.SCHEMA_INCOMPATIBLE_MSG,
                     existing_version, M.SCHEMA_VERSION))
             end
         else
@@ -785,6 +787,24 @@ function M.select_rows(conn, sql, params, row_mapper)
     end
     stmt:finalize()
     return rows
+end
+
+--- Run a prepared SELECT COUNT(*) and return the integer result.
+--- Fails fast if the query returns no row or multiple rows.
+--- @param conn   sqlite3 connection
+--- @param sql    SQL string (must return a single COUNT(*) row)
+--- @param params array of bind values
+--- @return integer count
+function M.count(conn, sql, params)
+    local rows = M.select_rows(conn, sql, params, function(stmt)
+        return stmt:value(0)
+    end)
+    assert(#rows == 1, string.format(
+        "database.count: expected 1 row, got %d for sql=%q", #rows, sql))
+    local val = rows[1]
+    assert(type(val) == "number", string.format(
+        "database.count: expected numeric result, got %s", type(val)))
+    return val
 end
 
 -- Transaction management API

@@ -32,11 +32,11 @@ function M.start(sock_path)
     return transport.start({
         sock_path             = sock_path,
         repo_root             = repo_root(),
-        log_level             = "WARNING",
+        log_level             = "DEBUG",
         started_timeout_ms    = 5000,
         bind_poll_count       = 100,        -- 100 * 50ms = 5s
         corr_prefix           = "corr",
-        request_timeout_ticks = 500,        -- 500 * 20ms = 10s
+        request_timeout_ticks = 1500,       -- 1500 * 20ms = 30s
     })
 end
 

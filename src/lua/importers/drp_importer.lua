@@ -1231,7 +1231,12 @@ end
 -- @param seq_elem table: XML sequence element
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @return video_tracks, audio_tracks, media_lookup
-local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+local function parse_resolve_tracks(seq_elem, opts)
+    local frame_rate = opts.frame_rate
+    local media_ref_path_map = opts.media_ref_path_map
+    local media_ref_name_map = opts.media_ref_name_map
+    local media_ref_sample_rate_map = opts.media_ref_sample_rate_map
+
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_resolve_tracks: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -1576,11 +1581,13 @@ local function parse_resolve_tracks(seq_elem, frame_rate, media_ref_path_map, me
 
             -- The clip's own Sm2Ti DbId. Real Resolve exports carry one on every
             -- timeline clip; per spec 023 FR-011b the importer adopts it as the
-            -- JVE clip.id when present, else mints a UUID (Clip.create handles
-            -- the nil case). Markers (Sm2TiItemLockableBlob) attach by BlobOwner
-            -- = DbId, so absent DbId = no marker linkage either.
+            -- JVE clip.id. Rule 2.13: no silent minting. If Resolve didn't
+            -- provide a DbId, subsequent marker attachment via BlobOwner
+            -- would orphan anyway.
             local clip_db_id = clip_elem.attrs and clip_elem.attrs.DbId
-            if clip_db_id == "" then clip_db_id = nil end
+            assert(clip_db_id and clip_db_id ~= "", string.format(
+                "drp_importer: timeline clip %q missing Sm2Ti DbId attribute",
+                tostring(clip_name)))
 
             local clip = {
                 clip_id = clip_db_id,
@@ -1680,7 +1687,11 @@ local parse_clip_item
 -- @param frame_rate number: Frame rate from DRP metadata (required)
 -- @param media_ref_path_map table|nil: MediaRef DbId → original file path (for stale-path resolution)
 -- @return table: Timeline data
-local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+local function parse_sequence(seq_elem, opts)
+    local frame_rate = opts.frame_rate
+    local media_ref_path_map = opts.media_ref_path_map
+    local media_ref_name_map = opts.media_ref_name_map
+    local media_ref_sample_rate_map = opts.media_ref_sample_rate_map
     -- NSF: frame_rate is required
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",
@@ -1700,8 +1711,7 @@ local function parse_sequence(seq_elem, frame_rate, media_ref_path_map, media_re
     -- Primary: Resolve-native format (Sm2TiTrack with Sm2TiVideoClip/AudioClip).
     -- Has authoritative retime curves (MTBA), MediaFrameRate, native-rate source
     -- coordinates, and TracksBA TC data. DRP files always contain this format.
-    local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(
-        seq_elem, frame_rate, media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+    local resolve_video_tracks, resolve_audio_tracks, media_map = parse_resolve_tracks(seq_elem, opts)
     timeline.media_files = media_map
 
     for _, track in ipairs(resolve_video_tracks) do
@@ -1890,12 +1900,19 @@ end
 -- Locate the root <Project>/<SM_Project> element in a parsed project.xml.
 -- Returns nil + err string when no recognized container is present.
 local function locate_project_element(project_root)
-    local project_elem = find_element(project_root, "Project")
-    if project_elem then return project_elem end
+    -- Rule 2.32: Avoid redundant recursive walks (review item #2).
+    -- The project container is usually a top-level child of the root.
     if project_root.tag == "SM_Project" or project_root.tag == "Project" then
         return project_root
     end
-    return find_element(project_root, "SM_Project")
+    
+    local project_elem = find_direct_child(project_root, "Project")
+        or find_direct_child(project_root, "SM_Project")
+    if project_elem then return project_elem end
+
+    -- Fallback to recursive find if not top-level
+    return find_element(project_root, "Project")
+        or find_element(project_root, "SM_Project")
 end
 
 -- Some sequence XMLs wrap the timeline tracks in <Sequence>; others land
@@ -1993,7 +2010,15 @@ function M.parse_drp_file(drp_path, progress_cb)
 
     -- Parse project.xml
     local project_xml_path = tmp_dir .. "/project.xml"
-    local project_root, parse_err = parse_xml_file(project_xml_path)
+    local project_handle, open_err = io.open(project_xml_path, "r")
+    if not project_handle then
+        os.execute("rm -rf " .. tmp_dir)
+        return {success = false, error = "Failed to open project.xml: " .. tostring(open_err)}
+    end
+    local project_xml_text = file_read_all(project_handle, "parse_drp_file")
+    project_handle:close()
+
+    local project_root, parse_err = parse_xml_string(project_xml_text)
     if not project_root then
         os.execute("rm -rf " .. tmp_dir)
         return {success = false, error = "Failed to parse project.xml: " .. tostring(parse_err)}
@@ -2070,8 +2095,12 @@ function M.parse_drp_file(drp_path, progress_cb)
                 -- (compound clips, deleted timelines).
                 local fps_for_parsing = metadata and metadata.fps
                 if fps_for_parsing and fps_for_parsing > 0 then
-                    local timeline = parse_sequence(seq_elem, fps_for_parsing,
-                        media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map)
+                    local timeline = parse_sequence(seq_elem, {
+                        frame_rate = fps_for_parsing,
+                        media_ref_path_map = media_ref_path_map,
+                        media_ref_name_map = media_ref_name_map,
+                        media_ref_sample_rate_map = media_ref_sample_rate_map,
+                    })
                     apply_timeline_metadata(timeline, metadata, fps_for_parsing,
                         project.settings, seq_ref_id)
                     table.insert(timelines, timeline)
@@ -2084,14 +2113,8 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- 023: attach decoded clip markers to their clips by Sm2Ti DbId. Read the
-    -- raw project.xml (the marker blob map isn't reachable via the parsed tree).
+    -- 023: attach decoded clip markers to their clips by Sm2Ti DbId.
     do
-        local marker_handle = assert(io.open(project_xml_path, "r"),
-            "parse_drp_file: cannot reopen project.xml for marker scan: "
-            .. project_xml_path)
-        local project_xml_text = file_read_all(marker_handle, "parse_drp_file:markers")
-        marker_handle:close()
         local markers_by_owner = parse_resolve_markers(project_xml_text)
         for _, timeline in ipairs(timelines) do
             for _, track in ipairs(timeline.tracks) do

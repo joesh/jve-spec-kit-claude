@@ -10,7 +10,7 @@ local GitHubIssueCreator = {}
 local GITHUB_CONFIG = {
     api_url = "https://api.github.com",
     owner = nil,  -- Repository owner (e.g., "joevt")
-    repo = nil,   -- Repository name (e.g., "jve-spec-kit-claude")
+    repo = nil,   -- Repository name (e.g., "jve-editor")
     token = nil   -- Personal access token
 }
 

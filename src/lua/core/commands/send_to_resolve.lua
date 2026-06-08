@@ -48,7 +48,11 @@ local function out_path_for_export(sequence_id)
     local home = assert(os.getenv("HOME"),
         "SendToResolve: HOME env var required for export path")
     local dir = home .. "/.jve/resolve-exports"
-    os.execute(string.format("mkdir -p %q", dir))
+    
+    -- Rule 2.32: Use robust quoting for shell commands.
+    local q_dir = string.format("'%s'", dir:gsub("'", "'\\''"))
+    os.execute(string.format("mkdir -p %s", q_dir))
+    
     return string.format("%s/%s.drt", dir, sequence_id)
 end
 
@@ -81,7 +85,7 @@ function M.execute(args, db, _command)
     local payload = payload_builder.build(db,
         args.project_id, args.sequence_id)
     local out_path = out_path_for_export(args.sequence_id)
-    local authored = drt_writer.author(out_path, payload)
+    local authored = drt_writer.author_a005_compatible(out_path, payload)
     log.event("SendToResolve: authored %s", out_path)
 
     -- FR-004: round-trip the just-authored file through JVE's own

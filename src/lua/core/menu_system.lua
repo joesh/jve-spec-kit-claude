@@ -84,7 +84,8 @@ local qt = {
     SET_ACTION_ENABLED = qt_constants.MENU.SET_ACTION_ENABLED,
     SET_ACTION_CHECKED = qt_constants.MENU.SET_ACTION_CHECKED,
     SET_ACTION_TEXT = qt_constants.MENU.SET_ACTION_TEXT,
-    SET_ACTION_SHORTCUT = qt_constants.MENU.SET_ACTION_SHORTCUT
+    SET_ACTION_SHORTCUT = qt_constants.MENU.SET_ACTION_SHORTCUT,
+    SET_TOOLTIP = qt_constants.PROPERTIES.SET_TOOLTIP
 }
 
 --- Initialize menu system
@@ -477,6 +478,12 @@ local function build_menu(menu_elem, parent_menu, menu_path)
 
             -- No shortcut passed — display text set later by update_shortcut_display()
             local action = qt.CREATE_MENU_ACTION(menu, item_name, "", checkable)
+
+            if child.attrs.tooltip then
+                if qt.SET_TOOLTIP then
+                    qt.SET_TOOLTIP(action, child.attrs.tooltip)
+                end
+            end
 
             if command_name then
                 qt.CONNECT_MENU_ACTION(action, create_action_callback(command_name, params))

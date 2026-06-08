@@ -93,12 +93,14 @@ print("\n--- Test 4: Blob duration 0 must not override source_extent ---")
 -- Currently the merge checks `pmc.num_frames > 0` so this should already pass.
 
 -- Helper: construct a mock XML element
-local function elem(tag, text, children)
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
     return {
         tag = tag,
-        attrs = {},
+        attrs = attrs,
         children = children or {},
-        text = text or "",
+        text = text,
     }
 end
 
@@ -115,7 +117,7 @@ local seq = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip1"),
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -127,7 +129,7 @@ local seq = elem("Sequence", "", {
     }),
 })
 
-local v, _, ml = drp_importer.parse_resolve_tracks(seq, 24)
+local v, _, ml = drp_importer.parse_resolve_tracks(seq, {frame_rate = 24})
 assert(#v == 1 and #v[1].clips == 1)
 local media = ml["/vol/media/test.mov"]
 assert(media, "media_lookup should have entry")
@@ -151,7 +153,7 @@ local seq_path = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip1"),
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -167,7 +169,7 @@ local seq_path = elem("Sequence", "", {
 -- Blob path map has a DIFFERENT (possibly garbled) path for same MediaRef
 local blob_path_map = { ref_001 = "/garbled/path/vide\x1ao.mov" }
 
-local vt5, _, ml5 = drp_importer.parse_resolve_tracks(seq_path, 24, blob_path_map)
+local vt5, _, ml5 = drp_importer.parse_resolve_tracks(seq_path, {frame_rate = 24, media_ref_path_map = blob_path_map})
 assert(#vt5 == 1 and #vt5[1].clips == 1, "should have 1 track with 1 clip")
 -- The clip's file_path should be from MediaFilePath, NOT blob
 assert(vt5[1].clips[1].file_path == "/correct/path/video.mov",
@@ -186,7 +188,7 @@ local seq_no_mfp = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip2"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -201,7 +203,7 @@ local seq_no_mfp = elem("Sequence", "", {
 
 local blob_path_map2 = { ref_002 = "/valid/blob/path.mov" }
 
-local vt5b = drp_importer.parse_resolve_tracks(seq_no_mfp, 24, blob_path_map2)
+local vt5b = drp_importer.parse_resolve_tracks(seq_no_mfp, {frame_rate = 24, media_ref_path_map = blob_path_map2})
 assert(#vt5b == 1 and #vt5b[1].clips == 1)
 assert(vt5b[1].clips[1].file_path == "/valid/blob/path.mov",
     string.format("empty MediaFilePath should fallback to blob, got '%s'",
@@ -218,7 +220,7 @@ local seq_name = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "My Custom Label"),  -- timeline clip name (user's label)
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -234,7 +236,7 @@ local seq_name = elem("Sequence", "", {
 -- MC name map: original filename from master clip <Name>
 local mc_name_map = { ref_mc1 = "A001_C001.mov" }
 
-local vt6, _, ml6 = drp_importer.parse_resolve_tracks(seq_name, 24, nil, mc_name_map)
+local vt6, _, ml6 = drp_importer.parse_resolve_tracks(seq_name, {frame_rate = 24, media_ref_name_map = mc_name_map})
 assert(#vt6 == 1)
 -- media_lookup keyed by UUID (ref_mc1) now
 local media6 = ml6["ref_mc1"]
@@ -249,7 +251,7 @@ assert(vt6[1].clips[1].name == "My Custom Label",
 print("  ✓ media_lookup.name = MC name, clip.name = timeline label")
 
 -- Test 6b: Without MC name map, falls through to clip.name
-local _, _, ml6b = drp_importer.parse_resolve_tracks(seq_name, 24, nil, nil)
+local _, _, ml6b = drp_importer.parse_resolve_tracks(seq_name, {frame_rate = 24})
 -- Without name map, key is still UUID (ref_mc1 from MediaRef)
 local media6b = ml6b["ref_mc1"]
 assert(media6b, "media_lookup should have entry without name map")

@@ -89,8 +89,7 @@ print(string.format("  %d timeline clips, %d orphaned", clip_count, orphan_clips
 local no_fps = scalar("SELECT COUNT(*) FROM media WHERE fps_numerator IS NULL OR fps_numerator <= 0")
 assert(no_fps == 0, string.format("%d media records missing frame_rate", no_fps))
 
--- Step 6: Schema version
-local version = scalar("SELECT MAX(version) FROM schema_version")
-assert(version == 6, string.format("Expected schema version 6, got %d", version))
+-- Step 6: Schema version (match core/database.lua)
+test_env.assert_schema_version(db)
 
 print("\n✅ test_drp_uuid_dedup.lua passed")

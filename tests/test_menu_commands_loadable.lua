@@ -29,9 +29,9 @@ local function parse_menus_xml()
     -- source path) — survives symlinks, alternate working dirs, and
     -- running from a VM-guest mount where the host's absolute path is
     -- not present. The pre-2026-05-25 PWD-match-with-host-path-fallback
-    -- broke in the UTM guest because PWD via ~/jve was /Users/joe/jve,
-    -- which doesn't contain "jve-spec-kit-claude" and fell through to
-    -- the hardcoded host path that doesn't exist in the guest.
+    -- broken in the UTM guest because PWD via ~/jve was /Users/joe/jve,
+    -- which didn't match the expected repo root and fell through to
+    -- a hardcoded host path that doesn't exist in the guest.
     local xml_path = test_env.resolve_repo_path("menus.xml")
 
     local f = io.open(xml_path, "r")

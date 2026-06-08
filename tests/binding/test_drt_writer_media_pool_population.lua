@@ -49,7 +49,7 @@ local media = payload.media_refs[1]
 
 local OUT = fixture.out_path("test_drt_writer_media_pool_population")
 os.remove(OUT)
-writer.author(OUT, payload)
+writer.author_a005_compatible(OUT, payload)
 
 local mp_folder_xml = fixture.unzip_member(OUT, "MediaPool/Master/MpFolder.xml")
 

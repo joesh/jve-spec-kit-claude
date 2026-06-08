@@ -870,9 +870,9 @@ function M.import_into_project(project_id, parse_result, opts)
                     end
                     local clip_id = Clip.create({
                         -- Spec 023 FR-011b: adopt the Resolve Sm2Ti DbId as
-                        -- clip.id when the source carries one (real Resolve
-                        -- exports always do); nil → Clip.create mints a UUID.
-                        id                    = clip_data.clip_id,
+                        -- clip.id. Rule 2.13: no silent minting. Real Resolve
+                        -- exports always carry one.
+                        id                    = assert(clip_data.clip_id, "importer_core: clip missing id"),
                         project_id            = project_id,
                         owner_sequence_id     = sequence.id,
                         track_id              = track.id,

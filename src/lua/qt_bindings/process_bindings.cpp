@@ -211,7 +211,13 @@ static int lua_qt_process_write(lua_State* L) {
 static int lua_qt_process_pid(lua_State* L) {
     int id = (int)luaL_checkinteger(L, 1);
     auto* slot = require_slot(L, id, "qt_process_pid");
-    lua_pushinteger(L, (lua_Integer)slot->proc->processId());
+    qint64 pid = slot->proc->processId();
+    if (pid == 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "not_running");
+        return 2;
+    }
+    lua_pushinteger(L, (lua_Integer)pid);
     return 1;
 }
 

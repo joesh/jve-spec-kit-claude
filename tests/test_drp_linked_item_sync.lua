@@ -63,7 +63,7 @@ local function video_clip(clip_name, start_frame, sync_child)
         text("Flags", "0"),
     }
     if sync_child then table.insert(children, sync_child) end
-    return elem("Sm2TiVideoClip", {}, children)
+    return elem("Sm2TiVideoClip", { DbId = "v-" .. clip_name }, children)
 end
 
 local function audio_clip(clip_name, start_frame, media_ref, sync_child)
@@ -79,7 +79,7 @@ local function audio_clip(clip_name, start_frame, media_ref, sync_child)
         text("Flags", "0"),
     }
     if sync_child then table.insert(children, sync_child) end
-    return elem("Sm2TiAudioClip", {}, children)
+    return elem("Sm2TiAudioClip", { DbId = "a-" .. clip_name }, children)
 end
 
 local function track(track_type_value, clips)
@@ -115,10 +115,12 @@ local single_shot_seq = elem("Sm2SequenceContainer", {}, {
 })
 
 local v_tracks, a_tracks = drp.parse_resolve_tracks(
-    single_shot_seq, 25,
-    { ["audio-ref-1"] = "/tmp/ANCHOR.wav" },
-    { ["audio-ref-1"] = "ANCHOR.wav" },
-    { ["audio-ref-1"] = 48000 })
+    single_shot_seq, {
+        frame_rate = 25,
+        media_ref_path_map = { ["audio-ref-1"] = "/tmp/ANCHOR.wav" },
+        media_ref_name_map = { ["audio-ref-1"] = "ANCHOR.wav" },
+        media_ref_sample_rate_map = { ["audio-ref-1"] = 48000 }
+    })
 
 assert(#v_tracks == 1 and #a_tracks == 1,
     "expected 1 video track and 1 audio track")
@@ -171,10 +173,12 @@ local multi_shot_seq = elem("Sm2SequenceContainer", {}, {
 })
 
 local mv_tracks, ma_tracks = drp.parse_resolve_tracks(
-    multi_shot_seq, 25,
-    { ["ref-shot-a"] = "/tmp/SHOT_A.wav", ["ref-shot-b"] = "/tmp/SHOT_B.wav" },
-    { ["ref-shot-a"] = "SHOT_A.wav",      ["ref-shot-b"] = "SHOT_B.wav" },
-    { ["ref-shot-a"] = 48000,             ["ref-shot-b"] = 48000 })
+    multi_shot_seq, {
+        frame_rate = 25,
+        media_ref_path_map = { ["ref-shot-a"] = "/tmp/SHOT_A.wav", ["ref-shot-b"] = "/tmp/SHOT_B.wav" },
+        media_ref_name_map = { ["ref-shot-a"] = "SHOT_A.wav",      ["ref-shot-b"] = "SHOT_B.wav" },
+        media_ref_sample_rate_map = { ["ref-shot-a"] = 48000,             ["ref-shot-b"] = 48000 }
+    })
 
 local shot_a_video = mv_tracks[1].clips[1]
 local shot_b_video = mv_tracks[1].clips[2]
@@ -215,10 +219,12 @@ local extint_seq = elem("Sm2SequenceContainer", {}, {
             text("LinkedItemSync", "-4799|00000000000000bd")),
     }),
 })
-local ev, ea = drp.parse_resolve_tracks(extint_seq, 25,
-    { ["ref-extint"] = "/tmp/45-233-004.wav" },
-    { ["ref-extint"] = "45-233-004.wav" },
-    { ["ref-extint"] = 48000 })
+local ev, ea = drp.parse_resolve_tracks(extint_seq, {
+    frame_rate = 25,
+    media_ref_path_map = { ["ref-extint"] = "/tmp/45-233-004.wav" },
+    media_ref_name_map = { ["ref-extint"] = "45-233-004.wav" },
+    media_ref_sample_rate_map = { ["ref-extint"] = 48000 }
+})
 
 local v_bd  = ev[1].clips[1]
 local v_be  = ev[1].clips[2]
@@ -245,7 +251,7 @@ local non_numeric_seq = elem("Sm2SequenceContainer", {}, {
         video_clip("ANCHOR", 100, text("LinkedItemSync", "not-a-number")),
     }),
 })
-local ok, err = pcall(drp.parse_resolve_tracks, non_numeric_seq, 25, {}, {}, {})
+local ok, err = pcall(drp.parse_resolve_tracks, non_numeric_seq, { frame_rate = 25, media_ref_path_map = {}, media_ref_name_map = {}, media_ref_sample_rate_map = {} })
 assert(not ok, "malformed LinkedItemSync must error")
 assert(tostring(err):find("LinkedItemSync"), string.format(
     "error message must mention LinkedItemSync (got: %s)", tostring(err)))
@@ -261,7 +267,7 @@ local hostile_seq = elem("Sm2SequenceContainer", {}, {
             text("LinkedItemSync", "99")),
     }),
 })
-ok, err = pcall(drp.parse_resolve_tracks, hostile_seq, 25, {}, {}, {})
+ok, err = pcall(drp.parse_resolve_tracks, hostile_seq, { frame_rate = 25, media_ref_path_map = {}, media_ref_name_map = {}, media_ref_sample_rate_map = {} })
 assert(not ok, "clip name containing pair-key separator must error")
 assert(tostring(err):find("separator") or tostring(err):find("ambiguous"),
     "error must explain the collision (got: " .. tostring(err) .. ")")
@@ -275,7 +281,7 @@ local fractional_seq = elem("Sm2SequenceContainer", {}, {
         video_clip("ANCHOR", 100, text("LinkedItemSync", "1.5")),
     }),
 })
-ok, err = pcall(drp.parse_resolve_tracks, fractional_seq, 25, {}, {}, {})
+ok, err = pcall(drp.parse_resolve_tracks, fractional_seq, { frame_rate = 25, media_ref_path_map = {}, media_ref_name_map = {}, media_ref_sample_rate_map = {} })
 assert(not ok, "fractional LinkedItemSync must error")
 assert(tostring(err):find("malformed"),
     "error must flag malformed input (got: " .. tostring(err) .. ")")

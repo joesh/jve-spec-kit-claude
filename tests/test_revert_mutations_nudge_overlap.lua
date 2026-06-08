@@ -85,6 +85,7 @@ local mutations = {
     {
         type = "update",
         clip_id = "A",
+        owner_sequence_id = "seq",
         track_id = "v1",
         sequence_start_frame = 120, -- A nudged right by 120 frames
         duration_frames = 100,

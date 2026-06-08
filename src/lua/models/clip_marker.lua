@@ -106,16 +106,14 @@ function ClipMarker.find_by_clip(clip_id)
         "ClipMarker.find_by_clip: clip_id required")
     local conn = database.get_connection()
     assert(conn, "ClipMarker.find_by_clip: no database connection")
-    local stmt = conn:prepare(
-        "SELECT id, clip_id, frame, duration, color, name, note, custom_data "
-        .. "FROM clip_markers WHERE clip_id = ? ORDER BY frame ASC")
-    assert(stmt, "ClipMarker.find_by_clip: failed to prepare select")
-    stmt:bind_value(1, clip_id)
-    assert(stmt:exec(), "ClipMarker.find_by_clip: query failed for " .. clip_id)
-
-    local markers = {}
-    while stmt:next() do
-        markers[#markers + 1] = setmetatable({
+    
+    local sql = [[
+        SELECT id, clip_id, frame, duration, color, name, note, custom_data 
+        FROM clip_markers WHERE clip_id = ? ORDER BY frame ASC
+    ]]
+    
+    local markers = database.select_rows(conn, sql, { clip_id }, function(stmt)
+        return setmetatable({
             id = stmt:value(0),
             clip_id = stmt:value(1),
             frame = stmt:value(2),
@@ -125,8 +123,8 @@ function ClipMarker.find_by_clip(clip_id)
             note = stmt:value(6),
             custom_data = stmt:value(7),
         }, ClipMarker)
-    end
-    stmt:finalize()
+    end)
+
     log.detail("ClipMarker.find_by_clip %s → %d markers", clip_id, #markers)
     return markers
 end

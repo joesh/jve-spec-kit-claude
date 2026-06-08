@@ -22,7 +22,7 @@
 --- Importer prohibition: this writer NEVER probes media. Every value comes
 --- from the payload (feedback_importers_no_media_probe — symmetric outbound).
 
-local M = { _uuid_counter = 0 }
+local M = {}
 
 local enc            = require("exporters.drt_binary")
 local identity_marker = require("exporters.drt_identity_marker")
@@ -119,9 +119,9 @@ local function hash_uint24(s)
     return h
 end
 
-local function fresh_uuid(seed_byte)
-    M._uuid_counter = M._uuid_counter + 1
-    local k = M._uuid_counter
+local function fresh_uuid(seed_byte, state)
+    state.uuid_counter = state.uuid_counter + 1
+    local k = state.uuid_counter
     -- (counter, seed) embedded directly so two calls with different seeds
     -- or different counters can never collide. Format: 8-4-4-4-12;
     -- version=4, variant in {8,9,a,b}.
@@ -393,7 +393,7 @@ local TI_AUDIO_CLIP_FIELDS_BLOB =
     "d29636d9df17f845d84cdb298043099c67f29ad65ed444a245a4317983067b44" ..
     "cfa2693ca682d6a684af5ba2bc5057a902030040865bee3b7348"
 
-local function build_clip_element(clip, media, track_type)
+local function build_clip_element(clip, media, track_type, state)
     assert(type(clip.id) == "string" and clip.id ~= "",
         "drt_writer.build_clip_element: clip.id required")
     assert(type(clip.name) == "string" and clip.name ~= "",
@@ -492,7 +492,7 @@ local function build_clip_element(clip, media, track_type)
         parts[#parts + 1] = text_elem("PreConformMediaExtents",
             PRECONFORM_MEDIA_EXTENTS)
         parts[#parts + 1] = self_close("MediaMetadata")
-        local thumb_dbid = fresh_uuid(0x90)
+        local thumb_dbid = fresh_uuid(0x90, state)
         parts[#parts + 1] = elem("Thumbnail",
             elem("BtThumnail", table.concat({
                 self_close("FieldsBlob"),
@@ -519,14 +519,14 @@ end
 local TRACK_FIELDS_BLOB_NUM_LAYERS =
     "000000010000000100000012004e0075006d004c00610079006500720073000000020000000000"
 
-local function build_track_element(track, seq_dbid, media_by_uuid)
+local function build_track_element(track, seq_dbid, media_by_uuid, state)
     assert(type(track.clips) == "table",
         "drt_writer.build_track_element: track.clips array required")
     assert(track.type == "video" or track.type == "audio",
         "drt_writer.build_track_element: track.type must be 'video' or "
         .. "'audio', got " .. tostring(track.type))
     local type_value = (track.type == "audio") and 1 or 0
-    local track_dbid = fresh_uuid(0x70)
+    local track_dbid = fresh_uuid(0x70, state)
 
     local items = {}
     for _, c in ipairs(track.clips) do
@@ -534,7 +534,7 @@ local function build_track_element(track, seq_dbid, media_by_uuid)
         assert(media, "drt_writer.build_track_element: track clip references "
             .. "unknown media_uuid " .. tostring(c.media_uuid))
         items[#items + 1] = elem("Element",
-            build_clip_element(c, media, track.type))
+            build_clip_element(c, media, track.type, state))
     end
 
     return elem("Element", elem("Sm2TiTrack", table.concat({
@@ -555,14 +555,14 @@ end
 -- Resolve's schema separates video and audio tracks into siblings
 -- (<VideoTrackVec> and <AudioTrackVec>) rather than interleaving by index.
 
-local function build_seq_container_xml(seq, seq_dbid, container_dbid,
+local function build_seq_container_xml(seq, seq_dbid, container_dbid, state,
                                        media_by_uuid)
     assert(type(seq.tracks) == "table" and #seq.tracks >= 1,
         "drt_writer.build_seq_container_xml: sequence.tracks non-empty array")
 
     local video_tracks, audio_tracks = {}, {}
     for _, t in ipairs(seq.tracks) do
-        local rendered = build_track_element(t, seq_dbid, media_by_uuid)
+        local rendered = build_track_element(t, seq_dbid, media_by_uuid, state)
         if t.type == "audio" then
             audio_tracks[#audio_tracks + 1] = rendered
         else
@@ -622,7 +622,7 @@ end
 
 local TIME_ELEM_PATTERN = "<Time>([0-9a-f]+)</Time>"
 
-local function build_media_pool_video_item(media, dbids)
+local function build_media_pool_video_item(media, dbids, state)
     assert(type(media.file_uuid) == "string" and media.file_uuid ~= "",
         "drt_writer.build_media_pool_video_item: media.file_uuid required")
     assert(type(media.file_path) == "string" and media.file_path ~= "",
@@ -647,7 +647,7 @@ local function build_media_pool_video_item(media, dbids)
     tpl = plain_gsub_required(tpl,
         A005_TEMPLATE_MP_FOLDER_BACKREF, dbids.mp_folder)
     tpl = plain_gsub_required(tpl,
-        A005_TEMPLATE_UNIQUE_MP_ITEM_ID, fresh_uuid(0xa0))
+        A005_TEMPLATE_UNIQUE_MP_ITEM_ID, fresh_uuid(0xa0, state))
 
     -- Rewrite BtVideoInfo/Time blob from payload. Per-media UniqueId is
     -- minted so two media in one DRT can't collide on the Time blob's
@@ -655,7 +655,7 @@ local function build_media_pool_video_item(media, dbids)
     local new_time_hex = enc.encode_bt_video_time({
         num_frames = media.duration_frames,
         frame_rate = media.native_rate,
-        unique_id  = fresh_uuid(0xa1),
+        unique_id  = fresh_uuid(0xa1, state),
     })
     local replaced
     tpl, replaced = tpl:gsub(TIME_ELEM_PATTERN,
@@ -750,7 +750,7 @@ local function collect_clip_ids(seq)
     return ids
 end
 
-local function build_project_xml(template, payload, dbids)
+local function build_project_xml(template, payload, dbids, state)
     -- Required scalars (template drift = silent leak of reference content).
     -- Order: longer `.Cfg` form replaces first because it contains
     -- the shorter REFERENCE_PROJECT_NAME as a prefix.
@@ -769,7 +769,7 @@ local function build_project_xml(template, payload, dbids)
     local marker_elements = {}
     for _, clip_id in ipairs(collect_clip_ids(payload.sequence)) do
         marker_elements[#marker_elements + 1] =
-            build_identity_marker_element(clip_id, fresh_uuid(0x06))
+            build_identity_marker_element(clip_id, fresh_uuid(0x06, state))
     end
     if #marker_elements > 0 then
         template = plain_gsub_required(template,
@@ -779,7 +779,7 @@ local function build_project_xml(template, payload, dbids)
     return sweep_reference_dbids(template, dbids)
 end
 
-local function build_mp_folder_xml(template, payload, seq, dbids)
+local function build_mp_folder_xml(template, payload, seq, dbids, state)
     assert(type(payload.media_refs) == "table",
         "drt_writer.build_mp_folder_xml: payload.media_refs required")
     assert(type(seq.width) == "number" and seq.width > 0,
@@ -845,7 +845,7 @@ local function build_mp_folder_xml(template, payload, seq, dbids)
     -- carry payload media UUIDs, not freshly-minted ones.
     local items = {}
     for _, m in ipairs(payload.media_refs) do
-        items[#items + 1] = build_media_pool_video_item(m, dbids)
+        items[#items + 1] = build_media_pool_video_item(m, dbids, state)
     end
     template = plain_gsub_required(template,
         "</MediaVec>", table.concat(items) .. " </MediaVec>")
@@ -897,12 +897,21 @@ local function shell_quote(s) return "'" .. s:gsub("'", [['\'']]) .. "'" end
 ---   clip.sequence_start, clip.duration   timeline frames at seq.fps
 ---   clip.source_in                       absolute project-epoch frames
 ---   media.start_tc_frame                 media's TC origin (native frames)
----   media.duration_frames                media's length (native frames)
----   media.native_rate                    media file's container fps
---- @return table  { path, stage }
-function M.author(out_path, payload)
+--- Authors an A005-compatible DRT.
+--- QUARANTINE: This is a spike specifically for 23.976fps mp4/mov media.
+--- (See drt_writer.lua top-level comment).
+function M.author_a005_compatible(out_path, payload)
     assert(type(out_path) == "string" and out_path ~= "",
         "drt_writer.author: out_path required")
+    -- ...
+    for _, m in ipairs(payload.media_refs) do
+        -- Rule 2.13 quarantine gate (review item #23)
+        assert(math.abs(m.native_rate - 24000/1001) < 1e-4,
+            "drt_writer: author_a005_compatible requires 23.976fps media")
+        local ext = m.file_path:match("%.([^%.]+)$")
+        assert(ext == "mp4" or ext == "mov",
+            "drt_writer: author_a005_compatible requires mp4/mov media")
+    end
     assert(type(payload) == "table",
         "drt_writer.author: payload table required")
     assert(type(payload.project) == "table"
@@ -935,28 +944,26 @@ function M.author(out_path, payload)
     -- distinct minted DbIds (no cross-archive collision in the same Resolve
     -- instance) while same path + same payload still produces byte-identical
     -- output (reproducibility for verification / diff regression).
-    M._uuid_counter = hash_uint24(out_path)
-    local dbids = {}
-    local seeds = {
-        sm_project = 0x01, sm_config = 0x02, sm_multi_sys = 0x03,
-        sm_media_pool = 0x04, sm_group_list = 0x05, lockable_blob_map = 0x06,
-        media_pool_lockable = 0x07, power_node_list = 0x08,
-        mp_folder = 0x10, mp_folder_unique_id = 0x11,
-        mp_timeline_clip = 0x20, mp_timeline_unique = 0x21,
-        timeline = 0x30, sequence = 0x40, unique_sequence_id = 0x41,
-        seq_container = 0x50, plm_ver_table = 0x60, lm_version = 0x61,
-        ptzr_preset_outer = 0x80, ptzr_preset_timeline = 0x81,
+    -- Rule 2.13: Counter is now local to this call, making the writer
+    -- re-entrant (review item #18).
+    local state = {
+        uuid_counter = hash_uint24(out_path)
     }
-    for key, seed in pairs(seeds) do dbids[key] = fresh_uuid(seed) end
+
+    local dbids = {}
+    -- Rule 2.5: Use canonical slot map to satisfy DRY (review item #19).
+    for key, slot in pairs(DBID_SLOTS) do
+        dbids[key] = fresh_uuid(slot.seed, state)
+    end
 
     -- Load templates and apply substitutions.
     local project_xml = build_project_xml(
-        load_template("empty_reference_project.xml"), payload, dbids)
+        load_template("empty_reference_project.xml"), payload, dbids, state)
     local mp_folder_xml = build_mp_folder_xml(
-        load_template("empty_reference_mp_folder.xml"), payload, seq, dbids)
+        load_template("empty_reference_mp_folder.xml"), payload, seq, dbids, state)
     local gallery_xml = load_template("empty_reference_gallery.xml")
     local seq_container_xml = build_seq_container_xml(
-        seq, dbids.sequence, dbids.seq_container, media_by_uuid)
+        seq, dbids.sequence, dbids.seq_container, state, media_by_uuid)
 
     -- Fresh unique stage dir per call so concurrent authors (parallel test
     -- processes, parallel Claude sessions) don't collide on /tmp paths.

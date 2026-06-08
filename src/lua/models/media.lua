@@ -568,13 +568,7 @@ end
 function M.count()
     local database = require("core.database")
     local db = assert(database.get_connection(), "Media.count: no database connection")
-    local stmt = assert(db:prepare("SELECT COUNT(*) FROM media"),
-        "Media.count: failed to prepare query")
-    assert(stmt:exec(), "Media.count: query execution failed")
-    assert(stmt:next(), "Media.count: no result row")
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count
+    return database.count(db, "SELECT COUNT(*) FROM media")
 end
 
 -- Load a media item from the database
@@ -1678,6 +1672,9 @@ function M:save()
 
     query:finalize()
 
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_media(self.id)
+
     return true
 end
 
@@ -1747,6 +1744,9 @@ function M:delete()
         error(string.format("Media:delete: failed to delete media %s: %s", self.id, err))
     end
     del_media:finalize()
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_media(self.id)
 
     log.event("Media:delete: deleted media %s", self.id)
     return true

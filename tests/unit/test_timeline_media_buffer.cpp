@@ -60,7 +60,7 @@ private:
         // Prefer test_bars_tone.mp4 (3s, 320x240, H.264+AAC 48kHz) — the fixture
         // the original tests were written against. Falls back to any media file.
         QStringList searchDirs = {
-            QDir::homePath() + "/Local/jve-spec-kit-claude/tests/fixtures/media",
+            QDir::homePath() + "/Local/jve/tests/fixtures/media",
             QDir::currentPath() + "/../tests/fixtures/media",
         };
         for (const auto& dirPath : searchDirs) {
@@ -83,9 +83,9 @@ private:
         // countdown_chirp_30s.mp4: 30s, 25fps, 48kHz chirp sweep — PCM unique at every position
         // Fallback: anamnesis .movs (~10s with 48kHz audio)
         QStringList searchDirs = {
-            QDir::homePath() + "/Local/jve-spec-kit-claude/tests/fixtures/media",
+            QDir::homePath() + "/Local/jve/tests/fixtures/media",
             QDir::currentPath() + "/../tests/fixtures/media",
-            QDir::homePath() + "/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis",
+            QDir::homePath() + "/Local/jve/tests/fixtures/media/anamnesis",
             QDir::currentPath() + "/../tests/fixtures/media/anamnesis",
         };
         // Prefer the chirp fixture by name, then fall back to any .mp4/.mov

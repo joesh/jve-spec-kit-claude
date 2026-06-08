@@ -72,7 +72,7 @@ local seq_multi = elem("Sequence", "", {
     }),
 })
 
-local v_tracks, _, media_lookup = drp_importer.parse_resolve_tracks(seq_multi, 24)
+local v_tracks, _, media_lookup = drp_importer.parse_resolve_tracks(seq_multi, {frame_rate = 24})
 
 assert(#v_tracks == 1, "Expected 1 video track")
 assert(#v_tracks[1].clips == 2, "Expected 2 video clips")
@@ -110,7 +110,7 @@ local seq_single = elem("Sequence", "", {
     }),
 })
 
-local v2, _, ml2 = drp_importer.parse_resolve_tracks(seq_single, 24)
+local v2, _, ml2 = drp_importer.parse_resolve_tracks(seq_single, {frame_rate = 24})
 
 assert(#v2 == 1 and #v2[1].clips == 1)
 local solo_media = ml2["/vol/media/solo.mov"]
@@ -163,7 +163,7 @@ local seq_av = elem("Sequence", "", {
 
 local av_path_map = { ["av-media-ref-001"] = "/vol/media/av_file.mov" }
 local av_sr_map = { ["av-media-ref-001"] = 48000 }
-local v3, a3, ml3 = drp_importer.parse_resolve_tracks(seq_av, 24, av_path_map, nil, av_sr_map)
+local v3, a3, ml3 = drp_importer.parse_resolve_tracks(seq_av, {frame_rate = 24, media_ref_path_map = av_path_map, media_ref_sample_rate_map = av_sr_map})
 
 assert(#v3 == 1, "Expected 1 video track")
 assert(#a3 == 1, "Expected 1 audio track")
@@ -219,7 +219,7 @@ local seq_match = elem("Sequence", "", {
     }),
 })
 
-local v4, _, ml4 = drp_importer.parse_resolve_tracks(seq_match, 24)
+local v4, _, ml4 = drp_importer.parse_resolve_tracks(seq_match, {frame_rate = 24})
 
 assert(#v4[1].clips == 2)
 local match_media = ml4["/vol/media/long_interview.mov"]
@@ -314,7 +314,7 @@ local seq_zero = elem("Sequence", "", {
     }),
 })
 
-local v7, _, ml7 = drp_importer.parse_resolve_tracks(seq_zero, 24)
+local v7, _, ml7 = drp_importer.parse_resolve_tracks(seq_zero, {frame_rate = 24})
 
 assert(#v7 == 0, "Zero-duration clip track should be empty (no valid clips)")
 assert(ml7["/vol/media/degenerate.mov"] == nil,
@@ -355,7 +355,7 @@ local seq_retime = elem("Sequence", "", {
     }),
 })
 
-local v8, _, ml8 = drp_importer.parse_resolve_tracks(seq_retime, 24)
+local v8, _, ml8 = drp_importer.parse_resolve_tracks(seq_retime, {frame_rate = 24})
 
 assert(#v8 == 1, "Expected 1 video track")
 assert(#v8[1].clips == 1, "Expected 1 clip")

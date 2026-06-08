@@ -140,9 +140,9 @@ function M.notify(op_name, args, result, code, message)
             tostring(message or ""))
     end
 
-    Signals.emit(signal_name, result, code, message)
-
     _counts_by_op[op_name] = _counts_by_op[op_name] + 1
+
+    Signals.emit(signal_name, result, code, message)
 
     if type(args.on_complete) == "function" then
         args.on_complete(result, code, message)

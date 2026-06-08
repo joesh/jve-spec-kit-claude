@@ -475,6 +475,9 @@ local function save_internal(self, _opts)
     end
     query:finalize()
 
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_clip(self.id, self.owner_sequence_id)
+
     if krono_enabled and krono_start and krono_exists and krono_exec then
         log.detail("Clip.save[%s]: %.2fms (exists=%.2fms run=%.2fms)",
             tostring(self.id:sub(1, 8)),
@@ -525,6 +528,9 @@ function M:delete()
     end
 
     query:finalize()
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_clip(self.id, self.owner_sequence_id)
 
     return true
 end

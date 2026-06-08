@@ -91,6 +91,20 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
         "l2": "Enters modal inline rename; subsequent keys go to text edit",
     },
 
+    # ── 023 Resolve Color Bridge ──────────────────────────────────────────
+    ("Cmd+Option+R", ()): {
+        "l1": "SendToResolve authors DRT and opens Resolve; out of scope for L3",
+        "l2": "Launches external process / opens Resolve",
+    },
+    ("Cmd+Option+G", ()): {
+        "l1": "SyncGradesFromResolve pulls grades; L3 needs Resolve-mock / helper",
+        "l2": "Network/Socket IO with external helper",
+    },
+    ("Cmd+Option+E", ()): {
+        "l1": "SyncEditsFromResolve pulls edits; L3 needs Resolve-mock / helper",
+        "l2": "Network/Socket IO with external helper",
+    },
+
     # ── Shuttle (starts playback at non-zero rate) ───────────────────────
     ("J", ("timeline", "source_monitor", "timeline_monitor")): {
         "l1": "ShuttleReverse — L3 pending (needs play+stop dance)",
@@ -105,6 +119,15 @@ EXEMPT: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     ("Tab", ("timeline",)): {
         "l1": "ToggleTimecodeFocus — L3 pending (focus-state assertion)",
         "l2": "Shifts focus into TC widget; subsequent keys go there",
+    },
+    ("Tab", ()): {
+        "l1": "CycleFocus global fallback — L3 pending",
+    },
+    ("Shift+Tab", ()): {
+        "l1": "CycleFocus backward global fallback — L3 pending",
+    },
+    ("Escape", ()): {
+        "l1": "Cancel prioritised dismissal — L3 pending",
     },
 
     # ── L3-pending only (L2-safe; no L2 exemption) ──────────────────────

@@ -192,6 +192,9 @@ function Sequence.load(id)
     
             local fps_num = stmt:value(4)
             local fps_den = stmt:value(5)
+            assert(fps_num and fps_den, string.format(
+                "Sequence.load: id=%s missing fps metadata! kind=%s",
+                tostring(id), tostring(stmt:value(3))))
             local audio_sample_rate = stmt:value(13)
             local selected_clip_ids = stmt:value(14)  -- JSON string
             local selected_edge_infos = stmt:value(15)  -- JSON string
@@ -400,6 +403,10 @@ function Sequence:save()
         error(string.format("Sequence.save: failed for %s: %s", tostring(self.id), tostring(err)))
     end
     stmt:finalize()
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_sequence(self.id)
+
     return ok
 end
 
@@ -495,6 +502,9 @@ function Sequence.update_playhead(seq_id, playhead_frame)
     assert(ok, string.format(
         "Sequence.update_playhead: UPDATE failed for %s: %s",
         tostring(seq_id), tostring(err)))
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").queue_notify("sequence:" .. seq_id, { kind = "playhead" })
 end
 
 -- Atomically increment a sequence's mutation_generation counter.
@@ -544,17 +554,9 @@ end
 function Sequence.count_clips(sequence_id)
     assert(type(sequence_id) == "string" and sequence_id ~= "",
         "Sequence.count_clips: sequence_id required")
-    local db = require("core.database")
-    local conn = assert(db.get_connection(), "Sequence.count_clips: no database connection")
-    local stmt = assert(conn:prepare(
-        "SELECT COUNT(*) FROM clips c JOIN tracks t ON c.track_id = t.id WHERE t.sequence_id = ?"),
-        "Sequence.count_clips: failed to prepare query")
-    stmt:bind_value(1, sequence_id)
-    assert(stmt:exec(), "Sequence.count_clips: query execution failed")
-    assert(stmt:next(), "Sequence.count_clips: no result row")
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count
+    local conn = assert(database.get_connection(), "Sequence.count_clips: no database connection")
+    local sql = "SELECT COUNT(*) FROM clips c JOIN tracks t ON c.track_id = t.id WHERE t.sequence_id = ?"
+    return database.count(conn, sql, { sequence_id })
 end
 
 --- Rebind all sequences from one project_id to another.

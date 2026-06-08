@@ -15,6 +15,9 @@
 --- V1 ships VIDEO ONLY (audio support deferred — see
 --- `todo_t054_audio_support`). The classifier asserts on AUDIO clips.
 
+local ledger         = require("core.resolve_bridge.identity_ledger")
+local wire           = require("core.resolve_bridge.wire_decode")
+
 local M = {}
 
 local Clip              = require("models.clip")
@@ -73,7 +76,6 @@ local REQUIRED_ITEM_NUMBER_FIELDS = {
 -- own `tracks.track_type` column is uppercase; the helper returns
 -- Resolve's lowercase convention. `translate_wire_response` upcases on
 -- the way in.
-local WIRE_TRACK_TYPES = { video = "VIDEO", audio = "AUDIO" }
 
 -- Sentinel produced when a Resolve-side track has no JVE equivalent
 -- (e.g. user added a track in Resolve since send). The classifier's
@@ -127,7 +129,7 @@ function M.translate_wire_response(wire_response, sequence_id)
         if w.kind == "non_media" then
             non_media_skipped = non_media_skipped + 1
         else
-            local jve_track_type = WIRE_TRACK_TYPES[w.track_type]
+            local jve_track_type = wire.WIRE_TO_JVE_TRACK_TYPE[w.track_type]
             assert(jve_track_type ~= nil, string.format(
                 "sync_edits.translate_wire_response: item[%d] "
                 .. "track_type %q not in closed set {video, audio}",
@@ -158,12 +160,16 @@ function M.translate_wire_response(wire_response, sequence_id)
             }
         end
     end
-    if non_media_skipped > 0 then
-        log.event("sync_edits.translate_wire_response: skipped %d "
-            .. "non-media item(s) (generators/transitions/etc.)",
-            non_media_skipped)
+    local audio_skipped = wire_response.audio_items_skipped or 0
+    if non_media_skipped > 0 or audio_skipped > 0 then
+        log.event("SyncEdits: skipped %d non-media items and %d audio items "
+            .. "(audio deferred — see todo_t054)",
+            non_media_skipped, audio_skipped)
     end
-    return { items = out_items }
+    return {
+        items = out_items,
+        timeline_integer_rate = wire_response.timeline_integer_rate,
+    }
 end
 
 local function assert_response_shape(response)
@@ -386,21 +392,11 @@ end
 -- V1-MVP no-modal path drops these to skipped(no_modal_v1_unhandled_conflict).
 local function walk_ledger_for_deleted(sequence_id, seen_resolve_ids, db,
                                         result)
-    local stmt = assert(db:prepare([[
-        SELECT rbl.jve_clip_uuid, rbl.resolve_item_id
-        FROM resolve_bridge_link rbl
-        JOIN clips c ON c.id = rbl.jve_clip_uuid
-        WHERE c.owner_sequence_id = ?
-    ]]), "sync_edits.walk_ledger_for_deleted: prepare failed")
-    stmt:bind_value(1, sequence_id)
-    if not stmt:exec() then
-        stmt:finalize()
-        error("sync_edits.walk_ledger_for_deleted: exec failed for "
-            .. "sequence " .. tostring(sequence_id))
-    end
-    while stmt:next() do
-        local clip_id  = stmt:value(0)
-        local resolve_item_id = stmt:value(1)
+    -- Rule 2.5: Use centralized iterator for sequence links (review item #1).
+    local links = ledger.iter_links_for_sequence(sequence_id, db)
+    for _, link in ipairs(links) do
+        local clip_id  = link.clip_id
+        local resolve_item_id = link.resolve_item_id
         if seen_resolve_ids[resolve_item_id] == nil then
             emit("conflicts", {
                 clip_id         = clip_id,
@@ -409,7 +405,6 @@ local function walk_ledger_for_deleted(sequence_id, seen_resolve_ids, db,
             }, result)
         end
     end
-    stmt:finalize()
 end
 
 --- Classify a `read_timeline` response into action buckets.

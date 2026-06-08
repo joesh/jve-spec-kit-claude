@@ -119,12 +119,7 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
     assert(db_module and db_module.set_path, "project_open: db_module.set_path is required")
     assert(type(project_path) == "string" and project_path ~= "", "project_open: project_path is required")
 
-    -- Switching projects: release the outgoing project's pidlock so a
-    -- second JVE can immediately tell its SHM is stale rather than
-    -- waiting for our process to exit. No-op on first open.
-    if current_locked_path and current_locked_path ~= project_path then
-        M.release_current_pidlock()
-    end
+    local outgoing_path = current_locked_path
 
     -- Check for stale SHM BEFORE sqlite3_open (which can hang on stale
     -- WAL locks during ftruncate). WAL itself stays — SQLite recovers
@@ -154,6 +149,16 @@ function M.open_project_database_or_prompt_cleanup(db_module, qt_constants, proj
     -- Record that THIS JVE process now owns this project's SHM so the
     -- next open can tell stale-from-crash apart from concurrent-open.
     write_pidlock(project_path)
+
+    -- Successfully claimed the new project: NOW we can release the old one.
+    -- (Rule 2.32: No silent drop of lock-held coverage).
+    if outgoing_path and outgoing_path ~= project_path then
+        local path = pidlock_path(outgoing_path)
+        local prior = read_pidlock(outgoing_path)
+        if prior == our_pid() then
+            os.remove(path)
+        end
+    end
     return true
 end
 

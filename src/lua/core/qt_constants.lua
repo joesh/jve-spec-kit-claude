@@ -53,6 +53,7 @@ if qt_constants then
     qt_constants.PROPERTIES.ALIGN_LEFT = "AlignLeft"
     qt_constants.PROPERTIES.ALIGN_CENTER = "AlignCenter"
     qt_constants.PROPERTIES.ALIGN_TOP = "AlignTop"
+    qt_constants.PROPERTIES.SET_TOOLTIP = qt_constants.PROPERTIES.SET_TOOLTIP or require_global_function("qt_set_tooltip")
     qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE = qt_constants.PROPERTIES.SET_WINDOW_APPEARANCE or require_global_function("qt_set_window_appearance")
 
     -- Widget Functions - add parent relationship support

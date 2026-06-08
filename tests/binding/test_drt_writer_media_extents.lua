@@ -41,7 +41,7 @@ local clip = seq.tracks[1].clips[1]
 
 local OUT = fixture.out_path("test_drt_writer_media_extents")
 os.remove(OUT)
-writer.author(OUT, payload)
+writer.author_a005_compatible(OUT, payload)
 
 local xml = fixture.unzip_member(OUT, "MediaPool/Master/MpFolder.xml")
 

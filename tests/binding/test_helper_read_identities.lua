@@ -37,7 +37,6 @@
 -- Run via `jve --test`.
 
 local fixture  = require("binding.helper_fixture")
-local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-read-identities.sock")
 

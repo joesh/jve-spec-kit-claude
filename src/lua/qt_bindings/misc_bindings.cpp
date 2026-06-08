@@ -515,6 +515,24 @@ int lua_set_widget_property(lua_State* L) {
     return 0;
 }
 
+int lua_set_tooltip(lua_State* L) {
+    void* ptr = lua_to_widget(L, 1);
+    const char* text = luaL_checkstring(L, 2);
+    if (!ptr) return luaL_error(L, "qt_set_tooltip: widget or action required");
+
+    QObject* obj = static_cast<QObject*>(ptr);
+    QString qtext = QString::fromUtf8(text);
+
+    if (QWidget* w = qobject_cast<QWidget*>(obj)) {
+        w->setToolTip(qtext);
+    } else if (QAction* a = qobject_cast<QAction*>(obj)) {
+        a->setToolTip(qtext);
+    } else {
+        return luaL_error(L, "qt_set_tooltip: object is neither a QWidget nor a QAction");
+    }
+    return 0;
+}
+
 int lua_get_widget_property(lua_State* L) {
     QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
     if (!widget) return luaL_error(L, "qt_get_widget_property: widget required");

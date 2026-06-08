@@ -30,7 +30,6 @@ keyboard_shortcuts.MOD = MOD
 
 -- Module references (set in init, asserted non-nil)
 local command_manager = nil
-local project_browser = nil
 local timeline_panel = nil
 local initialized = false
 
@@ -49,13 +48,11 @@ end
 -- INIT
 -------------------------------------------------------------------------------
 
-function keyboard_shortcuts.init(cmd_mgr, proj_browser, panel)
+function keyboard_shortcuts.init(cmd_mgr, _, panel)
     assert(cmd_mgr, "keyboard_shortcuts.init: command_manager required")
-    assert(proj_browser, "keyboard_shortcuts.init: project_browser required")
     assert(panel, "keyboard_shortcuts.init: timeline_panel required")
 
     command_manager = cmd_mgr
-    project_browser = proj_browser
     timeline_panel = panel
     initialized = true
 
@@ -117,102 +114,6 @@ end
 
 -- Tab/Backtab: GlobalKeyFilter forwards every Tab to us so the user can
 -- bind it (Qt's native focusNextPrevChild can't be reached via QShortcut).
--- Three cases, exclusive:
---   1. Floating display-only window (history): redirect focus back to the
---      last main-window panel — the window has no useful tab group.
---   2. Floating text-input (find_dialog): defer to Qt so the dialog can
---      cycle its own fields natively.
---   3. Main window (incl. timecode QLineEdit): dispatch via TOML registry
---      using focused_panel. ToggleTimecodeFocus is the default @timeline
---      binding. No binding → cycle inside the panel (Qt's native cycling
---      would jump panels, which Joe explicitly disallows).
-local function try_handle_tab_key(event, key, modifiers, focused_panel, focus_is_text_input)
-    if key ~= KEY.Tab and key ~= KEY.Backtab then return nil end
-
-    if event.focus_outside_main_window and focus_is_text_input then
-        return false  -- find_dialog: native field cycling
-    end
-    -- Display-only floating window (history): redirect focus AND fire the
-    -- panel's Tab binding in the same press — the floating window is
-    -- transparent, so Tab should behave exactly as if it had been pressed
-    -- with the panel already focused. No "first press to escape" cost.
-    if event.focus_outside_main_window then
-        log.detail("  → Tab in display-only floating window, redirect to focused panel %s",
-            tostring(focused_panel))
-        focus_manager.focus_panel(focused_panel)
-        -- fall through to the dispatch below
-    end
-    -- Dispatch via TOML registry first. Tab/Shift+Tab in timeline is fully
-    -- owned by the command system (Tab → ToggleTimecodeFocus, Shift+Tab
-    -- user-mappable).
-    local registry = require("core.keyboard_shortcut_registry")
-    if registry.handle_key_event(key, modifiers, focused_panel) then return true end
-    if event.focus_outside_main_window then return true end  -- redirect already happened
-
-    -- No registry binding. Per Joe's rule: Tab NEVER escapes one panel to
-    -- another. Cycle focus within the focused panel's own descendants.
-    -- A panel-level event filter can't intercept this because
-    -- focusNextPrevChild fires on the focus widget BEFORE the event
-    -- propagates to the panel — handling it here at the app-level
-    -- dispatcher is the only place that works.
-    if focused_panel and focus_manager.focus_panel_widget then
-        local panel_widget = focus_manager.focus_panel_widget(focused_panel)
-        -- luacheck: globals qt_cycle_panel_focus
-        if panel_widget and qt_cycle_panel_focus then
-            local forward = (key == KEY.Tab)
-            qt_cycle_panel_focus(panel_widget, forward)
-            return true
-        end
-    end
-    return true  -- last resort: consume rather than let native cycling escape
-end
-
--- Escape: set the global cancel flag (drag/modal handlers consume it on
--- next event), then take the highest-priority dismissal action.
-local function try_handle_escape_key(key, focused_panel, focus_is_text_input,
-                                     panel_active_timeline)
-    if key ~= KEY.Escape then return nil end
-    local cancel = require("core.cancel")
-    cancel.request()
-    log.detail("  → Escape: cancel flag set")
-
-    local fv = require("ui.fullscreen_viewer")
-    if fv.is_active() then
-        log.detail("  → Escape exit fullscreen")
-        fv.exit()
-        return true
-    end
-
-    -- pcall: find_dialog depends on dkjson (C lib), unavailable in headless tests.
-    local find_ok, find_dlg = pcall(require, "ui.find_dialog")
-    if find_ok and find_dlg and find_dlg.is_visible() then
-        log.detail("  → Escape dismiss floating find dialog")
-        find_dlg.hide()
-        return true
-    end
-
-    local pb = project_browser
-    if pb and pb.find_bar and pb.find_bar.visible then
-        log.detail("  → Escape dismiss find bar")
-        pb.hide_find_bar()
-        return true
-    end
-
-    if focus_is_text_input and panel_active_timeline then
-        log.detail("  → Escape cancel timecode entry")
-        timeline_panel.cancel_timecode_entry()
-        return true
-    end
-
-    if focus_is_text_input then
-        log.detail("  → Escape cancel text input")
-        return false  -- Let Qt handle Escape on the widget
-    end
-
-    -- Not consumed here — drag handlers check cancel.consume() on next event.
-    return nil
-end
-
 -- Arrow keys: timeline frame-step with arrow_repeat timer. Browser delegates
 -- left/right to Qt for tree navigation; non-timeline panels fall through.
 -- (Not in TOML because arrow repeat is input management, not command
@@ -289,30 +190,54 @@ local function handle_key_impl(event)
     local focus_is_text_input = event.focus_widget_is_text_input and event.focus_widget_is_text_input ~= 0
 
     -- Dispatch through per-key handlers. Each returns nil to fall through.
-    -- Order: Tab → Escape → text-edit short-circuit → arrow keys → floating-
-    -- window TOML fallback. Comma/Period/E used to live here as a residual
-    -- cascade; they now bind in TOML (NudgeSelection, ExtendEdit) and dispatch
-    -- via the QShortcut path like every other key.
-    local r = try_handle_tab_key(event, key, modifiers, focused_panel, focus_is_text_input)
-    if r ~= nil then return r end
+    -- Order: Tab → Escape → arrow keys → floating-window TOML fallback.
+    -- Tab, Escape, Comma, Period, E used to live here as a residual cascade;
+    -- they now bind in TOML and dispatch via the QShortcut path or the thin
+    -- handlers below.
 
-    r = try_handle_escape_key(key, focused_panel, focus_is_text_input, panel_active_timeline)
-    if r ~= nil then return r end
+    local r
 
-    -- Non-residual keys: QShortcut handles dispatch. Qt's ShortcutOverride on
-    -- QLineEdit provides text input protection. Only arrow keys still need
-    -- Lua handling (arrow_repeat timer is input management, not command
-    -- dispatch).
+    -- Tab/Backtab: GlobalKeyFilter forwards every Tab to us so the user can
+    -- bind it (Qt's native focusNextPrevChild can't be reached via QShortcut).
+    if key == KEY.Tab or key == KEY.Backtab then
+        if event.focus_outside_main_window and focus_is_text_input then
+            return false  -- find_dialog: native field cycling
+        end
+        if event.focus_outside_main_window then
+            focus_manager.focus_panel(focused_panel)
+        end
+        -- Dispatch via TOML registry. Tab → CycleFocus is the default.
+        local registry = require("core.keyboard_shortcut_registry")
+        if registry.handle_key_event(key, modifiers, focused_panel) then
+            return true
+        end
+        return true  -- last resort: consume rather than let native cycling escape
+    end
 
     -- Text-input priority: when focus is on a text-editing widget and the
     -- key is a canonical text-editing key (typing, caret nav, selection,
-    -- clipboard, undo/redo, delete), the widget owns it. Return false so
-    -- Qt continues delivery to the widget's keyPressEvent. One rule for
-    -- main-window and floating-window text input — covers Left/Right and
-    -- every macOS editing shortcut (Cmd+A, Shift+Cmd+Z, etc.).
-    if focus_is_text_input and event.is_text_editing_key then
-        log.detail("  → text-editing key in text input, deferring to widget")
+    -- clipboard, undo/redo, delete, OR ESCAPE to cancel entry), the widget
+    -- owns it. Return false so Qt continues delivery to the widget's
+    -- keyPressEvent. One rule for main-window and floating-window text
+    -- input — covers Left/Right and every macOS editing shortcut (Cmd+A,
+    -- Shift+Cmd+Z, etc.).
+    if focus_is_text_input and (event.is_text_editing_key or key == KEY.Escape) then
+        if key == KEY.Escape and panel_active_timeline then
+            log.detail("  → Escape in timeline text input, canceling TC entry")
+            timeline_panel.cancel_timecode_entry()
+            return true
+        end
+        log.detail("  → text-editing key or Escape in text input, deferring to widget")
         return false
+    end
+
+    -- Escape: dispatch via TOML registry to reach the 'Cancel' command.
+    if key == KEY.Escape then
+        local registry = require("core.keyboard_shortcut_registry")
+        local params = { focus_is_text_input = focus_is_text_input }
+        if registry.handle_key_event(key, modifiers, focused_panel, params) then
+            return true
+        end
     end
 
     r = try_handle_arrow_keys(event, key, panel_active_browser, panel_active_timeline,

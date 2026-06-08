@@ -15,6 +15,33 @@ package.loaded["ui.panel_manager"] = {
     get_active_sequence_monitor = function() return nil end,
 }
 
+local timeline_panel_stub
+timeline_panel_stub = {
+    is_dragging = function() return false end,
+    focus_timeline_view = function() return true end,
+    focus_timecode_entry = function() return true end,
+    cancel_timecode_calls = 0,
+    cancel_timecode_entry = function()
+        timeline_panel_stub.cancel_timecode_calls = timeline_panel_stub.cancel_timecode_calls + 1
+        return true
+    end
+}
+package.loaded["ui.timeline.timeline_panel"] = timeline_panel_stub
+
+local project_browser_stub
+project_browser_stub = {
+    add_selected_to_timeline = function() end,
+    find_bar = nil,  -- find bar state for Escape dismiss test
+    hide_find_bar = function() end,
+}
+package.loaded["ui.project_browser"] = project_browser_stub
+
+-- Mock fullscreen_viewer
+package.loaded["ui.fullscreen_viewer"] = {
+    is_active = function() return false end,
+    exit = function() end,
+}
+
 -- Set up database for real timeline_state
 local database = require("core.database")
 local command_manager = require("core.command_manager")
@@ -125,6 +152,10 @@ end
 
 function command_manager_stub.execute_interactive(command_name)
     table.insert(command_manager_stub.executed_commands, command_name)
+    if command_name == "Cancel" then
+        local Cancel = require("core.commands.cancel")
+        return { success = Cancel.execute(nil, {}) }
+    end
     return {success = true}
 end
 
@@ -139,17 +170,6 @@ end
 function command_manager_stub.begin_command_event() end
 function command_manager_stub.end_command_event() end
 
-local timeline_panel_stub = {
-    is_dragging = function() return false end,
-    focus_timeline_view = function() return true end,
-    focus_timecode_entry = function() return true end,
-    cancel_timecode_calls = 0,
-}
-function timeline_panel_stub.cancel_timecode_entry()
-    timeline_panel_stub.cancel_timecode_calls = timeline_panel_stub.cancel_timecode_calls + 1
-    return true
-end
-
 local function reset_environment()
     selection_hub._reset_for_tests()
     command_manager_stub.undo_calls = 0
@@ -160,11 +180,8 @@ local function reset_environment()
     -- Real timeline_state: set playhead to known position for tracking
     timeline_state.set_playhead_position(100)
     focus_manager.set_focused_panel(nil)
-    local project_browser_stub = {
-        add_selected_to_timeline = function() end,
-        find_bar = nil,  -- find bar state for Escape dismiss test
-        hide_find_bar = function() end,
-    }
+    project_browser_stub.find_bar = nil
+    project_browser_stub.hide_find_bar = function() end
     keyboard_shortcuts.init(command_manager_stub, project_browser_stub, timeline_panel_stub)
 end
 
@@ -337,16 +354,10 @@ assert_equal(timeline_panel_stub.cancel_timecode_calls, 0,
 
 -- Test 15: Escape dismisses find bar when visible
 reset_environment()
-focus_manager.set_focused_panel("project_browser")
 -- Simulate find bar visible
--- Re-init with find_bar state on project_browser stub
 local find_bar_hidden = false
-local pb_with_find = {
-    add_selected_to_timeline = function() end,
-    find_bar = { visible = true },
-    hide_find_bar = function() find_bar_hidden = true end,
-}
-keyboard_shortcuts.init(command_manager_stub, pb_with_find, timeline_panel_stub)
+project_browser_stub.find_bar = { visible = true }
+project_browser_stub.hide_find_bar = function() find_bar_hidden = true end
 focus_manager.set_focused_panel("project_browser")
 
 handled = keyboard_shortcuts.handle_key({

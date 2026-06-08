@@ -12,15 +12,18 @@ package.loaded["ui.panel_manager"] = {
 
 print("=== test_relink_clips_integration.lua ===")
 
-local database = require("core.database")
+local database        = require("core.database")
 local command_manager = require("core.command_manager")
-local Command = require("command")
-local uuid = require("uuid")
-local json = require("dkjson")
+local Command         = require("command")
+local uuid            = require("uuid")
+local json            = require("dkjson")
 
-local Clip = require("models.clip")
-local Media = require("models.media")
-local media_relinker = require("core.media_relinker")
+local Project         = require("models.project")
+local Sequence        = require("models.sequence")
+local Track           = require("models.track")
+local Clip            = require("models.clip")
+local Media           = require("models.media")
+local media_relinker  = require("core.media_relinker")
 
 local TEST_DB = "/tmp/jve/test_relink_integration.db"
 os.remove(TEST_DB)
@@ -31,37 +34,34 @@ database.init(TEST_DB)
 local db = database.get_connection()
 db:exec(require("import_schema"))
 
-local now = os.time()
+-- ---------------------------------------------------------------------------
+-- Fixtures (SQL Isolation)
+-- ---------------------------------------------------------------------------
+
 local project_id = "proj-int"
-local seq_id = uuid.generate()
-local v1_track = uuid.generate()
-local a1_track = uuid.generate()
+Project.create("Integration Project", {
+    id   = project_id,
+    fps_mismatch_policy = "resample",
+}):save()
 
--- Create project, sequence, tracks
-db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
-    VALUES ('%s', 'Integration Project', 'resample', %d, %d, '{}');
+local seq_id = "sequence-main"
+Sequence.create("Main", project_id, { fps_numerator = 25, fps_denominator = 1 }, 1920, 1080, {
+    id   = seq_id,
+    kind = "sequence",
+    audio_sample_rate = 48000,
+    view_duration_frames = 500,
+}):save()
 
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height,
-        view_start_frame, view_duration_frames, playhead_frame, selected_clip_ids, selected_edge_infos,
-        selected_gap_infos, current_sequence_number, created_at, modified_at)
-    VALUES ('%s', '%s', 'Main', 'sequence', 25, 1, 48000, 1920, 1080, 0, 500, 0, '[]', '[]', '[]', 0, %d, %d);
-
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('%s', '%s', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('%s', '%s', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
-]], project_id, now, now,
-    seq_id, project_id, now, now,
-    v1_track, seq_id,
-    a1_track, seq_id))
+local v1_track = "track_v1"
+local a1_track = "track_a1"
+Track.create_video("V1", seq_id, { id = v1_track, index = 1 }):save()
+Track.create_audio("A1", seq_id, { id = a1_track, index = 1 }):save()
 
 -- Create media files (video + audio) with start TC
-local video_media_id = uuid.generate()
-local audio_media_id = uuid.generate()
+local video_media_id = "media_video"
+local audio_media_id = "media_audio"
 
-local video_media = Media.create({
+Media.create({
     id = video_media_id,
     project_id = project_id,
     file_path = "/offline/shoot1/A026_C007.mov",
@@ -73,9 +73,9 @@ local video_media = Media.create({
     height = 1080,
     audio_channels = 0,
     metadata = json.encode({start_tc_value = 89750, start_tc_rate = 25}),
-})
-video_media:save(db)
-local audio_media = Media.create({
+}):save()
+
+Media.create({
     id = audio_media_id,
     project_id = project_id,
     file_path = "/offline/shoot1/A026_C007.wav",
@@ -91,38 +91,41 @@ local audio_media = Media.create({
         start_tc_value = 0, start_tc_rate = 25,
         start_tc_audio_samples = 172320000, start_tc_audio_rate = 48000,
     }),
-})
-audio_media:save(db)
+}):save()
+
 -- V13: master sequences for the two media files; clips reference these.
-local _Sequence = require("models.sequence")
-local video_master = _Sequence.ensure_master(video_media_id, project_id)
-local audio_master = _Sequence.ensure_master(audio_media_id, project_id)
+local video_master = Sequence.ensure_master(video_media_id, project_id)
+local audio_master = Sequence.ensure_master(audio_media_id, project_id)
+
 -- Create clips: 2 video, 1 audio
-local v_clip_1 = uuid.generate()
-local v_clip_2 = uuid.generate()
-local a_clip_1 = uuid.generate()
+local v_clip_1 = "v_clip_1"
+local v_clip_2 = "v_clip_2"
+local a_clip_1 = "a_clip_1"
 
-db:exec(string.format([[
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
-        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
-        enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('%s', '%s', 'V-Shot1', '%s', '%s', '%s', 0, 100, 100, 200, NULL, NULL, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+Clip.create({
+    id = v_clip_1, project_id = project_id, name = "V-Shot1", track_id = v1_track,
+    sequence_id = video_master, owner_sequence_id = seq_id,
+    sequence_start_frame = 0, duration_frames = 100,
+    source_in_frame = 100, source_out_frame = 200,
+    fps_mismatch_policy = "resample", enabled = true, volume = 1.0, playhead_frame = 0,
+})
 
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
-        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
-        enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('%s', '%s', 'V-Shot2', '%s', '%s', '%s', 100, 50, 500, 550, NULL, NULL, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
+Clip.create({
+    id = v_clip_2, project_id = project_id, name = "V-Shot2", track_id = v1_track,
+    sequence_id = video_master, owner_sequence_id = seq_id,
+    sequence_start_frame = 100, duration_frames = 50,
+    source_in_frame = 500, source_out_frame = 550,
+    fps_mismatch_policy = "resample", enabled = true, volume = 1.0, playhead_frame = 0,
+})
 
-    INSERT INTO clips (id, project_id, name, track_id, sequence_id, owner_sequence_id,
-        sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe,
-        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
-        enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('%s', '%s', 'A-Shot1', '%s', '%s', '%s', 0, 100, 4800000, 9600000, 0, 0, NULL, NULL, 'resample', 1, 1.0, 0, %d, %d);
-]], v_clip_1, project_id, v1_track, video_master, seq_id, now, now,
-    v_clip_2, project_id, v1_track, video_master, seq_id, now, now,
-    a_clip_1, project_id, a1_track, audio_master, seq_id, now, now))
+Clip.create({
+    id = a_clip_1, project_id = project_id, name = "A-Shot1", track_id = a1_track,
+    sequence_id = audio_master, owner_sequence_id = seq_id,
+    sequence_start_frame = 0, duration_frames = 100,
+    source_in_frame = 4800000, source_out_frame = 9600000,
+    source_in_subframe = 0, source_out_subframe = 0,
+    fps_mismatch_policy = "resample", enabled = true, volume = 1.0, playhead_frame = 0,
+})
 
 command_manager.init(seq_id, project_id)
 

@@ -60,10 +60,13 @@ protected:
     void paintEvent(QPaintEvent* event) override;
 
 private:
-    QImage m_image;
+    QImage m_image;        // Authority for paintEvent (graded)
+    QImage m_imageSource;  // Ungraded source (authority for regrade())
     int m_frameWidth = 0;
     int m_frameHeight = 0;
     int m_rotation = 0;  // 0, 90, 180, 270
     emp::CdlParams m_cdl{};  // zero-init ⇒ enabled = 0 (passthrough)
     emp::Lut3d m_lut{};      // default-init ⇒ enabled = 0 (passthrough)
+
+    void regrade();
 };

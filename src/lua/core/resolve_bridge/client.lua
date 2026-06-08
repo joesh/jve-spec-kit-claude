@@ -33,7 +33,8 @@ local M = {}
 
 local NEXT_CORR_ID = 1
 local function mint_correlation_id()
-    local id = string.format("jve-%d-%d", os.time(), NEXT_CORR_ID)
+    local our_pid = qt_get_pid and qt_get_pid() or 0
+    local id = string.format("jve-%d-%d-%d", our_pid, os.time(), NEXT_CORR_ID)
     NEXT_CORR_ID = NEXT_CORR_ID + 1
     return id
 end
@@ -98,7 +99,16 @@ function M.connect(socket_path, opts)
         end
         local slot = in_flight[parsed.id]
         if slot == nil then
-            log.warn("client: response for unknown id %s", tostring(parsed.id))
+            -- Helper sent a response for an ID we don't recognize.
+            -- This implies deep desync or a helper bug where it's
+            -- sending duplicate/stale IDs. Rule 2.32: No silent
+            -- dropping. Fail all in-flight and close so the
+            -- supervisor can restart the helper.
+            log.error("client: response for unknown id %s", tostring(parsed.id))
+            fail_all_in_flight("resolve_api_error",
+                string.format("client: received response for unknown id %s; "
+                .. "closing socket due to desync", tostring(parsed.id)))
+            if self_close then self_close() end
             return
         end
         in_flight[parsed.id] = nil
@@ -124,12 +134,9 @@ function M.connect(socket_path, opts)
     end)
 
     qt_local_socket_set_disconnected_cb(handle, function()
-        closed = true
-        for corr_id, slot in pairs(in_flight) do
-            in_flight[corr_id] = nil
-            slot.on_complete(nil, "resolve_api_error",
-                "helper socket disconnected before reply")
-        end
+        log.event("client: disconnected from helper")
+        fail_all_in_flight("resolve_api_error", "helper socket disconnected before reply")
+        if self_close then self_close() end
     end)
 
     -- Capture the last QLocalSocket error so the connect-failure branch
@@ -149,46 +156,15 @@ function M.connect(socket_path, opts)
     local last_socket_error = nil
     qt_local_socket_set_error_cb(handle, function(err_name)
         last_socket_error = err_name
-        log.event("client: socket error: %s", err_name)
     end)
 
     qt_local_socket_connect(handle, socket_path)
-    local connected = qt_local_socket_wait_for_connected(
-        handle, connect_timeout_ms)
-    if not connected then
+
+    if not qt_local_socket_wait_for_connected(handle, connect_timeout_ms) then
+        local err = last_socket_error or "SocketTimeoutError"
         qt_local_socket_destroy(handle)
-        local err = last_socket_error
-        if err == "ServerNotFoundError" then
-            return nil, string.format(
-                "client.connect: socket file %s does not exist — "
-                .. "QLocalSocket fired ServerNotFoundError instantly "
-                .. "(it does NOT retry within its %dms timeout for "
-                .. "this error; the caller owns wait-for-bind)",
-                socket_path, connect_timeout_ms)
-        end
-        if err == "ConnectionRefusedError" then
-            return nil, string.format(
-                "client.connect: connection refused on %s — socket "
-                .. "file exists but the helper is not listen()ing",
-                socket_path)
-        end
-        if err == "PeerClosedError" then
-            return nil, string.format(
-                "client.connect: helper disconnected during connect "
-                .. "handshake on %s", socket_path)
-        end
-        if err then
-            return nil, string.format(
-                "client.connect: %s on %s (waited up to %dms)",
-                err, socket_path, connect_timeout_ms)
-        end
-        -- No QLocalSocket error cb fired before wait timed out: the
-        -- helper accepted then never replied, or the kernel queued
-        -- the connect indefinitely. This is the genuine timeout.
-        return nil, string.format(
-            "client.connect: timed out after %dms with no "
-            .. "QLocalSocket error (helper unresponsive on %s?)",
-            connect_timeout_ms, socket_path)
+        return nil, string.format("failed to connect to %s: %s",
+            socket_path, err)
     end
 
     -- opts.timeout_ms (optional): override the client's default
@@ -200,9 +176,10 @@ function M.connect(socket_path, opts)
     -- finished). Must be a positive number; rejected otherwise to
     -- keep the closed-set discipline at the boundary (rule 2.32).
     function self:request(verb, args, on_complete, opts)  -- luacheck: ignore self
-        assert(not closed, "client:request: socket is closed")
+        assert(type(verb) == "string", "client:request: verb required")
         assert(type(on_complete) == "function",
-            "client:request: on_complete required")
+            "client:request: on_complete callback required")
+        assert(not closed, "client:request: socket is closed")
         local effective_timeout_ms = request_timeout_ms
         if opts ~= nil then
             assert(type(opts) == "table",
@@ -217,16 +194,11 @@ function M.connect(socket_path, opts)
         end
         local corr_id = mint_correlation_id()
         in_flight[corr_id] = { on_complete = on_complete }
-        local line = protocol.build_request({
-            id = corr_id, verb = verb, args = args,
-        })
-        local written, werr = qt_local_socket_write(handle, line)
-        if written == nil then
+
+        local envelope = protocol.build_request(corr_id, verb, args)
+        if not qt_local_socket_write(handle, envelope) then
             in_flight[corr_id] = nil
-            assert(type(werr) == "string" and werr ~= "",
-                "client:request: qt_local_socket_write returned nil "
-                .. "without an error string (FFI contract violation)")
-            on_complete(nil, "resolve_api_error", werr)
+            on_complete(nil, "resolve_api_error", "failed to write to socket")
             return
         end
         qt_local_socket_flush(handle)
@@ -243,11 +215,7 @@ function M.connect(socket_path, opts)
     function self:close()  -- luacheck: ignore self
         if closed then return end
         closed = true
-        for corr_id, slot in pairs(in_flight) do
-            in_flight[corr_id] = nil
-            slot.on_complete(nil, "resolve_api_error",
-                "client:close() called before reply")
-        end
+        fail_all_in_flight("resolve_api_error", "client:close() called before reply")
         qt_local_socket_destroy(handle)
     end
 

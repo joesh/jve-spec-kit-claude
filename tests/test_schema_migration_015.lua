@@ -11,7 +11,7 @@
 --   * pre-existing tracks default to sync_mode='ripple'
 
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
-require("test_env")
+local test_env = require("test_env")
 local database = require("core.database")
 
 print("=== test_schema_migration_015.lua ===")
@@ -100,16 +100,9 @@ assert(cnt_after == 0, string.format(
     "FAIL: CASCADE delete did not remove patches — %d rows remain", cnt_after))
 print("  CASCADE on sequence delete — OK")
 
--- ── schema_version == 13 (023 bumped V11→V13: clip_grade +
---    resolve_bridge_link tables for Resolve color bridge; V12 never
---    shipped on-disk because spec-013 clip-shape changes were already
---    in V11 schema files) ──────────────────────────────────────────────
-local sv_stmt = db:prepare("SELECT MAX(version) FROM schema_version")
-assert(sv_stmt); sv_stmt:exec(); sv_stmt:next()
-local sv = sv_stmt:value(0)
-sv_stmt:finalize()
-assert(sv == 13, string.format("FAIL: schema_version=%s, expected 13", tostring(sv)))
-print("  schema_version=13 — OK")
+-- ── schema_version == database.SCHEMA_VERSION ─────────────────────────────
+test_env.assert_schema_version(db, "schema_version check")
+print("  schema_version=" .. database.SCHEMA_VERSION .. " — OK")
 
 -- ── snapshots table unchanged (no regressions) ───────────────────────────
 local snap_col = db:prepare(

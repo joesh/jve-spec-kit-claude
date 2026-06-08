@@ -22,12 +22,14 @@ print("=== test_drp_retimed_clip_speed.lua ===")
 
 local drp_importer = require("importers.drp_importer")
 
-local function elem(tag, text, children)
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
     return {
         tag = tag,
-        attrs = {},
+        attrs = attrs,
         children = children or {},
-        text = text or "",
+        text = text,
     }
 end
 
@@ -54,7 +56,7 @@ local seq = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "non_retimed_clip"),
                 elem("Start", "15880"),
                 elem("Duration", "181"),
@@ -68,7 +70,7 @@ local seq = elem("Sequence", "", {
     }),
 })
 
-local video_tracks = drp_importer.parse_resolve_tracks(seq, 25)
+local video_tracks = drp_importer.parse_resolve_tracks(seq, { frame_rate = 25 })
 local clip = video_tracks[1].clips[1]
 
 -- No MTBA = not retimed. Sub-frame 0.9048 + integer 34 = 34.9048 → rounds to 35.
@@ -103,7 +105,7 @@ local seq_normal = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "normal_clip"),
                 elem("Start", "0"),
                 elem("Duration", "200"),
@@ -116,7 +118,7 @@ local seq_normal = elem("Sequence", "", {
     }),
 })
 
-local v_normal = drp_importer.parse_resolve_tracks(seq_normal, 25)
+local v_normal = drp_importer.parse_resolve_tracks(seq_normal, { frame_rate = 25 })
 local normal = v_normal[1].clips[1]
 
 assert(normal.source_in == 50, "Non-retimed source_in should be 50, got " .. normal.source_in)
@@ -136,7 +138,7 @@ local seq_fast = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "fast_clip"),
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -150,7 +152,7 @@ local seq_fast = elem("Sequence", "", {
     }),
 })
 
-local v_fast = drp_importer.parse_resolve_tracks(seq_fast, 25)
+local v_fast = drp_importer.parse_resolve_tracks(seq_fast, { frame_rate = 25 })
 local fast = v_fast[1].clips[1]
 
 -- No MTBA = not retimed. source_in = raw in_value (20)
@@ -183,7 +185,7 @@ local seq_real = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "40-335.3-1"),
                 elem("Start", "91606"),
                 elem("Duration", "109"),
@@ -197,7 +199,7 @@ local seq_real = elem("Sequence", "", {
     }),
 })
 
-local v_real = drp_importer.parse_resolve_tracks(seq_real, 25)
+local v_real = drp_importer.parse_resolve_tracks(seq_real, { frame_rate = 25 })
 local real_clip = v_real[1].clips[1]
 
 -- Before fix: garbage speed 1.27e-11 accepted → source_in = floor(2327 * 1.27e-11) = 0
@@ -237,7 +239,7 @@ local seq_nohex = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "40-335.3-1"),
                 elem("Start", "90904"),
                 elem("Duration", "117"),
@@ -251,7 +253,7 @@ local seq_nohex = elem("Sequence", "", {
     }),
 })
 
-local v_nohex = drp_importer.parse_resolve_tracks(seq_nohex, 25)
+local v_nohex = drp_importer.parse_resolve_tracks(seq_nohex, { frame_rate = 25 })
 local nohex_clip = v_nohex[1].clips[1]
 
 -- media_tc_origin = floor(14481.12 * 25 + 0.5) = 362028
@@ -290,7 +292,7 @@ local seq_333 = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "01-333-2"),
                 elem("Start", "92770"),
                 elem("Duration", "132"),
@@ -304,7 +306,7 @@ local seq_333 = elem("Sequence", "", {
     }),
 })
 
-local v_333 = drp_importer.parse_resolve_tracks(seq_333, 25)
+local v_333 = drp_importer.parse_resolve_tracks(seq_333, { frame_rate = 25 })
 local clip_333 = v_333[1].clips[1]
 
 -- Domain: MTBA speed = YMax/XMax = 73.28/83.28 ≈ 0.88 (88% speed).

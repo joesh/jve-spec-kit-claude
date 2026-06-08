@@ -319,7 +319,11 @@ function Track:save()
     end
 
     stmt:finalize()
-    return ok
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_track(self.id, self.sequence_id)
+
+    return true
 end
 
 -- Count tracks for a sequence
@@ -481,6 +485,10 @@ function Track.delete(track_id)
     del:bind_value(1, track_id)
     assert(del:exec(), "Track.delete: delete exec failed")
     del:finalize()
+
+    -- FU-8: Notify entity watchers
+    require("core.watchers").notify_track(track_id, seq_id)
+
     return true
 end
 

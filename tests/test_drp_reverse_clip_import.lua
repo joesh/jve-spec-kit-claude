@@ -33,8 +33,10 @@ print("=== test_drp_reverse_clip_import.lua ===")
 -- Test-element helpers.
 -- ---------------------------------------------------------------------------
 
-local function elem(tag, text, children)
-    return { tag = tag, attrs = {}, children = children or {}, text = text or "" }
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
+    return { tag = tag, attrs = attrs, children = children or {}, text = text }
 end
 
 local function wrap(...)
@@ -92,7 +94,7 @@ local seq_elem = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),  -- 0 = VIDEO
         wrap(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "reverse_clamped"),
                 elem("Start", "0"),
                 elem("Duration", tostring(TIMELINE_DURATION)),
@@ -106,7 +108,7 @@ local seq_elem = elem("Sequence", "", {
     }),
 })
 
-local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, SEQ_FPS)
+local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, { frame_rate = SEQ_FPS })
 assert(#video_tracks == 1 and #video_tracks[1].clips == 1, "expected 1 clip")
 local clip = video_tracks[1].clips[1]
 

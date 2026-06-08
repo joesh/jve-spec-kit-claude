@@ -12,7 +12,8 @@ M.FR_24       = 24
 M.FR_23976    = 24000 / 1001
 M.TC_1H       = 24 * 3600                          -- 86400 frames @ 24fps
 
-M.A005_PATH   = "/Users/joe/Local/jve-spec-kit-claude/"
+local path_utils = require("core.path_utils")
+M.A005_PATH   = path_utils.resolve_repo_root() .. "/"
     .. "tests/fixtures/media/A005_C052_0925BL_001.mp4"
 M.A005_UUID   = "11111111-1111-4111-8111-111111111111"
 M.A005_NATIVE_RATE = M.FR_23976                    -- A005's container rate

@@ -1017,8 +1017,8 @@ local function build_render_ctx(view)
 
     state_module.debug_begin_layout_capture(view.debug_id, width, height)
 
-    local viewport_start    = state_module.get_viewport_start_time()
-    local viewport_duration = state_module.get_viewport_duration()
+    local viewport_start    = assert(state_module.get_viewport_start_time(), "timeline_view_renderer: viewport_start_time is nil")
+    local viewport_duration = assert(state_module.get_viewport_duration(), "timeline_view_renderer: viewport_duration is nil")
     local viewport_end      = viewport_start + viewport_duration
 
     assert(state_module.get_display_mark_in,
@@ -1219,6 +1219,7 @@ end
 function M.render(view)
     if not view.widget then return end
     local ctx = build_render_ctx(view)
+    if not ctx then return end
 
     timeline.clear_commands(view.widget)
     render_track_backgrounds(view, ctx.state_module, ctx.layout_by_index, ctx.width, ctx.height)

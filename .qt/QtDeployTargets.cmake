@@ -1,6 +1,0 @@
-set(__QT_DEPLOY_TARGET_JVECore_FILE /Users/joe/Local/jve-spec-kit-claude/libJVECore.a)
-set(__QT_DEPLOY_TARGET_JVECore_TYPE STATIC_LIBRARY)
-set(__QT_DEPLOY_TARGET_JVEEditor_FILE /Users/joe/Local/jve-spec-kit-claude/bin/JVEEditor)
-set(__QT_DEPLOY_TARGET_JVEEditor_TYPE EXECUTABLE)
-set(__QT_DEPLOY_TARGET_test_timeline_renderer_widget_FILE /Users/joe/Local/jve-spec-kit-claude/bin/test_timeline_renderer_widget)
-set(__QT_DEPLOY_TARGET_test_timeline_renderer_widget_TYPE EXECUTABLE)

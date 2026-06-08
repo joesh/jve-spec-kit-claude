@@ -17,8 +17,13 @@ package.loaded["ui.panel_manager"] = {
 local database = require('core.database')
 local command_manager = require('core.command_manager')
 local timeline_state = require('ui.timeline.timeline_state')
+local Project = require('models.project')
+local Sequence = require('models.sequence')
+local Track = require('models.track')
+local Clip = require('models.clip')
 
 local TEST_DB = "/tmp/jve/test_trim_head_tail.db"
+os.execute("mkdir -p /tmp/jve")
 os.remove(TEST_DB)
 os.remove(TEST_DB .. "-wal")
 os.remove(TEST_DB .. "-shm")
@@ -26,25 +31,28 @@ os.remove(TEST_DB .. "-shm")
 database.init(TEST_DB)
 local db = database.get_connection()
 
-db:exec(require('import_schema'))
+-- Setup: Project, Sequence, Tracks
+local project = Project.create('Test Project', {
+    id = 'proj',
+    fps_mismatch_policy = 'resample',
+    settings = { master_clock_hz = 192000, default_fps = { num = 24, den = 1 } }
+})
+assert(project:save(), "failed to save project")
 
-db:exec([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-    VALUES ('proj', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-    INSERT INTO sequences (
-        id, project_id, name, kind,
-        fps_numerator, fps_denominator, audio_sample_rate,
-        width, height, view_start_frame, view_duration_frames, playhead_frame,
-        selected_clip_ids, selected_edge_infos, selected_gap_infos,
-        current_sequence_number, created_at, modified_at
-    )
-    VALUES ('seq', 'proj', 'Sequence', 'sequence', 24, 1, 48000, 1920, 1080, 0, 10000, 0,
-        '[]', '[]', '[]', 0, 0, 0);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('v1', 'seq', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-    VALUES ('a1', 'seq', 'A1', 'AUDIO', 1, 1, 0, 0, 0, 1.0, 0.0);
-]])
+local sequence = Sequence.create('Sequence', 'proj', { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+    id = 'seq',
+    kind = 'sequence',
+    audio_sample_rate = 48000,
+    view_start_frame = 0,
+    view_duration_frames = 10000,
+    playhead_frame = 0
+})
+assert(sequence:save(), "failed to save sequence")
+
+local v1 = Track.create_video("V1", 'seq', { index = 1 })
+assert(v1:save(), "failed to save V1")
+local a1 = Track.create_audio("A1", 'seq', { index = 1 })
+assert(a1:save(), "failed to save A1")
 
 command_manager.init('seq', 'proj')
 
@@ -61,44 +69,31 @@ local function check(label, condition)
 end
 
 local function get_clip(clip_id)
-    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames, source_in_frame, source_out_frame FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    assert(stmt:exec())
-    if stmt:next() then
-        local c = {
-            start = stmt:value(0),
-            duration = stmt:value(1),
-            source_in = stmt:value(2),
-            source_out = stmt:value(3),
+    local c = Clip.load(clip_id)
+    if c then
+        return {
+            start = c.sequence_start,
+            duration = c.duration,
+            source_in = c.source_in,
+            source_out = c.source_out,
         }
-        stmt:finalize()
-        return c
     end
-    stmt:finalize()
     return nil
 end
 
 local function set_db_playhead(val)
-    -- viewport_state.set_playhead_position writes only to the UI cache; commands
-    -- read playhead from the DB via Sequence.load. Bypass the persist_callback
-    -- and write directly so TrimHead's pre-execute capture sees the value.
-    local stmt = db:prepare("UPDATE sequences SET playhead_frame = ? WHERE id = 'seq'")
-    stmt:bind_value(1, val)
-    assert(stmt:exec())
-    stmt:finalize()
+    local s = Sequence.load('seq')
+    s.playhead_position = val
+    assert(s:save())
 end
 
 local function get_db_playhead()
-    local stmt = db:prepare("SELECT playhead_frame FROM sequences WHERE id = 'seq'")
-    assert(stmt:exec())
-    assert(stmt:next())
-    local val = stmt:value(0)
-    stmt:finalize()
-    return val
+    local s = Sequence.load('seq')
+    return s.playhead_position
 end
 
 local function create_clip(id, track_id, start, duration, source_in)
-    source_in = source_in or 100  -- non-trivial source_in to catch bugs
+    source_in = source_in or 100
     local media_id = id .. "_media"
     require("test_env").create_test_media({
         id = media_id,
@@ -111,13 +106,7 @@ local function create_clip(id, track_id, start, duration, source_in)
         width = 1920,
         height = 1080,
     })
-    -- V13: clips reference master sequences, not media directly. Build the
-    -- master via ensure_master, then place a clip on the timeline that
-    -- references it.
-    local Sequence = require('models.sequence')
     local master_seq_id = Sequence.ensure_master(media_id, 'proj')
-    local now = os.time()
-    local Clip = require('models.clip')
     local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
     Clip.create({
         id = id,
@@ -136,14 +125,13 @@ local function create_clip(id, track_id, start, duration, source_in)
         enabled = true,
         volume = 1.0,
         playhead_frame = 0,
-        created_at = now,
-        modified_at = now,
     })
 end
 
 local function reset()
     db:exec("DELETE FROM clips;")
     db:exec("DELETE FROM media;")
+    db:exec("DELETE FROM sequences WHERE kind = 'master';")
     timeline_state.reload_clips()
     timeline_state.set_playhead_position(0)
 end
@@ -156,16 +144,9 @@ end
 print("\n--- TrimHead: basic trim + ripple + playhead ---")
 do
     reset()
-    -- Clip: start=50, dur=100, source_in=100 → frames [50..150)
-    -- Downstream: start=150, dur=80 → frames [150..230)
-    -- Trim at 80 → remove [50,80), ripple by 30
-    -- Expected: clip becomes [50..120) source_in=130, downstream at [120..200)
-    create_clip("th1", "v1", 50, 100, 100)
-    create_clip("th1_next", "v1", 150, 80, 200)
+    create_clip("th1", v1.id, 50, 100, 100)
+    create_clip("th1_next", v1.id, 150, 80, 200)
     timeline_state.reload_clips()
-    -- Pre-trim playhead = 65 (NOT equal to trim_frame=80). The pass-17 fix
-    -- captures prior_playhead from the DB and restores it on undo; if a
-    -- regression made undo restore trim_frame, this assertion would fail.
     set_db_playhead(65)
     timeline_state.set_playhead_position(65)
 
@@ -223,14 +204,10 @@ end
 print("\n--- TrimHead: multi-track (video + audio) ---")
 do
     reset()
-    -- V1 clip: [20..120), A1 clip: [20..120) — linked pair
-    -- Downstream V1: [120..200), downstream A1: [120..200)
-    -- Trim at 60 → remove [20,60), ripple 40 frames
-    -- Expected: clips become [20..80), downstreams at [80..160)
-    create_clip("mt_v", "v1", 20, 100, 50)
-    create_clip("mt_a", "a1", 20, 100, 50)
-    create_clip("mt_v_next", "v1", 120, 80, 300)
-    create_clip("mt_a_next", "a1", 120, 80, 300)
+    create_clip("mt_v", v1.id, 20, 100, 50)
+    create_clip("mt_a", a1.id, 20, 100, 50)
+    create_clip("mt_v_next", v1.id, 120, 80, 300)
+    create_clip("mt_a_next", a1.id, 120, 80, 300)
     timeline_state.reload_clips()
     timeline_state.set_playhead_position(60)
 
@@ -267,12 +244,8 @@ end
 print("\n--- TrimTail: basic trim + ripple ---")
 do
     reset()
-    -- Clip: start=50, dur=100, source_in=100 → frames [50..150)
-    -- Downstream: start=150, dur=80 → frames [150..230)
-    -- Trim at 110 → remove [110,150), ripple by 40
-    -- Expected: clip becomes [50..110) source_out=160, downstream at [110..190)
-    create_clip("tt1", "v1", 50, 100, 100)
-    create_clip("tt1_next", "v1", 150, 80, 200)
+    create_clip("tt1", v1.id, 50, 100, 100)
+    create_clip("tt1_next", v1.id, 150, 80, 200)
     timeline_state.reload_clips()
     timeline_state.set_playhead_position(110)
 
@@ -324,10 +297,10 @@ end
 print("\n--- TrimTail: multi-track ---")
 do
     reset()
-    create_clip("tt_v", "v1", 20, 100, 50)
-    create_clip("tt_a", "a1", 20, 100, 50)
-    create_clip("tt_v_next", "v1", 120, 80, 300)
-    create_clip("tt_a_next", "a1", 120, 80, 300)
+    create_clip("tt_v", v1.id, 20, 100, 50)
+    create_clip("tt_a", a1.id, 20, 100, 50)
+    create_clip("tt_v_next", v1.id, 120, 80, 300)
+    create_clip("tt_a_next", a1.id, 120, 80, 300)
     timeline_state.reload_clips()
     timeline_state.set_playhead_position(70)
 
@@ -357,7 +330,7 @@ end
 print("\n--- TrimHead: playhead outside clip fails ---")
 do
     reset()
-    create_clip("edge1", "v1", 50, 100, 0)
+    create_clip("edge1", v1.id, 50, 100, 0)
     timeline_state.reload_clips()
 
     local result = command_manager.execute("TrimHead", {
@@ -372,7 +345,7 @@ end
 print("\n--- TrimTail: playhead outside clip fails ---")
 do
     reset()
-    create_clip("edge2", "v1", 50, 100, 0)
+    create_clip("edge2", v1.id, 50, 100, 0)
     timeline_state.reload_clips()
 
     local result = command_manager.execute("TrimTail", {

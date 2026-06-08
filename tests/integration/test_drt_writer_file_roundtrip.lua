@@ -109,7 +109,7 @@ local OUT = "/tmp/jve/t004_roundtrip.drt"
 os.execute("mkdir -p /tmp/jve")
 os.remove(OUT)
 
-writer.author(OUT, PAYLOAD)
+writer.author_a005_compatible(OUT, PAYLOAD)
 
 local parsed = importer.parse_drp_file(OUT)
 check(parsed.success, ("parse_drp_file refused the writer's .drt: %s")

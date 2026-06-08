@@ -25,9 +25,9 @@ local PATH_B = fixture.out_path("dbid_uniq_B")
 
 os.remove(PATH_A); os.remove(PATH_B)
 
-local result_a1 = writer.author(PATH_A, fixture.build_a005_payload())
-local result_b  = writer.author(PATH_B, fixture.build_a005_payload())
-local result_a2 = writer.author(PATH_A, fixture.build_a005_payload())
+local result_a1 = writer.author_a005_compatible(PATH_A, fixture.build_a005_payload())
+local result_b  = writer.author_a005_compatible(PATH_B, fixture.build_a005_payload())
+local result_a2 = writer.author_a005_compatible(PATH_A, fixture.build_a005_payload())
 
 local slot_count = 0
 local collisions = {}
@@ -74,8 +74,8 @@ end
 -- Re-author the two distinct paths and compare freshly to avoid relying on
 -- prior file contents (the earlier authors already cleaned up).
 os.remove(PATH_A); os.remove(PATH_B)
-writer.author(PATH_A, fixture.build_a005_payload())
-writer.author(PATH_B, fixture.build_a005_payload())
+writer.author_a005_compatible(PATH_A, fixture.build_a005_payload())
+writer.author_a005_compatible(PATH_B, fixture.build_a005_payload())
 local thumbs_a = collect_thumb_dbids(fixture.unzip_member(PATH_A, "SeqContainer/*.xml"))
 local thumbs_b = collect_thumb_dbids(fixture.unzip_member(PATH_B, "SeqContainer/*.xml"))
 check(#thumbs_a > 0,

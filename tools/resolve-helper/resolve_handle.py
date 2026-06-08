@@ -17,17 +17,6 @@ import os
 import sys
 
 
-# Documented Resolve scripting env vars (phase0-findings.md §Environment).
-DEFAULT_SCRIPT_API = (
-    "/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
-    "Developer/Scripting"
-)
-DEFAULT_SCRIPT_LIB = (
-    "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/"
-    "Libraries/Fusion/fusionscript.so"
-)
-
-
 class ResolveHandle:
     def __init__(self):
         self._log = logging.getLogger("resolve_handle")
@@ -36,10 +25,27 @@ class ResolveHandle:
         self._bootstrap()
 
     def _bootstrap(self):
-        api = os.environ.get("RESOLVE_SCRIPT_API", DEFAULT_SCRIPT_API)
-        lib = os.environ.get("RESOLVE_SCRIPT_LIB", DEFAULT_SCRIPT_LIB)
-        os.environ["RESOLVE_SCRIPT_API"] = api
-        os.environ["RESOLVE_SCRIPT_LIB"] = lib
+        api = os.environ.get("RESOLVE_SCRIPT_API")
+        lib = os.environ.get("RESOLVE_SCRIPT_LIB")
+        if not api or not lib:
+            # For now, default to macOS paths if missing, but assert they exist.
+            api = (
+                "/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
+                "Developer/Scripting"
+            )
+            lib = (
+                "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/"
+                "Libraries/Fusion/fusionscript.so"
+            )
+            if not os.path.exists(api) or not os.path.exists(lib):
+                raise RuntimeError(
+                    "RESOLVE_SCRIPT_API and RESOLVE_SCRIPT_LIB environment variables "
+                    "are not set, and the macOS default paths do not exist. "
+                    "Helper cannot bootstrap."
+                )
+            os.environ["RESOLVE_SCRIPT_API"] = api
+            os.environ["RESOLVE_SCRIPT_LIB"] = lib
+
         modules = os.path.join(api, "Modules")
         if modules not in sys.path:
             sys.path.insert(0, modules)
@@ -47,10 +53,7 @@ class ResolveHandle:
             import DaVinciResolveScript as dvr  # type: ignore[import]
             self._dvr = dvr
         except ImportError as exc:
-            self._terminal_error = (
-                "resolve_api_error",
-                f"DaVinciResolveScript import failed: {exc}",
-            )
+            raise RuntimeError(f"DaVinciResolveScript import failed: {exc}") from exc
 
     def acquire(self):
         if self._terminal_error is not None:
@@ -60,10 +63,10 @@ class ResolveHandle:
             resolve = self._dvr.scriptapp("Resolve")
         except Exception as exc:
             return ("error", "resolve_api_error",
-                f"scriptapp() raised: {exc}")
+                f"scriptapp('Resolve') raised: {exc}")
         if resolve is None:
             return ("error", "handle_stale",
-                "scriptapp('Resolve') returned None")
+                "scriptapp('Resolve') returned None — Resolve may be closed")
 
         try:
             product = resolve.GetProductName()
@@ -72,14 +75,18 @@ class ResolveHandle:
                 f"GetProductName failed: {exc}")
         if product != "DaVinci Resolve Studio":
             self._terminal_error = (
-                "not_studio",
+                "resolve_api_error",
                 f"connected Resolve is {product!r}, not Studio",
             )
             code, msg = self._terminal_error
             return ("error", code, msg)
 
         try:
-            project = resolve.GetProjectManager().GetCurrentProject()
+            pm = resolve.GetProjectManager()
+            if pm is None:
+                 return ("error", "resolve_api_error",
+                     "GetProjectManager() returned None")
+            project = pm.GetCurrentProject()
         except Exception as exc:
             return ("error", "resolve_api_error",
                 f"GetCurrentProject failed: {exc}")
@@ -91,12 +98,17 @@ class ResolveHandle:
 
     def version_string(self):
         # Logged with every ping per protocol.md ("API-drift landmine").
+        # Rule 2.13: no "unavailable" fallback. If we can't get the version,
+        # it's a diagnostic-worthy failure.
         if self._terminal_error is not None:
-            return "unavailable"
-        try:
-            resolve = self._dvr.scriptapp("Resolve")
-            if resolve is None:
-                return "unavailable"
-            return resolve.GetVersionString()
-        except Exception:
-            return "unavailable"
+            code, msg = self._terminal_error
+            raise RuntimeError(f"Cannot get version in terminal state: {code} ({msg})")
+            
+        resolve = self._dvr.scriptapp("Resolve")
+        if resolve is None:
+            raise RuntimeError("scriptapp('Resolve') returned None")
+            
+        ver = resolve.GetVersionString()
+        if ver is None:
+             raise RuntimeError("GetVersionString() returned None")
+        return ver

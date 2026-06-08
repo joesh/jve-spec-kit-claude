@@ -43,8 +43,7 @@ end
 -- Fixture: 23.976fps BRAW where the duration round-trip overshoots
 -- audio_sample_count. Path is repo-relative so the test runs anywhere
 -- the fixture tree is in place.
-local repo_root = os.getenv("JVE_REPO_ROOT")
-    or "/Users/joe/Local/jve-spec-kit-claude"
+local repo_root = require("core.path_utils").resolve_repo_root()
 local fixture_dir = repo_root .. "/tests/fixtures/media/anamnesis/"
     .. "2026-02-28-anamnesis joe edit-mm/Volumes/AnamBack4 Joe/Footage/"
 

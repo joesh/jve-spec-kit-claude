@@ -32,18 +32,27 @@ void CPUVideoSurface::setFrameData(const uint8_t* data, int width, int height, i
     m_frameWidth = width;
     m_frameHeight = height;
 
-    if (m_image.width() != width || m_image.height() != height) {
+    if (m_imageSource.width() != width || m_imageSource.height() != height) {
+        m_imageSource = QImage(width, height, QImage::Format_ARGB32);
         m_image = QImage(width, height, QImage::Format_ARGB32);
     }
 
     for (int y = 0; y < height; ++y) {
-        std::memcpy(m_image.scanLine(y), data + y * stride, width * 4);
+        std::memcpy(m_imageSource.scanLine(y), data + y * stride, width * 4);
     }
 
-    // CDL color stage (T032 / FR-016). No-op when m_cdl.enabled == 0
-    // (the View hasn't pushed a primary grade for the current clip).
-    // BGRA8 in place; alpha preserved.
-    emp::apply_cdl_bgra8_inplace(m_image.bits(), width, height,
+    regrade();
+}
+
+void CPUVideoSurface::regrade() {
+    if (m_imageSource.isNull()) return;
+
+    // CDL color stage (T032 / FR-016). No-op when m_cdl.enabled == 0.
+    // Copy ungraded source to display buffer, then apply math.
+    std::memcpy(m_image.bits(), m_imageSource.bits(), m_imageSource.sizeInBytes());
+
+    emp::apply_cdl_bgra8_inplace(m_image.bits(),
+                                  m_image.width(), m_image.height(),
                                   static_cast<int>(m_image.bytesPerLine()),
                                   m_cdl);
 
@@ -51,7 +60,8 @@ void CPUVideoSurface::setFrameData(const uint8_t* data, int width, int height, i
     // FR-015 makes them mutually exclusive per clip: at most one of
     // the two has enabled==1 at any moment (view_grade_pull enforces).
     // BGRA8 in place; alpha preserved by apply_lut3d_bgra8_inplace.
-    emp::apply_lut3d_bgra8_inplace(m_image.bits(), width, height,
+    emp::apply_lut3d_bgra8_inplace(m_image.bits(),
+                                    m_image.width(), m_image.height(),
                                     static_cast<int>(m_image.bytesPerLine()),
                                     m_lut);
 
@@ -60,12 +70,14 @@ void CPUVideoSurface::setFrameData(const uint8_t* data, int width, int height, i
 
 void CPUVideoSurface::setGrade(const emp::CdlParams& cdl) {
     m_cdl = cdl;
-    // No update() — the next setFrame/setFrameData will re-render
-    // with the new grade. The View pushes grade BEFORE frame.
+    // Rule 3.0: Park mode must be pull-based. regrade() uses the
+    // already-held m_imageSource to update the display immediately.
+    regrade();
 }
 
 void CPUVideoSurface::clearGrade() {
     m_cdl = emp::CdlParams{};  // zero-init ⇒ enabled = 0
+    regrade();
 }
 
 void CPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
@@ -74,17 +86,18 @@ void CPUVideoSurface::setLut3D(const emp::Lut3d& lut) {
     assert(lut.size >= 2 && lut.size <= 256 &&
         "CPUVideoSurface::setLut3D: lut.size out of [2,256]");
     m_lut = lut;
-    // No update() — the next setFrame/setFrameData will re-render
-    // with the new LUT. The View pushes LUT BEFORE frame.
+    regrade();
 }
 
 void CPUVideoSurface::clearLut3D() {
     m_lut = emp::Lut3d{};  // default-init ⇒ enabled = 0
+    regrade();
 }
 
 void CPUVideoSurface::clearFrame() {
     m_frameWidth = 0;
     m_frameHeight = 0;
+    m_imageSource = QImage();
     m_image = QImage();
     update();
 }

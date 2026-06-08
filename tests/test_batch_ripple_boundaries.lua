@@ -180,13 +180,20 @@ do
     local layout = ripple_layout.create({
         db_path = "/tmp/jve/test_batch_ripple_boundary_no_media.db",
         clips = {
-            v1_left = {sequence_start = 0, duration = 1000}  -- No media_id set
+            v1_left = {sequence_start = 0, duration = 1000}
         }
     })
 
-    -- Update clip to have no media_id (offline clip)
-    local db = layout.db
-    db:exec(string.format("UPDATE clips SET media_id = NULL WHERE id = '%s'", layout.clips.v1_left.id))
+    -- In V13, offline means the referenced master sequence has offline media.
+    local clip = Clip.load(layout.clips.v1_left.id, layout.db)
+    local master_seq_id = clip.sequence_id
+    
+    -- Mark media as offline
+    local Media = require("models.media")
+    local media_id = layout.media.main.id
+    local m = Media.load(media_id)
+    m:set_file_path("/nonexistent/path.mov")
+    m:save()
 
     local cmd = Command.create("BatchRippleEdit", layout.project_id)
     cmd:set_parameter("sequence_id", layout.sequence_id)

@@ -35,7 +35,9 @@ local command_event_depth = 0
 -- Execution depth tracking for nested command execution
 -- Depth 0 = top-level execution (full ceremony: transaction, history, DB save)
 -- Depth > 0 = nested execution (record to DB but skip transaction/UI refresh)
+-- Execution isolation: track recursion depth and prevent runaway command cycles.
 local execution_depth = 0
+local MAX_EXECUTION_DEPTH = 10
 
 -- Post-commit signal-emit queue.
 --
@@ -52,16 +54,26 @@ local execution_depth = 0
 local _post_commit_emits = {}
 
 local function flush_post_commit_emits()
-    if #_post_commit_emits == 0 then return end
+    if #_post_commit_emits == 0 then
+        require("core.watchers").flush()
+        return
+    end
     local pending = _post_commit_emits
     _post_commit_emits = {}
     for _, entry in ipairs(pending) do
         Signals.emit(unpack(entry))
     end
+    require("core.watchers").flush()
 end
 
 local function discard_post_commit_emits()
     _post_commit_emits = {}
+    require("core.watchers").discard()
+end
+
+--- True if a command is currently executing.
+function M.is_executing()
+    return execution_depth > 0
 end
 
 --- Queue a signal emit to fire after the surrounding command's
@@ -1597,6 +1609,12 @@ end
 
 function M.execute(command_or_name, params)
     params = params or {}
+
+    -- Guard 1: Recursion depth (prevents infinite cycles / stack overflow)
+    assert(execution_depth < MAX_EXECUTION_DEPTH,
+        string.format("CommandManager.execute: MAX_EXECUTION_DEPTH (%d) exceeded while executing %s",
+            MAX_EXECUTION_DEPTH, type(command_or_name) == "table" and command_or_name.type or tostring(command_or_name)))
+
     -- Centralized context injection (sequence_id + playhead) — same
     -- function for both dispatch forms, posture flag selects the
     -- contract. String-form (UI / menus / keyboard shortcuts) gets
@@ -1647,6 +1665,356 @@ function M.execute(command_or_name, params)
     return result_or_err, command_out
 end
 
+--- Internal helper for top-level recording commands. Handles the transaction 
+--- envelope, state hashing, per-clip mutation snapshots, DB persistence, 
+--- UI reload, and event notification.
+local function execute_with_recording_ceremony(command, spec, exec_scope)
+    local result = {
+        success = false,
+        error_message = "",
+        result_data = ""
+    }
+    
+    -- Stack routing: determine which undo stack this command belongs to.
+    local stack_id, stack_opts
+    do
+        local pre_seq_id = extract_sequence_id(command)
+        if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
+            stack_id = history.GLOBAL_STACK_ID
+            stack_opts = nil
+        elseif pre_seq_id then
+            stack_id = history.stack_id_for_sequence(pre_seq_id)
+            stack_opts = {sequence_id = pre_seq_id}
+        else
+            -- Check if this command type has sequence_id in its spec.
+            -- If so, it will derive it during execution — route to the active timeline stack.
+            local cmd_spec = registry.get_spec(command.type)
+            local has_seq_in_spec = cmd_spec and cmd_spec.args and cmd_spec.args.sequence_id
+            if has_seq_in_spec and active_sequence_id then
+                stack_id = history.stack_id_for_sequence(active_sequence_id)
+                stack_opts = {sequence_id = active_sequence_id}
+            else
+                stack_id = history.GLOBAL_STACK_ID
+                stack_opts = nil
+            end
+        end
+    end
+    history.set_active_stack(stack_id, stack_opts)
+    command.stack_id = stack_id
+
+    -- BEGIN TRANSACTION (skip if undo group is active - savepoint already started transaction)
+    local undo_group_active = history.get_current_undo_group_id() ~= nil
+    local snapshot_taken = false
+    if not undo_group_active then
+        local db_module = require("core.database")
+        if not db_module.begin_transaction() then
+            result.error_message = "Failed to begin transaction"
+            exec_scope:finish("begin_tx_failed")
+            return result
+        end
+        -- Mutation transaction parallels the DB transaction: snapshot in-memory
+        -- clip state so rollback_transaction can restore it if the command fails.
+        if not (spec and spec.skip_clip_snapshot) then
+            snapshot_taken = true
+            local clip_state = require("ui.timeline.state.clip_state")
+            clip_state.begin_mutation_transaction()
+        end
+    end
+
+    local perf = create_command_perf_tracker(command)
+    local needs_state_hash = should_compute_state_hash(command)
+    -- Always compute pre_hash: needed for NSF mutation check.
+    perf.reset()
+    local pre_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
+    perf.log("state_hash_pre")
+    perf.reset()
+
+    -- Use history module for sequence tracking
+    local sequence_number = history.increment_sequence_number()
+    command.sequence_number = sequence_number
+    -- Parent in the undo tree: the per-sequence cursor if available,
+    -- otherwise the global cursor.
+    command.parent_sequence_number = history.get_current_sequence_number()
+        or history.get_global_cursor()
+
+    -- Automatic undo grouping: root command becomes the group, nested commands inherit
+    local explicit_group = history.get_current_undo_group_id()
+    if explicit_group then
+        command.undo_group_id = explicit_group
+    else
+        -- Root command: set itself as the undo group for any nested commands
+        command.undo_group_id = sequence_number
+    end
+    root_command_sequence_number = sequence_number
+
+    -- Validation logic
+    if not command.parent_sequence_number then
+        local executing_from_root = history.get_current_sequence_number() == nil
+        if not executing_from_root and sequence_number > 1 then
+            log.error("Command %d has NULL parent but is not first!", sequence_number)
+            rollback_transaction()
+            snapshot_taken = false
+            history.decrement_sequence_number()
+            result.error_message = "FATAL: undo tree corruption"
+            exec_scope:finish("null_parent")
+            return result
+        end
+    end
+
+    state_mgr.update_command_hashes(command, pre_hash)
+
+    -- Capture playhead/selection.
+    command.playhead_value, command.playhead_rate =
+        capture_displayed_playhead("execute (top-level pre)")
+
+    -- Store for nested commands to inherit
+    root_playhead_value = command.playhead_value
+    root_playhead_rate = command.playhead_rate
+    local skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
+    if not skip_selection_snapshot then
+        capture_pre_selection_for_command(command)
+        -- Store for nested commands to inherit
+        root_selected_clips_pre = command.selected_clip_ids_pre
+        root_selected_edges_pre = command.selected_edge_infos_pre
+        root_selected_gaps_pre = command.selected_gap_infos_pre
+    end
+
+    -- EXECUTE
+    local exec_result = execute_command_implementation(command)
+    perf.log("execute_command_implementation")
+    perf.reset()
+    local execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
+    if execution_result_data ~= nil then
+        result.executor_result_data = execution_result_data
+        if not execution_success then
+            result.result_data = execution_result_data
+        end
+    end
+
+    -- Preserve custom fields from executor result
+    if type(exec_result) == "table" then
+        for key, value in pairs(exec_result) do
+            if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
+                result[key] = value
+            end
+        end
+    end
+
+    -- Handle user cancellation
+    if type(exec_result) == "table" and exec_result.cancelled then
+        return finish_as_noop(db, history, exec_scope, result, { cancelled = true })
+    end
+
+    if execution_success then
+        command.status = "Executed"
+        command.executed_at = os.time()
+
+        -- Normalize selection after trim edits
+        if not skip_selection_snapshot then
+            local ok_sel, selection_state = pcall(require, "ui.timeline.state.selection_state")
+            if ok_sel and selection_state and type(selection_state.normalize_edge_selection) == "function" then
+                selection_state.normalize_edge_selection()
+            end
+            capture_post_selection_for_command(command)
+        end
+
+        -- Capture post-execution playhead position
+        command.playhead_value_post, command.playhead_rate_post =
+            capture_displayed_playhead("execute (top-level post)")
+
+        local suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
+        if suppress_noop_after and not needs_state_hash then
+            -- Executor decided this command is a no-op
+            return finish_as_noop(db, history, exec_scope, result)
+        end
+
+        local post_hash = ""
+        if needs_state_hash then
+            perf.reset()
+            post_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
+            perf.log("state_hash_post")
+            perf.reset()
+        else
+            perf.reset()
+            perf.log("state_hash_post_skipped")
+            perf.reset()
+        end
+        command.post_hash = post_hash
+
+        -- No-op detection (hash-based)
+        if suppress_noop_after and post_hash == pre_hash then
+            return finish_as_noop(db, history, exec_scope, result)
+        end
+
+        -- Per-Sequence Undo: classify after execution
+        command.sequence_id = classify_command_sequence_id(command)
+
+        local saved = save_command_with_collision_retry(command, db)
+        sequence_number = command.sequence_number
+        perf.log("command:save")
+        perf.reset()
+        if saved then
+            result.success = true
+            result.result_data = command:serialize()
+
+            -- Move HEAD
+            local current_cursor = history.get_current_sequence_number()
+            local should_advance = not current_cursor or current_cursor < sequence_number
+            if command.sequence_id then
+                if should_advance then
+                    history.set_current_sequence_number(sequence_number)
+                    history.set_branch_tip_on_stack(
+                        history.stack_id_for_sequence(command.sequence_id),
+                        sequence_number)
+                end
+                history.save_undo_position()
+            else
+                if should_advance then
+                    history.set_branch_tip_on_stack(
+                        history.GLOBAL_STACK_ID, sequence_number)
+                end
+                history.set_global_cursor(sequence_number)
+            end
+
+            -- Snapshotting
+            local snapshot_mgr = require('core.snapshot_manager')
+            local force_snapshot = command_flag(command, "force_snapshot", "__force_snapshot")
+            local seq_id = command:get_parameter("sequence_id")
+            if seq_id and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
+                 local clips = require('core.database').load_clips(seq_id)
+                 snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
+                 perf.log("snapshotting")
+                 perf.reset()
+            end
+
+            -- PRE-COMMIT MUTATION VALIDATION
+            local mutation_order = command:get_parameter("executed_mutation_order")
+            if type(mutation_order) == "table" and #mutation_order > 0 then
+                local original_states = command:get_parameter("original_states")
+                local delta_frames = command:get_parameter("delta_frames")
+                for _, mut in ipairs(mutation_order) do
+                    if mut.type == "delete" and original_states and original_states[mut.clip_id] then
+                        local orig = original_states[mut.clip_id]
+                        if orig.duration and type(delta_frames) == "number" then
+                            local abs_delta = math.abs(delta_frames)
+                            if abs_delta < orig.duration then
+                                log.error("PRE-COMMIT REJECTED: %s would delete clip %s "
+                                    .. "(duration=%d but |delta|=%d is too small to reach zero). "
+                                    .. "Likely a constraint bug. Rolling back.",
+                                    command.type, tostring(mut.clip_id),
+                                    orig.duration, abs_delta)
+                                rollback_transaction()
+                                snapshot_taken = false
+                                history.decrement_sequence_number()
+                                result.success = false
+                                result.error_message = string.format(
+                                    "Safety rollback: %s would delete clip (duration=%d) with delta=%d",
+                                    command.type, orig.duration, delta_frames)
+                                exec_scope:finish("mutation_validation_failed")
+                                return result
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Bump mutation_generation
+            increment_sequence_generation_if_scoped(command)
+
+            -- COMMIT
+            if not undo_group_active then
+                local db_module = require("core.database")
+                assert(db_module.commit(), "command_manager: post-command commit failed")
+                if snapshot_taken then
+                    local clip_state = require("ui.timeline.state.clip_state")
+                    clip_state.commit_mutation_transaction()
+                    snapshot_taken = false
+                end
+                flush_post_commit_emits()
+            end
+            perf.log("db_commit")
+            perf.reset()
+
+            -- UI Refresh / Mutation Handling
+            local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
+            if not skip_timeline_reload then
+                 local reload_sequence_id = extract_sequence_id(command)
+                 local timeline_state = require('ui.timeline.timeline_state')
+                 local timeline_active_seq = timeline_state.get_tab_strip():active_sequence_id()
+                 if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
+                     timeline_state.init(reload_sequence_id, command.project_id)
+                 end
+
+                 local applied_mutations = apply_command_mutations(command)
+
+                 if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
+                     local has_mutations = command:get_parameter("__timeline_mutations") ~= nil
+                     if not has_mutations then
+                         local is_project_level = is_non_clip_mutating_command(command.type)
+                             or not command.sequence_id
+                         local has_nested_children = command.undo_group_id
+                             and #history.find_group_members(command.undo_group_id, nil, nil) > 1
+                         if not is_project_level and not has_nested_children then
+                             local mutation_check_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
+                             assert(mutation_check_hash == pre_hash, string.format(
+                                 "execute: command %s modified DB but produced no __timeline_mutations "
+                                 .. "for sequence %s. Fix the executor to produce mutations.",
+                                 command.type, reload_sequence_id))
+                         end
+                     end
+                     reload_clips_after_no_mutations(command.type, reload_sequence_id)
+                 end
+                 perf.log("ui_refresh")
+                 perf.reset()
+            end
+
+            notify_command_event({
+                event = "execute",
+                command = command,
+                project_id = command.project_id,
+                stack_id = stack_id,
+                sequence_number = sequence_number
+            })
+            perf.log("notify_command_event")
+
+        else
+            result.error_message = "Failed to save command to database"
+            rollback_transaction()
+            snapshot_taken = false
+            history.decrement_sequence_number()
+        end
+    else
+        command.status = "Failed"
+        result.error_message = execution_error_message ~= "" and execution_error_message
+            or (last_error_message ~= "" and last_error_message or "Command execution failed")
+        last_error_message = ""
+        rollback_transaction()
+        snapshot_taken = false
+        history.decrement_sequence_number()
+    end
+
+    exec_scope:finish(result.success and "success" or "failure")
+
+    -- Capture command execution for bug reporter
+    local capture_manager = require("bug_reporter.capture_manager")
+    if capture_manager.capture_enabled then
+        capture_manager:log_command(
+            command.type,
+            command.parameters,
+            result,
+            nil
+        )
+    end
+
+    if snapshot_taken then
+        local clip_state = require("ui.timeline.state.clip_state")
+        clip_state.commit_mutation_transaction()
+        snapshot_taken = false
+    end
+    
+    return result
+end
+
 function M._execute_body(command_or_name, params)
     -- During redo, wrapper commands may call execute() but nested cmds are replayed by redo_group
     -- Check early to skip normalize_command which requires an active command event
@@ -1675,6 +2043,12 @@ function M._execute_body(command_or_name, params)
         return normalize_failure, nil
     end
 
+    -- Declare locals upfront to satisfy Lua goto scoping rules.
+    local promoted_non_persisting_saved
+    local exec_scope, result
+    local scope_ok, scope_err
+    local spec
+
     -- Auto-promote runs after normalize so it can trust command.type and
     -- so a normalize failure can return early without leaking the cleared
     -- parent_is_non_persisting flag. When promoting, clear the flag for
@@ -1683,23 +2057,12 @@ function M._execute_body(command_or_name, params)
     -- a nested DB transaction inside the promoted parent's open
     -- transaction. Restored in the ::cleanup:: label so the outer
     -- non-persisting wrapper's scope is preserved across the promote.
-    local promoted_non_persisting_saved
     if should_auto_promote(command.type) then
         log.event("Auto-promoting %s to top-level (parent is non-persisting)", command.type)
         is_nested = false
         promoted_non_persisting_saved = parent_is_non_persisting
         parent_is_non_persisting = false
     end
-
-    -- Declare all locals upfront to avoid goto scope issues
-    local exec_scope, result, scope_ok, scope_err, stack_id, stack_info, stack_opts
-    local undo_group_active, snapshot_taken, perf, needs_state_hash, pre_hash
-    local sequence_number, executing_from_root, skip_selection_snapshot
-    local exec_result, execution_success, execution_error_message, execution_result_data
-    local suppress_noop_after, post_hash, saved
-    local timeline_state, capture_manager
-    local explicit_group
-    local spec
 
     exec_scope = profile_scope.begin("command_manager.execute", {
         details_fn = function()
@@ -1739,14 +2102,6 @@ function M._execute_body(command_or_name, params)
     if spec and spec.undoable == false then
         -- Capture root playhead/selection for nested recording commands to inherit.
         if root_playhead_value == nil then
-            -- Both values are nil iff no displayed tab is open at capture
-            -- (project-level commands; init_project_only test fixtures;
-            -- early-startup before a sequence opens). The helper asserts
-            -- the bidirectional invariant against the actual displayed-cache
-            -- state — divergence (one nil and not the other, value present
-            -- but no tab, etc.) is a bug surfaced here, not silently
-            -- propagated to Command.save. Nested commands inherit whatever
-            -- the root captured.
             root_playhead_value, root_playhead_rate =
                 capture_displayed_playhead("execute (root undoable=false capture)")
             if not command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot") then
@@ -1756,451 +2111,23 @@ function M._execute_body(command_or_name, params)
                 root_selected_gaps_pre = command.selected_gap_infos_pre
             end
         end
-        -- No implicit undo group — commands that need grouping use explicit
-        -- begin_undo_group/end_undo_group in their executor (e.g., Blade, DeleteSelection).
-        -- Mark parent as non-persisting so any persisting child commands
-        -- dispatched from this executor get auto-promoted to top-level
-        -- (not silently nested).
         result = execute_as_non_persisting_parent(command)
-
         exec_scope:finish("non_recording")
         goto cleanup
     end
 
     -- Commands with no_persist skip transaction handling entirely
-    -- (e.g. OpenProject which switches databases mid-execution).
-    -- Same rationale as the undoable=false branch: any persisting child
-    -- dispatched from this executor gets auto-promoted to top-level.
     if spec and spec.no_persist then
         result = execute_as_non_persisting_parent(command)
         exec_scope:finish("no_persist")
         goto cleanup
     end
 
-    -- Stack routing: determine which undo stack this command belongs to.
-    -- Project-level commands go to GLOBAL. Sequence-scoped commands go to their sequence's stack.
-    -- Commands that derive sequence_id during execution (Paste, Insert, etc.) have
-    -- sequence_id in their spec — use that as a signal to route to the timeline stack.
-    do
-        local pre_seq_id = extract_sequence_id(command)
-        if PROJECT_LEVEL_COMMAND_TYPES[command.type] then
-            stack_id = history.GLOBAL_STACK_ID
-            stack_opts = nil
-        elseif pre_seq_id then
-            stack_id = history.stack_id_for_sequence(pre_seq_id)
-            stack_opts = {sequence_id = pre_seq_id}
-        else
-            -- Check if this command type has sequence_id in its spec.
-            -- If so, it will derive it during execution — route to the active timeline stack.
-            local cmd_spec = registry.get_spec(command.type)
-            local has_seq_in_spec = cmd_spec and cmd_spec.args and cmd_spec.args.sequence_id
-            if has_seq_in_spec and active_sequence_id then
-                stack_id = history.stack_id_for_sequence(active_sequence_id)
-                stack_opts = {sequence_id = active_sequence_id}
-            else
-                stack_id = history.GLOBAL_STACK_ID
-                stack_opts = nil
-            end
-        end
-    end
-    history.set_active_stack(stack_id, stack_opts)
-    command.stack_id = stack_id
-
-
-    -- TRANSACTION / UNDO-GROUP INVARIANT
-    --
-    -- command_manager.execute() MUST obey the following rules:
-    --
-    -- 1. When NO undo group is active:
-    --    - execute() owns the transaction lifecycle
-    --    - it is responsible for BEGIN, COMMIT, and full ROLLBACK on failure
-    --
-    -- 2. When an undo group IS active:
-    --    - a SAVEPOINT has already established transactional context
-    --    - execute() MUST NOT issue BEGIN or COMMIT
-    --    - on failure, execute() MUST rollback ONLY to the active SAVEPOINT
-    --    - commit of grouped commands is deferred until end_undo_group()
-    --
-    -- 3. History cursor movement is NOT a transaction concern:
-    --    - execute() never advances the undo/redo cursor
-    --    - undo boundaries are established explicitly by:
-    --        * undo()
-    --        * redo()
-    --        * end_undo_group() (for grouped commands)
-    --
-    -- Violating any of the above will corrupt undo/redo semantics,
-    -- especially under branching histories.
-
-    -- BEGIN TRANSACTION (skip if undo group is active - savepoint already started transaction)
-    undo_group_active = history.get_current_undo_group_id() ~= nil
-    if not undo_group_active then
-        local db_module = require("core.database")
-        if not db_module.begin_transaction() then
-            result.error_message = "Failed to begin transaction"
-            exec_scope:finish("begin_tx_failed")
-            goto cleanup
-        end
-        -- Mutation transaction parallels the DB transaction: snapshot in-memory
-        -- clip state so rollback_transaction can restore it if the command fails.
-        -- (For explicit undo groups, begin_undo_group handles this.)
-        -- Commands that only modify sequence/track/project metadata (not
-        -- clips) can declare spec.skip_clip_snapshot to avoid cloning every
-        -- clip in the active sequence on every execution. For a 3000+ clip
-        -- project dragged in a slider, that's the difference between
-        -- smooth and stutter. Default is to snapshot (safe).
-        if not (spec and spec.skip_clip_snapshot) then
-            snapshot_taken = true
-            local clip_state = require("ui.timeline.state.clip_state")
-            clip_state.begin_mutation_transaction()
-        end
-    end
-
-    perf = create_command_perf_tracker(command)
-    needs_state_hash = should_compute_state_hash(command)
-    -- Always compute pre_hash: needed for NSF mutation check (assert if DB
-    -- changed but executor produced no __timeline_mutations).
-    -- Scoped to active sequence to avoid scanning entire project (127K+ clips).
-    perf.reset()
-    pre_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
-    perf.log("state_hash_pre")
-    perf.reset()
-
-    -- Use history module for sequence tracking
-    sequence_number = history.increment_sequence_number()
-    command.sequence_number = sequence_number
-    -- Parent in the undo tree: the per-sequence cursor if available,
-    -- otherwise the global cursor (first command on a newly-activated sequence).
-    command.parent_sequence_number = history.get_current_sequence_number()
-        or history.get_global_cursor()
-
-    -- Automatic undo grouping: root command becomes the group, nested commands inherit
-    -- If there's an explicit undo group active (from begin_undo_group), use that instead
-    explicit_group = history.get_current_undo_group_id()
-    if explicit_group then
-        command.undo_group_id = explicit_group
-    else
-        -- Root command: set itself as the undo group for any nested commands
-        command.undo_group_id = sequence_number
-    end
-    root_command_sequence_number = sequence_number
-
-    -- Validation logic
-    if not command.parent_sequence_number then
-        executing_from_root = history.get_current_sequence_number() == nil
-        if not executing_from_root and sequence_number > 1 then
-            log.error("Command %d has NULL parent but is not first!", sequence_number)
-            rollback_transaction()
-            snapshot_taken = false  -- rollback_mutations already popped it
-            history.decrement_sequence_number()
-            result.error_message = "FATAL: undo tree corruption"
-            exec_scope:finish("null_parent")
-            goto cleanup
-        end
-    end
-
-    state_mgr.update_command_hashes(command, pre_hash)
-
-    -- Capture playhead/selection. Both fields are nil iff no displayed tab
-    -- exists at this point; the helper asserts the bidirectional invariant
-    -- against the actual displayed-cache state.
-    command.playhead_value, command.playhead_rate =
-        capture_displayed_playhead("execute (top-level pre)")
-
-    -- Store for nested commands to inherit (they share the same user action context)
-    root_playhead_value = command.playhead_value
-    root_playhead_rate = command.playhead_rate
-    skip_selection_snapshot = command_flag(command, "skip_selection_snapshot", "__skip_selection_snapshot")
-    if not skip_selection_snapshot then
-        capture_pre_selection_for_command(command)
-        -- Store for nested commands to inherit (they share the same user action context)
-        root_selected_clips_pre = command.selected_clip_ids_pre
-        root_selected_edges_pre = command.selected_edge_infos_pre
-        root_selected_gaps_pre = command.selected_gap_infos_pre
-    end
-
-    -- EXECUTE
-    exec_result = execute_command_implementation(command)
-    perf.log("execute_command_implementation")
-    perf.reset()
-    execution_success, execution_error_message, execution_result_data = normalize_executor_result(exec_result, command)
-    if execution_result_data ~= nil then
-        result.executor_result_data = execution_result_data
-        if not execution_success then
-            result.result_data = execution_result_data
-        end
-    end
-
-    -- Preserve custom fields from executor result (e.g., project_id, sequence_id, etc.)
-    -- Copy all non-standard fields from exec_result into result
-    if type(exec_result) == "table" then
-        for key, value in pairs(exec_result) do
-            -- Skip standard contract fields (already handled by normalize_executor_result)
-            if key ~= "success" and key ~= "error_message" and key ~= "result_data" and key ~= "cancelled" then
-                result[key] = value
-            end
-        end
-    end
-
-    -- Handle user cancellation (e.g., file dialog dismissed) - no persistence needed
-    if type(exec_result) == "table" and exec_result.cancelled then
-        result = finish_as_noop(db, history, exec_scope, result, { cancelled = true })
-        goto cleanup
-    end
-
-    if execution_success then
-        command.status = "Executed"
-        command.executed_at = os.time()
-
-        -- Normalize selection after trim edits: stale gap edges become clip edges
-        -- when the gap has been closed by the edit
-        if not skip_selection_snapshot then
-            local ok_sel, selection_state = pcall(require, "ui.timeline.state.selection_state")
-            if ok_sel and selection_state and type(selection_state.normalize_edge_selection) == "function" then
-                selection_state.normalize_edge_selection()
-            end
-            capture_post_selection_for_command(command)
-        end
-
-        -- Capture post-execution playhead position (restored on redo).
-        -- Same invariant as pre-capture: nil iff no displayed tab.
-        command.playhead_value_post, command.playhead_rate_post =
-            capture_displayed_playhead("execute (top-level post)")
-
-        suppress_noop_after = command_flag(command, "suppress_if_unchanged", "__suppress_if_unchanged")
-        if suppress_noop_after and not needs_state_hash then
-            -- Executor decided this command is a no-op, but the flag was set during execution,
-            -- so we didn't pay the cost of hashing. Treat as no-op and suppress persistence/UI refresh.
-            result = finish_as_noop(db, history, exec_scope, result)
-            goto cleanup
-        end
-
-        post_hash = ""
-        if needs_state_hash then
-            perf.reset()
-            post_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
-            perf.log("state_hash_post")
-            perf.reset()
-        else
-            perf.reset()
-            perf.log("state_hash_post_skipped")
-            perf.reset()
-        end
-        command.post_hash = post_hash
-
-        -- No-op detection (hash-based)
-        if suppress_noop_after and post_hash == pre_hash then
-            result = finish_as_noop(db, history, exec_scope, result)
-            goto cleanup
-        end
-
-        -- Per-Sequence Undo: classify after execution (executors may set sequence_id)
-        command.sequence_id = classify_command_sequence_id(command)
-
-        saved = save_command_with_collision_retry(command, db)
-        sequence_number = command.sequence_number  -- retry may have reallocated
-        perf.log("command:save")
-        perf.reset()
-        if saved then
-            result.success = true
-            result.result_data = command:serialize()
-
-            -- Move HEAD - but only if nested commands haven't already advanced past us
-            -- (nested commands chain their parent_sequence_number through the cursor).
-            -- New commits advance BOTH cursor and tip: tip = leaf of the user's
-            -- current branch, which is exactly the just-committed command. If the
-            -- user had undone before committing, the prior subtree is orphaned
-            -- (still in the commands table, but unreachable via Cmd+Shift+Z because
-            -- the tip no longer points there). Tip MUST be set on the stack where
-            -- the command actually lands (command.sequence_id column), NOT the
-            -- active stack — SetClipProperty has sequence_id in its spec so active
-            -- stack is per-seq, but the column ends up NULL and the command lands
-            -- on GLOBAL; tip on per-seq would be a no-op for that command's redo.
-            local current_cursor = history.get_current_sequence_number()
-            local should_advance = not current_cursor or current_cursor < sequence_number
-            if command.sequence_id then
-                if should_advance then
-                    history.set_current_sequence_number(sequence_number)
-                    history.set_branch_tip_on_stack(
-                        history.stack_id_for_sequence(command.sequence_id),
-                        sequence_number)
-                end
-                history.save_undo_position()
-            else
-                if should_advance then
-                    history.set_branch_tip_on_stack(
-                        history.GLOBAL_STACK_ID, sequence_number)
-                end
-                history.set_global_cursor(sequence_number)
-            end
-
-            -- Snapshotting (only for commands that modify existing sequences)
-            local snapshot_mgr = require('core.snapshot_manager')
-            local force_snapshot = command_flag(command, "force_snapshot", "__force_snapshot")
-            local seq_id = command:get_parameter("sequence_id")
-            if seq_id and (force_snapshot or snapshot_mgr.should_snapshot(sequence_number)) then
-                 local clips = require('core.database').load_clips(seq_id)
-                 snapshot_mgr.create_snapshot(db, seq_id, sequence_number, clips)
-                 perf.log("snapshotting")
-                 perf.reset()
-            end
-
-            -- PRE-COMMIT MUTATION VALIDATION
-            -- Catch garbage mutations before they reach the DB. If a command
-            -- produced obviously wrong results (e.g., a clip delete from a
-            -- constraint calculation bug), rollback instead of committing.
-            -- NOTE: Legitimate trim-to-zero deletes ARE allowed — they happen
-            -- when |delta| >= clip duration. A garbage delete happens when the
-            -- user's requested delta is too small to reach zero but a broken
-            -- per-edge constraint amplifies it internally.
-            local mutation_order = command:get_parameter("executed_mutation_order")
-            if type(mutation_order) == "table" and #mutation_order > 0 then
-                local original_states = command:get_parameter("original_states")
-                local delta_frames = command:get_parameter("delta_frames")
-                for _, mut in ipairs(mutation_order) do
-                    if mut.type == "delete" and original_states and original_states[mut.clip_id] then
-                        local orig = original_states[mut.clip_id]
-                        if orig.duration and type(delta_frames) == "number" then
-                            local abs_delta = math.abs(delta_frames)
-                            -- A delete is only legitimate when the user's delta
-                            -- is large enough to trim the clip to zero duration.
-                            -- If |delta| < duration, the clip should NOT be deleted —
-                            -- a constraint bug amplified the delta internally.
-                            if abs_delta < orig.duration then
-                                log.error("PRE-COMMIT REJECTED: %s would delete clip %s "
-                                    .. "(duration=%d but |delta|=%d is too small to reach zero). "
-                                    .. "Likely a constraint bug. Rolling back.",
-                                    command.type, tostring(mut.clip_id),
-                                    orig.duration, abs_delta)
-                                rollback_transaction()
-                                snapshot_taken = false  -- rollback_mutations already popped it
-                                history.decrement_sequence_number()
-                                result.success = false
-                                result.error_message = string.format(
-                                    "Safety rollback: %s would delete clip (duration=%d) with delta=%d",
-                                    command.type, orig.duration, delta_frames)
-                                exec_scope:finish("mutation_validation_failed")
-                                goto cleanup
-                            end
-                        end
-                    end
-                end
-            end
-
-            -- Bump mutation_generation inside the commit transaction so
-            -- nested-sequence references observing the counter see the
-            -- increment atomically with the mutation itself.
-            increment_sequence_generation_if_scoped(command)
-
-            -- COMMIT (skip if undo group is active - savepoint will handle commit)
-            if not undo_group_active then
-                local db_module = require("core.database")
-                assert(db_module.commit(), "command_manager: post-command commit failed")
-                -- Discard mutation snapshot (commit: in-memory state is now
-                -- authoritative). Guarded on snapshot_taken — a command that
-                -- declared skip_clip_snapshot never pushed a snapshot, so
-                -- there's nothing to commit.
-                if snapshot_taken then
-                    local clip_state = require("ui.timeline.state.clip_state")
-                    clip_state.commit_mutation_transaction()
-                    snapshot_taken = false
-                end
-                -- Transaction is committed. Any post-commit emits queued by
-                -- the executor (e.g. CreateSequence's sequence_list_changed)
-                -- can now fire — DB state is authoritative.
-                flush_post_commit_emits()
-            end
-            perf.log("db_commit")
-            perf.reset()
-
-            -- UI Refresh / Mutation Handling
-            local skip_timeline_reload = command_flag(command, "skip_timeline_reload", "__skip_timeline_reload")
-            if not skip_timeline_reload then
-                 local reload_sequence_id = extract_sequence_id(command)
-                 local applied_mutations = false
-                 timeline_state = require('ui.timeline.timeline_state')
-                 local timeline_active_seq = timeline_state.get_tab_strip():active_sequence_id()
-                 if reload_sequence_id and reload_sequence_id ~= "" and (not timeline_active_seq or timeline_active_seq == "") then
-                     -- Tests/headless command execution may run without timeline UI bootstrap; initialize on demand.
-                     timeline_state.init(reload_sequence_id, command.project_id)
-                 end
-
-                 applied_mutations = apply_command_mutations(command)
-
-                 if not applied_mutations and reload_sequence_id and reload_sequence_id ~= "" then
-                     -- NSF: distinguish "executor forgot mutations" from
-                     -- "mutations present but UI cache unavailable (test env)".
-                     local has_mutations = command:get_parameter("__timeline_mutations") ~= nil
-                     if not has_mutations then
-                         local is_project_level = is_non_clip_mutating_command(command.type)
-                             or not command.sequence_id
-                         local has_nested_children = command.undo_group_id
-                             and #history.find_group_members(command.undo_group_id, nil, nil) > 1
-                         if not is_project_level and not has_nested_children then
-                             local mutation_check_hash = state_mgr.calculate_state_hash(command.project_id, active_sequence_id)
-                             assert(mutation_check_hash == pre_hash, string.format(
-                                 "execute: command %s modified DB but produced no __timeline_mutations "
-                                 .. "for sequence %s. Fix the executor to produce mutations.",
-                                 command.type, reload_sequence_id))
-                         end
-                     end
-                     reload_clips_after_no_mutations(command.type, reload_sequence_id)
-                 end
-                 perf.log("ui_refresh")
-                 perf.reset()
-            end
-
-            notify_command_event({
-                event = "execute",
-                command = command,
-                project_id = command.project_id,
-                stack_id = stack_id,
-                sequence_number = sequence_number
-            })
-            perf.log("notify_command_event")
-
-        else
-            result.error_message = "Failed to save command to database"
-            rollback_transaction()
-            snapshot_taken = false  -- rollback_mutations already popped it
-            history.decrement_sequence_number()
-        end
-    else
-        command.status = "Failed"
-        result.error_message = execution_error_message ~= "" and execution_error_message
-            or (last_error_message ~= "" and last_error_message or "Command execution failed")
-        last_error_message = ""
-        rollback_transaction()
-        snapshot_taken = false  -- rollback_mutations already popped it
-        history.decrement_sequence_number()
-    end
-
-    exec_scope:finish(result.success and "success" or "failure")
-
-    -- Capture command execution for bug reporter
-    capture_manager = require("bug_reporter.capture_manager")
-    if capture_manager.capture_enabled then
-        capture_manager:log_command(
-            command.type,
-            command.parameters,
-            result,
-            nil  -- gesture_id not currently tracked - could be added later
-        )
-    end
+    -- Standard recording ceremony
+    result = execute_with_recording_ceremony(command, spec, exec_scope)
 
 ::cleanup::
-    -- If we own a mutation snapshot that wasn't committed or rolled back
-    -- (noop, cancel, early exit), discard it by committing it — the
-    -- in-memory clip state is already in the desired post-command shape
-    -- either way. Guarded because skip_clip_snapshot commands never push
-    -- a snapshot, and the success/rollback branches above set this false
-    -- to signal "already handled".
-    if snapshot_taken then
-        local clip_state = require("ui.timeline.state.clip_state")
-        clip_state.commit_mutation_transaction()
-        snapshot_taken = false
-    end
-    -- Restore the parent's non-persisting scope after a promote. See the
-    -- promote block at the top of _execute_body for the rationale.
+    -- Restore the parent's non-persisting scope after a promote.
     if promoted_non_persisting_saved ~= nil then
         parent_is_non_persisting = promoted_non_persisting_saved
     end

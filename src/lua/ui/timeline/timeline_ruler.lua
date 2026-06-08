@@ -70,8 +70,8 @@ function M.create(widget, state_module)
         timeline.clear_commands(ruler.widget)
 
         -- Get viewport state (integer frames)
-        local viewport_start_frames = state_module.get_viewport_start_time()
-        local viewport_duration_frames = state_module.get_viewport_duration()
+        local viewport_start_frames = assert(state_module.get_viewport_start_time(), "timeline_ruler: viewport_start_time is nil")
+        local viewport_duration_frames = assert(state_module.get_viewport_duration(), "timeline_ruler: viewport_duration is nil")
         local viewport_end_frames = viewport_start_frames + viewport_duration_frames
         local playhead_frame = state_module.get_playhead_position()
 

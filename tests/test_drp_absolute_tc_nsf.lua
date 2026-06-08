@@ -15,12 +15,14 @@ print("=== test_drp_absolute_tc_nsf.lua ===")
 
 local drp_importer = require("importers.drp_importer")
 
-local function elem(tag, text, children)
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
     return {
         tag = tag,
-        attrs = {},
+        attrs = attrs,
         children = children or {},
-        text = text or "",
+        text = text,
     }
 end
 
@@ -50,7 +52,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),
-            wrap_clips(elem("Sm2TiVideoClip", "", {
+            wrap_clips(elem("Sm2TiVideoClip", { DbId = "test-video-id" }, {
                 elem("Name", "tc_video"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -61,7 +63,7 @@ do
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
+    local tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 90100, string.format(
         "video source_in should be 90100 (abs TC), got %d", clip.source_in))
@@ -82,7 +84,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "1"),
-            wrap_clips(elem("Sm2TiAudioClip", "", {
+            wrap_clips(elem("Sm2TiAudioClip", { DbId = "test-audio-id" }, {
                 elem("Name", "tc_audio"),
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -93,7 +95,7 @@ do
             })),
         }),
     })
-    local _, a_tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
+    local _, a_tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = a_tracks[1].clips[1]
     assert(clip.source_in == 173280000, string.format(
         "audio source_in should be 173280000, got %d", clip.source_in))
@@ -108,7 +110,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),
-            wrap_clips(elem("Sm2TiVideoClip", "", {
+            wrap_clips(elem("Sm2TiVideoClip", { DbId = "test-video-id" }, {
                 elem("Name", "zero_mst"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -119,7 +121,7 @@ do
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 24, nil, nil, AUDIO_SR_MAP)
+    local tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 24, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 42, string.format(
         "MST=0: source_in should be 42, got %d", clip.source_in))
@@ -134,7 +136,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),
-            wrap_clips(elem("Sm2TiVideoClip", "", {
+            wrap_clips(elem("Sm2TiVideoClip", { DbId = "test-video-id" }, {
                 elem("Name", "no_mst"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -145,7 +147,7 @@ do
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
+    local tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = tracks[1].clips[1]
     assert(clip.source_in == 77, string.format(
         "missing MST: source_in should be 77, got %d", clip.source_in))
@@ -162,7 +164,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),
-            wrap_clips(elem("Sm2TiVideoClip", "", {
+            wrap_clips(elem("Sm2TiVideoClip", { DbId = "test-video-id" }, {
                 elem("Name", "max_mst"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -173,7 +175,7 @@ do
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
+    local tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = tracks[1].clips[1]
     local expected = math.floor(86399 * 25 + 0.5) + 10
     assert(clip.source_in == expected, string.format(
@@ -189,7 +191,7 @@ do
     local seq = elem("Sequence", "", {
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),
-            wrap_clips(elem("Sm2TiVideoClip", "", {
+            wrap_clips(elem("Sm2TiVideoClip", { DbId = "test-video-id" }, {
                 elem("Name", "tc_field"),
                 elem("Start", "0"),
                 elem("Duration", "50"),
@@ -200,7 +202,7 @@ do
             })),
         }),
     })
-    local tracks = drp_importer.parse_resolve_tracks(seq, 25, nil, nil, AUDIO_SR_MAP)
+    local tracks = drp_importer.parse_resolve_tracks(seq, {frame_rate = 25, media_ref_sample_rate_map = AUDIO_SR_MAP})
     local clip = tracks[1].clips[1]
     assert(clip.source_in_tc == clip.source_in, string.format(
         "source_in_tc should equal source_in (%d), got %d",

@@ -18,12 +18,14 @@ print("=== test_drp_video_source_units.lua ===")
 local drp_importer = require("importers.drp_importer")
 
 -- Helper: construct a mock XML element
-local function elem(tag, text, children)
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
     return {
         tag = tag,
-        attrs = {},
+        attrs = attrs,
         children = children or {},
-        text = text or "",
+        text = text,
     }
 end
 
@@ -46,7 +48,7 @@ local seq_elem = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),  -- 0 = VIDEO
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "test_video_clip"),
                 elem("Start", "86400"),
                 elem("Duration", "1496"),
@@ -59,7 +61,7 @@ local seq_elem = elem("Sequence", "", {
     }),
 })
 
-local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, 24)
+local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, {frame_rate = 24})
 
 assert(#video_tracks == 1, "Expected 1 video track, got " .. #video_tracks)
 assert(#video_tracks[1].clips == 1, "Expected 1 video clip")
@@ -87,7 +89,7 @@ local seq_trim = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "trimmed_video"),
                 elem("Start", "86400"),
                 elem("Duration", "200"),
@@ -100,7 +102,7 @@ local seq_trim = elem("Sequence", "", {
     }),
 })
 
-local v_trim = drp_importer.parse_resolve_tracks(seq_trim, 24)
+local v_trim = drp_importer.parse_resolve_tracks(seq_trim, {frame_rate = 24})
 local trim_clip = v_trim[1].clips[1]
 
 local mst2 = math.floor(45274 * 24 + 0.5)
@@ -122,7 +124,7 @@ local seq_audio = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "1"),  -- 1 = AUDIO
         wrap_clips(
-            elem("Sm2TiAudioClip", "", {
+            elem("Sm2TiAudioClip", { DbId = "a1" }, {
                 elem("Name", "test_audio.WAV"),
                 elem("Start", "86400"),
                 elem("Duration", "73794"),        -- timeline frames
@@ -135,7 +137,7 @@ local seq_audio = elem("Sequence", "", {
     }),
 })
 
-local _, a_tracks = drp_importer.parse_resolve_tracks(seq_audio, 24, nil, nil, { ["test-audio-ref"] = 48000 })
+local _, a_tracks = drp_importer.parse_resolve_tracks(seq_audio, {frame_rate = 24, media_ref_sample_rate_map = { ["test-audio-ref"] = 48000 }})
 
 assert(#a_tracks == 1, "Expected 1 audio track, got " .. #a_tracks)
 local audio_clip = a_tracks[1].clips[1]
@@ -164,7 +166,7 @@ local seq_audio_trim = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "1"),
         wrap_clips(
-            elem("Sm2TiAudioClip", "", {
+            elem("Sm2TiAudioClip", { DbId = "a1" }, {
                 elem("Name", "test_audio.WAV"),
                 elem("Start", "160194"),
                 elem("Duration", "30867"),
@@ -177,7 +179,7 @@ local seq_audio_trim = elem("Sequence", "", {
     }),
 })
 
-local _, a_trim = drp_importer.parse_resolve_tracks(seq_audio_trim, 24, nil, nil, { ["test-audio-ref"] = 48000 })
+local _, a_trim = drp_importer.parse_resolve_tracks(seq_audio_trim, {frame_rate = 24, media_ref_sample_rate_map = { ["test-audio-ref"] = 48000 }})
 local audio_trim_clip = a_trim[1].clips[1]
 
 -- in_offset = floor(73794 * 48000 / 24 + 0.5) = 147588000 samples
@@ -198,7 +200,7 @@ local seq_regression = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip_a"),
                 elem("Start", "86400"),
                 elem("Duration", "100"),
@@ -207,7 +209,7 @@ local seq_regression = elem("Sequence", "", {
                 elem("MediaFilePath", "/test/a.mov"),
                 elem("MediaFrameRate", "0000000000003840"),  -- 24fps LE double
             }),
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip_b"),
                 elem("Start", "86500"),
                 elem("Duration", "100"),
@@ -220,7 +222,7 @@ local seq_regression = elem("Sequence", "", {
     }),
 })
 
-local v_reg = drp_importer.parse_resolve_tracks(seq_regression, 24)
+local v_reg = drp_importer.parse_resolve_tracks(seq_regression, {frame_rate = 24})
 local mst_a = math.floor(45274 * 24 + 0.5)
 local mst_b = math.floor(99999 * 24 + 0.5)
 assert(v_reg[1].clips[1].source_in == mst_a, string.format(
@@ -239,7 +241,7 @@ local seq_mst = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip_with_mst"),
                 elem("Start", "86400"),
                 elem("Duration", "200"),
@@ -252,7 +254,7 @@ local seq_mst = elem("Sequence", "", {
     })
 })
 
-local v_mst, _, media_map = drp_importer.parse_resolve_tracks(seq_mst, 25)
+local v_mst, _, media_map = drp_importer.parse_resolve_tracks(seq_mst, {frame_rate = 25})
 local clip_mst = v_mst[1].clips[1]
 
 -- Clip struct should have media_start_time (raw seconds from DRP)
@@ -283,7 +285,7 @@ local seq_zero_mst = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {
         elem("Type", "0"),
         wrap_clips(
-            elem("Sm2TiVideoClip", "", {
+            elem("Sm2TiVideoClip", { DbId = "v1" }, {
                 elem("Name", "clip_zero_mst"),
                 elem("Start", "0"),
                 elem("Duration", "100"),
@@ -296,7 +298,7 @@ local seq_zero_mst = elem("Sequence", "", {
     })
 })
 
-local v_zmst, _, media_map_z = drp_importer.parse_resolve_tracks(seq_zero_mst, 25)
+local v_zmst, _, media_map_z = drp_importer.parse_resolve_tracks(seq_zero_mst, {frame_rate = 25})
 assert(v_zmst[1].clips[1].media_start_time == 0,
     "zero MediaStartTime should be stored as 0, not nil")
 assert(media_map_z["/test/zero_mst.mov"].media_start_time == 0,

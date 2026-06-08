@@ -51,7 +51,7 @@ local media = payload.media_refs[1]
 
 local OUT = fixture.out_path("test_drt_writer_ti_video_clip_shape")
 os.remove(OUT)
-writer.author(OUT, payload)
+writer.author_a005_compatible(OUT, payload)
 
 local seq_xml = fixture.unzip_member(OUT, "SeqContainer/*.xml")
 

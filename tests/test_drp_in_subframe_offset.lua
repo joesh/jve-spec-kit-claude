@@ -21,8 +21,10 @@ local drp_importer = require("importers.drp_importer")
 
 print("=== test_drp_in_subframe_offset.lua ===")
 
-local function elem(tag, text, children)
-    return { tag = tag, attrs = {}, children = children or {}, text = text or "" }
+local function elem(tag, text_or_attrs, children)
+    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
+    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
+    return { tag = tag, attrs = attrs, children = children or {}, text = text }
 end
 
 local function wrap(...)
@@ -50,7 +52,7 @@ local function import_clip_with_in(in_text)
         elem("Sm2TiTrack", "", {
             elem("Type", "0"),  -- 0 = VIDEO
             wrap(
-                elem("Sm2TiVideoClip", "", {
+                elem("Sm2TiVideoClip", { DbId = "v1" }, {
                     elem("Name", "subframe_case"),
                     elem("Start", "0"),
                     elem("Duration", tostring(TIMELINE_DURATION)),
@@ -62,7 +64,7 @@ local function import_clip_with_in(in_text)
             ),
         }),
     })
-    local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, SEQ_FPS)
+    local video_tracks = drp_importer.parse_resolve_tracks(seq_elem, {frame_rate = SEQ_FPS})
     assert(#video_tracks == 1 and #video_tracks[1].clips == 1, "expected 1 clip")
     return video_tracks[1].clips[1]
 end

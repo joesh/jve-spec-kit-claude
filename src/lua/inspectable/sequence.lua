@@ -131,19 +131,43 @@ function SequenceInspectable:set(field, value)
             string.format("SequenceInspectable:set(%s): TIMECODE value must be a number, got %s",
                 field, type(payload_value)))
         assert(payload_value == math.floor(payload_value),
-            string.format("SequenceInspectable:set(%s): TIMECODE value must be integer frames, got %s",
+            string.format("SequenceInspectable:set(%s): TIMECODE value must integer frames, got %s",
                 field, tostring(payload_value)))
         assert(payload_value >= 0,
             string.format("SequenceInspectable:set(%s): TIMECODE value must be non-negative, got %d",
                 field, payload_value))
     end
 
-    local result = command_manager.execute_interactive("SetSequenceMetadata", {
-        ["sequence_id"] = self.sequence_id,
-        ["field"]       = field,
-        ["value"]       = payload_value,
-        project_id      = self.project_id,
-    })
+    -- Map time-related fields to specialized commands. These handle their
+    -- own DB writes and signal emissions.
+    local specialized = {
+        mark_in_frame  = "SetMarkIn",
+        mark_out_frame = "SetMarkOut",
+        playhead_frame = "SetPlayhead",
+    }
+
+    local result
+    if specialized[field] then
+        local params = {
+            sequence_id = self.sequence_id,
+            project_id  = self.project_id,
+        }
+        if field == "playhead_frame" then
+            params.playhead_position = payload_value
+        else
+            params.frame = payload_value
+        end
+        result = command_manager.execute_interactive(specialized[field], params)
+    else
+        -- Delegate generic metadata fields to the SetSequenceMetadata command.
+        result = command_manager.execute_interactive("SetSequenceMetadata", {
+            ["sequence_id"] = self.sequence_id,
+            ["field"]       = field,
+            ["value"]       = payload_value,
+            project_id      = self.project_id,
+        })
+    end
+
     assert(type(result) == "table",
         string.format("SequenceInspectable:set(%s): execute() returned %s, expected table",
             tostring(field), type(result)))
@@ -152,22 +176,8 @@ function SequenceInspectable:set(field, value)
     end
 
     if self._record then
-        self._record[field] = payload_value
-    end
-
-    -- Dispatch signal-emitting commands so all views update. Field names here
-    -- are the DB column names that flow through the Inspector → whitelist path.
-    if field == "mark_in_frame" then
-        command_manager.execute_interactive("SetMarkIn",
-            {sequence_id = self.sequence_id, frame = payload_value, project_id = self.project_id})
-    elseif field == "mark_out_frame" then
-        command_manager.execute_interactive("SetMarkOut",
-            {sequence_id = self.sequence_id, frame = payload_value, project_id = self.project_id})
-    elseif field == "playhead_frame" then
-        assert(payload_value ~= nil,
-            "SequenceInspectable:set(playhead_frame): value cannot be nil")
-        command_manager.execute_interactive("SetPlayhead",
-            {sequence_id = self.sequence_id, playhead_position = payload_value, project_id = self.project_id})
+        local mapped = COLUMN_TO_MODEL_FIELD[field] or field
+        self._record[mapped] = payload_value
     end
 
     return true
@@ -187,6 +197,10 @@ end
 function SequenceInspectable:supports_multi_edit()
     -- Multi-editing sequences is not supported today.
     return false
+end
+
+function SequenceInspectable:get_watcher_keys()
+    return { "sequence:" .. self.sequence_id }
 end
 
 return SequenceInspectable

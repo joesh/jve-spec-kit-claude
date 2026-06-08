@@ -491,6 +491,9 @@ function M.update_selection(items, source_panel_id, ui_state)
     ui_state.prev_item_ids        = ids_set(items)
     ui_state.prev_schemas_present = schemas_present
 
+    local change_listeners = require("ui.inspector.change_listeners")
+    change_listeners.update_watches(ui_state)
+
     log.event("inspector.update_selection: mode=%s schema=%s size=%d",
         mode, active_schema_id, #active_inspectables)
 end

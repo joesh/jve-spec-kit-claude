@@ -70,7 +70,7 @@ local OUT = "/tmp/jve/test_drt_round_trip_validator.drt"
 do
     os.remove(OUT)
     local payload = fresh_payload()
-    writer.author(OUT, payload)
+    writer.author_a005_compatible(OUT, payload)
     local ok, code, msg = rt.validate(OUT, payload)
     check("happy path: valid file + matching payload → ok=true", ok)
     check("happy path: no failure code returned", code == nil)
@@ -86,7 +86,7 @@ end
 do
     os.remove(OUT)
     local payload = fresh_payload()
-    writer.author(OUT, payload)
+    writer.author_a005_compatible(OUT, payload)
     local parsed = importer.parse_drp_file(OUT)
     check("identity carrier: parse_drp_file succeeded", parsed.success)
     check("identity carrier: exactly one parsed timeline",
@@ -133,7 +133,7 @@ end
 do
     os.remove(OUT)
     local payload, clips = fresh_payload()
-    writer.author(OUT, payload)
+    writer.author_a005_compatible(OUT, payload)
     -- The on-disk file has 2 clips. Tell the validator we expected 3.
     table.insert(clips, {
         id = "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -165,7 +165,7 @@ end
 do
     os.remove(OUT)
     local payload = fresh_payload()
-    writer.author(OUT, payload)
+    writer.author_a005_compatible(OUT, payload)
     local canon = require("exporters.drt_identity_marker")
     local orig = canon.FRAME
     canon.FRAME = 99
@@ -182,7 +182,7 @@ end
 do
     os.remove(OUT)
     local payload = fresh_payload()
-    writer.author(OUT, payload)
+    writer.author_a005_compatible(OUT, payload)
     local canon = require("exporters.drt_identity_marker")
     local orig = canon.DURATION_FRAMES
     canon.DURATION_FRAMES = 7

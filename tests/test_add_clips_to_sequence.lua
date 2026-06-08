@@ -6,9 +6,12 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 require('test_env')
 
-local database = require('core.database')
-local Clip = require('models.clip')
-require('models.track')  -- luacheck: ignore 411 (needed for Clip model dependencies)
+local database        = require('core.database')
+local Clip            = require('models.clip')
+local Media           = require('models.media')
+local Track           = require('models.track')
+local Project         = require('models.project')
+local Sequence        = require('models.sequence')
 local command_manager = require('core.command_manager')
 
 -- Mock Qt timer
@@ -24,87 +27,53 @@ database.init(db_path)
 local db = database.get_connection()
 db:exec(require('import_schema'))
 
--- Insert Project/Sequence (30fps)
-local now = os.time()
-db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
-]], now, now))
--- V13: synthesize placeholder media + master sequence for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _existing = _Media.load("media_1")
-    if not _existing then
-        local _m = _Media.create({
-            id = "media_1",
-            project_id = "project",
-            file_path = "/tmp/jve/_placeholder.mov",
-            name = "Placeholder",
-            duration_frames = 10000,
-            fps_numerator = 30,
-            fps_denominator = 1,
-            width = 1920,
-            height = 1080,
-            audio_channels = 0,
-            metadata = _json.encode({ start_tc_value = 0, start_tc_rate = 30 }),
-        })
-        assert(_m:save())
-    end
-end
--- V13: master sequence wrapping the media for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _m = _Media.load("media_1")
-    if _m then
-        if not _m.width or _m.width == 0 then _m.width = 1920 end
-        if not _m.height or _m.height == 0 then _m.height = 1080 end
-        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
-        if not _parsed or _parsed.start_tc_value == nil then
-            _m.metadata = _json.encode({ start_tc_value = 0,
-                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
-                start_tc_audio_samples = 0,
-                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
-                    and (_m.audio_sample_rate or 48000) or nil })
-        end
-        _m:save()
-    end
-end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_1", "project")
+-- ---------------------------------------------------------------------------
+-- Fixtures (SQL Isolation)
+-- ---------------------------------------------------------------------------
 
-db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
-]], now, now))
-db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_a1', 'sequence', 'A1', 'AUDIO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_a2', 'sequence', 'A2', 'AUDIO', 2, 1);
-]])
-
-command_manager.init('sequence', 'project')
+local project_id = "project"
+Project.create("Test Project", {
+    id   = project_id,
+    fps_mismatch_policy = "resample",
+    settings = {
+        master_clock_hz = 192000,
+        default_fps = { num = 24, den = 1 }
+    }
+}):save()
 
 -- Create Media (500 frames @ 30fps)
-local test_env = require("test_env")
-test_env.create_test_media({
-    id = "media_1",
-    project_id = "project",
-    file_path = "/tmp/jve/video1.mov",
-    name = "Video 1",
+local media_id = "media_1"
+Media.create({
+    id         = media_id,
+    project_id = project_id,
+    file_path  = "/tmp/jve/video1.mov",
+    name       = "Video 1",
     duration_frames = 500,
-    fps_numerator = 30,
+    fps_numerator   = 30,
     fps_denominator = 1,
-    width = 1920,
-    height = 1080,
-    audio_channels = 2,
+    width      = 1920,
+    height     = 1080,
+    audio_channels  = 2,
     audio_sample_rate = 48000,
-})
+    metadata   = '{"start_tc_value":0,"start_tc_rate":30,"start_tc_audio_samples":0,"start_tc_audio_rate":48000}'
+}):save()
+
+-- V13: master sequence wrapping the media for clip references.
+local MC_TEST = Sequence.ensure_master(media_id, project_id)
+
+local seq_id = "sequence"
+Sequence.create("Test Sequence", project_id, { fps_numerator = 30, fps_denominator = 1 }, 1920, 1080, {
+    id   = seq_id,
+    kind = "sequence",
+    audio_sample_rate = 48000,
+}):save()
+
+Track.create_video("V1", seq_id, { id = "track_v1", track_index = 1 }):save()
+Track.create_video("V2", seq_id, { id = "track_v2", track_index = 2 }):save()
+Track.create_audio("A1", seq_id, { id = "track_a1", track_index = 1 }):save()
+Track.create_audio("A2", seq_id, { id = "track_a2", track_index = 2 }):save()
+
+command_manager.init(seq_id, project_id)
 
 -- Helper: execute command with proper event wrapping
 local function execute_command(name, params)
@@ -131,54 +100,41 @@ end
 
 -- Helper: count clips on track
 local function count_clips(track_id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = ?")
-    stmt:bind_value(1, track_id)
-    stmt:exec()
-    stmt:next()
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count
+    local sql = "SELECT COUNT(*) FROM clips WHERE track_id = ?"
+    return database.count(db, sql, { track_id })
 end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    stmt:exec()
-    if stmt:next() then
-        local start = stmt:value(0)
-        local dur = stmt:value(1)
-        stmt:finalize()
-        return start, dur
+    local c = Clip.load_optional(clip_id)
+    if c then
+        return c.sequence_start, c.duration
     end
-    stmt:finalize()
     return nil, nil
 end
 
--- Helper: reset timeline. Direct-DB DELETE bypasses timeline_state's
--- cache; reload after each reset so clip_state.apply_mutations bulk_shift
--- finds the right clips (the test's create_clip below also goes
--- direct-DB; reload_clips is repeated after the setup if pre-existing
--- clips are part of the test's preconditions).
+-- Helper: reset timeline.
 local function reset_timeline()
     db:exec("DELETE FROM clips")
     db:exec("DELETE FROM clip_links")
     local timeline_state = require("ui.timeline.timeline_state")
     if timeline_state.reload_clips then
-        timeline_state.reload_clips("sequence")
+        timeline_state.reload_clips(seq_id)
     end
 end
 
 -- Helper: create existing clip
 local function create_clip(id, track_id, start_frame, duration_frames)
-    -- 018 INV-3: AUDIO clips carry subframes (0 default), VIDEO get NULL.
-    local sub_in, sub_out = Clip.subframe_defaults_for(db, track_id)
-    local clip = Clip.create({
+    local track = Track.load(track_id)
+    assert(track, "create_clip: track not found: " .. tostring(track_id))
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track.track_type)
+    
+    local clip_id = Clip.create({
         name = "Clip " .. id,
         id = id,
-        project_id = "project",
+        project_id = project_id,
         track_id = track_id,
-        owner_sequence_id = "sequence",
+        owner_sequence_id = seq_id,
         sequence_id = MC_TEST,
         sequence_start_frame = start_frame,
         duration_frames = duration_frames,
@@ -186,18 +142,22 @@ local function create_clip(id, track_id, start_frame, duration_frames)
         source_out_frame = duration_frames,
         source_in_subframe = sub_in,
         source_out_subframe = sub_out,
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
         enabled = true,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
+        mark_in_frame = nil,
+        mark_out_frame = nil,
     })
-    assert(clip ~= nil and clip ~= "", "Failed to save clip " .. id)
-    -- Direct Clip.create bypasses timeline_state cache; sync.
+    assert(clip_id ~= nil and clip_id ~= "", "Failed to save clip " .. id)
+    
     local timeline_state = require("ui.timeline.timeline_state")
     if timeline_state.reload_clips then
-        timeline_state.reload_clips("sequence")
+        timeline_state.reload_clips(seq_id)
     end
-    return clip
+    return clip_id
 end
 
 -- =============================================================================
@@ -211,8 +171,8 @@ local groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Test Clip",
                 source_in = 0,
                 source_out = 100,
@@ -229,8 +189,8 @@ local groups = {
 local result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "insert",
     arrangement = "serial",
 })
@@ -249,8 +209,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Inserted",
                 source_in = 0,
                 source_out = 50,
@@ -267,8 +227,8 @@ groups = {
 result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,  -- Insert at start
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "insert",
 })
 assert(result.success, "Insert should succeed: " .. tostring(result.error_message))
@@ -291,8 +251,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Overwritten",
                 source_in = 0,
                 source_out = 50,
@@ -309,8 +269,8 @@ groups = {
 result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "overwrite",
 })
 assert(result.success, "Overwrite should succeed")
@@ -331,8 +291,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Clip A",
                 source_in = 0,
                 source_out = 100,
@@ -348,8 +308,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Clip B",
                 source_in = 0,
                 source_out = 50,
@@ -366,8 +326,8 @@ groups = {
 result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "insert",
     arrangement = "serial",
 })
@@ -396,8 +356,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "AV Clip",
                 source_in = 0,
                 source_out = 100,
@@ -409,8 +369,8 @@ groups = {
             {
                 role = "audio",
                 channel = 0,
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "AV Clip (Audio)",
                 source_in = 0,
                 source_out = 100,
@@ -427,8 +387,8 @@ groups = {
 result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "insert",
 })
 assert(result.success, "AV insert should succeed: " .. tostring(result.error_message))
@@ -484,8 +444,8 @@ groups = {
         clips = {
             {
                 role = "video",
-                media_id = "media_1", sequence_id = MC_TEST, fps_mismatch_policy = "resample",
-                project_id = "project",
+                media_id = media_id, sequence_id = MC_TEST, fps_mismatch_policy = "resample",
+                project_id = project_id,
                 name = "Inserted",
                 source_in = 0,
                 source_out = 50,
@@ -502,8 +462,8 @@ groups = {
 result = execute_command("AddClipsToSequence", {
     groups = groups,
     position = 0,
-    sequence_id = "sequence",
-    project_id = "project",
+    sequence_id = seq_id,
+    project_id = project_id,
     edit_type = "insert",
 })
 assert(result.success, "Cross-track insert should succeed")
@@ -518,4 +478,4 @@ assert(v2_start == 50, string.format("V2 clip should be at 50 (cross-track rippl
 local a1_start, _ = get_clip_position("a1_clip")
 assert(a1_start == 50, string.format("A1 clip should be at 50 (cross-track ripple), got %s", tostring(a1_start)))
 
-print("\n\226\156\133 AddClipsToSequence command tests passed")
+print("\n✅ AddClipsToSequence command tests passed")

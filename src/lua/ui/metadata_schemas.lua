@@ -139,6 +139,17 @@ local clip_sections = {
             field { key = "volume",  label = "Volume", type = T.DOUBLE },
         }},
     },
+    {
+        name = "Color",
+        schema = { fields = {
+            -- fidelity: spec 023 §5.5 — badge for non-primary clips.
+            -- source: provenance (e.g. 'resolve_readback').
+            -- synced_at: timestamp of last sync.
+            field { key = "fidelity",  label = "Grade Fidelity", type = T.STRING,   read_only = true },
+            field { key = "source",    label = "Source",         type = T.STRING,   read_only = true },
+            field { key = "synced_at",  label = "Last Synced",    type = T.INTEGER,  read_only = true },
+        }},
+    },
 }
 
 -- Sequence schema — viewport fields intentionally excluded per /analyze I1.

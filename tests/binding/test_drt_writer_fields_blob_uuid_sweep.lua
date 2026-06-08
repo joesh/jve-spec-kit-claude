@@ -38,7 +38,7 @@ end
 
 local OUT = fixture.out_path("test_drt_writer_fields_blob_uuid_sweep")
 os.remove(OUT)
-writer.author(OUT, fixture.build_a005_payload())
+writer.author_a005_compatible(OUT, fixture.build_a005_payload())
 
 local mpf = fixture.unzip_member(OUT, "MediaPool/Master/MpFolder.xml")
 local pj  = fixture.unzip_member(OUT, "project.xml")

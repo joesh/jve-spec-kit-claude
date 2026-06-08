@@ -17,9 +17,10 @@ local media_relinker = require("core.media_relinker")
 local database = require("core.database")
 local Clip = require("models.clip")
 
-local DRP_PATH = "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/resolve/anamnesis joe edit.drp"
+local path_utils = require("core.path_utils")
+local DRP_PATH = path_utils.resolve_repo_path("tests/fixtures/resolve/anamnesis joe edit.drp")
 local JVP_PATH = "/tmp/jve_retime_e2e.jvp"
-local FIXTURE_ROOT = "/Users/joe/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis"
+local FIXTURE_ROOT = path_utils.resolve_repo_path("tests/fixtures/media/anamnesis")
 
 -- Clean up any prior run
 os.remove(JVP_PATH)

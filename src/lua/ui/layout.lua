@@ -423,7 +423,7 @@ assert(menu_success, string.format(
 -- to src/lua under Contents/Resources/ for parity (CMakeLists addition
 -- when the .app bundle ships the bridge — currently dev-only).
 local helper_supervisor = require("core.resolve_bridge.helper_supervisor")
-local helper_script_path = layout_dir .. "../../../tools/resolve-helper/helper.py"
+local helper_script_path = require("core.path_utils").resolve_repo_path("tools/resolve-helper/helper.py")
 helper_supervisor.configure(helper_script_path)
 log.event("Resolve bridge supervisor configured: %s", helper_script_path)
 -- SPEC.keyboard metadata for non-menu commands surfaces in the dialog

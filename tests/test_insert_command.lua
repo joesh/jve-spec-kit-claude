@@ -6,12 +6,15 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 local test_env = require('test_env')
 
-local database = require('core.database')
-local Clip = require('models.clip')
-local Media = require('models.media')
-local Command = require('command')
+local database        = require('core.database')
+local Clip            = require('models.clip')
+local Media           = require('models.media')
+local Track           = require('models.track')
+local Project         = require('models.project')
+local Sequence        = require('models.sequence')
+local Command         = require('command')
 local command_manager = require('core.command_manager')
-local asserts = require('core.asserts')
+local asserts         = require('core.asserts')
 
 -- Mock Qt timer
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
@@ -30,23 +33,82 @@ db:exec(require('import_schema'))
 db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_insert;")
 db:exec("DROP TRIGGER IF EXISTS trg_prevent_video_overlap_update;")
 
--- Insert Project/Sequence (30fps)
-local now = os.time()
-db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
-]], now, now))
-db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
-]], now, now))
-db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_a1', 'sequence', 'A1', 'AUDIO', 1, 1);
-]])
+-- ---------------------------------------------------------------------------
+-- Fixtures (SQL Isolation)
+-- ---------------------------------------------------------------------------
 
-command_manager.init('sequence', 'project')
+local project_id = "project"
+Project.create("Test Project", {
+    id   = project_id,
+    fps_mismatch_policy = "resample",
+    settings = {
+        master_clock_hz = 192000,
+        default_fps = { num = 24, den = 1 }
+    }
+}):save()
+
+local seq_id = "sequence"
+Sequence.create("Test Sequence", project_id, { fps_numerator = 30, fps_denominator = 1 }, 1920, 1080, {
+    id   = seq_id,
+    kind = "sequence",
+    audio_sample_rate = 48000,
+}):save()
+
+Track.create_video("V1", seq_id, { id = "track_v1", track_index = 1 }):save()
+Track.create_audio("A1", seq_id, { id = "track_a1", track_index = 1 }):save()
+
+command_manager.init(seq_id, project_id)
+
+-- Create Media (100 frames @ 30fps)
+local media_id = "media_video"
+Media.create({
+    id         = media_id,
+    project_id = project_id,
+    file_path  = "/tmp/jve/video.mov",
+    name       = "Video",
+    duration_frames = 100,
+    fps_numerator   = 30,
+    fps_denominator = 1,
+    width      = 1920,
+    height     = 1080,
+    metadata   = '{"start_tc_value":0,"start_tc_rate":30}'
+}):save()
+
+-- V13: master sequence wrapping the media for clip references.
+local MC_TEST = Sequence.ensure_master(media_id, project_id)
+
+-- Create masterclip sequence for this media (required for Insert)
+local source_sequence_id = test_env.create_test_masterclip_sequence(
+    project_id, "Video Master", 30, 1, 100, media_id)
+
+-- Create downstream clip at [200, 300) to test ripple behavior
+Clip.create({
+    name = "Downstream",
+    id = "downstream_clip",
+    project_id = project_id,
+    track_id = "track_v1",
+    owner_sequence_id = seq_id,
+    sequence_id = MC_TEST,
+    sequence_start_frame = 200,
+    duration_frames = 100,
+    source_in_frame = 0,
+    source_out_frame = 100,
+    enabled = true,
+    fps_mismatch_policy = "resample",
+    volume = 1.0,
+    playhead_frame = 0,
+    mark_in_frame = nil,
+    mark_out_frame = nil,
+    source_in_subframe = nil,
+    source_out_subframe = nil,
+    master_layer_track_id = nil,
+    master_audio_track_id = nil,
+})
+
+do
+    local ts = require("ui.timeline.timeline_state")
+    if ts.reload_clips then ts.reload_clips(seq_id) end
+end
 
 -- Helper: execute command with proper event wrapping
 local function execute_cmd(cmd)
@@ -71,94 +133,22 @@ local function redo()
     return result
 end
 
--- Create Media (100 frames @ 30fps)
-local media = Media.create({
-    id = "media_video",
-    project_id = "project",
-    file_path = "/tmp/jve/video.mov",
-    name = "Video",
-    duration_frames = 100,
-    fps_numerator = 30,
-    fps_denominator = 1
-})
-media:save(db)
--- V13: master sequence wrapping the media for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _m = _Media.load("media_video")
-    if _m then
-        if not _m.width or _m.width == 0 then _m.width = 1920 end
-        if not _m.height or _m.height == 0 then _m.height = 1080 end
-        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
-        if not _parsed or _parsed.start_tc_value == nil then
-            _m.metadata = _json.encode({ start_tc_value = 0,
-                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
-                start_tc_audio_samples = 0,
-                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
-                    and (_m.audio_sample_rate or 48000) or nil })
-        end
-        _m:save()
-    end
-end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_video", "project")
-
--- Create masterclip sequence for this media (required for Insert)
-local source_sequence_id = test_env.create_test_masterclip_sequence(
-    "project", "Video Master", 30, 1, 100, "media_video")
-
--- Create downstream clip at [200, 300) to test ripple behavior
-local downstream_clip = Clip.create({
-        name = "Downstream",
-        id = "downstream_clip",
-        project_id = "project",
-        track_id = "track_v1",
-        owner_sequence_id = "sequence",
-        sequence_id = MC_TEST,
-        sequence_start_frame = 200,
-        duration_frames = 100,
-        source_in_frame = 0,
-        source_out_frame = 100,
-        enabled = true,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-    })
-assert(downstream_clip ~= nil, "Failed to create downstream clip")
-do
-    local ts = require("ui.timeline.timeline_state")
-    if ts.reload_clips then ts.reload_clips("sequence") end
-end
-
 -- Helper: count clips on track
 local function count_clips(track_id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = ?")
-    stmt:bind_value(1, track_id)
-    stmt:exec()
-    stmt:next()
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count
+    local sql = "SELECT COUNT(*) FROM clips WHERE track_id = ?"
+    return database.count(db, sql, { track_id })
 end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
-    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    stmt:exec()
-    if stmt:next() then
-        local start = stmt:value(0)
-        local dur = stmt:value(1)
-        stmt:finalize()
-        return start, dur
+    local c = Clip.load_optional(clip_id)
+    if c then
+        return c.sequence_start, c.duration
     end
-    stmt:finalize()
     return nil, nil
 end
 
 -- Helper: set marks on masterclip sequence to define source subrange
-local Sequence = require("models.sequence")
 local function set_masterclip_marks(mc_id, mark_in, mark_out)
     local mc_seq = assert(Sequence.load(mc_id), "set_masterclip_marks: not found")
     mc_seq.mark_in = mark_in
@@ -171,10 +161,10 @@ end
 -- =============================================================================
 print("Test 1: Basic insertion at frame 0")
 set_masterclip_marks(source_sequence_id, 0, 50)
-local insert_cmd = Command.create("Insert", "project")
+local insert_cmd = Command.create("Insert", project_id)
 insert_cmd:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd:set_parameter("target_video_track_id", "track_v1")
-insert_cmd:set_parameter("sequence_id", "sequence")
+insert_cmd:set_parameter("sequence_id", seq_id)
 insert_cmd:set_parameter("sequence_start_frame", 0)
 
 local result = execute_cmd(insert_cmd)
@@ -192,10 +182,10 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 -- =============================================================================
 print("Test 2: Second insert at frame 0 ripples everything")
 set_masterclip_marks(source_sequence_id, 0, 30)
-local insert_cmd2 = Command.create("Insert", "project")
+local insert_cmd2 = Command.create("Insert", project_id)
 insert_cmd2:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd2:set_parameter("target_video_track_id", "track_v1")
-insert_cmd2:set_parameter("sequence_id", "sequence")
+insert_cmd2:set_parameter("sequence_id", seq_id)
 insert_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(insert_cmd2)
@@ -246,10 +236,10 @@ db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip
 
 -- Clear marks — no marks = use full clip range
 set_masterclip_marks(source_sequence_id, nil, nil)
-local insert_cmd3 = Command.create("Insert", "project")
+local insert_cmd3 = Command.create("Insert", project_id)
 insert_cmd3:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd3:set_parameter("target_video_track_id", "track_v1")
-insert_cmd3:set_parameter("sequence_id", "sequence")
+insert_cmd3:set_parameter("sequence_id", seq_id)
 insert_cmd3:set_parameter("sequence_start_frame", 0)
 -- No marks set — should use full media duration (100 frames)
 
@@ -273,10 +263,10 @@ db:exec("DELETE FROM clips WHERE track_id = 'track_v1' AND id != 'downstream_cli
 db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip'")
 
 set_masterclip_marks(source_sequence_id, 0, 50)
-local insert_cmd4 = Command.create("Insert", "project")
+local insert_cmd4 = Command.create("Insert", project_id)
 insert_cmd4:set_parameter("source_sequence_id", source_sequence_id)
 insert_cmd4:set_parameter("target_video_track_id", "track_v1")
-insert_cmd4:set_parameter("sequence_id", "sequence")
+insert_cmd4:set_parameter("sequence_id", seq_id)
 insert_cmd4:set_parameter("sequence_start_frame", 200)  -- Exactly at downstream start
 
 result = execute_cmd(insert_cmd4)
@@ -292,9 +282,9 @@ assert(downstream_start == 250, string.format("Downstream should ripple to 250, 
 print("Test 7: Missing media_id fails")
 -- Disable asserts for error case testing (schema validation asserts on missing required params)
 asserts._set_enabled_for_tests(false)
-local bad_cmd = Command.create("Insert", "project")
+local bad_cmd = Command.create("Insert", project_id)
 bad_cmd:set_parameter("target_video_track_id", "track_v1")
-bad_cmd:set_parameter("sequence_id", "sequence")
+bad_cmd:set_parameter("sequence_id", seq_id)
 bad_cmd:set_parameter("sequence_start_frame", 0)
 -- No source_sequence_id
 
@@ -307,10 +297,10 @@ assert(not result.success, "Insert without media_id should fail")
 -- =============================================================================
 print("Test 8: Nonexistent source_sequence_id fails")
 asserts._set_enabled_for_tests(false)
-local bad_cmd2 = Command.create("Insert", "project")
+local bad_cmd2 = Command.create("Insert", project_id)
 bad_cmd2:set_parameter("source_sequence_id", "nonexistent_master")
 bad_cmd2:set_parameter("target_video_track_id", "track_v1")
-bad_cmd2:set_parameter("sequence_id", "sequence")
+bad_cmd2:set_parameter("sequence_id", seq_id)
 bad_cmd2:set_parameter("sequence_start_frame", 0)
 
 result = execute_cmd(bad_cmd2)
@@ -328,10 +318,10 @@ db:exec("UPDATE clips SET sequence_start_frame = 200 WHERE id = 'downstream_clip
 -- Insert 3 clips
 set_masterclip_marks(source_sequence_id, 0, 30)
 for i = 1, 3 do
-    local cmd = Command.create("Insert", "project")
+    local cmd = Command.create("Insert", project_id)
     cmd:set_parameter("source_sequence_id", source_sequence_id)
     cmd:set_parameter("target_video_track_id", "track_v1")
-    cmd:set_parameter("sequence_id", "sequence")
+    cmd:set_parameter("sequence_id", seq_id)
     cmd:set_parameter("sequence_start_frame", 0)
     result = execute_cmd(cmd)
     assert(result.success, string.format("Insert %d should succeed", i))

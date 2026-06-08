@@ -21,6 +21,9 @@
 --- helper running (T030), while M.execute is integration-level (T034 once
 --- T029 lands). FR-022 — no mocks; tests pass real data structures.
 
+local ledger         = require("core.resolve_bridge.identity_ledger")
+local wire           = require("core.resolve_bridge.wire_decode")
+
 local M = {}
 
 local ClipGrade         = require("models.clip_grade")
@@ -171,43 +174,27 @@ end
 -- restore() can revert.
 local function walk_ledger_for_stale(sequence_id, seen_clip_ids, db,
                                       captured)
-    local stmt = assert(db:prepare([[
-        SELECT rbl.jve_clip_uuid
-        FROM resolve_bridge_link rbl
-        JOIN clips c ON c.id = rbl.jve_clip_uuid
-        WHERE c.owner_sequence_id = ?
-    ]]), "sync_grades.walk_ledger_for_stale: prepare failed")
-    stmt:bind_value(1, sequence_id)
-    if not stmt:exec() then
-        stmt:finalize()
-        error("sync_grades.walk_ledger_for_stale: exec failed for "
-            .. "sequence " .. tostring(sequence_id))
-    end
-    local to_stale = {}
-    while stmt:next() do
-        local clip_id = stmt:value(0)
+    -- Rule 2.5: Use centralized iterator for sequence links (review item #1).
+    local links = ledger.iter_links_for_sequence(sequence_id, db)
+    for _, link in ipairs(links) do
+        local clip_id = link.clip_id
         if seen_clip_ids[clip_id] == nil then
-            to_stale[#to_stale + 1] = clip_id
-        end
-    end
-    stmt:finalize()
-
-    for _, clip_id in ipairs(to_stale) do
-        local before = load_existing_row(clip_id, db)
-        if before ~= nil and before.stale == 0 then
-            captured.entries[#captured.entries + 1] = {
-                clip_id = clip_id,
-                before  = before,
-            }
-            local staled = {
-                cdl       = before.cdl,
-                lut_ref   = before.lut_ref,
-                fidelity  = before.fidelity,
-                source    = before.source,
-                stale     = 1,
-                synced_at = before.synced_at,
-            }
-            ClipGrade.upsert(clip_id, staled, db)
+            local before = load_existing_row(clip_id, db)
+            if before ~= nil and before.stale == 0 then
+                captured.entries[#captured.entries + 1] = {
+                    clip_id = clip_id,
+                    before  = before,
+                }
+                local staled = {
+                    cdl       = before.cdl,
+                    lut_ref   = before.lut_ref,
+                    fidelity  = before.fidelity,
+                    source    = before.source,
+                    stale     = 1,
+                    synced_at = before.synced_at,
+                }
+                ClipGrade.upsert(clip_id, staled, db)
+            end
         end
     end
 end

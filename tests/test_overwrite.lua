@@ -6,12 +6,14 @@
 package.path = package.path .. ";src/lua/?.lua;tests/?.lua"
 local test_env = require('test_env')
 
-local database = require('core.database')
-local Clip = require('models.clip')
-local Media = require('models.media')
-require('models.track') -- luacheck: ignore 411
+local database        = require('core.database')
+local Clip            = require('models.clip')
+local Media           = require('models.media')
+local Track           = require('models.track')
+local Project         = require('models.project')
+local Sequence        = require('models.sequence')
 local command_manager = require('core.command_manager')
-local asserts = require('core.asserts')
+local asserts         = require('core.asserts')
 
 -- Mock Qt timer
 _G.qt_create_single_shot_timer = function(delay, cb) cb(); return nil end
@@ -26,63 +28,56 @@ database.init(db_path)
 local db = database.get_connection()
 db:exec(require('import_schema'))
 
--- Insert Project/Sequence (30fps)
-local now = os.time()
-db:exec(string.format([[
-    INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at) VALUES ('project', 'Test Project', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', %d, %d);
-]], now, now))
-db:exec(string.format([[
-    INSERT INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-    VALUES ('sequence', 'project', 'Test Sequence', 'sequence', 30, 1, 48000, 1920, 1080, %d, %d);
-]], now, now))
-db:exec([[
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v1', 'sequence', 'V1', 'VIDEO', 1, 1);
-    INSERT INTO tracks (id, sequence_id, name, track_type, track_index, enabled)
-    VALUES ('track_v2', 'sequence', 'V2', 'VIDEO', 2, 1);
-]])
+-- ---------------------------------------------------------------------------
+-- Fixtures (SQL Isolation)
+-- ---------------------------------------------------------------------------
 
-command_manager.init('sequence', 'project')
+local project_id = "project"
+Project.create("Test Project", {
+    id   = project_id,
+    fps_mismatch_policy = "resample",
+    settings = {
+        master_clock_hz = 192000,
+        default_fps = { num = 24, den = 1 }
+    }
+}):save()
+
+local seq_id = "sequence"
+Sequence.create("Test Sequence", project_id, { fps_numerator = 30, fps_denominator = 1 }, 1920, 1080, {
+    id   = seq_id,
+    kind = "sequence",
+    audio_sample_rate = 48000,
+}):save()
+
+Track.create_video("V1", seq_id, { id = "track_v1", track_index = 1 }):save()
+Track.create_video("V2", seq_id, { id = "track_v2", track_index = 2 }):save()
+
+command_manager.init(seq_id, project_id)
 
 -- Create Media (500 frames @ 30fps)
+local media_id = "media_ow"
 local media = Media.create({
-    id = "media_ow",
-    project_id = "project",
-    file_path = "/tmp/jve/ow_video.mov",
-    name = "OW Video",
+    id         = media_id,
+    project_id = project_id,
+    file_path  = "/tmp/jve/ow_video.mov",
+    name       = "OW Video",
     duration_frames = 500,
-    fps_numerator = 30,
-    fps_denominator = 1
+    fps_numerator   = 30,
+    fps_denominator = 1,
+    width      = 1920,
+    height     = 1080,
+    metadata   = '{"start_tc_value":0,"start_tc_rate":30}'
 })
 media:save(db)
+
 -- V13: master sequence wrapping the media for clip references.
-do
-    local _Media = require("models.media")
-    local _json = require("dkjson")
-    local _m = _Media.load("media_ow")
-    if _m then
-        if not _m.width or _m.width == 0 then _m.width = 1920 end
-        if not _m.height or _m.height == 0 then _m.height = 1080 end
-        local _parsed = _m.metadata and (function() local ok,v = pcall(_json.decode, _m.metadata); return ok and v end)()
-        if not _parsed or _parsed.start_tc_value == nil then
-            _m.metadata = _json.encode({ start_tc_value = 0,
-                start_tc_rate = (_m.frame_rate and _m.frame_rate.fps_numerator) or 24,
-                start_tc_audio_samples = 0,
-                start_tc_audio_rate = (_m.audio_channels and _m.audio_channels > 0)
-                    and (_m.audio_sample_rate or 48000) or nil })
-        end
-        _m:save()
-    end
-end
-local _Sequence_for_master = require("models.sequence")
-local MC_TEST = _Sequence_for_master.ensure_master("media_ow", "project")
+local MC_TEST = Sequence.ensure_master(media_id, project_id)
 
 -- Create masterclip sequence for this media (required for Overwrite)
 local source_sequence_id = test_env.create_test_masterclip_sequence(
-    "project", "OW Video Master", 30, 1, 500, "media_ow")
+    project_id, "OW Video Master", 30, 1, 500, media_id)
 
 -- Helper: set marks on masterclip sequence before Insert/Overwrite
-local Sequence = require("models.sequence")
 local function set_mc_marks(mc_id, source_in, source_out)
     local mc_seq = Sequence.load(mc_id)
     assert(mc_seq, "set_mc_marks: failed to load masterclip sequence")
@@ -96,23 +91,19 @@ local function clear_mc_marks(mc_id)
     local mc_seq = Sequence.load(mc_id)
     if mc_seq then
         mc_seq:clear_marks()
+        mc_seq:save()
     end
 end
 
 -- Map test-friendly aliases ("overwrite_clip", "middle_overwrite", …)
 -- to the V13-generated id of the clip the corresponding command
--- actually created. Tests reference clips by alias for readability;
--- the helpers below resolve the alias before clip_exists /
--- get_clip_position. The duplicate-key params lines used to override
--- source_sequence_id with the desired literal id; in V13 the new
--- clip's id is generated, so we capture it under params._alias instead.
+-- actually created.
 local clip_alias = {}
 local function resolve_clip_id(id)
     return clip_alias[id] or id
 end
 
 -- Helper: execute command with proper event wrapping
--- For Insert/Overwrite: reads source_in/source_out from params, sets marks, removes timing params
 local function execute_command(name, params)
     local alias = params._alias
     params._alias = nil
@@ -129,7 +120,7 @@ local function execute_command(name, params)
         end
     end
     local Command = require("command")
-    local cmd = Command.create(name, params.project_id or "project")
+    local cmd = Command.create(name, params.project_id or project_id)
     cmd:set_parameters(params)
     command_manager.begin_command_event("script")
     local result = command_manager.execute(cmd)
@@ -160,63 +151,52 @@ end
 
 -- Helper: create a clip
 local function create_clip(id, track_id, start_frame, duration_frames)
-    local clip = Clip.create({
+    local clip_id = Clip.create({
         name = "Clip " .. id,
         id = id,
-        project_id = "project",
+        project_id = project_id,
         track_id = track_id,
-        owner_sequence_id = "sequence",
+        owner_sequence_id = seq_id,
         sequence_id = MC_TEST,
         sequence_start_frame = start_frame,
         duration_frames = duration_frames,
         source_in_frame = 0,
         source_out_frame = duration_frames,
+        source_in_subframe = nil,
+        source_out_subframe = nil,
+        master_layer_track_id = nil,
+        master_audio_track_id = nil,
         enabled = true,
         fps_mismatch_policy = "resample",
         volume = 1.0,
         playhead_frame = 0,
+        mark_in_frame = nil,
+        mark_out_frame = nil,
     })
-    assert(clip ~= nil and clip ~= "", "Failed to save clip " .. id)
-    return clip
+    assert(clip_id ~= nil and clip_id ~= "", "Failed to save clip " .. id)
+    return clip_id
 end
 
 -- Helper: get clip position
 local function get_clip_position(clip_id)
     clip_id = resolve_clip_id(clip_id)
-    local stmt = db:prepare("SELECT sequence_start_frame, duration_frames FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    stmt:exec()
-    if stmt:next() then
-        local start = stmt:value(0)
-        local dur = stmt:value(1)
-        stmt:finalize()
-        return start, dur
+    local c = Clip.load_optional(clip_id)
+    if c then
+        return c.sequence_start, c.duration
     end
-    stmt:finalize()
     return nil, nil
 end
 
 -- Helper: check if clip exists
 local function clip_exists(clip_id)
     clip_id = resolve_clip_id(clip_id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE id = ?")
-    stmt:bind_value(1, clip_id)
-    stmt:exec()
-    stmt:next()
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count > 0
+    return Clip.load_optional(clip_id) ~= nil
 end
 
 -- Helper: count clips on track
 local function count_clips(track_id)
-    local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE track_id = ?")
-    stmt:bind_value(1, track_id)
-    stmt:exec()
-    stmt:next()
-    local count = stmt:value(0)
-    stmt:finalize()
-    return count
+    local sql = "SELECT COUNT(*) FROM clips WHERE track_id = ?"
+    return database.count(db, sql, { track_id })
 end
 
 -- Helper: reset timeline (only timeline clips, not masterclip stream clips)
@@ -231,8 +211,8 @@ print("Test 1: Basic overwrite at empty position")
 reset_timeline()
 
 local result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     sequence_start_frame = 0,
@@ -251,8 +231,8 @@ reset_timeline()
 create_clip("existing_clip", "track_v1", 0, 100)
 
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "overwrite_clip",
@@ -276,8 +256,8 @@ create_clip("trim_start", "track_v1", 0, 100)
 
 -- Overwrite first 50 frames
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "overwrite_start",
@@ -316,7 +296,7 @@ local redo_result = redo()
 assert(redo_result.success, "Redo should succeed: " .. tostring(redo_result.error_message))
 
 -- Original should be trimmed again
-start = get_clip_position("trim_start") -- luacheck: ignore 411
+start = get_clip_position("trim_start")
 assert(start == 50, string.format("Original should be at 50 after redo, got %s", tostring(start)))
 
 -- Overwrite clip should be back
@@ -331,8 +311,8 @@ create_clip("split_me", "track_v1", 0, 200)
 
 -- Overwrite middle 50 frames [75, 125)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "middle_overwrite",
@@ -353,11 +333,10 @@ print("Test 7: Missing media_id fails without UI context")
 reset_timeline()
 asserts._set_enabled_for_tests(false)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
-    sequence_start_frame = 0,
-    duration = 100
+    sequence_start_frame = 0
     -- No source_sequence_id
 })
 asserts._set_enabled_for_tests(true)
@@ -369,8 +348,8 @@ assert(not result.success, "Overwrite without source_sequence_id should fail")
 print("Test 8: Resolves track_id from sequence")
 reset_timeline()
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     -- No track_id - should use first video track
     source_sequence_id = source_sequence_id,
     sequence_start_frame = 0,
@@ -388,8 +367,8 @@ print("Test 9: Nil duration infers from masterclip stream")
 reset_timeline()
 -- When duration is nil, Overwrite should use masterclip's stream duration (500 frames)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "fallback_dur_clip",
@@ -399,7 +378,7 @@ result = execute_command("Overwrite", {
 assert(result.success, "Overwrite should succeed with duration inference: " .. tostring(result.error_message))
 
 -- Clip should have masterclip's stream duration (500 frames)
-local _, dur2 = get_clip_position("fallback_dur_clip"); _ = _ -- luacheck: ignore 311
+local _, dur2 = get_clip_position("fallback_dur_clip")
 assert(dur2 == 500, string.format("Clip should use masterclip stream duration (500), got %s", tostring(dur2)))
 
 -- =============================================================================
@@ -410,8 +389,8 @@ reset_timeline()
 
 -- First overwrite at [0, 100)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_1",
@@ -424,8 +403,8 @@ assert(result.success, "First overwrite should succeed")
 
 -- Second overwrite at [100, 200)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_2",
@@ -438,8 +417,8 @@ assert(result.success, "Second overwrite should succeed")
 
 -- Third overwrite at [200, 300)
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,
     _alias = "ow_3",
@@ -468,8 +447,8 @@ reset_timeline()
 create_clip("v1_clip", "track_v1", 0, 100)
 
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v2",  -- Different track
     source_sequence_id = source_sequence_id,
     _alias = "v2_clip",
@@ -497,8 +476,8 @@ reset_timeline()
 -- Full audio clip creation is tested via import_media tests.
 
 result = execute_command("Overwrite", {
-    project_id = "project",
-    sequence_id = "sequence",
+    project_id = project_id,
+    sequence_id = seq_id,
     target_video_track_id = "track_v1",
     source_sequence_id = source_sequence_id,  -- Uses the existing video-only masterclip
     sequence_start_frame = 0,
@@ -511,4 +490,4 @@ assert(result.success, "Overwrite should succeed: " .. tostring(result.error_mes
 -- Should have video clip on V1
 assert(count_clips("track_v1") == 1, "Should have 1 video clip on track_v1")
 
-print("\n\226\156\133 Overwrite command tests passed")
+print("\n✅ Overwrite command tests passed")

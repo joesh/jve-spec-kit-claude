@@ -1084,8 +1084,37 @@ function M.apply_mutations(db, mutations)
     end
 
     finalize_all_stmts()
-	    return true
-	end
+
+    -- FU-8: Notify entity watchers for the mutated clips, tracks, and their owning sequences.
+    local watchers = require("core.watchers")
+    local Clip = require("models.clip")
+    local Track = require("models.track")
+    
+    for _, mut in ipairs(mutations) do
+        if mut.type == "update" or mut.type == "delete" or mut.type == "insert" then
+            local seq_id = mut.owner_sequence_id
+            if not seq_id and mut.previous then
+                seq_id = mut.previous.owner_sequence_id
+            end
+
+            assert(seq_id, string.format("command_helper: unable to resolve sequence_id for clip %s (mut type: %s)", tostring(mut.clip_id), tostring(mut.type)))
+
+            watchers.notify_clip(mut.clip_id, seq_id)
+
+            if mut.previous then
+                local prev_seq_id = mut.previous.owner_sequence_id
+                if prev_seq_id and prev_seq_id ~= seq_id then
+                    watchers.notify_clip(mut.clip_id, prev_seq_id)
+                end
+            end
+        elseif mut.type == "bulk_shift" then
+            local seq_id = Track.get_sequence_id(mut.track_id)
+            watchers.notify_track(mut.track_id, seq_id)
+        end
+    end
+
+    return true
+end
 
 -- Revert a forward `bulk_shift` mutation. The forward shift moved every
 -- clip on `track_id` with sequence_start_frame >= start_frame by

@@ -10,24 +10,23 @@
 --- reconcile algorithm (M.reconcile — direct / content_match /
 --- blade_inherit, no DB writes; callers persist via M.upsert).
 
+local database = require("core.database")
+
 local M = {}
 
 local function read_row(clip_id, db)
-    local stmt = assert(db:prepare([[
+    local sql = [[
         SELECT resolve_item_id, grade_fingerprint, edit_fingerprint
         FROM resolve_bridge_link WHERE jve_clip_uuid = ?
-    ]]), "identity_ledger: prepare(load) failed")
-    stmt:bind_value(1, clip_id)
-    local existing
-    if stmt:exec() and stmt:next() then
-        existing = {
+    ]]
+    local rows = database.select_rows(db, sql, { clip_id }, function(stmt)
+        return {
             resolve_item_id   = stmt:value(0),
             grade_fingerprint = stmt:value(1),
             edit_fingerprint  = stmt:value(2),
         }
-    end
-    stmt:finalize()
-    return existing
+    end)
+    return rows[1]
 end
 
 --- Insert or update the link row for a clip.
@@ -90,9 +89,11 @@ function M.upsert(clip_id, link, db)
     stmt:bind_value(2, link.resolve_item_id)
     stmt:bind_value(3, grade_fp)
     stmt:bind_value(4, edit_fp)
-    local ok = stmt:exec()
+    -- Rule 2.32: No silent failure of the driver. assert(stmt:exec())
+    -- ensures we don't return success when the write failed.
+    assert(stmt:exec(), "identity_ledger.upsert: stmt:exec failed for clip "
+        .. tostring(clip_id))
     stmt:finalize()
-    assert(ok, "identity_ledger.upsert: exec failed for clip " .. clip_id)
 end
 
 --- Load the link row for a clip; returns nil if no row.
@@ -112,30 +113,53 @@ function M.lookup_clip_id(resolve_item_id, db)
     assert(type(resolve_item_id) == "string" and resolve_item_id ~= "",
         "identity_ledger.lookup_clip_id: resolve_item_id required")
     assert(db, "identity_ledger.lookup_clip_id: db connection required")
-    local stmt = assert(db:prepare([[
-        SELECT jve_clip_uuid FROM resolve_bridge_link
-        WHERE resolve_item_id = ?
-    ]]), "identity_ledger.lookup_clip_id: prepare failed")
-    stmt:bind_value(1, resolve_item_id)
-    local clip_id
-    if stmt:exec() and stmt:next() then
-        clip_id = stmt:value(0)
-        -- Multi-row defensive assert. One resolve_item_id should map to
-        -- at most one clip; multiple ledger rows means reconcile produced
-        -- a bad state (blade-inherit fragments should be read-time
-        -- decorations, not persisted ledger rows — see data-model.md
-        -- §reconcile bladed-inherit).
-        if stmt:next() then
-            local second = stmt:value(0)
-            stmt:finalize()
-            error(string.format(
-                "identity_ledger.lookup_clip_id: multiple clip mappings "
-                .. "for resolve_item_id=%s (at least %s and %s)",
-                resolve_item_id, tostring(clip_id), tostring(second)))
-        end
+    
+    local sql = "SELECT jve_clip_uuid FROM resolve_bridge_link WHERE resolve_item_id = ?"
+    local rows = database.select_rows(db, sql, { resolve_item_id }, function(stmt)
+        return stmt:value(0)
+    end)
+    
+    -- Multi-row defensive assert. One resolve_item_id should map to
+    -- at most one clip; multiple ledger rows means reconcile produced
+    -- a bad state (blade-inherit fragments should be read-time
+    -- decorations, not persisted ledger rows — see data-model.md
+    -- §reconcile bladed-inherit).
+    if #rows > 1 then
+        error(string.format(
+            "identity_ledger.lookup_clip_id: multiple clip mappings "
+            .. "for resolve_item_id=%s (found %d: e.g. %s and %s)",
+            resolve_item_id, #rows, tostring(rows[1]), tostring(rows[2])))
     end
-    stmt:finalize()
-    return clip_id
+    
+    return rows[1]
+end
+
+--- Iterate all ledger links for clips in a given JVE sequence.
+--- Returns an array of {clip_id, resolve_item_id, grade_fingerprint, edit_fingerprint}.
+--- @param sequence_id string
+--- @param db          table  open SQLite connection
+function M.iter_links_for_sequence(sequence_id, db)
+    assert(type(sequence_id) == "string" and sequence_id ~= "",
+        "identity_ledger.iter_links_for_sequence: sequence_id required")
+    assert(db, "identity_ledger.iter_links_for_sequence: db connection required")
+    
+    local sql = [[
+        SELECT l.jve_clip_uuid, l.resolve_item_id, 
+               l.grade_fingerprint, l.edit_fingerprint
+        FROM resolve_bridge_link l
+        JOIN clips c ON l.jve_clip_uuid = c.id
+        JOIN tracks t ON c.track_id = t.id
+        WHERE t.sequence_id = ?
+    ]]
+    
+    return database.select_rows(db, sql, { sequence_id }, function(stmt)
+        return {
+            clip_id           = stmt:value(0),
+            resolve_item_id   = stmt:value(1),
+            grade_fingerprint = stmt:value(2),
+            edit_fingerprint  = stmt:value(3),
+        }
+    end)
 end
 
 --- Reconcile algorithm (spec 023 T036, FR-012, data-model.md §reconcile).

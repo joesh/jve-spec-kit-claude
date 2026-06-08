@@ -8,6 +8,11 @@
 #   Named:       "DeleteSelection ripple=true"
 #   Duration:    1f (1 frame), -1s (minus 1 second), 30f (30 frames)
 
+[Global]
+"Tab" = "CycleFocus"
+"Shift+Tab" = "CycleFocus direction=backward"
+"Escape" = "Cancel"
+
 [Application]
 "Cmd+Q" = "Quit"
 "Cmd+N" = "NewProject"
@@ -47,7 +52,7 @@
 "Down" = "GoToNextEdit @timeline @source_monitor @timeline_monitor"
 # Left/Right handled in keyboard_shortcuts.lua (arrow repeat management)
 "Tab" = "ToggleTimecodeFocus @timeline"
-# Shift+Tab intentionally unbound — user-mappable via the keyboard customization UI
+
 
 [Marks]
 # 017 FR-020 movement-class: mark commands target the displayed side
@@ -154,3 +159,10 @@
 # Return handled natively: tree keymap (activate/toggle) + PanelFocusTrap (button click)
 "F2" = "StartRename @project_browser"
 "Cmd+Shift+N" = "NewBinHere @project_browser"
+
+[Color]
+# 023 Resolve Color Bridge
+"Cmd+Option+R" = "SendToResolve"
+"Cmd+Option+G" = "SyncGradesFromResolve"
+"Cmd+Option+E" = "SyncEditsFromResolve"
+# ConnectToResolveProject intentionally unbound — less frequent setup command.

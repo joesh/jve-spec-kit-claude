@@ -178,7 +178,13 @@ function M.build(db, project_id, sequence_id)
 
         for _, clip_row in ipairs(track_payload.clips) do
             local media_uuid = clip_row.media_uuid
-            if media_uuid and not media_seen[media_uuid] then
+            -- Rule 2.13: no silent skip of media links. If a clip exists
+            -- on a track, it must point to valid media.
+            assert(media_uuid and media_uuid ~= "", string.format(
+                "payload_builder: clip %s has no media link",
+                tostring(clip_row.id)))
+
+            if not media_seen[media_uuid] then
                 media_seen[media_uuid] = true
                 local m = Media.load(media_uuid)
                 assert(m, string.format(
