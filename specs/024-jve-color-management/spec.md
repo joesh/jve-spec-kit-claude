@@ -15,6 +15,13 @@
 
 ---
 
+## Clarifications
+
+### Session 2026-06-07
+- Q: Project color settings UI — Inspector section or modal dialog? → A: Modal project settings dialog, delivered by a separate feature. Out of scope for 024 — 024 owns the data model, persistence, and read-side renderer wiring; the user-facing dialog is not authored here.
+
+---
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### Primary User Story
@@ -67,11 +74,11 @@ and ACES are tracked so future work doesn't break the contract.
    minimum, the vanilla YRGB case is correct; non-vanilla modes
    are recorded but may render with a fidelity badge per
    spec 023 FR-015).
-5. **Given** any project,
-   **When** the user opens Project Settings → Color,
-   **Then** the user can read the current color science mode,
-   working color space, and output color space, and can change them.
-   The renderer reflects the change on the next show-frame.
+5. **Given** the project color settings are mutated (via any future
+   write surface — the user-facing dialog is out of scope for 024),
+   **When** the renderer pulls the next frame,
+   **Then** the new settings are honored. 024 guarantees the read
+   path; the dialog feature is responsible for invoking mutation.
 6. **Given** a cold-start of any project with a graded clip at
    the sequence's initial playhead,
    **When** the first frame is rendered,
@@ -185,15 +192,15 @@ and ACES are tracked so future work doesn't break the contract.
 
 **UI surface**
 
-- **FR-015**: The user MUST be able to read and change the project
-  color settings (FR-001/002) from a single UI surface
-  [NEEDS CLARIFICATION: Inspector section ("Project" inspectable
-  gets a Color group) vs modal "Project Settings → Color" dialog.
-  Per JVE convention so far, Inspector wins for live state and
-  modal wins for one-off config — color settings are read-often,
-  written-rarely, so probably Inspector. Confirm.].
+- **FR-015**: The project color settings (FR-001/002) MUST be
+  readable by any consumer (renderer, bridge, inspector readouts)
+  via the project model. **User-facing edit UI is out of scope for
+  024** — delivered by the separate Project Settings dialog feature.
+  024 owns the data model, persistence, default values, and the
+  read-side wiring; the dialog feature owns the write surface.
 - **FR-016**: The user MUST be able to read and change a clip's
   Input Color Space override (FR-004/005) from the clip Inspector.
+  (Clip-scoped, not project-scoped — stays in 024.)
 
 **Invariants**
 
@@ -208,6 +215,9 @@ and ACES are tracked so future work doesn't break the contract.
   and GPU surfaces produce pixels matching within tolerance.
 
 ### Out of Scope (V1 — explicit, do not expand)
+- Project Color Settings **user-facing edit UI** (delivered by the
+  separate Project Settings dialog feature; 024 owns the data
+  model + persistence + read-side wiring only)
 - HDR mastering / tone mapping (HDR1000 timeline, PQ output, etc.)
 - Gamut mapping / ACES Reference Gamut Compression
 - Monitor calibration LUTs (`videoMonitorLUT`, `videoMonitor3DLUT`
@@ -287,7 +297,6 @@ and ACES are tracked so future work doesn't break the contract.
 - pixel tol vs Resolve? (≤2/255 visual / ≤1/255 mirror — propose, confirm)
 - CPU/GPU tol? (≤1/255 — propose, confirm)
 - Input Color Space round-trip through DRT — supported by Resolve? if no, scope-out outbound override or accept loss?
-- Project Color Settings UI — Inspector section or modal? (Inspector recommended)
 - V1 ambition for `davinci_yrgb_cm` and `aces` — record-only with fidelity badge, or attempt apply?
 - ACES placeholder mode — keep as enum value or drop until V2?
 - Per-clip override storage — column on `clips` table or side table?
