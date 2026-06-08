@@ -45,24 +45,10 @@ local mtba_no_retime = "02405251eb851eb851"
 
 -- Build a synthetic Sequence XML element wrapping both clips on a single
 -- video track. Pattern matches tests/test_drp_retimed_clip_speed.lua.
-local function elem(tag, text_or_attrs, children)
-    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
-    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
-    return {
-        tag = tag,
-        attrs = attrs,
-        children = children or {},
-        text = text,
-    }
-end
+local _xml_helpers = require("drp_test_helpers")
+local elem = _xml_helpers.elem
+local wrap_clips = _xml_helpers.wrap_clips
 
-local function wrap_clips(...)
-    local elements = {}
-    for _, clip in ipairs({...}) do
-        table.insert(elements, elem("Element", "", {clip}))
-    end
-    return elem("Items", "", elements)
-end
 
 local seq = elem("Sequence", "", {
     elem("Sm2TiTrack", "", {

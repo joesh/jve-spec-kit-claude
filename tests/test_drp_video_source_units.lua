@@ -18,25 +18,11 @@ print("=== test_drp_video_source_units.lua ===")
 local drp_importer = require("importers.drp_importer")
 
 -- Helper: construct a mock XML element
-local function elem(tag, text_or_attrs, children)
-    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
-    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
-    return {
-        tag = tag,
-        attrs = attrs,
-        children = children or {},
-        text = text,
-    }
-end
+local _xml_helpers = require("drp_test_helpers")
+local elem = _xml_helpers.elem
+local wrap_clips = _xml_helpers.wrap_clips
 
 -- Helper: wrap clips in Items > Element structure matching real DRP XML
-local function wrap_clips(...)
-    local elements = {}
-    for _, clip in ipairs({...}) do
-        table.insert(elements, elem("Element", "", {clip}))
-    end
-    return elem("Items", "", elements)
-end
 
 --------------------------------------------------------------------------------
 -- Test 1: Video clip with empty <In/> and MST → source_in = media_tc_origin

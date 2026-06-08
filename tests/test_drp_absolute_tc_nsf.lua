@@ -15,24 +15,10 @@ print("=== test_drp_absolute_tc_nsf.lua ===")
 
 local drp_importer = require("importers.drp_importer")
 
-local function elem(tag, text_or_attrs, children)
-    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
-    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
-    return {
-        tag = tag,
-        attrs = attrs,
-        children = children or {},
-        text = text,
-    }
-end
+local _xml_helpers = require("drp_test_helpers")
+local elem = _xml_helpers.elem
+local wrap_clips = _xml_helpers.wrap_clips
 
-local function wrap_clips(...)
-    local elements = {}
-    for _, clip in ipairs({...}) do
-        table.insert(elements, elem("Element", "", {clip}))
-    end
-    return elem("Items", "", elements)
-end
 
 -- LE hex-encoded IEEE 754 doubles for <MediaFrameRate>
 local MFR_25  = "0000000000003940"  -- 25.0fps

@@ -92,4 +92,4 @@ assert(no_fps == 0, string.format("%d media records missing frame_rate", no_fps)
 -- Step 6: Schema version (match core/database.lua)
 test_env.assert_schema_version(db)
 
-print("\n✅ test_drp_uuid_dedup.lua passed")
+print("\n✅ test_drp_uuid_dedup_full.lua passed")

@@ -93,24 +93,10 @@ print("\n--- Test 4: Blob duration 0 must not override source_extent ---")
 -- Currently the merge checks `pmc.num_frames > 0` so this should already pass.
 
 -- Helper: construct a mock XML element
-local function elem(tag, text_or_attrs, children)
-    local text = type(text_or_attrs) == "string" and text_or_attrs or ""
-    local attrs = type(text_or_attrs) == "table" and text_or_attrs or {}
-    return {
-        tag = tag,
-        attrs = attrs,
-        children = children or {},
-        text = text,
-    }
-end
+local _xml_helpers = require("drp_test_helpers")
+local elem = _xml_helpers.elem
+local wrap_clips = _xml_helpers.wrap_clips
 
-local function wrap_clips(...)
-    local elements = {}
-    for _, clip in ipairs({...}) do
-        table.insert(elements, elem("Element", "", {clip}))
-    end
-    return elem("Items", "", elements)
-end
 
 -- Sequence with clip: source_in=400, duration=100 → extent=500
 local seq = elem("Sequence", "", {

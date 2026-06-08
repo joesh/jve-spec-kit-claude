@@ -139,20 +139,9 @@ function M.connect(socket_path, opts)
         if self_close then self_close() end
     end)
 
-    -- Capture the last QLocalSocket error so the connect-failure branch
-    -- below can surface what actually happened instead of always saying
-    -- "timed out". QLocalSocket::waitForConnected returns false in
-    -- multiple distinct cases:
-    --   • ServerNotFoundError — socket file doesn't exist (fires
-    --     INSTANTLY, NOT after the timeout — cost ~1hr session time
-    --     during the spec-023 spawn-race investigation before the real
-    --     cause was found; the misleading "timed out" message sent the
-    --     debugger after a phantom slow-path).
-    --   • ConnectionRefusedError — socket file exists but no listen().
-    --   • PeerClosedError — disconnected during handshake.
-    --   • SocketTimeoutError / no error cb fired — the genuine timeout.
-    -- We branch on err_name so each failure mode self-describes (rule
-    -- 2.32 — no silent failure of the actual cause).
+    -- Capture the last QLocalSocket error so a connect failure surfaces
+    -- the actual cause (ServerNotFoundError fires instantly; the default
+    -- "timed out" message would hide that).
     local last_socket_error = nil
     qt_local_socket_set_error_cb(handle, function(err_name)
         last_socket_error = err_name

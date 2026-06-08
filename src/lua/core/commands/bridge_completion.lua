@@ -2,75 +2,31 @@
 --- four bridge commands (SendToResolve, ConnectToResolveProject,
 --- SyncGradesFromResolve, SyncEditsFromResolve).
 ---
---- Why this exists. Every bridge command is async-with-callback (helper
---- round-trip happens off the calling thread). The root failure that
---- prompted this module was a TEST-COVERAGE gap: not a single test ever
---- drove these commands through `command_manager.execute_interactive`
---- (the menu / shortcut path), so the SPEC-required `on_complete` arg
---- went undetected for the entire feature. SPEC asserted REQUIRED;
---- `execute_interactive` had nowhere to inject a callback; menu picks
---- hard-failed at the schema validator. The regression gate now lives
---- at `tests/smoke/cases/test_bridge_menu_dispatch.py`.
+--- Every bridge command is async-with-callback. `notify(args, result,
+--- code, message)` is the one terminal path; it
+---   1. emits the op's `<op_snake>_completed` signal,
+---   2. logs (event on ok, error on failure),
+---   3. invokes optional `args.on_complete(result, code, message)`,
+---   4. bumps a per-op counter (smokes assert advancement to catch
+---      pcall-swallow regressions in the async tail).
 ---
---- The fix flips `on_complete` to OPTIONAL on every bridge command and
---- routes every terminal path through `notify()`. "Every terminal path"
---- has a subtlety: each command's `M.register` wraps `M.execute` in a
---- pcall and routes the caught error through `notify()` — that catches
---- SYNC-phase asserts (input validation, payload_builder, Sequence.load,
---- round-trip validator, anything inside `M.execute` BEFORE
---- `client:request(...)` returns). ASYNC-phase asserts (failures inside
---- the response callback — e.g. `M.apply` invariant violations, ledger
---- upsert, response-shape checks) are deliberately NOT pcall-wrapped:
---- those are internal-invariant violations that must crash hard per
---- rule 1.14, not be downgraded to a toast. The four command files
---- each carry a brief in-callback comment pointing at this docstring.
---- If a future debugger sees a frozen UI + no counter advance, the
---- async response handler is the thing to check — not a regression in
---- this contract.
+--- Each command's `M.register` wraps `M.execute` in a pcall and routes
+--- the caught error through `notify()` — that catches SYNC-phase asserts
+--- (input validation, payload_builder, Sequence.load, anything BEFORE
+--- `client:request` returns). ASYNC-phase asserts (failures inside the
+--- response callback) are deliberately NOT pcall-wrapped: those are
+--- internal-invariant violations and must crash hard per rule 1.14.
 ---
---- `notify()` is one place that:
----   1. emits the OP-SPECIFIC completion signal
----      (`<op_snake>_completed`), mirroring the rest of
----      `core/signals.lua` (per-op, never a tagged generic). Subscribers
----      pick exactly the op they care about.
----   2. logs the outcome (event on success, error on failure) — the
----      user-visible feedback path today, before a toast layer lands.
----   3. calls `args.on_complete(result, code, message)` when the
----      caller supplied one. Programmatic callers (scripted tests,
----      future automations) keep working unchanged.
----   4. bumps a monotonic per-op counter. Smokes assert the counter
----      advanced — the actual completion contract is "the async tail
----      reached `notify`", not just "no Lua error on the click."
----      Without the counter, a future regression that pcall-swallows
----      the async tail false-greens the menu-dispatch smoke.
----
---- Signal asymmetry — important to keep straight (do NOT merge these):
----   * `grades_changed(sequence_id)` (already exists; fires from
----     SyncGradesFromResolve.apply / .restore) is a MODEL-MUTATION
----     signal. Cache subscribers (SequenceMonitor's clip-grade cache)
----     want this — "the grade rows changed, drop stale cache."
----   * `sync_grades_from_resolve_completed(result, code, message)`
----     (new, fires from the async tail via this module) is an
----     OPERATION-FINISHED signal. Toast / dialog / smoke counter want
----     this — "the user-initiated sync op finished, possibly with
----     error."
----   On success both fire (apply emits the model signal, the tail
----   emits the completion signal). On error only `*_completed` fires
----   — no model state was changed.
----
---- Wire shape (same for all four signals, mirrors on_complete signature
---- so signal observers and callback observers see identical payloads):
----   Signals.emit("<op_snake>_completed", result, code, message)
----     result  : op-specific success table, or nil on failure
----     code    : structured error code (string) on failure, nil on ok
----     message : human-readable message on failure, nil on ok
+--- Signal asymmetry — do NOT merge:
+---   * `grades_changed(sequence_id)`: model-mutation signal; cache
+---     subscribers (SequenceMonitor's grade cache) listen here.
+---   * `<op>_completed(result, code, message)`: operation-finished
+---     signal; toast / dialog / smoke counter listen here.
+---   On success both fire; on error only `<op>_completed` does.
 ---
 --- Per-op registration: every bridge command MUST call
---- `register_op(op_name, signal_name)` at module load. This binds the
---- (op → signal) map and zero-initializes the completion counter —
---- so `notify` and `completion_count` never need fallback `or 0` reads
---- (rule 2.13). Unregistered ops fail loudly (rule 1.14), catching the
---- typo "SendToResolv" before the wire.
+--- `register_op(op_name, signal_name)` at module load. Unregistered
+--- ops fail loudly so the typo "SendToResolv" surfaces before the wire.
 
 local M = {}
 

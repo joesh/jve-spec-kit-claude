@@ -39,20 +39,18 @@ local OP = bridge_command.declare(
     "SendToResolve", "send_to_resolve_completed")
 local notify = OP.notify
 
+-- Stable per-sequence path: re-sending the same sequence overwrites the
+-- same file so the helper's idempotency check matches. Lives under
+-- ~/.jve/ alongside the rest of JVE's per-user state.
+-- TODO: replace os.execute("mkdir -p") with a Qt FS binding (rules 1.10
+-- / 2.18: Lua talks to OS via Qt FFI, not shell). See
+-- todo_send_to_resolve_mkdir_via_qt_fs.md.
 local function out_path_for_export(sequence_id)
-    -- Stable per-sequence path: re-sending the same sequence overwrites
-    -- the same file so the helper's idempotency check actually matches.
-    -- Lives under ~/.jve/ alongside the rest of JVE's per-user state
-    -- (probe_cache.json, recent_projects.json, etc.) — /tmp was macOS-
-    -- shaped and inconsistent with the rest of the codebase.
     local home = assert(os.getenv("HOME"),
         "SendToResolve: HOME env var required for export path")
     local dir = home .. "/.jve/resolve-exports"
-    
-    -- Rule 2.32: Use robust quoting for shell commands.
     local q_dir = string.format("'%s'", dir:gsub("'", "'\\''"))
     os.execute(string.format("mkdir -p %s", q_dir))
-    
     return string.format("%s/%s.drt", dir, sequence_id)
 end
 
