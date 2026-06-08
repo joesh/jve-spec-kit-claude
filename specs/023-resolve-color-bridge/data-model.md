@@ -70,13 +70,15 @@ CREATE TABLE IF NOT EXISTS resolve_bridge_link (
 - `grade_fingerprint` — fingerprint of the grade last synced; detects "did the grade change in Resolve since last sync" without diffing full CDLs. NULL until first grade sync. **Contract**: nil-or-non-empty-string only; the model rejects `""` (empty string is a malformed bootstrap signal that would force re-bootstrap forever).
 - `edit_fingerprint` — fingerprint of the edit state (record start/duration, source in/out, track, enabled) at last sync; an edit-pull compares the live state and the current JVE clip against this to tell a Resolve-side change from a JVE-side local change (FR-025). NULL until first connect/sync. Same nil-or-non-empty contract as `grade_fingerprint`.
 
-**Spec 024 extension** (color management — draft): adds a
-`source_color_science_mode` column carrying Resolve's `colorScienceMode`
-setting at link time (`davinci_yrgb` | `davinci_yrgb_cm` | `aces`).
-Renderer's apply path uses this to pick the correct pipeline so the
-output matches Resolve's preview for the source project's mode (spec
-024 FR-012/013/014). Not present in 023 — added by 024's data-model
-update. Pointer here so 023 readers see the extension exists.
+**Spec 024 extension** (color management — draft): adds three
+columns copied from Resolve's project settings at link time —
+`source_color_science_mode` (`davinci_yrgb` | `davinci_yrgb_cm` |
+`aces`), `source_working_color_space`, `source_output_color_space`.
+Renderer's apply path uses these to pick the correct pipeline so
+the output matches Resolve's preview for the source project's mode
+(spec 024 FR-012/013/014). Not present in 023 — added by 024's
+data-model update. Pointer here so 023 readers see the extension
+exists.
 
 **Algorithmic invariant**: each `resolve_item_id` maps to at most one JVE clip. Blade-inherit fragments do **not** get their own ledger rows — only the parent's row is persisted; fragments inherit the parent's mapping at query time. `identity_ledger.lookup_clip_id` asserts the uniqueness (defensive against reconcile bugs); a future schema bump may enforce it via `UNIQUE(resolve_item_id)`.
 
