@@ -21,6 +21,7 @@
 - Q: Project color settings UI — Inspector section or modal dialog? → A: Modal project settings dialog, delivered by a separate feature. Out of scope for 024 — 024 owns the data model, persistence, and read-side renderer wiring; the user-facing dialog is not authored here.
 - Q: V1 ambition for `davinci_yrgb_cm` and `aces` modes — record-only, YRGB CM apply, or both apply? → A: YRGB CM applies end-to-end; ACES is record-only with fidelity badge. Full ACES IDT/ODT apply deferred to a later spec.
 - Q: Per-clip Input Color Space override + outbound DRT round-trip? → A: **JVE is read-only for color in V1.** No user-facing edit surface — no per-clip ICS override, no project color-settings edit UI, no outbound color writes through the bridge. JVE READS color metadata (source tags, bridge-recorded modes) and applies the correct display pipeline. All color *editing* surfaces deferred to a later spec.
+- Q: Pixel-match tolerance — visual A/B vs Resolve, and CPU/GPU mirror? → A: **≤2/255 per channel visual (JVE preview vs Resolve preview); ≤1/255 per channel CPU/GPU mirror.** Visual tolerance sits at the edge of perceptibility on a calibrated display; mirror tolerance reflects what's achievable when both surfaces share tetrahedral interpolation and float32 math.
 
 ---
 
@@ -56,10 +57,7 @@ and ACES are tracked so future work doesn't break the contract.
    `color_space=gbr` and an active per-clip primary grade,
    **When** the playhead lands on a frame of that clip,
    **Then** the rendered RGB pixels match Resolve's preview of the
-   same frame at the same grade, within a per-channel ΔE of
-   [NEEDS CLARIFICATION: pixel-match tolerance not specified —
-   propose ≤2/255 per channel for visual match, ≤1/255 for
-   CPU/GPU mirror].
+   same frame at the same grade within ≤2/255 per channel.
 2. **Given** an open project with a BT.709-tagged ProRes 422 source,
    **When** the playhead lands on a frame,
    **Then** the rendered output is unchanged from spec 023's behavior
@@ -98,9 +96,7 @@ and ACES are tracked so future work doesn't break the contract.
    surface,
    **When** a clip with a 3D LUT is rendered through both the GPU
    surface and the CPU surface for the same source frame,
-   **Then** the two outputs match within
-   [NEEDS CLARIFICATION: CPU/GPU pixel-match tolerance — propose
-   ≤1/255 per channel given both use tetrahedral interpolation].
+   **Then** the two outputs match within ≤1/255 per channel.
 
 ### Edge Cases
 - A clip with no embedded color tag: the renderer uses the project's
@@ -293,8 +289,7 @@ when JVE begins to support color writes.
 - [x] Mandatory sections completed
 
 ### Requirement Completeness
-- [ ] No [NEEDS CLARIFICATION] markers remain (2 outstanding,
-      both pixel-match tolerances — see Unresolved questions below)
+- [x] No [NEEDS CLARIFICATION] markers remain
 - [x] Requirements are testable (each FR has an observable
       acceptance condition)
 - [x] Scope is clearly bounded (Out of Scope section explicit)
@@ -316,8 +311,6 @@ when JVE begins to support color writes.
 
 ## Unresolved questions
 
-- pixel tol vs Resolve? (≤2/255 visual / ≤1/255 mirror — propose, confirm)
-- CPU/GPU tol? (≤1/255 — propose, confirm)
 - For YRGB CM apply (FR-013): does Resolve's `ExportLUT` in CM mode bake the full working→output transform, or only the node graph? Affects whether YRGB CM apply is "load baked LUT" (cheap) or "ship the transforms" (more work). Plan-phase spike.
 - Default Input Color Space for untagged sources when project is `davinci_yrgb` — Rec.709 obvious, confirm?
 - Fidelity badge — new value for "color-mode-mismatch" or reuse existing "partial"?
