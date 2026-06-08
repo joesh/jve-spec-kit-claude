@@ -221,6 +221,27 @@ def _find_imported_timeline(project, prev_timeline_ids):
     return None
 
 
+def _find_timeline_by_uid(project, uid):
+    # Resolve provides no GetTimelineById; iterate (1-indexed).
+    try:
+        count = project.GetTimelineCount()
+    except Exception as exc:
+        raise RuntimeError(f"GetTimelineCount raised: {exc}") from exc
+    for i in range(1, count + 1):
+        try:
+            tl = project.GetTimelineByIndex(i)
+        except Exception as exc:
+            raise RuntimeError(f"GetTimelineByIndex({i}) raised: {exc}") from exc
+        if tl is None:
+            continue
+        try:
+            if tl.GetUniqueId() == uid:
+                return tl
+        except Exception as exc:
+            raise RuntimeError(f"timeline[{i}].GetUniqueId raised: {exc}") from exc
+    return None
+
+
 def _snapshot_timeline_ids(project):
     try:
         n = project.GetTimelineCount()
@@ -462,11 +483,11 @@ def _recover_jve_guid(item):
     # customData strings, that is ambiguous stamping (rule 2.32 — no
     # silent first-wins). Raise so the caller surfaces resolve_api_error
     # rather than committing the wrong jve_guid.
-    try:
-        markers = item.GetMarkers() or {}
-    except Exception as exc:
-        raise RuntimeError(
-            f"item.GetMarkers() raised: {exc}") from exc
+    markers = item.GetMarkers()
+    if markers is None:
+         # Resolve API returns None if the item is invalid or an internal
+         # error occurred. Don't fallback to {} (Rule 2.13).
+         raise RuntimeError("item.GetMarkers() returned None")
     if not isinstance(markers, dict):
         return None
     found = None
@@ -576,6 +597,9 @@ def _read_video_item(item):
         source_in       = item.GetSourceStartFrame()
         source_out      = item.GetSourceEndFrame()
         enabled         = item.GetClipEnabled()
+        name            = item.GetName()
+        mp_item         = item.GetMediaPoolItem()
+        media_file_path = mp_item.GetClipProperty("File Path") if mp_item else ""
     except Exception as exc:
         raise RuntimeError(
             f"timeline-item TC/enabled extraction raised: {exc}") from exc
@@ -603,6 +627,8 @@ def _read_video_item(item):
             "source_in":       source_in,
             "source_out":      source_out,
             "enabled":         enabled,
+            "name":            name,
+            "media_file_path": media_file_path,
         }
     if src_in_is_int or src_out_is_int:
         # Partial-int source TC is a Resolve API surprise, not a kind
@@ -646,15 +672,15 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
         return _error(envelope_id, "resolve_api_error", str(exc))
 
     items = []
+    audio_items_skipped = 0
     try:
         for track_type, tidx, item in _iter_all_timeline_items(timeline):
             # V1 scope: video items only. Audio support lands with T054
             # (subframe-aware {frame, subframe} extraction, sample-rate
-            # mismatch handling on the JVE side). Skipping audio items
-            # here means a JVE walk_ledger_for_deleted on the JVE side
-            # may surface audio ledger rows as deleted_in_resolve until
-            # T054 lands — documented in data-model.md §V1 scope.
+            # mismatch handling on the JVE side). Surface skip count
+            # so the caller knows why total != video_count (review #9).
             if track_type != "video":
+                audio_items_skipped += 1
                 continue
             video_fields = _read_video_item(item)
             if item_id_filter is not None and (
@@ -671,6 +697,7 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     return _ok(envelope_id, {
         "items": items,
         "timeline_integer_rate": integer_rate,
+        "audio_items_skipped": audio_items_skipped,
     })
 
 
@@ -836,31 +863,9 @@ def verb_delete_timeline(args, _resolve, project, envelope_id,
     # Walk the project's timelines to find the one whose GetUniqueId
     # matches. Resolve provides no GetTimelineById; iterate.
     try:
-        count = project.GetTimelineCount()
-    except Exception as exc:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetTimelineCount raised: {exc}")
-    if not isinstance(count, int) or count < 0:
-        return _error(envelope_id, "resolve_api_error",
-            f"GetTimelineCount returned non-int / negative: {count!r}")
-
-    target = None
-    for i in range(1, count + 1):
-        try:
-            tl = project.GetTimelineByIndex(i)
-        except Exception as exc:
-            return _error(envelope_id, "resolve_api_error",
-                f"GetTimelineByIndex({i}) raised: {exc}")
-        if tl is None:
-            continue
-        try:
-            uid = tl.GetUniqueId()
-        except Exception as exc:
-            return _error(envelope_id, "resolve_api_error",
-                f"timeline[{i}].GetUniqueId raised: {exc}")
-        if uid == resolve_timeline_id:
-            target = tl
-            break
+        target = _find_timeline_by_uid(project, resolve_timeline_id)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
 
     if target is None:
         # Idempotent: a re-sent delete after the timeline is already

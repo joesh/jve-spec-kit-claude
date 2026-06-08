@@ -44,6 +44,8 @@
 --- enqueued; `on_complete` carries `{matched, unmatched, ambiguous}`
 --- on success or `(nil, code, msg)` on error.
 
+local wire = require("core.resolve_bridge.wire_decode")
+
 local M = {}
 
 local Track             = require("models.track")
@@ -86,10 +88,7 @@ end
 -- helper's read_timeline wire shape (and the matcher key) uses
 -- lowercase ("video"/"audio"). Single source of truth — adding a new
 -- track type tomorrow only needs an entry here.
-local TRACK_TYPE_TO_WIRE = {
-    VIDEO = "video",
-    AUDIO = "audio",
-}
+
 
 -- Iterate JVE clips on a track via the database.select_rows helper.
 -- The helper guarantees prepare → bind → exec → next → finalize so a
@@ -97,15 +96,18 @@ local TRACK_TYPE_TO_WIRE = {
 -- "0 JVE clip(s)" here (2026-06-03 fix). Returns lightweight tables in
 -- matcher-input shape.
 local function load_clips_on_track(db, track)
-    local wire_track_type = TRACK_TYPE_TO_WIRE[track.track_type] or error(
+    local wire_track_type = wire.JVE_TO_WIRE_TRACK_TYPE[track.track_type] or error(
         "ConnectToResolveProject: unsupported track.track_type "
         .. tostring(track.track_type))
     return database.select_rows(db, [[
-        SELECT id, name, sequence_start_frame, duration_frames,
-               source_in_frame, source_out_frame
-        FROM clips
-        WHERE track_id = ?
-        ORDER BY sequence_start_frame
+        SELECT c.id, c.name, c.sequence_start_frame, c.duration_frames,
+               c.source_in_frame, c.source_out_frame,
+               m.file_path
+        FROM clips c
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id AND mr.track_id = c.master_layer_track_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE c.track_id = ?
+        ORDER BY c.sequence_start_frame
     ]], { track.id }, function(stmt)
         return {
             id              = stmt:value(0),
@@ -121,6 +123,7 @@ local function load_clips_on_track(db, track)
             duration        = stmt:value(3),
             source_in       = stmt:value(4),
             source_out      = stmt:value(5),
+            media_file_path = stmt:value(6),
         }
     end)
 end
@@ -218,8 +221,20 @@ local function match_by_marker(jve_clips, identities_items)
 
     local marker_matched = {}  -- jve_clip_id → resolve_item_id
     for _, item in ipairs(identities_items) do
-        if jve_clip_ids[item.jve_guid] then
-            marker_matched[item.jve_guid] = item.resolve_item_id
+        local guid = item.jve_guid
+        if jve_clip_ids[guid] then
+            -- Rule 2.32: No silent last-write-wins. If two Resolve items
+            -- claim the same JVE clip, that's an ambiguous state that
+            -- requires a loud failure (marker-channel equivalent of
+            -- the position-match collision check).
+            assert(marker_matched[guid] == nil, string.format(
+                "ConnectToResolveProject: duplicate identity marker for "
+                .. "JVE clip %s (found on Resolve items %s and %s) — "
+                .. "marker identity must be unique",
+                tostring(guid),
+                tostring(marker_matched[guid]),
+                tostring(item.resolve_item_id)))
+            marker_matched[guid] = item.resolve_item_id
         end
     end
     return marker_matched
@@ -239,8 +254,18 @@ local function match_by_position(jve_clips, items_by_pos, marker_matched,
                 clip.track_type, clip.track_index, clip.sequence_start)
             local hit = items_by_pos[key]
             if hit ~= nil and not already_claimed[hit.resolve_item_id] then
-                pos_matched[clip.id] = hit.resolve_item_id
-                already_claimed[hit.resolve_item_id] = true
+                if hit.name == clip.name
+                    and hit.source_in == clip.source_in
+                    and hit.media_file_path == clip.media_file_path then
+                    pos_matched[clip.id] = hit.resolve_item_id
+                    already_claimed[hit.resolve_item_id] = true
+                else
+                    ambiguous[#ambiguous + 1] = {
+                        clip_id         = clip.id,
+                        resolve_item_id = hit.resolve_item_id,
+                        reason          = "content_mismatch",
+                    }
+                end
             elseif hit ~= nil then
                 ambiguous[#ambiguous + 1] = {
                     clip_id         = clip.id,

@@ -1,8 +1,37 @@
-# TODO
+## Integration Test Status (2026-06-04)
+
+- [x] `tests/integration/test_editor_operations.lua` — PASS
+- [x] `tests/integration/test_tmb_same_file_two_tracks.lua` — PASS (Fixed in `fd101d8`)
+- [x] `tests/integration/test_playback_av_sync.lua` — PASS
+- [x] `tests/integration/test_codec_status_on_startup.lua` — PASS
+
+## Active Tasks (2026-06-04)
+
+### 023-resolve-color-bridge (Phase 3 Completion)
+- [x] **T043a** Keymap entries for Resolve commands (`SendToResolve`, `SyncGradesFromResolve`, etc.)
+- [x] **T043b** Tooltips on Resolve-related UI controls
+- [x] **T043c** Inspector fidelity badge for non-primary clips (spec §5.5)
+- [x] **T044** Run `make -j4` and ensure green; zero luacheck warnings
+
+### Keyboard Architecture Refactor
+- [x] **T100** Port `Escape` logic to TOML `Cancel` command
+- [x] **T101** Port `Tab` logic fully to TOML (minimize `keyboard_shortcuts.lua` residual)
+- [x] **T102** Evaluate moving `Arrow keys` to TOML vs keeping as "input management" (KEEP as input management: QShortcut lacks release semantics)
+
+### Performance & Architecture Follow-ups
+- [x] **FU-7:** Fixed redundant `RELOAD_ALL_CLIPS` by removing double subscription in `sequence_monitor`.
+- [x] **FU-8:** Implemented `core/watchers` per-entity notification system; migrated Inspector to use targeted watches instead of broadcast `content_changed`.
+- [x] **Command isolation enforcement:** Implemented hard `MAX_EXECUTION_DEPTH=10` assert in `CommandManager.execute`.
+
+### Data Model & Persistence
+- [x] **Media `audio_sample_rate` column:** Verified already exists (V11 Feature 018) and populated by `MediaReader` probe.
 
 ## Test Coverage Audit (2026-02-02)
 
 Full-codebase audit identified ~8,000 LOC with zero or minimal test coverage. Tasks ordered by risk × testability.
+
+### Phase 0: Test Infrastructure & Cleanup
+- [ ] **T0.1** Test SQL Isolation: Refactor tests to use model methods instead of raw SQL (Current: ~50% - Refactored `test_trim_head_tail.lua`).
 
 ### Phase 1: Zero-Coverage Core Modules (highest risk)
 
@@ -84,7 +113,7 @@ See FU-7 (`content_changed` triggers redundant `RELOAD_ALL_CLIPS` + double subsc
 
 ### Other open items
 
-- [ ] **Media `sample_rate` column** — Media model has no `sample_rate` field. `Sequence.ensure_masterclip()` defaults to 48000. Add `sample_rate INTEGER` to media table, populate from MediaReader probe, use in ensure_masterclip and audio clip creation.
+- [x] **Media `sample_rate` column** — Media model has no `sample_rate` field. `Sequence.ensure_masterclip()` defaults to 48000. Add `sample_rate INTEGER` to media table, populate from MediaReader probe, use in ensure_masterclip and audio clip creation.
 - [ ] **Edge-release latency** — NOT STARTED. `TimelineActiveRegion` has on-demand snapshot builds but no preloading/caching. Header TODOs unfilled. Needs design decision on when to preload (playhead move vs drag start) and perf target.
 - [ ] **Command isolation enforcement** — PARTIAL (60%). Depth tracking + undo grouping implemented. Missing: hard max-depth assert, re-entrancy guards. Current approach is soft guardrails, not fail-fast.
 

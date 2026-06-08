@@ -26,75 +26,100 @@
 
 require("test_env")
 local database = require("core.database")
+local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Media = require("models.media")
+local Clip = require("models.clip")
+local command_manager = require("core.command_manager")
 
 local DB_PATH = "/tmp/jve/test_013_slip_slide_roll.db"
 
 local function fresh_db()
     os.remove(DB_PATH)
     assert(database.init(DB_PATH), "schema.sql init failed")
-    return database.get_connection()
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+    return db
 end
 
 local function build_fixture(owner_fps, nested_native_duration)
     local db = fresh_db()
-    assert(db:exec(string.format([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'sequence', %d, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
-               ('e-v1', 'e', 'V1', 'VIDEO', 1);
-        UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels, created_at, modified_at)
-        VALUES ('med-v', 'p1', 'v.mov', '/tmp/v.mov', %d, 24, 1, 0, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr-v', 'p1', 'm', 'm-v1', 'med-v', 0, %d, 0, %d, 48000,
-            1, 1.0, 0, 0, 0);
-    ]], owner_fps, nested_native_duration, nested_native_duration, nested_native_duration)))
-    return db
+    
+    local project_id = "p1"
+    Project.create("p", {
+        id = project_id,
+        fps_mismatch_policy = "passthrough",
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 }
+        }
+    }):save()
+
+    local seq_id = "e"
+    Sequence.create("edit", project_id, { fps_numerator = owner_fps, fps_denominator = 1 }, 1920, 1080, {
+        id = seq_id,
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+
+    Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
+
+    local media_id = "med-v"
+    Media.create({
+        id = media_id,
+        project_id = project_id,
+        name = "v.mov",
+        file_path = "/tmp/v.mov",
+        duration_frames = nested_native_duration,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        width = 1920,
+        height = 1080,
+        audio_channels = 0,
+        metadata = '{"start_tc_value":0,"start_tc_rate":24}'
+    }):save()
+
+    local MC_TEST = Sequence.ensure_master(media_id, project_id)
+
+    command_manager.init(seq_id, project_id)
+
+    return db, MC_TEST
 end
 
-local function seed_clip(db, clip_id, policy,
+local function seed_clip(clip_id, policy, mc_id,
                        sequence_start, duration, source_in, source_out)
-    assert(db:exec(string.format([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name, sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            fps_mismatch_policy, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', 'e-v1', 'm', '%s', %d, %d, %d, %d,
-            '%s', 1, 1.0, 0, 0, 0)
-    ]], clip_id, clip_id, sequence_start, duration, source_in, source_out,
-       policy)))
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
+    local cid = Clip.create({
+        id = clip_id,
+        project_id = "p1",
+        owner_sequence_id = "e",
+        track_id = "e-v1",
+        sequence_id = mc_id,
+        name = clip_id,
+        sequence_start_frame = sequence_start,
+        duration_frames = duration,
+        source_in_frame = source_in,
+        source_out_frame = source_out,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
+        fps_mismatch_policy = policy,
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+    })
+    assert(cid == clip_id, "seed_clip failed")
 end
 
-local function load_clip(db, id)
-    local stmt = db:prepare([[
-        SELECT sequence_start_frame, duration_frames,
-               source_in_frame, source_out_frame
-        FROM clips WHERE id = ?
-    ]])
-    stmt:bind_value(1, id)
-    assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
-    local r = {
-        sequence_start = stmt:value(0),
-        duration       = stmt:value(1),
-        source_in      = stmt:value(2),
-        source_out     = stmt:value(3),
+local function load_clip(id)
+    local c = Clip.load_optional(id)
+    assert(c, "load_clip: not found: " .. id)
+    return {
+        sequence_start = c.sequence_start,
+        duration       = c.duration,
+        source_in      = c.source_in,
+        source_out     = c.source_out,
     }
-    stmt:finalize()
-    return r
 end
 
 local Slip  = require("core.commands.slip")
@@ -107,18 +132,28 @@ assert(type(Slide.execute) == "function",
 assert(type(Roll.execute) == "function",
     "T044 not landed: core.commands.roll must export .execute")
 
+-- Helper: execute command with proper event wrapping
+local function execute_cmd(module, params)
+    command_manager.begin_command_event("script")
+    -- bypass command manager registry to just call execute for testing
+    local ok, result_or_err = pcall(module.execute, params)
+    command_manager.end_command_event()
+    if not ok then return false, result_or_err end
+    return result_or_err == nil or (type(result_or_err) == "table" and result_or_err.success ~= false)
+end
+
 -- -------------------------------------------------------------------------
 -- CT-C4 Slip: positive slip of 5 nested frames. Clip [100, 200) source
 -- [50, 150) → still [100, 200), source [55, 155). Timeline untouched.
 -- -------------------------------------------------------------------------
 print("-- CT-C4 Slip +5 --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "c", "passthrough", 100, 100, 50, 150)
-    Slip.execute({
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
+    assert(execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = 5,
-    })
-    local c = load_clip(db, "c")
+    }))
+    local c = load_clip("c")
     assert(c.sequence_start == 100 and c.duration == 100, string.format(
         "timeline must not move under Slip; got [tl=%d,d=%d]",
         c.sequence_start, c.duration))
@@ -131,12 +166,12 @@ end
 -- Negative slip.
 print("-- Slip -10 --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "c", "passthrough", 100, 100, 50, 150)
-    Slip.execute({
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
+    assert(execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = -10,
-    })
-    local c = load_clip(db, "c")
+    }))
+    local c = load_clip("c")
     assert(c.sequence_start == 100 and c.duration == 100, "timeline untouched")
     assert(c.source_in == 40 and c.source_out == 140, string.format(
         "source shifted by -10; got [%d,%d)", c.source_in, c.source_out))
@@ -146,13 +181,13 @@ end
 -- Error: Slip that would push source_in below 0 (source window lower bound must be >= 0).
 print("-- Slip that underflows refuses --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "c", "passthrough", 100, 100, 5, 105)
-    local ok = pcall(Slip.execute, {
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("c", "passthrough", mc_id, 100, 100, 5, 105)
+    local success, err = execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = -10,
     })
-    assert(not ok, "Slip past source_in=0 must refuse")
-    local c = load_clip(db, "c")
+    assert(not success, "Slip past source_in=0 must refuse")
+    local c = load_clip("c")
     assert(c.source_in == 5 and c.source_out == 105,
         "DB unchanged after refused underflow")
     print("  ok")
@@ -162,13 +197,13 @@ end
 print("-- Slip that overflows nested bounds refuses --")
 do
     -- nested has 200-frame native duration.
-    local db = build_fixture(24, 200)
-    seed_clip(db, "c", "passthrough", 0, 100, 95, 195)
-    local ok = pcall(Slip.execute, {
+    local db, mc_id = build_fixture(24, 200)
+    seed_clip("c", "passthrough", mc_id, 0, 100, 95, 195)
+    local success, err = execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = 10,
     })
-    assert(not ok, "Slip past source_out=nested.duration must refuse")
-    local c = load_clip(db, "c")
+    assert(not success, "Slip past source_out=nested.duration must refuse")
+    local c = load_clip("c")
     assert(c.source_in == 95 and c.source_out == 195,
         "DB unchanged after refused overflow")
     print("  ok")
@@ -179,12 +214,12 @@ end
 -- -------------------------------------------------------------------------
 print("-- CT-C5 Slide +15 --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "c", "passthrough", 100, 100, 50, 150)
-    Slide.execute({
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
+    assert(execute_cmd(Slide, {
         sequence_id = "e", clip_id = "c", delta_timeline_frames = 15,
-    })
-    local c = load_clip(db, "c")
+    }))
+    local c = load_clip("c")
     assert(c.sequence_start == 115 and c.duration == 100, string.format(
         "timeline shifts by +15; got [tl=%d,d=%d]",
         c.sequence_start, c.duration))
@@ -196,13 +231,13 @@ end
 -- Slide negative: sequence_start must not go below 0.
 print("-- Slide that drags past frame 0 refuses --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "c", "passthrough", 10, 100, 50, 150)
-    local ok = pcall(Slide.execute, {
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("c", "passthrough", mc_id, 10, 100, 50, 150)
+    local success, err = execute_cmd(Slide, {
         sequence_id = "e", clip_id = "c", delta_timeline_frames = -20,
     })
-    assert(not ok, "Slide below 0 must refuse")
-    local c = load_clip(db, "c")
+    assert(not success, "Slide below 0 must refuse")
+    local c = load_clip("c")
     assert(c.sequence_start == 10, "DB unchanged after refused slide")
     print("  ok")
 end
@@ -216,17 +251,17 @@ end
 -- -------------------------------------------------------------------------
 print("-- CT-C6 Roll +10 at boundary --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "a", "passthrough", 0, 100, 0, 100)
-    seed_clip(db, "b", "passthrough", 100, 100, 200, 300)
-    Roll.execute({
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
+    seed_clip("b", "passthrough", mc_id, 100, 100, 200, 300)
+    assert(execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
         delta_timeline_frames = 10,
-    })
-    local a = load_clip(db, "a")
-    local b = load_clip(db, "b")
+    }))
+    local a = load_clip("a")
+    local b = load_clip("b")
     assert(a.sequence_start == 0 and a.duration == 110
            and a.source_in == 0 and a.source_out == 110, string.format(
         "A after +10 Roll expected [tl=0,d=110,s=(0,110)]; got [tl=%d,d=%d,s=(%d,%d)]",
@@ -241,17 +276,17 @@ end
 -- Roll negative: the boundary moves leftward.
 print("-- Roll -10 at boundary --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "a", "passthrough", 0, 100, 0, 100)
-    seed_clip(db, "b", "passthrough", 100, 100, 200, 300)
-    Roll.execute({
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
+    seed_clip("b", "passthrough", mc_id, 100, 100, 200, 300)
+    assert(execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
         delta_timeline_frames = -10,
-    })
-    local a = load_clip(db, "a")
-    local b = load_clip(db, "b")
+    }))
+    local a = load_clip("a")
+    local b = load_clip("b")
     assert(a.duration == 90 and a.source_out == 90,
         "A shrunk 10 from the right")
     assert(b.sequence_start == 90 and b.duration == 110
@@ -263,16 +298,16 @@ end
 -- Error: Roll that would collapse A to 0 duration.
 print("-- Roll that collapses A refuses --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "a", "passthrough", 0, 50,  0,   50)
-    seed_clip(db, "b", "passthrough", 50, 100, 200, 300)
-    local ok = pcall(Roll.execute, {
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("a", "passthrough", mc_id, 0, 50,  0,   50)
+    seed_clip("b", "passthrough", mc_id, 50, 100, 200, 300)
+    local success, err = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
         delta_timeline_frames = -50,
     })
-    assert(not ok, "Roll collapsing A to zero must refuse")
+    assert(not success, "Roll collapsing A to zero must refuse")
     print("  ok")
 end
 
@@ -281,17 +316,17 @@ print("-- Roll that overflows A's master coverage refuses --")
 do
     -- nested has 200-frame coverage. A currently ends at 180 (source_out).
     -- Roll N=+25 would push A.source_out to 205 > 200 → must refuse.
-    local db = build_fixture(24, 200)
-    seed_clip(db, "a", "passthrough", 0,  100, 80,  180)
-    seed_clip(db, "b", "passthrough", 100, 50, 180, 230)
-    local ok = pcall(Roll.execute, {
+    local db, mc_id = build_fixture(24, 200)
+    seed_clip("a", "passthrough", mc_id, 0,  100, 80,  180)
+    seed_clip("b", "passthrough", mc_id, 100, 50, 180, 230)
+    local success, err = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
         delta_timeline_frames = 25,
     })
-    assert(not ok, "Roll past A.source_out=master.coverage must refuse")
-    local a = load_clip(db, "a")
+    assert(not success, "Roll past A.source_out=master.coverage must refuse")
+    local a = load_clip("a")
     assert(a.source_out == 180, "DB unchanged after refused roll overflow: source_out=" .. tostring(a.source_out))
     print("  ok")
 end
@@ -299,16 +334,16 @@ end
 -- Error: non-adjacent clips. B's start != A's end → refuse.
 print("-- Roll on non-adjacent clips refuses --")
 do
-    local db = build_fixture(24, 1000)
-    seed_clip(db, "a", "passthrough", 0, 100, 0, 100)
-    seed_clip(db, "b", "passthrough", 150, 100, 200, 300)  -- gap
-    local ok = pcall(Roll.execute, {
+    local db, mc_id = build_fixture(24, 1000)
+    seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
+    seed_clip("b", "passthrough", mc_id, 150, 100, 200, 300)  -- gap
+    local success, err = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
         delta_timeline_frames = 10,
     })
-    assert(not ok, "Roll on non-adjacent clips must refuse")
+    assert(not success, "Roll on non-adjacent clips must refuse")
     print("  ok")
 end
 

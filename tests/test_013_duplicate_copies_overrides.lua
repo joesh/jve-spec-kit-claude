@@ -11,60 +11,103 @@
 
 require("test_env")
 local database = require("core.database")
+local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Media = require("models.media")
+local Clip = require("models.clip")
+local command_manager = require("core.command_manager")
 
 local DB_PATH = "/tmp/jve/test_013_duplicate_copies_overrides.db"
 
 local function fresh_db()
     os.remove(DB_PATH)
     assert(database.init(DB_PATH), "schema.sql init failed")
-    return database.get_connection()
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+    return db
 end
 
 local function build_fixture()
     local db = fresh_db()
-    assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
-               ('m-v2', 'm', 'V2', 'VIDEO', 2),
-               ('e-v1', 'e', 'V1', 'VIDEO', 1),
-               ('e-v2', 'e', 'V2', 'VIDEO', 2);
-        UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels, created_at, modified_at)
-        VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
+    
+    local project_id = "p1"
+    Project.create("p", {
+        id = project_id,
+        fps_mismatch_policy = "passthrough",
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 }
+        }
+    }):save()
+
+    Sequence.create("m", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = "m",
+        kind = "master",
+    }):save()
+
+    local seq_id = "e"
+    Sequence.create("edit", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = seq_id,
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+
+    Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
+    Track.create_video("V2", "m", { id = "m-v2", index = 2 }):save()
+    Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
+    Track.create_video("V2", seq_id, { id = "e-v2", index = 2 }):save()
+    
+    db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm'")
+
+    local media_id = "med"
+    Media.create({
+        id = media_id,
+        project_id = project_id,
+        name = "a.mov",
+        file_path = "/tmp/a.mov",
+        duration_frames = 1000,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        audio_channels = 0,
+        metadata = '{"start_tc_value":0,"start_tc_rate":24}'
+    }):save()
+
+    db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
             created_at, modified_at)
         VALUES ('mr', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
-    ]]))
+    ]])
+
+    command_manager.init(seq_id, project_id)
+
     return db
 end
 
 local function seed_clip(db, clip_id, master_layer)
-    local master_val = master_layer and ("'" .. master_layer .. "'") or "NULL"
-    assert(db:exec(string.format([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            master_layer_track_id, fps_mismatch_policy,
-            enabled, volume, playhead_frame, created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', 'e-v1', 'm', '%s',
-            100, 50, 200, 250,
-            %s, 'resample',
-            1, 0.75, 0, 0, 0)
-    ]], clip_id, clip_id, master_val)))
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
+    local cid = Clip.create({
+        id = clip_id,
+        project_id = "p1",
+        owner_sequence_id = "e",
+        track_id = "e-v1",
+        sequence_id = "m",
+        name = clip_id,
+        sequence_start_frame = 100,
+        duration_frames = 50,
+        source_in_frame = 200,
+        source_out_frame = 250,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
+        master_layer_track_id = master_layer,
+        fps_mismatch_policy = "resample",
+        enabled = true,
+        volume = 0.75,
+        playhead_frame = 0,
+    })
+    assert(cid == clip_id, "seed_clip failed")
 end
 
 local function seed_override(db, clip_id, channel, enabled, gain_db)
@@ -75,30 +118,21 @@ local function seed_override(db, clip_id, channel, enabled, gain_db)
 end
 
 local function load_clip(db, id)
-    local stmt = db:prepare([[
-        SELECT sequence_start_frame, duration_frames,
-               source_in_frame, source_out_frame,
-               master_layer_track_id, fps_mismatch_policy,
-               enabled, volume, track_id, owner_sequence_id, sequence_id
-        FROM clips WHERE id = ?
-    ]])
-    stmt:bind_value(1, id)
-    assert(stmt:exec() and stmt:next(), "clip not found: " .. id)
-    local r = {
-        sequence_start = stmt:value(0),
-        duration       = stmt:value(1),
-        source_in      = stmt:value(2),
-        source_out     = stmt:value(3),
-        master_layer   = stmt:value(4),
-        policy         = stmt:value(5),
-        enabled        = stmt:value(6) == 1,
-        volume         = stmt:value(7),
-        track_id       = stmt:value(8),
-        owner_seq_id   = stmt:value(9),
-        nested_seq_id  = stmt:value(10),
+    local c = Clip.load_optional(id)
+    assert(c, "clip not found: " .. id)
+    return {
+        sequence_start = c.sequence_start,
+        duration       = c.duration,
+        source_in      = c.source_in,
+        source_out     = c.source_out,
+        master_layer   = c.master_layer_track_id,
+        policy         = c.fps_mismatch_policy,
+        enabled        = c.enabled,
+        volume         = c.volume,
+        track_id       = c.track_id,
+        owner_seq_id   = c.owner_sequence_id,
+        nested_seq_id  = c.sequence_id,
     }
-    stmt:finalize()
-    return r
 end
 
 local function load_overrides(db, clip_id)
@@ -125,6 +159,14 @@ local Duplicate = require("core.commands.duplicate")
 assert(type(Duplicate.execute) == "function",
     "T047 not landed: core.commands.duplicate must export .execute")
 
+local function execute_cmd(module, params)
+    command_manager.begin_command_event("script")
+    local ok, result_or_err = pcall(module.execute, params)
+    command_manager.end_command_event()
+    if not ok then return false, result_or_err end
+    return result_or_err == nil or (type(result_or_err) == "table" and result_or_err.success ~= false), result_or_err
+end
+
 -- -------------------------------------------------------------------------
 -- CT-C8: duplicate of a clip with 3 overrides yields a new clip with 3
 -- matching override rows AND copies master_layer_track_id + policy.
@@ -138,12 +180,13 @@ do
     seed_override(db, "c", 1, false,  0.0)
     seed_override(db, "c", 2, true,  -6.0)
 
-    local result = Duplicate.execute({
+    local success, result = execute_cmd(Duplicate, {
         sequence_id     = "e",
         clip_id         = "c",
         target_track_id = "e-v2",
         delta_frames    = 200,
     })
+    assert(success, "Duplicate failed")
     assert(type(result) == "table" and result.new_clip_id,
         "Duplicate must return new_clip_id")
     local new_id = result.new_clip_id
@@ -201,13 +244,13 @@ print("-- Duplicate at delta=0 on same track refuses --")
 do
     local db = build_fixture()
     seed_clip(db, "c", nil)
-    local ok = pcall(Duplicate.execute, {
+    local success, err = execute_cmd(Duplicate, {
         sequence_id     = "e",
         clip_id         = "c",
         target_track_id = "e-v1",
         delta_frames    = 0,
     })
-    assert(not ok, "delta=0 onto same track must refuse (overlap)")
+    assert(not success, "delta=0 onto same track must refuse (overlap)")
     -- DB unchanged: still exactly one clip on e.
     local stmt = db:prepare("SELECT COUNT(*) FROM clips WHERE owner_sequence_id = 'e'")
     stmt:exec(); stmt:next()
@@ -224,12 +267,13 @@ print("-- Duplicate of clip with no overrides --")
 do
     local db = build_fixture()
     seed_clip(db, "c", nil)
-    local result = Duplicate.execute({
+    local success, result = execute_cmd(Duplicate, {
         sequence_id     = "e",
         clip_id         = "c",
         target_track_id = "e-v1",
         delta_frames    = 100,
     })
+    assert(success, "Duplicate failed")
     local new_ovs = load_overrides(db, result.new_clip_id)
     assert(#new_ovs == 0, "no overrides on either side")
     local new = load_clip(db, result.new_clip_id)

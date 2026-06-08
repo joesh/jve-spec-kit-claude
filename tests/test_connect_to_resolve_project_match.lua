@@ -38,10 +38,13 @@ local function clip(id, ti, rec_start, src_in, src_out)
         duration        = (src_out - src_in),
         source_in       = src_in,
         source_out      = src_out,
+        media_file_path = "/path/to/" .. id .. ".mov",
     }
 end
 
-local function tl_item(rid, ti, rec_start, dur, src_in, src_out)
+local function tl_item(rid, ti, rec_start, dur, src_in, src_out, clip_id)
+    -- Derive expected content keys from clip_id for the happy path
+    local c_id = clip_id or rid
     return {
         resolve_item_id = rid,
         kind            = "media",
@@ -52,6 +55,8 @@ local function tl_item(rid, ti, rec_start, dur, src_in, src_out)
         source_in       = src_in,
         source_out      = src_out,
         enabled         = true,
+        name            = "C-" .. c_id,
+        media_file_path = "/path/to/" .. c_id .. ".mov",
     }
 end
 
@@ -88,8 +93,8 @@ do
         id_item("R2", "c_b"),
     }
     local timeline = {
-        tl_item("R1", 1, 0,   100, 0, 100),
-        tl_item("R2", 1, 100, 100, 0, 100),
+        tl_item("R1", 1, 0,   100, 0, 100, "c_a"),
+        tl_item("R2", 1, 100, 100, 0, 100, "c_b"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 1: marker_matched c_a → R1",
@@ -110,8 +115,8 @@ do
     }
     local identities = {}  -- no markers stamped yet (first-connect)
     local timeline = {
-        tl_item("R1", 1, 0,   100, 0, 100),
-        tl_item("R2", 2, 100, 100, 0, 100),
+        tl_item("R1", 1, 0,   100, 0, 100, "c_a"),
+        tl_item("R2", 2, 100, 100, 0, 100, "c_b"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 2: marker_matched empty",
@@ -131,8 +136,8 @@ do
     }
     local identities = { id_item("R_m", "c_marked") }
     local timeline = {
-        tl_item("R_m", 1, 0,   100, 0, 100),
-        tl_item("R_p", 1, 100, 100, 0, 100),
+        tl_item("R_m", 1, 0,   100, 0, 100, "c_marked"),
+        tl_item("R_p", 1, 100, 100, 0, 100, "c_pos"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 3: c_marked via marker",
@@ -150,7 +155,7 @@ do
     }
     local identities = {}
     local timeline = {
-        tl_item("R1", 1, 0, 100, 0, 100),
+        tl_item("R1", 1, 0, 100, 0, 100, "c_a"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 4: c_a position-matched",
@@ -170,7 +175,7 @@ do
     }
     local identities = { id_item("R_shared", "c_marker") }
     local timeline = {
-        tl_item("R_shared", 1, 0, 100, 0, 100),
+        tl_item("R_shared", 1, 0, 100, 0, 100, "c_marker"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 5: c_marker via marker",
@@ -201,7 +206,7 @@ do
         id_item("R_strange", "some_other_sequences_clip_id"),
     }
     local timeline = {
-        tl_item("R_strange", 1, 0, 100, 0, 100),
+        tl_item("R_strange", 1, 0, 100, 0, 100, "c_in_seq"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     -- The cross-sequence jve_guid is not used for any clip in this
@@ -229,8 +234,8 @@ do
     -- the real media item.
     local timeline = {
         tl_item_non_media("R_gen", 1, 0, 50),   -- generator at (V1, 0)
-        tl_item("R_a", 1, 0,   100, 0, 100),    -- real media at (V1, 0)
-        tl_item("R_b", 1, 100, 100, 0, 100),    -- real media at (V1, 100)
+        tl_item("R_a", 1, 0,   100, 0, 100, "c_a"),    -- real media at (V1, 0)
+        tl_item("R_b", 1, 100, 100, 0, 100, "c_b"),    -- real media at (V1, 100)
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 7: c_a position-matches the media item, not generator",
@@ -252,7 +257,7 @@ do
     local timeline = {
         tl_item_non_media("R_gen1", 1, 0, 50),
         tl_item_non_media("R_gen2", 1, 0, 50),  -- same position, ok
-        tl_item("R_a", 1, 100, 100, 0, 100),
+        tl_item("R_a", 1, 100, 100, 0, 100, "c_a"),
     }
     local m = connect.match(jve_clips, identities, timeline)
     check("scenario 7b: stacked non_media at same pos does not assert",
@@ -281,6 +286,32 @@ do
         ok or tostring(err):find("kind", 1, true) ~= nil)
 end
 
+-- ── Scenario 8: Content mismatch (name, media_file_path, source_in).
+--    If an item sits at the correct position but the content doesn't
+--    match, it surfaces as ambiguous (content_mismatch). ──────────────
+do
+    local jve_clips = {
+        clip("c_a", 1, 0, 0, 100),
+    }
+    local identities = {}
+    local timeline = {
+        tl_item("R_mismatch", 1, 0, 100, 0, 100, "c_different"),
+    }
+    local m = connect.match(jve_clips, identities, timeline)
+    check("scenario 8: content mismatch is NOT pos_matched",
+        m.pos_matched["c_a"] == nil)
+    
+    local found = false
+    for _, a in ipairs(m.ambiguous) do
+        if a.clip_id == "c_a"
+            and a.resolve_item_id == "R_mismatch"
+            and a.reason == "content_mismatch" then
+            found = true
+        end
+    end
+    check("scenario 8: c_a surfaced as ambiguous (content_mismatch)", found)
+end
+
 -- ── Failure paths: validate args (rule 2.32) ────────────────────────
 do
     local ok1 = pcall(connect.match, nil, {}, {})
@@ -296,8 +327,8 @@ do
     local jve_clips = { clip("c_a", 1, 0, 0, 100) }
     local identities = {}
     local timeline = {
-        tl_item("R1", 1, 0, 100, 0, 100),
-        tl_item("R2", 1, 0, 100, 0, 100),  -- same (track, record_start)
+        tl_item("R1", 1, 0, 100, 0, 100, "c_a"),
+        tl_item("R2", 1, 0, 100, 0, 100, "c_a"),  -- same (track, record_start)
     }
     local ok, err = pcall(connect.match, jve_clips, identities, timeline)
     check("duplicate position key asserts", not ok)

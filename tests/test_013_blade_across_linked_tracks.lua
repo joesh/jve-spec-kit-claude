@@ -15,39 +15,69 @@
 
 require("test_env")
 local database = require("core.database")
+local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Media = require("models.media")
+local Clip = require("models.clip")
 
 local DB_PATH = "/tmp/jve/test_013_blade_across_linked_tracks.db"
 
 local function fresh_db()
     os.remove(DB_PATH)
     assert(database.init(DB_PATH), "schema.sql init failed")
-    return database.get_connection()
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+    return db
 end
 
 local function build_fixture()
     local db = fresh_db()
-    -- Owner sequence 'e' (the one being bladed). Master 'm' is the source.
-    -- Owner has V1 + A1 tracks; master has V1 + A1 with one media on each.
-    assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('m', 'p1', 'm', 'master', 24, 1, NULL, 1920, 1080, 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('e', 'p1', 'edit', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v1', 'm', 'V1', 'VIDEO', 1),
-               ('m-a1', 'm', 'A1', 'AUDIO', 1),
-               ('e-v1', 'e', 'V1', 'VIDEO', 1),
-               ('e-a1', 'e', 'A1', 'AUDIO', 1);
-        UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels, created_at, modified_at)
-        VALUES ('med', 'p1', 'a.mov', '/tmp/a.mov', 1000, 24, 1, 0, 0, 0);
+    
+    local project_id = "p1"
+    Project.create("p", {
+        id = project_id,
+        fps_mismatch_policy = "passthrough",
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 }
+        }
+    }):save()
+
+    Sequence.create("m", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = "m",
+        kind = "master",
+    }):save()
+
+    local seq_id = "e"
+    Sequence.create("edit", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = seq_id,
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+
+    Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
+    Track.create_audio("A1", "m", { id = "m-a1", index = 1 }):save()
+    Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
+    Track.create_audio("A1", seq_id, { id = "e-a1", index = 1 }):save()
+    
+    db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm'")
+
+    local media_id = "med"
+    Media.create({
+        id = media_id,
+        project_id = project_id,
+        name = "a.mov",
+        file_path = "/tmp/a.mov",
+        duration_frames = 1000,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        audio_channels = 0,
+        metadata = '{"start_tc_value":0,"start_tc_rate":24}'
+    }):save()
+
+    -- Ensure a media ref exists on the master track
+    db:exec([[
         INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
             media_id, source_in_frame, source_out_frame,
             sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
@@ -55,31 +85,35 @@ local function build_fixture()
         VALUES
           ('mr-v', 'p1', 'm', 'm-v1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0),
           ('mr-a', 'p1', 'm', 'm-a1', 'med', 0, 1000, 0, 1000, 48000, 1, 1.0, 0, 0, 0);
-    ]]))
+    ]])
+
     return db
 end
 
 local function seed_clip(db, clip_id, track_id, sequence_start, duration,
                         source_in, source_out)
-    -- 018 INV-3: audio clips need non-NULL subframes (frame-aligned default
-    -- (0,0)); video clips need NULL. Detect via track_type.
-    local tt = db:prepare("SELECT track_type FROM tracks WHERE id = ?")
-    tt:bind_value(1, track_id)
-    assert(tt:exec()); assert(tt:next())
-    local track_type = tt:value(0); tt:finalize()
-    local sub_lit = track_type == "AUDIO" and "0, 0" or "NULL, NULL"
-    assert(db:exec(string.format([[
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            source_in_subframe, source_out_subframe,
-            fps_mismatch_policy, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('%s', 'p1', 'e', '%s', 'm', '%s', %d, %d, %d, %d, %s,
-            'passthrough', 1, 1.0, 0, 0, 0)
-    ]], clip_id, track_id, clip_id, sequence_start, duration,
-       source_in, source_out, sub_lit)))
+    local track = Track.load(track_id)
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type(track.track_type)
+    
+    local cid = Clip.create({
+        id = clip_id,
+        project_id = "p1",
+        owner_sequence_id = "e",
+        track_id = track_id,
+        sequence_id = "m",
+        name = clip_id,
+        sequence_start_frame = sequence_start,
+        duration_frames = duration,
+        source_in_frame = source_in,
+        source_out_frame = source_out,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
+        fps_mismatch_policy = "passthrough",
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+    })
+    assert(cid == clip_id, "seed_clip failed")
 end
 
 local function link_clips(db, group_id, clips)
@@ -92,22 +126,15 @@ local function link_clips(db, group_id, clips)
 end
 
 local function load_clip(db, id)
-    local stmt = db:prepare([[
-        SELECT sequence_start_frame, duration_frames,
-               source_in_frame, source_out_frame, track_id
-        FROM clips WHERE id = ?
-    ]])
-    stmt:bind_value(1, id)
-    assert(stmt:exec() and stmt:next(), "load_clip: not found: " .. id)
-    local r = {
-        sequence_start = stmt:value(0),
-        duration       = stmt:value(1),
-        source_in      = stmt:value(2),
-        source_out     = stmt:value(3),
-        track_id       = stmt:value(4),
+    local c = Clip.load_optional(id)
+    assert(c, "load_clip: not found: " .. id)
+    return {
+        sequence_start = c.sequence_start,
+        duration       = c.duration,
+        source_in      = c.source_in,
+        source_out     = c.source_out,
+        track_id       = c.track_id,
     }
-    stmt:finalize()
-    return r
 end
 
 local function group_id_for(db, clip_id)
@@ -136,6 +163,15 @@ local Blade = require("core.commands.blade")
 assert(type(Blade.execute) == "function",
     "T045a not landed: core.commands.blade must export .execute")
 
+local function execute_cmd(module, params)
+    local command_manager = require("core.command_manager")
+    command_manager.begin_command_event("script")
+    local ok, result_or_err = pcall(module.execute, params)
+    command_manager.end_command_event()
+    if not ok then return false, result_or_err end
+    return result_or_err == nil or (type(result_or_err) == "table" and result_or_err.success ~= false), result_or_err
+end
+
 -- -------------------------------------------------------------------------
 -- CT-C7b: blade across an A+V linked pair at frame 60.
 -- Before: V@e-v1=[0,100), A@e-a1=[0,100), both in link_group G1.
@@ -155,11 +191,17 @@ do
     local g1_before = group_id_for(db, "v")
     assert(g1_before == "G1")
 
-    local result = Blade.execute({
+    local command_manager = require("core.command_manager")
+    command_manager.init("e", "p1")
+    
+    local success, result = execute_cmd(Blade, {
         sequence_id = "e",
         blade_frame = 60,
         track_ids   = { "e-v1", "e-a1" },
     })
+    
+    assert(success, "Blade failed")
+    
     assert(type(result) == "table" and type(result.splits) == "table",
         "Blade must return splits table")
     assert(#result.splits == 2,
@@ -217,11 +259,16 @@ do
     seed_clip(db, "v",  "e-v1", 0, 100, 0, 100)
     seed_clip(db, "a",  "e-a1", 0, 100, 0, 100)
 
-    local result = Blade.execute({
+    local command_manager = require("core.command_manager")
+    command_manager.init("e", "p1")
+    
+    local success, result = execute_cmd(Blade, {
         sequence_id = "e",
         blade_frame = 50,
         track_ids   = { "e-v1" },  -- only V armed
     })
+    assert(success, "Blade failed")
+    
     assert(#result.splits == 1, string.format(
         "expected 1 split (only V armed); got %d", #result.splits))
     assert(result.splits[1].clip_id == "v",
@@ -243,11 +290,17 @@ do
     local db = build_fixture()
     seed_clip(db, "v",  "e-v1", 0, 50, 0, 50)
     -- blade at 200 — past the end of v.
-    local result = Blade.execute({
+    
+    local command_manager = require("core.command_manager")
+    command_manager.init("e", "p1")
+    
+    local success, result = execute_cmd(Blade, {
         sequence_id = "e",
         blade_frame = 200,
         track_ids   = { "e-v1", "e-a1" },
     })
+    assert(success, "Blade failed")
+    
     assert(#result.splits == 0,
         "no splits when blade misses every armed clip")
     local v = load_clip(db, "v")
@@ -265,11 +318,17 @@ do
     local db = build_fixture()
     seed_clip(db, "v",  "e-v1", 0, 100, 0, 100)
     seed_clip(db, "v2", "e-v1", 100, 100, 100, 200)
-    local result = Blade.execute({
+    
+    local command_manager = require("core.command_manager")
+    command_manager.init("e", "p1")
+    
+    local success, result = execute_cmd(Blade, {
         sequence_id = "e",
         blade_frame = 100,
         track_ids   = { "e-v1" },
     })
+    assert(success, "Blade failed")
+    
     assert(#result.splits == 0,
         "blade at exact boundary must not split either neighbor")
     local v  = load_clip(db, "v")

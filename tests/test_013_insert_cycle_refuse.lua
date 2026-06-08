@@ -13,13 +13,21 @@
 
 require("test_env")
 local database = require("core.database")
+local Project = require("models.project")
+local Sequence = require("models.sequence")
+local Track = require("models.track")
+local Media = require("models.media")
+local Clip = require("models.clip")
+local command_manager = require("core.command_manager")
 
 local DB_PATH = "/tmp/jve/test_013_insert_cycle_refuse.db"
 
 local function fresh_db()
     os.remove(DB_PATH)
     assert(database.init(DB_PATH), "schema.sql init failed")
-    return database.get_connection()
+    local db = database.get_connection()
+    db:exec(require("import_schema"))
+    return db
 end
 
 local function clips_count(db)
@@ -40,28 +48,45 @@ local Insert = require("core.commands.insert")
 assert(type(Insert.execute) == "function",
     "T040 not landed: core.commands.insert must export .execute")
 
+local function execute_cmd(module, params)
+    command_manager.begin_command_event("script")
+    local ok, result_or_err = pcall(module.execute, params)
+    command_manager.end_command_event()
+    if not ok then return false, result_or_err end
+    return result_or_err == nil or (type(result_or_err) == "table" and result_or_err.success ~= false), result_or_err
+end
+
 -- -------------------------------------------------------------------------
 -- Direct cycle: insert sequence E into itself.
 -- -------------------------------------------------------------------------
 print("-- Insert E into E refuses (direct cycle) --")
 do
     local db = fresh_db()
-    -- Cycle check fires before any duration / media inspection in
-    -- _place_shared, so the fixture only needs the sequence + a track.
-    assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('e', 'p1', 'e', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('e-v1', 'e', 'V1', 'VIDEO', 1);
-    ]]))
+    
+    local project_id = "p1"
+    Project.create("p", {
+        id = project_id,
+        fps_mismatch_policy = "passthrough",
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 }
+        }
+    }):save()
+
+    local seq_id = "e"
+    Sequence.create("e", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = seq_id,
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+
+    Track.create_video("V1", seq_id, { id = "e-v1", index = 1 }):save()
+    
+    command_manager.init(seq_id, project_id)
 
     local before_clips = clips_count(db)
     local before_links = link_count(db)
-    local ok, err = pcall(Insert.execute, {
+    local ok, err = execute_cmd(Insert, {
         sequence_id           = "e",
         source_sequence_id    = "e",     -- same as owner — direct cycle
         sequence_start_frame  = 0,
@@ -84,56 +109,94 @@ end
 print("-- Insert E1 into E2 refuses (transitive cycle) --")
 do
     local db = fresh_db()
-    -- Build a small DAG: master M with a 100-frame video media_ref, then
-    -- nested E2 with a clip referencing M, then nested E1 with a clip
-    -- referencing E2. Now E2 is reachable from E1 — Insert E1 into E2
-    -- would close the loop.
-    assert(db:exec([[
-        INSERT INTO projects (id, name, fps_mismatch_policy, settings, created_at, modified_at)
-        VALUES ('p1', 'p', 'passthrough', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0);
-        INSERT INTO sequences (id, project_id, name, kind,
-            fps_numerator, fps_denominator, audio_sample_rate, width, height,
-            created_at, modified_at)
-        VALUES ('m',  'p1', 'm',  'master', 24, 1, NULL, 1920, 1080, 0, 0),
-               ('e1', 'p1', 'e1', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0),
-               ('e2', 'p1', 'e2', 'sequence', 24, 1, 48000, 1920, 1080, 0, 0);
-        INSERT INTO tracks (id, sequence_id, name, track_type, track_index)
-        VALUES ('m-v1',  'm',  'V1', 'VIDEO', 1),
-               ('e1-v1', 'e1', 'V1', 'VIDEO', 1),
-               ('e2-v1', 'e2', 'V1', 'VIDEO', 1);
-        UPDATE sequences SET default_video_layer_track_id = 'm-v1' WHERE id = 'm';
-        INSERT INTO media (id, project_id, name, file_path, duration_frames,
-            fps_numerator, fps_denominator, audio_channels, created_at, modified_at)
-        VALUES ('med', 'p1', 'v.mov', '/tmp/v.mov', 100, 24, 1, 0, 0, 0);
-        INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-            media_id, source_in_frame, source_out_frame,
-            sequence_start_frame, duration_frames, audio_sample_rate, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('mr-m', 'p1', 'm', 'm-v1', 'med', 0, 100, 0, 100, 48000, 1, 1.0, 0, 0, 0);
-        -- E2 contains a clip referencing master M (non-zero effective duration).
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            fps_mismatch_policy, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('c-e2-uses-m', 'p1', 'e2', 'e2-v1', 'm', 'c2',
-            0, 50, 0, 50, 'passthrough', 1, 1.0, 0, 0, 0);
-        -- E1 contains a clip whose sequence_id is E2 — closes the
-        -- reachability E1 -> E2.
-        INSERT INTO clips (id, project_id, owner_sequence_id, track_id,
-            sequence_id, name,
-            sequence_start_frame, duration_frames,
-            source_in_frame, source_out_frame,
-            fps_mismatch_policy, enabled, volume, playhead_frame,
-            created_at, modified_at)
-        VALUES ('c-e1-uses-e2', 'p1', 'e1', 'e1-v1', 'e2', 'c1',
-            0, 50, 0, 50, 'passthrough', 1, 1.0, 0, 0, 0);
-    ]]))
+    
+    local project_id = "p1"
+    Project.create("p", {
+        id = project_id,
+        fps_mismatch_policy = "passthrough",
+        settings = {
+            master_clock_hz = 192000,
+            default_fps = { num = 24, den = 1 }
+        }
+    }):save()
+    
+    local media_id = "med"
+    Media.create({
+        id = media_id,
+        project_id = project_id,
+        name = "v.mov",
+        file_path = "/tmp/v.mov",
+        duration_frames = 100,
+        fps_numerator = 24,
+        fps_denominator = 1,
+        audio_channels = 0,
+        metadata = '{"start_tc_value":0,"start_tc_rate":24}'
+    }):save()
+    
+    local mc_id = Sequence.ensure_master(media_id, project_id)
+
+    Sequence.create("e1", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = "e1",
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+    
+    Sequence.create("e2", project_id, { fps_numerator = 24, fps_denominator = 1 }, 1920, 1080, {
+        id = "e2",
+        kind = "sequence",
+        audio_sample_rate = 48000,
+    }):save()
+
+    Track.create_video("V1", "e1", { id = "e1-v1", index = 1 }):save()
+    Track.create_video("V1", "e2", { id = "e2-v1", index = 1 }):save()
+    
+    -- E2 contains a clip referencing master M (non-zero effective duration).
+    local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
+    Clip.create({
+        id = "c-e2-uses-m",
+        project_id = project_id,
+        owner_sequence_id = "e2",
+        track_id = "e2-v1",
+        sequence_id = mc_id,
+        name = "c2",
+        sequence_start_frame = 0,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
+        fps_mismatch_policy = "passthrough",
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+    })
+    
+    -- E1 contains a clip whose sequence_id is E2 — closes the
+    -- reachability E1 -> E2.
+    Clip.create({
+        id = "c-e1-uses-e2",
+        project_id = project_id,
+        owner_sequence_id = "e1",
+        track_id = "e1-v1",
+        sequence_id = "e2",
+        name = "c1",
+        sequence_start_frame = 0,
+        duration_frames = 50,
+        source_in_frame = 0,
+        source_out_frame = 50,
+        source_in_subframe = sub_in,
+        source_out_subframe = sub_out,
+        fps_mismatch_policy = "passthrough",
+        enabled = true,
+        volume = 1.0,
+        playhead_frame = 0,
+    })
+    
+    command_manager.init("e2", project_id)
 
     local before_clips = clips_count(db)
     local before_links = link_count(db)
-    local ok, err = pcall(Insert.execute, {
+    local ok, err = execute_cmd(Insert, {
         sequence_id           = "e2",
         source_sequence_id    = "e1",    -- e1 already references e2
         sequence_start_frame  = 0,

@@ -36,7 +36,6 @@
 -- Run via `jve --test`.
 
 local fixture  = require("binding.helper_fixture")
-local protocol = require("core.resolve_bridge.protocol")
 
 local fix = fixture.start("/tmp/jve-contract-read-timeline.sock")
 
@@ -93,6 +92,11 @@ local function assert_items_shape(items, label)
                 assert(is_video_tc(item[fld]) or is_audio_tc(item[fld]),
                     string.format("%s items[%d].%s must be integer "
                         .. "frame (video) or {frame, subframe} (audio) "
+                        .. "for kind=media", label, i, fld))
+            end
+            for _, fld in ipairs({"name", "media_file_path"}) do
+                assert(type(item[fld]) == "string",
+                    string.format("%s items[%d].%s must be string "
                         .. "for kind=media", label, i, fld))
             end
         else
