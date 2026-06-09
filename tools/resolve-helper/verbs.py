@@ -70,6 +70,29 @@ def _error(envelope_id, code, message):
     }
 
 
+def _api(label, fn, *args, **kwargs):
+    """Call a Resolve scripting-API method, re-raising any exception as a
+    RuntimeError tagged with `label` so the dispatch wrapper surfaces a
+    structured `resolve_api_error` with a useful breadcrumb.
+
+    Lifted from 25+ hand-rolled `try: X(); except Exception as exc:
+    raise RuntimeError(f"X raised: {exc}")` blocks. The Resolve API has
+    no typed exception hierarchy — any internal failure surfaces as a
+    bare Exception — so the helper-side contract is "every API call
+    must be wrapped, labeled, and re-raised through this seam." Single
+    source of truth keeps the label format consistent and removes the
+    visual noise of a 4-line try/except around every one-line call.
+
+    Multi-call try blocks that share one handler are NOT a fit for this
+    helper — leave them as plain try/except where the group label makes
+    sense.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        raise RuntimeError(f"{label} raised: {exc}") from exc
+
+
 def _revalidate(handle, envelope_id):
     status = handle.acquire()
     if status[0] == "ok":
@@ -198,24 +221,12 @@ def _find_imported_timeline(project, prev_timeline_ids):
     # newer Resolve versions and a bool on older ones. We rely on the
     # post-import delta against the pre-import GetTimelineByIndex list
     # to find the new timeline either way (timelines are 1-indexed).
-    try:
-        n = project.GetTimelineCount()
-    except Exception as exc:
-        raise RuntimeError(
-            f"GetTimelineCount raised: {exc}") from exc
+    n = _api("GetTimelineCount", project.GetTimelineCount)
     for i in range(1, n + 1):
-        try:
-            tl = project.GetTimelineByIndex(i)
-        except Exception as exc:
-            raise RuntimeError(
-                f"GetTimelineByIndex({i}) raised: {exc}") from exc
+        tl = _api(f"GetTimelineByIndex({i})", project.GetTimelineByIndex, i)
         if tl is None:
             continue
-        try:
-            tl_id = tl.GetUniqueId()
-        except Exception as exc:
-            raise RuntimeError(
-                f"timeline.GetUniqueId raised: {exc}") from exc
+        tl_id = _api("timeline.GetUniqueId", tl.GetUniqueId)
         if tl_id not in prev_timeline_ids:
             return tl
     return None
@@ -223,41 +234,24 @@ def _find_imported_timeline(project, prev_timeline_ids):
 
 def _find_timeline_by_uid(project, uid):
     # Resolve provides no GetTimelineById; iterate (1-indexed).
-    try:
-        count = project.GetTimelineCount()
-    except Exception as exc:
-        raise RuntimeError(f"GetTimelineCount raised: {exc}") from exc
+    count = _api("GetTimelineCount", project.GetTimelineCount)
     for i in range(1, count + 1):
-        try:
-            tl = project.GetTimelineByIndex(i)
-        except Exception as exc:
-            raise RuntimeError(f"GetTimelineByIndex({i}) raised: {exc}") from exc
+        tl = _api(f"GetTimelineByIndex({i})", project.GetTimelineByIndex, i)
         if tl is None:
             continue
-        try:
-            if tl.GetUniqueId() == uid:
-                return tl
-        except Exception as exc:
-            raise RuntimeError(f"timeline[{i}].GetUniqueId raised: {exc}") from exc
+        if _api(f"timeline[{i}].GetUniqueId", tl.GetUniqueId) == uid:
+            return tl
     return None
 
 
 def _snapshot_timeline_ids(project):
-    try:
-        n = project.GetTimelineCount()
-    except Exception as exc:
-        raise RuntimeError(
-            f"GetTimelineCount raised: {exc}") from exc
+    n = _api("GetTimelineCount", project.GetTimelineCount)
     ids = set()
     for i in range(1, n + 1):
-        try:
-            tl = project.GetTimelineByIndex(i)
-            if tl is None:
-                continue
-            ids.add(tl.GetUniqueId())
-        except Exception as exc:
-            raise RuntimeError(
-                f"timeline snapshot raised at index {i}: {exc}") from exc
+        tl = _api(f"GetTimelineByIndex({i})", project.GetTimelineByIndex, i)
+        if tl is None:
+            continue
+        ids.add(_api(f"timeline[{i}].GetUniqueId", tl.GetUniqueId))
     return ids
 
 
@@ -437,11 +431,7 @@ def _safe_uid(item):
     # verb_import_timeline bundles GetUniqueId + GetStart in one try,
     # and _find_timeline_item_by_uid doesn't do the non-empty check.
     # Don't invent a fan-out signature to shoehorn them in.
-    try:
-        uid = item.GetUniqueId()
-    except Exception as exc:
-        raise RuntimeError(
-            f"item.GetUniqueId() raised: {exc}") from exc
+    uid = _api("item.GetUniqueId()", item.GetUniqueId)
     if not isinstance(uid, str) or not uid:
         raise RuntimeError(
             "item.GetUniqueId() returned empty/non-string — "
@@ -455,18 +445,12 @@ def _iter_all_timeline_items(timeline):
     # and "audio". `GetItemListInTrack` may return None for an empty
     # track — treat as empty list, not as an error.
     for track_type in ("video", "audio"):
-        try:
-            n_tracks = timeline.GetTrackCount(track_type)
-        except Exception as exc:
-            raise RuntimeError(
-                f"GetTrackCount({track_type!r}) raised: {exc}") from exc
+        n_tracks = _api(f"GetTrackCount({track_type!r})",
+            timeline.GetTrackCount, track_type)
         for tidx in range(1, n_tracks + 1):
-            try:
-                items = timeline.GetItemListInTrack(track_type, tidx) or []
-            except Exception as exc:
-                raise RuntimeError(
-                    f"GetItemListInTrack({track_type!r}, {tidx}) "
-                    f"raised: {exc}") from exc
+            items = _api(
+                f"GetItemListInTrack({track_type!r}, {tidx})",
+                timeline.GetItemListInTrack, track_type, tidx) or []
             for item in items:
                 yield track_type, tidx, item
 
@@ -748,12 +732,7 @@ _IDENTITY_MARKER_FRAME = 0  # item-relative; placed at the head
 
 def _find_timeline_item_by_uid(timeline, resolve_item_id):
     for _track_type, _tidx, item in _iter_all_timeline_items(timeline):
-        try:
-            uid = item.GetUniqueId()
-        except Exception as exc:
-            raise RuntimeError(
-                f"item.GetUniqueId() raised: {exc}") from exc
-        if uid == resolve_item_id:
+        if _api("item.GetUniqueId()", item.GetUniqueId) == resolve_item_id:
             return item
     return None
 
@@ -905,12 +884,8 @@ def _export_edl_cdl(timeline, resolve, integer_rate):
     fd, edl_path = tempfile.mkstemp(prefix="jve-read-grades-", suffix=".edl")
     os.close(fd)
     try:
-        try:
-            ok = timeline.Export(
-                edl_path, resolve.EXPORT_EDL, resolve.EXPORT_CDL)
-        except Exception as exc:
-            raise RuntimeError(
-                f"timeline.Export(EDL+CDL) raised: {exc}") from exc
+        ok = _api("timeline.Export(EDL+CDL)", timeline.Export,
+            edl_path, resolve.EXPORT_EDL, resolve.EXPORT_CDL)
         if not ok:
             raise RuntimeError(
                 "timeline.Export(EDL+CDL) returned False — Resolve "
@@ -947,12 +922,8 @@ def _timeline_integer_frame_rate(timeline):
     # spurious `timeline_rate_mismatch` errors when the active timeline
     # differed from the project default (anamnesis-gold-timeline,
     # 2026-06-03: timeline 25, project 24).
-    try:
-        setting = timeline.GetSetting("timelineFrameRate")
-    except Exception as exc:
-        raise RuntimeError(
-            f"timeline.GetSetting('timelineFrameRate') raised: {exc}"
-            ) from exc
+    setting = _api("timeline.GetSetting('timelineFrameRate')",
+        timeline.GetSetting, "timelineFrameRate")
     try:
         return integer_frame_rate_from_setting(setting)
     except CdlEdlParseError as exc:
@@ -964,11 +935,7 @@ def _item_lut_ref(item):
     # TimelineItem.GetLUT() returns a local path string when an
     # item-level LUT is bound, None otherwise. Empty string is treated
     # as None (defensive — Resolve sometimes returns "" for no LUT).
-    try:
-        lut = item.GetLUT()
-    except Exception as exc:
-        raise RuntimeError(
-            f"item.GetLUT() raised: {exc}") from exc
+    lut = _api("item.GetLUT()", item.GetLUT)
     if lut is None:
         return None
     if isinstance(lut, str):
@@ -982,30 +949,18 @@ def _any_non_cdl_tools(item):
     # Walk the item's node graph; GetToolsInNode(n) returns the list of
     # NON-primary tools attached to node n (curves, qualifier, OFX,
     # masks). An empty list per node = primary-only correction.
-    try:
-        graph = item.GetNodeGraph()
-    except Exception as exc:
-        raise RuntimeError(
-            f"item.GetNodeGraph() raised: {exc}") from exc
+    graph = _api("item.GetNodeGraph()", item.GetNodeGraph)
     if graph is None:
         # Item has no color graph at all — treat as primary-only
         # (degenerate; the EDL will still carry identity CDL).
         return False
-    try:
-        num_nodes = graph.GetNumNodes()
-    except Exception as exc:
-        raise RuntimeError(
-            f"graph.GetNumNodes() raised: {exc}") from exc
+    num_nodes = _api("graph.GetNumNodes()", graph.GetNumNodes)
     if not isinstance(num_nodes, int) or num_nodes < 0:
         raise RuntimeError(
             f"graph.GetNumNodes() returned non-int / negative: "
             f"{num_nodes!r}")
     for n in range(1, num_nodes + 1):
-        try:
-            tools = graph.GetToolsInNode(n)
-        except Exception as exc:
-            raise RuntimeError(
-                f"graph.GetToolsInNode({n}) raised: {exc}") from exc
+        tools = _api(f"graph.GetToolsInNode({n})", graph.GetToolsInNode, n)
         if tools is None:
             continue
         if not isinstance(tools, list):

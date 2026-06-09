@@ -182,13 +182,9 @@ local function index_items_by_position(items)
     local by_pos = {}
     local non_media_skipped = 0
     for _, item in ipairs(items) do
-        assert(item.kind == "media" or item.kind == "non_media",
-            string.format(
-                "ConnectToResolveProject: read_timeline item %s missing "
-                .. "or invalid kind (got %q) — helper-protocol "
-                .. "§read_timeline requires kind ∈ "
-                .. "{\"media\",\"non_media\"}",
-                tostring(item.resolve_item_id), tostring(item.kind)))
+        wire.assert_item_kind(item.kind, string.format(
+            "ConnectToResolveProject: read_timeline item %s",
+            tostring(item.resolve_item_id)))
         if item.kind == "non_media" then
             non_media_skipped = non_media_skipped + 1
         else

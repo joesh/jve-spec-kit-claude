@@ -120,11 +120,8 @@ function M.translate_wire_response(wire_response, sequence_id)
         -- and cannot participate in edit-fingerprint diffing — filter
         -- them out here at the translate seam so classify_all stays
         -- strict on source_in/source_out presence.
-        assert(w.kind == "media" or w.kind == "non_media", string.format(
-            "sync_edits.translate_wire_response: item[%d] missing or "
-            .. "invalid kind (got %q) — helper-protocol §read_timeline "
-            .. "requires kind ∈ {\"media\",\"non_media\"}",
-            i, tostring(w.kind)))
+        wire.assert_item_kind(w.kind, string.format(
+            "sync_edits.translate_wire_response: item[%d]", i))
         if w.kind == "non_media" then
             non_media_skipped = non_media_skipped + 1
         else
