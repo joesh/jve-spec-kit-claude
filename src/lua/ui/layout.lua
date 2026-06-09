@@ -119,7 +119,9 @@ local function open_and_init_project(path)
     -- Persist last-opened path (for subsequent launches to skip welcome screen)
     local home = os.getenv("HOME")
     if home then
-        os.execute('mkdir -p "' .. home .. '/.jve"')
+        local jve_dir = home .. "/.jve"
+        local ok, err = qt_fs_mkdir_p(jve_dir)
+        assert(ok, "layout: mkdir " .. jve_dir .. " failed: " .. tostring(err))
         local lf = io.open(home .. "/.jve/last_project_path", "w")
         if lf then
             lf:write(path)
@@ -792,21 +794,11 @@ log.event("Main window size: %dx%d", window_w, window_h)
 log.event("Timeline panel size: %dx%d", timeline_w, timeline_h)
 log.event("Inspector panel size: %dx%d", inspector_w, inspector_h)
 
--- Shutdown hook: called by main.cpp via aboutToQuit before Qt objects are destroyed.
--- Cancel background workers, flush pending DB writes, persist state.
-_G.__jve_shutdown = function()
-    log.event("Lua shutdown: cancelling background workers, flushing state")
-    local media_status = require("core.media.media_status")
-    media_status.cancel_background_probe()
-    media_status.persist_now()
-    -- spec 023 — terminate the Resolve helper process (if any) and
-    -- close its socket. Idempotent: no-op when supervisor was never
-    -- asked to spawn (e.g. user never invoked a bridge command).
-    helper_supervisor.shutdown()
-    -- Release the project pidlock so the next JVE launch sees the SHM
-    -- as recoverable rather than concurrently-held by a now-dead PID.
-    require("core.project_open").release_current_pidlock()
-end
+-- Shutdown hook: called by main.cpp via aboutToQuit before Qt objects
+-- are destroyed. Delegates to core.app_lifecycle so the sequence is
+-- unit-testable without booting Qt — see core/app_lifecycle.lua for
+-- the ordered shutdown steps and rationale.
+_G.__jve_shutdown = require("core.app_lifecycle").shutdown
 
 -- Export widget references for UI tests (main.cpp uses s_lastCreatedMainWindow, not this return value)
 return {
