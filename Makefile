@@ -3,6 +3,27 @@
 
 BUILD_DIR = build
 
+# ---- Per-checkout serialization ------------------------------------------------
+# Two parallel Claude sessions in the SAME checkout would race on
+# build/CMakeFiles state AND on the shared VM staging tree under
+# scripts/_run_in_vm.sh (~/jve-* there) — observed as cmake artifact
+# collisions on the host and SQLite "disk I/O error" on schema apply in
+# the VM. Serialize via an atomic mkdir lock keyed by checkout path.
+# Sessions in DIFFERENT checkouts hash to different locks and stay
+# parallel.
+LOCK_FILE := /tmp/jve-make-$(shell printf "%s" "$(CURDIR)" | shasum | cut -c 1-8).lock
+
+ifndef JVE_MAKE_LOCKED
+.PHONY: __lock_dispatcher
+__lock_dispatcher:
+	@$(CURDIR)/scripts/with_make_lock.sh $(LOCK_FILE) $(MAKE) JVE_MAKE_LOCKED=1 $(MAKECMDGOALS)
+
+%: __lock_dispatcher
+	@:
+
+.DEFAULT_GOAL := __lock_dispatcher
+else
+
 .PHONY: all build clean install help configure reconfigure luacheck nav-index test \
         smoke smoke-coverage smoke-template jve lint scan install-hooks
 
@@ -137,3 +158,5 @@ help:
 	@echo "  make clean      - Clean and rebuild"
 	@echo "  make test       - Build and run tests"
 	@echo "  make nav-index  - Generate navigation indexes"
+
+endif  # JVE_MAKE_LOCKED

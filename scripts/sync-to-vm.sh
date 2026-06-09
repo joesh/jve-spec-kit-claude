@@ -28,6 +28,13 @@
 #                                  not in test_env's search list, and
 #                                  import_schema.lua reads schema.sql via
 #                                  io.open (not require) from this tree)
+#   - resources/                  (templates/*.jvp opened by importer tests;
+#                                  icons/*.svg loaded during ui.layout init —
+#                                  missing either of these makes ui-touching
+#                                  binding tests fail with a 'loop or previous
+#                                  error loading module ui.layout' cascade)
+#   - keymaps/                    (keyboard_shortcuts.init resolves
+#                                  keymaps/default.jvekeys relative to PWD)
 #   - scripts/run_binding_tests.sh + tests/run_integration_tests.sh +
 #     scripts/_run_in_vm.sh       (the runners themselves are re-exec'd
 #                                  on the guest)
@@ -45,7 +52,9 @@
 #   - Guest reachable at $JVE_VM_HOST (default joes-virtual-machine.local)
 #   - Guest user $JVE_VM_USER (default joe)
 #   - SSH key at ~/.ssh/jve_vm
-#   - Guest tree at ~/jve
+#   - Guest tree at ~/jve-<hash-of-host-repo-path> (per-checkout, so two
+#     sessions in different checkouts don't fight on the same VM tree).
+#     Override with JVE_VM_GUEST_PATH.
 
 set -e
 set -o pipefail  # propagate failures from non-last pipeline commands (e.g. the
@@ -54,10 +63,15 @@ set -o pipefail  # propagate failures from non-last pipeline commands (e.g. the
 
 HOST="${JVE_VM_HOST:-joes-virtual-machine.local}"
 USER="${JVE_VM_USER:-joe}"
-GUEST_PATH="${JVE_VM_GUEST_PATH:-~/jve}"
 KEY="${HOME}/.ssh/jve_vm"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Per-checkout VM staging path (see scripts/_run_in_vm.sh for rationale).
+# Derive a stable suffix from the host repo path so parallel sessions
+# in different checkouts don't share a guest tree.
+VM_PATH_SUFFIX="$(printf '%s' "$REPO_ROOT" | shasum | cut -c 1-8)"
+GUEST_PATH="${JVE_VM_GUEST_PATH:-~/jve-$VM_PATH_SUFFIX}"
 APP="$REPO_ROOT/build/bin/jve.app"
 
 if [ ! -f "$KEY" ]; then
@@ -97,6 +111,8 @@ rsync -az --delete \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
     "tests/fixtures/media/anamnesis-trimmed/2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
     src/lua \
+    resources \
+    keymaps \
     menus.xml \
     scripts/run_binding_tests.sh \
     tests/run_integration_tests.sh \

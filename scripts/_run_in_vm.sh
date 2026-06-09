@@ -33,7 +33,6 @@ _VM_KEY="${HOME}/.ssh/jve_vm"
 
 _VM_HOST="${JVE_VM_HOST:-joes-virtual-machine.local}"
 _VM_USER="${JVE_VM_USER:-joe}"
-_VM_GUEST_PATH="${JVE_VM_GUEST_PATH:-~/jve}"
 _VM_SSH="ssh -i $_VM_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -o BatchMode=yes"
 
 # Reachability probe (fast — falls through to host if VM is off).
@@ -49,6 +48,16 @@ fi
 _VM_SYNC_SENTINEL="/tmp/jve_vm_sync.$PPID"
 _VM_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _VM_REPO_ROOT="$(cd "$_VM_SCRIPT_DIR/.." && pwd)"
+
+# Per-checkout VM staging path: parallel sessions in different
+# checkouts hash to different guest paths, so their rsync --delete
+# trees don't fight (the prior single ~/jve target produced "not empty
+# cannot delete" warnings and SQLite "disk I/O error" mid-test when
+# two pushes overlapped). Same-checkout sessions still share a path
+# and rely on the Makefile lock to serialize.
+_VM_PATH_SUFFIX="$(printf '%s' "$_VM_REPO_ROOT" | shasum | cut -c 1-8)"
+_VM_GUEST_PATH="${JVE_VM_GUEST_PATH:-~/jve-$_VM_PATH_SUFFIX}"
+export JVE_VM_GUEST_PATH="$_VM_GUEST_PATH"
 
 if [ ! -f "$_VM_SYNC_SENTINEL" ]; then
     echo "[vm-dispatch] syncing host → $_VM_USER@$_VM_HOST:$_VM_GUEST_PATH" >&2
