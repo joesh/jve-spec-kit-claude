@@ -661,16 +661,16 @@ PeakGenerator::ProgressQueryResult PeakGenerator::QueryInProgress(
     // proportionally narrow sub-window and leaves the unwritten tail
     // blank, revealing as generation advances. Stretching partial bins
     // to fill pixel_width is the "march along" bug.
-    // Requested range is uncapped — what a complete peak file would
-    // serve. MapSourceRangeToBins's upper clamp does
-    // `if (end_bin > static_cast<int64_t>(total_bins))`, which wraps
-    // UINT64_MAX to -1 and clamps end_bin to -1, so we can't reuse it
-    // here. Inline the same math without the upper clamp.
-    int64_t requested_start_bin = source_start_sample / static_cast<int64_t>(spp);
-    int64_t requested_end_bin =
-        (source_end_sample + static_cast<int64_t>(spp) - 1)
-        / static_cast<int64_t>(spp);
-    if (requested_start_bin < 0) requested_start_bin = 0;
+    // The uncapped sentinel must be INT64_MAX, not UINT64_MAX: the
+    // helper's upper clamp casts total_bins to int64_t, and UINT64_MAX
+    // wraps to -1 there (clamping every range to empty). INT64_MAX
+    // survives the cast, so the clamp never fires.
+    constexpr uint64_t kUncappedBins =
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    int64_t requested_start_bin, requested_end_bin;
+    MapSourceRangeToBins(source_start_sample, source_end_sample,
+                          spp, kUncappedBins,
+                          requested_start_bin, requested_end_bin);
     int64_t requested_bin_count = requested_end_bin - requested_start_bin;
     if (requested_bin_count <= 0) return result;
 
