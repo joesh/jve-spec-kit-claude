@@ -136,7 +136,7 @@ int lua_set_layout_margins(lua_State* L) {
     int bottom = luaL_checkinteger(L, 5);
 
     // Try as QWidget first
-    if (QWidget* w = qobject_cast<QWidget*>(static_cast<QObject*>(userdata))) {
+    if (QWidget* w = widget_cast<QWidget>(userdata)) {
         if (QLayout* layout = w->layout()) {
             layout->setContentsMargins(left, top, right, bottom);
             lua_pushboolean(L, 1);
@@ -145,15 +145,18 @@ int lua_set_layout_margins(lua_State* L) {
     }
 
     // Try as QLayout directly
-    if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(userdata))) {
+    if (QLayout* l = widget_cast<QLayout>(userdata)) {
          l->setContentsMargins(left, top, right, bottom);
          lua_pushboolean(L, 1);
          return 1;
     }
 
-    // Neither QWidget nor QLayout
-    lua_pushboolean(L, 0);
-    return 1;
+    // Caller passed a non-null userdata that is neither a QWidget nor a
+    // QLayout — that's a binding misuse, not a lifecycle silent-no-op
+    // (the destroyed-widget path returned at line ~131 already). Raise
+    // so the call site shows up instead of silently swallowing.
+    return luaL_error(L,
+        "set_contents_margins: userdata is neither QWidget nor QLayout");
 }
 
 int lua_set_layout_spacing(lua_State* L) {
@@ -166,7 +169,7 @@ int lua_set_layout_spacing(lua_State* L) {
     int spacing = luaL_checkinteger(L, 2);
 
     // Try as QWidget first
-    if (QWidget* w = qobject_cast<QWidget*>(static_cast<QObject*>(userdata))) {
+    if (QWidget* w = widget_cast<QWidget>(userdata)) {
         if (QLayout* layout = w->layout()) {
             layout->setSpacing(spacing);
             lua_pushboolean(L, 1);
@@ -175,15 +178,15 @@ int lua_set_layout_spacing(lua_State* L) {
     }
 
     // Try as QLayout directly
-    if (QLayout* l = qobject_cast<QLayout*>(static_cast<QObject*>(userdata))) {
+    if (QLayout* l = widget_cast<QLayout>(userdata)) {
          l->setSpacing(spacing);
          lua_pushboolean(L, 1);
          return 1;
     }
 
-    // Neither QWidget nor QLayout
-    lua_pushboolean(L, 0);
-    return 1;
+    // See set_contents_margins above — non-null wrong-type is misuse.
+    return luaL_error(L,
+        "set_layout_spacing: userdata is neither QWidget nor QLayout");
 }
 
 int lua_get_splitter_sizes(lua_State* L) {
