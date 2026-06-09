@@ -153,15 +153,39 @@ def serve(sock, handle, ledger):
                         response, idem_key = handle_line(
                             decoded, handle, ledger)
                     except Exception as exc:
-                        # Recover correlation id so the JVE client can
-                        # match the crash to its in-flight request rather
-                        # than drop it as "unknown id" (rule 2.32 — no
-                        # silent failure of the dispatch crash detail).
+                        # Dispatch crashed mid-verb: helper state past
+                        # this point is suspect — the idempotency
+                        # ledger may be inconsistent with what the
+                        # Resolve API actually committed, and the verb
+                        # may have left transient state in `verbs.py`
+                        # module globals. Send the in-flight requester
+                        # a structured crash envelope so it can
+                        # correlate, then re-raise to terminate the
+                        # process. The supervisor's finished_cb
+                        # (helper_supervisor.lua) clears state and the
+                        # next ensure_client call respawns clean —
+                        # spec FR-007 "Wire-level corruption … closes
+                        # the socket; the supervisor's next request
+                        # respawns" applies to verb crashes too. Prior
+                        # behavior (synthesize envelope + keep serving)
+                        # contradicted that contract; review HIGH E#8.
                         crash_id = _recover_envelope_id(decoded)
-                        log.exception("dispatch crashed (id=%r)", crash_id)
-                        response = make_error(crash_id, "resolve_api_error",
+                        log.exception("dispatch crashed (id=%r) — "
+                            "writing crash envelope and exiting",
+                            crash_id)
+                        crash_response = make_error(
+                            crash_id, "resolve_api_error",
                             f"helper crashed: {exc}")
-                        idem_key = None
+                        try:
+                            write_envelope(conn, crash_response)
+                        except OSError:
+                            # Client already gone; the supervisor will
+                            # see process-exit and surface its own
+                            # helper_unavailable to whatever request is
+                            # in flight next. Don't mask the original
+                            # exception with the write failure.
+                            pass
+                        raise
                     write_envelope(conn, response)
                     if idem_key is not None and response.get("ok") is True:
                         ledger.store(idem_key, response)
