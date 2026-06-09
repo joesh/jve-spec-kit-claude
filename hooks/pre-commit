@@ -1,74 +1,119 @@
 #!/bin/bash
-# JVE pre-commit hook: block commits that introduce anti-pattern violations.
+# JVE pre-commit hook.
 #
-# Runs scripts/lint_anti_patterns.sh on staged files. Violations on lines
-# being introduced/modified block the commit. Violations on lines that were
-# already in the file (untouched by this commit) do NOT block — only fresh
-# violations gate the commit, so unrelated cleanup isn't forced on every PR.
+# Gates (in order):
+#   1) Build freshness — exe mtime newer than every C++/Objective-C++/header
+#      in src/. Proves `make -j4` (or `make jve -j4`) ran after the latest
+#      compiled-source edit. Stale binary → block.
+#   2) Luacheck — staged .lua files must pass cleanly (no warnings, no errors).
+#   3) Anti-pattern lint — only violations on lines being introduced/modified
+#      block. Pre-existing violations on untouched lines do not.
+#   4) Lint-allow gate — any newly added `lint-allow:` annotation pauses the
+#      commit until explicitly opted in via JVE_LINT_ALLOW_OK=1. Prevents
+#      "shut up the linter" as a substitute for the real fix.
 #
-# Bypass for a single commit: `git commit --no-verify` (not recommended;
-# prefer adding `lint-allow: <rule> <reason>` on the offending line).
+# Bypass for a single commit: `git commit --no-verify` (not recommended).
 
 set -u
 
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -z "$REPO_ROOT" ] && exit 0
-LINT="$REPO_ROOT/scripts/lint_anti_patterns.sh"
-[ ! -x "$LINT" ] && exit 0
 
-STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(lua|cpp|h|hpp|mm)$' || true)
-[ -z "$STAGED" ] && exit 0
-
-violations_blocked=0
-violations_total=0
-report=$(mktemp)
-trap 'rm -f "$report"' EXIT
-
-for f in $STAGED; do
-    [ ! -f "$f" ] && continue
-    lint_out=$("$LINT" "$f" 2>/dev/null)
-    [ -z "$lint_out" ] && continue
-
-    added_lines=$(git diff --cached -U0 -- "$f" \
-        | awk '
-            /^@@/ {
-                split($3, parts, ",");
-                start = parts[1] + 0;
-                if (start < 0) start = -start;
-                count = (length(parts) > 1) ? parts[2] + 0 : 1;
-                for (i = 0; i < count; i++) print start + i;
-            }
-        ')
-
-    while IFS= read -r vline; do
-        violations_total=$((violations_total + 1))
-        ln=$(echo "$vline" | awk -F: '{print $2}')
-        if echo "$added_lines" | grep -qx "$ln"; then
-            echo "$vline" >> "$report"
-            violations_blocked=$((violations_blocked + 1))
-        fi
-    done <<< "$lint_out"
-done
-
-if [ "$violations_blocked" -gt 0 ]; then
-    echo "PRE-COMMIT BLOCKED: $violations_blocked anti-pattern violation(s) on added lines." >&2
-    echo "" >&2
-    cat "$report" >&2
-    echo "" >&2
-    echo "Fix the violations, or add a per-line exemption with explicit reason:" >&2
-    echo "  -- lint-allow: <rule_id> <reason>   (Lua)" >&2
-    echo "  // lint-allow: <rule_id> <reason>   (C++)" >&2
-    echo "" >&2
-    echo "Bypass this commit only: git commit --no-verify (not recommended)." >&2
+# --- 1) build freshness ------------------------------------------------------
+EXE="$REPO_ROOT/build/bin/jve.app/Contents/MacOS/jve"
+if [ ! -x "$EXE" ]; then
+    echo "PRE-COMMIT BLOCKED: no built executable at ${EXE#$REPO_ROOT/}" >&2
+    echo "Run \`make -j4\` (or \`make jve -j4\`) before committing." >&2
     exit 1
 fi
 
-if [ "$violations_total" -gt 0 ]; then
-    echo "[lint] $violations_total pre-existing violation(s) on unchanged lines (not blocking)." >&2
-fi
-exit 0
+exe_mtime=$(stat -f %m "$EXE")
+newest_src=""
+newest_mtime=0
+while IFS= read -r src; do
+    m=$(stat -f %m "$src")
+    if [ "$m" -gt "$newest_mtime" ]; then
+        newest_mtime=$m
+        newest_src=$src
+    fi
+done < <(find "$REPO_ROOT/src" -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' \))
 
-# --- lint-allow gate ----------------------------------------------------------
+if [ "$newest_mtime" -gt "$exe_mtime" ]; then
+    echo "PRE-COMMIT BLOCKED: built executable is stale." >&2
+    echo "  newer source: ${newest_src#$REPO_ROOT/}" >&2
+    echo "  exe:          ${EXE#$REPO_ROOT/}" >&2
+    echo "Rebuild with \`make -j4\` (or \`make jve -j4\` for UI iteration) and re-stage." >&2
+    exit 1
+fi
+
+# --- 2) luacheck on staged .lua ---------------------------------------------
+STAGED_LUA=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.lua$' || true)
+if [ -n "$STAGED_LUA" ]; then
+    if ! lua_out=$(cd "$REPO_ROOT" && luacheck $STAGED_LUA 2>&1); then
+        echo "PRE-COMMIT BLOCKED: luacheck reports warnings or errors on staged Lua." >&2
+        echo "" >&2
+        echo "$lua_out" >&2
+        echo "" >&2
+        echo "Fix the warnings before committing." >&2
+        exit 1
+    fi
+fi
+
+# --- 3) anti-pattern lint ----------------------------------------------------
+LINT="$REPO_ROOT/scripts/lint_anti_patterns.sh"
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(lua|cpp|h|hpp|mm)$' || true)
+
+if [ -x "$LINT" ] && [ -n "$STAGED" ]; then
+    violations_blocked=0
+    violations_total=0
+    report=$(mktemp)
+    trap 'rm -f "$report"' EXIT
+
+    for f in $STAGED; do
+        [ ! -f "$f" ] && continue
+        lint_out=$("$LINT" "$f" 2>/dev/null)
+        [ -z "$lint_out" ] && continue
+
+        added_lines=$(git diff --cached -U0 -- "$f" \
+            | awk '
+                /^@@/ {
+                    split($3, parts, ",");
+                    start = parts[1] + 0;
+                    if (start < 0) start = -start;
+                    count = (length(parts) > 1) ? parts[2] + 0 : 1;
+                    for (i = 0; i < count; i++) print start + i;
+                }
+            ')
+
+        while IFS= read -r vline; do
+            violations_total=$((violations_total + 1))
+            ln=$(echo "$vline" | awk -F: '{print $2}')
+            if echo "$added_lines" | grep -qx "$ln"; then
+                echo "$vline" >> "$report"
+                violations_blocked=$((violations_blocked + 1))
+            fi
+        done <<< "$lint_out"
+    done
+
+    if [ "$violations_blocked" -gt 0 ]; then
+        echo "PRE-COMMIT BLOCKED: $violations_blocked anti-pattern violation(s) on added lines." >&2
+        echo "" >&2
+        cat "$report" >&2
+        echo "" >&2
+        echo "Fix the violations, or add a per-line exemption with explicit reason:" >&2
+        echo "  -- lint-allow: <rule_id> <reason>   (Lua)" >&2
+        echo "  // lint-allow: <rule_id> <reason>   (C++)" >&2
+        echo "" >&2
+        echo "Bypass this commit only: git commit --no-verify (not recommended)." >&2
+        exit 1
+    fi
+
+    if [ "$violations_total" -gt 0 ]; then
+        echo "[lint] $violations_total pre-existing violation(s) on unchanged lines (not blocking)." >&2
+    fi
+fi
+
+# --- 4) lint-allow gate ------------------------------------------------------
 # Every newly added `lint-allow:` annotation gets surfaced for review. The
 # point: prevent the "shut up the linter" shortcut. If a rule fires, the
 # default action is to FIX the code; lint-allow is the exception, not the
@@ -80,7 +125,6 @@ for f in $STAGED; do
     diff_out=$(git diff --cached -U0 -- "$f" 2>/dev/null | grep -E '^\+' | grep -v '^+++' | grep -E 'lint-allow:' || true)
     [ -z "$diff_out" ] && continue
     while IFS= read -r line; do
-        # Strip leading +
         clean="${line#+}"
         allow_lines+="$f: $clean"$'\n'
     done <<< "$diff_out"
@@ -99,3 +143,5 @@ if [ -n "$allow_lines" ]; then
         exit 1
     fi
 fi
+
+exit 0
