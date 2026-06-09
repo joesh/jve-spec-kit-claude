@@ -32,7 +32,7 @@ REGISTRY_PATH    = REPO_ROOT / "src" / "lua" / "core" / "command_registry.lua"
 COMMANDS_DIR     = REPO_ROOT / "src" / "lua" / "core" / "commands"
 MENUS_PATH       = REPO_ROOT / "menus.xml"
 COMMAND_TESTS    = REPO_ROOT / "tests" / "command"
-SMOKE_CASES      = REPO_ROOT / "tests" / "smoke" / "cases"
+SMOKE_CASES      = REPO_ROOT / "tests" / "live" / "cases"
 
 
 # ─── parsing ────────────────────────────────────────────────────────────────
@@ -158,8 +158,9 @@ def _smoke_cases_text() -> str:
 
     Read once; cheap. Membership queries are substring/regex against this.
     """
-    if not SMOKE_CASES.exists():
-        return ""
+    assert SMOKE_CASES.exists(), (
+        f"coverage: SMOKE_CASES dir missing: {SMOKE_CASES} — "
+        "audit would silently pass by finding zero smokes to match against")
     chunks = []
     for f in sorted(SMOKE_CASES.glob("**/*.py")):
         chunks.append(f.read_text())
@@ -250,8 +251,8 @@ def audit_menus() -> list[str]:
     whose filename contains 'menu' (so menu-specific coverage doesn't
     get spuriously satisfied by a keymap smoke that mentions the same
     command)."""
-    if not SMOKE_CASES.exists():
-        return [repr(item) for item in list_menu_items()]
+    assert SMOKE_CASES.exists(), (
+        f"coverage: SMOKE_CASES dir missing: {SMOKE_CASES}")
     menu_text_parts = []
     for f in sorted(SMOKE_CASES.glob("**/menu_*.py")) + sorted(SMOKE_CASES.glob("**/test_menu_*.py")):
         menu_text_parts.append(f.read_text())
