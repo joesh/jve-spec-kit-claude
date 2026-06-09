@@ -22,6 +22,7 @@ local routing_state = require("ui.source_routing_view_state")
 
 -- luacheck: globals qt_line_edit_select_all qt_scroll_area_h_scroll_by qt_scroll_area_h_scroll_info
 -- luacheck: globals qt_set_scroll_area_h_scroll_handler
+-- luacheck: globals qt_set_scroll_area_v_user_scroll_handler qt_set_scroll_area_v_range_handler
 
 local View = require("ui.view")
 local M = View.new("timeline")
@@ -2270,7 +2271,6 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
-    qt_set_scroll_area_anchor_bottom(video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Audio headers section with scroll area (same VBox shape as video).
     local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
@@ -2541,6 +2541,17 @@ function M.create(opts)
             render_bottom_to_top = true,
             on_drag_start = on_drag_start,
             debug_id = "video",
+            -- Model-owned vertical scroll entry points (single-owner
+            -- redesign): wheel + scroll-into-view route through the
+            -- panel so every position change is a model write.
+            vertical_scroll = {
+                by = function(dy) M.user_scroll_pane_by("video", dy) end,
+                to = function(v) M.user_scroll_pane_to("video", v) end,
+                metrics = function()
+                    -- luacheck: globals qt_get_scroll_area_v_metrics
+                    return qt_get_scroll_area_v_metrics(M.timeline_video_scroll)
+                end,
+            },
         }
     )
     video_view_ref = video_view  -- Store reference for drag detection
@@ -2555,10 +2566,12 @@ function M.create(opts)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
-    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
+    -- Visible (transient overlay on macOS) scrollbar: a second user
+    -- gesture source alongside the wheel, wired below via
+    -- qt_set_scroll_area_v_user_scroll_handler.
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_video_scroll, "AsNeeded")
     -- Remove scroll area frame/border so content width matches ruler width exactly
     qt_constants.PROPERTIES.SET_STYLE(timeline_video_scroll, "QScrollArea { border: none; }")
-    qt_set_scroll_area_anchor_bottom(timeline_video_scroll, true)  -- V1 stays visible when shrinking
 
     -- Register video widget → scroll area mapping for coordinate conversion
     widget_to_scroll_area[video_widget] = timeline_video_scroll
@@ -2578,6 +2591,15 @@ function M.create(opts)
         {
             on_drag_start = on_drag_start,
             debug_id = "audio",
+            -- Same model-owned scroll entry points as the video view.
+            vertical_scroll = {
+                by = function(dy) M.user_scroll_pane_by("audio", dy) end,
+                to = function(v) M.user_scroll_pane_to("audio", v) end,
+                metrics = function()
+                    -- luacheck: globals qt_get_scroll_area_v_metrics
+                    return qt_get_scroll_area_v_metrics(M.timeline_audio_scroll)
+                end,
+            },
         }
     )
     audio_view_ref = audio_view  -- Store reference for drag detection
@@ -2592,7 +2614,8 @@ function M.create(opts)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
-    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
+    -- Visible scrollbar, same rationale as the video pane above.
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_audio_scroll, "AsNeeded")
     -- Remove scroll area frame/border so content width matches ruler width exactly
     qt_constants.PROPERTIES.SET_STYLE(timeline_audio_scroll, "QScrollArea { border: none; }")
 
@@ -2769,18 +2792,38 @@ function M.create(opts)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, vertical_splitter)
 
-    -- Persist scroll offsets whenever the Qt scroll area changes
-    _G["video_scroll_changed"] = function(value)
-        log.event("video_scroll_changed: %d", value)
-        state.set_video_scroll_offset(value)
+    -- Scrollbar gestures (drags, page clicks, arrow steps) write the
+    -- model. actionTriggered fires ONLY for user interaction — never
+    -- for programmatic setValue or layout clamps — so this is a pure
+    -- intent signal, unlike the old valueChanged wiring whose ambiguity
+    -- let transient layout clamps overwrite saved offsets.
+    _G["video_user_scrolled"] = function(value)
+        M.user_scroll_pane_to("video", value)
     end
-    qt_set_scroll_area_v_scroll_handler(M.timeline_video_scroll, "video_scroll_changed")
+    qt_set_scroll_area_v_user_scroll_handler(M.timeline_video_scroll, "video_user_scrolled")
 
-    _G["audio_scroll_changed"] = function(value)
-        log.event("audio_scroll_changed: %d", value)
-        state.set_audio_scroll_offset(value)
+    _G["audio_user_scrolled"] = function(value)
+        M.user_scroll_pane_to("audio", value)
     end
-    qt_set_scroll_area_v_scroll_handler(M.timeline_audio_scroll, "audio_scroll_changed")
+    qt_set_scroll_area_v_user_scroll_handler(M.timeline_audio_scroll, "audio_user_scrolled")
+
+    -- Whenever Qt's scrollable range catches up with a layout change
+    -- (content min-height applied, viewport resized, splitter dragged),
+    -- re-apply the model. Anchored model coordinates make this a pure
+    -- projection: video re-anchors to the bottom (the old
+    -- BottomAnchorFilter behavior, now derived from the model instead
+    -- of a timer race), audio to the top, and a deferred sequence-load
+    -- restore lands as soon as the new content's range exists (the old
+    -- _pending_scroll_restore mechanism, minus the stale-range hole).
+    _G["video_scroll_range_changed"] = function()
+        M.apply_pane_scroll("video")
+    end
+    qt_set_scroll_area_v_range_handler(M.timeline_video_scroll, "video_scroll_range_changed")
+
+    _G["audio_scroll_range_changed"] = function()
+        M.apply_pane_scroll("audio")
+    end
+    qt_set_scroll_area_v_range_handler(M.timeline_audio_scroll, "audio_scroll_range_changed")
 
     -- Set stretch factor so splitter gets all remaining vertical space
     qt_set_layout_stretch_factor(timeline_area_layout, vertical_splitter, 1)
@@ -2924,6 +2967,24 @@ function M.create(opts)
     qt_set_scroll_area_scroll_handler(header_audio_scroll, "audio_scroll_sync_handler")
     qt_set_scroll_area_scroll_handler(timeline_audio_scroll, "audio_scroll_sync_handler")
 
+    -- Header columns are passive followers of the timeline panes — they
+    -- never scroll on their own. Capture wheel gestures over them and
+    -- route through the model write path like any other scroll gesture
+    -- (the sync handlers above then mirror the result back to the
+    -- headers). Without this capture Qt would scroll the header area
+    -- natively, the model would never hear about it, and the next
+    -- model projection would snap the headers back.
+    -- luacheck: globals qt_set_scroll_area_wheel_handler
+    _G["header_video_wheel"] = function(dy)
+        M.user_scroll_pane_by("video", dy)
+    end
+    qt_set_scroll_area_wheel_handler(header_video_scroll, "header_video_wheel")
+
+    _G["header_audio_wheel"] = function(dy)
+        M.user_scroll_pane_by("audio", dy)
+    end
+    qt_set_scroll_area_wheel_handler(header_audio_scroll, "header_audio_wheel")
+
     -- (Headers column width is already pinned to track_header_width above
     -- via SET_MIN/MAX_WIDTH on headers_column; the drag-edge handler
     -- mutates that pin as the user drags. Timeline area Expanding policy
@@ -3028,29 +3089,9 @@ function M.create(opts)
         end
     end
 
-    -- After renderer updates widget content, apply any pending scroll restore.
-    -- BUG: When switching from a sequence with fewer tracks (smaller widget height)
-    -- to one with more tracks, the first render uses the stale height. The scroll
-    -- restore succeeds (Qt accepts the value) but the drawing commands only cover
-    -- the stale height region. The visible area at the new scroll position shows
-    -- blank tracks until the user scrolls slightly (triggering a full repaint).
-    -- Attempted fixes that did NOT work:
-    --   - widget->update() / widget->repaint() after scroll restore
-    --   - Deferred restore via singleShot(0) timer
-    --   - Multi-pass retry (consume after 2+ renders)
-    -- Root cause: the renderer draws commands clipped to widget height at render time.
-    -- After SET_MIN_HEIGHT resizes the widget, Qt doesn't automatically repaint the
-    -- newly allocated region with the correct commands.
-    state.add_listener(function()
-        local pending = M._pending_scroll_restore
-        if not pending then return end
-        if state.get_tab_strip():active_sequence_id() ~= pending.seq_id then
-            M._pending_scroll_restore = nil
-            return
-        end
-        M._pending_scroll_restore = nil
-        M.restore_scroll_with_targets(pending.video, pending.audio)
-    end)
+    -- (Scroll restore needs no deferred listener: the model is projected
+    -- onto the panes by rebuild_for_displayed_tab, and Qt's rangeChanged
+    -- handlers re-apply it whenever layout catches up with new content.)
 
     -- State → Viewer: state changes (commands, ruler clicks, timecode entry)
     -- propagate to whichever monitor is currently the timeline view's engine.
@@ -3236,6 +3277,99 @@ function M._test_get_source_tab_seq_id()
     return source_tab_seq_id
 end
 
+--------------------------------------------------------------------------------
+-- Vertical scroll: single-owner plumbing (2026-06-09 redesign)
+--
+-- The displayed tab's cache (via timeline_state get/set_*_scroll_offset)
+-- is the ONLY owner of scroll position, in anchored coordinates:
+-- video = px from content BOTTOM (V1 visible at 0), audio = px from TOP
+-- (A1 visible at 0). The QScrollAreas are projections: every user
+-- gesture (timeline wheel, scrollbar action, header-column wheel) and
+-- every navigation (scroll-into-view) writes the model through the two
+-- entry points below, which then push to the widget. Qt's rangeChanged
+-- re-applies the model whenever layout catches up — replacing the old
+-- BottomAnchorFilter and deferred-restore mechanisms whose races
+-- destroyed saved offsets (test_scroll_survives_tab_switch.lua).
+--------------------------------------------------------------------------------
+
+local function pane_scroll_area(pane)
+    if pane == "video" then return M.timeline_video_scroll end
+    if pane == "audio" then return M.timeline_audio_scroll end
+    error("timeline_panel: unknown scroll pane '" .. tostring(pane) .. "'")
+end
+
+local function pane_model_offset(pane)
+    if pane == "video" then return state.get_video_scroll_offset() end
+    return state.get_audio_scroll_offset()
+end
+
+local function pane_set_model_offset(pane, offset)
+    if pane == "video" then
+        state.set_video_scroll_offset(offset)
+    else
+        state.set_audio_scroll_offset(offset)
+    end
+end
+
+-- Anchored model offset ↔ Qt's top-anchored scrollbar value.
+-- Video stacks bottom-up (V1 at the content bottom), so its offset is
+-- measured from the bottom: value = max - offset. Audio is top-anchored:
+-- value = offset. max is the scrollbar maximum at conversion time.
+local function model_offset_to_value(pane, offset, max)
+    if pane == "video" then return max - offset end
+    return offset
+end
+
+local function value_to_model_offset(pane, value, max)
+    if pane == "video" then return max - value end
+    return value
+end
+
+--- Project the model's scroll offset onto the pane's QScrollArea.
+--- Idempotent and safe to call on every rangeChanged: when the model
+--- offset exceeds the current range the value pins at the nearest edge
+--- WITHOUT writing the clamp back to the model, so the user's position
+--- re-emerges intact once the content is tall enough again.
+function M.apply_pane_scroll(pane)
+    local sa = pane_scroll_area(pane)
+    if not sa then return end  -- panel not built yet (bootstrap)
+    local offset = pane_model_offset(pane)
+    if not offset then return end  -- blank panel (no displayed tab)
+    local _, max = qt_get_scroll_area_v_metrics(sa)  -- luacheck: globals qt_get_scroll_area_v_metrics
+    if not max then return end  -- widget destroyed (teardown)
+    local value = model_offset_to_value(pane, offset, max)
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(
+        sa, math.max(0, math.min(max, value)))
+end
+
+--- User gesture / navigation: scroll a pane to an absolute scrollbar
+--- value. Clamps to the current range, writes the model (anchored
+--- coords), then projects back onto the widget. The model write also
+--- arms the throttle persist.
+function M.user_scroll_pane_to(pane, value)
+    local sa = pane_scroll_area(pane)
+    assert(sa, "timeline_panel.user_scroll_pane_to: scroll area for '"
+        .. pane .. "' not built — gestures cannot precede panel creation")
+    local _, max = qt_get_scroll_area_v_metrics(sa)  -- luacheck: globals qt_get_scroll_area_v_metrics
+    if not max then return end  -- widget destroyed (teardown)
+    value = math.max(0, math.min(max, value))
+    pane_set_model_offset(pane, value_to_model_offset(pane, value, max))
+    M.apply_pane_scroll(pane)
+end
+
+--- User gesture: scroll a pane by a wheel delta (widget px). Matches
+--- Qt's native wheel direction: positive dy (fingers swipe down on a
+--- natural-scrolling trackpad) moves the content down, i.e. decreases
+--- the scrollbar value.
+function M.user_scroll_pane_by(pane, dy)
+    local sa = pane_scroll_area(pane)
+    assert(sa, "timeline_panel.user_scroll_pane_by: scroll area for '"
+        .. pane .. "' not built — gestures cannot precede panel creation")
+    local value = qt_get_scroll_area_v_metrics(sa)  -- luacheck: globals qt_get_scroll_area_v_metrics
+    if not value then return end  -- widget destroyed (teardown)
+    M.user_scroll_pane_to(pane, value - dy)
+end
+
 --- Single canonical timeline-view rebuild path. Reads from the model
 --- (`state.get_displayed_tab_id()`) and refreshes the timeline view's
 --- track headers, tab widget, scroll restore, and engine load to match.
@@ -3251,20 +3385,6 @@ local function rebuild_for_displayed_tab()
 
     -- Skip if the panel hasn't been constructed yet (bootstrap sequencing).
     if not M.header_video_scroll then return end
-
-    local Sequence = require("models.sequence")
-    local displayed = Sequence.load(displayed_id)
-    assert(displayed, string.format(
-        "rebuild_for_displayed_tab: sequence %s not found", displayed_id))
-
-    -- Suspend bottom-anchor filters during rebuild — their async singleShot(0)
-    -- callbacks would overwrite restored scroll positions.
-    if M.timeline_video_scroll then
-        qt_suspend_scroll_area_anchor(M.timeline_video_scroll, true)
-    end
-    if M.header_video_scroll then
-        qt_suspend_scroll_area_anchor(M.header_video_scroll, true)
-    end
 
     -- Timeline-view data (tracks, clips, view-state) lives on the
     -- displayed TimelineTab's cache, hydrated by strip:open_record_tab /
@@ -3289,20 +3409,13 @@ local function rebuild_for_displayed_tab()
         rerender_all_src_btns()
     end
 
-    -- video/audio_scroll_offset are NOT NULL DEFAULT 0 in schema and
-    -- asserted non-nil by Sequence.load.
-    M._pending_scroll_restore = {
-        seq_id = displayed_id,
-        video  = displayed.video_scroll_offset,
-        audio  = displayed.audio_scroll_offset,
-    }
-
-    if M.timeline_video_scroll then
-        qt_suspend_scroll_area_anchor(M.timeline_video_scroll, false)
-    end
-    if M.header_video_scroll then
-        qt_suspend_scroll_area_anchor(M.header_video_scroll, false)
-    end
+    -- Project the incoming tab's scroll offsets (already on its cache,
+    -- hydrated from the DB by tab:load_from_database) onto the panes.
+    -- If Qt's range still reflects the OUTGOING tab's layout, the value
+    -- pins at an edge without touching the model; the rangeChanged
+    -- handlers re-apply as soon as the new content's range exists.
+    M.apply_pane_scroll("video")
+    M.apply_pane_scroll("audio")
 
     -- Tab widget: ensure it exists in the strip and apply current styling.
     -- The underline tracks the DISPLAYED tab (which is what we just swapped
@@ -3418,56 +3531,14 @@ function M.load_sequence(sequence_id)
     rebuild_for_displayed_tab()
 end
 
---- Restore scroll offsets from explicit target values (immune to async Qt clobbering).
-function M.restore_scroll_with_targets(v_scroll, a_scroll)
-    if M.timeline_video_scroll then
-        log.event("Restoring video scroll offset: %d", v_scroll)
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, v_scroll)
-    end
-    if M.timeline_audio_scroll then
-        log.event("Restoring audio scroll offset: %d", a_scroll)
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_scroll)
-    end
-    if M.vertical_splitter and M.headers_main_splitter then
-        -- ratio is per-sequence (H1: lives on displayed tab cache). Nil
-        -- means no displayed tab — skip splitter restore (panel keeps
-        -- whatever ratio the user has on screen).
-        local ratio = state.get_video_audio_split_ratio()
-        if ratio then
-            log.event("Restoring split ratio: %.3f", ratio)
-            local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
-            local total_height = total[1] + total[2]
-            if total_height > 0 then
-                local video_h = math.floor(total_height * ratio + 0.5)
-                local audio_h = total_height - video_h
-                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
-                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
-            end
-        end
-    end
-end
-
 --- Restore scroll offsets and splitter ratio from persisted state.
--- Called after sequence load and after initial panel creation.
--- All three reads are per-sequence (H1): nil when no displayed tab —
--- skip that branch rather than write fabricated zeros to the Qt widget.
+-- Called after sequence load and after initial panel creation. Scroll
+-- is a pure projection of the model (apply_pane_scroll); the splitter
+-- ratio read is per-sequence (H1): nil when no displayed tab — skip
+-- rather than write fabricated values to the Qt widget.
 function M.restore_scroll_and_splitter()
-    if M.timeline_video_scroll then
-        local v_off = state.get_video_scroll_offset()
-        if v_off then
-            local target = M.metrics.compute_initial_scroll_target(v_off)
-            log.event("Restoring video scroll offset: stored=%d → target=%d",
-                v_off, target)
-            qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, target)
-        end
-    end
-    if M.timeline_audio_scroll then
-        local a_off = state.get_audio_scroll_offset()
-        if a_off then
-            log.event("Restoring audio scroll offset: %d", a_off)
-            qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, a_off)
-        end
-    end
+    M.apply_pane_scroll("video")
+    M.apply_pane_scroll("audio")
     if M.vertical_splitter and M.headers_main_splitter then
         local ratio = state.get_video_audio_split_ratio()
         if ratio then
@@ -3485,6 +3556,9 @@ function M.restore_scroll_and_splitter()
 end
 
 --- Snapshot current layout state for inheritance by new projects.
+-- Scroll offsets come from the model (anchored coordinates), not the
+-- widgets — the model is the value the user chose; a widget can be
+-- transiently clamped by in-flight layout.
 function M.snapshot_layout()
     local snapshot = {}
     if M.vertical_splitter then
@@ -3494,17 +3568,15 @@ function M.snapshot_layout()
             snapshot.split_ratio = sizes[1] / total
         end
     end
-    if M.timeline_video_scroll then
-        snapshot.video_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll)
-    end
-    if M.timeline_audio_scroll then
-        snapshot.audio_scroll = qt_constants.CONTROL.GET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll)
-    end
+    snapshot.video_scroll = state.get_video_scroll_offset()
+    snapshot.audio_scroll = state.get_audio_scroll_offset()
     return snapshot
 end
 
 --- Apply inherited layout from a previous project.
--- Writes values to state AND to the Qt widgets, then persists to DB.
+-- Writes values to the model, then projects onto the Qt widgets.
+-- Snapshot scroll values are anchored model coordinates (see
+-- snapshot_layout above).
 function M.apply_layout_if_default(snapshot)
     if not snapshot then return end
 
@@ -3521,14 +3593,14 @@ function M.apply_layout_if_default(snapshot)
         end
     end
 
-    -- Apply scroll offsets
-    if snapshot.video_scroll and M.timeline_video_scroll then
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_video_scroll, snapshot.video_scroll)
+    -- Apply scroll offsets (model write + projection)
+    if snapshot.video_scroll then
         state.set_video_scroll_offset(snapshot.video_scroll)
+        M.apply_pane_scroll("video")
     end
-    if snapshot.audio_scroll and M.timeline_audio_scroll then
-        qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLL(M.timeline_audio_scroll, snapshot.audio_scroll)
+    if snapshot.audio_scroll then
         state.set_audio_scroll_offset(snapshot.audio_scroll)
+        M.apply_pane_scroll("audio")
     end
 end
 
@@ -3758,9 +3830,9 @@ function M.get_clip_global_center_for_test(clip_id)
     local track_h = view.get_track_visual_height(clip.track_id)
     assert(type(track_h) == "number" and track_h > 0,
         "get_clip_global_center_for_test: track height missing for " .. tostring(clip.track_id))
-    -- track_y already accounts for vertical_scroll_offset (see
-    -- timeline_view.update_layout_cache: entry.y = cursor - scroll).
-    -- Don't subtract scroll again — would be a double-correction.
+    -- track_y is in content (widget) coordinates; the QScrollArea pans
+    -- the widget itself, so MAP_TO_GLOBAL below already lands on the
+    -- on-screen position — no scroll term needed.
     local cy = math.floor(track_y + track_h / 2)
     local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(widget, cx, cy)
     return gx, gy

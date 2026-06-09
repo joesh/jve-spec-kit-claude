@@ -138,12 +138,14 @@ CREATE TABLE IF NOT EXISTS sequences (
     view_start_frame INTEGER NOT NULL DEFAULT 0,
     view_duration_frames INTEGER NOT NULL DEFAULT 240,
     playhead_frame INTEGER NOT NULL DEFAULT 0,
-    -- -1 sentinel = "freshly created, never user-scrolled" — the
-    -- renderer translates this to "scroll past max" so Qt clamps to
-    -- viewport-bottom (V1 visible — video tracks are V_n…V1 top-to-bottom
-    -- with V1 anchored at the bottom of the header stack). Audio uses
-    -- 0 = top because A1 is anchored at the top of its header stack.
-    video_scroll_offset INTEGER NOT NULL DEFAULT -1,
+    -- Scroll offsets are anchored in each pane's natural coordinate:
+    -- video = pixels from the BOTTOM of the content (video tracks stack
+    -- V_n…V1 top-to-bottom with V1 anchored at the bottom, so 0 = V1
+    -- visible); audio = pixels from the TOP (A1 at the top, 0 = A1
+    -- visible). Anchored values survive viewport/content resizes
+    -- unchanged; the view converts to Qt's top-anchored scrollbar
+    -- values when applying.
+    video_scroll_offset INTEGER NOT NULL DEFAULT 0,
     audio_scroll_offset INTEGER NOT NULL DEFAULT 0,
     video_audio_split_ratio REAL NOT NULL DEFAULT 0.5,
 

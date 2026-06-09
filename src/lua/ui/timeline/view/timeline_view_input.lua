@@ -229,15 +229,17 @@ end
 
 --- Handle a wheel event on the timeline view.
 --
--- Drives the horizontal viewport from `dx` (always) and decides whether
--- Qt's native vertical scroll should fire for `dy`. The asymmetric axis
--- lock suppresses vertical jitter during/after horizontal-dominant
--- gestures; in that case we return false so the C++ caller accepts the
--- event without propagating to QWidget::wheelEvent (which would otherwise
--- scroll the parent QScrollArea vertically using the raw, unfiltered dy).
+-- Drives the horizontal viewport from `dx` and the model-owned vertical
+-- scroll from `dy` (single-owner redesign, 2026-06-09: the gesture is
+-- interpreted HERE and written to the model via the panel's injected
+-- vertical_scroll entry point; the QScrollArea is a projection of the
+-- model and must never scroll natively). The asymmetric axis lock
+-- suppresses vertical jitter during/after horizontal-dominant gestures.
 --
--- @return propagate_vertical:bool — true to let Qt scroll vertically; false
---         to consume the event and pin the vertical position.
+-- @return propagate_vertical:bool — always false: vertical is fully
+--         handled through the model write path, so the C++ caller must
+--         never forward to QWidget::wheelEvent (native QScrollArea
+--         scrolling would move the view behind the model's back).
 function M.handle_wheel(view, delta_x, delta_y, modifiers, phase)
     assert(type(delta_x) == "number",
         "timeline_view_input.handle_wheel: delta_x must be a number, got " .. type(delta_x))
@@ -246,7 +248,13 @@ function M.handle_wheel(view, delta_x, delta_y, modifiers, phase)
 
     local dx, dy = filter_wheel_axis(view, delta_x, delta_y, phase)
     scroll_viewport_horizontally(view, effective_horizontal(dx, dy, modifiers))
-    return math.abs(dy) >= WHEEL_DELTA_EPSILON
+    if math.abs(dy) >= WHEEL_DELTA_EPSILON then
+        assert(view.vertical_scroll,
+            "timeline_view_input.handle_wheel: view created without a "
+            .. "vertical_scroll entry point (panel must inject it)")
+        view.vertical_scroll.by(dy)
+    end
+    return false
 end
 
 -- Scan the requested track for clips near the cursor and return whichever edges

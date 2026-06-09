@@ -197,7 +197,10 @@ for t in \
   test_playback_engine_filter.lua \
   test_playback_routes_to_displayed_tab.lua \
   test_mark_routing.lua \
-  test_browser_activation_routes_through_commands.lua
+  test_browser_activation_routes_through_commands.lua \
+  test_scroll_persistence_reopen.lua \
+  test_scroll_persistence_cold_start.lua \
+  test_scroll_survives_tab_switch.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"

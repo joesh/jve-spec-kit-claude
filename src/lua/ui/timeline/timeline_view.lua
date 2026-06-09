@@ -19,10 +19,16 @@ function M.create(widget, state_module, track_filter_fn, options)
         widget = widget,
         state = state_module,
         track_filter = track_filter_fn,
-        vertical_scroll_offset = options.vertical_scroll_offset or 0,
         render_bottom_to_top = options.render_bottom_to_top or false,
         on_drag_start = options.on_drag_start,
-        on_scroll_changed = options.on_scroll_changed,  -- callback(offset) for persistence
+        -- Vertical scroll is model-owned (single-owner redesign,
+        -- 2026-06-09); the view never holds a scroll position of its
+        -- own. The panel injects these entry points so gestures and
+        -- scroll-into-view route through the model write path:
+        --   vertical_scroll.by(dy)        — wheel delta (widget px)
+        --   vertical_scroll.to(value)     — absolute scrollbar value
+        --   vertical_scroll.metrics()     — value, max, pageStep
+        vertical_scroll = options.vertical_scroll,
         filtered_tracks = {},
         track_layout_cache = {by_index={}, by_id={}},
         potential_drag = nil,
@@ -51,7 +57,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             for i, track in ipairs(view.filtered_tracks) do
                 local h = view.get_track_visual_height(track.id)
                 cursor = cursor - h
-                local entry = { id = track.id, y = cursor - view.vertical_scroll_offset, height = h, track_type = track.track_type }
+                local entry = { id = track.id, y = cursor, height = h, track_type = track.track_type }
                 layout_by_index[i] = entry
                 layout_by_id[track.id] = entry
             end
@@ -59,7 +65,7 @@ function M.create(widget, state_module, track_filter_fn, options)
             local cursor = 0
             for i, track in ipairs(view.filtered_tracks) do
                 local h = view.get_track_visual_height(track.id)
-                local entry = { id = track.id, y = cursor - view.vertical_scroll_offset, height = h, track_type = track.track_type }
+                local entry = { id = track.id, y = cursor, height = h, track_type = track.track_type }
                 layout_by_index[i] = entry
                 layout_by_id[track.id] = entry
                 cursor = cursor + h
@@ -111,55 +117,56 @@ function M.create(widget, state_module, track_filter_fn, options)
     -- Scroll vertically so every track in the given list is visible.
     -- Called by the viewport_surface_tracks signal after undo/redo of a
     -- multi-track edit. If the union of requested tracks fits within
-    -- the widget height, center it; otherwise anchor the topmost track
-    -- near the top edge. No-op when all tracks are already in view.
+    -- the visible viewport, center it; otherwise anchor the topmost
+    -- track near the top edge. No-op when all tracks are already in
+    -- view. Scroll-into-view is intentional navigation: the target
+    -- routes through the model write path (vertical_scroll.to) exactly
+    -- like a user gesture.
     function view.ensure_tracks_visible(track_ids)
         if type(track_ids) ~= "table" or #track_ids == 0 then return end
-        -- Widget height is queried lazily via Qt; cache misses go through
-        -- update_layout_cache(height), so read the widget height first.
+        assert(view.vertical_scroll,
+            "timeline_view.ensure_tracks_visible: view created without a "
+            .. "vertical_scroll entry point (panel must inject it)")
+        -- Track Ys are content (widget) coordinates; the visible window
+        -- is the scroll area's [value, value + pageStep).
+        local value, _, page = view.vertical_scroll.metrics()
+        if not value or page <= 0 then return end  -- not laid out yet
         local widget_height = qt_constants.PROPERTIES.GET_HEIGHT
             and qt_constants.PROPERTIES.GET_HEIGHT(widget)
             or 0
         if widget_height <= 0 then return end
         view.update_layout_cache(widget_height)
 
-        -- Convert each track's current screen Y back to "pre-scroll" Y
-        -- (layout Y) so we can compute an offset against a stable frame.
-        local min_layout_y, max_layout_y = nil, nil
+        local min_y, max_y = nil, nil
         for _, track_id in ipairs(track_ids) do
             local entry = view.track_layout_cache.by_id[track_id]
             if entry then
-                local top = entry.y + view.vertical_scroll_offset
-                local bottom = top + entry.height
-                if not min_layout_y or top < min_layout_y then min_layout_y = top end
-                if not max_layout_y or bottom > max_layout_y then max_layout_y = bottom end
+                local bottom = entry.y + entry.height
+                if not min_y or entry.y < min_y then min_y = entry.y end
+                if not max_y or bottom > max_y then max_y = bottom end
             end
         end
-        if not min_layout_y then return end
+        if not min_y then return end
 
-        local current_offset = view.vertical_scroll_offset
-        local visible_top = current_offset
-        local visible_bottom = current_offset + widget_height
-        local union_height = max_layout_y - min_layout_y
+        local visible_top = value
+        local visible_bottom = value + page
+        local union_height = max_y - min_y
 
-        local new_offset
-        if min_layout_y >= visible_top and max_layout_y <= visible_bottom then
+        local target
+        if min_y >= visible_top and max_y <= visible_bottom then
             return  -- already visible, no-op
-        elseif union_height <= widget_height then
+        elseif union_height <= page then
             -- Center the union within the viewport.
-            local mid = (min_layout_y + max_layout_y) / 2
-            new_offset = math.floor(mid - widget_height / 2)
+            local mid = (min_y + max_y) / 2
+            target = math.floor(mid - page / 2)
         else
             -- Union taller than viewport: anchor top of union near the
             -- top edge, leaving a small padding above so the topmost
             -- track doesn't butt against the ruler.
-            local padding = math.floor(widget_height * VERTICAL_SURFACE_PADDING_FRACTION)
-            new_offset = min_layout_y - padding
+            local padding = math.floor(page * VERTICAL_SURFACE_PADDING_FRACTION)
+            target = min_y - padding
         end
-        if new_offset < 0 then new_offset = 0 end
-        view.vertical_scroll_offset = new_offset
-        view.render()
-        if view.on_scroll_changed then view.on_scroll_changed(new_offset) end
+        view.vertical_scroll.to(target)
     end
 
     -- Event Wiring
@@ -208,12 +215,6 @@ function M.create(widget, state_module, track_filter_fn, options)
     return {
         widget = widget,
         render = view.render,
-        set_vertical_scroll = function(off)
-            view.vertical_scroll_offset = off
-            view.render()
-            if view.on_scroll_changed then view.on_scroll_changed(off) end
-        end,
-        get_vertical_scroll = function() return view.vertical_scroll_offset end,
         ensure_tracks_visible = view.ensure_tracks_visible,
         -- Coord → track query; consumed by external drop handlers
         -- (patch-drag strip drops, FR-010a). Same function the view's
@@ -223,7 +224,8 @@ function M.create(widget, state_module, track_filter_fn, options)
         -- renderer consumes; exposed so external consumers (drop
         -- handlers, test-helpers asking "where on screen is clip X?")
         -- don't re-implement layout math against the internal view
-        -- table. y already accounts for vertical_scroll_offset.
+        -- table. y is in content (widget) coordinates; the QScrollArea
+        -- pans the widget, so widget-local y needs no scroll term.
         get_track_y_by_id = view.get_track_y_by_id,
         get_track_visual_height = view.get_track_visual_height,
         on_mouse_event = on_mouse,

@@ -232,7 +232,6 @@ protected:
         if (event->type() == QEvent::ShortcutOverride) {
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
             int k = keyEvent->key();
-            auto mods = keyEvent->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier);
 
             // Always-residual keys (any modifier combo): arrows, Escape
             // Tab NOT claimed — Qt's native focusNextPrevChild handles Tab cycling.
@@ -540,50 +539,41 @@ private:
     int press_x, press_y;
 };
 
-// Event filter class to maintain bottom-anchored scrolling.
-// Suspended during programmatic scroll restoration (sequence tab switch)
-// to prevent async singleShot callbacks from clobbering the restored position.
-class BottomAnchorFilter : public QObject
+// Event filter that captures wheel events on a scroll area's viewport
+// and forwards the vertical delta to a Lua handler INSTEAD of letting Qt
+// scroll natively. Scroll position is model-owned (single-owner scroll
+// redesign, 2026-06-09): every user gesture must route through the model
+// write path, so passive scroll surfaces (track header columns) capture
+// the gesture here rather than moving their own scrollbar.
+// Delta convention matches TimelineRenderer::wheelEvent — pixelDelta
+// when available, else angleDelta/8.
+class WheelCaptureFilter : public QObject
 {
 public:
-    BottomAnchorFilter(QScrollArea* sa) : QObject(sa), scrollArea(sa), distanceFromBottom(0), suspended(false) {}
-
-    void setSuspended(bool s) { suspended = s; }
-    bool isSuspended() const { return suspended; }
+    WheelCaptureFilter(lua_State* L_ptr, const std::string& handler, QObject* parent)
+        : QObject(parent), lua_state(L_ptr), handler_name(handler) {}
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override
     {
-        if (suspended || !scrollArea || !scrollArea->widget()) {
+        if (event->type() != QEvent::Wheel || !lua_state) {
             return QObject::eventFilter(obj, event);
         }
-        QScrollBar* vbar = scrollArea->verticalScrollBar();
-        if (vbar) {
-            if (event->type() == QEvent::Resize) {
-                int oldMax = vbar->maximum();
-                int oldValue = vbar->value();
-                distanceFromBottom = oldMax - oldValue;
-
-                QTimer::singleShot(0, [this, vbar]() {
-                    if (suspended) return;
-                    int newMax = vbar->maximum();
-                    int newValue = newMax - distanceFromBottom;
-                    vbar->setValue(qMax(0, newValue));
-                });
-            } else if (event->type() == QEvent::Wheel || event->type() == QEvent::MouseButtonPress) {
-                QTimer::singleShot(0, [this, vbar]() {
-                    if (suspended) return;
-                    distanceFromBottom = vbar->maximum() - vbar->value();
-                });
-            }
+        QWheelEvent* we = static_cast<QWheelEvent*>(event);
+        double deltaY = !we->pixelDelta().isNull()
+            ? we->pixelDelta().y()
+            : we->angleDelta().y() / 8.0;
+        LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.scroll_area_wheel");
+        if (cb.ready()) {
+            lua_pushnumber(lua_state, deltaY);
+            cb.invoke(1, 0);
         }
-        return QObject::eventFilter(obj, event);
+        return true;  // consumed — Qt must not also scroll natively
     }
 
 private:
-    QScrollArea* scrollArea;
-    int distanceFromBottom;
-    bool suspended;
+    lua_State* lua_state;
+    std::string handler_name;
 };
 
 // ============================================================================
@@ -1200,8 +1190,14 @@ int lua_set_splitter_moved_handler(lua_State* L) {
     return 0;
 }
 
-// Scroll area vertical scroll changed handler
-int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
+// Scroll area vertical USER-scroll handler. Connects actionTriggered,
+// which Qt emits ONLY for user interaction with the scrollbar (drags,
+// page clicks, arrow steps) — never for programmatic setValue or layout
+// clamps. This is the intent-distinguishing signal the model write path
+// requires; valueChanged is deliberately NOT used here because it fires
+// for programmatic changes too (the ambiguity behind the 2026-06-09
+// scroll-loss bug). Handler receives the user's target position.
+int lua_set_scroll_area_v_user_scroll_handler(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
     const char* handler_name = lua_tostring(L, 2);
     if (!sa || !handler_name) return 0;
@@ -1210,13 +1206,55 @@ int lua_set_scroll_area_v_scroll_handler(lua_State* L) {
     if (!sb) return 0;
 
     std::string handler_str = std::string(handler_name);
-    QObject::connect(sb, &QScrollBar::valueChanged, [L, handler_str](int value) {
-        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_vscroll");
+    QObject::connect(sb, &QScrollBar::actionTriggered, [L, sb, handler_str](int) {
+        // sliderPosition is the user's target at action time (value may
+        // not have caught up yet for tracking drags).
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_v_user_scroll");
         if (cb.ready()) {
-            lua_pushinteger(L, value);
+            lua_pushinteger(L, sb->sliderPosition());
             cb.invoke(1, 0);
         }
     });
+    return 0;
+}
+
+// Scroll area vertical range handler. Fires when the scrollable range
+// changes (content resize, viewport resize). The model owns the scroll
+// position; the view re-applies it whenever Qt's range catches up with
+// a layout change — this replaces both the BottomAnchorFilter timer
+// dance and the deferred pending-restore mechanism.
+int lua_set_scroll_area_v_range_handler(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!sa || !handler_name) return 0;
+
+    QScrollBar* sb = sa->verticalScrollBar();
+    if (!sb) return 0;
+
+    std::string handler_str = std::string(handler_name);
+    QObject::connect(sb, &QScrollBar::rangeChanged, [L, handler_str](int min, int max) {
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_area_v_range");
+        if (cb.ready()) {
+            lua_pushinteger(L, min);
+            lua_pushinteger(L, max);
+            cb.invoke(2, 0);
+        }
+    });
+    return 0;
+}
+
+// Capture wheel events on a scroll area so they route through the
+// model write path instead of Qt's native scrolling. See
+// WheelCaptureFilter above. Installed on the viewport (where Qt
+// delivers wheel events for the scroll area's content).
+int lua_set_scroll_area_wheel_handler(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!sa || !handler_name || !sa->viewport()) return 0;
+
+    WheelCaptureFilter* filter =
+        new WheelCaptureFilter(L, handler_name, sa->viewport());
+    sa->viewport()->installEventFilter(filter);
     return 0;
 }
 
@@ -1288,36 +1326,19 @@ int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
     return 0;
 }
 
-int lua_set_scroll_area_anchor_bottom(lua_State* L) {
+// Vertical scroll metrics: value, max, pageStep (viewport height in
+// content coordinates). The gesture entry points need all three to
+// clamp a user target and convert between top-anchored widget values
+// and the model's anchored offsets.
+int lua_get_scroll_area_v_metrics(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
-    bool enable = lua_toboolean(L, 2);
     if (!sa) return 0;
-
-    if (enable) {
-        BottomAnchorFilter* filter = new BottomAnchorFilter(sa);
-        sa->viewport()->installEventFilter(filter);
-        QScrollBar* vbar = sa->verticalScrollBar();
-        if (vbar) {
-            vbar->setValue(vbar->maximum());
-        }
-    }
-    return 0;
-}
-
-int lua_suspend_scroll_area_anchor(lua_State* L) {
-    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
-    bool suspend = lua_toboolean(L, 2);
-    if (!sa || !sa->viewport()) return 0;
-
-    // Find the BottomAnchorFilter installed on this scroll area's viewport
-    for (QObject* child : sa->viewport()->children()) {
-        BottomAnchorFilter* filter = dynamic_cast<BottomAnchorFilter*>(child);
-        if (filter) {
-            filter->setSuspended(suspend);
-            break;
-        }
-    }
-    return 0;
+    QScrollBar* sb = sa->verticalScrollBar();
+    if (!sb) return 0;
+    lua_pushinteger(L, sb->value());
+    lua_pushinteger(L, sb->maximum());
+    lua_pushinteger(L, sb->pageStep());
+    return 3;
 }
 
 // Event filter for window geometry changes (resize and move)

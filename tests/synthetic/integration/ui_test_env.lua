@@ -259,6 +259,36 @@ function M.launch(opts)
     }
 end
 
+--- Launch the full application UI on an EXISTING .jvp — the cold-start
+--- path. Unlike launch(), nothing is created or wiped: this is exactly
+--- what happens when a user restarts JVE on a project from a previous
+--- session (layout.lua opens JVE_PROJECT_PATH itself). Use for tests
+--- that assert persisted view-state survives a process restart.
+--- @param db_path string absolute path to an existing .jvp
+--- @return app table (from layout.lua)
+function M.launch_existing(db_path)
+    assert(db_path and db_path ~= "", "launch_existing: db_path required")
+    local f = io.open(db_path, "r")
+    assert(f, "launch_existing: no project file at " .. db_path)
+    f:close()
+
+    saved_home = os.getenv("HOME")
+    package.cpath = package.cpath .. ';' .. saved_home .. '/.luarocks/lib/lua/5.1/?.so'
+    package.path = package.path .. ';' .. saved_home .. '/.luarocks/share/lua/5.1/?.lua'
+    package.path = package.path .. ';' .. saved_home .. '/.luarocks/share/lua/5.1/?/init.lua'
+
+    local test_home = "/tmp/jve_test_home"
+    os.execute("mkdir -p " .. test_home .. "/.jve")
+    setenv("HOME", test_home)
+
+    setenv("JVE_PROJECT_PATH", db_path)
+    local app = require("ui.layout")
+    assert(type(app) == "table" and app.main_window,
+        "launch_existing: layout.lua did not return a main window")
+    M.pump(200)
+    return app
+end
+
 --------------------------------------------------------------------------------
 -- Event loop helpers
 --------------------------------------------------------------------------------

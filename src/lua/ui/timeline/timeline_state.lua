@@ -757,6 +757,20 @@ end
 -- shutdown remain explicit save points for kill paths that don't let the
 -- timer fire.
 --
+-- Offsets are ANCHORED, in each pane's natural coordinate (single-owner
+-- redesign, 2026-06-09): video = pixels from the BOTTOM of the content
+-- (V1 sits at the bottom of the stack, so 0 = V1 visible — the fresh-
+-- sequence default needs no sentinel); audio = pixels from the TOP
+-- (0 = A1 visible). timeline_panel converts to/from Qt's top-anchored
+-- scrollbar values at the view boundary. Anchored coordinates survive
+-- viewport and content resizes without adjustment, which is what lets
+-- the view re-apply the model on every Qt rangeChanged instead of
+-- needing the old BottomAnchorFilter timer dance.
+--
+-- These setters are called ONLY from timeline_panel's gesture/navigation
+-- entry points — never from Qt change events, which can't distinguish
+-- user intent from layout side effects.
+--
 -- Silent no-op when no displayed cache: legitimate transient state during
 -- tab close / project switch. Logged at `event` level (off by default).
 local SCROLL_PERSIST_THROTTLE_MS = 250  -- estimate; settle time of Qt rebuild storm not measured
@@ -800,11 +814,15 @@ M.set_audio_scroll_offset = function(offset)
 end
 
 --- Persist current scroll offsets to DB. Call at save points only.
--- Reads the displayed tab's cache (the source of truth for view-state since
--- H1) and then prefers the live Qt scroll-bar value when widgets are
--- available — async scroll events can lag the cache during widget rebuild,
--- so the widget read is the more recent value at save time. The cache value
--- stands when widgets aren't yet attached.
+-- Reads the displayed tab's cache and nothing else. The cache is the
+-- single owner of scroll position (single-owner redesign, 2026-06-09):
+-- it is written ONLY by user gestures and explicit navigation through
+-- timeline_panel's scroll entry points, so it is always the value the
+-- user last chose. The Qt widget is a projection of this value and is
+-- deliberately NOT consulted — a widget can sit clamped at a stale
+-- position while Qt's deferred layout catches up with content changes,
+-- and persisting that transient destroyed saved offsets (Joe's
+-- kill/restart scroll loss; test_scroll_survives_tab_switch.lua).
 M.persist_scroll_offsets = function()
     -- Scroll offsets are view-state and belong to the DISPLAYED sequence
     -- (FR-005, FR-007), not the active edit target. With option A
@@ -820,17 +838,6 @@ M.persist_scroll_offsets = function()
     local v_off = cache.video_scroll_offset
     local a_off = cache.audio_scroll_offset
     if v_off == nil or a_off == nil then return end
-    -- Read from Qt widgets (ground truth) if available
-    local ok, panel = pcall(require, "ui.timeline.timeline_panel")
-    if ok and panel then
-        local qt = require("core.qt_constants")
-        if panel.timeline_video_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
-            v_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_video_scroll) or v_off
-        end
-        if panel.timeline_audio_scroll and qt.CONTROL.GET_SCROLL_AREA_V_SCROLL then
-            a_off = qt.CONTROL.GET_SCROLL_AREA_V_SCROLL(panel.timeline_audio_scroll) or a_off
-        end
-    end
     local Sequence = require("models.sequence")
     Sequence.update_scroll_offsets(seq_id, v_off, a_off)
 end

@@ -309,7 +309,10 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_tree_expand_collapse_handler); lua_setglobal(L, "qt_set_tree_expand_collapse_handler");
     lua_pushcfunction(L, lua_hide_splitter_handle); lua_setglobal(L, "qt_hide_splitter_handle");
     lua_pushcfunction(L, lua_set_splitter_moved_handler); lua_setglobal(L, "qt_set_splitter_moved_handler");
-    lua_pushcfunction(L, lua_set_scroll_area_v_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_v_scroll_handler");
+    lua_pushcfunction(L, lua_set_scroll_area_v_user_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_v_user_scroll_handler");
+    lua_pushcfunction(L, lua_set_scroll_area_v_range_handler); lua_setglobal(L, "qt_set_scroll_area_v_range_handler");
+    lua_pushcfunction(L, lua_set_scroll_area_wheel_handler); lua_setglobal(L, "qt_set_scroll_area_wheel_handler");
+    lua_pushcfunction(L, lua_get_scroll_area_v_metrics); lua_setglobal(L, "qt_get_scroll_area_v_metrics");
     lua_pushcfunction(L, lua_get_splitter_handle); lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget); lua_setglobal(L, "qt_update_widget");
 
@@ -371,8 +374,6 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_window_appearance); lua_setglobal(L, "qt_set_window_appearance");
     lua_pushcfunction(L, lua_create_single_shot_timer); lua_setglobal(L, "qt_create_single_shot_timer");
     lua_pushcfunction(L, lua_set_scroll_area_alignment); lua_setglobal(L, "qt_set_scroll_area_alignment");
-    lua_pushcfunction(L, lua_set_scroll_area_anchor_bottom); lua_setglobal(L, "qt_set_scroll_area_anchor_bottom");
-    lua_pushcfunction(L, lua_suspend_scroll_area_anchor); lua_setglobal(L, "qt_suspend_scroll_area_anchor");
     lua_pushcfunction(L, lua_set_focus_policy); lua_setglobal(L, "qt_set_focus_policy");
     lua_pushcfunction(L, lua_set_focus); lua_setglobal(L, "qt_set_focus");
     lua_pushcfunction(L, lua_get_focus_widget); lua_setglobal(L, "qt_get_focus_widget");
