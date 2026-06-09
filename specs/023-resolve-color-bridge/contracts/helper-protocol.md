@@ -46,6 +46,7 @@ State-changing verbs revalidate the handle before touching the Resolve API and r
 - **args**: none
 - **result**: `{ alive, resolve_connected, resolve_version, helper_version }`
 - Liveness + version surface JVE gates on. `resolve_version` is logged (API-drift landmine).
+- When `resolve_connected: false` (handle stale / API error / not Studio), `resolve_version` is `null` and `last_error: {code, message}` is added — JVE must not assume `resolve_version` is always a string.
 
 ### `import_timeline` *(state-changing; idempotent on change token)*
 - **args**: `{ drt_path, media_roots: [string], clip_positions: [{clip_id, track_type, track_index, record_start}], change_token }`

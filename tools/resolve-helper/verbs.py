@@ -143,13 +143,17 @@ def verb_ping(args, handle, envelope_id, helper_version):
         })
     # Non-fatal: ping returns alive=True + connected=False on
     # handle errors so JVE can gate UI without false "helper dead"
-    # alarms when Resolve is just not running.
+    # alarms when Resolve is just not running. version_string()
+    # raises in the same conditions acquire() failed for (terminal
+    # state / scriptapp returns None) — calling it here would crash
+    # the dispatch handler (post-pass5 re-raises). Send None instead;
+    # last_error already conveys why the connection is down.
     _, code, msg = status
     if code in ("handle_stale", "resolve_api_error", "not_studio"):
         return _ok(envelope_id, {
             "alive": True,
             "resolve_connected": False,
-            "resolve_version": handle.version_string(),
+            "resolve_version": None,
             "helper_version": helper_version,
             "last_error": {"code": code, "message": msg},
         })
