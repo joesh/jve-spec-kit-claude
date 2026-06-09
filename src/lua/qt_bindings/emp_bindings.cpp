@@ -2448,21 +2448,44 @@ static int lua_emp_peak_header(lua_State* L) {
     return 1;
 }
 
-// EMP.MEDIA_CONTENT_HASH(media_path) -> table {size, hash} | nil
+// EMP.MEDIA_CONTENT_HASH(media_path) -> table {size, hash}
+//                                       | nil, "stat_failed:<errno>"
+//                                       | nil, "empty_file"
 //
 // Computes the content fingerprint of a media file without loading
 // any peak data. Used by peak_cache.try_load_existing to verify a
 // cached peak file against the current bytes on disk when mtime has
-// drifted. Returns nil if the file is missing / unreadable / empty.
+// drifted. The three failure shapes used to collapse to a single nil —
+// rule 2.32 violation since the caller cannot distinguish missing-file
+// (drop cache, expect regen) from empty-file (degenerate input) from
+// the hash==0 case (which is a ComputeContentHash bug, NOT a runtime
+// failure — asserted below). Review HIGH E#5.
 static int lua_emp_media_content_hash(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
     struct stat st;
-    if (::stat(path, &st) != 0 || st.st_size <= 0) {
-        return 0;  // nil — caller treats as "no fingerprint available"
+    if (::stat(path, &st) != 0) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "stat_failed:%d", errno);
+        return 2;
+    }
+    if (st.st_size <= 0) {
+        lua_pushnil(L);
+        lua_pushstring(L, "empty_file");
+        return 2;
     }
     uint64_t h = emp::ComputeContentHash(path, st.st_size);
-    if (h == 0) return 0;
+    if (h == 0) {
+        // hash==0 on a non-empty file is a ComputeContentHash algorithm
+        // bug, not a runtime failure path; format the path into a fixed
+        // buffer for the assert message (JVE_ASSERT takes const char*).
+        char assert_msg[512];
+        std::snprintf(assert_msg, sizeof(assert_msg),
+            "MEDIA_CONTENT_HASH: ComputeContentHash returned 0 for "
+            "non-empty %s (size=%lld) — algorithm contract violation",
+            path, static_cast<long long>(st.st_size));
+        JVE_ASSERT(h != 0, assert_msg);
+    }
 
     lua_newtable(L);
     lua_pushinteger(L, static_cast<lua_Integer>(st.st_size));

@@ -125,7 +125,17 @@ local function try_load_existing(media_id, media_path, source_mtime, expected_sa
     local hash_rescued = false
     if (not mtime_matches) and coverage_ok and media_path
             and hdr.source_size and hdr.content_hash then
-        local fp = EMP.MEDIA_CONTENT_HASH(media_path)
+        local fp, fp_err = EMP.MEDIA_CONTENT_HASH(media_path)
+        if (not fp) and fp_err then
+            -- Distinct failure variants per review HIGH E#5; the cache
+            -- still falls through to regen, but logs the specific cause
+            -- (stat_failed:<errno> | empty_file) so an unexpected stat
+            -- failure on a file we just resolved is visible, not
+            -- silently collapsed with "content didn't match".
+            log.event("peak_cache: content-hash unavailable for %s (%s) — "
+                .. "skipping hash-rescue, will regen",
+                media_id, fp_err)
+        end
         if fp and fp.size == hdr.source_size and fp.hash == hdr.content_hash then
             local ok = EMP.PEAK_REFRESH_HEADER_MTIME(path, floored_mtime)
             assert(ok, string.format(

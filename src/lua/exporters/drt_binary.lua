@@ -365,9 +365,15 @@ local function encode_marker_color_message(marker)
         .. " (closed set: drp_binary.MARKER_COLOR_VALUES)")
     assert(type(marker.note) == "string",
         "encode_marker_color_message: marker.note must be string (may be empty)")
-    assert(type(marker.duration) == "number" and marker.duration >= 0
+    -- Same rule as ClipMarker.new and drp_binary's decoder: duration >= 1
+    -- (1 = point marker). Prior code accepted >= 0 here, which let a 0
+    -- escape into the wire — drp_binary's decoder then dropped that
+    -- marker on the round trip back in, silently breaking identity.
+    -- Review HIGH E#4: one rule across decoder, model, encoder.
+    assert(type(marker.duration) == "number" and marker.duration >= 1
         and marker.duration % 1 == 0,
-        "encode_marker_color_message: marker.duration must be non-negative integer")
+        "encode_marker_color_message: marker.duration must be integer "
+        .. ">= 1 (1 = point marker)")
     assert(type(marker.name) == "string" and marker.name ~= "",
         "encode_marker_color_message: marker.name required "
         .. "(Resolve rejects empty-name markers)")
