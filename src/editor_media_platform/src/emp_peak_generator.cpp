@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <limits>
 #include <vector>
 #include <cassert>
 #include <sys/stat.h>
@@ -651,7 +652,23 @@ PeakGenerator::ProgressQueryResult PeakGenerator::QueryInProgress(
     int64_t bins_available = progress / static_cast<int64_t>(spp);
     if (bins_available <= 0) return result;
 
-    // Map source range to bins, clamped to what's been computed
+    // Two bin ranges:
+    //   requested: what the caller asked for (uncapped — what a complete
+    //              peak file would serve)
+    //   available: clamped to the decoder frontier (bins_available)
+    // The output pixel count is proportional to available/requested so
+    // the caller draws partial pixels (decoded prefix) over a
+    // proportionally narrow sub-window and leaves the unwritten tail
+    // blank, revealing as generation advances. Stretching partial bins
+    // to fill pixel_width is the "march along" bug.
+    constexpr uint64_t kUncappedBins = std::numeric_limits<uint64_t>::max();
+    int64_t requested_start_bin, requested_end_bin;
+    MapSourceRangeToBins(source_start_sample, source_end_sample,
+                          spp, kUncappedBins,
+                          requested_start_bin, requested_end_bin);
+    int64_t requested_bin_count = requested_end_bin - requested_start_bin;
+    if (requested_bin_count <= 0) return result;
+
     int64_t start_bin, end_bin;
     MapSourceRangeToBins(source_start_sample, source_end_sample,
                           spp, static_cast<uint64_t>(bins_available),
@@ -660,15 +677,23 @@ PeakGenerator::ProgressQueryResult PeakGenerator::QueryInProgress(
 
     int64_t bin_count = end_bin - start_bin;
 
-    // Resample to pixel width (main thread only, m_query_scratch is safe)
+    int output_pixels = static_cast<int>(std::llround(
+        static_cast<double>(pixel_width)
+        * static_cast<double>(bin_count)
+        / static_cast<double>(requested_bin_count)));
+    if (output_pixels < 1) output_pixels = 1;
+    if (output_pixels > pixel_width) output_pixels = pixel_width;
+
+    // Resample partial bins to the proportional pixel count (main
+    // thread only, m_query_scratch is safe).
     const float* level0 = job->peak_buf.data.data() + job->peak_buf.level_offsets[0];
     ResampleBinsToPixels(level0, start_bin, bin_count,
                           static_cast<uint64_t>(bins_available),
-                          pixel_width, m_query_scratch);
+                          output_pixels, m_query_scratch);
 
     // Copy to owned result (scratch may be reused on next call)
     result.peaks = m_query_scratch;
-    result.count = pixel_width;
+    result.count = output_pixels;
     result.actual_start = start_bin * static_cast<int64_t>(spp);
     result.actual_end = end_bin * static_cast<int64_t>(spp);
     return result;

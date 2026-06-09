@@ -871,12 +871,20 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
                 log_waveform_range_anomalies((clip.resolved_media and clip.resolved_media.id),
                     peak_start, peak_end, actual_start, actual_end, max_drift)
 
+                -- In-progress peak generation returns peaks whose actual
+                -- range is clamped to the decoder frontier. Draw the
+                -- waveform only over the corresponding pixel sub-window
+                -- so the unwritten tail stays blank and reveals as
+                -- generation advances — NLE convention.
+                local wave_x, wave_w = waveform_utils.partial_waveform_window(
+                    peak_start, peak_end, actual_start, actual_end,
+                    visible_x, draw_width, reversed)
                 local wave_col = waveform_color.derive(body_color)
                 local wave_y_offset, wave_height, lbl_vis =
                     waveform_layout.compute(clip_height)
                 label_visible = lbl_vis
-                timeline.add_waveform(view.widget, visible_x, y + wave_y_offset,
-                    draw_width, wave_height, peaks, count, wave_col, reversed)
+                timeline.add_waveform(view.widget, wave_x, y + wave_y_offset,
+                    wave_w, wave_height, peaks, count, wave_col, reversed)
                 has_waveform = true
             end
         end
