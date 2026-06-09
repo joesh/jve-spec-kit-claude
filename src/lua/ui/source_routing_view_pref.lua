@@ -38,11 +38,8 @@ local function save_to_disk(value)
     assert(_path and _path ~= "", "source_routing_view_pref: not initialized")
     local dir = _path:match("^(.+)/[^/]+$")
     if dir then
-        -- Quote dir to survive path components with spaces. os.execute
-        -- returns 0 (luajit/Lua 5.1) or true (Lua 5.2+) on success.
-        local rc = os.execute(string.format("mkdir -p %q", dir))
-        assert(rc == 0 or rc == true,
-            "source_routing_view_pref: mkdir -p failed for " .. dir)
+        local ok, err = qt_fs_mkdir_p(dir)
+        assert(ok, "source_routing_view_pref: mkdir " .. dir .. " failed: " .. tostring(err))
     end
     local f = io.open(_path, "w")
     assert(f, string.format("source_routing_view_pref: cannot write to '%s'", _path))

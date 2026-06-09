@@ -30,7 +30,10 @@ end
 
 local function ensure_persistence_dir()
     local dir = persistence_path:match("^(.+)/[^/]+$")
-    if dir then os.execute(string.format("mkdir -p %q", dir)) end
+    if dir then
+        local ok, err = qt_fs_mkdir_p(dir)
+        assert(ok, "file_browser_paths: mkdir " .. dir .. " failed: " .. tostring(err))
+    end
 end
 
 local function load_paths()

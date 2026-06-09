@@ -4,6 +4,7 @@
 #include <chrono>
 #include <sys/stat.h>      // ::stat for nanosecond mtime (POSIX)
 #include <QApplication> // For QApplication::focusWidget()
+#include <QDir>
 #include <QFileInfo>
 #include <QDateTime>
 #include <QRubberBand>
@@ -128,6 +129,36 @@ static int lua_qt_file_stat_batch(lua_State* L) {
         }
     }
     return 1;
+}
+
+// Recursive mkdir using Qt's native QDir::mkpath. Replaces os.execute("mkdir -p")
+// shellouts, which fail silently under Finder-launched .app bundles (stripped
+// PATH) and discard exit status. Returns true on success or if the directory
+// already exists; returns (nil, errmsg) on failure. Callers MUST assert on nil.
+// Empty string is rejected explicitly: QDir::mkpath("") silently returns true
+// (resolves to CWD), which would mask caller bugs.
+static int lua_qt_fs_mkdir_p(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    if (path[0] == '\0') {
+        lua_pushnil(L);
+        lua_pushliteral(L, "qt_fs_mkdir_p: path must not be empty");
+        return 2;
+    }
+    QString qpath = QString::fromUtf8(path);
+    QDir dir;
+    if (dir.mkpath(qpath)) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    // Discriminate the most actionable failure: target exists as a non-directory.
+    // Other modes collapse — Qt doesn't surface errno through mkpath.
+    QFileInfo fi(qpath);
+    const char* reason = (fi.exists() && !fi.isDir())
+        ? "path exists but is not a directory"
+        : "permission denied, invalid path, or non-directory component in parent chain";
+    lua_pushnil(L);
+    lua_pushfstring(L, "QDir::mkpath failed for %s: %s", path, reason);
+    return 2;
 }
 
 namespace {

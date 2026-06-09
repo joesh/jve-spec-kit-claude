@@ -425,16 +425,19 @@ function M.post_open_init(project, sequence, project_path)
         end
     end
 
-    -- Persist last-opened project path for startup
-    local home = os.getenv("HOME")
-    if home then
-        os.execute('mkdir -p "' .. home .. '/.jve"')
-        local f = io.open(home .. "/.jve/last_project_path", "w")
-        if f then
-            f:write(project_path)
-            f:close()
-        end
-    end
+    -- Persist last-opened project path for startup. HOME is hard-required —
+    -- the same function asserts it for the interactive path (rule 1.14).
+    local home = assert(os.getenv("HOME"),
+        "open_project.post_open_init: HOME env var required")
+    local jve_dir = home .. "/.jve"
+    local ok, err = qt_fs_mkdir_p(jve_dir)
+    assert(ok, "open_project: mkdir " .. jve_dir .. " failed: " .. tostring(err))
+    local last_path_file = home .. "/.jve/last_project_path"
+    local f, open_err = io.open(last_path_file, "w")
+    assert(f, string.format(
+        "open_project: cannot write %s: %s", last_path_file, tostring(open_err)))
+    f:write(project_path)
+    f:close()
 
     -- Add to recent projects list
     local display_name = (project and project.name) or "Untitled"

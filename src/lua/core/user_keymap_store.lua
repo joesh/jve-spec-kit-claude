@@ -59,8 +59,8 @@ local function validate_name(name)
 end
 
 local function ensure_dir(path)
-    -- mkdir -p; harmless if already present
-    os.execute(string.format("mkdir -p %q", path))
+    local ok, err = qt_fs_mkdir_p(path)
+    assert(ok, "user_keymap_store: mkdir " .. path .. " failed: " .. tostring(err))
 end
 
 local function file_exists(path)

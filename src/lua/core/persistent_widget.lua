@@ -32,10 +32,10 @@ local function read_file(path)
 end
 
 local function write_file(path, contents)
-    -- Ensure parent dir exists. Assert on failure — silent skip would hide a bug.
-    local ok_mkdir = os.execute(string.format("mkdir -p %q", STATE_DIR))
-    assert(ok_mkdir == 0 or ok_mkdir == true,
-        string.format("persistent_widget.write_file: mkdir -p %s failed", STATE_DIR))
+    local ok_mkdir, mkdir_err = qt_fs_mkdir_p(STATE_DIR)
+    assert(ok_mkdir, string.format(
+        "persistent_widget.write_file: mkdir %s failed: %s",
+        STATE_DIR, tostring(mkdir_err)))
     local fh, err = io.open(path, "w")
     assert(fh, string.format(
         "persistent_widget.write_file: cannot open %s for write: %s", path, tostring(err)))

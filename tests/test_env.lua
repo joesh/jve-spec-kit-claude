@@ -249,6 +249,22 @@ if not _G.qt_file_mtime then
     end
 end
 
+-- Provide qt_fs_mkdir_p for plain-luajit test runs. Production registers
+-- the C++ binding (misc_bindings.cpp::lua_qt_fs_mkdir_p) which calls
+-- QDir::mkpath. The headless harness can't link Qt, so we shell out via
+-- /bin/mkdir (absolute path; the harness has a normal PATH but production
+-- under Finder launch does not, so the binding is the path that matters).
+if not _G.qt_fs_mkdir_p then
+    _G.qt_fs_mkdir_p = function(path)
+        if type(path) ~= "string" or path == "" then
+            return nil, "qt_fs_mkdir_p: path required"
+        end
+        local rc = os.execute(string.format("/bin/mkdir -p %q", path))
+        if rc == 0 or rc == true then return true end
+        return nil, string.format("/bin/mkdir -p exited %s", tostring(rc))
+    end
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

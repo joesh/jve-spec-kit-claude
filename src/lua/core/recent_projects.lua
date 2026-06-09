@@ -99,7 +99,8 @@ function M.add(name, path)
     local persistence = persistence_path()
     local dir = persistence:match("^(.+)/[^/]+$")
     if dir then
-        os.execute(string.format("mkdir -p %q", dir))
+        local ok, err = qt_fs_mkdir_p(dir)
+        assert(ok, "recent_projects: mkdir " .. dir .. " failed: " .. tostring(err))
     end
     local encoded = json.encode(filtered, { indent = true })
     local f, err = io.open(persistence, "w")

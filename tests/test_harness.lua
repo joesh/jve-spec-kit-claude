@@ -21,6 +21,22 @@ package.path = root .. "/src/lua/?.lua;"
     .. root .. "/tests/?/init.lua;"
     .. package.path
 
+-- Production code calls qt_fs_mkdir_p (registered as a global by qt_bindings.cpp
+-- in the editor). The harness runs under plain luajit with no Qt bindings, so
+-- stub it via /bin/mkdir -p before any production module loads. (test_env.lua
+-- provides the same stub for tests that require it directly, but many tests
+-- don't.)
+if not _G.qt_fs_mkdir_p then
+    _G.qt_fs_mkdir_p = function(path)
+        if type(path) ~= "string" or path == "" then
+            return nil, "qt_fs_mkdir_p: path required"
+        end
+        local rc = os.execute(string.format("/bin/mkdir -p %q", path))
+        if rc == 0 or rc == true then return true end
+        return nil, string.format("/bin/mkdir -p exited %s", tostring(rc))
+    end
+end
+
 -- Now we can require modules
 local command_manager = require("core.command_manager")
 

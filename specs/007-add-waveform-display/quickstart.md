@@ -15,7 +15,7 @@
 5. Verify: gap clips do NOT show waveform
 
 ### 2. Progressive Generation
-1. Delete the `<project>.jvp-cache/peaks/` directory
+1. Delete the `~/Library/Caches/JVE/<name>_<project_id>/peaks/` directory
 2. Reopen the project
 3. Verify: clips initially appear as flat rectangles
 4. Verify: waveforms progressively fill in (left to right) within a few seconds
@@ -45,7 +45,7 @@
 ### 6. Cache Persistence
 1. Close and reopen the project
 2. Verify: waveforms appear immediately (no regeneration)
-3. Check `<project>.jvp-cache/peaks/` directory exists with `.peaks` files
+3. Check `~/Library/Caches/JVE/<name>_<project_id>/peaks/` directory exists with `.peaks` files
 
 ### 7. Media Change Detection
 1. Replace a media file with a different audio file (same path, different content)

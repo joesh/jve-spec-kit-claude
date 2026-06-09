@@ -164,8 +164,8 @@ function M.show_dialog(parent_window)
             return
         end
 
-        -- Ensure location directory exists
-        os.execute(string.format('mkdir -p %q', location))
+        local ok_mkdir, mkdir_err = qt_fs_mkdir_p(location)
+        assert(ok_mkdir, "new_project: mkdir " .. location .. " failed: " .. tostring(mkdir_err))
 
         -- Create from template
         local ok, result_or_err = pcall(

@@ -84,16 +84,12 @@ function Utils.get_time_ms(start_time)
     return current * 1000
 end
 
--- Create directory with proper error handling
--- @param path: Directory path to create
--- @return: Success boolean, error message
+-- Create directory recursively. Returns (true) or (false, errmsg).
+-- Wraps qt_fs_mkdir_p so existing callers keep their (ok, err) contract.
 function Utils.mkdir_p(path)
-    local escaped = Utils.shell_escape(path)
-    local result = os.execute("mkdir -p '" .. escaped .. "' >/dev/null 2>&1")
-    if result == true or result == 0 then
-        return true
-    end
-    return false, "Failed to create directory: " .. path
+    local ok, err = qt_fs_mkdir_p(path)
+    if ok then return true end
+    return false, "Failed to create directory: " .. tostring(path) .. ": " .. tostring(err)
 end
 
 -- Securely write file with restricted permissions

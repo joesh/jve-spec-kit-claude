@@ -50,7 +50,9 @@ function M.save(path, settings)
         "dialog_prefs.save: path required")
     assert(type(settings) == "table",
         "dialog_prefs.save: settings must be a table")
-    os.execute("mkdir -p " .. jve_dir())
+    local dir = jve_dir()
+    local ok, err = qt_fs_mkdir_p(dir)
+    assert(ok, "dialog_prefs.save: mkdir " .. dir .. " failed: " .. tostring(err))
     local f, open_err = io.open(path, "w")
     assert(f, string.format(
         "dialog_prefs.save: cannot open %s for writing: %s",

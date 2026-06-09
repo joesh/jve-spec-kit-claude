@@ -660,13 +660,67 @@ function M.get_path()
     return db_path
 end
 
---- Get the peak cache directory for the current project.
---- Returns <project>.jvp-cache/peaks/ and ensures the directory exists.
+--- Sanitize a project name for use as a filesystem path component.
+--- Keeps alphanumerics, space, dash, dot, underscore. Replaces everything
+--- else (including `/` and `:`, which are problematic on macOS) with `_`.
+--- Collapses runs of `_`. Empty result asserts (caller's project has no
+--- representable name characters).
+local function sanitize_for_path(name)
+    assert(name and name ~= "", "sanitize_for_path: name required")
+    local sanitized = name:gsub("[^%w%s%-_.]", "_"):gsub("__+", "_")
+    sanitized = sanitized:gsub("^%s+", ""):gsub("%s+$", "")
+    assert(sanitized ~= "", string.format(
+        "sanitize_for_path: name '%s' has no representable characters", name))
+    return sanitized
+end
+
+--- Get the peak cache directory for a project.
+---
+--- Returns ~/Library/Caches/JVE/<name>_<project_id>/peaks/ and ensures the
+--- directory exists. ~/Library/Caches is the macOS-standard cache location:
+--- excluded from iCloud Drive sync, Time Machine, and migration; the OS
+--- may purge under storage pressure (fine — peak files are regenerable).
+---
+--- Pre-2026-06-08 this returned `<project>.jvp-cache/peaks/` (sibling of
+--- the .jvp). For users whose .jvp lives in iCloud-synced storage (Desktop
+--- & Documents Sync is on by default for many users), the peak files got
+--- evicted to iCloud and re-downloaded on every verifier touch — a 6s
+--- peak verifier observed as 360s in TSO 2026-06-08. Caches don't belong
+--- in user document storage.
+---
+--- Directory is keyed by both name and project_id so:
+---   - User browsing ~/Library/Caches can identify which project a cache
+---     belongs to without UUID-decoding.
+---   - Two projects with the same name don't collide.
+---
+--- @param project_id string project UUID (REQUIRED)
 --- @return string absolute path to peaks cache directory
-function M.get_peak_cache_dir()
-    assert(db_path, "database.get_peak_cache_dir: no project open (db_path is nil)")
-    local cache_dir = db_path .. "-cache/peaks"
-    os.execute(string.format("mkdir -p %q", cache_dir))
+function M.get_peak_cache_dir(project_id)
+    assert(project_id and project_id ~= "",
+        "database.get_peak_cache_dir: project_id required")
+    assert(db_connection,
+        "database.get_peak_cache_dir: no database connection")
+
+    local stmt = assert(db_connection:prepare("SELECT name FROM projects WHERE id = ?"),
+        "database.get_peak_cache_dir: failed to prepare name lookup")
+    stmt:bind_value(1, project_id)
+    assert(stmt:exec(),
+        "database.get_peak_cache_dir: name lookup exec failed")
+    local name
+    if stmt:next() then name = stmt:value(0) end
+    stmt:finalize()
+    assert(name and name ~= "", string.format(
+        "database.get_peak_cache_dir: project %s not found or has empty name",
+        project_id))
+
+    local home = assert(os.getenv("HOME"),
+        "database.get_peak_cache_dir: HOME env var not set")
+    local cache_dir = string.format("%s/Library/Caches/JVE/%s_%s/peaks",
+        home, sanitize_for_path(name), project_id)
+    local ok, err = qt_fs_mkdir_p(cache_dir)
+    assert(ok, string.format(
+        "database.get_peak_cache_dir: mkdir failed for %s: %s",
+        cache_dir, tostring(err)))
     return cache_dir
 end
 

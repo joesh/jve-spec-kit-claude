@@ -171,7 +171,7 @@ local n2 = take_request_count_delta("step2")
 assert(n2 == 1, string.format(
     "relink to CLICK_WAV should request exactly 1 gen, got %d", n2))
 
-local cache_dir = database.get_peak_cache_dir()
+local cache_dir = database.get_peak_cache_dir(project_id)
 local peak_path = cache_dir .. "/" .. media_id .. ".peaks"
 local bins_click = peak_bins_at(peak_path)
 assert(bins_click > 100, string.format(

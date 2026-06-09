@@ -974,12 +974,12 @@ function M.author_a005_compatible(out_path, payload)
     h:close()
     assert(stage and stage ~= "",
         "drt_writer.author: mktemp -d returned empty path")
-    assert(os.execute("mkdir -p " .. shell_quote(stage
-        .. "/MediaPool/Master")) == 0,
-        "drt_writer.author: mkdir MediaPool/Master failed")
-    assert(os.execute("mkdir -p " .. shell_quote(stage
-        .. "/SeqContainer")) == 0,
-        "drt_writer.author: mkdir SeqContainer failed")
+    local mp_dir = stage .. "/MediaPool/Master"
+    local ok_mp, mp_err = qt_fs_mkdir_p(mp_dir)
+    assert(ok_mp, "drt_writer.author: mkdir " .. mp_dir .. " failed: " .. tostring(mp_err))
+    local sc_dir = stage .. "/SeqContainer"
+    local ok_sc, sc_err = qt_fs_mkdir_p(sc_dir)
+    assert(ok_sc, "drt_writer.author: mkdir " .. sc_dir .. " failed: " .. tostring(sc_err))
 
     write_file(stage .. "/project.xml", project_xml)
     write_file(stage .. "/MediaPool/Master/MpFolder.xml", mp_folder_xml)

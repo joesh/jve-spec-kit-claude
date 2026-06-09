@@ -341,6 +341,10 @@ void registerQtBindings(lua_State* L)
     // for fs_utils.file_mtime's old shell-out path.
     lua_pushcfunction(L, lua_qt_file_mtime); lua_setglobal(L, "qt_file_mtime");
 
+    // Recursive mkdir via QDir::mkpath — replaces os.execute("mkdir -p")
+    // shellouts that fail silently under Finder-launched .app (stripped PATH).
+    lua_pushcfunction(L, lua_qt_fs_mkdir_p); lua_setglobal(L, "qt_fs_mkdir_p");
+
     // Register other global utility functions
     lua_pushcfunction(L, lua_set_layout_stretch_factor); lua_setglobal(L, "qt_set_layout_stretch_factor");
     lua_pushcfunction(L, lua_set_widget_alignment); lua_setglobal(L, "qt_set_widget_alignment");

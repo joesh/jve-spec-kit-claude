@@ -73,7 +73,8 @@ local STATE_NAMES = {
 }
 
 function M._write_report(elapsed)
-    os.execute("mkdir -p /tmp/jve")
+    local ok, err = qt_fs_mkdir_p("/tmp/jve")
+    assert(ok, "lua_profiler: mkdir /tmp/jve failed: " .. tostring(err))
 
     local f = io.open(REPORT_PATH, "w")
     assert(f, "lua_profiler._write_report: could not open " .. REPORT_PATH)

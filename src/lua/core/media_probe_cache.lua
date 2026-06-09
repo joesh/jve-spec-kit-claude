@@ -116,15 +116,16 @@ end
 
 --- Atomically write the cache document. Writes to a temp file then
 --- os.rename so a crash mid-write can't leave a half-written cache.
---- Returns true on success, false + logs warn on any I/O failure so
---- the caller can decide whether to propagate (failed save just means
---- the next probe_batch rebuilds — not fatal, but observably worse).
+--- mkdir of the parent ~/.jve/ asserts on failure (rule 1.14 — a missing
+--- prefs dir is unrecoverable for cache persistence). Downstream io.open
+--- + os.rename still return false on transient I/O failure so callers can
+--- log + continue (a failed save just means next probe_batch rebuilds).
 --- @return boolean ok
 local function save_cache(entries)
     local path = cache_path()
-    -- Ensure ~/.jve/ exists. mkdir_ok=true in the common case; we'll
-    -- detect real failure at the io.open step below.
-    os.execute(string.format("mkdir -p %q", path:match("(.+)/[^/]+$")))
+    local dir = path:match("(.+)/[^/]+$")
+    local ok, err = qt_fs_mkdir_p(dir)
+    assert(ok, "media_probe_cache: mkdir " .. dir .. " failed: " .. tostring(err))
 
     local json = require("dkjson")
     local data = json.encode({ version = CACHE_VERSION, entries = entries })

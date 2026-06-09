@@ -2,7 +2,9 @@
 ---
 --- Peaks are per-media-file (keyed by media_id). All clip instances sharing
 --- a media file share the same peak data. Peak files are binary `.peaks` files
---- stored in `<project>.jvp-cache/peaks/`.
+--- stored in `~/Library/Caches/JVE/<project_name>_<project_id>/peaks/`.
+--- (Pre-2026-06-08 lived sibling to the .jvp; that put them on iCloud-synced
+--- storage and caused the relink slow path — see database.get_peak_cache_dir.)
 ---
 --- @module peak_cache
 local M = {}
@@ -298,7 +300,7 @@ function M.init_for_project(project_id)
         "peak_cache.init_for_project: project_id required")
 
     local database = require("core.database")
-    cache_dir = database.get_peak_cache_dir()
+    cache_dir = database.get_peak_cache_dir(project_id)
     assert(cache_dir and cache_dir ~= "",
         "peak_cache.init_for_project: get_peak_cache_dir returned empty")
 

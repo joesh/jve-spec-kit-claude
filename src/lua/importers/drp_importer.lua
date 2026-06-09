@@ -86,7 +86,8 @@ end
 local function extract_drp(drp_path)
     local tmp_dir = os.tmpname()
     os.remove(tmp_dir)  -- Remove the file, we want a directory
-    os.execute("mkdir -p " .. tmp_dir)
+    local ok_mkdir, mkdir_err = qt_fs_mkdir_p(tmp_dir)
+    assert(ok_mkdir, "drp_importer: mkdir " .. tmp_dir .. " failed: " .. tostring(mkdir_err))
 
     local cmd = string.format('unzip -q "%s" -d "%s"', drp_path, tmp_dir)
     local result = os.execute(cmd)
