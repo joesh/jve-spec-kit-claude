@@ -44,7 +44,7 @@ int lua_set_layout(lua_State* L) {
 
 int lua_add_widget_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* widget = get_widget<QWidget>(L, 2);
     
     if (!container_ptr || !widget) {
         lua_pushboolean(L, 0);
@@ -85,7 +85,7 @@ int lua_add_widget_to_layout(lua_State* L) {
 
 int lua_insert_widget_in_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* widget = get_widget<QWidget>(L, 2);
     int index = luaL_checkinteger(L, 3);
     if (!container_ptr || !widget) return luaL_error(L, "insert_widget: layout and widget required");
 

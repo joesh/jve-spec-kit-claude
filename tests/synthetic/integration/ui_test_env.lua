@@ -263,16 +263,10 @@ end
 -- Event loop helpers
 --------------------------------------------------------------------------------
 
---- Pump Qt event loop for at least `ms` milliseconds.
--- Ensures timers and deferred callbacks fire.
-function M.pump(ms)
-    ms = ms or 100
-    local start = os.clock()
-    local target = start + (ms / 1000.0)
-    while os.clock() < target do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-    end
-end
+-- Pump re-exported from the canonical Qt event-loop helper so all
+-- pump callsites share one wall-clock implementation. See
+-- synthetic/helpers/qt_event_pump.lua.
+M.pump = require("synthetic.helpers.qt_event_pump").pump
 
 --------------------------------------------------------------------------------
 -- Assertion helpers

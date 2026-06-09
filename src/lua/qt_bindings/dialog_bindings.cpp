@@ -86,7 +86,7 @@ int lua_show_confirm_dialog(lua_State* L)
     if (argCount >= 1) {
         if (lua_istable(L, 1)) {
             lua_getfield(L, 1, "parent");
-            if (lua_isuserdata(L, -1)) parent = static_cast<QWidget*>(lua_to_widget(L, -1));
+            if (lua_isuserdata(L, -1)) parent = get_widget<QWidget>(L, -1);
             lua_pop(L, 1);
 
             lua_getfield(L, 1, "title"); if (lua_isstring(L, -1)) title = QString::fromUtf8(lua_tostring(L, -1)); lua_pop(L, 1);

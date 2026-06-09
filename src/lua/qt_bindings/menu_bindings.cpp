@@ -21,7 +21,7 @@ int lua_get_menu_bar(lua_State* L) {
 
 // Create menu (can be attached to menu bar or parent menu)
 int lua_create_menu(lua_State* L) {
-    QWidget* parent = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* parent = get_widget<QWidget>(L, 1);
     const char* title = luaL_checkstring(L, 2);
 
     QMenu* menu = nullptr;

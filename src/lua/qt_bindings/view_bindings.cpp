@@ -595,7 +595,7 @@ int lua_set_tree_selection_mode(lua_State* L) {
 }
 
 int lua_set_tree_drag_drop_mode(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     const char* mode = luaL_checkstring(L, 2);
     
     if (LuaTreeWidget* tree = dynamic_cast<LuaTreeWidget*>(w)) {
@@ -610,7 +610,7 @@ int lua_set_tree_drag_drop_mode(lua_State* L) {
 }
 
 int lua_set_tree_drop_handler(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     const char* handler = luaL_checkstring(L, 2);
     
     if (LuaTreeWidget* tree = dynamic_cast<LuaTreeWidget*>(w)) {
@@ -623,7 +623,7 @@ int lua_set_tree_drop_handler(lua_State* L) {
 }
 
 int lua_set_tree_key_handler(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     const char* handler = luaL_checkstring(L, 2);
     
     if (LuaTreeWidget* tree = dynamic_cast<LuaTreeWidget*>(w)) {

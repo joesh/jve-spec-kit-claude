@@ -33,7 +33,7 @@ static int lua_process_events(lua_State*) {
 
 int lua_set_scroll_area_widget(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* w = get_widget<QWidget>(L, 2);
     if (sa && w) {
         sa->setWidget(w);
         lua_pushboolean(L, 1);
@@ -243,7 +243,7 @@ int lua_set_word_wrap(lua_State* L) {
 
 // Generic setEnabled for any widget
 int lua_set_enabled(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     bool enabled = lua_toboolean(L, 2);
     if (w) w->setEnabled(enabled);
     return 0;

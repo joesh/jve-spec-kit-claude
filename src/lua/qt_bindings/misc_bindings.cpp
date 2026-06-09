@@ -337,7 +337,7 @@ int lua_create_rubber_band(lua_State* L) {
 }
 
 int lua_set_rubber_band_geometry(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_set_rubber_band_geometry: widget required");
     int x = luaL_checkint(L, 2);
     int y = luaL_checkint(L, 3);
@@ -348,14 +348,14 @@ int lua_set_rubber_band_geometry(lua_State* L) {
 }
 
 int lua_grab_mouse(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_grab_mouse: widget required");
     widget->grabMouse();
     return 0;
 }
 
 int lua_release_mouse(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_release_mouse: widget required");
     widget->releaseMouse();
     return 0;
@@ -363,8 +363,8 @@ int lua_release_mouse(lua_State* L) {
 
 // Coordinate mapping functions
 int lua_map_point_from(lua_State* L) {
-    QWidget* target_widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-    QWidget* source_widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* target_widget = get_widget<QWidget>(L, 1);
+    QWidget* source_widget = get_widget<QWidget>(L, 2);
     int x = luaL_checkint(L, 3);
     int y = luaL_checkint(L, 4);
     if (!target_widget || !source_widget) return luaL_error(L, "qt_map_point_from: both widgets required");
@@ -375,8 +375,8 @@ int lua_map_point_from(lua_State* L) {
 }
 
 int lua_map_rect_from(lua_State* L) {
-    QWidget* target_widget = static_cast<QWidget*>(lua_to_widget(L, 1));
-    QWidget* source_widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* target_widget = get_widget<QWidget>(L, 1);
+    QWidget* source_widget = get_widget<QWidget>(L, 2);
     int x = luaL_checkint(L, 3);
     int y = luaL_checkint(L, 4);
     int width = luaL_checkint(L, 5);
@@ -392,7 +392,7 @@ int lua_map_rect_from(lua_State* L) {
 }
 
 int lua_map_to_global(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     int x = luaL_checkint(L, 2);
     int y = luaL_checkint(L, 3);
     if (!widget) return luaL_error(L, "qt_map_to_global: widget required");
@@ -403,7 +403,7 @@ int lua_map_to_global(lua_State* L) {
 }
 
 int lua_map_from_global(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     int x = luaL_checkint(L, 2);
     int y = luaL_checkint(L, 3);
     if (!widget) return luaL_error(L, "qt_map_from_global: widget required");
@@ -413,9 +413,17 @@ int lua_map_from_global(lua_State* L) {
     return 2;
 }
 
-// Widget styling
+// Widget styling.
+//
+// Uses get_widget<QWidget> (qobject_cast under the hood) NOT
+// get_widget<QWidget>(...). The dead-widget guard in
+// lua_to_widget catches DESTROYED QObjects (QPointer null) but not
+// LIVE non-QWidget QObjects (e.g. a QTimer userdata): static_cast on a
+// QTimer* succeeds blindly, then setStyleSheet dereferences a non-
+// QWidget vtable → SIGSEGV. qobject_cast returns nullptr for the
+// non-QWidget case so the `widget required` guard fires cleanly.
 int lua_set_widget_stylesheet(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* stylesheet = luaL_checkstring(L, 2);
     if (!widget) return luaL_error(L, "qt_set_widget_stylesheet: widget required");
     widget->setStyleSheet(QString::fromUtf8(stylesheet));
@@ -424,7 +432,7 @@ int lua_set_widget_stylesheet(lua_State* L) {
 
 // Set widget cursor (uses optimized lookup)
 int lua_set_widget_cursor(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* cursor_type = luaL_checkstring(L, 2);
     if (!widget) return luaL_error(L, "qt_set_widget_cursor: widget required");
 
@@ -440,7 +448,7 @@ int lua_set_widget_cursor(lua_State* L) {
 
 int lua_set_window_appearance(lua_State* L)
 {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* appearance_name = luaL_optstring(L, 2, "NSAppearanceNameDarkAqua");
 
     if (!widget) {
@@ -495,7 +503,7 @@ int lua_set_window_appearance(lua_State* L)
 }
 
 int lua_set_focus_policy(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* policy_str = luaL_checkstring(L, 2);
     if (!widget) return luaL_error(L, "qt_set_focus_policy: widget required");
 
@@ -505,7 +513,7 @@ int lua_set_focus_policy(lua_State* L) {
 }
 
 int lua_set_focus(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_set_focus: widget required");
     // Activate the widget's window first — on macOS, setFocus() is a no-op
     // unless the widget's window is the active (key) window.
@@ -529,7 +537,7 @@ int lua_get_focus_widget(lua_State* L) {
 }
 
 int lua_update_widget(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return 0; // No error, just skip if invalid
     widget->updateGeometry();
     widget->update();
@@ -537,7 +545,7 @@ int lua_update_widget(lua_State* L) {
 }
 
 int lua_set_widget_property(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_set_widget_property: widget required");
     const char* name = luaL_checkstring(L, 2);
     const char* value = luaL_checkstring(L, 3);
@@ -565,7 +573,7 @@ int lua_set_tooltip(lua_State* L) {
 }
 
 int lua_get_widget_property(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_get_widget_property: widget required");
     const char* name = luaL_checkstring(L, 2);
     QVariant v = widget->property(name);
@@ -578,7 +586,7 @@ int lua_get_widget_property(lua_State* L) {
 // prove no overlay widgets are added on focus change (overlays caused
 // macOS Metal occlusion before the focusBorderColor refactor).
 int lua_widget_child_widget_count(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_widget_child_widget_count: widget required");
     int n = 0;
     for (QObject* child : widget->children()) {
@@ -589,7 +597,7 @@ int lua_widget_child_widget_count(lua_State* L) {
 }
 
 int lua_set_widget_contents_margins(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_set_widget_contents_margins: widget required");
     int left = luaL_checkinteger(L, 2);
     int top = luaL_checkinteger(L, 3);
@@ -621,7 +629,7 @@ int lua_set_scroll_position(lua_State* L) {
 int lua_scroll_area_ensure_widget_visible(lua_State* L) {
     QScrollArea* sa = get_widget<QScrollArea>(L, 1);
     if (!sa) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: scroll area required");
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* w = get_widget<QWidget>(L, 2);
     if (!w) return luaL_error(L, "qt_scroll_area_ensure_widget_visible: widget required");
     sa->ensureWidgetVisible(w);
     return 0;
@@ -662,7 +670,7 @@ int lua_get_splitter_handle(lua_State* L) {
 }
 
 int lua_set_widget_attribute(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* attr_name = luaL_checkstring(L, 2);
     bool value = lua_toboolean(L, 3);
     if (!widget) return luaL_error(L, "qt_set_widget_attribute: widget required");
@@ -736,7 +744,7 @@ int lua_set_scroll_area_widget_resizable(lua_State* L) {
 }
 
 int lua_set_widget_size_policy(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     if (!widget) return luaL_error(L, "qt_set_widget_size_policy: widget required");
     
     const char* h_policy_str = luaL_checkstring(L, 2);
@@ -759,7 +767,7 @@ int lua_set_widget_size_policy(lua_State* L) {
 
 int lua_set_layout_stretch_factor(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* widget = get_widget<QWidget>(L, 2);
     int stretch = luaL_checkinteger(L, 3);
     
     if (QBoxLayout* box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
@@ -850,10 +858,10 @@ int lua_scroll_area_h_scroll_info(lua_State* L) {
 }
 
 int lua_set_parent(lua_State* L) {
-    QWidget* child = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* child = get_widget<QWidget>(L, 1);
     QWidget* parent = nullptr;
     if (!lua_isnil(L, 2)) {
-        parent = static_cast<QWidget*>(lua_to_widget(L, 2));
+        parent = get_widget<QWidget>(L, 2);
     }
 
     if (child) {

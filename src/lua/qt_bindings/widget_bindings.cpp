@@ -60,7 +60,7 @@ LUA_BIND_SETTER_STRING(lua_set_style_sheet, QWidget, setStyleSheet)
 LUA_BIND_SETTER_BOOL(lua_set_visible, QWidget, setVisible)
 
 int lua_set_text_generic(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     const char* txt = lua_tostring(L, 2);
     if (!w || !txt) return 0;
     QString qtxt = QString::fromUtf8(txt);
@@ -75,7 +75,7 @@ int lua_set_text_generic(lua_State* L) {
 }
 
 int lua_get_text_generic(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (!w) { lua_pushnil(L); return 1; }
     
     if (QLabel* l = qobject_cast<QLabel*>(w)) lua_pushstring(L, l->text().toUtf8().constData());
@@ -87,7 +87,7 @@ int lua_get_text_generic(lua_State* L) {
 
 int lua_set_central_widget(lua_State* L) {
     QMainWindow* mw = get_widget<QMainWindow>(L, 1);
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 2));
+    QWidget* w = get_widget<QWidget>(L, 2);
     if (mw && w) {
         mw->setCentralWidget(w);
         lua_pushboolean(L, 1);
@@ -98,7 +98,7 @@ int lua_set_central_widget(lua_State* L) {
 }
 
 int lua_show_widget(lua_State* L) {
-    if (QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1))) {
+    if (QWidget* w = get_widget<QWidget>(L, 1)) {
         w->show();
         lua_pushboolean(L, 1);
     } else {
@@ -109,7 +109,7 @@ int lua_show_widget(lua_State* L) {
 
 // Size and Geometry
 int lua_set_size(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int width = luaL_checkinteger(L, 2);
     int height = luaL_checkinteger(L, 3);
     if (w) {
@@ -122,7 +122,7 @@ int lua_set_size(lua_State* L) {
 }
 
 int lua_get_widget_size(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (w) {
         lua_pushinteger(L, w->width());
         lua_pushinteger(L, w->height());
@@ -132,35 +132,35 @@ int lua_get_widget_size(lua_State* L) {
 }
 
 int lua_set_minimum_width(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int val = luaL_checkinteger(L, 2);
     if (w) w->setMinimumWidth(val);
     return 0;
 }
 
 int lua_set_maximum_width(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int val = luaL_checkinteger(L, 2);
     if (w) w->setMaximumWidth(val);
     return 0;
 }
 
 int lua_set_minimum_height(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int val = luaL_checkinteger(L, 2);
     if (w) w->setMinimumHeight(val);
     return 0;
 }
 
 int lua_set_maximum_height(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int val = luaL_checkinteger(L, 2);
     if (w) w->setMaximumHeight(val);
     return 0;
 }
 
 int lua_set_geometry(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     int x = luaL_checkinteger(L, 2);
     int y = luaL_checkinteger(L, 3);
     int width = luaL_checkinteger(L, 4);
@@ -170,7 +170,7 @@ int lua_set_geometry(lua_State* L) {
 }
 
 int lua_get_geometry(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (w) {
         QRect g = w->geometry();
         lua_pushinteger(L, g.x());
@@ -184,33 +184,33 @@ int lua_get_geometry(lua_State* L) {
 
 // Misc Setters
 int lua_raise_widget(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (w) w->raise();
     return 0;
 }
 
 int lua_activate_window(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (w) w->activateWindow();
     return 0;
 }
 
 int lua_show_fullscreen(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (!w) return luaL_error(L, "show_fullscreen: widget required");
     w->showFullScreen();
     return 0;
 }
 
 int lua_show_normal(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (!w) return luaL_error(L, "show_normal: widget required");
     w->showNormal();
     return 0;
 }
 
 int lua_set_window_flags(lua_State* L) {
-    QWidget* w = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* w = get_widget<QWidget>(L, 1);
     if (!w) return luaL_error(L, "set_window_flags: widget required");
     int flags = luaL_checkinteger(L, 2);
     w->setWindowFlags(Qt::WindowFlags(flags));

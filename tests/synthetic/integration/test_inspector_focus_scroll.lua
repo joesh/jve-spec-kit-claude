@@ -46,10 +46,7 @@ local clayout = qt_constants.LAYOUT.CREATE_VBOX()
 qt_constants.LAYOUT.SET_ON_WIDGET(container, clayout)
 qt_constants.LAYOUT.ADD_WIDGET(clayout, scroll_area)
 qt_constants.DISPLAY.SHOW(container)
-local function pump(ms)
-    local target = os.clock() + (ms or 100) / 1000
-    while os.clock() < target do qt_constants.CONTROL.PROCESS_EVENTS() end
-end
+local pump = require("synthetic.helpers.qt_event_pump").pump
 pump(150)
 
 -- luacheck: globals qt_get_scroll_position qt_scroll_area_ensure_widget_visible

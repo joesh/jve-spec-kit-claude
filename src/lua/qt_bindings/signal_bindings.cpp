@@ -606,7 +606,7 @@ int lua_set_button_click_handler(lua_State* L) {
 }
 
 int lua_set_widget_click_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = lua_tostring(L, 2);
     if (!widget || !handler_name) return 0;
 
@@ -620,7 +620,7 @@ int lua_set_widget_click_handler(lua_State* L) {
 // Lua: qt_set_widget_drag_handler(widget, handler_name)
 // handler fires as: handler(event_type, global_x, global_y, modifiers)
 int lua_set_widget_drag_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = lua_tostring(L, 2);
     if (!widget || !handler_name) {
         return luaL_error(L, "qt_set_widget_drag_handler: widget and handler_name required");
@@ -779,7 +779,7 @@ private:
 // Lua: qt_install_drag_source(widget, mime_type, payload_provider_handler_name)
 // The provider handler is called as: handler() → returns payload string.
 int lua_install_drag_source(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* mime = luaL_checkstring(L, 2);
     const char* provider = luaL_checkstring(L, 3);
     if (!widget) {
@@ -795,7 +795,7 @@ int lua_install_drag_source(lua_State* L) {
 // The handler is called as: handler(local_x, local_y, payload_string).
 // Calls setAcceptDrops(true) on the widget so Qt routes drag events to it.
 int lua_install_drop_target(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* mime = luaL_checkstring(L, 2);
     const char* handler = luaL_checkstring(L, 3);
     if (!widget) {
@@ -824,7 +824,7 @@ int lua_install_drop_target(lua_State* L) {
 // silently no-op'ing.
 // Lua: qt_synthetic_drop(widget, mime_type, payload_str, local_x, local_y)
 int lua_synthetic_drop(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* mime = luaL_checkstring(L, 2);
     size_t plen = 0;
     const char* pstr = luaL_checklstring(L, 3, &plen);
@@ -871,7 +871,7 @@ int lua_widget_at_global(lua_State* L) {
 }
 
 int lua_set_context_menu_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = lua_tostring(L, 2);
     if (!widget || !handler_name) return 0;
 
@@ -1137,7 +1137,7 @@ int lua_install_panel_focus_filter(lua_State* L) {
 
 // Register a panel widget with the global focus filter: qt_register_panel_focus_widget(widget, panel_id)
 int lua_register_panel_focus_widget(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* panel_id = luaL_checkstring(L, 2);
     if (!widget || !panel_id || !g_panel_focus_filter) return 0;
     g_panel_focus_filter->add_panel_widget(widget, panel_id);
@@ -1160,7 +1160,7 @@ int lua_focus_outside_main_window(lua_State* L) {
 
 // Global key handler
 int lua_set_global_key_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1)); // Passed but not used for filter installation
+    QWidget* widget = get_widget<QWidget>(L, 1); // Passed but not used for filter installation
     const char* handler_name = luaL_checkstring(L, 2);
     if (!widget || !handler_name) return 0;
 
@@ -1171,7 +1171,7 @@ int lua_set_global_key_handler(lua_State* L) {
 
 // Focus handler
 int lua_set_focus_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = luaL_checkstring(L, 2);
     if (!widget || !handler_name) return 0;
 
@@ -1409,7 +1409,7 @@ int lua_set_app_state_handler(lua_State* L) {
 }
 
 int lua_set_close_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = luaL_checkstring(L, 2);
     if (!widget || !handler_name) return 0;
 
@@ -1420,7 +1420,7 @@ int lua_set_close_handler(lua_State* L) {
 
 // Window geometry change handler - fires on resize or move
 int lua_set_geometry_change_handler(lua_State* L) {
-    QWidget* widget = static_cast<QWidget*>(lua_to_widget(L, 1));
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* handler_name = luaL_checkstring(L, 2);
     if (!widget || !handler_name) return 0;
 

@@ -89,14 +89,7 @@ local function capture_to_file(fn)
     return content
 end
 
-local function pump_until(predicate, timeout_ms)
-    local deadline_ms = (os.clock() * 1000) + timeout_ms
-    while os.clock() * 1000 < deadline_ms do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-        if predicate() then return true end
-    end
-    return false
-end
+local pump_until = require("synthetic.helpers.qt_event_pump").pump_until
 
 -- ----------------------------------------------------------------------
 -- Scenario 1: string error.

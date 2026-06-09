@@ -10,15 +10,7 @@ assert(type(qt_constants.WIDGET) == "table", "WIDGET bindings required")
 assert(type(qt_constants.CONTROL) == "table", "CONTROL bindings required")
 assert(type(qt_create_single_shot_timer) == "function", "qt_create_single_shot_timer required")
 
--- Helper: pump Qt event loop
-local function pump(ms)
-    ms = ms or 100
-    local start = os.clock()
-    local target = start + (ms / 1000.0)
-    while os.clock() < target do
-        qt_constants.CONTROL.PROCESS_EVENTS()
-    end
-end
+local pump = require("synthetic.helpers.qt_event_pump").pump
 
 local passed = 0
 local total = 0
@@ -64,7 +56,8 @@ local ok2, err2 = pcall(function()
     qt_set_widget_stylesheet(timer_ref, "color: red;")
 end)
 check("dead widget produces error (not crash)", not ok2)
-check("error mentions widget required",
+check(string.format("error mentions widget required (err2=%s)",
+        type(err2) == "string" and string.format("%q", err2) or tostring(err2)),
     type(err2) == "string" and err2:find("widget required") ~= nil)
 
 --------------------------------------------------------------------------------
