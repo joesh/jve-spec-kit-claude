@@ -163,6 +163,16 @@ function command_manager_stub.get_executor(command_name) -- luacheck: ignore 212
     return function() end
 end
 
+function command_manager_stub.get_spec(command_name)
+    -- Forward to the real SPEC (single source of truth) so SPEC.when()
+    -- decides consumption against the test's stubbed surfaces (fullscreen,
+    -- find dialog, find bar, timeline panel) — same code path as production.
+    if command_name == "Cancel" then
+        return require("core.commands.cancel").SPEC
+    end
+    return nil
+end
+
 function command_manager_stub.peek_command_event_origin()
     return nil
 end

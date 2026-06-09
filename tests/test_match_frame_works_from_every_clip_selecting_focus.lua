@@ -20,6 +20,7 @@ local registry = require("core.keyboard_shortcut_registry")
 local dispatched = {}
 local stub_command_manager = {
     get_executor = function(_) return function() return { success = true } end end,
+        get_spec = function() return nil end,
     execute_interactive = function(name, _params)
         dispatched[#dispatched + 1] = name
         return { success = true }

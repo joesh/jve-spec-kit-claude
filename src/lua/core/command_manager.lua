@@ -3026,6 +3026,10 @@ function M.get_executor(command_type)
     return registry.get_executor(command_type)
 end
 
+function M.get_spec(command_type)
+    return registry.get_spec(command_type)
+end
+
 -- Emacs-style undo grouping
 function M.begin_undo_group(label)
     local group_id = history.begin_undo_group(label)

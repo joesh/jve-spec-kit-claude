@@ -66,6 +66,7 @@ local function test_unregistered_command_asserts()
     -- Mock command_manager where get_executor returns nil
     registry.set_command_manager({
         get_executor = function() return nil end,
+        get_spec = function() return nil end,
         execute_interactive = function() error("should not be called") end,
     })
 
@@ -105,6 +106,7 @@ local function test_registered_command_dispatches()
 
     registry.set_command_manager({
         get_executor = function() return function() end end,
+        get_spec = function() return nil end,
         execute_interactive = function(name, params)
             dispatched_name = name
             dispatched_params = params
@@ -131,6 +133,7 @@ local function test_context_mismatch_returns_false()
 
     registry.set_command_manager({
         get_executor = function() return function() end end,
+        get_spec = function() return nil end,
         execute_interactive = function() error("should not dispatch in wrong context") end,
     })
 

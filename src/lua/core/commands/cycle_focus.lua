@@ -6,6 +6,16 @@ local M = {}
 
 local log = require("core.logger").for_area("commands")
 
+-- Active iff there is a focused panel AND a widget the toolkit can cycle
+-- within. When false, Tab falls through to Qt's native focus cycling so the
+-- toolkit's default behavior applies — JVE has no opinion in this state.
+local function has_cycleable_panel()
+    local focus_manager = require("ui.focus_manager")
+    local focused_panel = focus_manager.get_focused_panel()
+    if not focused_panel then return false end
+    return focus_manager.focus_panel_widget(focused_panel) ~= nil
+end
+
 local SPEC = {
     name = "CycleFocus",
     description = "Cycle focus within the current panel",
@@ -14,25 +24,27 @@ local SPEC = {
         direction = { required = false, default = "forward" },
         project_id = { required = false }
     },
+    when = has_cycleable_panel,
 }
 
 function M.execute(args)
     local focus_manager = require("ui.focus_manager")
     local focused_panel = focus_manager.get_focused_panel()
-    if not focused_panel then return false end
-
     local panel_widget = focus_manager.focus_panel_widget(focused_panel)
-    if not panel_widget then return false end
-
-    -- luacheck: globals qt_cycle_panel_focus
-    if qt_cycle_panel_focus then
-        local forward = (args.direction ~= "backward")
-        log.detail("CycleFocus: %s in panel %s", args.direction, focused_panel)
-        qt_cycle_panel_focus(panel_widget, forward)
+    -- when() guaranteed both at match time; if either vanished mid-tick,
+    -- consume + warn rather than silently no-op (the binding was claimed).
+    if not (focused_panel and panel_widget) then
+        log.warn("CycleFocus: when() said active but panel/widget missing at execute")
         return true
     end
 
-    return false
+    -- luacheck: globals qt_cycle_panel_focus
+    assert(qt_cycle_panel_focus,
+        "CycleFocus: qt_cycle_panel_focus binding missing — required by the command")
+    local forward = (args.direction ~= "backward")
+    log.detail("CycleFocus: %s in panel %s", args.direction, focused_panel)
+    qt_cycle_panel_focus(panel_widget, forward)
+    return true
 end
 
 function M.register(command_executors, _command_undoers, _db, _set_last_error)

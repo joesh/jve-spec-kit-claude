@@ -833,6 +833,15 @@ function M.handle_key_event(key, modifiers, context, extra_params)
         string.format("handle_key_event: TOML binding '%s' has no registered executor (combo %s)",
             matched.command_name, matched.shortcut and matched.shortcut.string or combo_key))
 
+    -- `when` predicate: bindings can declare a SPEC.when() guard that gates
+    -- dispatch at the moment of the keypress. Used by context-sensitive
+    -- commands (Cancel/Escape, CycleFocus/Tab) to opt out cleanly when
+    -- there's nothing to act on — Qt then receives the key for native
+    -- handling (e.g. Tab cycles default focus, Escape closes a native
+    -- popover). Keeps consumption out of the command's success/failure
+    -- return value: success = "did my work succeed", consumed = "was the
+    -- binding active". Separating them is what made F14 → no-Cancel-passthrough
+    -- and pre-F14 → Save-falls-through-to-OS both fixable from one model.
     local params = {}
     if extra_params then
         for k, v in pairs(extra_params) do
@@ -844,6 +853,22 @@ function M.handle_key_event(key, modifiers, context, extra_params)
     end
     if #matched.positional_args > 0 then
         params._positional = matched.positional_args
+    end
+
+    assert(type(command_manager.get_spec) == "function",
+        "handle_key_event: command_manager must implement get_spec for `when` predicate evaluation")
+    local spec = command_manager.get_spec(matched.command_name)
+    if spec and spec.when then
+        assert(type(spec.when) == "function",
+            string.format("handle_key_event: command '%s' SPEC.when must be a function",
+                matched.command_name))
+        -- `when(params)` receives the same runtime params execute() will see,
+        -- so the gate can consult per-keypress state (e.g. focus_is_text_input)
+        -- that's part of the dispatch context, not just process-global UI state.
+        if not spec.when(params) then
+            log.detail("  when() returned false for %s → not consumed", matched.command_name)
+            return false
+        end
     end
 
     log.detail("  dispatching %s via execute_interactive", matched.command_name)

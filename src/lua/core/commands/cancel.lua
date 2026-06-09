@@ -6,6 +6,33 @@ local M = {}
 
 local log = require("core.logger").for_area("commands")
 
+-- Cancel is only meaningfully active when there's a dismissable surface.
+-- The `when` predicate (consulted by keyboard_shortcut_registry at keypress
+-- time) gates Escape on that condition — when nothing is dismissable, the
+-- binding is inactive and Escape falls through to Qt for native handling.
+local function fullscreen_active()
+    local ok, fv = pcall(require, "ui.fullscreen_viewer")
+    return ok and fv and fv.is_active()
+end
+
+local function find_dialog_visible()
+    -- pcall: find_dialog depends on dkjson (C lib), unavailable in headless tests.
+    local ok, fd = pcall(require, "ui.find_dialog")
+    return ok and fd and fd.is_visible()
+end
+
+local function find_bar_visible()
+    local ok, pb = pcall(require, "ui.project_browser")
+    return ok and pb and pb.find_bar and pb.find_bar.visible
+end
+
+local function timeline_tc_entry_focused()
+    local ok, tp = pcall(require, "ui.timeline.timeline_panel")
+    if not (ok and tp) then return false end
+    local focus_manager = require("ui.focus_manager")
+    return focus_manager.get_focused_panel() == "timeline"
+end
+
 local SPEC = {
     name = "Cancel",
     description = "Prioritised action cancellation (Escape key)",
@@ -14,6 +41,17 @@ local SPEC = {
         project_id = { required = false },
         focus_is_text_input = { required = false, kind = "boolean" }
     },
+    -- Gate evaluated at keypress with the same params execute() will see.
+    -- TC entry cancellation is the only branch that depends on a runtime
+    -- param (focus_is_text_input) — it only fires when the focused widget
+    -- is a text input AND the timeline panel is focused. Without text-input
+    -- focus, an Escape with timeline focused must fall through to Qt.
+    when = function(params)
+        return fullscreen_active()
+            or find_dialog_visible()
+            or find_bar_visible()
+            or (params and params.focus_is_text_input and timeline_tc_entry_focused())
+    end,
 }
 
 function M.execute(args)
@@ -22,49 +60,43 @@ function M.execute(args)
     cancel.request()
     log.detail("Cancel command: request flag set (text_input=%s)", tostring(focus_is_text_input))
 
-    -- 1. Fullscreen
-    local fv_ok, fv = pcall(require, "ui.fullscreen_viewer")
-    if fv_ok and fv and fv.is_active() then
+    if fullscreen_active() then
         log.detail("  → exit fullscreen")
-        fv.exit()
+        require("ui.fullscreen_viewer").exit()
         return true
     end
 
-    -- 2. Floating Find Dialog
-    -- pcall: find_dialog depends on dkjson (C lib), unavailable in headless tests.
-    local find_ok, find_dlg = pcall(require, "ui.find_dialog")
-    if find_ok and find_dlg and find_dlg.is_visible() then
+    if find_dialog_visible() then
         log.detail("  → dismiss floating find dialog")
-        find_dlg.hide()
+        require("ui.find_dialog").hide()
         return true
     end
 
-    -- 3. Project Browser Find Bar
-    local pb_ok, pb = pcall(require, "ui.project_browser")
-    if pb_ok and pb and pb.find_bar and pb.find_bar.visible then
+    if find_bar_visible() then
         log.detail("  → dismiss find bar")
-        pb.hide_find_bar()
+        require("ui.project_browser").hide_find_bar()
         return true
     end
 
-    -- 4. Timeline Timecode Entry
-    if focus_is_text_input then
-        local tp_ok, timeline_panel = pcall(require, "ui.timeline.timeline_panel")
-        if tp_ok and timeline_panel then
-            local focus_manager = require("ui.focus_manager")
-            if focus_manager.get_focused_panel() == "timeline" then
-                if timeline_panel.cancel_timecode_entry() then
-                    log.detail("  → cancel timecode entry")
-                    return true
-                end
-            end
+    if focus_is_text_input and timeline_tc_entry_focused() then
+        local timeline_panel = require("ui.timeline.timeline_panel")
+        if timeline_panel.cancel_timecode_entry() then
+            log.detail("  → cancel timecode entry")
+            return true
         end
     end
 
-    -- If nothing consumed it, return false so the caller knows (though usually
-    -- Escape is just swallowed).
-    return false
+    -- when() said active; reaching here means the surface vanished between
+    -- the gate evaluation and execute (rare race — dialog dismissed by
+    -- another input in the same tick). Consume rather than fall through:
+    -- the binding was claimed at match time.
+    log.warn("Cancel: when() said active but no dismissable surface at execute")
+    return true
 end
+
+-- Exported so tests (and other introspection callers) can reach the SPEC
+-- — in particular SPEC.when — without duplicating the predicate.
+M.SPEC = SPEC
 
 function M.register(command_executors, _command_undoers, _db, _set_last_error)
     command_executors.Cancel = function(command)

@@ -135,13 +135,14 @@ local function test_assign_and_remove_shortcut()
     assert_equals("alpha current_shortcuts empty", #alpha.current_shortcuts, 0)
 end
 
--- Regression: a key matched by a registered binding is "consumed" — the caller
+-- Contract: a key matched by a registered binding is "consumed" — the caller
 -- (handle_key in keyboard_shortcuts.lua) treats a truthy return as "Qt should
--- stop routing this key". The contract must be "matched binding = consumed",
--- regardless of whether the dispatched command itself succeeded. Command
--- failures are surfaced via the log.warn at the dispatch site; conflating
--- them with the consumption signal causes a matched-but-failed key to leak
--- to Qt's native handling (e.g. Cmd+S falling through to the OS).
+-- stop routing this key". A matched binding consumes regardless of whether
+-- the dispatched command itself succeeded; command failures are surfaced via
+-- log.warn. Bindings that should only fire conditionally (Cancel, CycleFocus)
+-- declare a `when` predicate on their SPEC — that's evaluated at MATCH time
+-- (below in test_handle_key_event_when_predicate_blocks_match), not by
+-- overloading the command's success return value.
 local function test_handle_key_event_consumed_even_when_command_fails()
     reset_registry_state()
 
@@ -155,6 +156,7 @@ local function test_handle_key_event_consumed_even_when_command_fails()
     local dispatched = false
     local fake_cmd_mgr = {
         get_executor = function(_) return function() end end,
+        get_spec = function(_) return nil end,  -- no `when` predicate
         execute_interactive = function(_, _)
             dispatched = true
             return { success = false, error_message = "intentional failure" }
@@ -176,6 +178,52 @@ local function test_handle_key_event_consumed_even_when_command_fails()
     local unmatched_consumed = registry.handle_key_event(
         unmatched_parsed.key, unmatched_parsed.modifiers, nil)
     assert_true("unmatched key is not consumed", not unmatched_consumed)
+end
+
+-- Architectural: bindings declare an optional `when` predicate on the SPEC.
+-- When `when()` returns false at the moment of the key press, the binding is
+-- inactive — the key falls through to Qt (not consumed, command not dispatched).
+-- This is the model that lets Cancel (Escape) and CycleFocus (Tab) cleanly
+-- pass through to native handling when there's nothing for them to act on,
+-- without overloading the command's success return value to mean "consumed".
+local function test_handle_key_event_when_predicate_blocks_match()
+    reset_registry_state()
+
+    registry.register_command({
+        id = "test.gated",
+        category = "Testing",
+        name = "Gated",
+        description = "",
+    })
+
+    local when_value = false
+    local dispatched = false
+    local fake_cmd_mgr = {
+        get_executor = function(_) return function() end end,
+        get_spec = function(_)
+            return { when = function() return when_value end }
+        end,
+        execute_interactive = function(_, _)
+            dispatched = true
+            return { success = true }
+        end,
+    }
+    registry.set_command_manager(fake_cmd_mgr)
+
+    assert_true("assign succeeded", registry.assign_shortcut("test.gated", "Cmd+L"))
+    local parsed = registry.parse_shortcut("Cmd+L")
+
+    -- when() false → binding inactive → key falls through, no dispatch.
+    when_value = false
+    local consumed_off = registry.handle_key_event(parsed.key, parsed.modifiers, nil)
+    assert_true("gated-off binding does NOT consume", not consumed_off)
+    assert_true("gated-off binding does NOT dispatch", not dispatched)
+
+    -- when() true → binding active → key consumed, command dispatched.
+    when_value = true
+    local consumed_on = registry.handle_key_event(parsed.key, parsed.modifiers, nil)
+    assert_true("gated-on binding consumes", consumed_on)
+    assert_true("gated-on binding dispatches", dispatched)
 end
 
 local function test_reset_to_defaults_reloads_toml()
@@ -210,6 +258,7 @@ local tests = {
     test_assign_shortcut_conflicts,
     test_assign_and_remove_shortcut,
     test_handle_key_event_consumed_even_when_command_fails,
+    test_handle_key_event_when_predicate_blocks_match,
     test_reset_to_defaults_reloads_toml,
 }
 

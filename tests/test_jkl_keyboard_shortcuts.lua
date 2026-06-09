@@ -68,6 +68,7 @@ local mock_cm = {
         return { success = true }
     end,
     get_executor = function() return function() end end,
+        get_spec = function() return nil end,
     peek_command_event_origin = function() return nil end,
     begin_command_event = function() end,
     end_command_event = function() end,

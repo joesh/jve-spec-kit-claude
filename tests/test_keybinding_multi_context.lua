@@ -12,6 +12,7 @@ print("=== Test Multi-Context Keybinding Dispatch ===")
 local dispatched = {}
 local mock_cm = {
     get_executor = function() return function() end end,
+        get_spec = function() return nil end,
     execute_interactive = function(command_name, params)
         dispatched[#dispatched + 1] = { command = command_name, params = params }
         return { success = true }
