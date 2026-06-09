@@ -968,7 +968,15 @@ function SequenceMonitor:_on_show_frame(frame_handle, metadata)
     -- MVC pull: ask the model for this clip's display grade, push to the
     -- surface BEFORE the frame so the shader's CDL uniform is in place
     -- when the new frame draws (spec 023 T032 / FR-016).
-    self:_apply_clip_grade(metadata and metadata.clip_id)
+    -- Gap frames (and synthetic show_frame with no clip metadata) carry
+    -- no clip identity; pull_for_clip is strict (rule 2.13), so the view
+    -- owns the gap→clear-grade policy.
+    local clip_id = metadata and metadata.clip_id
+    if clip_id and clip_id ~= "" then
+        self:_apply_clip_grade(clip_id)
+    else
+        self:_clear_clip_grade()
+    end
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, frame_handle)
     if self._frame_mirror then
         qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, frame_handle)
@@ -984,6 +992,9 @@ end
 --- grades_changed signal we already wire below rather than reintroducing
 --- a key-only cache.
 function SequenceMonitor:_apply_clip_grade(clip_id)
+    assert(type(clip_id) == "string" and clip_id ~= "",
+        "sequence_monitor:_apply_clip_grade: clip_id required — use "
+        .. "_clear_clip_grade for gap/no-clip frames")
     -- view_grade_pull is a thin wrapper over the model; the model owns
     -- SQL access (SQL-isolation policy in core/database.lua). The view
     -- does not touch the connection.
@@ -1000,11 +1011,21 @@ function SequenceMonitor:_apply_clip_grade(clip_id)
     end
 end
 
+-- Render-side gap policy (T032 / FR-016): clear CDL + LUT stages so the
+-- last graded clip's look doesn't linger across a gap. Owned by the view
+-- because pull_for_clip is strict about clip identity (rule 2.13).
+function SequenceMonitor:_clear_clip_grade()
+    qt_constants.EMP.SURFACE_SET_GRADE(self._video_surface, nil)
+    qt_constants.EMP.SURFACE_SET_LUT3D(self._video_surface, nil)
+    if self._frame_mirror then
+        qt_constants.EMP.SURFACE_SET_GRADE(self._frame_mirror, nil)
+        qt_constants.EMP.SURFACE_SET_LUT3D(self._frame_mirror, nil)
+    end
+end
+
 function SequenceMonitor:_on_show_gap()
     log.event("show_gap: view=%s", self.view_id)
-    -- Drop any previously-pushed grade so the next graded clip's grade
-    -- doesn't linger across the gap (T032 / FR-016).
-    self:_apply_clip_grade(nil)
+    self:_clear_clip_grade()
     qt_constants.EMP.SURFACE_SET_FRAME(self._video_surface, nil)
     if self._frame_mirror then
         qt_constants.EMP.SURFACE_SET_FRAME(self._frame_mirror, nil)

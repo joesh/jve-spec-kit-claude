@@ -60,18 +60,28 @@ local ClipGrade = require("models.clip_grade")
 local M = {}
 
 --- Pull the display grade stages for a clip.
---- @param clip_id string|nil   clip id (nil/empty ⇒ no clip, returns nil)
---- @param db      table|nil    optional open SQLite connection; when nil
----                              the model layer grabs the active connection
----                              (the model layer is the only place allowed
----                              to call `database.get_connection()` under
----                              the SQL-isolation policy).
---- @return table|nil  stage table `{cdl?, lut_ref?}`, or nil for passthrough
+--- @param clip_id string         clip id — must be a non-empty string. The
+---                                gap/no-active-clip case is the view layer's
+---                                responsibility: when there's no clip on the
+---                                show-frame metadata or the renderer is in
+---                                gap state, callers MUST clear the grade
+---                                stages on the surface directly rather than
+---                                routing nil through this function (rule
+---                                2.13: no silent-nil swallow at the model
+---                                layer; render policy belongs in the view).
+--- @param db      table|nil      optional open SQLite connection; when nil
+---                                the model layer grabs the active connection
+---                                (the model layer is the only place allowed
+---                                to call `database.get_connection()` under
+---                                the SQL-isolation policy).
+--- @return table|nil  stage table `{cdl?, lut_ref?}`, or nil when this clip
+---                    has no grade row at all (a real model answer, not a
+---                    swallow of bad input).
 function M.pull_for_clip(clip_id, db)
-    if clip_id == nil or clip_id == "" then return nil end
-    assert(type(clip_id) == "string",
-        string.format("view_grade_pull.pull_for_clip: clip_id must be string, got %s",
-            type(clip_id)))
+    assert(type(clip_id) == "string" and clip_id ~= "", string.format(
+        "view_grade_pull.pull_for_clip: clip_id must be a non-empty "
+        .. "string (got %s) — gap/no-clip frames must clear grade at the "
+        .. "render path, not call pull_for_clip(nil)", type(clip_id)))
 
     local grade = ClipGrade.load(clip_id, db)
     if not grade then return nil end

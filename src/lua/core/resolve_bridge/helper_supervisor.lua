@@ -132,7 +132,11 @@ end
 local function wait_for_bind(proc, socket_path, timeout_ms)
     local elapsed = 0
     while elapsed < timeout_ms do
-        if os.execute("test -S " .. socket_path) == 0 then
+        -- QFileInfo::exists() picks up the Unix-domain socket inode the
+        -- moment QLocalServer creates it; the shell `test -S` shellout
+        -- this replaced forked sh per tick and silently failed under the
+        -- Finder-launched .app's stripped PATH.
+        if qt_fs_path_exists(socket_path) then
             return nil
         end
         -- If the helper died mid-startup, fail with a distinct message
@@ -144,7 +148,7 @@ local function wait_for_bind(proc, socket_path, timeout_ms)
                 .. socket_path
         end
         qt_constants.CONTROL.PROCESS_EVENTS()
-        os.execute(string.format("sleep %f", BIND_READY_POLL_MS / 1000))
+        qt_thread_msleep(BIND_READY_POLL_MS)
         elapsed = elapsed + BIND_READY_POLL_MS
     end
     return string.format(

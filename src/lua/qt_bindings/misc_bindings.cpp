@@ -22,6 +22,7 @@
 #include <QPen>
 #include <QPainterPath>
 #include <QPainterPathStroker>
+#include <QThread>
 
 #ifdef Q_OS_MAC
 #include <objc/objc-runtime.h>
@@ -71,6 +72,31 @@ static int lua_qt_monotonic_s(lua_State* L) {
 // when launched from Finder with a stripped PATH).
 static int lua_qt_get_pid(lua_State* L) {
     lua_pushinteger(L, static_cast<lua_Integer>(QCoreApplication::applicationPid()));
+    return 1;
+}
+
+// Sleep the calling thread for `ms` milliseconds. Replaces
+// `os.execute(string.format("sleep %f", ms/1000))` in tight poll loops
+// (helper_supervisor wait_for_bind), which forked /bin/sh per tick and
+// broke under Finder-launched .app's stripped PATH.
+static int lua_qt_thread_msleep(lua_State* L) {
+    int ms = luaL_checkinteger(L, 1);
+    luaL_argcheck(L, ms >= 0, 1,
+        "qt_thread_msleep: ms must be non-negative");
+    QThread::msleep(static_cast<unsigned long>(ms));
+    return 0;
+}
+
+// Filesystem-existence check via QFileInfo. Covers regular files,
+// directories, symlinks AND Unix-domain sockets — the use case driving
+// this is the supervisor polling for the helper's QLocalServer socket
+// inode to appear (replaces `os.execute("test -S " .. path)`).
+static int lua_qt_fs_path_exists(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    luaL_argcheck(L, path[0] != '\0', 1,
+        "qt_fs_path_exists: path must not be empty");
+    QFileInfo fi{QString::fromUtf8(path)};
+    lua_pushboolean(L, fi.exists() ? 1 : 0);
     return 1;
 }
 

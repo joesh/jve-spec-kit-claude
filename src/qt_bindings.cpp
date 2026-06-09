@@ -337,6 +337,12 @@ void registerQtBindings(lua_State* L)
     // per-project pidlock owner check (replaces ps shellout).
     lua_pushcfunction(L, lua_qt_get_pid); lua_setglobal(L, "qt_get_pid");
 
+    // Thread sleep + FS existence — replace the helper_supervisor
+    // wait_for_bind shellouts (test -S / sleep). The fork-per-tick pattern
+    // broke under Finder-launched .app's stripped PATH.
+    lua_pushcfunction(L, lua_qt_thread_msleep); lua_setglobal(L, "qt_thread_msleep");
+    lua_pushcfunction(L, lua_qt_fs_path_exists); lua_setglobal(L, "qt_fs_path_exists");
+
     // Bulk file stat for the media probe disk cache (avoids 500×
     // io.popen stat calls that would dominate the cache-lookup cost)
     lua_pushcfunction(L, lua_qt_file_stat_batch); lua_setglobal(L, "qt_file_stat_batch");

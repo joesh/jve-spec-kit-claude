@@ -51,6 +51,9 @@ globals = {
     "qt_compose_bt709_csc",
     -- spec 023 — Resolve-bridge client process identity (QCoreApplication::applicationPid).
     "qt_get_pid",
+    -- spec 023 — helper_supervisor wait_for_bind: replaces test/sleep shellouts.
+    "qt_thread_msleep",
+    "qt_fs_path_exists",
     -- spec 023 T019/T020 — QProcess + QLocalSocket FFI for Resolve bridge.
     "qt_process_create",
     "qt_process_start",

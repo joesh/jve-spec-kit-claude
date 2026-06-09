@@ -169,10 +169,32 @@ do
         stages and stages.lut_ref == "/tmp/jve/itemlut.cube")
 end
 
--- ─── nil/empty clip_id → nil (gap frame, no clip context) ────────────
+-- ─── nil/empty clip_id is a caller bug, not a passthrough ────────────
+-- The "gap frame → no grade" rule lives in the render path
+-- (SequenceMonitor:_clear_clip_grade), not here. Passing nil into the
+-- model layer would silently swallow misrouted callers — rule 2.13.
 do
-    check("nil clip_id → nil",      view_grade_pull.pull_for_clip(nil, db) == nil)
-    check("empty clip_id → nil",    view_grade_pull.pull_for_clip("", db) == nil)
+    local function expect_assert(label, fn, substr)
+        local ok, err = pcall(fn)
+        if ok then
+            fail = fail + 1
+            print("FAIL (expected assert): " .. label)
+            return
+        end
+        if substr and not tostring(err):find(substr, 1, true) then
+            fail = fail + 1
+            print(string.format("FAIL (msg %q lacks %q): %s",
+                tostring(err), substr, label))
+            return
+        end
+        pass = pass + 1
+    end
+    expect_assert("nil clip_id asserts", function()
+        view_grade_pull.pull_for_clip(nil, db)
+    end, "non-empty")
+    expect_assert("empty clip_id asserts", function()
+        view_grade_pull.pull_for_clip("", db)
+    end, "non-empty")
 end
 
 print(string.format("\n%d passed, %d failed", pass, fail))

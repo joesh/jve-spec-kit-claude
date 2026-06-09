@@ -47,6 +47,26 @@ if not _G.qt_get_pid then
     _G.qt_get_pid = function() return tonumber(ffi.C.getpid()) end
 end
 
+-- qt_thread_msleep / qt_fs_path_exists — production via misc_bindings.cpp
+-- (QThread::msleep / QFileInfo::exists). Harness uses FFI usleep + /bin/test.
+if not _G.qt_thread_msleep then
+    local ffi = require("ffi")
+    pcall(ffi.cdef, "int usleep(unsigned int usec);")
+    _G.qt_thread_msleep = function(ms)
+        assert(type(ms) == "number" and ms >= 0,
+            "qt_thread_msleep: ms must be non-negative number")
+        ffi.C.usleep(math.floor(ms * 1000))
+    end
+end
+if not _G.qt_fs_path_exists then
+    _G.qt_fs_path_exists = function(path)
+        assert(type(path) == "string" and path ~= "",
+            "qt_fs_path_exists: path must be non-empty string")
+        local ok = os.execute(string.format("/bin/test -e %q", path))
+        return ok == 0 or ok == true
+    end
+end
+
 -- Now we can require modules
 local command_manager = require("core.command_manager")
 
