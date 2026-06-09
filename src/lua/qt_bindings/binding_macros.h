@@ -43,15 +43,17 @@ protected:
 };
 
 // Cast an already-extracted widget/layout void* (from lua_to_widget) to T*.
-// Both QWidget and QLayout inherit QObject (single inheritance), so the
-// void* reinterprets as QObject* without offset adjustment; qobject_cast
-// then uses Qt's metaobject system to verify the runtime type. Going
-// through QObject* (not QWidget*) matters: a void* holding a QLayout
-// would be UB to cast straight to QWidget*.
+// lua_push_widget stores the QObject base address directly (see
+// qt_bindings.cpp:85 — `QObject* obj = static_cast<QObject*>(widget);`),
+// so going void* → QObject* is well-defined for every Qt type we push
+// (QWidget, QLayout, QAction, QMenu — all inherit QObject first).
+// qobject_cast then uses Qt's metaobject system to verify the runtime
+// type. An intermediate static_cast through QWidget* would be UB when
+// the pointer actually holds a QLayout (QLayout does not inherit QWidget).
 template<typename T>
 T* widget_cast(void* ptr) {
     if (!ptr) return nullptr;
-    return qobject_cast<T*>(static_cast<QObject*>(static_cast<QWidget*>(ptr)));
+    return qobject_cast<T*>(static_cast<QObject*>(ptr));
 }
 
 // Helper to get widget from Lua stack with type checking.
