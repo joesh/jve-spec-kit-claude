@@ -61,6 +61,7 @@ pgrep -x jve || rm -f "$HOME/Documents/JVE Projects/Untitled Project.jvp-shm"
 ## Commands
 make -j4            # Builds C++ AND runs luacheck on all Lua files AND all tests
 make clean          # Clean build artifacts
+make install-hooks  # Run once per fresh clone — points git at tracked hooks/
 
 **NOTE** don't run make|grep. instead send output to a /tmp file and grep that. running make takes real time!
 

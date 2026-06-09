@@ -1,0 +1,101 @@
+#!/bin/bash
+# JVE pre-commit hook: block commits that introduce anti-pattern violations.
+#
+# Runs scripts/lint_anti_patterns.sh on staged files. Violations on lines
+# being introduced/modified block the commit. Violations on lines that were
+# already in the file (untouched by this commit) do NOT block — only fresh
+# violations gate the commit, so unrelated cleanup isn't forced on every PR.
+#
+# Bypass for a single commit: `git commit --no-verify` (not recommended;
+# prefer adding `lint-allow: <rule> <reason>` on the offending line).
+
+set -u
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+[ -z "$REPO_ROOT" ] && exit 0
+LINT="$REPO_ROOT/scripts/lint_anti_patterns.sh"
+[ ! -x "$LINT" ] && exit 0
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(lua|cpp|h|hpp|mm)$' || true)
+[ -z "$STAGED" ] && exit 0
+
+violations_blocked=0
+violations_total=0
+report=$(mktemp)
+trap 'rm -f "$report"' EXIT
+
+for f in $STAGED; do
+    [ ! -f "$f" ] && continue
+    lint_out=$("$LINT" "$f" 2>/dev/null)
+    [ -z "$lint_out" ] && continue
+
+    added_lines=$(git diff --cached -U0 -- "$f" \
+        | awk '
+            /^@@/ {
+                split($3, parts, ",");
+                start = parts[1] + 0;
+                if (start < 0) start = -start;
+                count = (length(parts) > 1) ? parts[2] + 0 : 1;
+                for (i = 0; i < count; i++) print start + i;
+            }
+        ')
+
+    while IFS= read -r vline; do
+        violations_total=$((violations_total + 1))
+        ln=$(echo "$vline" | awk -F: '{print $2}')
+        if echo "$added_lines" | grep -qx "$ln"; then
+            echo "$vline" >> "$report"
+            violations_blocked=$((violations_blocked + 1))
+        fi
+    done <<< "$lint_out"
+done
+
+if [ "$violations_blocked" -gt 0 ]; then
+    echo "PRE-COMMIT BLOCKED: $violations_blocked anti-pattern violation(s) on added lines." >&2
+    echo "" >&2
+    cat "$report" >&2
+    echo "" >&2
+    echo "Fix the violations, or add a per-line exemption with explicit reason:" >&2
+    echo "  -- lint-allow: <rule_id> <reason>   (Lua)" >&2
+    echo "  // lint-allow: <rule_id> <reason>   (C++)" >&2
+    echo "" >&2
+    echo "Bypass this commit only: git commit --no-verify (not recommended)." >&2
+    exit 1
+fi
+
+if [ "$violations_total" -gt 0 ]; then
+    echo "[lint] $violations_total pre-existing violation(s) on unchanged lines (not blocking)." >&2
+fi
+exit 0
+
+# --- lint-allow gate ----------------------------------------------------------
+# Every newly added `lint-allow:` annotation gets surfaced for review. The
+# point: prevent the "shut up the linter" shortcut. If a rule fires, the
+# default action is to FIX the code; lint-allow is the exception, not the
+# escape hatch. To proceed when an allow is genuinely justified, opt-in
+# explicitly with `JVE_LINT_ALLOW_OK=1 git commit ...`.
+allow_lines=""
+for f in $STAGED; do
+    [ ! -f "$f" ] && continue
+    diff_out=$(git diff --cached -U0 -- "$f" 2>/dev/null | grep -E '^\+' | grep -v '^+++' | grep -E 'lint-allow:' || true)
+    [ -z "$diff_out" ] && continue
+    while IFS= read -r line; do
+        # Strip leading +
+        clean="${line#+}"
+        allow_lines+="$f: $clean"$'\n'
+    done <<< "$diff_out"
+done
+
+if [ -n "$allow_lines" ]; then
+    if [ "${JVE_LINT_ALLOW_OK:-0}" = "1" ]; then
+        echo "[lint-allow gate] $(echo "$allow_lines" | grep -c .) new lint-allow annotation(s) — proceeding (JVE_LINT_ALLOW_OK=1)" >&2
+    else
+        echo "PRE-COMMIT PAUSED: this commit adds lint-allow annotation(s)." >&2
+        echo "" >&2
+        echo "$allow_lines" >&2
+        echo "lint-allow is for cases where the code is genuinely correct and" >&2
+        echo "the linter is wrong, NOT for ducking a real fix. Read each one." >&2
+        echo "If still right, retry with JVE_LINT_ALLOW_OK=1 git commit ..." >&2
+        exit 1
+    fi
+fi

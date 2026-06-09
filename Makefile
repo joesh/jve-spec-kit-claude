@@ -4,7 +4,7 @@
 BUILD_DIR = build
 
 .PHONY: all build clean install help configure reconfigure luacheck nav-index test \
-        smoke smoke-coverage smoke-template jve lint scan
+        smoke smoke-coverage smoke-template jve lint scan install-hooks
 
 # Default target: lint, build, and run all tests.
 #
@@ -105,6 +105,13 @@ reconfigure:
 nav-index:
 	@$(MAKE) -C $(BUILD_DIR) nav-index --no-print-directory
 
+# Point this clone's git hooks at the tracked hooks/ directory so the
+# lint-allow gate (and any future shared hooks) fire for everyone.
+# Idempotent. Run once per fresh clone / worktree.
+install-hooks:
+	@git config core.hooksPath hooks
+	@echo "git hooks → $$(git config core.hooksPath)"
+
 help:
 	@echo ""
 	@echo "Available targets:"
@@ -121,6 +128,7 @@ help:
 	@echo "  smoke        - Run smoke suite (long-lived JVE + Python runner)"
 	@echo "  smoke-template - (Re)build Anamnesis .jvp template smoke tests copy from"
 	@echo "  smoke-coverage - Audit: every command/keymap/menu entry has a test"
+	@echo "  install-hooks - Point git at the tracked hooks/ dir (once per clone)"
 	@echo "  help         - Show this help message"
 	@echo ""
 	@echo "Example usage:"
