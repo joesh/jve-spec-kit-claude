@@ -61,12 +61,8 @@ static SockSlot* socket_require_slot(lua_State* L, int id, const char* fn) {
 }
 
 static void socket_invoke_cb(int ref, std::function<int(lua_State*)> push_args) {
-    if (!s_socket_L || ref == LUA_NOREF) return;
-    lua_rawgeti(s_socket_L, LUA_REGISTRYINDEX, ref);
-    int n = push_args(s_socket_L);
-    if (lua_pcall(s_socket_L, n, 0, 0) != 0) {
-        jve_handle_lua_callback_error(s_socket_L, "qt_local_socket callback");
-    }
+    jve_invoke_lua_callback(s_socket_L, ref, std::move(push_args),
+                            "qt_local_socket callback");
 }
 
 static const char* socket_error_name(QLocalSocket::LocalSocketError err) {

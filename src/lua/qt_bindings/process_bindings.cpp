@@ -58,12 +58,8 @@ static ProcSlot* find_slot(int id) {
 }
 
 static void invoke_cb(int ref, std::function<int(lua_State*)> push_args) {
-    if (!s_proc_L || ref == LUA_NOREF) return;
-    lua_rawgeti(s_proc_L, LUA_REGISTRYINDEX, ref);
-    int n = push_args(s_proc_L);
-    if (lua_pcall(s_proc_L, n, 0, 0) != 0) {
-        jve_handle_lua_callback_error(s_proc_L, "qt_process callback");
-    }
+    jve_invoke_lua_callback(s_proc_L, ref, std::move(push_args),
+                            "qt_process callback");
 }
 
 static int lua_qt_process_create(lua_State* L) {

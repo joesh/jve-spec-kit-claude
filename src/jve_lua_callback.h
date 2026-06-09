@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 // Shared helper for Lua pcall error handling in C++ callback contexts.
 //
 // Use this after EVERY lua_pcall() in a C++ callback invoked by Qt, by a
@@ -31,3 +33,18 @@ void jve_handle_lua_callback_error(lua_State* L, const char* where);
 // (the call is typically inside a Qt event handler with no protected frame
 // above — crashing here would be worse than logging).
 void jve_discard_non_function_handler(lua_State* L, const char* handler_name, const char* where);
+
+// Invoke a Lua callback held in LUA_REGISTRYINDEX[ref]:
+//   1. No-op (silent) when L is null or ref == LUA_NOREF — supports the
+//      "callback not registered yet" lifecycle of bindings that wire Qt
+//      signal lambdas before the Lua side sets its handler.
+//   2. Otherwise: lua_rawgeti the function, invoke push_args(L) to push
+//      callback arguments (returning the arg count), lua_pcall, and on
+//      failure route the error through jve_handle_lua_callback_error.
+//
+// Lifts the identical `invoke_cb` helper that previously lived inline
+// in process_bindings.cpp, local_socket_bindings.cpp, and
+// fs_watcher_bindings.cpp.
+void jve_invoke_lua_callback(lua_State* L, int ref,
+                             std::function<int(lua_State*)> push_args,
+                             const char* where);

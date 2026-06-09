@@ -59,6 +59,18 @@ void jve_handle_lua_callback_error(lua_State* L, const char* where)
     lua_pop(L, 3);  // pop traceback, err_str, original error
 }
 
+void jve_invoke_lua_callback(lua_State* L, int ref,
+                             std::function<int(lua_State*)> push_args,
+                             const char* where)
+{
+    if (L == nullptr || ref == LUA_NOREF) return;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
+    int n = push_args(L);
+    if (lua_pcall(L, n, 0, 0) != 0) {
+        jve_handle_lua_callback_error(L, where);
+    }
+}
+
 void jve_discard_non_function_handler(lua_State* L, const char* handler_name, const char* where)
 {
     JVE_ASSERT(L != nullptr, "jve_discard_non_function_handler: lua_State is null");

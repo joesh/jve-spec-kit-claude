@@ -5,6 +5,7 @@
 #include <QFileSystemWatcher>
 #include <lua.hpp>
 #include "../../jve_log.h"
+#include "../../jve_lua_callback.h"
 
 namespace {
 
@@ -19,24 +20,22 @@ static void ensure_watcher() {
 
         QObject::connect(s_watcher, &QFileSystemWatcher::fileChanged,
             [](const QString& path) {
-                if (s_L && s_file_changed_ref != LUA_NOREF) {
-                    lua_rawgeti(s_L, LUA_REGISTRYINDEX, s_file_changed_ref);
-                    lua_pushstring(s_L, path.toUtf8().constData());
-                    if (lua_pcall(s_L, 1, 0, 0) != 0) {
-                        jve_handle_lua_callback_error(s_L, "fs.file_changed");
-                    }
-                }
+                QByteArray utf8 = path.toUtf8();
+                jve_invoke_lua_callback(s_L, s_file_changed_ref,
+                    [&utf8](lua_State* L) {
+                        lua_pushlstring(L, utf8.constData(), utf8.size());
+                        return 1;
+                    }, "fs.file_changed");
             });
 
         QObject::connect(s_watcher, &QFileSystemWatcher::directoryChanged,
             [](const QString& path) {
-                if (s_L && s_dir_changed_ref != LUA_NOREF) {
-                    lua_rawgeti(s_L, LUA_REGISTRYINDEX, s_dir_changed_ref);
-                    lua_pushstring(s_L, path.toUtf8().constData());
-                    if (lua_pcall(s_L, 1, 0, 0) != 0) {
-                        jve_handle_lua_callback_error(s_L, "fs.dir_changed");
-                    }
-                }
+                QByteArray utf8 = path.toUtf8();
+                jve_invoke_lua_callback(s_L, s_dir_changed_ref,
+                    [&utf8](lua_State* L) {
+                        lua_pushlstring(L, utf8.constData(), utf8.size());
+                        return 1;
+                    }, "fs.dir_changed");
             });
     }
 }
