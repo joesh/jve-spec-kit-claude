@@ -751,13 +751,35 @@ M.get_audio_scroll_offset = function()
     local cache = strip_holder.displayed_cache()
     return cache and cache.audio_scroll_offset or nil
 end
--- Scroll setters: update displayed-tab cache only. DB persistence happens at
--- save points (sequence switch-away, project close) via persist_scroll_offsets().
--- Reason: Qt fires async scroll events (0) during widget rebuild/layout that
--- would clobber the incoming sequence's saved offsets if persisted eagerly.
+-- Scroll setters update the displayed-tab cache and throttle-persist to DB.
+-- The throttle (~SCROLL_PERSIST_THROTTLE_MS, rough estimate) coalesces
+-- drag/wheel storms into one DB write per idle window. Tab-switch and
+-- shutdown remain explicit save points for kill paths that don't let the
+-- timer fire.
+--
 -- Silent no-op when no displayed cache: legitimate transient state during
--- tab close / project switch. Logged at `event` level (off by default) so the
--- drop is observable in JVE_LOG=ui:event without spamming production (L3 audit).
+-- tab close / project switch. Logged at `event` level (off by default).
+local SCROLL_PERSIST_THROTTLE_MS = 250  -- estimate; settle time of Qt rebuild storm not measured
+local scroll_persist_pending = false
+local function schedule_scroll_persist()
+    if scroll_persist_pending then return end
+    if type(qt_create_single_shot_timer) ~= "function" then return end  -- lint-allow: R004 Qt binding may not be wired in pure-Lua test harnesses -- luacheck: globals qt_create_single_shot_timer
+    scroll_persist_pending = true
+    qt_create_single_shot_timer(SCROLL_PERSIST_THROTTLE_MS, function()
+        scroll_persist_pending = false
+        M.persist_scroll_offsets()
+    end)
+end
+-- M.reset is bound to data.reset above (line 157), which cannot see this
+-- module-level upvalue. Wrap it so a project close / re-init also clears
+-- the throttle flag — without this, a timer in flight at reset leaves
+-- pending=true and the first scroll in the next project silently skips
+-- scheduling.
+local _scroll_data_reset = M.reset
+M.reset = function(...)
+    scroll_persist_pending = false
+    return _scroll_data_reset(...)
+end
 M.set_video_scroll_offset = function(offset)
     local cache = strip_holder.displayed_cache()
     if not cache then
@@ -765,6 +787,7 @@ M.set_video_scroll_offset = function(offset)
         return
     end
     cache.video_scroll_offset = math.floor(offset)
+    schedule_scroll_persist()
 end
 M.set_audio_scroll_offset = function(offset)
     local cache = strip_holder.displayed_cache()
@@ -773,6 +796,7 @@ M.set_audio_scroll_offset = function(offset)
         return
     end
     cache.audio_scroll_offset = math.floor(offset)
+    schedule_scroll_persist()
 end
 
 --- Persist current scroll offsets to DB. Call at save points only.
