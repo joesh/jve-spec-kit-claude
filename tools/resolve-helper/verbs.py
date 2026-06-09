@@ -141,23 +141,26 @@ def verb_ping(args, handle, envelope_id, helper_version):
             "resolve_version": handle.version_string(),
             "helper_version": helper_version,
         })
-    # Non-fatal: ping returns alive=True + connected=False on
-    # handle errors so JVE can gate UI without false "helper dead"
-    # alarms when Resolve is just not running. version_string()
+    # Non-fatal: ping returns alive=True + connected=False on ANY
+    # non-ok acquire result so JVE can gate UI without false "helper
+    # dead" alarms when Resolve is just not running. version_string()
     # raises in the same conditions acquire() failed for (terminal
     # state / scriptapp returns None) — calling it here would crash
     # the dispatch handler (post-pass5 re-raises). Send None instead;
     # last_error already conveys why the connection is down.
+    # Prior shape whitelisted ("handle_stale", "resolve_api_error",
+    # "not_studio") — adding a new acquire code (license_expired,
+    # project_locked, ...) without updating that set would fall through
+    # to _error and crash the dispatcher. Treat every non-ok status as
+    # ping-non-fatal.
     _, code, msg = status
-    if code in ("handle_stale", "resolve_api_error", "not_studio"):
-        return _ok(envelope_id, {
-            "alive": True,
-            "resolve_connected": False,
-            "resolve_version": None,
-            "helper_version": helper_version,
-            "last_error": {"code": code, "message": msg},
-        })
-    return _error(envelope_id, code, msg)
+    return _ok(envelope_id, {
+        "alive": True,
+        "resolve_connected": False,
+        "resolve_version": None,
+        "helper_version": helper_version,
+        "last_error": {"code": code, "message": msg},
+    })
 
 
 _TRACK_TYPES_LOWER = {"video", "audio"}
