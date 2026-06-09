@@ -7,7 +7,7 @@ print("=== Testing SplitClip Command ===\n")
 -- Mock database object
 local mock_db = {
     queries = {},
-    prepare = function(self, sql)
+    prepare = function(_self, sql)
         print("  DB: Preparing query: " .. sql:sub(1, 50) .. "...")
         local query = {
             sql = sql,

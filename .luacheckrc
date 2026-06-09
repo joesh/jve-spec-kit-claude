@@ -124,6 +124,7 @@ exclude_files = {
     "build/**",
     "CMakeFiles/**",
     "tests/smoke/**",       -- Python runner (spec 020 Phase 1)
+    "**/autogen/**/deps",   -- CMake-generated depfiles under autogen test bundles
     "**/*.py",
     "**/*.pyc",
     "**/__pycache__/**",

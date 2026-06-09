@@ -46,17 +46,17 @@ if [ "$newest_mtime" -gt "$exe_mtime" ]; then
     exit 1
 fi
 
-# --- 2) luacheck on staged .lua ---------------------------------------------
-STAGED_LUA=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.lua$' || true)
-if [ -n "$STAGED_LUA" ]; then
-    if ! lua_out=$(cd "$REPO_ROOT" && luacheck $STAGED_LUA 2>&1); then
-        echo "PRE-COMMIT BLOCKED: luacheck reports warnings or errors on staged Lua." >&2
-        echo "" >&2
-        echo "$lua_out" >&2
-        echo "" >&2
-        echo "Fix the warnings before committing." >&2
-        exit 1
-    fi
+# --- 2) luacheck (whole repo) -----------------------------------------------
+# Matches `make -j4`'s luacheck scope: every src/ + tests/ .lua file, not
+# just the ones staged. A clean tree before commit means whoever pulls
+# this commit gets a green `make -j4` too. ~8s on this codebase.
+if ! lua_out=$(cd "$REPO_ROOT" && luacheck src tests 2>&1); then
+    echo "PRE-COMMIT BLOCKED: luacheck reports warnings or errors." >&2
+    echo "" >&2
+    echo "$lua_out" >&2
+    echo "" >&2
+    echo "Fix the warnings before committing." >&2
+    exit 1
 fi
 
 # --- 3) anti-pattern lint ----------------------------------------------------

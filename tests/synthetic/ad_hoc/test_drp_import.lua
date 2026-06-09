@@ -5,7 +5,7 @@
 
 package.path = package.path .. ";./src/lua/?.lua;./src/lua/ui/?.lua"
 
-local drp_importer = require("importers.drp_importer")
+require("importers.drp_importer")
 
 print("=== DaVinci Resolve .drp Importer Test ===\n")
 

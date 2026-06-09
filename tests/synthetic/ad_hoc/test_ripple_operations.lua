@@ -26,22 +26,6 @@ local function assert_eq(actual, expected, message)
     end
 end
 
-local function assert_near(actual, expected, tolerance, message)
-    tests_run = tests_run + 1
-    local diff = math.abs(actual - expected)
-    if diff <= tolerance then
-        tests_passed = tests_passed + 1
-        print(string.format("  ✓ %s: %s", current_test, message))
-        return true
-    else
-        tests_failed = tests_failed + 1
-        print(string.format("  ✗ %s: %s", current_test, message))
-        print(string.format("    Expected: %s ± %s", tostring(expected), tostring(tolerance)))
-        print(string.format("    Actual:   %s (diff: %s)", tostring(actual), tostring(diff)))
-        return false
-    end
-end
-
 -- Mock database with in-memory clip storage
 local mock_db = {
     clips = {},
@@ -105,7 +89,7 @@ local Clip = {
         for k, v in pairs(stored) do
             clip[k] = v
         end
-        clip.save = function(self, db)
+        clip.save = function(self, _db)
             mock_db:store_clip(self)
             return true
         end
@@ -148,7 +132,6 @@ local Command = {
 
 -- Load the actual command manager code
 -- We need to inject our mocks
-_G.db = mock_db
 package.loaded['models.clip'] = Clip
 package.loaded['models.media'] = Media
 package.loaded['core.database'] = database_module
@@ -189,7 +172,7 @@ local function apply_edge_ripple(clip, edge_type, delta_frames)
             -- Check media boundary
             local media = nil
             if clip.media_id then
-                media = Media.load(clip.media_id, db)
+                media = Media.load(clip.media_id, mock_db)
             end
 
             if media and new_source_out > media.duration then
@@ -220,28 +203,17 @@ local function execute_batch_ripple_edit(command)
         return false, "Missing parameters"
     end
 
-    local original_states = {}
     local latest_ripple_time = 0
     local latest_shift_amount = 0
 
-    local all_clips = database_module.load_clips(sequence_id)
-
     -- Phase 1: Trim all edges
     for _, edge_info in ipairs(edge_infos) do
-        local clip = Clip.load(edge_info.clip_id, db)
+        local clip = Clip.load(edge_info.clip_id, mock_db)
         if not clip then
             return false, "Clip not found: " .. edge_info.clip_id
         end
 
         local actual_edge_type = edge_info.edge_type
-
-        -- Save original state
-        original_states[edge_info.clip_id] = {
-            start_time = clip.start_time,
-            duration = clip.duration,
-            source_in = clip.source_in,
-            source_out = clip.source_out
-        }
 
         -- BUG FIX: Pass same delta to ALL edges
         local edge_delta = delta_frames
@@ -251,7 +223,7 @@ local function execute_batch_ripple_edit(command)
         end
 
         -- Save modified clip
-        clip:save(db)
+        clip:save(mock_db)
 
         -- Track latest ripple and shift
         if ripple_time then
@@ -275,7 +247,7 @@ local function execute_batch_ripple_edit(command)
         table.insert(edited_clip_ids, edge_info.clip_id)
     end
 
-    all_clips = database_module.load_clips(sequence_id)
+    local all_clips = database_module.load_clips(sequence_id)
 
     local function compute_move_bounds(target_clip)
         local left_end = 0
@@ -360,9 +332,9 @@ local function execute_batch_ripple_edit(command)
         end
 
         if not is_edited and other_clip.start_time >= latest_ripple_time then
-            local shift_clip = Clip.load(other_clip.id, db)
+            local shift_clip = Clip.load(other_clip.id, mock_db)
             shift_clip.start_time = shift_clip.start_time + latest_shift_amount
-            shift_clip:save(db)
+            shift_clip:save(mock_db)
         end
     end
 
@@ -417,6 +389,7 @@ cmd:set_parameter("delta_frames", 500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 local success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").start_time, 1000, "Clip1 position unchanged (ripple rule)")
@@ -441,6 +414,7 @@ cmd:set_parameter("delta_frames", -500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").start_time, 1000, "Clip1 position unchanged")
@@ -465,6 +439,7 @@ cmd:set_parameter("delta_frames", 500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").start_time, 1000, "Clip1 position unchanged")
@@ -489,6 +464,7 @@ cmd:set_parameter("delta_frames", -500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").start_time, 1000, "Clip1 position unchanged")
@@ -518,6 +494,7 @@ cmd:set_parameter("delta_frames", 500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 -- Clip1: out-point extends
@@ -558,6 +535,7 @@ cmd:set_parameter("delta_frames", 500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").duration, 2000, "Clip1 extended by 500 frames")
@@ -587,6 +565,7 @@ cmd:set_parameter("delta_frames", 500)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").duration, 1500, "Clip1 trimmed by 500 frames")
@@ -611,6 +590,7 @@ cmd:set_parameter("delta_frames", 1000)  -- Would exceed media duration
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, false, "Command failed (media boundary)")
 assert_eq(get_clip("clip1").duration, 9500, "Clip1 duration unchanged (blocked)")
@@ -631,6 +611,7 @@ cmd:set_parameter("delta_frames", -500)  -- Would make source_in negative
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, false, "Command failed (source boundary)")
 assert_eq(get_clip("clip1").source_in, 0, "Clip1 source_in unchanged (blocked)")
@@ -657,6 +638,7 @@ cmd:set_parameter("delta_frames", 300)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip1").duration, 1300, "Clip1 extended by 300 frames")
@@ -690,6 +672,7 @@ cmd:set_parameter("delta_frames", 500)  -- Drag right
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 
@@ -733,6 +716,7 @@ cmd:set_parameter("delta_frames", -500)  -- Drag LEFT
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 
@@ -772,6 +756,7 @@ cmd:set_parameter("delta_frames", 5000)
 cmd:set_parameter("sequence_id", "test_sequence")
 
 success, result = execute_batch_ripple_edit(cmd)
+local _ = result
 
 assert_eq(success, true, "Command succeeded")
 assert_eq(get_clip("clip_v2").duration, 4000, "V2 clip trimmed by full 5000-frame drag")

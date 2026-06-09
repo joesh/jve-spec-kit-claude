@@ -4,7 +4,7 @@
 
 package.path = "./src/lua/?.lua;./src/lua/?/init.lua;" .. package.path
 
-local media_relinker = require("core.media_relinker")
+require("core.media_relinker")
 
 print("Media Relinking System Test")
 print("============================\n")
@@ -42,10 +42,6 @@ print("Test 1: Path-based Relinking")
 print("------------------------------")
 local media1 = mock_media[1]
 local new_root = "/Volumes/NewDrive"
-
-local options1 = {
-    new_root = new_root
-}
 
 print(string.format("Original path: %s", media1.file_path))
 print(string.format("New root: %s", new_root))
@@ -95,15 +91,6 @@ print("  Match: 100% confidence (same duration + resolution)\n")
 print("Test 4: Batch Relinking")
 print("------------------------")
 print(string.format("Processing %d offline media files...\n", #mock_media))
-
-local batch_options = {
-    search_paths = {"/Volumes/NewDrive"},
-    candidate_files = {
-        "/Volumes/NewDrive/Footage/Interviews/Interview_A.mov",
-        "/Volumes/NewDrive/Videos/Broll_Sunset.mp4",
-        "/Volumes/NewDrive/Audio/Voiceover_Take2.wav"
-    }
-}
 
 print("Relinking strategies priority:")
 print("  1. Path-based (fastest, exact match)")
