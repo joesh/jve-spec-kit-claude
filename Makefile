@@ -27,7 +27,7 @@ all: configure
 	 rm -f .luacheck.log
 	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests --no-print-directory -j2
 	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
-	@python3 tests/smoke/runner/coverage.py --axis keymap
+	@python3 tests/live/runner/coverage.py --axis keymap
 
 # Build only (C++ compile + link, no tests, no lint)
 build: configure
@@ -77,17 +77,17 @@ scan:
 # Static coverage audit — every registered command / keymap entry /
 # menu item has a corresponding test. No JVE launch; fast (<1s).
 smoke-coverage:
-	@python3 tests/smoke/runner/coverage.py
+	@python3 tests/live/runner/coverage.py
 
 # Build the Anamnesis template .jvp that smoke tests copy per-case.
 # Idempotent — re-runs only when the DRP fixture hash changes (or --force).
 smoke-template: build
-	@python3 tests/smoke/runner/build_template.py
+	@python3 tests/live/runner/build_template.py
 
 # Run the Phase A/B/C smoke suite via stdlib unittest discovery.
 # Requires: built JVEEditor binary + smoke-template up to date.
 smoke: build
-	@python3 -m unittest discover -s tests/smoke/cases -p "test_*.py" -v
+	@python3 -m unittest discover -s tests/live/cases -p "test_*.py" -v
 
 # Configure CMake (automatic)
 configure:

@@ -93,7 +93,7 @@ Track-arming filter on the intersection check: a selected clip on a locked or au
 
 Adapter is `undoable=false`; the nested Blade call owns the single user-visible undo entry.
 
-**Smoke coverage**: `tests/smoke/cases/test_keymap_cmd_b_blades_at_playhead.py` pins all three resolution paths via real Cmd+B keypresses against the Anamnesis fixture.
+**Smoke coverage**: `tests/live/cases/test_keymap_cmd_b_blades_at_playhead.py` pins all three resolution paths via real Cmd+B keypresses against the Anamnesis fixture.
 
 #### Cmd+L / Cmd+Shift+L keyboard adapters (`LinkSelectedClips`, `UnlinkSelectedClips`)
 

@@ -10,7 +10,7 @@
 #   - build/bin/jve.app           (host-built, self-contained: Qt frameworks
 #                                  via macdeployqt, src/lua + keymaps +
 #                                  resources via CMake post-build bundling)
-#   - tests/smoke/                (Python runner + cases — lives outside
+#   - tests/live/                (Python runner + cases — lives outside
 #                                  the .app by design, drives it)
 #   - tests/binding/              (Lua --test scripts dispatched via _run_in_vm.sh)
 #   - tests/integration/          (Lua --test scripts dispatched via _run_in_vm.sh)
@@ -86,7 +86,7 @@ rsync -az --delete \
     --exclude='*.pyc' \
     --exclude='.DS_Store' \
     -- \
-    tests/smoke \
+    tests/live \
     tests/binding \
     tests/integration \
     tests/test_env.lua \
@@ -120,4 +120,4 @@ tar -ch -C "$(dirname "$APP")" "$(basename "$APP")" \
     | $SSH_OPTS "$USER@$HOST" "tar -x -C $GUEST_PATH/build/bin"
 
 echo "✓ synced. Run smokes in guest with:"
-echo "    cd ~/jve && python3 -m pytest tests/smoke/cases/"
+echo "    cd ~/jve && python3 -m pytest tests/live/cases/"

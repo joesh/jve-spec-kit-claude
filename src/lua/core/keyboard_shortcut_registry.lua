@@ -911,7 +911,7 @@ local shortcut_fire_count = 0
 
 --- Number of QShortcut-handler invocations since process start.
 --- Monotonic; pre/post-press diff is the L2 "did this key actually
---- fire" probe. See tests/smoke/cases/test_keymap_dispatch_no_crash.py.
+--- fire" probe. See tests/live/cases/test_keymap_dispatch_no_crash.py.
 function M.get_shortcut_fire_count()
     return shortcut_fire_count
 end

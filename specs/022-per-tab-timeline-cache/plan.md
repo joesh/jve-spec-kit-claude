@@ -57,7 +57,7 @@ Move the per-sequence data cache (clips, tracks, viewport, playhead, selection) 
 
 When `displayed == active` (common case) they agree. When the user opens the source tab (e.g., via `source_viewer.load_clip` → `source_loaded_changed` listener at `timeline_panel.lua:1789` → `switch_to_source_tab`), `data.state.clips` gets replaced with the source master's clips while `data.state.sequence_id` still returns the record id. Commands targeting active (BRE, etc.) read a cache that doesn't contain their clips → silent no-op.
 
-The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutations.py` catches this (currently has a `switch_to_record_tab` workaround landed in the same session as this plan). The NSF defense landed in BRE (`src/lua/core/commands/batch_ripple_edit.lua`) errors loudly when the bug repeats. Tonight's refactor makes the bug impossible by construction: each tab carries its own cache, so BRE targeting active gets active's cache regardless of what's displayed.
+The smoke test `tests/live/cases/test_source_viewer_marks_track_live_clip_mutations.py` catches this (currently has a `switch_to_record_tab` workaround landed in the same session as this plan). The NSF defense landed in BRE (`src/lua/core/commands/batch_ripple_edit.lua`) errors loudly when the bug repeats. Tonight's refactor makes the bug impossible by construction: each tab carries its own cache, so BRE targeting active gets active's cache regardless of what's displayed.
 
 ## What "done" looks like
 
@@ -72,7 +72,7 @@ The smoke test `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutat
 3. Tab switch becomes a pointer swap on the strip, NOT a cache rebuild. Verify by timing a switch between two record tabs each with ~3000 clips. Should be sub-millisecond.
 4. The smoke test `test_in_edge_ripple_updates_source_viewer_effective_in` passes WITHOUT the `switch_to_record_tab` workaround currently in it. Remove that workaround.
 5. The BRE NSF defense (cache-desync assert) you'll find in `build_clip_cache` stays — it now catches "no open tab for seq_id" as the bug surface, which is a clean error message.
-6. Full smoke suite green: `python3 -m unittest discover tests/smoke/cases -v` (host).
+6. Full smoke suite green: `python3 -m unittest discover tests/live/cases -v` (host).
 7. Full `make -j4` clean (luacheck + Lua + C++ + binding + integration).
 
 ## What to NOT do
@@ -216,7 +216,7 @@ Source of the win: `core.activate_displayed` no longer re-runs `tab:load_from_da
 - Plan-doc "If it still rebuilds, you missed a hook" warning resolved end-to-end.
 
 ### Phase 1.6 — Test + smoke (LANDED)
-- Removed the `switch_to_record_tab` workaround from `tests/smoke/cases/test_source_viewer_marks_track_live_clip_mutations.py`. Smoke passes end-to-end (verified `2026-05-26`).
+- Removed the `switch_to_record_tab` workaround from `tests/live/cases/test_source_viewer_marks_track_live_clip_mutations.py`. Smoke passes end-to-end (verified `2026-05-26`).
 - Memory cleanup: `todo_test_source_viewer_marks_track_live_clip_mutations.md` marked RESOLVED with root-cause explanation; MEMORY.md index updated.
 - New memory `project_per_tab_timeline_cache.md` documents the contract for future Claudes.
 
@@ -289,7 +289,7 @@ With-Help-From: Claude
 ## Mandatory pre-commit checks (each commit)
 
 - `make -j4` clean
-- `python3 -m unittest discover tests/smoke/cases -v` green
+- `python3 -m unittest discover tests/live/cases -v` green
 - `luacheck src tests` clean
 - No `or 0` / `or default` fallbacks added (rule 2.13)
 - No backward-compat shims (rule 2.15) — keep public API clean; no aliases for renamed accessors

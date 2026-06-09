@@ -6,7 +6,7 @@
 -- provenance row; media; sequences; clips).
 --
 -- Why this matters: cross-process consumers see only the .jvp.
--- The smoke build (tests/smoke/runner/build_template.py) does
+-- The smoke build (tests/live/runner/build_template.py) does
 -- shutil.move(scratch.jvp, template.jvp) — moving the main file but
 -- not the sidecars. Backup / sync tools commonly do the same. If the
 -- convert leaves recent writes in the WAL, those consumers silently

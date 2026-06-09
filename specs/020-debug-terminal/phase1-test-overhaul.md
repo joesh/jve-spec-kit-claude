@@ -40,7 +40,7 @@ The two practical tier boundaries:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  tests/smoke/runner/runner.py                                   │
+│  tests/live/runner/runner.py                                   │
 │  ────────────────────────────────                               │
 │  • Launches JVEEditor --control-socket /tmp/jve_test.sock once. │
 │  • Foregrounds via `osascript -e 'tell app "jve" to       │
@@ -69,7 +69,7 @@ The two practical tier boundaries:
               └────────────────────────────────────────────────────┘
 ```
 
-The runner is one Python script (`tests/smoke/runner/runner.py`) plus a small library of per-test cases (`tests/smoke/test_*.py`). JVE itself is stock — no test code in the binary, no test-only modes beyond the existing `--control-socket` flag.
+The runner is one Python script (`tests/live/runner/runner.py`) plus a small library of per-test cases (`tests/live/test_*.py`). JVE itself is stock — no test code in the binary, no test-only modes beyond the existing `--control-socket` flag.
 
 ### Reset between tests
 
@@ -178,9 +178,9 @@ Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The 
    ```bash
    # On host:
    make -j4                  # produces self-contained build/bin/jve.app
-   scripts/sync-to-vm.sh     # pushes .app + tests/smoke + DRP fixtures
+   scripts/sync-to-vm.sh     # pushes .app + tests/live + DRP fixtures
    # In guest:
-   cd ~/jve && python3 -m pytest tests/smoke/cases/
+   cd ~/jve && python3 -m pytest tests/live/cases/
    ```
    Per-edit loop is host-edit → `make jve -j4` → `sync-to-vm.sh` → guest pytest. Lua-only edits still require `make jve -j4` because the CMake post-build rsync re-bundles `src/lua` into `jve.app/Contents/Resources/` — the .app being self-contained is the whole point, so there is no shortcut path that ships loose Lua to the guest.
 
@@ -192,7 +192,7 @@ Setup is one-time. The guest is **runtime-only** — it does NOT build JVE. The 
 * Push: `scripts/sync-to-vm.sh` from the host.
 * Inside the guest terminal:
   ```bash
-  cd ~/jve && python3 -m pytest tests/smoke/cases/
+  cd ~/jve && python3 -m pytest tests/live/cases/
   ```
 * Use the UTM guest window for runs you want to watch; capture-keyboard mode (Ctrl+Option to release) lets the guest fully own input without any chance of leakage to the host. Click anywhere outside the guest window OR hit Ctrl+Option to release the keyboard back to the host.
 
@@ -226,7 +226,7 @@ Single client, synchronous, one request → one response. No subscriptions, no s
 
 stdlib `socket` (AF_UNIX, SOCK_STREAM) + `subprocess` (osascript; cliclick as future fast-path) + stdlib `unittest` covers everything. Zero new install on a typical dev mac — no `pip install`, no virtualenv. unittest test classes are pytest-discoverable as-is, so a future move to pytest stays a one-line `pip install` away. Considered Lua: keeps one-language discipline but `osascript` shell-out plus socket framing in pure LuaJIT is unergonomic, and the test fixture file (`anamnesis-gold-timeline.drp`) is binary-handled by external tools anyway. Python pays for itself in test-author ergonomics.
 
-Boundary: Python lives only under `tests/smoke/runner/` and `tests/smoke/test_*.py`. JVE never imports Python. No build dependency. Runner ships as a Python script; CI installs `cliclick` from Homebrew on macOS runners.
+Boundary: Python lives only under `tests/live/runner/` and `tests/live/test_*.py`. JVE never imports Python. No build dependency. Runner ships as a Python script; CI installs `cliclick` from Homebrew on macOS runners.
 
 ---
 
@@ -337,7 +337,7 @@ The suite must cover three independent things. A single test typically hits one 
 - **Interactive command** (the kind you bind to a key or menu) → Command tier as above PLUS Smoke coverage of at least one invocation surface (key or menu) that reaches it. Catches the dispatch-chain regressions that drove this whole arc.
 - **Non-undoable command** (`SPEC.undoable = false`) — same as above minus the undo half.
 
-CI guard `tests/smoke/runner/coverage.py` walks `command_registry.lua` + `src/lua/core/commands/`, then matches against test files under `tests/command/` (canonical) **or** `tests/test_<snake>.lua` / `tests/test_<snake>_*.lua` (legacy variant naming, accepted during the migration window). Missing → fail. Once the reorg moves all legacy variants into `tests/command/`, the legacy path falls out of the matcher.
+CI guard `tests/live/runner/coverage.py` walks `command_registry.lua` + `src/lua/core/commands/`, then matches against test files under `tests/command/` (canonical) **or** `tests/test_<snake>.lua` / `tests/test_<snake>_*.lua` (legacy variant naming, accepted during the migration window). Missing → fail. Once the reorg moves all legacy variants into `tests/command/`, the legacy path falls out of the matcher.
 
 ### Axis 2 — every keymap entry
 
@@ -421,7 +421,7 @@ Each journey = one test file. Black-box: assert what the user would see, not whi
 
 ## CI guard
 
-`tests/smoke/runner/check_keymap_coverage.py` walks `keymaps/default.jvekeys`, parses every binding, and checks that `tests/smoke/test_keymap_*.py` contains at least one test referencing each `(combo, scope)` pair. Missing → exit non-zero. Wired into `make -j4` so regressions don't merge.
+`tests/live/runner/check_keymap_coverage.py` walks `keymaps/default.jvekeys`, parses every binding, and checks that `tests/live/test_keymap_*.py` contains at least one test referencing each `(combo, scope)` pair. Missing → exit non-zero. Wired into `make -j4` so regressions don't merge.
 
 Similar guard for menu coverage in Phase B.
 
@@ -430,14 +430,14 @@ Similar guard for menu coverage in Phase B.
 ## Files to create
 
 ```
-tests/smoke/runner/runner.py                     [NEW] launcher + socket client + helpers
-tests/smoke/runner/cliclick.py                   [NEW] key/mouse translation layer
-tests/smoke/runner/fixtures.py                   [NEW] Anamnesis template build + per-test copy
-tests/smoke/runner/check_keymap_coverage.py      [NEW] CI guard
-tests/smoke/runner/conftest.py                   [NEW] pytest setUp/tearDown wiring
-tests/smoke/test_keymap_*.py                     [NEW] Phase A binding tests
-tests/smoke/test_menu_*.py                       [NEW] Phase B menu tests
-tests/smoke/test_journey_*.py                    [NEW] Phase C user-journey tests
+tests/live/runner/runner.py                     [NEW] launcher + socket client + helpers
+tests/live/runner/cliclick.py                   [NEW] key/mouse translation layer
+tests/live/runner/fixtures.py                   [NEW] Anamnesis template build + per-test copy
+tests/live/runner/check_keymap_coverage.py      [NEW] CI guard
+tests/live/runner/conftest.py                   [NEW] pytest setUp/tearDown wiring
+tests/live/test_keymap_*.py                     [NEW] Phase A binding tests
+tests/live/test_menu_*.py                       [NEW] Phase B menu tests
+tests/live/test_journey_*.py                    [NEW] Phase C user-journey tests
 tests/{unit,module,command,integration,binding}/ [REORG] new tier folders; existing _smoke.lua files moved per table above
 specs/020-debug-terminal/phase1-test-overhaul.md [THIS DOC]
 Makefile / build/CMakeLists                      [MODIFIED] new `make smoke` target — sets up Anamnesis template, runs pytest
