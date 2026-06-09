@@ -102,6 +102,10 @@ local mock_qt_constants = {
             surface._on_ready_cb = callback
         end,
         SURFACE_ON_ERROR = function() end,
+        SURFACE_SET_LUT3D = function() end,
+    },
+    SIGNAL = {
+        SET_APP_STATE_HANDLER = function() end,
     },
 }
 

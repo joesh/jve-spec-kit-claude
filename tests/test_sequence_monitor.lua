@@ -65,6 +65,11 @@ package.loaded["core.qt_constants"] = {
                 type = "set_par", surface = surface, par_num = num, par_den = den,
             }
         end,
+        SURFACE_SET_LUT3D = function(surface, lut_ref)
+            qt_log[#qt_log + 1] = {
+                type = "set_lut3d", surface = surface, lut_ref = lut_ref,
+            }
+        end,
     },
     WIDGET = {
         CREATE = function() return { _type = "widget" } end,
