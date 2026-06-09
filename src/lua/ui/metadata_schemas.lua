@@ -23,6 +23,11 @@ metadata_schemas.FIELD_TYPES = {
     --   Used for: every TC field — durations, sequence start, playhead,
     --   marks, source-side positions.
     TIMECODE  = "TIMECODE",
+    -- TIMESTAMP: unix epoch seconds → "YYYY-MM-DD HH:MM:SS UTC".
+    --   Display-only (read_only must be true); parse rejects all input.
+    --   UTC is fixed: no localization layer in the codebase, and stable
+    --   across machines for tests. Used for: synced_at on ClipGrade.
+    TIMESTAMP = "TIMESTAMP",
 }
 
 metadata_schemas.PROPERTY_TYPES = {
@@ -41,6 +46,7 @@ local FIELD_TO_PROPERTY = {
     DOUBLE    = "NUMBER",
     BOOLEAN   = "BOOLEAN",
     TIMECODE  = "TIMECODE",
+    TIMESTAMP = "STRING",
 }
 
 function metadata_schemas.get_property_type(field_type)
@@ -147,7 +153,7 @@ local clip_sections = {
             -- synced_at: timestamp of last sync.
             field { key = "fidelity",  label = "Grade Fidelity", type = T.STRING,   read_only = true },
             field { key = "source",    label = "Source",         type = T.STRING,   read_only = true },
-            field { key = "synced_at",  label = "Last Synced",    type = T.INTEGER,  read_only = true },
+            field { key = "synced_at",  label = "Last Synced",    type = T.TIMESTAMP, read_only = true },
         }},
     },
 }

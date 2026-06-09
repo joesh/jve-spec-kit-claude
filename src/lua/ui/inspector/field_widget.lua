@@ -58,6 +58,12 @@ local function parse_text(field_type, text, sequence_provider)
         if not n then return nil, "not a number" end
         return n, nil
     end
+    if field_type == FT.TIMESTAMP then
+        -- TIMESTAMP is display-only (read_only must be true on the field).
+        -- Reject any commit attempt so a future writeable timestamp field
+        -- (if ever added) crashes loudly until a parser is implemented.
+        return nil, "timestamps are read-only"
+    end
     if field_type == FT.TIMECODE then
         local seq = sequence_provider()
         assert(seq and seq.frame_rate,
@@ -99,6 +105,11 @@ M._classify_commit = classify_commit
 
 local function format_value(field_type, value, sequence_provider)
     if value == nil then return "" end
+    if field_type == FT.TIMESTAMP then
+        assert(type(value) == "number",
+            "field_widget.format_value: TIMESTAMP requires number (unix epoch), got " .. type(value))
+        return os.date("!%Y-%m-%d %H:%M:%S UTC", value)
+    end
     if field_type == FT.TIMECODE then
         local seq = sequence_provider()
         assert(seq and seq.frame_rate,
@@ -187,7 +198,7 @@ end
 local function create_control(field_def)
     local ft = field_def.type
     if ft == FT.STRING or ft == FT.INTEGER or ft == FT.DOUBLE
-        or ft == FT.TIMECODE then
+        or ft == FT.TIMECODE or ft == FT.TIMESTAMP then
         return create_line_edit_control(field_def.read_only), "line_edit"
     elseif ft == FT.TEXT_AREA then
         return create_text_area_control(field_def.read_only), "text_area"
