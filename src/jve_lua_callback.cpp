@@ -63,7 +63,22 @@ void jve_invoke_lua_callback(lua_State* L, int ref,
                              std::function<int(lua_State*)> push_args,
                              const char* where)
 {
-    if (L == nullptr || ref == LUA_NOREF) return;
+    // ref == LUA_NOREF is a valid lifecycle state — the binding has no
+    // callback registered yet (or it was already unrefed); silent no-op
+    // is correct. L == nullptr with a valid ref is an invariant
+    // violation: a binding wired a Qt signal without capturing its
+    // lua_State. Surface loudly via stderr (same loud-but-non-terminating
+    // policy as jve_handle_lua_callback_error above — a hard assert would
+    // kill the editor mid-slot and lose Joe's session).
+    if (ref == LUA_NOREF) return;
+    if (L == nullptr) {
+        fprintf(stderr,
+            "\n[jve_invoke_lua_callback @ %s] lua_State is null but ref=%d is valid"
+            " — binding wired a signal without capturing L\n",
+            where ? where : "<unknown>", ref);
+        fflush(stderr);
+        return;
+    }
     lua_rawgeti(L, LUA_REGISTRYINDEX, ref);
     int n = push_args(L);
     if (lua_pcall(L, n, 0, 0) != 0) {
