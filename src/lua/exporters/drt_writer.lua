@@ -343,13 +343,18 @@ local PRECONFORM_MEDIA_EXTENTS = "00000100000030c20000010000003042"
 -- to nothing in JVE-authored output → Resolve rejected the timeline-item's
 -- media binding and refused to render any clip body).
 --
--- Borrowed verbatim from resolve_authored_single_clip.drp's single-clip
--- timeline FieldsBlob, which encodes the same Type/MediaExtents/etc but
+-- ONE per exported timeline (MpFolder.xml: 1× Sm2MpTimelineClip wrapper),
+-- independent of how many clips the timeline contains — per-clip data
+-- lives in SeqContainer/*.xml's Sm2TiVideoClip/Sm2TiAudioClip elements
+-- synthesized by build_clip_element (drt_writer.lua:396+). The "_BORROWED"
+-- suffix replaced an earlier "_SINGLE_CLIP" name that misleadingly hinted
+-- at a clip-count constraint — there is none; "single_clip" referred only
+-- to the source-fixture filename (resolve_authored_single_clip.drp).
+-- Borrowed verbatim from that fixture; encodes Type/MediaExtents/etc but
 -- WITHOUT the dangling MediaRef pointers. Substituted into the empty-
 -- reference template's Sm2MpTimelineClip element before any DbId sweep.
--- See todo_drt_inner_fieldsblob_uuids.md for the broader leak class and
--- todo_drt_mp_timeline_clip_fields_blob.md for the per-timeline decode work.
-local SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_SINGLE_CLIP =
+-- See todo_drt_inner_fieldsblob_uuids.md for the broader leak class.
+local SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_BORROWED =
     "00000002000000ae8128b52ffd6004001d0500a2481d2a9039cd019fb131c47a" ..
     "fffc65fa22ee36ca76a9aa2ad1991d5b0afe7f44340be9da28b946482f112172" ..
     "a7777777778f297777556941e5cd25737d1d0414a8b04dd8b09d4ea30b073e00" ..
@@ -829,13 +834,15 @@ local function build_mp_folder_xml(template, payload, seq, dbids, state)
     template = plain_gsub_required(template,
         ref_extents_hex, our_extents_hex)
 
-    -- Replace the empty-reference Sm2MpTimelineClip FieldsBlob with the
-    -- single-clip-timeline version. The empty-ref blob embeds dangling
-    -- MediaRef pointers to its own slot UUID; after sweep, those dangle
-    -- and Resolve refuses to render the timeline's clip body.
+    -- Replace the empty-reference Sm2MpTimelineClip FieldsBlob with a
+    -- borrowed-from-fixture version (one wrapper per exported timeline;
+    -- clip count is independent — handled by per-clip Sm2TiVideoClip
+    -- synthesis in SeqContainer/*.xml). The empty-ref blob embeds
+    -- dangling MediaRef pointers to its own slot UUID; after sweep,
+    -- those dangle and Resolve refuses to render the timeline's clip body.
     template = plain_gsub_required(template,
         EMPTY_REF_MP_TIMELINE_CLIP_FIELDS_BLOB,
-        SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_SINGLE_CLIP)
+        SM2_MP_TIMELINE_CLIP_FIELDS_BLOB_BORROWED)
 
     template = sweep_reference_dbids(template, dbids)
 
