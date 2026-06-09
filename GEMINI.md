@@ -1,6 +1,8 @@
 
 This is a **Scriptable Video Editor Platform** modeled after Final Cut Pro 7, Resolve, and Premiere, written in Lua with C++ for speed where absolutely necessary.
 
+@.claude-memory/MEMORY.md
+
 ## Active Technologies
 - C++ (Qt6) + Lua (LuaJIT) hybrid architecture
 - C++ for performance-critical: rendering, timeline manipulation, complex diffs
