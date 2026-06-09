@@ -91,6 +91,25 @@ while os.time() <= deadline do
                 progress_count, progress_actual_start, progress_actual_end))
             break
         end
+
+        -- Empty result while generating. Legitimate only at the very
+        -- start, before the decoder frontier has filled a single peak
+        -- bin. Once a full second of audio is decoded, a whole-file
+        -- query must return at least one pixel — a persistent empty
+        -- here is the silently-empty reveal regression (waveform pops
+        -- at completion instead of revealing progressively). The
+        -- re-check rules out the job completing mid-query: job state
+        -- only moves forward, so "still generating after the query"
+        -- proves it was generating during the query.
+        local recheck = EMP.PEAK_STATUS(MEDIA_ID)
+        assert(not (recheck and recheck.state == "generating"
+                    and status.progress_samples >= info.audio_sample_rate),
+            string.format(
+                "PEAK_QUERY_PROGRESS returned no pixels while generating "
+                .. "with %d samples (%.1fs) already decoded — progressive "
+                .. "reveal is silently empty",
+                status.progress_samples,
+                status.progress_samples / info.audio_sample_rate))
     end
 
     for _ = 1, 100000 do end  -- brief busy-wait
