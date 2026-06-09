@@ -28,7 +28,17 @@ class ResolveHandle:
         api = os.environ.get("RESOLVE_SCRIPT_API")
         lib = os.environ.get("RESOLVE_SCRIPT_LIB")
         if not api or not lib:
-            # For now, default to macOS paths if missing, but assert they exist.
+            # Defaults are macOS-only by Resolve's install layout. On
+            # other platforms refuse to guess — the caller must export
+            # the env vars (rule 2.13: no platform-specific silent
+            # fallbacks; the JVE supervisor is the right owner of any
+            # future platform-aware resolution).
+            if sys.platform != "darwin":
+                raise RuntimeError(
+                    "RESOLVE_SCRIPT_API and RESOLVE_SCRIPT_LIB environment "
+                    f"variables are required on {sys.platform} (no helper "
+                    "defaults; only macOS has known install paths)."
+                )
             api = (
                 "/Library/Application Support/Blackmagic Design/DaVinci Resolve/"
                 "Developer/Scripting"
@@ -40,8 +50,8 @@ class ResolveHandle:
             if not os.path.exists(api) or not os.path.exists(lib):
                 raise RuntimeError(
                     "RESOLVE_SCRIPT_API and RESOLVE_SCRIPT_LIB environment variables "
-                    "are not set, and the macOS default paths do not exist. "
-                    "Helper cannot bootstrap."
+                    "are not set, and the macOS default paths do not exist "
+                    f"(api={api!r}, lib={lib!r}). Helper cannot bootstrap."
                 )
             os.environ["RESOLVE_SCRIPT_API"] = api
             os.environ["RESOLVE_SCRIPT_LIB"] = lib
