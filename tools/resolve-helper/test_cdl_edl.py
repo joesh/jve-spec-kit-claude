@@ -323,17 +323,36 @@ class ParseCdlEdlFailurePathTests(unittest.TestCase):
             parse_cdl_edl(text, 24)
         self.assertIn("non-numeric", str(cm.exception))
 
-    def test_sat_non_numeric_falls_to_eof_error(self):
-        # ASC_SAT regex requires numeric; a non-numeric line falls
-        # through to "ignored", leaving the SOP pending → caught at EOF.
+    def test_sat_non_numeric_raises_malformed(self):
+        # Closed-set ASC_* guard (review M#17): a malformed `*ASC_SAT yyy`
+        # used to fall through silently and surface only at EOF as "ASC_SOP
+        # without ASC_SAT" — a misleading message that hid the real failure
+        # line. Now raises with the malformed-directive message at the
+        # actual line.
         text = (
             "001  AX       V     C        "
             "00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n"
             "*ASC_SOP (1.0 1.0 1.0)(0.0 0.0 0.0)(1.0 1.0 1.0)\n"
             "*ASC_SAT yyy\n"
         )
-        with self.assertRaises(CdlEdlParseError):
+        with self.assertRaises(CdlEdlParseError) as cm:
             parse_cdl_edl(text, 24)
+        self.assertIn("malformed ASC_SAT", str(cm.exception))
+
+    def test_unknown_asc_directive_raises(self):
+        # Closed-set guard (review M#17): if Resolve adds e.g. `*ASC_SOP_HDR`,
+        # the parser must NOT treat it as a comment — that would silently
+        # misread the file as fully-primary.
+        text = (
+            "001  AX       V     C        "
+            "00:00:00:00 00:00:01:00 01:00:00:00 01:00:01:00\n"
+            "*ASC_SOP (1.0 1.0 1.0)(0.0 0.0 0.0)(1.0 1.0 1.0)\n"
+            "*ASC_SAT 1.0\n"
+            "*ASC_FUTURE_DIRECTIVE foo bar\n"
+        )
+        with self.assertRaises(CdlEdlParseError) as cm:
+            parse_cdl_edl(text, 24)
+        self.assertIn("unknown ASC_FUTURE_DIRECTIVE", str(cm.exception))
 
     def test_duplicate_record_in(self):
         text = (

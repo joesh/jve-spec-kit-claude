@@ -56,6 +56,7 @@ _ASC_SOP = re.compile(
     r"\(([^)]*)\)"                         # 3 power r g b
     r"\s*$"
 )
+_ASC_TOKEN = re.compile(r"^\s*\*\s*ASC_([A-Za-z0-9_]+)")
 _ASC_SAT = re.compile(
     r"^\s*\*\s*ASC_SAT\s+([\-0-9.eE+]+)\s*$"
 )
@@ -204,6 +205,25 @@ def parse_cdl_edl(edl_text, integer_frame_rate):
             }
             pending_sop = None
             continue
+        # Closed-set guard for `*ASC_*` lines (Rule 2.32 — no silent
+        # failures on unknown protocol extensions). Two failure modes:
+        #   (a) unknown token (e.g. `*ASC_SOP_HDR` if Resolve adds one) —
+        #       letting it pass would silently misread the file as
+        #       fully-primary.
+        #   (b) known token (SOP/SAT) but the strict regex above didn't
+        #       match — malformed value. Previously fell through to EOF
+        #       error ("ASC_SOP without ASC_SAT"); now raises with the
+        #       actual line context.
+        asc_m = _ASC_TOKEN.match(raw)
+        if asc_m:
+            token = asc_m.group(1)
+            if token in ("SOP", "SAT"):
+                raise CdlEdlParseError(
+                    f"line {line_number}: malformed ASC_{token} "
+                    f"directive: {raw.strip()!r}")
+            raise CdlEdlParseError(
+                f"line {line_number}: unknown ASC_{token} directive — "
+                f"only ASC_SOP and ASC_SAT are handled")
         # Any other line (TITLE, FCM, blank, FROM CLIP NAME comments,
         # etc.) is silently ignored — they carry no CDL state.
 
