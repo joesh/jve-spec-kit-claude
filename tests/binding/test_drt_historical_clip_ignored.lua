@@ -23,8 +23,8 @@ local function fail(msg)
 end
 
 local fixture = test_env.require_fixture(
-    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/"
-    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
+    "tests/fixtures/media/anamnesis-trimmed/"
+    .. "2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
 
 local r = drp_importer.parse_drp_file(fixture)
 if not r.success then fail("parse failed: " .. tostring(r.error)) end

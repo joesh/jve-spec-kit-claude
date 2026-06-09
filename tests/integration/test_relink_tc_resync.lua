@@ -31,9 +31,9 @@ print("--- test_relink_tc_resync ---")
 --   MOV: 25fps, tmcd atom only (no explicit audio TC) at 22:55:38:13.
 --   WAV: BWF time_reference (primary audio TC source).
 local MOV = env.test_media_path(
-    "anamnesis/2026-02-28-anamnesis joe edit-mm/Volumes/AnamBack4 Joe/Footage/Day 12/A035/A035_11192255_C020.mov")
+    "anamnesis-trimmed/Volumes/AnamBack4 Joe/Footage/Day 12/A035/A035_11192255_C020.mov")
 local WAV = env.test_media_path(
-    "anamnesis/2026-02-28-anamnesis joe edit-mm/Volumes/AnamBack4 Joe/Footage/Day 12/DAY12 Sound/SCENE1_WT-T001.WAV")
+    "anamnesis-trimmed/Volumes/AnamBack4 Joe/Footage/Day 12/DAY12 Sound/SCENE1_WT-T001.WAV")
 
 -- -----------------------------------------------------------------------
 -- (A) MOV audio TC comes back from the probe, computed as the same instant

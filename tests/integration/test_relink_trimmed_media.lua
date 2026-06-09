@@ -25,9 +25,9 @@ local Command = require("command")
 print("=== test_relink_trimmed_media.lua ===")
 
 local ORIGINAL = test_env.require_fixture(
-    "tests/fixtures/media/anamnesis/untrimmed/Day2/A007/A007_05202055_C007.mov")
+    "tests/fixtures/media/anamnesis-untrimmed/A007_05202055_C007.mov")
 local TRIMMED = test_env.require_fixture(
-    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/Volumes/AnamBack4 Joe/Footage/Day 2/A007/A007_05202055_C007.mov")
+    "tests/fixtures/media/anamnesis-trimmed/Volumes/AnamBack4 Joe/Footage/Day 2/A007/A007_05202055_C007.mov")
 
 -- TC values at 25fps (from ffprobe).
 -- Original: starts at 20:55:01:23 = 1886298 frames, 1602 frames long (64s)
@@ -51,7 +51,8 @@ db:exec(require("import_schema"))
 -- Create project + sequence
 local now = os.time()
 db:exec(string.format(
-    "INSERT INTO projects (id, name, created_at, modified_at) VALUES ('proj1', 'Test', %d, %d)", now, now))
+    "INSERT INTO projects (id, name, created_at, modified_at, fps_mismatch_policy) "
+    .. "VALUES ('proj1', 'Test', %d, %d, 'passthrough')", now, now))
 local seq = Sequence.create("Timeline", "proj1", {fps_numerator = FPS, fps_denominator = 1}, 1920, 1080,
     { kind = "sequence", audio_sample_rate = 48000, id = "seq1" })
 assert(seq:save())
@@ -99,23 +100,22 @@ local MC_TEST = _Sequence_for_master.ensure_master("media_orig", "proj1")
 -- so the content exists in BOTH the original and the trimmed version.
 local CLIP_SOURCE_IN = TRIMMED_TC + 100   -- absolute TC: 1886692
 local CLIP_SOURCE_OUT = TRIMMED_TC + 200  -- 100 frames of content
-local clip = Clip.create({
-        name = "Test Clip",
-        id = "clip1",
-        project_id = "proj1",
-        track_id = "track_v1",
-        sequence_id = MC_TEST,
-        owner_sequence_id = "seq1",
-        sequence_start_frame = 0,
-        duration_frames = 100,
-        source_in_frame = CLIP_SOURCE_IN,
-        source_out_frame = CLIP_SOURCE_OUT,
-        fps_mismatch_policy = "resample",
-        volume = 1.0,
-        playhead_frame = 0,
-        enabled = 1,
-    })
-assert(clip:save({skip_occlusion = true}))
+assert(Clip.create({
+    name = "Test Clip",
+    id = "clip1",
+    project_id = "proj1",
+    track_id = "track_v1",
+    sequence_id = MC_TEST,
+    owner_sequence_id = "seq1",
+    sequence_start_frame = 0,
+    duration_frames = 100,
+    source_in_frame = CLIP_SOURCE_IN,
+    source_out_frame = CLIP_SOURCE_OUT,
+    fps_mismatch_policy = "resample",
+    volume = 1.0,
+    playhead_frame = 0,
+    enabled = 1,
+}))
 
 command_manager.init("seq1", "proj1")
 

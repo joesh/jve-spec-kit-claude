@@ -21,8 +21,8 @@ local function fail(msg)
 end
 
 local fixture = test_env.require_fixture(
-    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/"
-    .. "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
+    "tests/fixtures/media/anamnesis-trimmed/"
+    .. "2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt")
 
 -- Black-box: the fixture is a real Resolve timeline export with retimed
 -- clips whose bezier-curve first keyframes carry sub-frame negative Y.

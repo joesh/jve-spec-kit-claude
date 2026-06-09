@@ -21,7 +21,7 @@ local media_relinker = require("core.media_relinker")
 
 -- Real fixture file with known BWF time_reference=2384442240 at 48kHz
 local FIXTURE_FILE = test_env.require_fixture(
-    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm"
+    "tests/fixtures/media/anamnesis-trimmed"
     .. "/Volumes/AnamBack4 Joe/Footage/Day 12/DAY12 Sound"
     .. "/SCENE1_WT-T001.WAV")
 local FIXTURE_TC = 2384442240   -- BWF time_reference in samples at 48kHz
