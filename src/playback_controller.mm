@@ -529,14 +529,25 @@ void AudioPump::pumpLoop() {
             consecutive_dry_cycles = 0;
         }
 
-        // 5. AOP underrun detection (WARN stays — rare, important)
+        // 5. AOP underrun detection. WARN only fires when we DID push
+        // source this cycle — that's a real CoreAudio starvation. When
+        // pushed_source is false (timeline gap / sequence has no audio
+        // clips at this position) the underrun is expected and the WARN
+        // would spam every pump cycle; log at DETAIL instead.
         if (m_aop->HadUnderrun()) {
             m_aop->ClearUnderrunFlag();
             ++m_underrun_count;
             flags |= PumpFlags::UNDERRUN;
-            JVE_LOG_WARN(Audio, "pump: AOP underrun #%lld at media_t=%lldus buf=%lld",
-                        (long long)m_underrun_count, (long long)media_time_us,
-                        (long long)m_aop->BufferedFrames());
+            if (pushed_source) {
+                JVE_LOG_WARN(Audio, "pump: AOP underrun #%lld at media_t=%lldus buf=%lld",
+                            (long long)m_underrun_count, (long long)media_time_us,
+                            (long long)m_aop->BufferedFrames());
+            } else {
+                JVE_LOG_DETAIL(Audio, "pump: AOP underrun #%lld at media_t=%lldus buf=%lld "
+                              "(no source — timeline gap)",
+                              (long long)m_underrun_count, (long long)media_time_us,
+                              (long long)m_aop->BufferedFrames());
+            }
         }
 
         // 6. Write ring entry
@@ -818,12 +829,27 @@ void PlaybackController::prefillAudio(int64_t pos, int direction, float speed) {
         total_prefilled += written;
     }
     if (total_prefilled == 0) {
-        JVE_LOG_WARN(Audio, "Play: audio pre-fill produced 0 frames "
-                     "(ring_capacity=%lld, pcm=%s, time_us=%lld) — "
-                     "AOP starts with empty ring buffer",
-                     (long long)ring_capacity,
-                     pcm ? "non-null" : "null",
-                     (long long)time_us);
+        // Two distinct cases, only one is a problem:
+        //   (a) TMB returned no source PCM — the timeline has no audio
+        //       clips covering this position. Empty ring buffer is
+        //       expected; downstream code already handles the gap path.
+        //       Log at DETAIL so it doesn't spam Joe's terminal every
+        //       Play when the sequence has no audio clips.
+        //   (b) TMB returned PCM but SSE produced 0 frames — real
+        //       starvation, worth a WARN.
+        bool had_source = (pcm && pcm->frames() > 0);
+        if (had_source) {
+            JVE_LOG_WARN(Audio, "Play: audio pre-fill produced 0 frames "
+                         "despite %lld source frames at time_us=%lld — "
+                         "SSE starved during pre-fill",
+                         (long long)pcm->frames(),
+                         (long long)time_us);
+        } else {
+            JVE_LOG_DETAIL(Audio, "Play: no audio source at time_us=%lld "
+                          "(timeline has no audio clip here) — ring "
+                          "buffer left empty, gap path will handle",
+                          (long long)time_us);
+        }
     } else {
         JVE_LOG_DETAIL(Audio, "Play: pre-filled %lld/%lld frames into ring buffer",
                       (long long)total_prefilled, (long long)ring_capacity);
