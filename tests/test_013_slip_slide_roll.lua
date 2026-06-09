@@ -148,7 +148,7 @@ end
 -- -------------------------------------------------------------------------
 print("-- CT-C4 Slip +5 --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
     assert(execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = 5,
@@ -166,7 +166,7 @@ end
 -- Negative slip.
 print("-- Slip -10 --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
     assert(execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = -10,
@@ -181,9 +181,9 @@ end
 -- Error: Slip that would push source_in below 0 (source window lower bound must be >= 0).
 print("-- Slip that underflows refuses --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("c", "passthrough", mc_id, 100, 100, 5, 105)
-    local success, err = execute_cmd(Slip, {
+    local success, _ = execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = -10,
     })
     assert(not success, "Slip past source_in=0 must refuse")
@@ -197,9 +197,9 @@ end
 print("-- Slip that overflows nested bounds refuses --")
 do
     -- nested has 200-frame native duration.
-    local db, mc_id = build_fixture(24, 200)
+    local _, mc_id = build_fixture(24, 200)
     seed_clip("c", "passthrough", mc_id, 0, 100, 95, 195)
-    local success, err = execute_cmd(Slip, {
+    local success, _ = execute_cmd(Slip, {
         sequence_id = "e", clip_id = "c", delta_source_frames = 10,
     })
     assert(not success, "Slip past source_out=nested.duration must refuse")
@@ -214,7 +214,7 @@ end
 -- -------------------------------------------------------------------------
 print("-- CT-C5 Slide +15 --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("c", "passthrough", mc_id, 100, 100, 50, 150)
     assert(execute_cmd(Slide, {
         sequence_id = "e", clip_id = "c", delta_timeline_frames = 15,
@@ -231,9 +231,9 @@ end
 -- Slide negative: sequence_start must not go below 0.
 print("-- Slide that drags past frame 0 refuses --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("c", "passthrough", mc_id, 10, 100, 50, 150)
-    local success, err = execute_cmd(Slide, {
+    local success, _ = execute_cmd(Slide, {
         sequence_id = "e", clip_id = "c", delta_timeline_frames = -20,
     })
     assert(not success, "Slide below 0 must refuse")
@@ -251,7 +251,7 @@ end
 -- -------------------------------------------------------------------------
 print("-- CT-C6 Roll +10 at boundary --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
     seed_clip("b", "passthrough", mc_id, 100, 100, 200, 300)
     assert(execute_cmd(Roll, {
@@ -276,7 +276,7 @@ end
 -- Roll negative: the boundary moves leftward.
 print("-- Roll -10 at boundary --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
     seed_clip("b", "passthrough", mc_id, 100, 100, 200, 300)
     assert(execute_cmd(Roll, {
@@ -298,10 +298,10 @@ end
 -- Error: Roll that would collapse A to 0 duration.
 print("-- Roll that collapses A refuses --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("a", "passthrough", mc_id, 0, 50,  0,   50)
     seed_clip("b", "passthrough", mc_id, 50, 100, 200, 300)
-    local success, err = execute_cmd(Roll, {
+    local success, _ = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
@@ -316,10 +316,10 @@ print("-- Roll that overflows A's master coverage refuses --")
 do
     -- nested has 200-frame coverage. A currently ends at 180 (source_out).
     -- Roll N=+25 would push A.source_out to 205 > 200 → must refuse.
-    local db, mc_id = build_fixture(24, 200)
+    local _, mc_id = build_fixture(24, 200)
     seed_clip("a", "passthrough", mc_id, 0,  100, 80,  180)
     seed_clip("b", "passthrough", mc_id, 100, 50, 180, 230)
-    local success, err = execute_cmd(Roll, {
+    local success, _ = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",
@@ -334,10 +334,10 @@ end
 -- Error: non-adjacent clips. B's start != A's end → refuse.
 print("-- Roll on non-adjacent clips refuses --")
 do
-    local db, mc_id = build_fixture(24, 1000)
+    local _, mc_id = build_fixture(24, 1000)
     seed_clip("a", "passthrough", mc_id, 0, 100, 0, 100)
     seed_clip("b", "passthrough", mc_id, 150, 100, 200, 300)  -- gap
-    local success, err = execute_cmd(Roll, {
+    local success, _ = execute_cmd(Roll, {
         sequence_id = "e",
         outgoing_clip_id = "a",
         incoming_clip_id = "b",

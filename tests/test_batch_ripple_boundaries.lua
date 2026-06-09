@@ -185,9 +185,8 @@ do
     })
 
     -- In V13, offline means the referenced master sequence has offline media.
-    local clip = Clip.load(layout.clips.v1_left.id, layout.db)
-    local master_seq_id = clip.sequence_id
-    
+
+
     -- Mark media as offline
     local Media = require("models.media")
     local media_id = layout.media.main.id

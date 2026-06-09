@@ -29,7 +29,6 @@ print("=== test_relink_zero_padding_boundary.lua ===")
 
 local _xml_helpers = require("drp_test_helpers")
 local elem = _xml_helpers.elem
-local wrap_clips = _xml_helpers.wrap_clips
 
 local function wrap(...)
     local out = {}

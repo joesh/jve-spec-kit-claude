@@ -1689,9 +1689,6 @@ local parse_clip_item
 -- @return table: Timeline data
 local function parse_sequence(seq_elem, opts)
     local frame_rate = opts.frame_rate
-    local media_ref_path_map = opts.media_ref_path_map
-    local media_ref_name_map = opts.media_ref_name_map
-    local media_ref_sample_rate_map = opts.media_ref_sample_rate_map
     -- NSF: frame_rate is required
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
         "parse_sequence: frame_rate is required (got %s) - DRP must provide fps metadata",

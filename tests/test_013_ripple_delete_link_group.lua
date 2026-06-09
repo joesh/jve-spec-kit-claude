@@ -194,7 +194,7 @@ do
     
     link_clips(db, "G1", { { id = "v1", role = "video" }, { id = "a1", role = "audio" } })
 
-    local success, err = execute_cmd(RippleDelete, {
+    local success, _ = execute_cmd(RippleDelete, {
         sequence_id = "e", clip_ids = {"v1", "a1"}, project_id = "p1",
     }, db)
     assert(success, "RippleDelete failed")
@@ -223,7 +223,7 @@ do
     link_clips(db, "G1", { { id = "v1", role = "video" }, { id = "a1", role = "audio" } })
     link_clips(db, "G2", { { id = "v2", role = "video" }, { id = "a2", role = "audio" } })
 
-    local success, err = execute_cmd(RippleDelete, {
+    local success, _ = execute_cmd(RippleDelete, {
         sequence_id = "e", clip_ids = {"v1", "a1", "v2", "a2"}, project_id = "p1",
     }, db)
     assert(success, "RippleDelete failed")

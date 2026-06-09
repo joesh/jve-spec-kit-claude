@@ -15,7 +15,6 @@ print("=== test_relink_clips_integration.lua ===")
 local database        = require("core.database")
 local command_manager = require("core.command_manager")
 local Command         = require("command")
-local uuid            = require("uuid")
 local json            = require("dkjson")
 
 local Project         = require("models.project")

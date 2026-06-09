@@ -42,6 +42,15 @@ globals = {
     -- spec 023 T032 — ASC CDL math test binding (regression target for
     -- both emp::apply_cdl_rgb and the mirrored Metal fragment shader).
     "qt_cdl_apply_pixel",
+    -- spec 023 LUT3D math test bindings (parser + sampler regression target,
+    -- mirrored CPU/Metal in emp_lut3d.cpp).
+    "qt_lut3d_parse_string",
+    "qt_lut3d_apply_pixel",
+    "qt_lut3d_free",
+    -- spec 024 — BT.709 color-space conversion math test binding.
+    "qt_compose_bt709_csc",
+    -- spec 023 — Resolve-bridge client process identity (QCoreApplication::applicationPid).
+    "qt_get_pid",
     -- spec 023 T019/T020 — QProcess + QLocalSocket FFI for Resolve bridge.
     "qt_process_create",
     "qt_process_start",
@@ -92,6 +101,8 @@ globals = {
     "qt_show_dialog",
     "qt_monotonic_s",
     "qt_file_stat_batch",
+    "qt_file_mtime",
+    "qt_fs_mkdir_p",
     "timeline",
 
     -- Bug reporter Qt bindings (from qt_bindings_bug_reporter.cpp)

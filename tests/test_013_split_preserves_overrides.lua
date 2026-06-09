@@ -240,7 +240,7 @@ end
 -- -------------------------------------------------------------------------
 print("-- Split under resample scales source_offset by fps ratio --")
 do
-    local db = build_fixture(24, 25)
+    local _ = build_fixture(24, 25)
     -- Clip: 96 owner frames playing 100 nested frames (25fps in 24fps owner).
     seed_clip("c", "resample", nil, 0, 96, 0, 100)
     local success, result = execute_cmd(SplitClip, {
@@ -266,10 +266,10 @@ end
 -- -------------------------------------------------------------------------
 print("-- Split outside clip bounds refuses --")
 do
-    local db = build_fixture(24, 24)
+    local _ = build_fixture(24, 24)
     seed_clip("c", "passthrough", nil, 100, 100, 0, 100)
     for _, bad in ipairs({ 100, 200, 50, 250 }) do
-        local ok, err = execute_cmd(SplitClip, {
+        local ok, _ = execute_cmd(SplitClip, {
             sequence_id = "e", clip_id = "c", split_frame = bad,
         })
         assert(not ok, string.format(

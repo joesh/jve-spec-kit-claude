@@ -164,21 +164,21 @@ function M.connect(socket_path, opts)
     -- would then post an "unknown id" reply when it eventually
     -- finished). Must be a positive number; rejected otherwise to
     -- keep the closed-set discipline at the boundary (rule 2.32).
-    function self:request(verb, args, on_complete, opts)  -- luacheck: ignore self
+    function self:request(verb, args, on_complete, req_opts)  -- luacheck: ignore self
         assert(type(verb) == "string", "client:request: verb required")
         assert(type(on_complete) == "function",
             "client:request: on_complete callback required")
         assert(not closed, "client:request: socket is closed")
         local effective_timeout_ms = request_timeout_ms
-        if opts ~= nil then
-            assert(type(opts) == "table",
+        if req_opts ~= nil then
+            assert(type(req_opts) == "table",
                 "client:request: opts must be table when supplied")
-            if opts.timeout_ms ~= nil then
-                assert(type(opts.timeout_ms) == "number"
-                        and opts.timeout_ms > 0,
+            if req_opts.timeout_ms ~= nil then
+                assert(type(req_opts.timeout_ms) == "number"
+                        and req_opts.timeout_ms > 0,
                     "client:request: opts.timeout_ms must be positive "
                     .. "number")
-                effective_timeout_ms = opts.timeout_ms
+                effective_timeout_ms = req_opts.timeout_ms
             end
         end
         local corr_id = mint_correlation_id()

@@ -244,7 +244,7 @@ print("-- Duplicate at delta=0 on same track refuses --")
 do
     local db = build_fixture()
     seed_clip(db, "c", nil)
-    local success, err = execute_cmd(Duplicate, {
+    local success, _ = execute_cmd(Duplicate, {
         sequence_id     = "e",
         clip_id         = "c",
         target_track_id = "e-v1",

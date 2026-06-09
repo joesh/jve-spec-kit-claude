@@ -1087,9 +1087,8 @@ function M.apply_mutations(db, mutations)
 
     -- FU-8: Notify entity watchers for the mutated clips, tracks, and their owning sequences.
     local watchers = require("core.watchers")
-    local Clip = require("models.clip")
-    local Track = require("models.track")
-    
+
+
     for _, mut in ipairs(mutations) do
         if mut.type == "update" or mut.type == "delete" or mut.type == "insert" then
             local seq_id = mut.owner_sequence_id

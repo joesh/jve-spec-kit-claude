@@ -171,7 +171,7 @@ do
     seed_clip("v1", "e-v1",   0,  50,   0,  50)
     seed_clip("v2", "e-v1", 200,  50, 200, 250)
 
-    local exec, undo = register(DeleteClip, "DeleteClip", db)
+    local exec, _ = register(DeleteClip, "DeleteClip", db)
     local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
     assert(exec(cmd))
 
@@ -197,7 +197,7 @@ do
     link_clips(db, "G1", { { id = "v1", role = "video" }, { id = "a1", role = "audio" } })
     link_clips(db, "G2", { { id = "v2", role = "video" }, { id = "a2", role = "audio" } })
 
-    local exec, undo = register(DeleteClip, "DeleteClip", db)
+    local exec, _ = register(DeleteClip, "DeleteClip", db)
     local cmd = make_cmd({ sequence_id = "e", clip_id = "v1" })
     assert(exec(cmd))
 
@@ -230,7 +230,7 @@ do
     local db = build_fixture()
     seed_clip("v1", "e-v1", 0, 100, 0, 100)
     
-    local exec, undo = register(DeleteClip, "DeleteClip", db)
+    local exec, _ = register(DeleteClip, "DeleteClip", db)
     local cmd = make_cmd({ sequence_id = "e", clip_id = "missing" })
     local ok = exec(cmd)
     assert(not ok, "missing clip must refuse")
