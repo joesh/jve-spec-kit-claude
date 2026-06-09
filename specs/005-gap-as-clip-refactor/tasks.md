@@ -53,7 +53,7 @@
 
 - [X] T021 Wire gap update into command post-execution. After any command that modifies clips (BatchRippleEdit, Insert, Overwrite, Delete, RippleDelete, SplitClip, etc.), call `update_gaps_after_edit` on affected tracks. This must happen after mutations are applied but before UI refresh. Verify gaps stay in sync after edits and undos.
 
-- [X] T022 [P] Update `tests/helpers/ripple_layout.lua` and `tests/helpers/ripple_test_runner.lua`: when creating test layouts, compute gaps for each track and include them in the clip list. This ensures all tests that use these helpers work with the new gap-as-clip model.
+- [X] T022 [P] Update `tests/synthetic/helpers/ripple_layout.lua` and `tests/synthetic/helpers/ripple_test_runner.lua`: when creating test layouts, compute gaps for each track and include them in the clip list. This ensures all tests that use these helpers work with the new gap-as-clip model.
 
 - [X] T023 [P] Update existing gap tests (`test_batch_ripple_gap_*.lua`, `test_gap_*.lua`, `test_timeline_*gap*.lua`) to use new gap model. Replace `gap_before`/`gap_after` edge types with `in`/`out` on gap clips. Replace `is_temp_gap` checks with `clip_kind == "gap"` checks. Remove references to `materialize_gap_edges`, `create_temp_gap_clip`.
 
@@ -93,7 +93,7 @@ T004: tests/test_gap_lifecycle_update.lua
 T005: tests/test_gap_lifecycle_implied.lua
 
 # Phase 3.4: Test helper and test updates are independent files
-T022: tests/helpers/ripple_layout.lua + ripple_test_runner.lua
+T022: tests/synthetic/helpers/ripple_layout.lua + ripple_test_runner.lua
 T023: tests/test_batch_ripple_gap_*.lua + test_gap_*.lua + test_timeline_*gap*.lua
 ```
 

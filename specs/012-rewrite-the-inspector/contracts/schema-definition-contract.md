@@ -159,7 +159,7 @@ Section: Marks
 - **dropdown-options-required**: a DROPDOWN field without `options` asserts.
 - **no-stale-exports**: the returned module table has no `clip_inspector_schemas` key, no `sequence_inspector_schemas` key, no premiere/review/crop/composite/transform sections anywhere.
 
-Test home: `tests/contract/inspector/test_schema_definition_contract.lua`.
+Test home: `tests/synthetic/contract/inspector/test_schema_definition_contract.lua`.
 
 ---
 

@@ -415,12 +415,12 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTORCC ON)
 
 # C++/Qt tests (on by default)
-# Unit tests (no unit tests currently - they would go in tests/unit/)
+# Unit tests (no unit tests currently - they would go in tests/synthetic/unit/)
 # Note: New timeline tests are standalone and defined below
 
 # Standalone timeline widget test (no test_base dependency)
 add_executable(test_timeline_renderer_widget
-    tests/unit/test_timeline_renderer_widget.cpp
+    tests/synthetic/unit/test_timeline_renderer_widget.cpp
 )
 target_link_libraries(test_timeline_renderer_widget
     JVECore
@@ -445,7 +445,7 @@ add_test(NAME test_timeline_renderer_widget COMMAND test_timeline_renderer_widge
 
 # Standalone Qt bindings test (no test_base dependency)
 add_executable(test_qt_bindings
-    tests/unit/test_qt_bindings.cpp
+    tests/synthetic/unit/test_qt_bindings.cpp
 )
 target_link_libraries(test_qt_bindings
     JVECore
@@ -470,7 +470,7 @@ add_test(NAME test_qt_bindings COMMAND test_qt_bindings)
 
 # EMP Core test (MediaFile, Reader, Frame, HW accel)
 add_executable(test_emp_core
-    tests/unit/test_emp_core.cpp
+    tests/synthetic/unit/test_emp_core.cpp
 )
 target_link_libraries(test_emp_core
     JVECore
@@ -500,7 +500,7 @@ add_test(NAME test_emp_core COMMAND test_emp_core)
 
 # Video Surface test (VideoSurfaceWidget, MetalVideoSurface)
 add_executable(test_video_surface
-    tests/unit/test_video_surface.cpp
+    tests/synthetic/unit/test_video_surface.cpp
 )
 target_link_libraries(test_video_surface
     JVECore
@@ -531,7 +531,7 @@ add_test(NAME test_video_surface COMMAND test_video_surface)
 
 # SSE Core test (Scrub Stretch Engine)
 add_executable(test_sse_core
-    tests/unit/test_sse_core.cpp
+    tests/synthetic/unit/test_sse_core.cpp
 )
 target_link_libraries(test_sse_core
     JVECore
@@ -555,7 +555,7 @@ add_test(NAME test_sse_core COMMAND test_sse_core)
 
 # SSE Decimate test (>4x speeds)
 add_executable(test_sse_decimate
-    tests/unit/test_sse_decimate.cpp
+    tests/synthetic/unit/test_sse_decimate.cpp
 )
 target_link_libraries(test_sse_decimate
     JVECore
@@ -579,7 +579,7 @@ add_test(NAME test_sse_decimate COMMAND test_sse_decimate)
 
 # PlaybackClock (A/V sync clock) test
 add_executable(test_playback_clock
-    tests/unit/test_playback_clock.cpp
+    tests/synthetic/unit/test_playback_clock.cpp
 )
 target_link_libraries(test_playback_clock
     JVECore
@@ -603,7 +603,7 @@ add_test(NAME test_playback_clock COMMAND test_playback_clock)
 
 # TMB (TimelineMediaBuffer) test
 add_executable(test_tmb
-    tests/unit/test_timeline_media_buffer.cpp
+    tests/synthetic/unit/test_timeline_media_buffer.cpp
 )
 target_link_libraries(test_tmb
     JVECore

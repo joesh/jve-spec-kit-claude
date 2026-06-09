@@ -296,7 +296,7 @@
   },
   {
     "symbol": "EventData",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -416,7 +416,7 @@
   },
   {
     "symbol": "L",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -1806,12 +1806,12 @@
   },
   {
     "symbol": "TestQtBindings",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_qt_bindings.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_qt_bindings.cpp",
     "kind": null
   },
   {
     "symbol": "TestTimelineRendererWidget",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -58626,7 +58626,7 @@
   },
   {
     "symbol": "alt",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -58721,12 +58721,12 @@
   },
   {
     "symbol": "apply_edge_ripple",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "apply_edge_ripple_rational",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -58961,7 +58961,7 @@
   },
   {
     "symbol": "assert_eq",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -58996,7 +58996,7 @@
   },
   {
     "symbol": "assert_eq_rational",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -59091,7 +59091,7 @@
   },
   {
     "symbol": "assert_near",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -59161,7 +59161,7 @@
   },
   {
     "symbol": "assert_rational_eq",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_full_timebase_pipeline.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_full_timebase_pipeline.lua",
     "kind": null
   },
   {
@@ -59171,12 +59171,12 @@
   },
   {
     "symbol": "assert_true",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_full_timebase_pipeline.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_full_timebase_pipeline.lua",
     "kind": null
   },
   {
     "symbol": "assert_true",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -59381,7 +59381,7 @@
   },
   {
     "symbol": "bind_value",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -59471,7 +59471,7 @@
   },
   {
     "symbol": "build_clip_sql",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -59491,7 +59491,7 @@
   },
   {
     "symbol": "build_config",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -59536,7 +59536,7 @@
   },
   {
     "symbol": "build_media_sql",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -59661,7 +59661,7 @@
   },
   {
     "symbol": "build_track_sql",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -59691,7 +59691,7 @@
   },
   {
     "symbol": "button",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -59716,7 +59716,7 @@
   },
   {
     "symbol": "calculate_edge_delta",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_bracket_negation.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_bracket_negation.lua",
     "kind": null
   },
   {
@@ -59726,7 +59726,7 @@
   },
   {
     "symbol": "calculate_new_duration",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_bracket_negation.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_bracket_negation.lua",
     "kind": null
   },
   {
@@ -60116,12 +60116,12 @@
   },
   {
     "symbol": "cleanup",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
     "symbol": "cleanupTestCase",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -60751,7 +60751,7 @@
   },
   {
     "symbol": "command",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -61166,7 +61166,7 @@
   },
   {
     "symbol": "compute_move_bounds",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -61576,12 +61576,12 @@
   },
   {
     "symbol": "create",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "create",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -61681,12 +61681,12 @@
   },
   {
     "symbol": "create_clip",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "create_clip",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -61921,7 +61921,7 @@
   },
   {
     "symbol": "ctrl",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -62111,7 +62111,7 @@
   },
   {
     "symbol": "deep_copy",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -62926,7 +62926,7 @@
   },
   {
     "symbol": "exec",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -63086,7 +63086,7 @@
   },
   {
     "symbol": "execute_batch_ripple_edit",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -64401,12 +64401,12 @@
   },
   {
     "symbol": "get_bracket",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_bracket_negation.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_bracket_negation.lua",
     "kind": null
   },
   {
     "symbol": "get_bracket",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_drag_reference_edge.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_drag_reference_edge.lua",
     "kind": null
   },
   {
@@ -64426,7 +64426,7 @@
   },
   {
     "symbol": "get_clip",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -65106,7 +65106,7 @@
   },
   {
     "symbol": "get_parameter",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -66176,7 +66176,7 @@
   },
   {
     "symbol": "get_sequence_frame_rate",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -67676,17 +67676,17 @@
   },
   {
     "symbol": "init",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_qt_bindings.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_qt_bindings.cpp",
     "kind": null
   },
   {
     "symbol": "init",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "initTestCase",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -67741,7 +67741,7 @@
   },
   {
     "symbol": "init_timeline_state",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -68186,7 +68186,7 @@
   },
   {
     "symbol": "key",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -68331,22 +68331,22 @@
   },
   {
     "symbol": "lastKeyEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "lastKeyEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "lastMouseEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "lastMouseEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -68361,7 +68361,7 @@
   },
   {
     "symbol": "last_error",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -68486,12 +68486,12 @@
   },
   {
     "symbol": "load",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "load",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -68541,17 +68541,17 @@
   },
   {
     "symbol": "load_clips",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "load_clips",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "load_clips",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_ripple_operations_rational.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_ripple_operations_rational.lua",
     "kind": null
   },
   {
@@ -69091,12 +69091,12 @@
   },
   {
     "symbol": "lua_mock_key_handler",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "lua_mock_mouse_handler",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -69711,7 +69711,7 @@
   },
   {
     "symbol": "merge_table",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -69916,7 +69916,7 @@
   },
   {
     "symbol": "name",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -70021,7 +70021,7 @@
   },
   {
     "symbol": "next",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -71156,7 +71156,7 @@
   },
   {
     "symbol": "prepare",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -71516,7 +71516,7 @@
   },
   {
     "symbol": "qt_create_single_shot_timer",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_full_timebase_pipeline.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_full_timebase_pipeline.lua",
     "kind": null
   },
   {
@@ -72826,7 +72826,7 @@
   },
   {
     "symbol": "remove_best_effort",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -72886,7 +72886,7 @@
   },
   {
     "symbol": "remove_project_artifacts",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/helpers/ripple_layout.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/helpers/ripple_layout.lua",
     "kind": null
   },
   {
@@ -73156,7 +73156,7 @@
   },
   {
     "symbol": "reset",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -73916,7 +73916,7 @@
   },
   {
     "symbol": "save",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -74721,7 +74721,7 @@
   },
   {
     "symbol": "set_parameter",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -75366,7 +75366,7 @@
   },
   {
     "symbol": "setup_timeline",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -75381,7 +75381,7 @@
   },
   {
     "symbol": "shift",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -75761,12 +75761,12 @@
   },
   {
     "symbol": "store_clip",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
     "symbol": "store_media",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_ripple_operations.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_ripple_operations.lua",
     "kind": null
   },
   {
@@ -75866,62 +75866,62 @@
   },
   {
     "symbol": "testClearCommands",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testDrawingCommands",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testEventHandlerRegistration",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testKeyboardEventHandling",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testModifierKeys",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testMouseEventHandling",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testMouseMoveEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testMouseReleaseEvent",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testMultipleDrawingCommands",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testPlayheadManagement",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testWidgetCreation",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
     "symbol": "testWidgetDimensions",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -75951,7 +75951,7 @@
   },
   {
     "symbol": "test_create_main_window_sets_global",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_qt_bindings.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_qt_bindings.cpp",
     "kind": null
   },
   {
@@ -76026,12 +76026,12 @@
   },
   {
     "symbol": "test_set_alignment_widget_signature",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_qt_bindings.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_qt_bindings.cpp",
     "kind": null
   },
   {
     "symbol": "test_set_parent_accepts_nil",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_qt_bindings.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_qt_bindings.cpp",
     "kind": null
   },
   {
@@ -76176,7 +76176,7 @@
   },
   {
     "symbol": "timeline",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -76531,7 +76531,7 @@
   },
   {
     "symbol": "type",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -77006,7 +77006,7 @@
   },
   {
     "symbol": "value",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/ad_hoc/test_split_command.lua",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/ad_hoc/test_split_command.lua",
     "kind": null
   },
   {
@@ -77161,7 +77161,7 @@
   },
   {
     "symbol": "x",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {
@@ -77176,7 +77176,7 @@
   },
   {
     "symbol": "y",
-    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/unit/test_timeline_renderer_widget.cpp",
+    "file": "/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/unit/test_timeline_renderer_widget.cpp",
     "kind": null
   },
   {

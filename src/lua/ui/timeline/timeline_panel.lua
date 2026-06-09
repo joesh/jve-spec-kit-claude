@@ -3664,7 +3664,7 @@ function M:get_clips()
 end
 
 --- TEST-ONLY: return a snapshot of how the track header is laid out for
---- the given track id. Used by tests/binding/test_015_track_header_layout
+--- the given track id. Used by tests/synthetic/binding/test_015_track_header_layout
 --- to verify spec FR-008–FR-021d invariants (cell order, banned cells,
 --- lock-not-text-L) without coupling to private Qt widget state.
 --- @param track_id string

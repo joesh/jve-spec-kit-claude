@@ -25,7 +25,7 @@ Technical approach: introduce `clear()` primitives on `timeline_state` and `comm
 **Language/Version**: Lua (LuaJIT 2.1) + C++17 (Qt 6.6)
 **Primary Dependencies**: Qt6 (widgets, signals), SQLite via existing `core.database`, existing modules: `command_manager`, `timeline_state`, `timeline_panel`, `selection_hub`, `sequence_monitor`
 **Storage**: SQLite `.jvp` project files. **No schema change.** Uses existing `project_settings` rows for `open_sequence_ids` (JSON) and `last_open_sequence_id` (TEXT).
-**Testing**: LuaJIT test harness (`tests/*.lua` via `tests/run_lua_tests_all.sh`) + `--test` mode binding tests (`tests/binding/*.lua` run inside `./build/bin/JVEEditor`). Luacheck gate.
+**Testing**: LuaJIT test harness (`tests/*.lua` via `tests/run_lua_tests_all.sh`) + `--test` mode binding tests (`tests/synthetic/binding/*.lua` run inside `./build/bin/JVEEditor`). Luacheck gate.
 **Target Platform**: macOS (primary), Qt-supported desktops
 **Project Type**: Single (one Lua/C++ codebase)
 **Performance Goals**: Blank-state transitions instant (<100 ms perceived); no new hot loops.

@@ -32,7 +32,7 @@ snapshot for historical reference.
   - Ripple V1 clip A out by +15. Expected: allowed (15 < 20, fits all tracks)
   - Ripple V1 clip A out by +20. Expected: allowed (exactly fills A2's gap)
   - Zero-space case: A2 clip starts at 100 (no gap). Ripple by +10. Expected: clamped to 0
-  - Use DSL test runner (`tests/helpers/ripple_test_runner.lua`) for setup/verification
+  - Use DSL test runner (`tests/synthetic/helpers/ripple_test_runner.lua`) for setup/verification
   - Tests MUST FAIL initially (implementation doesn't exist yet — current code may pass some due to different constraint logic; verify each test exercises the new max-shift path)
 
 - [x] T003 [P] Test: gap-as-clip in constraint computation in `tests/test_gap_as_clip_constraints.lua`
@@ -169,7 +169,7 @@ T007-T011: sequential chain in batch_ripple_edit.lua → clip_state.lua → time
 
 ## Notes
 - All tests use `require("test_env")` and run from `tests/` directory
-- Tests use the DSL test runner where possible (`tests/helpers/ripple_test_runner.lua`)
+- Tests use the DSL test runner where possible (`tests/synthetic/helpers/ripple_test_runner.lua`)
 - `make -j4` must pass after each task (luacheck + all tests)
 - Commit after each task with proper attribution
 - Old bulk_shift formats (`clip_ids` list, `first_clip_id + anchor_start_frame`)

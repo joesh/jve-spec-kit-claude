@@ -1,0 +1,85 @@
+--- Shared fixture for spec-023 LIVE tests.
+---
+--- LIVE tests (T025, T026, T033, T034, T037, T041, T042, T050, T055)
+--- run against a real DaVinci Resolve Studio attached on the local
+--- machine. They are NOT part of the default test run because they
+--- depend on Resolve's UI being open and a project being loaded.
+---
+--- Transport mechanics (start/request/stop loop) live in
+--- `binding._helper_transport` — review item #6 lifted the common
+--- code shared with helper_fixture. This file owns only LIVE-side
+--- policy: 60s request deadline (live verbs do real Resolve work),
+--- "live-" correlation prefix, helper at INFO log level, and the
+--- LIVE-side helpers `expect_ok` / `expect_error` /
+--- `skip_unless_live` (the resolve_connected check).
+---
+--- Tests under tests/live/ are run via:
+---     ./build/bin/jve.app/Contents/MacOS/jve --test \
+---         tests/live/test_<name>.lua
+--- with a Resolve Studio running and a project open.
+
+local transport = require("synthetic.binding._helper_transport")
+
+local M = {}
+
+local function repo_root()
+    return transport.repo_root_from(
+        debug.getinfo(1, "S").source, "tests/synthetic/integration/live_resolve")
+end
+
+function M.start(sock_path)
+    return transport.start({
+        sock_path             = sock_path,
+        repo_root             = repo_root(),
+        log_level             = "INFO",
+        started_timeout_ms    = 10000,
+        bind_poll_count       = 200,        -- 200 * 50ms = 10s
+        corr_prefix           = "live",
+        request_timeout_ticks = 3000,       -- 3000 * 20ms = 60s
+    })
+end
+
+M.request = transport.request
+M.stop    = transport.stop
+
+--- Pre-flight: ping the helper and only proceed if Resolve Studio is
+--- attached. On non-Studio / no-current-project, prints a skip line
+--- and calls os.exit(0) — the harness counts that as "passed" but the
+--- printed line makes the skip visible. This avoids false-fails on
+--- developer machines without Resolve.
+function M.skip_unless_live(fix, test_name)
+    local r = M.request(fix, "ping", {})
+    assert(r.ok == true, string.format(
+        "%s: ping itself failed (%s/%s)",
+        test_name, r.error and r.error.code,
+        r.error and r.error.message))
+    if r.result.resolve_connected ~= true then
+        local last = r.result.last_error or {}
+        print(string.format(
+            "SKIPPED: %s — Resolve Studio not attached (last_error=%s/%s)",
+            test_name, last.code or "?", last.message or "?"))
+        M.stop(fix)
+        os.exit(0)
+    end
+    return r.result
+end
+
+function M.expect_ok(parsed, label)
+    assert(parsed.ok == true, string.format(
+        "%s: expected ok=true, got %s/%s",
+        label, parsed.error and parsed.error.code,
+        parsed.error and parsed.error.message))
+    return parsed.result
+end
+
+function M.expect_error(parsed, expected_code, label)
+    assert(parsed.ok == false, label .. ": expected ok=false")
+    assert(parsed.error and parsed.error.code == expected_code,
+        string.format("%s: expected code %q, got %q (%s)",
+            label, expected_code,
+            parsed.error and parsed.error.code,
+            parsed.error and parsed.error.message))
+    return parsed.error
+end
+
+return M

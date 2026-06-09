@@ -107,7 +107,7 @@ The same anti-pattern repeats in many forms. Treat as one finding; all sites sho
 ### DRY: shared test scaffolds duplicated across many tests
 - DRP tests: identical `elem()` / `wrap_clips()` / `text()` XML helper duplicated in 9 files (`tests/test_drp_*.lua`). This branch widened the helper signature in all 9 simultaneously — clear signal of missed centralization.
 - Six command tests (`test_insert_command.lua`, `test_overwrite.lua`, `test_add_clips_to_sequence.lua`, `test_trim_head_tail.lua`, `test_relink_clips_integration.lua`, `test_move_to_bin.lua`) repeat the same Project + Sequence + Track scaffolding paragraph introduced by the SQL-isolation refactor.
-- DRT roundtrip payload (`FR_23976`, `TC_1H_AT_23976`, identical UUIDs) duplicated across `tests/integration/test_drt_writer_file_roundtrip.lua` and `test_drt_round_trip_validator.lua`.
+- DRT roundtrip payload (`FR_23976`, `TC_1H_AT_23976`, identical UUIDs) duplicated across `tests/synthetic/integration/test_drt_writer_file_roundtrip.lua` and `test_drt_round_trip_validator.lua`.
 - Two near-identical UUID-dedup tests (`test_drp_uuid_dedup.lua` + `test_drp_uuid_dedup_full.lua`) — the `_full` variant's success print even says `test_drp_uuid_dedup.lua passed`.
 - DRP importer: `opts.*` 4-line unpack duplicated in `parse_sequence` and `parse_resolve_tracks`.
 
@@ -125,7 +125,7 @@ The same anti-pattern repeats in many forms. Treat as one finding; all sites sho
 **Direction:** Drive both the column list and the binds from `CDL_CHANNELS` + a small constant for trailing columns.
 
 ### Test mutates production module constants to drive a failure path
-**File:** `tests/integration/test_drt_round_trip_validator.lua:165-196`
+**File:** `tests/synthetic/integration/test_drt_round_trip_validator.lua:165-196`
 **Evidence:** `canon.FRAME = 99 ... canon.FRAME = orig`. Encodes that the validator reads `canon.FRAME`; also leaks state if the assertion in between throws.
 **Direction:** Drive drift through the writer (produce a .drt with a different marker frame/duration and feed it to the validator). Test bytes, not Lua tables.
 
@@ -206,10 +206,10 @@ The same anti-pattern repeats in many forms. Treat as one finding; all sites sho
 `src/lua/qt_bindings/process_bindings.cpp:386-408` — log when `waitForFinished` returns false.
 
 ### `helper_fixture.lua` log_level mismatch
-`tests/binding/helper_fixture.lua:35` — `DEBUG` contradicts the module's own docstring and `_helper_transport.lua`'s banner (`WARNING`). Pick one.
+`tests/synthetic/binding/helper_fixture.lua:35` — `DEBUG` contradicts the module's own docstring and `_helper_transport.lua`'s banner (`WARNING`). Pick one.
 
 ### `drt_spike_fixture.out_path` returns `.drp` for `.drt` output
-`tests/helpers/drt_spike_fixture.lua:36-41` — rename to `.drt`.
+`tests/synthetic/helpers/drt_spike_fixture.lua:36-41` — rename to `.drt`.
 
 ### Stub conditionally executes real Cancel command
 `tests/test_keyboard_focus_routing.lua:152-156` — hybrid stub. Either use the real `command_manager` or keep the stub pure.
@@ -224,7 +224,7 @@ Renames itself implicitly as `SCHEMA_VERSION` moves. Either pin to V10 (it's a m
 `'v1'`, `'test-video-id'`, `'v-' .. clip_name` — trivial values that won't catch length/encoding bugs in identity flow. Use realistic 18-hex DbIds from real fixtures.
 
 ### Inconsistent step numbering across e2e test
-`tests/binding/test_e2e_retime_relink.lua` — `[6/6]` then `[7/7]` then `[8/8]`. Pick one denominator or drop the fraction.
+`tests/synthetic/binding/test_e2e_retime_relink.lua` — `[6/6]` then `[7/7]` then `[8/8]`. Pick one denominator or drop the fraction.
 
 ### Comment/spec-citation bloat (CLAUDE.md default is no comments)
 Spread across `drt_writer.lua`, `send_to_resolve.lua`, `bridge_completion.lua`, `sync_grades_from_resolve.lua`, `cpu_video_surface.{cpp,h}`, `cdl_edl.py`, `clip_grade.lua`, `clip_marker.lua`. Per-block "Rule N.NN" tags are often misapplied (e.g. "Rule 2.32" used in `send_to_resolve.lua:52` for shell quoting; 2.32 is about regression tests). `change_listeners.lua` top docstring still describes a `content_changed` handler that was removed. `database.lua` `select_rows` carries a multi-line history comment. `cpu_video_surface.{cpp,h}` cites `T032 / FR-016` which decay once 023 ships. `layout.lua:416-426` has an 8-line aspirational bundle-deploy plan. Move rationale to spec/commit messages; keep one-line non-obvious-decision notes.
@@ -245,7 +245,7 @@ Clean-build / actionable-assert hygiene.
 Break into sub-bullets (Discriminator / Partial source / Track identity / `timeline_integer_rate` / Caller obligations).
 
 ### Pinned hex constants in DRT shape tests are unnamed
-`tests/binding/test_drt_writer_ti_video_clip_shape.lua`, `test_drt_writer_media_pool_population.lua` — acceptable given byte-equality requirement and inline provenance comments, but extracting to `tests/helpers/resolve_pinned_bytes.lua` would improve diffability.
+`tests/synthetic/binding/test_drt_writer_ti_video_clip_shape.lua`, `test_drt_writer_media_pool_population.lua` — acceptable given byte-equality requirement and inline provenance comments, but extracting to `tests/synthetic/helpers/resolve_pinned_bytes.lua` would improve diffability.
 
 ## Areas That Looked Clean
 - `identity_ledger.reconcile` and the phase-pipeline state machine in `sync_edits_from_resolve` (core dispatch).
@@ -256,7 +256,7 @@ Break into sub-bullets (Discriminator / Partial source / Track identity / `timel
 - `qt_bindings.cpp` wiring (mechanical three `register_*` calls + tooltip entry).
 - `_helper_transport.lua`, `drt_spike_fixture.lua`, and the dedicated DRT writer shape/extents/media-pool tests (good provenance pinning).
 - `menus.xml`, `keymaps/default.jvekeys`, `github_issue_creator.lua` repo-name fix.
-- Smoke runner `keymap_exempt.py` and `tests/unit/test_timeline_media_buffer.cpp` (mechanical updates only).
+- Smoke runner `keymap_exempt.py` and `tests/synthetic/unit/test_timeline_media_buffer.cpp` (mechanical updates only).
 
 ## Open Questions for Joe
 - DRP marker `duration < 1`: is this a protobuf-decode bug, a model invariant (`duration >= 1`), or real data? The current "force to 1" hides whichever it is.

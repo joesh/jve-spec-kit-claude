@@ -44,7 +44,7 @@
   **File**: `tests/test_relink_file_original_tc.lua`
   **Reads**: `src/lua/core/media_relinker.lua`
 
-- [x] **T004** Write `tests/binding/test_emp_tc_override.lua` — EMP setter integration test
+- [x] **T004** Write `tests/synthetic/binding/test_emp_tc_override.lua` — EMP setter integration test
 
   Integration test via `--test` mode. Tests:
   1. Open a media file via `EMP.MEDIA_FILE_OPEN(path)`, read `EMP.MEDIA_FILE_INFO(mf)` → note probed `first_frame_tc`.
@@ -56,7 +56,7 @@
 
   **Expected at this point**: ERRORS — `MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE` binding doesn't exist yet.
 
-  **File**: `tests/binding/test_emp_tc_override.lua`
+  **File**: `tests/synthetic/binding/test_emp_tc_override.lua`
   **Reads**: `src/lua/qt_bindings/emp_bindings.cpp`, `src/editor_media_platform/include/editor_media_platform/emp_media_file.h`
 
 ## Phase 3.3: Core Implementation (ONLY after tests are failing)
@@ -255,7 +255,7 @@
 
 ## Phase 3.4: Integration & Verification
 
-- [x] **T013** E2E test: extend `tests/binding/test_e2e_retime_relink.lua` for VFX clip override
+- [x] **T013** E2E test: extend `tests/synthetic/binding/test_e2e_retime_relink.lua` for VFX clip override
 
   Add to the existing e2e test (or create a new section):
   1. After relink, find a VFX clip in the gold master whose media row has `file_original_timecode` populated.
@@ -264,7 +264,7 @@
   4. If running via `--test` mode with full EMP: open the file via `EMP.MEDIA_FILE_OPEN`, verify probed `first_frame_tc` differs from `start_tc_value`, call `EMP.MEDIA_FILE_SET_TC_ORIGIN_OVERRIDE(mf, start_tc_value, ...)`, verify `first_frame_tc` now equals `start_tc_value`.
   5. Report: remaining offline count, VFX clips now online count.
 
-  **File**: `tests/binding/test_e2e_retime_relink.lua`
+  **File**: `tests/synthetic/binding/test_e2e_retime_relink.lua`
   **Depends on**: T005–T012 (all layers)
 
 - [x] **T014** Verify all TDD tests pass
@@ -273,8 +273,8 @@
   ```bash
   cd tests && luajit test_harness.lua test_drp_dual_tc.lua
   cd tests && luajit test_harness.lua test_relink_file_original_tc.lua
-  ./build/bin/JVEEditor --test tests/binding/test_emp_tc_override.lua
-  JVE_LOG=media:detail ./build/bin/JVEEditor --test tests/binding/test_e2e_retime_relink.lua > /tmp/e2e_output.txt 2>&1
+  ./build/bin/JVEEditor --test tests/synthetic/binding/test_emp_tc_override.lua
+  JVE_LOG=media:detail ./build/bin/JVEEditor --test tests/synthetic/binding/test_e2e_retime_relink.lua > /tmp/e2e_output.txt 2>&1
   ```
 
   All must pass. If any fail, fix the implementation (not the test).

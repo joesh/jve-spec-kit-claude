@@ -103,4 +103,4 @@ Each test fails before the rewrite lands and passes after.
 - **get-focus-widgets-shape**: returns a non-empty list ending with the container root.
 - **forbidden-public-exports**: introspection of the returned module table contains no keys other than `mount`, `update_selection`, `get_focus_widgets`.
 
-Test home: `tests/contract/inspector/test_inspector_api_contract.lua`.
+Test home: `tests/synthetic/contract/inspector/test_inspector_api_contract.lua`.

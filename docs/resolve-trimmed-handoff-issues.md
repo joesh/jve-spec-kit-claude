@@ -339,5 +339,5 @@ to the winner's media_id instead of being dropped.
 
 - `tests/test_drp_dual_tc.lua` — TracksBA.StartTime extraction + override detection
 - `tests/test_relink_file_original_tc.lua` — relinker second-chance TC match
-- `tests/binding/test_emp_tc_override.lua` — EMP setter + assert-after-decode
-- `tests/binding/test_e2e_retime_relink.lua` — VFX clips online in gold master
+- `tests/synthetic/binding/test_emp_tc_override.lua` — EMP setter + assert-after-decode
+- `tests/synthetic/binding/test_e2e_retime_relink.lua` — VFX clips online in gold master

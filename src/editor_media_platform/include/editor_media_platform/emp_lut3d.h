@@ -13,7 +13,7 @@
 // the GPU path uploads `Lut3d::data` as an RGBA16F 3D texture and uses
 // MTLSamplerStateLinear for hardware trilinear; the CPU path here
 // implements the same trilinear in software for symmetry. Reference
-// vectors in tests/binding/test_lut3d_apply.lua are the shared
+// vectors in tests/synthetic/binding/test_lut3d_apply.lua are the shared
 // regression target.
 //
 // .cube format (Adobe Cube LUT Specification v1.0):

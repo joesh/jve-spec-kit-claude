@@ -79,7 +79,7 @@ function M.handle_drop_on_blank_timeline(payload)
   - `build_drop_sequence_name("clip.mov", 0) == "clip.mov"`.
   - `build_drop_sequence_name("clip.mov", 3) == "clip.mov (+3 more)"`.
   - `build_drop_sequence_name("a", 1) == "a (+1 more)"`.
-- `tests/binding/test_close_last_tab_enters_blank.lua` (--test mode):
+- `tests/synthetic/binding/test_close_last_tab_enters_blank.lua` (--test mode):
   - Open 1-seq project via `timeline_panel.create({sequence_id=s,project_id=p})`.
   - Call `close_tab(s)`.
   - Assert state cleared + DB persisted empty + no phantom tab reappeared.

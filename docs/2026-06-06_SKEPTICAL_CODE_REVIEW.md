@@ -195,9 +195,9 @@ This branch lands the Resolve color bridge: Lua client + supervisor, Python help
 ### LOW
 
 - **tests/test_edit_diff.lua:32-39** — `clip(opts)` helper uses `opts.source_in or 100` etc.; `source_in = 0` boundary test silently rewritten to 100. The `enabled` field correctly uses `== nil and ... or ...` showing the author knew the distinction.
-- **tests/binding/helper_fixture.lua:9 vs 35** — Docstring claims `log_level = WARNING`; code passes `DEBUG`.
+- **tests/synthetic/binding/helper_fixture.lua:9 vs 35** — Docstring claims `log_level = WARNING`; code passes `DEBUG`.
 - **tests/test_drt_writer_emit_order.lua:24-37** — Hand-built `seq` table pins encoder input contract but cannot catch upstream drift; add model-driven companion.
-- **tests/binding/_helper_transport.lua:85-89** — Socket-bind poll uses `os.execute("test -S " .. sock_path)` (unquoted) and `os.execute("sleep 0.05")` (fork per tick). Copy-pasted bad pattern from supervisor.
+- **tests/synthetic/binding/_helper_transport.lua:85-89** — Socket-bind poll uses `os.execute("test -S " .. sock_path)` (unquoted) and `os.execute("sleep 0.05")` (fork per tick). Copy-pasted bad pattern from supervisor.
 
 ---
 

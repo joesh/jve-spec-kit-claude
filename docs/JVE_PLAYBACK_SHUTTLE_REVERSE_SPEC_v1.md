@@ -301,7 +301,7 @@ This reverse work plugs into the existing plan as:
 ### Phase 2: >4x audio decimate (as already planned)
 - Add SSE Q3_DECIMATE, MAX_SPEED constants, render_decimate
 - Add Lua thresholding + reanchor rules
-- Add `tests/unit/test_sse_decimate.cpp`
+- Add `tests/synthetic/unit/test_sse_decimate.cpp`
 - Add `tests/test_audio_decimate.lua`
 
 ### Phase 3: Reverse video rework (this spec)
@@ -363,7 +363,7 @@ Mechanism details belong only in comments inside implementation modules, not pub
 - `src/lua/ui/media_cache.lua`  *(reverse windowing likely lives here)*
 - `src/scrub_stretch_engine/sse.h`
 - `src/scrub_stretch_engine/sse.cpp`
-- tests under `tests/` and `tests/unit/`
+- tests under `tests/` and `tests/synthetic/unit/`
 
 ---
 

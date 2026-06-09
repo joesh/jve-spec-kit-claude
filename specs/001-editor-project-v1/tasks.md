@@ -21,20 +21,20 @@ Paths shown below assume single project structure from plan.md
 **CRITICAL: These tests MUST be written and MUST FAIL before ANY implementation**
 
 ### Command API Contract Tests
-- [ ] T005 [P] Contract test POST /commands/execute in tests/contract/test_command_execute.cpp
-- [ ] T006 [P] Contract test POST /commands/undo in tests/contract/test_command_undo.cpp  
-- [ ] T007 [P] Contract test POST /commands/redo in tests/contract/test_command_redo.cpp
+- [ ] T005 [P] Contract test POST /commands/execute in tests/synthetic/contract/test_command_execute.cpp
+- [ ] T006 [P] Contract test POST /commands/undo in tests/synthetic/contract/test_command_undo.cpp  
+- [ ] T007 [P] Contract test POST /commands/redo in tests/synthetic/contract/test_command_redo.cpp
 
 ### Project API Contract Tests
-- [ ] T008 [P] Contract test POST /projects in tests/contract/test_project_create.cpp
-- [ ] T009 [P] Contract test GET /projects/{id} in tests/contract/test_project_load.cpp
-- [ ] T010 [P] Contract test POST /projects/{id}/sequences in tests/contract/test_sequence_create.cpp
-- [ ] T011 [P] Contract test POST /projects/{id}/media in tests/contract/test_media_import.cpp
+- [ ] T008 [P] Contract test POST /projects in tests/synthetic/contract/test_project_create.cpp
+- [ ] T009 [P] Contract test GET /projects/{id} in tests/synthetic/contract/test_project_load.cpp
+- [ ] T010 [P] Contract test POST /projects/{id}/sequences in tests/synthetic/contract/test_sequence_create.cpp
+- [ ] T011 [P] Contract test POST /projects/{id}/media in tests/synthetic/contract/test_media_import.cpp
 
 ### Selection API Contract Tests  
-- [ ] T012 [P] Contract test GET/POST /selection/clips in tests/contract/test_clip_selection.cpp
-- [ ] T013 [P] Contract test GET/POST /selection/edges in tests/contract/test_edge_selection.cpp
-- [ ] T014 [P] Contract test GET/POST /selection/properties in tests/contract/test_selection_properties.cpp
+- [ ] T012 [P] Contract test GET/POST /selection/clips in tests/synthetic/contract/test_clip_selection.cpp
+- [ ] T013 [P] Contract test GET/POST /selection/edges in tests/synthetic/contract/test_edge_selection.cpp
+- [ ] T014 [P] Contract test GET/POST /selection/properties in tests/synthetic/contract/test_selection_properties.cpp
 
 ## Phase 3.3: Core Model Implementation (ONLY after contract tests are failing)
 
@@ -112,13 +112,13 @@ Paths shown below assume single project structure from plan.md
 ## Phase 3.8: Integration Testing (Based on quickstart.md scenarios)
 
 ### Workflow Integration Tests
-- [ ] T056 [P] Project creation and media import test in tests/integration/test_project_workflow.cpp
-- [ ] T057 [P] Sequence creation and clip placement test in tests/integration/test_sequence_workflow.cpp  
-- [ ] T058 [P] Clip selection and property editing test in tests/integration/test_inspector_workflow.cpp
-- [ ] T059 [P] Editing commands workflow test in tests/integration/test_editing_workflow.cpp
-- [ ] T060 [P] Save/load with state preservation test in tests/integration/test_persistence_workflow.cpp
-- [ ] T061 [P] Keyboard shortcuts integration test in tests/integration/test_shortcuts_workflow.cpp
-- [ ] T062 [P] Multi-selection and tri-state controls test in tests/integration/test_multiselection_workflow.cpp
+- [ ] T056 [P] Project creation and media import test in tests/synthetic/integration/test_project_workflow.cpp
+- [ ] T057 [P] Sequence creation and clip placement test in tests/synthetic/integration/test_sequence_workflow.cpp  
+- [ ] T058 [P] Clip selection and property editing test in tests/synthetic/integration/test_inspector_workflow.cpp
+- [ ] T059 [P] Editing commands workflow test in tests/synthetic/integration/test_editing_workflow.cpp
+- [ ] T060 [P] Save/load with state preservation test in tests/synthetic/integration/test_persistence_workflow.cpp
+- [ ] T061 [P] Keyboard shortcuts integration test in tests/synthetic/integration/test_shortcuts_workflow.cpp
+- [ ] T062 [P] Multi-selection and tri-state controls test in tests/synthetic/integration/test_multiselection_workflow.cpp
 
 ## Phase 3.9: Polish & Validation
 

@@ -72,7 +72,7 @@ Repo root: `/Users/joe/Local/jve-spec-kit-claude`. All paths below are absolute.
 
 ### Integration / scenario tests (from quickstart.md)
 
-- [X] **T009** [P] Integration test for the failing scenario at `/Users/joe/Local/jve-spec-kit-claude/tests/integration/test_anamnesis_reimport_no_asserts.lua`. Per `quickstart.md` and FR-011. Runs via `JVEEditor --test`:
+- [X] **T009** [P] Integration test for the failing scenario at `/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/integration/test_anamnesis_reimport_no_asserts.lua`. Per `quickstart.md` and FR-011. Runs via `JVEEditor --test`:
   - Delete any pre-existing `anamnesis-gold-timeline.jvp` files in the test sandbox.
   - Drive the conversion of `tests/fixtures/resolve/anamnesis-gold-timeline.drp` programmatically via the importer API.
   - Open the resulting `.jvp` programmatically.

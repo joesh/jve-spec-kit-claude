@@ -165,9 +165,9 @@ Artifacts generated:
 
 1. From each contract file, generate one contract test. Each test must fail before its target exists.
 
-2. From the 14 Acceptance Scenarios in `spec.md`, generate 14 `--test` integration scripts under `tests/integration/inspector/`. Each is named `scenario_NN_<shortname>.lua` with a 1:1 mapping. All must fail until the full Inspector lands.
+2. From the 14 Acceptance Scenarios in `spec.md`, generate 14 `--test` integration scripts under `tests/synthetic/integration/inspector/`. Each is named `scenario_NN_<shortname>.lua` with a 1:1 mapping. All must fail until the full Inspector lands.
 
-3. From the FR-032 invariant list, generate 6 unit tests under `tests/unit/inspector/`.
+3. From the FR-032 invariant list, generate 6 unit tests under `tests/synthetic/unit/inspector/`.
 
 4. Implementation tasks in TDD order:
    - **Phase A — setup and failing tests**: create empty module stubs so tests can `require`; write all contract + unit + integration tests; verify all fail.

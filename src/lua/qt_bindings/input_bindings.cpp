@@ -11,7 +11,7 @@
 // against itself in --test mode is not foregrounded (no Dock
 // activation, no user gesture). Result: events go nowhere reachable
 // from our own QShortcut map. Confirmed empirically 2026-05-20 against
-// `tests/binding/test_qt_send_key_event.lua` (handler fired 0 times).
+// `tests/synthetic/binding/test_qt_send_key_event.lua` (handler fired 0 times).
 //
 // Why it's kept in tree: spec 020's Phase 1 calls for an external
 // test-runner process that foregrounds JVE via osascript (or a similar

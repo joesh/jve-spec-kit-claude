@@ -3,7 +3,7 @@
 **Feature**: 013-timeline-placements-as — Phase 1 output
 **Prereq**: Implementation complete (tasks.md executed), `make -j4` green, `tests/run_lua_tests_all.sh` green, `tests/run_integration_tests.sh` green.
 
-This quickstart is the human-verifiable end-to-end validation of the 11 Acceptance Scenarios in `spec.md`. Each scenario maps to one or more automated integration tests (in `tests/integration/`); this doc describes how to reproduce each manually for smoke-level confidence before shipping.
+This quickstart is the human-verifiable end-to-end validation of the 11 Acceptance Scenarios in `spec.md`. Each scenario maps to one or more automated integration tests (in `tests/synthetic/integration/`); this doc describes how to reproduce each manually for smoke-level confidence before shipping.
 
 ## Vocabulary reminder
 

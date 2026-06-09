@@ -2,7 +2,7 @@
 //
 // Mirrored by the Metal fragment shader in src/gpu_video_surface.mm
 // — any change here MUST also land in the shader source. The
-// reference expected values in tests/binding/test_cdl_apply_pixel.lua
+// reference expected values in tests/synthetic/binding/test_cdl_apply_pixel.lua
 // are the shared regression target (derived from the ASC standard,
 // not from this implementation).
 

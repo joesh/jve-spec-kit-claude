@@ -38,7 +38,7 @@ Expected:
 
 ```bash
 # Integration test via --test mode (needs C++ bindings)
-./build/bin/JVEEditor --test tests/binding/test_emp_tc_override.lua
+./build/bin/JVEEditor --test tests/synthetic/binding/test_emp_tc_override.lua
 ```
 
 Expected:
@@ -50,7 +50,7 @@ Expected:
 
 ```bash
 # Integration test via --test mode
-JVE_LOG=media:detail ./build/bin/JVEEditor --test tests/binding/test_e2e_retime_relink.lua > /tmp/e2e_output.txt 2>&1
+JVE_LOG=media:detail ./build/bin/JVEEditor --test tests/synthetic/binding/test_e2e_retime_relink.lua > /tmp/e2e_output.txt 2>&1
 ```
 
 Expected:

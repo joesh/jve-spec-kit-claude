@@ -658,7 +658,7 @@ end
 **Replace:**
 ```cmake
 # Unit tests
-add_executable(test_sql_transaction tests/unit/test_sql_transaction.cpp)
+add_executable(test_sql_transaction tests/synthetic/unit/test_sql_transaction.cpp)
 target_link_libraries(test_sql_transaction JVECore Qt6::Test Qt6::Sql)
 target_link_directories(test_sql_transaction PRIVATE ${LUAJIT_LIBRARY_DIRS})
 set_target_properties(test_sql_transaction PROPERTIES
@@ -699,7 +699,7 @@ endif()
 ---
 
 ### Task 5.5: Fix test_sql_transaction file handling
-**File:** `tests/unit/test_sql_transaction.cpp:28-52`
+**File:** `tests/synthetic/unit/test_sql_transaction.cpp:28-52`
 **Issue:** QTemporaryFile closes before execution, file deleted
 
 **Fix:**

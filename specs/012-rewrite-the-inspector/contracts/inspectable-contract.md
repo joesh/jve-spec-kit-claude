@@ -87,7 +87,7 @@ inspectable:set(field_key, {
 - **set-timecode-payload-asserts-on-negative**: `:set("source_in", {value=-1, property_type="TIMECODE"})` asserts.
 - **set-timecode-payload-asserts-on-rate-in-payload**: if a caller sneaks `rate = ...` into the payload, that key is ignored; the canonical rate on the entity is used. (Optional test — asserts only if we choose to validate strict payload shape.)
 
-Test home: `tests/contract/inspector/test_inspectable_set_timecode.lua`.
+Test home: `tests/synthetic/contract/inspector/test_inspectable_set_timecode.lua`.
 
 ---
 

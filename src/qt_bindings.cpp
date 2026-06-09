@@ -434,7 +434,7 @@ void registerQtBindings(lua_State* L)
 
     // Register BT.709 CSC matrix binding (spec 023 Piece 3 — unified CSC).
     // Math source-of-truth lives in GPUVideoSurface::composeBt709Csc; this
-    // exposes it to Lua so the binding test (tests/binding/test_compose_bt709_csc.lua)
+    // exposes it to Lua so the binding test (tests/synthetic/binding/test_compose_bt709_csc.lua)
     // pins per-format/per-range matrices against BT.709-standard-derived values.
     register_csc_bindings(L);
 

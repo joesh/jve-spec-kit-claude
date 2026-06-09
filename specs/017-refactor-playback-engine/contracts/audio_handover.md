@@ -114,7 +114,7 @@ Audio handover happens only when the user invokes a transport command (Space / J
 
 ## Black-box contract tests (failing initially)
 
-`tests/contract/test_audio_handover_contract.lua` — runs under `--test` mode (real AOP/SSE). Tests tap the audio output stream (a new `--test`-only inspector returning a small ring of recently-produced samples + their source-engine tag) and verify invariants directly, not internal steps.
+`tests/synthetic/contract/test_audio_handover_contract.lua` — runs under `--test` mode (real AOP/SSE). Tests tap the audio output stream (a new `--test`-only inspector returning a small ring of recently-produced samples + their source-engine tag) and verify invariants directly, not internal steps.
 
 1. **I1 holds across a full handover**: source playing → trigger record `engine:play()` → tap audio stream → verify no sample-instant has samples from BOTH engines.
 2. **I2 holds across a full handover**: same scenario → verify the timestamp of the first video frame delivered by record-engine is >= the timestamp of the first audio sample produced by record-engine.

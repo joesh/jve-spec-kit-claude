@@ -1,6 +1,6 @@
 You are reviewing this codebase to produce long-lived repo documentation that prevents repeated full-code walks.
 Current top-level dirs: tests/ docs/ src/
-Tests layout: tests/captures/ tests/unit/ tests/integration/ tests/ad_hoc/ tests/helpers/
+Tests layout: tests/captures/ tests/synthetic/unit/ tests/synthetic/integration/ tests/synthetic/ad_hoc/ tests/synthetic/helpers/
 Source layout: src/lua/ (ui/ qt_bindings/ inspectable/ core/ importers/ models/ bug_reporter/ media/) and src/bug_reporter/.
 
 Deliverables (create/update files under docs/):
@@ -25,7 +25,7 @@ Every non-trivial claim must cite concrete evidence: file paths + (when possible
 
 Separate observed from inferred. Inferred statements must state the evidence that suggests them.
 
-INVARIANTS.md: each invariant must include “How to verify” using tests/unit, tests/integration, captures, or a minimal repro.
+INVARIANTS.md: each invariant must include “How to verify” using tests/synthetic/unit, tests/synthetic/integration, captures, or a minimal repro.
 
 GOLDEN_PATHS.md: include exact commands and expected success signals. If you cannot run a command, mark it UNVERIFIED and say what blocked it.
 

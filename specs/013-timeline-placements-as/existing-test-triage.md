@@ -8,7 +8,7 @@
 |---|---|
 | Total `tests/test_*.lua` files | 685 |
 | Files touching banned identifiers | 235 (~34%) |
-| `tests/helpers/*.lua` touching banned identifiers | 3 |
+| `tests/synthetic/helpers/*.lua` touching banned identifiers | 3 |
 
 ### Banned-identifier occurrence (file count)
 
@@ -32,8 +32,8 @@
 ### Shared helpers that encode the old schema
 
 - `tests/test_env.lua` (1 hit) — ultimate fan-out; changing this affects every test.
-- `tests/helpers/ripple_layout.lua` (3 hits) — ASCII-DSL ripple test runner.
-- `tests/helpers/project_validator.lua` (14 hits) — schema assertions.
+- `tests/synthetic/helpers/ripple_layout.lua` (3 hits) — ASCII-DSL ripple test runner.
+- `tests/synthetic/helpers/project_validator.lua` (14 hits) — schema assertions.
 
 ## Character of the work
 
@@ -115,5 +115,5 @@ Roughly 100 test files that reference banned identifiers ONLY in set-up boilerpl
 
 - Fixture regeneration scope overlaps with T109 (deferred there).
 - `test_env.lua` is loaded by ~every test — changing it is a build-break moment. Must land atomically with T008.
-- `tests/helpers/ripple_layout.lua` builds old-shape timeline clips via its ASCII DSL — DSL surface stays, internal construction swaps to the new shape. Small but must land atomically with T008 + helper rewrite.
+- `tests/synthetic/helpers/ripple_layout.lua` builds old-shape timeline clips via its ASCII DSL — DSL surface stays, internal construction swaps to the new shape. Small but must land atomically with T008 + helper rewrite.
 - `import_schema.lua` (referenced by some tests via `require("import_schema")`) may duplicate parts of schema.sql; verify it's just reading from the canonical file, not encoding its own shape.

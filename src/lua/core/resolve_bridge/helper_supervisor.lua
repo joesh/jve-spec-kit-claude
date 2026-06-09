@@ -127,7 +127,7 @@ end
 --
 -- `os.execute("test -S")` is reliable for socket files (which
 -- io.open/stat-as-regular-file are not); same probe the binding
--- fixture uses (tests/binding/helper_fixture.lua) so prod and test
+-- fixture uses (tests/synthetic/binding/helper_fixture.lua) so prod and test
 -- agree on what "ready" means.
 local function wait_for_bind(proc, socket_path, timeout_ms)
     local elapsed = 0

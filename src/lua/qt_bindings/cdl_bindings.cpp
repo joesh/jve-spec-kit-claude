@@ -9,7 +9,7 @@
 //     → r', g', b'
 //
 // Thin one-to-one wrapper over emp::apply_cdl_rgb. Exists so the
-// binding test (tests/binding/test_cdl_apply_pixel.lua) can pin the
+// binding test (tests/synthetic/binding/test_cdl_apply_pixel.lua) can pin the
 // math against ASC-derived domain values without shipping a parallel
 // Lua reimplementation of the formula (which would silently drift
 // from the C++/MSL source of truth).

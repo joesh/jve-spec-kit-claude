@@ -57,7 +57,7 @@
 ## Timebase Migration Prep (2025-11-19)
 - Working baseline branch: `pre-timebase-stable` (before RationalTime migration). New Lua regressions were cherry-picked: `tests/lua/test_batch_command_contract.lua`, `tests/lua/test_batch_ripple_timeline_state_overlap.lua`, and `tests/lua/test_clip_occlusion_current.lua`.
 - Removed unused C++ event log layer (`include/jve/eventlog/*`, `src/eventlog/*`) and the SQLite path helper (`src/core/sqlite_env.*`) to keep “logic in Lua” and reduce unused native surface area. CMake no longer builds or links `JVEEventLog`; the only remaining native libs are Qt/SQLite/Lua.
-- Dropped unused C++ test `tests/unit/test_project_browser_rename.cpp` and the old eventlog golden test wiring.
+- Dropped unused C++ test `tests/synthetic/unit/test_project_browser_rename.cpp` and the old eventlog golden test wiring.
 - Makefile now drives `cmake --build` with an explicit `-j$(JOBS)` (default 4) so `make -j4` actually fans out the underlying build instead of collapsing to `-j1` with jobserver warnings.
 - Current build configuration runs the Lua test suite via `lua_tests` during `make`; C++ tests are built but not executed automatically. All Lua tests currently pass on this branch; undo bugs remain to be investigated separately.
 

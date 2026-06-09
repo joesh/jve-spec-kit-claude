@@ -30,7 +30,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # for standalone script invocations.
 BUILD_DIR="${BUILD_DIR:-build}"
 BINARY="${JVE_BINARY:-$ROOT_DIR/$BUILD_DIR/bin/jve.app/Contents/MacOS/jve}"
-INTEG_DIR="$ROOT_DIR/tests/integration"
+INTEG_DIR="$ROOT_DIR/tests/synthetic/integration"
 
 if [[ ! -x "$BINARY" ]]; then
   echo "ERROR: JVEEditor binary not found at $BINARY" >&2

@@ -37,13 +37,13 @@ Reads through `entry`:
 | `entry.source_time_us`, `entry.source_frame` | (not actually read by `_provide_clips`) | ✘ — dead field |
 | `entry.media_fps_num/den` | `_compute_audio_speed_ratio` | ✘ — recoverable via `media_id → media` |
 
-### `tests/binding/test_drp_anamnesis_full.lua:122-171`
+### `tests/synthetic/binding/test_drp_anamnesis_full.lua:122-171`
 
 Reads `entry.clip.enabled`, `entry.clip.id`, `entry.clip.timeline_start`.
 `clip.enabled` is now on ResolvedEntry as `entry.enabled` (composite of
 chain). Test must be updated if wrapper returns ResolvedEntry shape.
 
-### `tests/integration/test_tmb_mute_exclusion.lua:204-222`
+### `tests/synthetic/integration/test_tmb_mute_exclusion.lua:204-222`
 
 Reads nothing off entries — only counts them. Wrapper change is
 transparent.
@@ -94,7 +94,7 @@ These items are downstream of T031 and belong to T093:
    DB-represented but **not** honored at playback until a separate
    design pass. T093's audio entry collapse: group per-(outermost clip,
    media_ref) and treat enabled = OR across channels.
-6. `tests/binding/test_drp_anamnesis_full.lua` — update `entry.clip.*`
+6. `tests/synthetic/binding/test_drp_anamnesis_full.lua` — update `entry.clip.*`
    reads to `entry.*` (or `entry.enabled`) per ResolvedEntry.
 
 ## Rule 2.18 FFI stability

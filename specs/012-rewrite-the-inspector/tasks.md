@@ -21,7 +21,7 @@ Executed unsupervised per Joe's instruction. Scope-complete on the Inspector rew
   - T012b: `test_inspector_resolve_inspectables.lua` — 13 assertions.
   - T012c: `test_inspector_compute_mode.lua` — 7 assertions.
   - T012d: `test_inspector_property_type_mapping.lua` — 8 assertions.
-  - + integration smoke `tests/integration/inspector/smoke_inspector_launch.lua` via `--test` mode (facade shape + mount + update_selection).
+  - + integration smoke `tests/synthetic/integration/inspector/smoke_inspector_launch.lua` via `--test` mode (facade shape + mount + update_selection).
 - **Implementation (T028–T038)**: `persistent_widget.lua` (122 LOC), `metadata_schemas.lua` (restructured, stale sections pruned), `inspectable/clip.lua` + `inspectable/sequence.lua` TIMECODE branches, `ui_constants.lua` Inspector keys, `field_widget.lua` (441), `schema.lua` (155), `selection_binding.lua` (527), `change_listeners.lua` (107), `mount.lua` (225), `init.lua` (34).
 - **Integration (T039, T040, T042)**: layout.lua rewired to 3-function facade; C++ build clean; editor launches cleanly with new Inspector mounted; 538/538 Lua tests pass.
 - **Cleanup (T043–T045)**: deleted `view.lua`, `adapter.lua`, `widget_pool.lua`, `selection_inspector.lua`, `main_window.lua`, `test_inspector_modules.lua`, `clip_audio_inspector.lua`; removed `set_inspector` stub on `timeline_panel.lua`; removed `M.inspector_view` storage on `project_browser.lua`.
@@ -76,9 +76,9 @@ Tasks T046–T050 are explicit audits that verify compliance before the feature 
   Compliance: rule 2.17 means these stubs must be **temporary scaffolding only**, removed by end of Phase B when real implementations land. Do NOT ship stubs.
 
 - [ ] **T003** Create test directories:
-  - `tests/contract/inspector/`
-  - `tests/unit/inspector/`
-  - `tests/integration/inspector/`
+  - `tests/synthetic/contract/inspector/`
+  - `tests/synthetic/unit/inspector/`
+  - `tests/synthetic/integration/inspector/`
 
 ---
 
@@ -87,19 +87,19 @@ Tasks T046–T050 are explicit audits that verify compliance before the feature 
 *Each contract file yields one contract test. All marked [P] (different files).*
 
 - [ ] **T004** [P] Write contract test for the Inspector public API surface per `contracts/inspector-api.md` §5.
-  - File: `tests/contract/inspector/test_inspector_api_contract.lua`
+  - File: `tests/synthetic/contract/inspector/test_inspector_api_contract.lua`
   - Cases (one per §5 bullet): `mount-idempotent-failure`, `update-selection-ignores-self-source`, `update-selection-empty`, `update-selection-single-clip`, `update-selection-multi-same-schema`, `update-selection-heterogeneous-majority-clip`, `update-selection-heterogeneous-tie-breaks-on-new-click`, `get-focus-widgets-shape`, `forbidden-public-exports`.
   - Test shape: black-box. Only require `ui.inspector` (the `init.lua` facade) and assert observable state via the exported functions and returned values. Do NOT reach into internal module fields.
   - Must fail against current empty stub.
 
 - [ ] **T005** [P] Write contract test for the inspectable `:set` TIMECODE branch per `contracts/inspectable-contract.md` §3.3.
-  - File: `tests/contract/inspector/test_inspectable_set_timecode.lua`
+  - File: `tests/synthetic/contract/inspector/test_inspectable_set_timecode.lua`
   - Cases: `set-string-payload`, `set-number-payload`, `set-boolean-payload`, `set-enum-payload`, `set-timecode-payload-valid`, `set-timecode-payload-asserts-on-non-integer`, `set-timecode-payload-asserts-on-negative`.
   - Use a real (not mocked) project DB in `/tmp/jve/` with a sequence and clip. Assert the column is written for the valid cases; assert via `pcall` that the assertions fire for the invalid cases and the error message contains "TIMECODE" and "integer" / "negative" respectively.
   - Compliance: rule 2.34 — test domain behavior ("an integer-frames timecode is persisted at the named column"), not the dispatch internals.
 
 - [ ] **T006** [P] Write contract test for the restructured schema module per `contracts/schema-definition-contract.md` §5.
-  - File: `tests/contract/inspector/test_schema_definition_contract.lua`
+  - File: `tests/synthetic/contract/inspector/test_schema_definition_contract.lua`
   - Cases: `field-types-enumeration`, `property-types-enumeration`, `property-type-mapping-timecode-is-timecode`, `get-sections-clip-shape`, `get-sections-sequence-shape`, `field-label-required`, `field-type-required`, `read-only-flag-respected`, `dropdown-options-required`, `no-stale-exports`.
   - Assert `FIELD_TYPES` has exactly 7 keys (per FR-010), `PROPERTY_TYPES` has exactly 5 including TIMECODE, the sections returned for `clip` and `sequence` are in the order specified in §§3–4 of the contract, and no stale sections (premiere/review/crop/composite/transform) appear anywhere in the module's exports.
 
@@ -109,27 +109,27 @@ Tasks T046–T050 are explicit audits that verify compliance before the feature 
 
 *One unit test per decomposable pure function named in FR-032. All marked [P].*
 
-- [ ] **T007** [P] `tests/unit/inspector/test_filter_matching.lua` — section filter by case-insensitive substring match against section name OR any field label (FR-019, FR-020, FR-021). Include non-trivial labels (unicode, mixed case, trailing whitespace, substrings that shouldn't match, empty query, label with punctuation).
+- [ ] **T007** [P] `tests/synthetic/unit/inspector/test_filter_matching.lua` — section filter by case-insensitive substring match against section name OR any field label (FR-019, FR-020, FR-021). Include non-trivial labels (unicode, mixed case, trailing whitespace, substrings that shouldn't match, empty query, label with punctuation).
 
-- [ ] **T008** [P] `tests/unit/inspector/test_majority_schema_tiebreak.lua` — majority-schema computation (FR-005a). Cases: single-schema unanimous; 3-vs-1 clip majority; 1-vs-1 tie with prev-selection providing stability; 1-vs-1 tie with no prev-selection, tiebreak on first non-overlapping item; full-overlap selection (no newly-clicked item, fall back to items[1]); schemas-present set unchanged but counts changed (active schema remains stable).
+- [ ] **T008** [P] `tests/synthetic/unit/inspector/test_majority_schema_tiebreak.lua` — majority-schema computation (FR-005a). Cases: single-schema unanimous; 3-vs-1 clip majority; 1-vs-1 tie with prev-selection providing stability; 1-vs-1 tie with no prev-selection, tiebreak on first non-overlapping item; full-overlap selection (no newly-clicked item, fall back to items[1]); schemas-present set unchanged but counts changed (active schema remains stable).
 
-- [ ] **T009** [P] `tests/unit/inspector/test_mixed_value_detection.lua` — FR-014. Given N stub inspectables with identical values for field K → mixed=false; with differing values → mixed=true. Include N=2, N=5, and a case where one inspectable returns `nil` vs another returning explicit `""` (should be distinguished).
+- [ ] **T009** [P] `tests/synthetic/unit/inspector/test_mixed_value_detection.lua` — FR-014. Given N stub inspectables with identical values for field K → mixed=false; with differing values → mixed=true. Include N=2, N=5, and a case where one inspectable returns `nil` vs another returning explicit `""` (should be distinguished).
 
-- [ ] **T010** [P] `tests/unit/inspector/test_timecode_parse_format.lua` — FR-010 + FR-015. Cases: parse "00:00:04:12" at 24 fps → 108; format 108 at 24 fps → "00:00:04:12"; parse "bad" → nil + error; parse "" → nil; parse with drop-frame rate (29.97df). Derive expected frames from timecode math, NOT from reading `frame_utils` source (rule 2.34).
+- [ ] **T010** [P] `tests/synthetic/unit/inspector/test_timecode_parse_format.lua` — FR-010 + FR-015. Cases: parse "00:00:04:12" at 24 fps → 108; format 108 at 24 fps → "00:00:04:12"; parse "bad" → nil + error; parse "" → nil; parse with drop-frame rate (29.97df). Derive expected frames from timecode math, NOT from reading `frame_utils` source (rule 2.34).
 
-- [ ] **T011** [P] `tests/unit/inspector/test_pending_edit_discard.lua` — FR-013a + FR-016a. Starting state: multi-edit mode with pending values on two fields and dirty flag set. Trigger: selection-change update. Assert: pending values are discarded, dirty flag clears, Apply button becomes disabled. Separate case: a content-change notification for a non-dirty field updates the field; for a dirty field leaves it untouched.
+- [ ] **T011** [P] `tests/synthetic/unit/inspector/test_pending_edit_discard.lua` — FR-013a + FR-016a. Starting state: multi-edit mode with pending values on two fields and dirty flag set. Trigger: selection-change update. Assert: pending values are discarded, dirty flag clears, Apply button becomes disabled. Separate case: a content-change notification for a non-dirty field updates the field; for a dirty field leaves it untouched.
 
-- [ ] **T012** [P] `tests/unit/inspector/test_read_only_commit_suppression.lua` — FR-010a. A field with `read_only=true` in its schema definition does NOT install commit signal handlers; a programmatic attempt to trigger commit on it is a no-op; widget is rendered in disabled style. Does not count as dirty; does not block Apply in multi-edit.
+- [ ] **T012** [P] `tests/synthetic/unit/inspector/test_read_only_commit_suppression.lua` — FR-010a. A field with `read_only=true` in its schema definition does NOT install commit signal handlers; a programmatic attempt to trigger commit on it is a no-op; widget is rendered in disabled style. Does not count as dirty; does not block Apply in multi-edit.
 
-- [ ] **T012a** [P] `tests/unit/inspector/test_persistent_widget_roundtrip.lua` — /analyze G2. Write a section-collapse record via `persistent_widget.set(key, false)`, call `save()`, clear `package.loaded["core.persistent_widget"]`, re-`require` the module, call `load()`, assert `get(key, true) == false`. Proves cross-session round-trip without requiring an actual relaunch.
+- [ ] **T012a** [P] `tests/synthetic/unit/inspector/test_persistent_widget_roundtrip.lua` — /analyze G2. Write a section-collapse record via `persistent_widget.set(key, false)`, call `save()`, clear `package.loaded["core.persistent_widget"]`, re-`require` the module, call `load()`, assert `get(key, true) == false`. Proves cross-session round-trip without requiring an actual relaunch.
 
-- [ ] **T012b** [P] `tests/unit/inspector/test_resolve_inspectables.lua` — /analyze U1. Pure test for the `resolve_inspectables` helper in `selection_binding.lua`: given a heterogeneous `items` list from the selection hub, assert that it returns the correct `(inspectables, schema_id, names)` tuple for each input shape (timeline_clip, master_clip, timeline_sequence, unknown item_type ignored), and that the schema-id result matches majority per FR-005a.
+- [ ] **T012b** [P] `tests/synthetic/unit/inspector/test_resolve_inspectables.lua` — /analyze U1. Pure test for the `resolve_inspectables` helper in `selection_binding.lua`: given a heterogeneous `items` list from the selection hub, assert that it returns the correct `(inspectables, schema_id, names)` tuple for each input shape (timeline_clip, master_clip, timeline_sequence, unknown item_type ignored), and that the schema-id result matches majority per FR-005a.
 
-- [ ] **T012c** [P] `tests/unit/inspector/test_compute_mode.lua` — /analyze U1. Pure test for the `compute_mode` helper: size 0 → `"empty"`; size 1 clip → `"single"`; size 1 sequence → `"single"`; N same-schema all multi-edit → `"multi_edit"`; N same-schema any-read-only → `"multi_read_only"`; N mixed schemas → `"heterogeneous"`. Expected behavior derived from the FR-005 / FR-005a / FR-005b / FR-007 / FR-008 text, NOT from reading the helper's source (rule 2.34).
+- [ ] **T012c** [P] `tests/synthetic/unit/inspector/test_compute_mode.lua` — /analyze U1. Pure test for the `compute_mode` helper: size 0 → `"empty"`; size 1 clip → `"single"`; size 1 sequence → `"single"`; N same-schema all multi-edit → `"multi_edit"`; N same-schema any-read-only → `"multi_read_only"`; N mixed schemas → `"heterogeneous"`. Expected behavior derived from the FR-005 / FR-005a / FR-005b / FR-007 / FR-008 text, NOT from reading the helper's source (rule 2.34).
 
-- [ ] **T012d** [P] `tests/unit/inspector/test_property_type_mapping.lua` — /analyze U1. Test `schemas.get_property_type(field_type)` exhaustively: STRING → `"STRING"`; TEXT_AREA → `"STRING"`; DROPDOWN → `"ENUM"`; INTEGER → `"NUMBER"`; DOUBLE → `"NUMBER"`; BOOLEAN → `"BOOLEAN"`; TIMECODE → `"TIMECODE"` (NOT `"NUMBER"`, per Q3 resolution). Missing / unknown field type → assert.
+- [ ] **T012d** [P] `tests/synthetic/unit/inspector/test_property_type_mapping.lua` — /analyze U1. Test `schemas.get_property_type(field_type)` exhaustively: STRING → `"STRING"`; TEXT_AREA → `"STRING"`; DROPDOWN → `"ENUM"`; INTEGER → `"NUMBER"`; DOUBLE → `"NUMBER"`; BOOLEAN → `"BOOLEAN"`; TIMECODE → `"TIMECODE"` (NOT `"NUMBER"`, per Q3 resolution). Missing / unknown field type → assert.
 
-- [ ] **T012e** [P] `tests/unit/inspector/test_invalid_input_state_machine.lua` — /analyze G3. Pure test for the dirty / error / showing_model_value transitions from data-model.md §3.3: type → dirty; commit with parse-fail → invalid (dirty + error); blur from invalid → showing_model_value (error cleared, dirty cleared); content_changed while invalid → ignored (dirty skips pull, FR-016a); type valid from invalid → dirty (error cleared). Does not touch Qt widgets; operates on the state object returned by `field_widget.create_field`'s entry table.
+- [ ] **T012e** [P] `tests/synthetic/unit/inspector/test_invalid_input_state_machine.lua` — /analyze G3. Pure test for the dirty / error / showing_model_value transitions from data-model.md §3.3: type → dirty; commit with parse-fail → invalid (dirty + error); blur from invalid → showing_model_value (error cleared, dirty cleared); content_changed while invalid → ignored (dirty skips pull, FR-016a); type valid from invalid → dirty (error cleared). Does not touch Qt widgets; operates on the state object returned by `field_widget.create_field`'s entry table.
 
 ---
 
@@ -137,26 +137,26 @@ Tasks T046–T050 are explicit audits that verify compliance before the feature 
 
 *14 scenarios from `spec.md`. All marked [P]. Each scenario creates its own project DB in `/tmp/jve/` and does not depend on any shared fixture.*
 
-- [ ] **T013** [P] `tests/integration/inspector/scenario_01_single_clip_browser.lua` — Acceptance Scenario 1. Select one master clip; assert header text, schema sections visible, field values match model.
-- [ ] **T014** [P] `tests/integration/inspector/scenario_02_timeline_clip_mark_summary.lua` — Scenario 2. Set mark_in and mark_out on sequence; select a timeline clip; assert header includes a mark-summary line in the timecode format matching the sequence rate.
-- [ ] **T015** [P] `tests/integration/inspector/scenario_03_single_sequence.lua` — Scenario 3. Select the sequence; assert sequence-schema sections, name header, mark-summary line.
-- [ ] **T016** [P] `tests/integration/inspector/scenario_04_single_field_edit.lua` — Scenario 4. Edit name field; commit via simulated editingFinished; assert DB row reflects the new name; assert one command recorded in history.
-- [ ] **T017** [P] `tests/integration/inspector/scenario_05_undo_round_trip.lua` — Scenario 5. After the edit in scenario 4 pattern, issue undo; assert field widget displays the prior value without re-selecting.
-- [ ] **T018** [P] `tests/integration/inspector/scenario_06_redo_round_trip.lua` — Scenario 6. Symmetric: redo after undo; widget shows edited value.
-- [ ] **T019** [P] `tests/integration/inspector/scenario_07_multi_edit_mixed.lua` — Scenario 7. Select two clips with one differing field; assert Apply button visible, differing field shows `<mixed>` placeholder, shared fields show the shared value.
-- [ ] **T020** [P] `tests/integration/inspector/scenario_08_apply_multi_edit.lua` — Scenario 8. With multi-edit pending, press Apply; assert both clips' DB rows updated, one undo group recorded (undoing it reverts both).
-- [ ] **T021** [P] `tests/integration/inspector/scenario_09_majority_schema_mixed.lua` — Scenario 9. Selection = 3 clips + 1 sequence; assert active schema is clip, header reads `"3 clips, 1 sequence — editing 3 clips"`, edits apply only to the three clips.
-- [ ] **T022** [P] `tests/integration/inspector/scenario_10_read_only_multi.lua` — Scenario 10. Selection of multi items where one reports `supports_multi_edit()==false`; assert first item's values shown, Apply hidden, header marked `(read-only)`.
-- [ ] **T023** [P] `tests/integration/inspector/scenario_11_search_filter.lua` — Scenario 11. Type substring in search; assert only matching sections remain visible; clear → all sections back.
-- [ ] **T024** [P] `tests/integration/inspector/scenario_12_project_change_clears.lua` — Scenario 12. Open project A, select clip, open project B; assert Inspector state cleared, empty-selection label shown.
-- [ ] **T025** [P] `tests/integration/inspector/scenario_13_content_changed_refresh.lua` — Scenario 13. Select clip; mutate clip via an external command; assert fields refresh without user interaction.
-- [ ] **T026** [P] `tests/integration/inspector/scenario_14_inspector_source_no_recurse.lua` — Scenario 14. Send `update_selection(items, "inspector")`; assert no state change observable.
+- [ ] **T013** [P] `tests/synthetic/integration/inspector/scenario_01_single_clip_browser.lua` — Acceptance Scenario 1. Select one master clip; assert header text, schema sections visible, field values match model.
+- [ ] **T014** [P] `tests/synthetic/integration/inspector/scenario_02_timeline_clip_mark_summary.lua` — Scenario 2. Set mark_in and mark_out on sequence; select a timeline clip; assert header includes a mark-summary line in the timecode format matching the sequence rate.
+- [ ] **T015** [P] `tests/synthetic/integration/inspector/scenario_03_single_sequence.lua` — Scenario 3. Select the sequence; assert sequence-schema sections, name header, mark-summary line.
+- [ ] **T016** [P] `tests/synthetic/integration/inspector/scenario_04_single_field_edit.lua` — Scenario 4. Edit name field; commit via simulated editingFinished; assert DB row reflects the new name; assert one command recorded in history.
+- [ ] **T017** [P] `tests/synthetic/integration/inspector/scenario_05_undo_round_trip.lua` — Scenario 5. After the edit in scenario 4 pattern, issue undo; assert field widget displays the prior value without re-selecting.
+- [ ] **T018** [P] `tests/synthetic/integration/inspector/scenario_06_redo_round_trip.lua` — Scenario 6. Symmetric: redo after undo; widget shows edited value.
+- [ ] **T019** [P] `tests/synthetic/integration/inspector/scenario_07_multi_edit_mixed.lua` — Scenario 7. Select two clips with one differing field; assert Apply button visible, differing field shows `<mixed>` placeholder, shared fields show the shared value.
+- [ ] **T020** [P] `tests/synthetic/integration/inspector/scenario_08_apply_multi_edit.lua` — Scenario 8. With multi-edit pending, press Apply; assert both clips' DB rows updated, one undo group recorded (undoing it reverts both).
+- [ ] **T021** [P] `tests/synthetic/integration/inspector/scenario_09_majority_schema_mixed.lua` — Scenario 9. Selection = 3 clips + 1 sequence; assert active schema is clip, header reads `"3 clips, 1 sequence — editing 3 clips"`, edits apply only to the three clips.
+- [ ] **T022** [P] `tests/synthetic/integration/inspector/scenario_10_read_only_multi.lua` — Scenario 10. Selection of multi items where one reports `supports_multi_edit()==false`; assert first item's values shown, Apply hidden, header marked `(read-only)`.
+- [ ] **T023** [P] `tests/synthetic/integration/inspector/scenario_11_search_filter.lua` — Scenario 11. Type substring in search; assert only matching sections remain visible; clear → all sections back.
+- [ ] **T024** [P] `tests/synthetic/integration/inspector/scenario_12_project_change_clears.lua` — Scenario 12. Open project A, select clip, open project B; assert Inspector state cleared, empty-selection label shown.
+- [ ] **T025** [P] `tests/synthetic/integration/inspector/scenario_13_content_changed_refresh.lua` — Scenario 13. Select clip; mutate clip via an external command; assert fields refresh without user interaction.
+- [ ] **T026** [P] `tests/synthetic/integration/inspector/scenario_14_inspector_source_no_recurse.lua` — Scenario 14. Send `update_selection(items, "inspector")`; assert no state change observable.
 
-- [ ] **T026a** [P] `tests/integration/inspector/scenario_15_pull_missing_inspectable_asserts.lua` — /analyze G1 (covers FR-017b). Construct an inspectable pointing at a clip_id that does not exist in the DB. Feed it to the Inspector via `update_selection` (the upstream bug being simulated is: a selection update arrived before the deleting command emitted its own selection change). Drive a `content_changed` pull. Assert via `pcall` that the Inspector asserts with a message containing `"inspector"` and the missing clip_id. The error must be actionable — include module, operation, and id per rule 1.14.
+- [ ] **T026a** [P] `tests/synthetic/integration/inspector/scenario_15_pull_missing_inspectable_asserts.lua` — /analyze G1 (covers FR-017b). Construct an inspectable pointing at a clip_id that does not exist in the DB. Feed it to the Inspector via `update_selection` (the upstream bug being simulated is: a selection update arrived before the deleting command emitted its own selection change). Drive a `content_changed` pull. Assert via `pcall` that the Inspector asserts with a message containing `"inspector"` and the missing clip_id. The error must be actionable — include module, operation, and id per rule 1.14.
 
-- [ ] **T026b** [P] `tests/integration/inspector/scenario_16_invalid_input_state_transitions.lua` — /analyze G3 (covers FR-015a/b/c). Select a clip. Focus the source_in TIMECODE field. Type `"bad timecode"`. Simulate editingFinished. Assert: widget retains bad text, widget shows error border styling, no command was recorded, field is dirty+error. Blur the field. Assert: widget reverts to the model value, error styling clears, dirty clears. Repeat in multi-edit with 2 clips — type bad text on one pending field, assert Apply button is disabled; type valid text, assert Apply re-enables.
+- [ ] **T026b** [P] `tests/synthetic/integration/inspector/scenario_16_invalid_input_state_transitions.lua` — /analyze G3 (covers FR-015a/b/c). Select a clip. Focus the source_in TIMECODE field. Type `"bad timecode"`. Simulate editingFinished. Assert: widget retains bad text, widget shows error border styling, no command was recorded, field is dirty+error. Blur the field. Assert: widget reverts to the model value, error styling clears, dirty clears. Repeat in multi-edit with 2 clips — type bad text on one pending field, assert Apply button is disabled; type valid text, assert Apply re-enables.
 
-- [ ] **T026c** [P] `tests/integration/inspector/scenario_17_mid_edit_external_mutation_race.lua` — /analyze G4 (covers FR-016a/b). Select a clip. Focus the name field. Type a new name without committing (field is now dirty). Trigger an external mutation to the same clip's name via a command dispatched outside the Inspector (must emit `content_changed` with the clip's sequence id). Assert: dirty field still shows the user's typed text; a non-dirty field on the same clip DID refresh to the new model value (proving only dirty fields skip pull). Commit the dirty field. Assert: user's value is persisted (last-write-wins, overwrites the external mutation). No prompt, no confirmation dialog.
+- [ ] **T026c** [P] `tests/synthetic/integration/inspector/scenario_17_mid_edit_external_mutation_race.lua` — /analyze G4 (covers FR-016a/b). Select a clip. Focus the name field. Type a new name without committing (field is now dirty). Trigger an external mutation to the same clip's name via a command dispatched outside the Inspector (must emit `content_changed` with the clip's sequence id). Assert: dirty field still shows the user's typed text; a non-dirty field on the same clip DID refresh to the new model value (proving only dirty fields skip pull). Commit the dirty field. Assert: user's value is persisted (last-write-wins, overwrites the external mutation). No prompt, no confirmation dialog.
 
 - [ ] **T027 (GATE)** Run every test from Phase 3.2, 3.3, 3.4. Confirm every one FAILS (stubs don't implement the behavior). If any passes prematurely, the test is verifying a vacuous truth — fix it before moving on. Record test-run output to `/tmp/inspector_pre_impl_tests.txt`.
 
@@ -361,10 +361,10 @@ Tasks T046–T050 are explicit audits that verify compliance before the feature 
 After T001–T003 are done, all 23 test files are independent (different files; no shared state). Spawn them in one batch:
 
 ```
-Task: "Write tests/contract/inspector/test_inspector_api_contract.lua per T004"
-Task: "Write tests/contract/inspector/test_inspectable_set_timecode.lua per T005"
-Task: "Write tests/contract/inspector/test_schema_definition_contract.lua per T006"
-Task: "Write tests/unit/inspector/test_filter_matching.lua per T007"
+Task: "Write tests/synthetic/contract/inspector/test_inspector_api_contract.lua per T004"
+Task: "Write tests/synthetic/contract/inspector/test_inspectable_set_timecode.lua per T005"
+Task: "Write tests/synthetic/contract/inspector/test_schema_definition_contract.lua per T006"
+Task: "Write tests/synthetic/unit/inspector/test_filter_matching.lua per T007"
 ... (through T026)
 ```
 

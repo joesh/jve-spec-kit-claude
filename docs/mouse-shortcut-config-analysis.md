@@ -116,7 +116,7 @@ Changes:
   cleanup: removes a fallback that was masking the bug (Rule 2.4 / 2.13).
 - `tests/test_drp_linked_item_sync.lua` — pure-Lua parser unit test on synthetic XML
   trees. 6 cases covering present / absent / empty `<LinkedItemSync>` on V and A.
-- `tests/integration/test_drp_av_link_groups.lua` — end-to-end test using the real
+- `tests/synthetic/integration/test_drp_av_link_groups.lua` — end-to-end test using the real
   anamnesis-gold-timeline.drp fixture via `--test` mode. Asserts that the V at
   timeline_start=111632 and the A at 111626 (both `13-053-001`) end up in the same
   `clip_links` group, and that the parallel V duplicate on a higher track is in no

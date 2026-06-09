@@ -9,8 +9,8 @@
 Phase 0 shipped the debug terminal: long-running JVE accepts a Unix-socket connection, evaluates Lua, returns formatted results. That primitive solves three problems the existing test suite has:
 
 1. **QShortcut activation gap.** `JVEEditor --test` boots Lua + Qt6 in-process but synthetic key events (`QApplication::sendEvent`, `QTest::keyClick`, even `CGEventPost` from inside) do not activate registered `QShortcut` objects — Qt's `QShortcutMap` requires spontaneous events from a foregrounded source process. Confirmed 2026-05-20. Hence the silent regression class (`I`, `E`, plain `Comma`/`Period` dead in the running app while 60+ executor tests stayed green). Driving from a separate process with real OS-level input solves it.
-2. **Bring-up tax per test.** Every existing `tests/integration/test_*_smoke.lua` runs `JVEEditor --test` once, exits, repeats — Qt init + EMP + lua bootstrap re-paid per test. Suite-wide that's seconds-to-minutes of dead time. One long-lived JVE amortizes the bring-up across the whole suite.
-3. **Mis-labelled "smoke" tests.** Per the rule pinned in `feedback_smoke_tests_real_keypress_only.md`, smoke = real OS input through the full activation surface. Most existing `tests/integration/test_*_smoke.lua` are pure-luajit data-layer tests with `smoke` in the filename. They're valuable Integration tests; they don't earn the smoke label.
+2. **Bring-up tax per test.** Every existing `tests/synthetic/integration/test_*_smoke.lua` runs `JVEEditor --test` once, exits, repeats — Qt init + EMP + lua bootstrap re-paid per test. Suite-wide that's seconds-to-minutes of dead time. One long-lived JVE amortizes the bring-up across the whole suite.
+3. **Mis-labelled "smoke" tests.** Per the rule pinned in `feedback_smoke_tests_real_keypress_only.md`, smoke = real OS input through the full activation surface. Most existing `tests/synthetic/integration/test_*_smoke.lua` are pure-luajit data-layer tests with `smoke` in the filename. They're valuable Integration tests; they don't earn the smoke label.
 
 This doc fixes all three.
 
@@ -300,11 +300,11 @@ The larger `anamnesis joe edit.drp` template is available for tests that need ma
 
 ## Per-existing-test recategorization
 
-Every file in `tests/integration/test_*_smoke.lua` was audited against the new taxonomy. Most are mislabelled (no Qt, no real input — they're Integration). The actual Smoke tier starts empty; Phase C builds it from real user journeys.
+Every file in `tests/synthetic/integration/test_*_smoke.lua` was audited against the new taxonomy. Most are mislabelled (no Qt, no real input — they're Integration). The actual Smoke tier starts empty; Phase C builds it from real user journeys.
 
 | Existing file | Real tier | Notes |
 |---|---|---|
-| `test_001_m1_foundation_smoke.lua` | **Integration** | Pure SQLite round-trip; no Qt. Rename to drop `_smoke`, move to `tests/integration/` (already there). |
+| `test_001_m1_foundation_smoke.lua` | **Integration** | Pure SQLite round-trip; no Qt. Rename to drop `_smoke`, move to `tests/synthetic/integration/` (already there). |
 | `test_003_find_smoke.lua` | **Module** | `query_engine` + `find_state` black-box. No real Find dialog. |
 | `test_004_keyboard_arch_smoke.lua` | **Module** | Registry loads TOML, exposes bindings — data only. Real keypress coverage moves to new Smoke test. |
 | `test_005_gap_as_clip_smoke.lua` | **Integration** | Resolver output for gap-spanning ranges. |
@@ -319,7 +319,7 @@ Every file in `tests/integration/test_*_smoke.lua` was audited against the new t
 | `test_018_t054_overwrite_audio_audible_smoke.lua` | **Binding** | Needs real EMP/TMB/audio. Stays in `JVEEditor --test`. |
 | `tests/test_dsl_roll_smoke.lua` | **Command** | DSL → command_manager → undo round-trip. |
 | `tests/test_smoke_run_app.sh` | **Binding** | Smoke-launches JVE and checks it doesn't crash on boot. Already process-spawn; leave as a shell-based binding test or fold into Phase A. |
-| `tests/binding/test_019_source_viewer_integration.lua` | **Integration** | Self-labelled "NOT a smoke test by the strict definition" — accurate. |
+| `tests/synthetic/binding/test_019_source_viewer_integration.lua` | **Integration** | Self-labelled "NOT a smoke test by the strict definition" — accurate. |
 
 Mechanical action: rename to drop `_smoke` suffix, move into matching folder (`tests/{unit,module,command,integration,binding}/`). One commit per tier batch.
 

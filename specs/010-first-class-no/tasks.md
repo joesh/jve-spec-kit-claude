@@ -64,7 +64,7 @@ Each test in this phase MUST be added, run, and verified to fail (or to error wi
   - No auto-creation of a tab; no `find_most_recent`-style fallback.
   Must fail on current master (open path falls back to `find_most_recent`).
 
-- [ ] **T007** [P] Create `/Users/joe/Local/jve-spec-kit-claude/tests/binding/test_close_last_tab_enters_blank.lua`. `--test` mode. Creates a fresh `.jvp` with one project + one sequence; calls `timeline_panel.create({sequence_id=s,project_id=p,…})`; calls `timeline_panel.close_tab(s)`. Asserts:
+- [ ] **T007** [P] Create `/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/binding/test_close_last_tab_enters_blank.lua`. `--test` mode. Creates a fresh `.jvp` with one project + one sequence; calls `timeline_panel.create({sequence_id=s,project_id=p,…})`; calls `timeline_panel.close_tab(s)`. Asserts:
   - `timeline_state.get_sequence_id() == nil` post-close.
   - `database.get_project_setting(p, "last_open_sequence_id") == ""` (or nil).
   - `database.get_project_setting(p, "open_sequence_ids")` is an empty array.
@@ -124,7 +124,7 @@ Prepares for the UI primitives (T013+).
 
 Makes T004 pass. Prepares for wiring.
 
-- [ ] **T014a** [P] Create failing test `/Users/joe/Local/jve-spec-kit-claude/tests/test_unload_sequence_persists_empty.lua`. Pure Lua. Stubs the Qt widget API (`qt_constants.WIDGET.SET_PARENT`, etc. — use the approach that existing pure-Lua tests which touch `timeline_panel` use; if no precedent, promote this test to `tests/binding/` and run via `--test`). Asserts:
+- [ ] **T014a** [P] Create failing test `/Users/joe/Local/jve-spec-kit-claude/tests/test_unload_sequence_persists_empty.lua`. Pure Lua. Stubs the Qt widget API (`qt_constants.WIDGET.SET_PARENT`, etc. — use the approach that existing pure-Lua tests which touch `timeline_panel` use; if no precedent, promote this test to `tests/synthetic/binding/` and run via `--test`). Asserts:
   - After seeding `last_open_sequence_id="s1"`, `open_sequence_ids={"s1"}` and calling `timeline_panel.unload_sequence()`:
     - `timeline_state.get_sequence_id() == nil`.
     - `database.get_project_setting(pid, "last_open_sequence_id") == ""`.
@@ -198,7 +198,7 @@ Makes T005 pass.
   - Remove the `log.warn(...)` line.
   - Case 1 (handle_ids empty AND tabs_data empty) still falls through to return with `open_timeline_ids = {}`, `active_timeline_id = nil`. That path is legitimate.
 
-- [ ] **T024** Run `T005` (pure) — must now pass. Run `make -j4`. Also re-run the three DRP binding tests manually (`./build/bin/JVEEditor --test tests/binding/test_drp_active_timeline_restored.lua`, `_open_timelines`, `_anamnesis_full`); all must stay green. Commit: `fix: drp_importer resolve_project_tab_ids asserts on malformed TimelineHandleVec`.
+- [ ] **T024** Run `T005` (pure) — must now pass. Run `make -j4`. Also re-run the three DRP binding tests manually (`./build/bin/JVEEditor --test tests/synthetic/binding/test_drp_active_timeline_restored.lua`, `_open_timelines`, `_anamnesis_full`); all must stay green. Commit: `fix: drp_importer resolve_project_tab_ids asserts on malformed TimelineHandleVec`.
 
 ---
 
@@ -224,7 +224,7 @@ Implements FR-011 (drop-to-blank creates new sequence). No existing test covers 
   - If nil AND the drop target is anything else: early-return no-op.
   - When not nil: existing behavior unchanged.
 
-- [ ] **T027** Create `/Users/joe/Local/jve-spec-kit-claude/tests/binding/test_drop_on_blank_creates_sequence.lua`. `--test` mode. Seeds a project with a couple of media clips + an existing sequence; enters blank state via `unload_sequence`; calls `timeline_panel.handle_drop_on_blank_timeline(...)` with a 3-clip payload. Asserts:
+- [ ] **T027** Create `/Users/joe/Local/jve-spec-kit-claude/tests/synthetic/binding/test_drop_on_blank_creates_sequence.lua`. `--test` mode. Seeds a project with a couple of media clips + an existing sequence; enters blank state via `unload_sequence`; calls `timeline_panel.handle_drop_on_blank_timeline(...)` with a 3-clip payload. Asserts:
   - One new sequence was created.
   - New sequence name matches `<first-clip> (+2 more)`.
   - New sequence's fps and resolution match the first clip's asset_info.
@@ -304,7 +304,7 @@ Task: "Create tests/test_timeline_state_clear.lua"           (T003 [P])
 Task: "Create tests/test_drop_sequence_name_building.lua"    (T004 [P])
 Task: "Create tests/test_drp_resolver_asserts_malformed.lua" (T005 [P])
 Task: "Create tests/test_project_open_no_tab_info_stays_blank.lua"  (T006 [P])
-Task: "Create tests/binding/test_close_last_tab_enters_blank.lua"   (T007 [P])
+Task: "Create tests/synthetic/binding/test_close_last_tab_enters_blank.lua"   (T007 [P])
 ```
 
 ### Phase 3.7 ↔ 3.8 (startup path and DRP resolver touch different files)

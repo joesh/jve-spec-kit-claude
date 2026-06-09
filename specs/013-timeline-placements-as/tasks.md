@@ -230,13 +230,13 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 ### 3.8.a — Tests first
 
-- [ ] **T070 [P]** DRP importer integration test: every synced clip produces one `kind='master'` sequence with V1 media_ref → .mov + N audio media_refs → external WAV channels; edit timelines contain clips with non-NULL `nested_sequence_id`. Path: `tests/integration/test_drp_emits_new_shape.lua`.
-- [ ] **T071 [P]** FCP7 XMEML importer integration test: same shape assertions. Path: `tests/integration/test_fcp7_emits_new_shape.lua`.
-- [ ] **T072 [P]** Premiere .prproj importer integration test: same. Path: `tests/integration/test_prproj_emits_new_shape.lua`.
-- [ ] **T073 [P]** Drag-drop / `media_reader` integration test: dropping a loose file creates a `kind='master'` sequence with media_refs + a clip on the current edit sequence. Path: `tests/integration/test_drag_drop_emits_new_shape.lua`.
-- [ ] **T073a [P]** Importer error-path tests (rule 2.32): malformed DRP (truncated FieldsBlob), FCP7 XMEML with missing media refs, .prproj referencing a file not on disk, drag-drop of a non-media file. Each must fail loudly with a user-visible error and leave no partial rows behind. Path: `tests/integration/test_importer_error_paths.lua`.
-- [ ] **T073b [P]** Importer drop-mode classification (FR-025): synced/multicam sources drop in **composite** mode (1 V + 1 A clip with `master_audio_track_id=NULL`); poly-WAV multitrack and importer-marked traditional multitrack assemblies drop in **expanded** mode (1 V + N A clips with distinct non-NULL `master_audio_track_id`). Covers DRP synced clip → composite, DRP poly-WAV multitrack → expanded, FCP7 multitrack → expanded, .prproj merged-clip → composite, drag-drop loose poly-WAV → expanded, drag-drop loose stereo file → composite. Path: `tests/integration/test_importer_drop_mode_classification.lua`.
-- [ ] **T073b [P]** Importer cycle-refusal test: a source project that (when translated) would produce a cycle must be refused at import time with a clear error; no partial sequences left. Path: `tests/integration/test_importer_cycle_refusal.lua`.
+- [ ] **T070 [P]** DRP importer integration test: every synced clip produces one `kind='master'` sequence with V1 media_ref → .mov + N audio media_refs → external WAV channels; edit timelines contain clips with non-NULL `nested_sequence_id`. Path: `tests/synthetic/integration/test_drp_emits_new_shape.lua`.
+- [ ] **T071 [P]** FCP7 XMEML importer integration test: same shape assertions. Path: `tests/synthetic/integration/test_fcp7_emits_new_shape.lua`.
+- [ ] **T072 [P]** Premiere .prproj importer integration test: same. Path: `tests/synthetic/integration/test_prproj_emits_new_shape.lua`.
+- [ ] **T073 [P]** Drag-drop / `media_reader` integration test: dropping a loose file creates a `kind='master'` sequence with media_refs + a clip on the current edit sequence. Path: `tests/synthetic/integration/test_drag_drop_emits_new_shape.lua`.
+- [ ] **T073a [P]** Importer error-path tests (rule 2.32): malformed DRP (truncated FieldsBlob), FCP7 XMEML with missing media refs, .prproj referencing a file not on disk, drag-drop of a non-media file. Each must fail loudly with a user-visible error and leave no partial rows behind. Path: `tests/synthetic/integration/test_importer_error_paths.lua`.
+- [ ] **T073b [P]** Importer drop-mode classification (FR-025): synced/multicam sources drop in **composite** mode (1 V + 1 A clip with `master_audio_track_id=NULL`); poly-WAV multitrack and importer-marked traditional multitrack assemblies drop in **expanded** mode (1 V + N A clips with distinct non-NULL `master_audio_track_id`). Covers DRP synced clip → composite, DRP poly-WAV multitrack → expanded, FCP7 multitrack → expanded, .prproj merged-clip → composite, drag-drop loose poly-WAV → expanded, drag-drop loose stereo file → composite. Path: `tests/synthetic/integration/test_importer_drop_mode_classification.lua`.
+- [ ] **T073b [P]** Importer cycle-refusal test: a source project that (when translated) would produce a cycle must be refused at import time with a clear error; no partial sequences left. Path: `tests/synthetic/integration/test_importer_cycle_refusal.lua`.
 
 ### 3.8.b — Implementation
 
@@ -274,9 +274,9 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 ### 3.10.a — Tests first
 
-- [ ] **T091 [P]** FR-012 playback through a clip decodes correct video and audio for single-file + synced + multicam + nested-nested-master chain. Path: `tests/integration/test_playback_recursion.lua`.
+- [ ] **T091 [P]** FR-012 playback through a clip decodes correct video and audio for single-file + synced + multicam + nested-nested-master chain. Path: `tests/synthetic/integration/test_playback_recursion.lua`.
 - [ ] **T091a [P]** Pre-T093 unit test: `playback_engine` reads via `pick_in_range` (or the wrappers); no remaining `clip.media_id` reads (static grep-assertion inside the test, failing if the identifier reappears in `src/lua/core/playback/`). Path: `tests/test_playback_engine_no_legacy_reads.lua`.
-- [ ] **T092 [P]** FR-019 export parity — preview a range, export the range, both outputs identical (same files, windows, channel states) within codec tolerance. Path: `tests/integration/test_export_parity.lua`.
+- [ ] **T092 [P]** FR-019 export parity — preview a range, export the range, both outputs identical (same files, windows, channel states) within codec tolerance. Path: `tests/synthetic/integration/test_export_parity.lua`.
 - [ ] **T092a [P]** Pre-T094 unit test: export-only policies (codec, bit depth, colorspace, proxy-vs-source, resample filter quality) are applied in the export pipeline ABOVE `pick_in_range`, never inside the resolver. Test: call `pick_in_range` with `export_mode=true` AND with a probe `context` whose extra fields would be illegal inside the resolver — verify output doesn't vary. Path: `tests/test_export_policy_above_resolver.lua`.
 - [ ] **T092b [P]** C++ TMB shape-preservation check. Plan.md asserts "no C++ changes required" for this feature; this task verifies that claim holds. Enumerate every C++ site that reads fields off a clip/media entry passed from Lua (grep `src/**/*.cpp` and `src/**/*.h` for `"media_id"`, `"source_in"`, `"source_out"`, `"clip_kind"`, `"timeline_start"`, etc. as string keys in `lua_getfield`/`sol::`/equivalent lookups). For each C++ read, verify the corresponding Lua entry emitted by T031's wrappers still carries the same key with the same type. If any key is renamed or removed, either update T031 to preserve the key in the wrapper (preferred — rule 2.18 FFI stability) or add a C++ edit task + test. Output: a markdown checklist committed at `specs/013-timeline-placements-as/cxx-shape-audit.md`. Path for the automated guard: `tests/test_cxx_shape_audit.lua` (greps the C++ keys and the Lua emission to confirm parity).
 
@@ -291,20 +291,20 @@ Every rewired command's behavior is covered by an existing test suite plus a new
 
 One integration test per spec Acceptance Scenario + the extra quickstart items.
 
-- [ ] **T095 [P]** Scenario 1 — Single-file A/V drop creates V+A linked clips; playback decodes both. Path: `tests/integration/test_scenario1_single_file_av.lua`.
-- [ ] **T096 [P]** Scenario 2 — DRP synced clip: V from .mov, A from WAV; per-channel disable silences that channel only. Path: `tests/integration/test_scenario2_synced_av.lua`.
-- [ ] **T097 [P]** Scenario 3 — Multicam layer change on one clip leaves other clips unaffected. Path: `tests/integration/test_scenario3_multicam_layer.lua`.
-- [ ] **T098 [P]** Scenario 4 — Disable audio channel on a clip; other clips of same master unaffected. Path: `tests/integration/test_scenario4_channel_disable.lua`.
-- [ ] **T099 [P]** Scenario 5 — Trim a clip; master unchanged; no other clip affected. Path: `tests/integration/test_scenario5_trim_clip.lua`.
-- [ ] **T100 [P]** Scenario 6 — Master content change propagates to all clips. Path: `tests/integration/test_scenario6_master_content_propagation.lua`.
-- [ ] **T101 [P]** Scenario 7 — Video-only master gains audio track; existing clips gain linked A clip (track-the-master default). Path: `tests/integration/test_scenario7_master_gains_audio.lua`.
-- [ ] **T102 [P]** Scenario 8 — Ripple-delete preserves link group + downstream shift. Path: `tests/integration/test_scenario8_ripple_delete_link.lua`.
-- [ ] **T103 [P]** Scenario 9 — All importers emit non-NULL `nested_sequence_id` on every edit-timeline clip; no `media_id` directly on clips. Path: `tests/integration/test_scenario9_importers_emit_refs.lua`.
-- [ ] **T104 [P]** Scenario 10 — Master default layer change propagates to tracking clips. Path: `tests/integration/test_scenario10_master_default_layer.lua`.
-- [ ] **T105 [P]** Scenario 11 — Master-level channel state propagates to tracking clips. Path: `tests/integration/test_scenario11_master_channel_state.lua`.
-- [ ] **T106 [P]** Nest/Unnest round-trip preserves positions; unnest refuses on masters. Path: `tests/integration/test_nest_unnest_roundtrip.lua`.
-- [ ] **T107 [P]** Cycle refusal — integration coverage distinct from T039 (which tests Insert-path only). T107 drives cycle attempts through **every command path** that can create a clip's `nested_sequence_id`: Insert, Overwrite, Duplicate, Nest, and direct-SQL cycle (resolver defense-in-depth assert from T024). Each path surfaces a user-visible error with no partial DB state. Path: `tests/integration/test_cycle_refusal.lua`.
-- [ ] **T108 [P]** Offline loud-fail overlay visible by default; suppressed by preference; log entries persist regardless (FR-022). Path: `tests/integration/test_offline_loud_fail.lua`.
+- [ ] **T095 [P]** Scenario 1 — Single-file A/V drop creates V+A linked clips; playback decodes both. Path: `tests/synthetic/integration/test_scenario1_single_file_av.lua`.
+- [ ] **T096 [P]** Scenario 2 — DRP synced clip: V from .mov, A from WAV; per-channel disable silences that channel only. Path: `tests/synthetic/integration/test_scenario2_synced_av.lua`.
+- [ ] **T097 [P]** Scenario 3 — Multicam layer change on one clip leaves other clips unaffected. Path: `tests/synthetic/integration/test_scenario3_multicam_layer.lua`.
+- [ ] **T098 [P]** Scenario 4 — Disable audio channel on a clip; other clips of same master unaffected. Path: `tests/synthetic/integration/test_scenario4_channel_disable.lua`.
+- [ ] **T099 [P]** Scenario 5 — Trim a clip; master unchanged; no other clip affected. Path: `tests/synthetic/integration/test_scenario5_trim_clip.lua`.
+- [ ] **T100 [P]** Scenario 6 — Master content change propagates to all clips. Path: `tests/synthetic/integration/test_scenario6_master_content_propagation.lua`.
+- [ ] **T101 [P]** Scenario 7 — Video-only master gains audio track; existing clips gain linked A clip (track-the-master default). Path: `tests/synthetic/integration/test_scenario7_master_gains_audio.lua`.
+- [ ] **T102 [P]** Scenario 8 — Ripple-delete preserves link group + downstream shift. Path: `tests/synthetic/integration/test_scenario8_ripple_delete_link.lua`.
+- [ ] **T103 [P]** Scenario 9 — All importers emit non-NULL `nested_sequence_id` on every edit-timeline clip; no `media_id` directly on clips. Path: `tests/synthetic/integration/test_scenario9_importers_emit_refs.lua`.
+- [ ] **T104 [P]** Scenario 10 — Master default layer change propagates to tracking clips. Path: `tests/synthetic/integration/test_scenario10_master_default_layer.lua`.
+- [ ] **T105 [P]** Scenario 11 — Master-level channel state propagates to tracking clips. Path: `tests/synthetic/integration/test_scenario11_master_channel_state.lua`.
+- [ ] **T106 [P]** Nest/Unnest round-trip preserves positions; unnest refuses on masters. Path: `tests/synthetic/integration/test_nest_unnest_roundtrip.lua`.
+- [ ] **T107 [P]** Cycle refusal — integration coverage distinct from T039 (which tests Insert-path only). T107 drives cycle attempts through **every command path** that can create a clip's `nested_sequence_id`: Insert, Overwrite, Duplicate, Nest, and direct-SQL cycle (resolver defense-in-depth assert from T024). Each path surfaces a user-visible error with no partial DB state. Path: `tests/synthetic/integration/test_cycle_refusal.lua`.
+- [ ] **T108 [P]** Offline loud-fail overlay visible by default; suppressed by preference; log entries persist regardless (FR-022). Path: `tests/synthetic/integration/test_offline_loud_fail.lua`.
 
 ---
 

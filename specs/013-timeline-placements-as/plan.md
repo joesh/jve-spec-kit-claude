@@ -18,7 +18,7 @@ Every user-visible entry on a non-master sequence's timeline is a clip (a refere
 **Language/Version**: Lua (LuaJIT). No C++ changes required for this feature: clip resolution runs entirely in Lua before the flat media-ref list reaches TMB (the C++ media pipeline). All data model, commands, resolver, override state, renderer pull paths, and importer updates are Lua-layer work.
 **Primary Dependencies**: Qt6 (UI + XML parsing), LuaJIT (scripting), SQLite3 (project storage), libzstd (DRP FieldsBlob decode — already landed earlier this session), nlohmann_json, FFmpeg (media decode), lsqlite3.
 **Storage**: SQLite `.jvp` project files. Schema change is substantial but unconstrained by back-compat requirements (FR-018).
-**Testing**: LuaJIT black-box tests under `tests/` (run via `tests/run_lua_tests_all.sh`), plus `--test` mode integration tests under `tests/integration/` (run via `tests/run_integration_tests.sh`). Zero mocks that encode assumptions; non-trivial values; domain-behavior assertions.
+**Testing**: LuaJIT black-box tests under `tests/` (run via `tests/run_lua_tests_all.sh`), plus `--test` mode integration tests under `tests/synthetic/integration/` (run via `tests/run_integration_tests.sh`). Zero mocks that encode assumptions; non-trivial values; domain-behavior assertions.
 **Target Platform**: macOS (Darwin 24+, Qt6); Linux/Windows follow. Desktop application; no network, no multi-user.
 **Project Type**: Single project, hybrid C++/Lua. Source layout `src/lua/*` + `src/*.cpp`.
 **Performance Goals**: Preview playback cadence p95 ≤ 80ms (existing integration-test budget). Clip resolution recursion must not regress the current single-level clip-resolution latency at 24/25/30 fps.
@@ -194,7 +194,7 @@ Load `.specify/templates/tasks-template.md` as base. Generate tasks from Phase 1
 - Each entity in data-model.md → schema-migration task + model-module task (with black-box test task preceding implementation).
 - Each resolver contract → contract-test task + implementation task + recursion-depth test.
 - Each command in contracts/commands.md (existing-command rewire + new override commands) → command-spec test task + command implementation task.
-- Each Acceptance Scenario in spec.md → integration-test task under `tests/integration/`.
+- Each Acceptance Scenario in spec.md → integration-test task under `tests/synthetic/integration/`.
 - Renderer/inspector pull updates → UI test + UI implementation task per affected surface.
 - Importer updates (DRP already in progress, FCP7, prproj, drag-drop) → per-importer nested-ref emission task + fixture-validation test.
 

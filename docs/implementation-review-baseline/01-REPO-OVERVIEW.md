@@ -105,7 +105,7 @@ Pattern: Lua calls FFI, FFI validates, Qt executes. No business logic in FFI.
 
 ## Testing Infrastructure
 - **Unit tests**: `tests/*.lua` (200+ files)
-- **Integration tests**: `tests/integration/*.lua`
+- **Integration tests**: `tests/synthetic/integration/*.lua`
 - **Fixtures**: `tests/fixtures/media/*.mp4`, `tests/fixtures/resolve/*.xml`
 - **Test harness**: `tests/test_env.lua` (SQLite in-memory)
 - **Bug reporter**: Captures gestures for differential validation

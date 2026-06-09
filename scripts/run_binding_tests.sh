@@ -9,7 +9,7 @@ set -euo pipefail
 
 # Binding test runner — dispatches batch_binding.lua into a single long-lived
 # JVEEditor process via --test. Matches the integration runner's batch model
-# (tests/integration/batch_runner.lua + batch_*.lua): one process, sequential
+# (tests/synthetic/integration/batch_runner.lua + batch_*.lua): one process, sequential
 # tests via pcall(dofile), no parallel spawn storm. Test discovery, SLOW_TEST
 # skip, and per-test pass/fail reporting live in batch_binding.lua. This
 # script's job is to launch the binary and translate its exit code.
@@ -22,7 +22,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # BUILD_DIR-derived path for standalone script invocations.
 BUILD_DIR="${BUILD_DIR:-build}"
 BINARY="${JVE_BINARY:-$ROOT_DIR/$BUILD_DIR/bin/jve.app/Contents/MacOS/jve}"
-BATCH="$ROOT_DIR/tests/binding/batch_binding.lua"
+BATCH="$ROOT_DIR/tests/synthetic/binding/batch_binding.lua"
 
 if [[ ! -x "$BINARY" ]]; then
   echo "ERROR: jve binary not found at $BINARY" >&2

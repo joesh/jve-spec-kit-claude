@@ -323,7 +323,7 @@ These are invariants where violating them indicates a bug or broken assumption.
    - remove hacks that existed only to tolerate repeated SetTarget calls
    - keep overlap de-dup if it’s still valid for real seeks
 
-4. `tests/unit/test_sse_core.cpp`
+4. `tests/synthetic/unit/test_sse_core.cpp`
    - update/remove tests that depended on removed hacks
    - add tests for new invariants if available
 

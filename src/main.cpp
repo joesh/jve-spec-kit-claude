@@ -101,7 +101,7 @@ static void raiseFileDescriptorLimit()
 }
 
 // Prepend the source tests/ tree to the Lua package.path so a --test script can
-// require("integration.integration_test_env"), require("import_schema"), etc.
+// require("synthetic.integration.integration_test_env"), require("import_schema"), etc.
 // The tests root is derived from the script's own location by walking up to the
 // ancestor directory named "tests" — robust to bundle (.app) vs bare-binary
 // layout (under the bundle the app dir is Contents/Resources, where tests/ is

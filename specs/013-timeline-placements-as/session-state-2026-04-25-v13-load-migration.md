@@ -67,7 +67,7 @@ Clips queries (scoped + full project) updated to V13 columns.
 
 ### Schema version bumped 8 → 9 (matches schema.sql).
 
-### `tests/helpers/ripple_layout.lua` rebuilt
+### `tests/synthetic/helpers/ripple_layout.lua` rebuilt
 - One master sequence per media via `Sequence.ensure_master` (TC=0 metadata
   synthesized at media creation time).
 - Clips emit V13 column names + required NOT-NULL fields (fps_mismatch_policy,

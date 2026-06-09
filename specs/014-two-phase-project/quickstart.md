@@ -93,4 +93,4 @@ The catalog must list every `Signals.connect("project_changed", ...)` site with 
 
 ## Automated equivalent
 
-An integration test at `tests/integration/test_anamnesis_reimport_no_asserts.lua` automates steps 1–5 via `--test` mode. The manual quickstart is for sanity-checking after large changes; the integration test runs in CI on every commit.
+An integration test at `tests/synthetic/integration/test_anamnesis_reimport_no_asserts.lua` automates steps 1–5 via `--test` mode. The manual quickstart is for sanity-checking after large changes; the integration test runs in CI on every commit.

@@ -3,7 +3,7 @@
 // Mirrored by the Metal fragment shader in src/gpu_video_surface.mm
 // (3D RGBA16F texture + MTLSamplerStateLinear gives hardware trilinear
 // equivalent to the software implementation here). Reference vectors
-// in tests/binding/test_lut3d_apply.lua are the shared regression
+// in tests/synthetic/binding/test_lut3d_apply.lua are the shared regression
 // target — derived from the Adobe Cube spec, not from this code.
 
 #include "editor_media_platform/emp_lut3d.h"

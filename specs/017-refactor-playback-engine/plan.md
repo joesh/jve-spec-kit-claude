@@ -198,9 +198,9 @@ These produce `research.md` with one Decision/Rationale/Alternatives block per i
    - No mid-handover cancellation needed — handover is short; coalescing is handled structurally by Qt's single-threaded event loop (R8); no `_pending_target` or `_handover_in_flight` state required.
 
 5. **Contract tests (failing)** — one per contract file:
-   - `tests/contract/test_transport_contract.lua` — every public function asserts on bad input; `set_user_transport("garbage")` asserts; `get_target()` returns a non-nil value at all times after init.
-   - `tests/contract/test_engine_contract.lua` — `engine:load(nil)` asserts; `engine:play()` before any load asserts.
-   - `tests/contract/test_audio_handover_contract.lua` — 5 ordering probes via `--test`-mode hooks.
+   - `tests/synthetic/contract/test_transport_contract.lua` — every public function asserts on bad input; `set_user_transport("garbage")` asserts; `get_target()` returns a non-nil value at all times after init.
+   - `tests/synthetic/contract/test_engine_contract.lua` — `engine:load(nil)` asserts; `engine:play()` before any load asserts.
+   - `tests/synthetic/contract/test_audio_handover_contract.lua` — 5 ordering probes via `--test`-mode hooks.
 
 6. **`quickstart.md`** — manual validation steps Joe runs:
    1. Open a project with 1 master (has audio) + 1 record sequence with audio + 1 record sequence video-only.
@@ -215,7 +215,7 @@ These produce `research.md` with one Decision/Rationale/Alternatives block per i
 
 7. **Agent file update**: run `.specify/scripts/bash/update-agent-context.sh claude`.
 
-**Output**: `data-model.md`, `contracts/transport.md`, `contracts/engine.md`, `contracts/audio_handover.md`, `tests/contract/test_*` failing tests, `quickstart.md`, updated `CLAUDE.md`.
+**Output**: `data-model.md`, `contracts/transport.md`, `contracts/engine.md`, `contracts/audio_handover.md`, `tests/synthetic/contract/test_*` failing tests, `quickstart.md`, updated `CLAUDE.md`.
 
 ## Phase 2: Task Planning Approach
 

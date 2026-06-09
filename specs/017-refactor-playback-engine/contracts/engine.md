@@ -89,7 +89,7 @@ Park-mode seek. Updates `self._position`, writes to PlaybackController (`PLAYBAC
 
 ## Contract tests (failing initially)
 
-`tests/contract/test_engine_contract.lua`:
+`tests/synthetic/contract/test_engine_contract.lua`:
 1. `PlaybackEngine.new("garbage")` asserts.
 2. `PlaybackEngine.new("source")` returns object with `role == "source"`, `loaded_sequence_id == nil`, `state == "stopped"`.
 3. `engine:play()` before `load` asserts.
