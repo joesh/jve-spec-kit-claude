@@ -3103,6 +3103,31 @@ function M.end_undo_group()
     end
 end
 
+--- Exception-symmetric undo group bracket (M#5).
+---
+--- Use this instead of bare begin_undo_group / end_undo_group when the body
+--- can throw — e.g., multi-phase dispatch that runs validation, classifier
+--- translation, or multiple inner commands. A throw mid-body would otherwise
+--- leave the group open, the savepoint un-released, the in-memory mutation
+--- transaction un-committed, and poison every subsequent command.
+---
+--- On throw: roll the savepoint back, restore in-memory state, close the
+--- group, and re-raise. On normal return: end the group cleanly.
+function M.with_undo_group(label, fn)
+    assert(type(label) == "string" and label ~= "",
+        "with_undo_group: label must be a non-empty string")
+    assert(type(fn) == "function",
+        "with_undo_group: fn must be a function")
+    M.begin_undo_group(label)
+    local ok, err = pcall(fn)
+    if not ok then
+        local group_id = history.get_current_undo_group_id()
+        if group_id then rollback_undo_group(group_id) end
+    end
+    M.end_undo_group()
+    if not ok then error(err, 0) end
+end
+
 -- Internal helper exposed for the white-box invariant test
 -- (test_capture_displayed_playhead_invariant.lua). Not for production use.
 M._test_capture_displayed_playhead = capture_displayed_playhead

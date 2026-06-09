@@ -937,12 +937,16 @@ function M.apply(response, sequence_id, project_id, db, user_choices)
     if #runnable == 0 then return result end
 
     local per_clip = init_per_clip(runnable)
-    command_manager.begin_undo_group("Sync Edits from Resolve")
-    run_phase_0(runnable, per_clip, project_id, sequence_id, result)
-    run_phase_a(runnable, per_clip, project_id, sequence_id, result)
-    run_phase_b(runnable, per_clip, project_id, sequence_id, result)
-    run_phase_c(runnable, per_clip, project_id, sequence_id, result)
-    command_manager.end_undo_group()
+    -- with_undo_group brackets the four phase runs symmetrically (M#5):
+    -- any phase-internal assert rolls back the savepoint + in-memory
+    -- mutations and closes the group before re-raising, instead of
+    -- leaving the group open to poison subsequent commands.
+    command_manager.with_undo_group("Sync Edits from Resolve", function()
+        run_phase_0(runnable, per_clip, project_id, sequence_id, result)
+        run_phase_a(runnable, per_clip, project_id, sequence_id, result)
+        run_phase_b(runnable, per_clip, project_id, sequence_id, result)
+        run_phase_c(runnable, per_clip, project_id, sequence_id, result)
+    end)
 
     finalize_per_clip(per_clip, runnable, db, result)
     return result
