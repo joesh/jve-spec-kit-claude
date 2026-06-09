@@ -48,6 +48,12 @@ function ClipInspectable.new(opts)
     self.clip_ref = opts.clip -- optional table representing live clip state
     self.metadata_overrides = opts.metadata or {}
     self._property_cache = nil
+    -- Per-instance ClipGrade cache (M#1). The Inspector queries 3 grade
+    -- fields (fidelity, source, synced_at) per render; without this each
+    -- field hits the DB. Sentinel `_grade_loaded` distinguishes "loaded,
+    -- no row" (returns nil from :get) from "not yet loaded."
+    self._grade_cache  = nil
+    self._grade_loaded = false
     return self
 end
 
@@ -57,9 +63,20 @@ end
 
 function ClipInspectable:refresh()
     self._property_cache = nil
+    self._grade_cache    = nil
+    self._grade_loaded   = false
     -- Overrides win in :get() to cover the commit round-trip; on refresh
     -- clip_ref is authoritative again and leaving them masks undo reverts.
     self.metadata_overrides = {}
+end
+
+function ClipInspectable:_ensure_grade()
+    if not self._grade_loaded then
+        local ClipGrade = require("models.clip_grade")
+        self._grade_cache  = ClipGrade.load(self.clip_id)
+        self._grade_loaded = true
+    end
+    return self._grade_cache
 end
 
 function ClipInspectable:get_display_name()
@@ -102,15 +119,15 @@ function ClipInspectable:get(field)
         end
     end
 
-    -- ClipGrade fields (spec 023).
+    -- ClipGrade fields (spec 023). Per-instance cached (M#1); refresh()
+    -- clears on grade-changed events. synced_at returns the raw unix epoch
+    -- — the inspector's TIMESTAMP field type (metadata_schemas) renders it.
     if field == "fidelity" or field == "source" or field == "synced_at" then
-        local ClipGrade = require("models.clip_grade")
-        local grade = ClipGrade.load(self.clip_id)
+        local grade = self:_ensure_grade()
         if not grade then return nil end
         if field == "synced_at" then
             assert(type(grade.synced_at) == "number" and grade.synced_at >= 0,
                 "ClipGrade synced_at must be a non-negative number")
-            return os.date("%Y-%m-%d %H:%M:%S", grade.synced_at)
         end
         return grade[field]
     end
