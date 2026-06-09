@@ -141,8 +141,20 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         playhead_position = playhead_pos,
         viewport_start_time = viewport_start,
         viewport_duration = viewport_dur,
-        video_scroll_offset = opts.video_scroll_offset or 0,
-        audio_scroll_offset = opts.audio_scroll_offset or 0,
+        -- Video scroll defaults to the UNINITIALIZED sentinel (not 0).
+        -- timeline_panel_metrics.compute_initial_scroll_target maps the
+        -- sentinel to SCROLL_PAST_MAX so Qt clamps the first-open
+        -- viewport to the content-bottom, surfacing V1 (the bottom-
+        -- anchored video track). An explicit caller value — including
+        -- 0 meaning "user scrolled to the very top" — passes through
+        -- verbatim. Audio lays out A1 at the top, so 0 = A1 visible:
+        -- no sentinel needed; explicit nil falls through to 0.
+        video_scroll_offset = (opts.video_scroll_offset ~= nil)
+            and opts.video_scroll_offset
+            or require("ui.timeline.timeline_panel_metrics").UNINITIALIZED_SCROLL_OFFSET,
+        audio_scroll_offset = (opts.audio_scroll_offset ~= nil)
+            and opts.audio_scroll_offset
+            or 0,
         video_audio_split_ratio = opts.video_audio_split_ratio or 0.5,
 
         mark_in = opts.mark_in_frame,   -- nil or integer
