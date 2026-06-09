@@ -480,7 +480,13 @@ def _recover_jve_guid(item):
          # error occurred. Don't fallback to {} (Rule 2.13).
          raise RuntimeError("item.GetMarkers() returned None")
     if not isinstance(markers, dict):
-        return None
+        # API drift — a future Resolve returning a list/string here would
+        # silently look like "no markers found" if we returned None.
+        # Raise so a real shape change surfaces as resolve_api_error
+        # instead of poisoning the id-anchored read path with empty results.
+        raise RuntimeError(
+            f"item.GetMarkers() returned non-dict: "
+            f"{type(markers).__name__} = {markers!r}")
     found = None
     for _frame, m in markers.items():
         if not isinstance(m, dict):
@@ -1115,22 +1121,28 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                 f"[read_grades] resolve.OpenPage('color') raised: "
                 f"{exc} — bakes will likely fail\n")
 
-    timeline, err = _require_current_timeline(project, envelope_id)
-    if err is not None:
-        return err
-
-    try:
-        integer_rate = _timeline_integer_frame_rate(timeline)
-    except RuntimeError as exc:
-        return _error(envelope_id, "resolve_api_error", str(exc))
-
-    try:
-        cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)
-    except RuntimeError as exc:
-        return _error(envelope_id, "resolve_api_error", str(exc))
-
+    # Single try/finally from this point forward so EVERY early return
+    # below the OpenPage("color") switch goes through the page-restore
+    # finally. Prior shape had three pre-loop returns (require_timeline,
+    # timeline_integer_frame_rate, export_edl_cdl) outside the try —
+    # any of those failing left Resolve stuck on Color even though the
+    # contract promised to restore the user's prior page.
     grades = []
     try:
+        timeline, err = _require_current_timeline(project, envelope_id)
+        if err is not None:
+            return err
+
+        try:
+            integer_rate = _timeline_integer_frame_rate(timeline)
+        except RuntimeError as exc:
+            return _error(envelope_id, "resolve_api_error", str(exc))
+
+        try:
+            cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)
+        except RuntimeError as exc:
+            return _error(envelope_id, "resolve_api_error", str(exc))
+
         for track_type, _tidx, item in _iter_all_timeline_items(timeline):
             # V1 video-only scope (mirrors verb_read_timeline). The EDL
             # carries only video CDL events; an audio item sharing a
