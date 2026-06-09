@@ -35,6 +35,33 @@ local CLICK_WAV = env.test_media_path("test_click_48k_stereo.wav")
 local TONE_WAV  = env.test_media_path("test_tone_48k_stereo.wav")
 local CLICK_SAMPLES = 144000
 
+-- Step 5 below relies on TONE_WAV.mtime ≠ CLICK_WAV.mtime so the peak
+-- cache's mtime invalidation fires when content swaps. Both fixtures
+-- live in the repo and `git checkout` restores them to whatever second
+-- the checkout ran in — identical mtimes are the norm, not the
+-- exception. Touch TONE_WAV forward by 2s so the precondition holds
+-- regardless of how the fixtures got onto disk. Real users editing one
+-- file at a time naturally produce distinct mtimes; this just makes the
+-- test self-healing instead of fixture-state-dependent.
+do
+    local touch_cmd = string.format(
+        "touch -t $(date -r $(( $(stat -f %%m %q) + 2 )) +%%Y%%m%%d%%H%%M.%%S) %q",
+        CLICK_WAV, TONE_WAV)
+    local ok = os.execute(touch_cmd)
+    -- os.execute return varies across Lua flavors; verify by reading
+    -- the actual mtimes back instead of trusting the exit code.
+    assert(ok ~= nil, "touch shellout failed entirely")
+    local fs_utils_setup = require("core.fs_utils")
+    local cm = assert(fs_utils_setup.file_mtime(CLICK_WAV))
+    local tm = assert(fs_utils_setup.file_mtime(TONE_WAV))
+    assert(math.floor(tm) > math.floor(cm), string.format(
+        "test setup: TONE_WAV mtime must be > CLICK_WAV mtime "
+        .. "(click=%d tone=%d) — without that, the cache's mtime "
+        .. "invalidation never fires and step 5 cannot distinguish "
+        .. "relink-to-new-content from re-init-of-same-content",
+        math.floor(cm), math.floor(tm)))
+end
+
 local function peak_bins_at(path)
     local handle = assert(EMP.PEAK_LOAD(path),
         "PEAK_LOAD failed for peak file at " .. tostring(path))
@@ -98,6 +125,21 @@ db:exec(string.format(
     "INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings) "
     .. "VALUES ('%s', 'p', 'resample', %d, %d, '{}')",
     project_id, now, now))
+
+-- Peak cache directory is project-scoped; a prior run leaves
+-- <cache_dir>/<media_id>.peaks on disk with an embedded source mtime.
+-- Without removing it, step 2's "first gen for this media_id" assertion
+-- runs against a stale peak file whose embedded mtime matches the current
+-- fixture mtime, so try_load_existing reuses instead of regenerating.
+-- get_peak_cache_dir requires the project to exist, so this must run AFTER
+-- the INSERT above.
+do
+    local stale_peak_dir = assert(database.get_peak_cache_dir(project_id),
+        "test setup: database.get_peak_cache_dir must return a path "
+        .. "(stale peak files from prior runs would otherwise persist and "
+        .. "invalidate the regen-detection assertions)")
+    os.execute(string.format("rm -rf %q", stale_peak_dir))
+end
 
 -- DRP-import scenario: media row points at a path that doesn't exist
 -- locally (e.g., /Volumes/X/... when X isn't mounted). Use a sentinel

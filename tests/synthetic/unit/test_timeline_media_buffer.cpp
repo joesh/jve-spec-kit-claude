@@ -73,8 +73,8 @@ private:
         }
         // Fallback: any media file in fixture dirs
         QStringList allDirs = searchDirs;
-        allDirs.append(QDir::homePath() + "/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis");
-        allDirs.append(QDir::currentPath() + "/../tests/fixtures/media/anamnesis");
+        allDirs.append(QDir::homePath() + "/Local/jve-spec-kit-claude/tests/fixtures/media/anamnesis-untrimmed");
+        allDirs.append(QDir::currentPath() + "/../tests/fixtures/media/anamnesis-untrimmed");
         m_testVideoPath = findMediaIn(allDirs, {"*.mp4", "*.mov", "*.mkv"});
         m_hasTestVideo = !m_testVideoPath.isEmpty();
     }
@@ -85,8 +85,8 @@ private:
         QStringList searchDirs = {
             QDir::homePath() + "/Local/jve/tests/fixtures/media",
             QDir::currentPath() + "/../tests/fixtures/media",
-            QDir::homePath() + "/Local/jve/tests/fixtures/media/anamnesis",
-            QDir::currentPath() + "/../tests/fixtures/media/anamnesis",
+            QDir::homePath() + "/Local/jve/tests/fixtures/media/anamnesis-untrimmed",
+            QDir::currentPath() + "/../tests/fixtures/media/anamnesis-untrimmed",
         };
         // Prefer the chirp fixture by name, then fall back to any .mp4/.mov
         for (const auto& dirPath : searchDirs) {

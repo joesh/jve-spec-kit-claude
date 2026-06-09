@@ -16,7 +16,7 @@ print("=== test_emp_tc_override.lua ===")
 -- Find a fixture file with a known TC.
 -- Use shell_capture (temp-file pattern) instead of io.popen to avoid the
 -- EINTR risk that LuaJIT pipes have under Qt signals/timers in --test mode.
-local fixture_dir = "tests/fixtures/media/anamnesis"
+local fixture_dir = "tests/fixtures/media/anamnesis-untrimmed"
 local fs_utils = require("core.fs_utils")
 local test_file = nil
 

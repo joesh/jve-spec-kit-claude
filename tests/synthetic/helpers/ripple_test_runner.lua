@@ -26,24 +26,15 @@ local M = {}
 local command_manager = require("core.command_manager")
 local Clip = require("models.clip")
 local ripple_layout = require("synthetic.helpers.ripple_layout")
+local timeline_dsl = require("synthetic.helpers.timeline_dsl")
 local validator = require("synthetic.helpers.project_validator")
 
---- Parse a timeline string into {track_name = {{name, start, end_pos}, ...}}
+-- DSL parser lives in synthetic.helpers.timeline_dsl. Local wrapper preserves
+-- this module's prior tuple-return shape (tracks, track_order) so the rest of
+-- the runner doesn't have to change.
 local function parse_timeline(text)
-    local tracks = {}
-    local track_order = {}
-    for line in text:gmatch("[^\n]+") do
-        local track_name, body = line:match("^%s*(%S+):%s*(.+)%s*$")
-        if track_name and body then
-            local clips = {}
-            for name, s, e in body:gmatch("%[(%S+)%s+(%d+)-(%d+)%]") do
-                table.insert(clips, {name = name, start = tonumber(s), end_pos = tonumber(e)})
-            end
-            tracks[track_name] = clips
-            table.insert(track_order, track_name)
-        end
-    end
-    return tracks, track_order
+    local parsed = timeline_dsl.parse(text)
+    return parsed.tracks, parsed.track_order
 end
 
 --- Parse drag string.

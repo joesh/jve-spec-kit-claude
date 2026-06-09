@@ -17,7 +17,11 @@
 # Recursion guard: JVE_IN_VM=1 is forced into the ssh command so the helper
 # returns immediately on the guest side (no infinite re-exec).
 #
-# Contract: source from a runner script's top, before any `set -e` or work.
+# Contract: source from a runner script after any host-only phases have
+# completed (the helper re-execs the whole script on the guest, so any
+# work above the source line runs on the host AND again on the guest
+# unless gated by `[ "${JVE_IN_VM:-0}" = "1" ]`). For runners with no
+# host-only phase, source at the very top before any `set -e`.
 #   . "$(dirname "${BASH_SOURCE[0]}")/_run_in_vm.sh"
 
 if [ "${JVE_IN_VM:-0}" = "1" ] || [ "${JVE_VM_DISABLE:-0}" = "1" ]; then
@@ -49,8 +53,18 @@ _VM_REPO_ROOT="$(cd "$_VM_SCRIPT_DIR/.." && pwd)"
 if [ ! -f "$_VM_SYNC_SENTINEL" ]; then
     echo "[vm-dispatch] syncing host → $_VM_USER@$_VM_HOST:$_VM_GUEST_PATH" >&2
     if ! bash "$_VM_REPO_ROOT/scripts/sync-to-vm.sh" >&2; then
-        echo "[vm-dispatch] sync failed; falling back to host" >&2
-        return 0
+        # VM is reachable (we just probed it) but sync failed — the config
+        # is broken (bad path, ssh key, virtiofs share, etc.). Falling back
+        # to host here is a silent degradation that turns one broken VM
+        # config into a ~40-process JVE fork-bomb on the host (Phase 2 of
+        # run_integration_tests.sh launches each test as its own jve --test
+        # in parallel with `&`). Fail-fast so the operator sees the broken
+        # config instead. Legitimate "VM not available" cases (no key, host
+        # unreachable) already returned earlier and don't reach this branch.
+        echo "[vm-dispatch] sync FAILED — VM is reachable but config is broken." >&2
+        echo "[vm-dispatch] NOT falling back to host (would spawn ~40 jve --test processes)." >&2
+        echo "[vm-dispatch] Set JVE_VM_DISABLE=1 to force host-local execution." >&2
+        exit 1
     fi
     touch "$_VM_SYNC_SENTINEL"
 fi

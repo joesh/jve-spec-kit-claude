@@ -44,12 +44,11 @@ end
 -- audio_sample_count. Path is repo-relative so the test runs anywhere
 -- the fixture tree is in place.
 local repo_root = require("core.path_utils").resolve_repo_root()
-local fixture_dir = repo_root .. "/tests/fixtures/media/anamnesis/"
-    .. "2026-02-28-anamnesis joe edit-mm/Volumes/AnamBack4 Joe/Footage/"
+local fixture_dir = repo_root .. "/tests/fixtures/media/anamnesis-untrimmed/"
 
 -- 25fps BRAW: round-number sample count, derivation happens to match —
 -- still useful as a positive check that the new field is populated.
-local braw_25fps = fixture_dir .. "Day 15/A001/A001_07240013_C018.braw"
+local braw_25fps = fixture_dir .. "A001_07240010_C015.braw"
 
 -- Helper: check file exists, otherwise SKIP (fixtures are large and
 -- not always cloned).

@@ -54,7 +54,24 @@ end
 function M.get_template_path(template)
     assert(template and template.name, "project_templates.get_template_path: template required")
 
-    local templates_dir = path_utils.resolve_repo_path("resources/templates")
+    -- Parallel test harnesses share the repo dir and race through this
+    -- regenerate-then-set_path sequence; one process's os.remove +
+    -- Project.create catches another's mid-write and sqlite returns
+    -- "disk I/O error" / "no sequence found after identity update". When
+    -- a runner needs isolation it sets JVE_TEMPLATE_DIR to a per-runner
+    -- path; production leaves it unset and uses the repo dir.
+    local override = os.getenv("JVE_TEMPLATE_DIR")
+    local templates_dir
+    if override and override ~= "" then
+        templates_dir = override
+        assert(qt_fs_mkdir_p, "project_templates: qt_fs_mkdir_p binding required "
+            .. "to honor JVE_TEMPLATE_DIR (not in --test mode?)")
+        local ok, mkdir_err = qt_fs_mkdir_p(templates_dir)
+        assert(ok, "project_templates: failed to create JVE_TEMPLATE_DIR: "
+            .. templates_dir .. ": " .. (mkdir_err or "unknown"))
+    else
+        templates_dir = path_utils.resolve_repo_path("resources/templates")
+    end
     local path = templates_dir .. "/" .. template_filename(template)
 
     -- Remove any stale cached template before regenerating.

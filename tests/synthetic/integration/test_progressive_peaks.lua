@@ -1,8 +1,8 @@
 -- Integration test: progressive peak display via PEAK_QUERY_PROGRESS
 --
 -- Verifies that partially-generated peak data is queryable from the main
--- thread while background workers are still generating. Uses a real media
--- file long enough to catch mid-generation state.
+-- thread while background workers are still generating. Uses a 34s
+-- synthetic AAC stereo file long enough to catch mid-generation state.
 --
 -- Tests:
 --   1. PEAK_QUERY_PROGRESS returns data while generation is in progress
@@ -19,7 +19,7 @@ local ffi = require("ffi")
 
 print("--- test_progressive_peaks.lua ---")
 
-local MEDIA_PATH = env.test_media_path("anamnesis/GOLD_MASTER.mov")
+local MEDIA_PATH = env.test_media_path("varied_amplitude_aac_34s.mp4")
 local PEAK_DIR = "/tmp/jve/test_progressive"
 local PEAK_FILE = PEAK_DIR .. "/progressive.peaks"
 os.execute(string.format("rm -rf %q", PEAK_DIR))

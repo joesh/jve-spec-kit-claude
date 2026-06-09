@@ -121,3 +121,6 @@ tests/fixtures/media
 
 # cozempic guard runtime lock (per-session daemon PID/state — not VCS)
 .claude/scheduled_tasks.lock
+
+# pre-commit clean-build marker (touched by `make -j4` on green finish)
+.last-clean-make

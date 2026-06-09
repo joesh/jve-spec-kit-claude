@@ -20,7 +20,7 @@ local Clip = require("models.clip")
 local path_utils = require("core.path_utils")
 local DRP_PATH = path_utils.resolve_repo_path("tests/fixtures/resolve/anamnesis joe edit.drp")
 local JVP_PATH = "/tmp/jve_retime_e2e.jvp"
-local FIXTURE_ROOT = path_utils.resolve_repo_path("tests/fixtures/media/anamnesis")
+local FIXTURE_ROOT = path_utils.resolve_repo_path("tests/fixtures/media/anamnesis-trimmed")
 
 -- Clean up any prior run
 os.remove(JVP_PATH)

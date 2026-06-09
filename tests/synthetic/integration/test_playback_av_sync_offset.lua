@@ -60,68 +60,91 @@ end
 
 --------------------------------------------------------------------------------
 -- Media + clips with NON-ZERO source_in
+--
+-- A single 64s Anamnesis source backs both V1 video and A1 audio; A/V drift
+-- assertions read identical content via different TC origins (video
+-- first_frame_tc vs audio first_sample_tc) plus a per-clip frame offset.
+-- The OFFSETS (10, 15, 5, 20 frames) are the whole point of this test: they
+-- exercise the source_in→seek conversion that test_playback_av_sync skips
+-- (that test uses source_in=0 everywhere).
 --------------------------------------------------------------------------------
-local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis")
+local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis-untrimmed")
+local MEDIA_PATH = MEDIA_DIR .. "/A007_05202055_C007.mov"
 
--- Source_in values: absolute TC = file's first_frame_tc + small offset.
--- The offsets (10, 15, 5, 20) exercise the source_in→seek conversion.
+do
+    local f = io.open(MEDIA_PATH, "r")
+    assert(f, "Missing fixture: " .. MEDIA_PATH)
+    f:close()
+end
+
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 local TL_START = 1000  -- non-zero timeline start (not 0!)
 
--- Probe file TC origin so source_in is absolute TC
+-- Probe must populate first_frame_tc / first_sample_tc. A nil here is a
+-- broken container or stale binding, not "default to 0" — the offset
+-- assertions further down would then drift uniformly across clips and
+-- look like a sync bug instead of a probe bug.
 local function tc_origin(path)
     local probe = EMP.MEDIA_FILE_PROBE(path)
     assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
-    return probe.first_frame_tc or 0
+    return assert(probe.first_frame_tc,
+        "MEDIA_FILE_PROBE: first_frame_tc nil for " .. path)
 end
 
-local v1_clips = {
-    { clip_id = "v1-offset-c002", media_path = MEDIA_DIR .. "/A012_C002.mov",
-      sequence_start = TL_START,       duration = 30,  source_in = tc_origin(MEDIA_DIR .. "/A012_C002.mov") + 10,
-      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-offset-c008", media_path = MEDIA_DIR .. "/A012_C008.mov",
-      sequence_start = TL_START + 30,  duration = 25,  source_in = tc_origin(MEDIA_DIR .. "/A012_C008.mov") + 15,
-      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-offset-c005", media_path = MEDIA_DIR .. "/A012_C005.mov",
-      sequence_start = TL_START + 55,  duration = 80,  source_in = tc_origin(MEDIA_DIR .. "/A012_C005.mov") + 5,
-      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-offset-c010", media_path = MEDIA_DIR .. "/A012_C010.mov",
-      sequence_start = TL_START + 135, duration = 50,  source_in = tc_origin(MEDIA_DIR .. "/A012_C010.mov") + 20,
-      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-}
-
--- Audio: same clips, but source_in in audio sample space (not video frames).
--- Audio clips use rate=48000/1 and first_sample_tc for TC origin.
 local function audio_tc_origin(path)
     local probe = EMP.MEDIA_FILE_PROBE(path)
     assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
-    return probe.first_sample_tc or 0
+    return assert(probe.first_sample_tc,
+        "MEDIA_FILE_PROBE: first_sample_tc nil for " .. path)
 end
 
-local audio_offsets = {10, 15, 5, 20}  -- same offsets as video, in timeline frames
-local a1_clips = {}
-for i, vc in ipairs(v1_clips) do
-    -- Convert timeline-frame offset to samples: offset * 48000 / 25
-    local offset_samples = math.floor(audio_offsets[i] * 48000 / 25 + 0.5)
-    a1_clips[i] = {
-        clip_id = "a1-offset-" .. vc.clip_id:sub(4),
-        media_path = vc.media_path,
-        sequence_start = vc.sequence_start,
-        duration = vc.duration,
-        source_in = audio_tc_origin(vc.media_path) + offset_samples,
-        rate_num = 48000,
-        rate_den = 1,
-        speed_ratio = vc.speed_ratio,
-    }
-end
+local timeline_dsl = require("synthetic.helpers.timeline_dsl")
 
--- Verify media exist
-for _, c in ipairs(v1_clips) do
-    local f = io.open(c.media_path, "r")
-    assert(f, "Missing: " .. c.media_path)
-    f:close()
-end
+-- Per-clip source_in offset in TIMELINE FRAMES (converted to samples for
+-- audio inside resolve_source_in below). Different offsets per clip mean
+-- a broken source_in→seek conversion will drift differently for each cut.
+local FRAME_OFFSETS = {
+    ["clip-1"] = 10,
+    ["clip-2"] = 15,
+    ["clip-3"] = 5,
+    ["clip-4"] = 20,
+}
+
+local TIMELINE = string.format([[
+    V1: [clip-1 %d-%d][clip-2 %d-%d][clip-3 %d-%d][clip-4 %d-%d]
+    A1: [clip-1 %d-%d][clip-2 %d-%d][clip-3 %d-%d][clip-4 %d-%d]
+]],
+    TL_START,        TL_START + 30,
+    TL_START + 30,   TL_START + 55,
+    TL_START + 55,   TL_START + 135,
+    TL_START + 135,  TL_START + 185,
+    TL_START,        TL_START + 30,
+    TL_START + 30,   TL_START + 55,
+    TL_START + 55,   TL_START + 135,
+    TL_START + 135,  TL_START + 185)
+
+local tracks = timeline_dsl.to_tmb(timeline_dsl.parse(TIMELINE), {
+    path_for        = function(_t, _c) return MEDIA_PATH end,
+    source_in_for   = function(_t, clip_name, kind)
+        local frame_offset = FRAME_OFFSETS[clip_name]
+        assert(frame_offset, "No frame offset configured for " .. clip_name)
+        if kind == "audio" then
+            local samples = math.floor(frame_offset * 48000 / SEQ_FPS_NUM + 0.5)
+            return audio_tc_origin(MEDIA_PATH) + samples
+        end
+        return tc_origin(MEDIA_PATH) + frame_offset
+    end,
+    rate_for        = function(_t, kind)
+        if kind == "audio" then return 48000, 1 end
+        return 25, 1
+    end,
+    speed_ratio_for = function(_t, _c) return 1.0 end,
+    id_prefix_for   = function(t) return t:lower() .. "-" end,
+})
+
+local v1_clips = tracks.video[1]
+local a1_clips = tracks.audio[1]
 
 local WINDOW_HI = TL_START + 185  -- total timeline extent
 
@@ -231,9 +254,10 @@ check(end_frame > START_FRAME + 20,
 local surface_count = EMP.SURFACE_FRAME_COUNT(surface) - baseline_surface
 check(surface_count > 20, string.format("surface delivered %d frames", surface_count))
 
--- Monotonic
+-- Monotonic — START_FRAME (not 0) so a seek-to-0 / seek-rewind regression
+-- would surface as a backward jump rather than slipping under a zero floor.
 local monotonic = true
-local prev_frame = 0
+local prev_frame = START_FRAME
 for _, s in ipairs(samples) do
     if s.video_frame < prev_frame then monotonic = false; break end
     prev_frame = s.video_frame

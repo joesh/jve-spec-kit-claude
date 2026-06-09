@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 
-# If the UTM guest is reachable, sync the host tree and re-exec this script
-# there. Falls through to host-local execution when the VM is off / key absent.
-# Must run BEFORE `set -e`.
-. "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/_run_in_vm.sh"
-
 set -euo pipefail
+
+# VM dispatch is deferred to between Phase 1 and Phase 2.
+# Phase 1 (timing-sensitive playback/codec tests) MUST run on the host —
+# UTM does not pass VideoToolbox through, so every codec falls back to
+# software decode in the VM and the cadence/drift assertions fail
+# regardless of fixture choice. Phase 2 (non-timing-sensitive) dispatches
+# to the VM when reachable, matching the existing fan-out model.
+_VM_DISPATCH_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/_run_in_vm.sh"
 
 # Integration test runner — uses batch mode (single JVEEditor process per group)
 # for most tests. UI tests that need isolated Qt windows run in separate processes.
@@ -40,6 +43,9 @@ fi
 
 RUN_SLOW="${RUN_SLOW_TESTS:-0}"
 RESULTS_DIR="$(mktemp -d -t integ_results.XXXXXX)"
+# Clean up scratch dir on any exit path. Phase 1's early-exit-on-fail and
+# the VM-dispatch exec replace below would otherwise leave it behind.
+trap 'rm -rf "$RESULTS_DIR"' EXIT
 PASS=0
 FAIL=0
 SKIP=0
@@ -49,12 +55,19 @@ FAILED_NAMES=()
 # RESULTS_DIR. Collected later by finalize_tests. Each test is already
 # an independent JVEEditor process, so no shared-state risk from
 # parallelizing — only CPU contention.
+#
+# Per-test JVE_TEMPLATE_DIR: project_templates.get_template_path
+# regenerates a shared .jvp in resources/templates/ on every open_fresh
+# call. Parallel test processes racing through that produce "disk I/O
+# error" / "no sequence found after identity update" failures.
+# Per-test scratch dir isolates them.
 launch_test() {
   local name="$1"
   shift
   local tmp_out="$RESULTS_DIR/$name.out"
+  local template_dir="/tmp/jve/templates_${name}_$$"
   (
-    if "$@" >"$tmp_out" 2>&1; then
+    if JVE_TEMPLATE_DIR="$template_dir" "$@" >"$tmp_out" 2>&1; then
       echo "PASS" > "$RESULTS_DIR/$name.status"
     else
       echo "FAIL" > "$RESULTS_DIR/$name.status"
@@ -80,19 +93,43 @@ collect_results() {
   done
 }
 
-# ─── Phase 1: timing-sensitive batches (paired parallelism) ────────────
-# These tests assert on wall-clock latency (e.g. playback cadence p95 ≤ 80ms).
+# ─── Phase 1: timing-sensitive batches (paired parallelism, HOST ONLY) ─
+# These tests assert on wall-clock latency (e.g. playback cadence p95 ≤ 80ms)
+# and require VideoToolbox HW decode. UTM does not pass VideoToolbox through,
+# so every codec falls back to software decode in the VM — playback rate
+# drops below the cadence/drift budgets and the assertions fail regardless
+# of fixture choice. Run on host only; when we are already re-exec'd inside
+# the VM (Phase 2 dispatch), Phase 1 has already completed on the host.
+#
 # Full N-way parallelism with other tests causes tail-latency flakes, but
 # running just the three perf batches together (3 processes on a machine
 # with ≥4 cores) stays inside their timing budgets. Verified: pair
 # (batch_playback + batch_codec) completes in 37s and passes.
-echo "[integration] Phase 1: timing-sensitive batches (paired parallel)..."
-PERF_BATCH_NAMES=(batch_playback batch_codec test_playback_av_sync_offset)
-launch_test "batch_playback"                 "$BINARY" --test "$INTEG_DIR/batch_playback.lua"
-launch_test "batch_codec"                    "$BINARY" --test "$INTEG_DIR/batch_codec.lua"
-launch_test "test_playback_av_sync_offset"   "$BINARY" --test "$INTEG_DIR/test_playback_av_sync_offset.lua"
-wait
-collect_results "${PERF_BATCH_NAMES[@]}"
+if [ "${JVE_IN_VM:-0}" != "1" ]; then
+  echo "[integration] Phase 1: timing-sensitive batches (host-local, paired parallel)..."
+  PERF_BATCH_NAMES=(batch_playback batch_codec test_playback_av_sync_offset)
+  launch_test "batch_playback"                 "$BINARY" --test "$INTEG_DIR/batch_playback.lua"
+  launch_test "batch_codec"                    "$BINARY" --test "$INTEG_DIR/batch_codec.lua"
+  launch_test "test_playback_av_sync_offset"   "$BINARY" --test "$INTEG_DIR/test_playback_av_sync_offset.lua"
+  wait
+  collect_results "${PERF_BATCH_NAMES[@]}"
+
+  # Surface Phase 1 failures immediately. The VM re-exec below would otherwise
+  # overwrite our exit code with Phase 2's, hiding host-only regressions.
+  if [ "$FAIL" -gt 0 ]; then
+    echo "[integration] Phase 1 had $FAIL failure(s); skipping Phase 2 dispatch" >&2
+    echo "Failed tests: ${FAILED_NAMES[*]}" >&2
+    exit 1
+  fi
+fi
+
+# ─── Phase 2 dispatch: VM if reachable, else host ─────────────────────
+# Sourcing _run_in_vm.sh re-execs this script on the guest with JVE_IN_VM=1,
+# which gates Phase 1 above to a no-op (already done on host) and runs only
+# the Phase 2 block below. Host process exits with the guest's status.
+# When the VM is off/unreachable, sourcing falls through and Phase 2 runs
+# locally.
+. "$_VM_DISPATCH_SCRIPT"
 
 # ─── Phase 2: non-timing-sensitive, run in parallel ───────────────────
 echo "[integration] Phase 2: other batches + UI tests (parallel)..."

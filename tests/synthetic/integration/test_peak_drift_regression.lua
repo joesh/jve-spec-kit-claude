@@ -3,10 +3,13 @@
 -- Verifies that peak bins at all file positions accurately represent the
 -- audio at those positions, using independently decoded ground truth.
 --
--- Uses GOLD_MASTER.mov (real film audio, AAC stereo, ~34s) which has
--- natural amplitude variation — quiet ambient, dialogue transients,
--- near-silence. This makes positional drift detectable: shifted bins
--- produce measurably different min/max values.
+-- Uses varied_amplitude_aac_34s.mp4 (synthetic AAC stereo, 34s):
+-- pink noise enveloped by a slow sine + periodic full-scale transient
+-- bursts every ~3s. The amplitude variation makes positional drift
+-- detectable — shifted bins produce measurably different min/max
+-- values. AAC encoding is required because this test verifies peak
+-- bin alignment across AAC frame boundaries (1024 samples), which is
+-- meaningless for raw PCM source files.
 --
 -- Method: "fingerprint" approach —
 --   1. Decode audio independently at positions across the file
@@ -24,8 +27,8 @@ local ffi = require("ffi")
 
 print("--- test_peak_drift_regression.lua ---")
 
--- Real film audio — AAC stereo with natural amplitude variation
-local MEDIA_PATH = env.test_media_path("anamnesis/GOLD_MASTER.mov")
+-- Synthetic AAC stereo with deliberate amplitude variation (see header).
+local MEDIA_PATH = env.test_media_path("varied_amplitude_aac_34s.mp4")
 local PEAK_DIR = "/tmp/jve/test_peak_drift"
 local PEAK_FILE = PEAK_DIR .. "/drift_test.peaks"
 os.execute(string.format("rm -rf %q", PEAK_DIR))

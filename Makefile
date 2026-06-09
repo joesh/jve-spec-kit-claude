@@ -28,6 +28,7 @@ all: configure
 	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests --no-print-directory -j2
 	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
 	@python3 tests/live/runner/coverage.py --axis keymap
+	@touch .last-clean-make
 
 # Build only (C++ compile + link, no tests, no lint)
 build: configure

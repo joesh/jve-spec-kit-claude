@@ -64,7 +64,7 @@ M.repo_root = repo_root
 -- fixtures: 588 GB anamnesis rushes, etc). Source code stays sync-based
 -- per specs/020-debug-terminal/phase1-test-overhaul.md (virtiofs cache
 -- staleness on host edits), so the synced tree wins when both have it.
-local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-workspace"
+local GUEST_REPO_MOUNT = "/Volumes/My Shared Files/jve-spec-kit-claude"
 
 function M.resolve_repo_path(relative)
     if not relative or relative == "" then return repo_root end

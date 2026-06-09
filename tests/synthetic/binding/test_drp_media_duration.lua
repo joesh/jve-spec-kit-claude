@@ -30,10 +30,19 @@ local function elem(tag, text, children)
     }
 end
 
--- Helper: wrap clips in Items > Element structure matching real DRP XML
+-- Helper: wrap clips in Items > Element structure matching real DRP XML.
+-- Stamps each clip with a unique synthetic DbId attribute — real Resolve
+-- exports always carry one (spec 023 FR-011b adopts it as clip.id); the
+-- importer asserts on its presence.
+local _next_db_id = 0
 local function wrap_clips(...)
     local elements = {}
     for _, clip in ipairs({...}) do
+        clip.attrs = clip.attrs or {}
+        if not clip.attrs.DbId then
+            _next_db_id = _next_db_id + 1
+            clip.attrs.DbId = string.format("synthetic-clip-%d", _next_db_id)
+        end
         table.insert(elements, elem("Element", "", {clip}))
     end
     return elem("Items", "", elements)

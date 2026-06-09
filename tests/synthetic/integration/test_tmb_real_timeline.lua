@@ -1,9 +1,11 @@
--- Integration Test: Real Timeline Section from Anamnesis Gold Master
--- Reconstructs the actual clip layout around playhead 122965 in
--- "2026-01-21-anamnesis-GOLD-MASTER-CANDIDATE" and decodes through it.
+-- Integration Test: Multi-track timeline decode around playhead 122965.
+-- Layout (V1 rapid cuts, V3 parallel coverage, V6 reference layer) is
+-- modeled on a real edit segment but uses two real source files instead
+-- of one-per-take. The frame ranges, cut positions, and clip durations
+-- are preserved; the take identities (`v1-clip-N`, `v6-ref`) are generic.
 --
 -- Tests: multi-track video decode, clip boundary transitions, rapid cuts,
--- async pending resolution across real edit points with real media.
+-- async pending resolution across edit points with real media.
 --
 -- Must run via: JVEEditor --test tests/synthetic/integration/test_tmb_real_timeline.lua
 
@@ -32,24 +34,22 @@ local function section(name)
 end
 
 --------------------------------------------------------------------------------
--- Media paths — source_in uses absolute TC (first_frame_tc + file offset)
+-- Media paths — two real source files:
+--   V1_V3_PATH backs the V1 rapid-cut sequence and the V3 parallel-coverage
+--     layer (test verifies clip_id transitions, not pixel distinction between
+--     V1 and V3, so they can share a source).
+--   V6_PATH backs the V6 reference layer. Distinct from V1/V3 so the
+--     multi-track decode section actually verifies the right layer's frame
+--     reaches the right track (a frame-routing bug would otherwise be
+--     invisible when all layers decode identical content).
 --------------------------------------------------------------------------------
-local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis")
+local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis-untrimmed")
+local V1_V3_PATH = MEDIA_DIR .. "/A007_05202055_C007.mov"
+local V6_PATH    = MEDIA_DIR .. "/A014_10221058_C013.mov"
 
-local media = {
-    vfx_01    = MEDIA_DIR .. "/A016_C003_VFX_01.mov",  -- Helen VHS VFX
-    day5_c003 = MEDIA_DIR .. "/A016_C003.mov",          -- 30-124-001
-    day4_c002 = MEDIA_DIR .. "/A012_C002.mov",          -- 18-097-002
-    day4_c008 = MEDIA_DIR .. "/A012_C008.mov",          -- 18-100-001
-    day4_c005 = MEDIA_DIR .. "/A012_C005.mov",          -- 18-098-003
-    day4_c010 = MEDIA_DIR .. "/A012_C010.mov",          -- 18-100-003
-    gold      = MEDIA_DIR .. "/GOLD_MASTER.mov",        -- prev gold master on V6
-}
-
--- Verify all media files exist
-for name, path in pairs(media) do
-    local f = io.open(path, "r")
-    assert(f, "Missing fixture: " .. name .. " at " .. path)
+for _, p in ipairs({ V1_V3_PATH, V6_PATH }) do
+    local f = io.open(p, "r")
+    assert(f, "Missing fixture: " .. p)
     f:close()
 end
 
@@ -60,45 +60,78 @@ end
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 
--- Probe file TC origin for absolute TC source_in
+-- Probe file TC origin for absolute TC source_in. Nil first_frame_tc
+-- means a broken container or stale binding, not "default to 0"; the
+-- park-decode clip_id assertions would otherwise pass with the wrong
+-- origin baked into source_in.
 local function tc_origin(path)
     local probe = EMP.MEDIA_FILE_PROBE(path)
     assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
-    return probe.first_frame_tc or 0
+    return assert(probe.first_frame_tc,
+        "MEDIA_FILE_PROBE: first_frame_tc nil for " .. path)
 end
 
--- V1: rapid cut sequence — Helen VHS → 30-124-001 → 18-097-002 → 18-100-001 → 18-098-003 → 18-100-003
-local v1_clips = {
-    { clip_id = "v1-helen-vhs",  media_path = media.vfx_01,    sequence_start = 122097, duration = 831, source_in = tc_origin(media.vfx_01),    rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-30-124-001", media_path = media.day5_c003,  sequence_start = 122928, duration = 32,  source_in = tc_origin(media.day5_c003), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002,  sequence_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008,  sequence_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005,  sequence_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010,  sequence_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-}
+local timeline_dsl = require("synthetic.helpers.timeline_dsl")
 
--- V3: parallel coverage clips (same source ranges, different camera files)
-local v3_clips = {
-    { clip_id = "v3-18-097-002", media_path = media.day4_c002,  sequence_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v3-18-100-001", media_path = media.day4_c008,  sequence_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v3-18-100-003", media_path = media.day4_c010,  sequence_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-}
+-- Modeled on a real edit segment around playhead 122965.
+--
+-- V1 — opener (clip-1, 831 frames ≈ 33s) followed by FIVE rapid cuts in
+--      ~358 frames (clip-2..clip-6). Tests cut-handling under pre-buffer
+--      pressure (section 4) and async-decode through dense edit points
+--      (section 5). Clip durations are deliberately above PRE_BUFFER_BATCH
+--      (48) on both sides of the 123172 boundary so the cache-thrashing
+--      regression in section 4 is reproducible.
+-- V3 — parallel coverage of three V1 ranges (clip-3 / clip-4 / clip-6).
+--      Verifies multi-track decode (section 3) routes the right layer's
+--      frame to the right track.
+-- V6 — reference layer (ref, 863 frames ≈ 34.5s) spanning V1's opener +
+--      cut region. Backed by a *different* media file than V1/V3 so the
+--      multi-track frame-routing test in section 3 can actually detect a
+--      layer-swap bug; if all layers shared content, the routing bug would
+--      be invisible. Also drives the gap-after-clip-end test (section 6):
+--      V6 ends at 122960, so playhead > 122960 must return nil + empty
+--      clip_id (TMB gap-detection contract).
+local TIMELINE = [[
+    V1: [clip-1 122097-122928][clip-2 122928-122960][clip-3 122960-123003][clip-4 123003-123043][clip-5 123043-123172][clip-6 123172-123286]
+    V3: [clip-3 122960-123003][clip-4 123003-123043][clip-6 123172-123286]
+    V6: [ref 122097-122960]
+]]
 
--- V6: previous gold master export (reference layer)
-local v6_clips = {
-    { clip_id = "v6-gold-ref",   media_path = media.gold,       sequence_start = 122097, duration = 863, source_in = tc_origin(media.gold),      rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-}
+local function path_for(track_name, _clip_name)
+    if track_name == "V6" then return V6_PATH end
+    return V1_V3_PATH
+end
+
+local tracks = timeline_dsl.to_tmb(timeline_dsl.parse(TIMELINE), {
+    path_for        = path_for,
+    source_in_for   = function(track_name, _clip_name, kind)
+        -- This timeline is video-only. An audio kind here means the
+        -- DSL grew an audio track without a matching resolver branch
+        -- — audio TC origin is samples, not frames, so the wrong call
+        -- would silently bake the wrong source_in.
+        assert(kind == "video",
+            "test_tmb_real_timeline: video-only timeline, got kind=" .. tostring(kind))
+        return tc_origin(path_for(track_name))
+    end,
+    rate_for        = function(_track_name, _kind) return 25, 1 end,
+    speed_ratio_for = function(_t, _c) return 1.0 end,
+    id_prefix_for   = function(t) return t:lower() .. "-" end,
+})
+
+local v1_clips = tracks.video[1]
+local v3_clips = tracks.video[3]
+local v6_clips = tracks.video[6]
 
 --------------------------------------------------------------------------------
--- 1. Probe all media files
+-- 1. Probe media files
 --------------------------------------------------------------------------------
 section("1. Probe media files")
 do
-    for name, path in pairs(media) do
+    for _, path in ipairs({ V1_V3_PATH, V6_PATH }) do
         local info = EMP.MEDIA_FILE_PROBE(path)
-        check(info ~= nil, string.format("probe %s: got info", name))
+        check(info ~= nil, "probe " .. path .. ": got info")
         if info then
-            check(info.has_video, string.format("probe %s: has video (%dx%d)", name, info.width, info.height))
+            check(info.has_video, string.format("probe %s: has video (%dx%d)", path, info.width, info.height))
         end
     end
 end
@@ -142,28 +175,27 @@ do
     local playhead = 122965
     EMP.TMB_SET_PLAYHEAD(tmb, playhead, 0, 1.0)
 
-    -- V1 at 122965 should be clip v1-18-097-002 (sequence_start=122960, dur=43)
+    -- V1 at 122965 should be v1-clip-3 (sequence_start=122960, dur=43)
     local f1, i1 = EMP.TMB_GET_VIDEO_FRAME(tmb, 1, playhead)
     check(f1 ~= nil, "multitrack V1@122965: decoded")
-    check(i1.clip_id == "v1-18-097-002",
-        string.format("multitrack V1@122965: clip_id=%s (expect v1-18-097-002)", i1.clip_id))
+    check(i1.clip_id == "v1-clip-3",
+        string.format("multitrack V1@122965: clip_id=%s (expect v1-clip-3)", i1.clip_id))
 
-    -- V3 at 122965 should be clip v3-18-097-002
+    -- V3 at 122965 should be v3-clip-3 (parallel coverage of same source range)
     local f3, i3 = EMP.TMB_GET_VIDEO_FRAME(tmb, 3, playhead)
     check(f3 ~= nil, "multitrack V3@122965: decoded")
-    check(i3.clip_id == "v3-18-097-002",
-        string.format("multitrack V3@122965: clip_id=%s (expect v3-18-097-002)", i3.clip_id))
+    check(i3.clip_id == "v3-clip-3",
+        string.format("multitrack V3@122965: clip_id=%s (expect v3-clip-3)", i3.clip_id))
 
-    -- V6 gold ref ends at 122960 (122097+863), so playhead 122965 is in gap.
+    -- V6 ref ends at 122960 (122097+863), so playhead 122965 is in gap.
     -- Decode at 122955 instead (5 frames before clip end).
     local v6_frame = 122955
     EMP.TMB_SET_PLAYHEAD(tmb, v6_frame, 0, 1.0)
     local f6, i6 = EMP.TMB_GET_VIDEO_FRAME(tmb, 6, v6_frame)
     check(f6 ~= nil, "multitrack V6@122955: decoded")
-    check(i6.clip_id == "v6-gold-ref",
-        string.format("multitrack V6@122955: clip_id=%s (expect v6-gold-ref)", i6.clip_id))
+    check(i6.clip_id == "v6-ref",
+        string.format("multitrack V6@122955: clip_id=%s (expect v6-ref)", i6.clip_id))
 
-    -- Verify different frames (different media files = different pixel data)
     if f1 and f6 then
         local fi1 = EMP.FRAME_INFO(f1)
         local fi6 = EMP.FRAME_INFO(f6)
@@ -186,7 +218,7 @@ do
     EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, v1_clips)
 
     -- Use boundary where BOTH clips > PRE_BUFFER_BATCH (48):
-    --   v1-18-098-003 (123043-123172, 129 frames) → v1-18-100-003 (123172-123286, 114 frames)
+    --   v1-clip-5 (123043-123172, 129 frames) → v1-clip-6 (123172-123286, 114 frames)
     -- Pre-buffer: min(48,remaining_A)+min(48,114) = 48+48=96 > MAX_VIDEO_CACHE(72) → thrash.
     -- Evicts 24 entries: the lowest keys in clip A (where playhead IS).
     local playhead_start = 123130  -- 42 frames from boundary (within PRE_BUFFER_THRESHOLD=96)
@@ -222,7 +254,7 @@ end
 --------------------------------------------------------------------------------
 -- 5. Async play through rapid cuts on V1
 --    Simulates real playback: advance playhead frame-by-frame through the
---    30-124-001 → 18-097-002 → 18-100-001 transition (3 cuts in 115 frames).
+--    v1-clip-2 → v1-clip-3 → v1-clip-4 transition (3 cuts in 115 frames).
 --------------------------------------------------------------------------------
 section("5. Async play through V1 rapid cuts (122928-123043)")
 do
@@ -230,8 +262,8 @@ do
     EMP.TMB_SET_SEQUENCE_RATE(tmb, SEQ_FPS_NUM, SEQ_FPS_DEN)
     EMP.TMB_SET_TRACK_CLIPS(tmb, "video", 1, v1_clips)
 
-    local start_frame = 122928  -- start of 30-124-001
-    local end_frame = 123043    -- end of 18-100-001
+    local start_frame = 122928  -- start of v1-clip-2
+    local end_frame = 123043    -- end of v1-clip-4
     local MAX_RETRIES = 50
     local SLEEP_CMD = "sleep 0.01"
     local FRAME_DEADLINE_MS = 1000.0 / (SEQ_FPS_NUM / SEQ_FPS_DEN) -- 40ms at 25fps
@@ -306,17 +338,17 @@ do
         string.format("async V1 rapid cuts: %d/%d decoded, %d stuck (worst poll: %d)",
             decoded_count, total_frames, stuck_count, worst_retries))
 
-    -- Should see exactly 3 clips: 30-124-001 → 18-097-002 → 18-100-001
+    -- Should see exactly 3 clips: v1-clip-2 → v1-clip-3 → v1-clip-4
     check(#clip_transitions == 3,
         string.format("async V1 rapid cuts: %d clip transitions (expect 3)", #clip_transitions))
 
     if #clip_transitions >= 3 then
-        check(clip_transitions[1].clip_id == "v1-30-124-001",
-            string.format("transition 1: %s (expect v1-30-124-001)", clip_transitions[1].clip_id))
-        check(clip_transitions[2].clip_id == "v1-18-097-002",
-            string.format("transition 2: %s (expect v1-18-097-002)", clip_transitions[2].clip_id))
-        check(clip_transitions[3].clip_id == "v1-18-100-001",
-            string.format("transition 3: %s (expect v1-18-100-001)", clip_transitions[3].clip_id))
+        check(clip_transitions[1].clip_id == "v1-clip-2",
+            string.format("transition 1: %s (expect v1-clip-2)", clip_transitions[1].clip_id))
+        check(clip_transitions[2].clip_id == "v1-clip-3",
+            string.format("transition 2: %s (expect v1-clip-3)", clip_transitions[2].clip_id))
+        check(clip_transitions[3].clip_id == "v1-clip-4",
+            string.format("transition 3: %s (expect v1-clip-4)", clip_transitions[3].clip_id))
     end
 
     -- Real-time performance report
@@ -360,7 +392,7 @@ do
 end
 
 --------------------------------------------------------------------------------
--- 6. V6 gap test: V6 gold master ends at 122960, gap after that
+-- 6. V6 gap test: V6 reference clip ends at 122960, gap after that
 --------------------------------------------------------------------------------
 section("6. V6 gap after clip end")
 do

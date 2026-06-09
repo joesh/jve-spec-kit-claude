@@ -384,7 +384,28 @@ local function parse_one_track_item(ti_ref, by_id, by_uuid,
     assert(out_point_ticks, string.format(
         "prproj: clip '%s' missing OutPoint (malformed TrackItem)", clip_name))
 
+    -- importer_core (spec 023 FR-011b) requires every clip to carry a stable
+    -- id. Premiere has no per-clip-instance globally-unique identifier:
+    -- ObjectUID lives on MasterClip/Media (source assets, captured here as
+    -- media_uuid), not on TrackItem instances; ObjectID (the ref_id used to
+    -- look up the TrackItem in by_id) IS unique-per-instance within the
+    -- file but documented as session-transient. Per FR-011b's "else mint a
+    -- UUID" path, compose ObjectRef + media_uuid + concrete coords:
+    --   - ObjectRef guarantees per-instance uniqueness (avoids UNIQUE
+    --     collision when the same media appears multiple times at the same
+    --     timeline position — e.g. linked V/A on parallel tracks).
+    --   - media_uuid + coords give Premiere's save-stability the best
+    --     chance of producing the same id on re-import. Re-import
+    --     idempotency is best-effort: if Premiere reshuffles ObjectIDs
+    --     on save, re-import will see "new" clips. Outbound round-trip
+    --     (when implemented) will use the marker-comment GUID channel
+    --     tracked by todo_prproj_marker_roundtrip.
+    -- `%s` / `%d` fail-fast on nil so we never silently compose "nil".
+    local clip_id = string.format("prproj:%s:%s:%d:%d:%d:%d",
+        ref_id, media_uuid, start_frame, duration_frames, in_point_ticks, native_rate)
+
     return {
+        clip_id     = clip_id,
         name        = clip_name,
         start_value = start_frame,
         duration    = duration_frames,

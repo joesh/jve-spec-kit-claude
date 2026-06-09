@@ -2,10 +2,13 @@
 # JVE pre-commit hook.
 #
 # Gates (in order):
-#   1) Build freshness — exe mtime newer than every C++/Objective-C++/header
-#      in src/. Proves `make -j4` (or `make jve -j4`) ran after the latest
-#      compiled-source edit. Stale binary → block.
-#   2) Luacheck — staged .lua files must pass cleanly (no warnings, no errors).
+#   1) Clean-build freshness — `.last-clean-make` marker (touched by `make -j4`'s
+#      final recipe step) must be newer than every input `make -j4` consumes:
+#      src/**/*.{cpp,mm,h,hpp,lua}, tests/**/*.lua, keymaps/**, top Makefile,
+#      and CMakeLists.txt files. Proves the whole `make -j4` (compile + lint +
+#      lua/binding/integration tests + keymap coverage) succeeded after the
+#      latest edit, not just that a binary got linked. Stale or missing → block.
+#   2) Luacheck (whole repo) — staged or not. Same scope as `make -j4`.
 #   3) Anti-pattern lint — only violations on lines being introduced/modified
 #      block. Pre-existing violations on untouched lines do not.
 #   4) Lint-allow gate — any newly added `lint-allow:` annotation pauses the
@@ -14,20 +17,19 @@
 #
 # Bypass for a single commit: `git commit --no-verify` (not recommended).
 
-set -u
+set -euo pipefail
 
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
-[ -z "$REPO_ROOT" ] && exit 0
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 
-# --- 1) build freshness ------------------------------------------------------
-EXE="$REPO_ROOT/build/bin/jve.app/Contents/MacOS/jve"
-if [ ! -x "$EXE" ]; then
-    echo "PRE-COMMIT BLOCKED: no built executable at ${EXE#$REPO_ROOT/}" >&2
-    echo "Run \`make -j4\` (or \`make jve -j4\`) before committing." >&2
+# --- 1) clean-build freshness ------------------------------------------------
+MARKER="$REPO_ROOT/.last-clean-make"
+if [ ! -f "$MARKER" ]; then
+    echo "PRE-COMMIT BLOCKED: no clean-build marker at ${MARKER#$REPO_ROOT/}" >&2
+    echo "Run \`make -j4\` to a green finish before committing." >&2
     exit 1
 fi
 
-exe_mtime=$(stat -f %m "$EXE")
+marker_mtime=$(stat -f %m "$MARKER")
 newest_src=""
 newest_mtime=0
 while IFS= read -r src; do
@@ -36,13 +38,19 @@ while IFS= read -r src; do
         newest_mtime=$m
         newest_src=$src
     fi
-done < <(find "$REPO_ROOT/src" -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' \))
+done < <(
+    find "$REPO_ROOT/src" -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' -o -name '*.lua' \)
+    find "$REPO_ROOT/tests" -type f -name '*.lua' -not -path '*/autogen/*'
+    find "$REPO_ROOT/keymaps" -type f 2>/dev/null
+    find "$REPO_ROOT" -maxdepth 2 -name 'CMakeLists.txt' -not -path '*/build/*'
+    echo "$REPO_ROOT/Makefile"
+)
 
-if [ "$newest_mtime" -gt "$exe_mtime" ]; then
-    echo "PRE-COMMIT BLOCKED: built executable is stale." >&2
+if [ "$newest_mtime" -gt "$marker_mtime" ]; then
+    echo "PRE-COMMIT BLOCKED: last clean \`make -j4\` is older than newer source." >&2
     echo "  newer source: ${newest_src#$REPO_ROOT/}" >&2
-    echo "  exe:          ${EXE#$REPO_ROOT/}" >&2
-    echo "Rebuild with \`make -j4\` (or \`make jve -j4\` for UI iteration) and re-stage." >&2
+    echo "  marker:       ${MARKER#$REPO_ROOT/}" >&2
+    echo "Run \`make -j4\` to a green finish and re-stage." >&2
     exit 1
 fi
 

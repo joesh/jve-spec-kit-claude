@@ -138,68 +138,73 @@ local function assert_diag_quality(pc_handle, label, has_audio_flag, fps_num, fp
 end
 
 --------------------------------------------------------------------------------
--- Media paths (Anamnesis fixtures — same as test_tmb_real_timeline.lua)
+-- Media path — single 64s ProRes/PCM Anamnesis source backs both V1 video
+-- and A1 audio. A/V sync verification doesn't require distinct content; the
+-- timing assertions read the same source via different TC origins (video
+-- first_frame_tc vs audio first_sample_tc).
 --------------------------------------------------------------------------------
-local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis")
+local MEDIA_DIR = ienv.resolve_repo_path("tests/fixtures/media/anamnesis-untrimmed")
+local MEDIA_PATH = MEDIA_DIR .. "/A007_05202055_C007.mov"
 
-local media = {
-    day4_c002 = MEDIA_DIR .. "/A012_C002.mov",  -- 18-097-002
-    day4_c008 = MEDIA_DIR .. "/A012_C008.mov",  -- 18-100-001
-    day4_c005 = MEDIA_DIR .. "/A012_C005.mov",  -- 18-098-003
-    day4_c010 = MEDIA_DIR .. "/A012_C010.mov",  -- 18-100-003
-}
-
--- Verify all media files exist
-for name, path in pairs(media) do
-    local f = io.open(path, "r")
-    assert(f, "Missing fixture: " .. name .. " at " .. path)
+do
+    local f = io.open(MEDIA_PATH, "r")
+    assert(f, "Missing fixture: " .. MEDIA_PATH)
     f:close()
 end
 
 --------------------------------------------------------------------------------
--- Timeline layout: V1 rapid-cut sequence starting at frame 122960
--- 3 cuts in ~326 frames (~13s at 25fps)
+-- Timeline layout: V1 rapid-cut sequence + parallel A1 audio.
+-- 4 video clips covering frames 122960..123286 (~326 frames ≈ 13s at 25fps);
+-- A1 mirrors V1's layout so each video cut has a matched audio cut at the
+-- same sequence frame. A/V drift is measured against playback-pipeline
+-- timing across these cuts.
 --------------------------------------------------------------------------------
 local SEQ_FPS_NUM = 25
 local SEQ_FPS_DEN = 1
 local WINDOW_HI = 123286
 
--- Probe file's TC origin (first_frame_tc) via EMP binding.
--- source_in must be absolute TC = first_frame_tc + file_offset.
+-- Probe file's TC origin via EMP binding.
+-- source_in must be absolute TC: first_frame_tc for video, first_sample_tc
+-- for audio. The probe MUST populate the field — a nil here means a broken
+-- container or stale binding, not "default to 0"; A/V drift assertions
+-- would then pass against the wrong origin on both streams.
 local function tc_origin(path)
     local probe = EMP.MEDIA_FILE_PROBE(path)
     assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
-    return probe.first_frame_tc or 0
+    return assert(probe.first_frame_tc,
+        "MEDIA_FILE_PROBE: first_frame_tc nil for " .. path)
 end
 
-local v1_clips = {
-    { clip_id = "v1-18-097-002", media_path = media.day4_c002, sequence_start = 122960, duration = 43,  source_in = tc_origin(media.day4_c002), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-001", media_path = media.day4_c008, sequence_start = 123003, duration = 40,  source_in = tc_origin(media.day4_c008), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-098-003", media_path = media.day4_c005, sequence_start = 123043, duration = 129, source_in = tc_origin(media.day4_c005), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-    { clip_id = "v1-18-100-003", media_path = media.day4_c010, sequence_start = 123172, duration = 114, source_in = tc_origin(media.day4_c010), rate_num = 25, rate_den = 1, speed_ratio = 1.0 },
-}
-
--- Audio track: same clips, same layout (AAC 48kHz stereo in all Anamnesis MOVs)
--- Audio clips: use sample rate and first_sample_tc for TC origin
 local function audio_tc_origin(path)
     local probe = EMP.MEDIA_FILE_PROBE(path)
     assert(probe, "MEDIA_FILE_PROBE failed: " .. path)
-    return probe.first_sample_tc or 0
+    return assert(probe.first_sample_tc,
+        "MEDIA_FILE_PROBE: first_sample_tc nil for " .. path)
 end
 
-local a1_clips = {}
-for i, vc in ipairs(v1_clips) do
-    a1_clips[i] = {
-        clip_id = "a1-" .. vc.clip_id:sub(4),
-        media_path = vc.media_path,
-        sequence_start = vc.sequence_start,
-        duration = vc.duration,
-        source_in = audio_tc_origin(vc.media_path),
-        rate_num = 48000,
-        rate_den = 1,
-        speed_ratio = vc.speed_ratio,
-    }
-end
+local timeline_dsl = require("synthetic.helpers.timeline_dsl")
+
+local TIMELINE = [[
+    V1: [clip-1 122960-123003][clip-2 123003-123043][clip-3 123043-123172][clip-4 123172-123286]
+    A1: [clip-1 122960-123003][clip-2 123003-123043][clip-3 123043-123172][clip-4 123172-123286]
+]]
+
+local tracks = timeline_dsl.to_tmb(timeline_dsl.parse(TIMELINE), {
+    path_for        = function(_t, _c) return MEDIA_PATH end,
+    source_in_for   = function(_t, _c, kind)
+        if kind == "audio" then return audio_tc_origin(MEDIA_PATH) end
+        return tc_origin(MEDIA_PATH)
+    end,
+    rate_for        = function(_t, kind)
+        if kind == "audio" then return 48000, 1 end
+        return 25, 1
+    end,
+    speed_ratio_for = function(_t, _c) return 1.0 end,
+    id_prefix_for   = function(t) return t:lower() .. "-" end,
+})
+
+local v1_clips = tracks.video[1]
+local a1_clips = tracks.audio[1]
 
 --------------------------------------------------------------------------------
 -- TMB setup (2 pool threads for async decode)
@@ -355,6 +360,21 @@ do
     local fps_hi = target_fps * 1.5
     check(measured_fps >= fps_lo and measured_fps <= fps_hi,
         string.format("playback rate: %.1ffps (target %d±50%%)", measured_fps, target_fps))
+
+    -- (d2) Clip-routing: forward playback across cuts at 123003/123043/
+    -- 123172 (START_FRAME=122965, last_frame well past 123043 under any
+    -- reasonable rate) must fire transitions tagged with the matching
+    -- v1-clip-N ids. Decoder mis-routing (wrong clip's frame served) is
+    -- invisible to the rate/monotonic checks but shows up here.
+    check(#clip_transitions >= 2,
+        string.format("forward playback fired ≥2 clip transitions (got %d)",
+            #clip_transitions))
+    local v1_id_pattern = "^v1%-clip%-%d+$"
+    for i, t in ipairs(clip_transitions) do
+        check(t.clip_id and t.clip_id:match(v1_id_pattern),
+            string.format("transition[%d] tagged with v1-clip-N (got %s)",
+                i, tostring(t.clip_id)))
+    end
 
     -- (e) [Audio] Playhead advanced
     if has_audio then

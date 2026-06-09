@@ -12,8 +12,8 @@
 #                                  resources via CMake post-build bundling)
 #   - tests/live/                (Python runner + cases — lives outside
 #                                  the .app by design, drives it)
-#   - tests/binding/              (Lua --test scripts dispatched via _run_in_vm.sh)
-#   - tests/integration/          (Lua --test scripts dispatched via _run_in_vm.sh)
+#   - tests/synthetic/binding/    (Lua --test scripts dispatched via _run_in_vm.sh)
+#   - tests/synthetic/integration/ (Lua --test scripts dispatched via _run_in_vm.sh)
 #   - tools/resolve-helper/       (Python helper.py spawned by helper_fixture.lua
 #                                  in spec-023 binding tests — without this the
 #                                  helper-* binding tests fail to bind socket)
@@ -87,16 +87,17 @@ rsync -az --delete \
     --exclude='.DS_Store' \
     -- \
     tests/live \
-    tests/binding \
-    tests/integration \
+    tests/synthetic/binding \
+    tests/synthetic/integration \
     tests/test_env.lua \
     tests/import_schema.lua \
-    tests/helpers \
+    tests/synthetic/helpers \
     tests/fixtures/resolve \
     tools/resolve-helper \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
-    "tests/fixtures/media/anamnesis/2026-02-28-anamnesis joe edit-mm/2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
+    "tests/fixtures/media/anamnesis-trimmed/2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
     src/lua \
+    menus.xml \
     scripts/run_binding_tests.sh \
     tests/run_integration_tests.sh \
     scripts/_run_in_vm.sh \
@@ -118,6 +119,24 @@ echo "→ jve.app → $USER@$HOST:$GUEST_PATH/build/bin/"
 $SSH_OPTS "$USER@$HOST" "mkdir -p $GUEST_PATH/build/bin && rm -rf $GUEST_PATH/build/bin/jve.app"
 tar -ch -C "$(dirname "$APP")" "$(basename "$APP")" \
     | $SSH_OPTS "$USER@$HOST" "tar -x -C $GUEST_PATH/build/bin"
+
+echo "→ VM-side symlinks for media fixtures whose host targets don't exist on guest"
+# tests/fixtures/media/anamnesis-trimmed is a host symlink →
+# /Users/joe/Local/Anamnesis/anamnesis-trimmed-gold-timeline (host-only path).
+# On the guest the same content is mounted at
+# /Volumes/My Shared Files/Local/Anamnesis/anamnesis-trimmed-gold-timeline.
+# resolve_repo_path() in tests/test_env.lua prefers the synced tree over the
+# virtiofs mount, so a VM-side symlink at ~/jve/tests/fixtures/media/anamnesis-trimmed
+# wins over the broken host-target symlink that came across via rsync.
+$SSH_OPTS "$USER@$HOST" "
+    set -e
+    cd $GUEST_PATH/tests/fixtures/media
+    # rm -rf handles both cases: a prior symlink (file) OR a real directory
+    # left behind by earlier touch_media_fixtures runs or fixture-bootstrap
+    # code that didn't know the host path was a symlink.
+    rm -rf anamnesis-trimmed
+    ln -s '/Volumes/My Shared Files/Local/Anamnesis/anamnesis-trimmed-gold-timeline' anamnesis-trimmed
+"
 
 echo "✓ synced. Run smokes in guest with:"
 echo "    cd ~/jve && python3 -m pytest tests/live/cases/"

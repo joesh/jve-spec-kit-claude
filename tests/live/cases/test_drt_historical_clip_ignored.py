@@ -36,9 +36,8 @@ from pathlib import Path
 from tests.live.runner.case import JVESmokeCase
 
 FIXTURE = (
-    "tests/fixtures/media/anamnesis/"
-    "2026-02-28-anamnesis joe edit-mm/"
-    "2026-02-28-anamnesis-GOLD-MASTER-CANDIDATE.drt"
+    "tests/fixtures/media/anamnesis-trimmed/"
+    "2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt"
 )
 PHANTOM_PATH = r"D:\Reshoots\IMG_3270.MOV"
 
