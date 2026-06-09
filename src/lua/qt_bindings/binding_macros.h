@@ -42,12 +42,22 @@ protected:
     }
 };
 
-// Helper to get widget from Lua stack with type checking
+// Cast an already-extracted widget/layout void* (from lua_to_widget) to T*.
+// Both QWidget and QLayout inherit QObject (single inheritance), so the
+// void* reinterprets as QObject* without offset adjustment; qobject_cast
+// then uses Qt's metaobject system to verify the runtime type. Going
+// through QObject* (not QWidget*) matters: a void* holding a QLayout
+// would be UB to cast straight to QWidget*.
+template<typename T>
+T* widget_cast(void* ptr) {
+    if (!ptr) return nullptr;
+    return qobject_cast<T*>(static_cast<QObject*>(static_cast<QWidget*>(ptr)));
+}
+
+// Helper to get widget from Lua stack with type checking.
 template<typename T>
 T* get_widget(lua_State* L, int index = 1) {
-    void* widget_ptr = lua_to_widget(L, index);
-    if (!widget_ptr) return nullptr;
-    return qobject_cast<T*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)));
+    return widget_cast<T>(lua_to_widget(L, index));
 }
 
 class LuaScrollArea : public QScrollArea {

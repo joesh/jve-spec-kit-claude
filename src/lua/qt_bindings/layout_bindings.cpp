@@ -24,14 +24,8 @@ int lua_set_layout(lua_State* L) {
     // verify the actual runtime type — guards against a QWidget userdata
     // being passed where a QLayout is expected (which previously corrupted
     // setLayout via an unchecked static_cast).
-    void* widget_ptr = lua_to_widget(L, 1);
-    void* layout_ptr = lua_to_widget(L, 2);
-    QWidget* widget = widget_ptr
-        ? qobject_cast<QWidget*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)))
-        : nullptr;
-    QLayout* layout = layout_ptr
-        ? qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(layout_ptr)))
-        : nullptr;
+    QWidget* widget = widget_cast<QWidget>(lua_to_widget(L, 1));
+    QLayout* layout = widget_cast<QLayout>(lua_to_widget(L, 2));
 
     if (widget && layout) {
         widget->setLayout(layout);
@@ -45,21 +39,21 @@ int lua_set_layout(lua_State* L) {
 int lua_add_widget_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
     QWidget* widget = get_widget<QWidget>(L, 2);
-    
+
     if (!container_ptr || !widget) {
         lua_pushboolean(L, 0);
         return 1;
     }
-    
+
     // Try QSplitter
-    if (QSplitter* splitter = qobject_cast<QSplitter*>(static_cast<QWidget*>(container_ptr))) {
+    if (QSplitter* splitter = widget_cast<QSplitter>(container_ptr)) {
         splitter->addWidget(widget);
         lua_pushboolean(L, 1);
         return 1;
     }
-    
+
     // Try QLayout
-    if (QLayout* layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+    if (QLayout* layout = widget_cast<QLayout>(container_ptr)) {
          Qt::Alignment alignment = Qt::Alignment();
         if (lua_gettop(L) >= 3 && lua_isstring(L, 3)) {
             // TODO: Use the optimized lookup here later
@@ -89,8 +83,7 @@ int lua_insert_widget_in_layout(lua_State* L) {
     int index = luaL_checkinteger(L, 3);
     if (!container_ptr || !widget) return luaL_error(L, "insert_widget: layout and widget required");
 
-    QBoxLayout* box = qobject_cast<QBoxLayout*>(
-        static_cast<QObject*>(static_cast<QWidget*>(container_ptr)));
+    QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr);
     if (!box) return luaL_error(L, "insert_widget: container must be a QBoxLayout");
     box->insertWidget(index, widget);
     lua_pushboolean(L, 1);
@@ -101,7 +94,7 @@ int lua_add_stretch_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
     int stretch = lua_tointeger(L, 2);
     
-    if (QBoxLayout* box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+    if (QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr)) {
         box->addStretch(stretch);
         lua_pushboolean(L, 1);
     } else {
@@ -213,7 +206,7 @@ int lua_add_spacing_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
     int spacing = luaL_checkinteger(L, 2);
 
-    if (QBoxLayout* box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+    if (QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr)) {
         box->addSpacing(spacing);
         lua_pushboolean(L, 1);
     } else {
@@ -232,8 +225,8 @@ int lua_add_layout_to_layout(lua_State* L) {
         return 1;
     }
 
-    QBoxLayout* parent_box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(parent_ptr)));
-    QLayout* child_layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(child_ptr)));
+    QBoxLayout* parent_box = widget_cast<QBoxLayout>(parent_ptr);
+    QLayout* child_layout = widget_cast<QLayout>(child_ptr);
 
     if (parent_box && child_layout) {
         parent_box->addLayout(child_layout);
@@ -249,14 +242,8 @@ int lua_add_layout_to_layout(lua_State* L) {
 // so a swapped widget/layout userdata or a stale destroyed QObject is caught
 // at the metaobject layer instead of corrupting setLayout via a bad pointer.
 int lua_set_widget_layout(lua_State* L) {
-    void* widget_ptr = lua_to_widget(L, 1);
-    void* layout_ptr = lua_to_widget(L, 2);
-    QWidget* widget = widget_ptr
-        ? qobject_cast<QWidget*>(static_cast<QObject*>(static_cast<QWidget*>(widget_ptr)))
-        : nullptr;
-    QLayout* layout = layout_ptr
-        ? qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(layout_ptr)))
-        : nullptr;
+    QWidget* widget = widget_cast<QWidget>(lua_to_widget(L, 1));
+    QLayout* layout = widget_cast<QLayout>(lua_to_widget(L, 2));
 
     if (widget && layout) {
         widget->setLayout(layout);

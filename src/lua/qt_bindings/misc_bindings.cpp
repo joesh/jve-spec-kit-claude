@@ -806,7 +806,7 @@ int lua_set_layout_stretch_factor(lua_State* L) {
     QWidget* widget = get_widget<QWidget>(L, 2);
     int stretch = luaL_checkinteger(L, 3);
     
-    if (QBoxLayout* box = qobject_cast<QBoxLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+    if (QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr)) {
         box->setStretchFactor(widget, stretch);
         lua_pushboolean(L, 1);
     } else {
@@ -850,7 +850,7 @@ int qt_set_layout_alignment(lua_State* L) {
     
     Qt::Alignment alignment = getAlignmentMap().value(QString::fromUtf8(align_str), Qt::Alignment());
     
-    if (QLayout* layout = qobject_cast<QLayout*>(static_cast<QObject*>(static_cast<QWidget*>(container_ptr)))) {
+    if (QLayout* layout = widget_cast<QLayout>(container_ptr)) {
         layout->setAlignment(alignment);
         lua_pushboolean(L, 1);
     } else {
