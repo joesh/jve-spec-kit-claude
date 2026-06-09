@@ -87,7 +87,7 @@ Pick the single command that matches what you touched. The "final check" rows ar
 
 | What you touched | Iteration loop                                              | Final check                |
 |------------------|-------------------------------------------------------------|----------------------------|
-| Lua only         | `cd tests && luajit test_harness.lua test_thing.lua`        | `./tests/run_lua_tests_all.sh` |
+| Lua only         | `cd tests && luajit test_harness.lua synthetic/lua/test_thing.lua`        | `./tests/run_lua_tests_all.sh` |
 | C++ only         | `cd build && make jve -j4` (rebuilds binary, no tests) | `make -j4`                 |
 | Lua + C++        | one of the above per iteration                              | `make -j4`                 |
 
@@ -105,7 +105,7 @@ make -j4 > /tmp/make.log 2>&1; grep -E "warning:|error:|FAILED" /tmp/make.log
 ## Running tests (mechanics)
 ```bash
 # Run a single test (from tests/ directory)
-cd tests && luajit test_harness.lua test_example.lua
+cd tests && luajit test_harness.lua synthetic/lua/test_example.lua
 
 # Run all Lua tests without stopping when one errors
 ./tests/run_lua_tests_all.sh

@@ -315,7 +315,8 @@ function M.create(opts)
     -- and a master sequence is the leaf that holds the media_ref to the file).
     local json = require("dkjson")
     local master_seq_for_media = {}
-    for _, key in ipairs(cfg.media.order or {}) do  -- lint-allow: R010 cfg is a test-config table, not a schema row
+    assert(cfg.media.order, "ripple_layout: cfg.media.order required")
+    for _, key in ipairs(cfg.media.order) do
         local m = cfg.media[key]
         local fps_num = m.fps_numerator or cfg.fps_numerator
         local meta = json.encode({

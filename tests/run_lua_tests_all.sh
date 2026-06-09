@@ -3,9 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$ROOT_DIR/tests"
+LUA_TEST_DIR="$TEST_DIR/synthetic/lua"
 HARNESS="$TEST_DIR/test_harness.lua"
 
-# Run from tests directory to match CMake lua_tests target behavior
+# Run from tests/ (matches CMake lua_tests target + harness path math),
+# pass each test as `synthetic/lua/<basename>` so harness dofile() finds it.
 cd "$TEST_DIR"
 
 export LUA_PATH="$ROOT_DIR/src/lua/?.lua;$ROOT_DIR/src/lua/?/init.lua;$ROOT_DIR/tests/?.lua;$ROOT_DIR/tests/?/init.lua;;${LUA_PATH:-}"
@@ -20,9 +22,7 @@ OUT_FILE="$ROOT_DIR/test-errors.txt"
 : > "$OUT_FILE"
 
 mapfile -t TESTS < <(
-  find "$TEST_DIR" -maxdepth 1 -type f -name 'test_*.lua' \
-    ! -name 'test_harness.lua' \
-    -print | sort
+  find "$LUA_TEST_DIR" -maxdepth 1 -type f -name 'test_*.lua' -print | sort
 )
 
 TOTAL=${#TESTS[@]}
@@ -38,11 +38,12 @@ echo "[lua-tests] Running $TOTAL Lua test(s)..."
 
 for t in "${TESTS[@]}"; do
   base="$(basename "$t")"
+  rel="synthetic/lua/$base"
   echo "[lua-tests] → $base"
 
   tmp_out="$(mktemp -t lua_test_out.XXXXXX)"
   # Run each test in its own LuaJIT process via the harness so failures don't abort the suite.
-  if luajit test_harness.lua "$base" >"$tmp_out" 2>&1; then
+  if luajit test_harness.lua "$rel" >"$tmp_out" 2>&1; then
     PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
