@@ -724,7 +724,7 @@ int lua_set_widget_attribute(lua_State* L) {
 }
 
 int lua_set_object_name(lua_State* L) {
-    QObject* obj = static_cast<QObject*>(lua_to_widget(L, 1));
+    QObject* obj = get_widget<QObject>(L, 1);
     const char* name = luaL_checkstring(L, 2);
     if (!obj) return luaL_error(L, "qt_set_object_name: object required");
     obj->setObjectName(QString::fromUtf8(name));
@@ -817,7 +817,7 @@ int lua_set_layout_stretch_factor(lua_State* L) {
 
 int lua_set_widget_alignment(lua_State* L)
 {
-    QWidget* widget = (QWidget*)lua_to_widget(L, 1);
+    QWidget* widget = get_widget<QWidget>(L, 1);
     const char* alignment = lua_tostring(L, 2);
 
     if (widget && alignment) {
