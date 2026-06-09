@@ -146,7 +146,13 @@ function M.request(fix, verb, args)
     while deadline > 0 do
         if #fix._chunks > 0 then
             response = response .. table.concat(fix._chunks)
-            fix._chunks = {}
+            -- In-place clear: the ready_read callback captured this
+            -- table as an upvalue at fixture.start. Replacing fix._chunks
+            -- with `{}` would leave the callback writing to an
+            -- orphaned table and the polling loop reading from a
+            -- forever-empty one — silent 30s hangs on every request
+            -- after the first.
+            for i = #fix._chunks, 1, -1 do fix._chunks[i] = nil end
         end
         if response:sub(-1) == "\n" then
             break
