@@ -70,8 +70,6 @@ void CPUVideoSurface::regrade() {
 
 void CPUVideoSurface::setGrade(const emp::CdlParams& cdl) {
     m_cdl = cdl;
-    // Rule 3.0: Park mode must be pull-based. regrade() uses the
-    // already-held m_imageSource to update the display immediately.
     regrade();
 }
 
