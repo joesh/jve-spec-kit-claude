@@ -333,6 +333,10 @@ void registerQtBindings(lua_State* L)
     // process total CPU time, which overcounts wall clock under threading)
     lua_pushcfunction(L, lua_qt_monotonic_s); lua_setglobal(L, "qt_monotonic_s");
 
+    // JVE process PID — used by resolve_bridge correlation ids and the
+    // per-project pidlock owner check (replaces ps shellout).
+    lua_pushcfunction(L, lua_qt_get_pid); lua_setglobal(L, "qt_get_pid");
+
     // Bulk file stat for the media probe disk cache (avoids 500×
     // io.popen stat calls that would dominate the cache-lookup cost)
     lua_pushcfunction(L, lua_qt_file_stat_batch); lua_setglobal(L, "qt_file_stat_batch");

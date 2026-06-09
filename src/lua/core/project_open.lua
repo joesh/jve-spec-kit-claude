@@ -35,18 +35,11 @@ local log = require("core.logger").for_area("media")
 local function pidlock_path(project_path) return project_path .. "-jve-pidlock" end
 
 local function our_pid()
-    -- Get JVE's own PID without a C binding: the shell that io.popen
-    -- spawns has us as its parent; ppid of $$ is our pid. Works under
-    -- the introspection wall because it's the kernel telling us about
-    -- the parent of our own immediate child.
-    local h = assert(io.popen("/bin/ps -o ppid= -p $$"),
-        "project_open.our_pid: io.popen(ps) failed")
-    local raw = h:read("*l")
-    h:close()
-    assert(raw, "project_open.our_pid: ps returned nil")
-    local pid = tonumber((raw:gsub("%s+", "")))
-    assert(pid and pid > 0, string.format(
-        "project_open.our_pid: ps returned non-numeric ppid: %q", raw))
+    assert(type(qt_get_pid) == "function",
+        "project_open.our_pid: qt_get_pid binding missing")
+    local pid = qt_get_pid()
+    assert(type(pid) == "number" and pid > 0, string.format(
+        "project_open.our_pid: qt_get_pid returned %s", tostring(pid)))
     return pid
 end
 

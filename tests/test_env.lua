@@ -265,6 +265,16 @@ if not _G.qt_fs_mkdir_p then
     end
 end
 
+-- qt_get_pid (misc_bindings.cpp::lua_qt_get_pid) — production returns
+-- QCoreApplication::applicationPid(). The plain-luajit harness uses
+-- LuaJIT FFI's getpid(2). Same scope/discipline as the qt_fs_mkdir_p
+-- stub above: real value, no fallback.
+if not _G.qt_get_pid then
+    local ffi = require("ffi")
+    pcall(ffi.cdef, "int getpid(void);")
+    _G.qt_get_pid = function() return tonumber(ffi.C.getpid()) end
+end
+
 -- Lightweight dependency guards for tests
 local function enforce(expected, fn)
     if type(fn) ~= "function" then

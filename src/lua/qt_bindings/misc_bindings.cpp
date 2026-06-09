@@ -64,6 +64,16 @@ static int lua_qt_monotonic_s(lua_State* L) {
     return 1;
 }
 
+// Process ID of the running JVE. Used by core.resolve_bridge.client to
+// stamp helper-protocol correlation ids (`jve-<pid>-<unix_s>-<seq>`) and
+// by core.project_open's pidlock (replaces the previous `io.popen("ps
+// -o ppid= -p $$")` shellout, which cost ~5ms per pidlock op and broke
+// when launched from Finder with a stripped PATH).
+static int lua_qt_get_pid(lua_State* L) {
+    lua_pushinteger(L, static_cast<lua_Integer>(QCoreApplication::applicationPid()));
+    return 1;
+}
+
 // Single-path mtime as seconds-since-epoch with sub-second resolution.
 // Returns nil when the file doesn't exist (callers race the FS between
 // existence checks and mtime reads — the same nil-on-missing contract

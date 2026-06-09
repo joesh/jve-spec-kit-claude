@@ -33,8 +33,12 @@ local M = {}
 
 local NEXT_CORR_ID = 1
 local function mint_correlation_id()
-    local our_pid = qt_get_pid and qt_get_pid() or 0
-    local id = string.format("jve-%d-%d-%d", our_pid, os.time(), NEXT_CORR_ID)
+    assert(type(qt_get_pid) == "function",
+        "client.mint_correlation_id: qt_get_pid binding missing — "
+        .. "correlation ids must embed the JVE PID so helper logs can "
+        .. "trace replies to the JVE that issued them")
+    local id = string.format("jve-%d-%d-%d",
+        qt_get_pid(), os.time(), NEXT_CORR_ID)
     NEXT_CORR_ID = NEXT_CORR_ID + 1
     return id
 end
@@ -150,7 +154,13 @@ function M.connect(socket_path, opts)
     qt_local_socket_connect(handle, socket_path)
 
     if not qt_local_socket_wait_for_connected(handle, connect_timeout_ms) then
-        local err = last_socket_error or "SocketTimeoutError"
+        -- The error_cb fires synchronously inside Qt's event loop for
+        -- instant-failure cases (server_not_found, connection_refused);
+        -- when wait_for_connected returns false WITHOUT an errorOccurred
+        -- having fired, it actually IS a timeout — the only safe
+        -- inference. Snake_case mirrors socket_error_name() in
+        -- local_socket_bindings.cpp.
+        local err = last_socket_error or "timeout"
         qt_local_socket_destroy(handle)
         return nil, string.format("failed to connect to %s: %s",
             socket_path, err)
@@ -184,7 +194,9 @@ function M.connect(socket_path, opts)
         local corr_id = mint_correlation_id()
         in_flight[corr_id] = { on_complete = on_complete }
 
-        local envelope = protocol.build_request(corr_id, verb, args)
+        local envelope = protocol.build_request({
+            id = corr_id, verb = verb, args = args,
+        })
         if not qt_local_socket_write(handle, envelope) then
             in_flight[corr_id] = nil
             on_complete(nil, "resolve_api_error", "failed to write to socket")

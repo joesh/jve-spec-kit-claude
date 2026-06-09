@@ -37,6 +37,16 @@ if not _G.qt_fs_mkdir_p then
     end
 end
 
+-- qt_get_pid: production via misc_bindings.cpp::lua_qt_get_pid; harness
+-- uses LuaJIT FFI getpid(2). project_open.our_pid() and the resolve_bridge
+-- client both assert this is a function, so it must exist before any
+-- production module loads.
+if not _G.qt_get_pid then
+    local ffi = require("ffi")
+    pcall(ffi.cdef, "int getpid(void);")
+    _G.qt_get_pid = function() return tonumber(ffi.C.getpid()) end
+end
+
 -- Now we can require modules
 local command_manager = require("core.command_manager")
 
