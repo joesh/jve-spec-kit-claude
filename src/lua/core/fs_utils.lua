@@ -26,6 +26,16 @@ function M.file_exists(path, mode)
     return false
 end
 
+--- Check if path is an existing directory. Portable across pure-Lua
+--- test harness and the JVE process (no binding dep).
+--- @param path string
+--- @return boolean
+function M.dir_exists(path)
+    if not path or path == "" then return false end
+    local exit_code = os.execute(string.format("test -d %q", path))
+    return exit_code == 0 or exit_code == true
+end
+
 --- Get file modification time (seconds since epoch, sub-second resolution).
 --- Returns nil if the file doesn't exist (expected case — callers race
 --- against FS changes between file_exists and file_mtime).

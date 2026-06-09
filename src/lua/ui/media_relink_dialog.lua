@@ -17,6 +17,7 @@
 local M = {}
 local log = require("core.logger").for_area("media")
 local json = require("dkjson")
+local dir_exists = require("core.fs_utils").dir_exists
 
 --- Pure: build a human-readable rich-text summary of a relink-results
 --- struct ({relinked, failed, ambiguous}). Partitions `failed` into
@@ -594,6 +595,13 @@ function M.show(media_list, parent_window, opts)
     _G[relink_name] = function()
         if not search_dir or search_dir == "" then
             qt.PROPERTIES.SET_TEXT(error_label, "Select a search directory first")
+            qt.DISPLAY.SET_VISIBLE(error_label, true)
+            return
+        end
+
+        if not dir_exists(search_dir) then
+            qt.PROPERTIES.SET_TEXT(error_label, string.format(
+                "Search directory does not exist: %s", search_dir))
             qt.DISPLAY.SET_VISIBLE(error_label, true)
             return
         end

@@ -33,6 +33,7 @@
 local M = {}
 local log = require("core.logger").for_area("media")
 local shell_capture = require("core.fs_utils").shell_capture
+local dir_exists = require("core.fs_utils").dir_exists
 
 --- Check if file exists at given path
 -- @param file_path string Absolute path to check
@@ -58,6 +59,9 @@ end
 -- @param extensions table Set of extensions to include (e.g., {mov=true, mp4=true})
 -- @return table Array of absolute file paths
 local function scan_directory(root_dir, extensions)
+    assert(dir_exists(root_dir), string.format(
+        "scan_directory: search directory does not exist: %s", root_dir))
+
     local results = {}
 
     -- Use find command for efficiency (Lua's directory traversal is slow)
