@@ -67,6 +67,25 @@ local function db_audio_scroll()
     return seq.audio_scroll_offset
 end
 
+-- Ruler and track lanes must map time across the SAME pixel span, or
+-- the playhead (and every clip edge) drifts horizontally between the
+-- ruler and the tracks. The vertical scrollbar reserves a gutter
+-- inside the panes; the ruler row mirrors it with a trailing spacer.
+-- (Joe's 2026-06-09 report: playhead offset between ruler and tracks
+-- after scrollbars were enabled.)
+do
+    local qtp = qt.PROPERTIES
+    local ruler_w = qtp.GET_SIZE(panel.ruler_widget)
+    local video_w = qtp.GET_SIZE(panel.video_widget)
+    local audio_w = qtp.GET_SIZE(panel.audio_widget)
+    assert(ruler_w == video_w and ruler_w == audio_w, string.format(
+        "time→x span mismatch: ruler=%spx video=%spx audio=%spx — the "
+        .. "playhead and clip edges will not line up between the ruler "
+        .. "and the track lanes",
+        tostring(ruler_w), tostring(video_w), tostring(audio_w)))
+end
+print("  ruler and track lanes share one time span: OK")
+
 -- First-open framing: a never-scrolled sequence shows V1 (video tracks
 -- stack with V1 at the content bottom, so the video pane must sit at
 -- its maximum) and A1 (audio pane at the top). Guards the 2026-06-07

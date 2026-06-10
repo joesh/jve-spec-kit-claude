@@ -2482,14 +2482,33 @@ function M.create(opts)
     qt_constants.CONTROL.SET_LAYOUT_SPACING(timeline_area_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(timeline_area_layout, 0, 0, 0, 0)
 
-    -- Ruler widget (fixed height)
+    -- Ruler widget (fixed height). The ruler and the track views must
+    -- map time across the SAME pixel span — but the track views live
+    -- inside scroll areas whose vertical scrollbar reserves a gutter
+    -- (width depends on the OS scrollbar style; 0 for overlay
+    -- scrollbars). A trailing spacer in the ruler row mirrors the
+    -- measured gutter so ruler width == track viewport width by
+    -- construction; sync_ruler_gutter (below) keeps it current.
+    local ruler_row = qt_constants.WIDGET.CREATE()
+    local ruler_row_layout = qt_constants.LAYOUT.CREATE_HBOX()
+    qt_constants.CONTROL.SET_LAYOUT_SPACING(ruler_row_layout, 0)
+    qt_constants.CONTROL.SET_LAYOUT_MARGINS(ruler_row_layout, 0, 0, 0, 0)
     local ruler_widget = qt_constants.WIDGET.CREATE_TIMELINE()
     local ruler = timeline_ruler.create(ruler_widget, state)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(ruler_widget, "Expanding", "Fixed")
     qt_constants.PROPERTIES.SET_MIN_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Set 32px height
     qt_constants.PROPERTIES.SET_MAX_HEIGHT(ruler_widget, timeline_ruler.RULER_HEIGHT)  -- Lock to 32px
-    qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, ruler_widget)
+    local ruler_gutter = qt_constants.WIDGET.CREATE()
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(ruler_gutter, "Fixed", "Fixed")
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(ruler_gutter, 0)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(ruler_gutter, 0)
+    qt_constants.LAYOUT.ADD_WIDGET(ruler_row_layout, ruler_widget)
+    qt_constants.LAYOUT.ADD_WIDGET(ruler_row_layout, ruler_gutter)
+    qt_constants.LAYOUT.SET_ON_WIDGET(ruler_row, ruler_row_layout)
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(ruler_row, "Expanding", "Fixed")
+    qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, ruler_row)
     M.ruler_widget = ruler_widget
+    M._ruler_gutter = ruler_gutter
 
     -- Drag selection coordination state (panel-level, not view-level)
     local drag_state = {
@@ -2566,10 +2585,14 @@ function M.create(opts)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_video_scroll, video_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_video_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOff")
-    -- Visible (transient overlay on macOS) scrollbar: a second user
-    -- gesture source alongside the wheel, wired below via
-    -- qt_set_scroll_area_v_user_scroll_handler.
-    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_video_scroll, "AsNeeded")
+    -- Visible scrollbar: a second user gesture source alongside the
+    -- wheel, wired below via qt_set_scroll_area_v_user_scroll_handler.
+    -- AlwaysOn (not AsNeeded) so the reserved gutter is CONSTANT: with
+    -- AsNeeded a pane whose content fits would be gutter-less while the
+    -- other pane isn't, and the two lanes (and the ruler) would map
+    -- time across different pixel spans. On overlay-scrollbar systems
+    -- the gutter measures 0 either way — see sync_ruler_gutter.
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_video_scroll, "AlwaysOn")
     -- Remove scroll area frame/border so content width matches ruler width exactly
     qt_constants.PROPERTIES.SET_STYLE(timeline_video_scroll, "QScrollArea { border: none; }")
 
@@ -2614,8 +2637,9 @@ function M.create(opts)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(timeline_audio_scroll, audio_widget)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(timeline_audio_scroll, "Expanding", "Expanding")
     qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOff")
-    -- Visible scrollbar, same rationale as the video pane above.
-    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_audio_scroll, "AsNeeded")
+    -- Visible scrollbar, AlwaysOn for a constant gutter — same
+    -- rationale as the video pane above.
+    qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(timeline_audio_scroll, "AlwaysOn")
     -- Remove scroll area frame/border so content width matches ruler width exactly
     qt_constants.PROPERTIES.SET_STYLE(timeline_audio_scroll, "QScrollArea { border: none; }")
 
@@ -2824,6 +2848,18 @@ function M.create(opts)
         M.apply_pane_scroll("audio")
     end
     qt_set_scroll_area_v_range_handler(M.timeline_audio_scroll, "audio_scroll_range_changed")
+
+    -- The ruler-gutter spacer mirrors the scrollbar's reserved width.
+    -- The style hint isn't trustworthy until the widget is realized
+    -- (it reports transient/0 pre-show), and rangeChanged never fires
+    -- for sequences whose content fits the viewport — so hook the
+    -- scroll area's geometry changes: the first real layout pass fires
+    -- one, and the sync is an idempotent pair of width pins.
+    _G["video_scroll_geometry_changed"] = function()
+        M.sync_ruler_gutter()
+    end
+    qt_constants.SIGNAL.SET_GEOMETRY_CHANGE_HANDLER(
+        M.timeline_video_scroll, "video_scroll_geometry_changed")
 
     -- Set stretch factor so splitter gets all remaining vertical space
     qt_set_layout_stretch_factor(timeline_area_layout, vertical_splitter, 1)
@@ -3357,6 +3393,26 @@ function M.user_scroll_pane_to(pane, value)
     M.apply_pane_scroll(pane)
 end
 
+--- Keep the ruler's time→x span identical to the track views'. The
+--- vertical scrollbar reserves a gutter inside each pane's scroll area
+--- (a STYLE metric: 0 on overlay-scrollbar systems, the scrollbar's
+--- hinted width otherwise — qt_get_scroll_area_v_gutter asks the style
+--- directly, so the value is stable regardless of in-flight layout
+--- passes, unlike measuring widget widths). Mirror it into the ruler
+--- row's trailing spacer so ruler width == track viewport width by
+--- construction. Both panes are AlwaysOn, so one pane's gutter speaks
+--- for both.
+function M.sync_ruler_gutter()
+    if not (M._ruler_gutter and M.timeline_video_scroll) then
+        return  -- panel not built yet (bootstrap)
+    end
+    -- luacheck: globals qt_get_scroll_area_v_gutter
+    local gutter = qt_get_scroll_area_v_gutter(M.timeline_video_scroll)
+    if not gutter then return end  -- widget destroyed (teardown)
+    qt_constants.PROPERTIES.SET_MIN_WIDTH(M._ruler_gutter, gutter)
+    qt_constants.PROPERTIES.SET_MAX_WIDTH(M._ruler_gutter, gutter)
+end
+
 --- User gesture: scroll a pane by a wheel delta (widget px). Matches
 --- Qt's native wheel direction: positive dy (fingers swipe down on a
 --- natural-scrolling trackpad) moves the content down, i.e. decreases
@@ -3416,6 +3472,7 @@ local function rebuild_for_displayed_tab()
     -- handlers re-apply as soon as the new content's range exists.
     M.apply_pane_scroll("video")
     M.apply_pane_scroll("audio")
+    M.sync_ruler_gutter()
 
     -- Tab widget: ensure it exists in the strip and apply current styling.
     -- The underline tracks the DISPLAYED tab (which is what we just swapped

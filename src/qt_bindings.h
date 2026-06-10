@@ -105,6 +105,7 @@ int lua_set_scroll_area_viewport_margins(lua_State* L);
 int lua_get_scroll_area_v_scroll(lua_State* L);
 int lua_set_scroll_area_v_scroll(lua_State* L);
 int lua_get_scroll_area_v_metrics(lua_State* L);
+int lua_get_scroll_area_v_gutter(lua_State* L);
 int lua_set_scroll_area_v_user_scroll_handler(lua_State* L);
 int lua_set_scroll_area_v_range_handler(lua_State* L);
 int lua_set_scroll_area_wheel_handler(lua_State* L);

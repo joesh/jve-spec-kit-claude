@@ -1326,6 +1326,22 @@ int lua_set_scroll_area_h_scroll_handler(lua_State* L) {
     return 0;
 }
 
+// Width the vertical scrollbar RESERVES from the viewport (the
+// "gutter"). A style metric, not a layout measurement — stable
+// regardless of pending layout passes: transient (overlay) scrollbars
+// reserve nothing; classic scrollbars reserve their sizeHint width.
+// Used to keep the ruler's time→x span equal to the track viewports'.
+int lua_get_scroll_area_v_gutter(lua_State* L) {
+    QScrollArea* sa = get_widget<QScrollArea>(L, 1);
+    if (!sa) return 0;
+    QScrollBar* sb = sa->verticalScrollBar();
+    if (!sb) return 0;
+    bool transient = sa->style()->styleHint(
+        QStyle::SH_ScrollBar_Transient, nullptr, sb);
+    lua_pushinteger(L, transient ? 0 : sb->sizeHint().width());
+    return 1;
+}
+
 // Vertical scroll metrics: value, max, pageStep (viewport height in
 // content coordinates). The gesture entry points need all three to
 // clamp a user target and convert between top-anchored widget values
