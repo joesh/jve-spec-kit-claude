@@ -58,10 +58,7 @@ local build_edge_key = ripple_edge.build_edge_key
 local bracket_for_normalized_edge = ripple_edge.bracket_for_normalized_edge
 local build_neighbor_bounds_cache = ripple_track.build_neighbor_bounds_cache
 local hydrate_executed_mutations_if_missing = ripple_undo.hydrate_executed_mutations_if_missing
-local signum
-local infer_implied_normalized_edge
 local lower_bound_start_frames
-local pick_gap_anchor_clip_id
 local compute_neighbor_bounds
 local ensure_neighbor_bounds
 local should_negate_edge
@@ -2497,66 +2494,90 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             local raw_edge_type = edge_info.edge_type
             local anchor_clip_id = edge_info.original_clip_id or edge_info.clip_id
             if anchor_clip_id and raw_edge_type then
+                -- Limiter lookup stays keyed by the MECHANICAL edge the
+                -- trim engine operates on (an injected gap ripples via
+                -- its in-edge), even when the display edge differs.
                 local edge_key = string.format("%s:%s",
                     tostring(anchor_clip_id), tostring(raw_edge_type))
                 local source_key = build_edge_key(edge_info)
                 local applied = compute_applied_delta(ctx, source_key, edge_info)
                 local is_implicit = edge_info.is_implicit_injection == true
+                local display_edge_type = raw_edge_type
+                local display_normalized = edge_info.normalized_edge
+                local display_delta = applied or 0
+                if is_implicit then
+                    -- The injected gap absorbs the ripple: its in-edge is
+                    -- the immobile upstream boundary; the edge that travels
+                    -- with the downstream content — the one the user must
+                    -- see move — is the gap's OUT edge. The mechanical
+                    -- trim is a head-trim (positive delta shrinks the gap),
+                    -- so the out edge moves by the NEGATED applied delta
+                    -- (out = start + duration; start fixed, duration -d).
+                    display_edge_type = "out"
+                    display_normalized = nil
+                    display_delta = -display_delta
+                end
                 upsert({
                     edge_key = edge_key,
                     clip_id = anchor_clip_id,
                     track_id = edge_info.track_id,
-                    raw_edge_type = raw_edge_type,
-                    normalized_edge = edge_info.normalized_edge or edge_utils.to_bracket(raw_edge_type),
+                    raw_edge_type = display_edge_type,
+                    normalized_edge = display_normalized or edge_utils.to_bracket(display_edge_type),
                     is_selected = not is_implicit,
                     is_implied = is_implicit,
                     is_limiter = clamped_edges[edge_key] == true,
-                    applied_delta_frames = applied or 0,
+                    applied_delta_frames = display_delta,
                 })
             end
         end
     end
 
-    -- Find a clip id to anchor a preview edge on an unselected track
-    -- at the ripple boundary: prefer a gap clip that contains the
-    -- boundary frame, otherwise fall back to the nearest media clip.
-    local function anchor_clip_id_for_propagated_track(track_clips, boundary_frames, raw_edge_type)
+    -- Find the clip AND edge that anchor a preview handle on an
+    -- unselected track at the ripple boundary. The moving edge is a
+    -- property of the anchor's geometry, never of the lead edge's
+    -- bracket: a gap containing the boundary absorbs the ripple, so its
+    -- OUT edge travels with the downstream content; with no containing
+    -- gap, the first clip at/after the boundary shifts bodily, so its
+    -- IN edge is the moving boundary. (Pre-fix this borrowed the lead's
+    -- bracket via infer_implied_normalized_edge, which could put the
+    -- handle on the gap's immobile in-edge — rendered at x=0 in the
+    -- regression scenario. Pinned by test_implied_edge_preview.)
+    local function anchor_for_propagated_track(track_clips, boundary_frames)
         -- Half-open occupancy: clip covers [sequence_start, sequence_start+duration).
         -- A gap ending exactly AT boundary_frames does NOT contain it — the
         -- frame at the end-exclusive boundary belongs to the next clip.
         -- Use strict `>` to match the sibling find_gap_at_boundary
         -- (line ~1038), which gets the same containment test right.
-        -- Pre-fix used `>=`, which mis-selected an upstream gap whose
-        -- right edge sits on the boundary instead of falling through to
-        -- pick_gap_anchor_clip_id for the correct neighbor.
         for _, c in ipairs(track_clips) do
             if c.is_gap
                 and c.sequence_start <= boundary_frames
                 and (c.sequence_start + c.duration) > boundary_frames then
-                return c.id
+                return c.id, "out"
             end
         end
-        return pick_gap_anchor_clip_id(track_clips, boundary_frames, raw_edge_type)
+        local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
+        local right = track_clips[idx]
+        if right then return right.id, "in" end
+        local left = (idx > 1) and track_clips[idx - 1] or nil
+        if left then return left.id, "out" end
+        return nil, nil
     end
 
     -- Emit a preview entry per unselected affected track (tracks that
     -- ripple via propagation rather than a direct edge selection). The
     -- entry anchors to the gap clip at the ripple boundary on that
     -- track so the UI can render the implied edge correctly.
-    local function preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges, lead_normalized, global_sign)
+    local function preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges)
         local boundary_default = ctx.earliest_ripple_time or 0
         for track_id in pairs(ctx.affected_tracks) do
             if not ctx.selected_tracks[track_id] then
                 local shift_frames = ctx.track_shift_amounts[track_id]
                     or ctx.downstream_shift_frames or 0
                 if shift_frames ~= 0 then
-                    local desired = infer_implied_normalized_edge(
-                        lead_normalized, signum(shift_frames), global_sign)
                     local boundary_frames = ctx.track_ripple_start_frames[track_id] or boundary_default
                     local track_clips = ctx.track_clip_map[track_id] or {}
-                    local raw_edge_type = desired or "in"
-                    local anchor_clip_id = anchor_clip_id_for_propagated_track(
-                        track_clips, boundary_frames, raw_edge_type)
+                    local anchor_clip_id, raw_edge_type =
+                        anchor_for_propagated_track(track_clips, boundary_frames)
                     if anchor_clip_id then
                         local edge_key = string.format("%s:%s",
                             tostring(anchor_clip_id), tostring(raw_edge_type))
@@ -2565,7 +2586,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                             clip_id = anchor_clip_id,
                             track_id = track_id,
                             raw_edge_type = raw_edge_type,
-                            normalized_edge = desired or "in",
+                            normalized_edge = edge_utils.to_bracket(raw_edge_type),
                             is_selected = false,
                             is_implied = true,
                             is_limiter = clamped_edges[edge_key] == true,
@@ -2610,15 +2631,9 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     -- which are implied, and which were clamped in red.
     local function build_edge_preview_payload(ctx, clamped_edges)
         local edges, by_key, upsert = make_edge_preview_accumulator()
-        local lead_normalized = nil
-        if ctx.lead_edge_entry then
-            lead_normalized = ctx.lead_edge_entry.normalized_edge
-                or edge_utils.to_bracket(ctx.lead_edge_entry.edge_type)
-        end
-        local global_sign = signum(ctx.clamped_delta_frames or 0)
 
         preview_entries_for_selected_edges(ctx, upsert, clamped_edges)
-        preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges, lead_normalized, global_sign)
+        preview_entries_for_propagated_tracks(ctx, upsert, clamped_edges)
         preview_entries_for_leftover_limiters(ctx, upsert, clamped_edges, by_key)
 
         return {
@@ -2786,32 +2801,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
     }
 end
 
-
-signum = function(value)
-    if not value then
-        return 0
-    end
-    if value > 0 then
-        return 1
-    elseif value < 0 then
-        return -1
-    end
-    return 0
-end
-
-infer_implied_normalized_edge = function(lead_normalized, shift_sign, global_sign)
-    if shift_sign == 0 then
-        return lead_normalized
-    end
-    if not lead_normalized then
-        return (shift_sign > 0) and "out" or "in"
-    end
-    if global_sign ~= 0 and shift_sign ~= global_sign then
-        return (lead_normalized == "in") and "out" or "in"
-    end
-    return lead_normalized
-end
-
 lower_bound_start_frames = function(track_clips, boundary_frames)
     if type(track_clips) ~= "table" or #track_clips == 0 then
         return 1
@@ -2832,19 +2821,6 @@ lower_bound_start_frames = function(track_clips, boundary_frames)
         end
     end
     return lo
-end
-
-pick_gap_anchor_clip_id = function(track_clips, boundary_frames, raw_edge_type)
-    if type(track_clips) ~= "table" or #track_clips == 0 then
-        return nil
-    end
-    local idx = lower_bound_start_frames(track_clips, boundary_frames or 0)
-    local right = track_clips[idx]
-    local left = (idx > 1) and track_clips[idx - 1] or nil
-    if raw_edge_type == "out" then
-        return (right and right.id) or (left and left.id) or nil
-    end
-    return (left and left.id) or (right and right.id) or nil
 end
 
 compute_neighbor_bounds = function(all_clips, original_state, clip_id)
