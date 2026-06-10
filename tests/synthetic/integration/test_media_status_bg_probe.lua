@@ -96,11 +96,11 @@ do
     media_status.start_background_probe(nil)
     -- Generous timeout: the probe runs FFmpeg on a worker thread, and
     -- the integration suite runs dozens of JVE processes in parallel —
-    -- 5s flaked under that load (2026-06-09). wait_until polls, so the
-    -- healthy case still returns the moment the flip lands; the
-    -- behavioral guarantee (stale cache entry gets re-validated) is
-    -- unchanged.
-    wait_until(function() return moved_changed end, 30,
+    -- 5s flaked under that load (2026-06-09), 30s flaked again under a
+    -- full `make -j4` (2026-06-10). wait_until polls, so the healthy
+    -- case still returns the moment the flip lands; the behavioral
+    -- guarantee (stale cache entry gets re-validated) is unchanged.
+    wait_until(function() return moved_changed end, 90,
         "moved_file flip after real probe")
     Signals.disconnect(sub)
 
