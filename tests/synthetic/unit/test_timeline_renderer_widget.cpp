@@ -357,6 +357,40 @@ private slots:
         }
     }
 
+    // 3. A clip's drawn width never changes while panning. Scrolling moves
+    //    viewport_start in whole frames but ppf is fractional, so every
+    //    edge shifts by a fractional number of device pixels per step;
+    //    snapping edges independently on the VIEWPORT grid makes each
+    //    clip's width breathe between N and N+1 device columns at
+    //    different scroll positions — the field shimmers (Joe's
+    //    "scrolling still feels like it flickers", 2026-06-09). The
+    //    renderer must anchor snapping to the CONTENT grid: given the
+    //    pan offset, snap content coordinates and translate by whole
+    //    device pixels.
+    void testClipWidthRigidWhilePanning() {
+        timeline->resize(200, 60);
+        const qreal content_left = 100.37, width_px = 30.4;
+        int first_width = -1;
+        for (int step = 0; step <= 9; ++step) {
+            const qreal pan = step * 0.31;  // fractional logical px, like real scroll steps
+            timeline->clearCommands();
+            timeline->setPanOffsetPx(pan);
+            timeline->addRect(content_left - pan, 10, width_px, 40, "#ffffff");
+            QImage img = timeline->grab().toImage();
+            const qreal dpr = img.devicePixelRatio();
+            const int row = int(30 * dpr);
+            int lit = 0;
+            for (int c = int(80 * dpr); c < int(145 * dpr); ++c) {
+                if (qRed(img.pixel(c, row)) > 128) lit++;
+            }
+            if (first_width < 0) first_width = lit;
+            QVERIFY2(lit == first_width, qPrintable(QString(
+                "pan=%1: clip spans %2 device columns (first frame had %3) — "
+                "width breathes while panning, the timeline shimmers")
+                .arg(pan).arg(lit).arg(first_width)));
+        }
+    }
+
     // 2. Two same-color rects sharing a fractional edge (abutting clips)
     //    tile seamlessly — no darker AA seam column at the shared edge.
     void testAbuttingRectsNoSeam() {

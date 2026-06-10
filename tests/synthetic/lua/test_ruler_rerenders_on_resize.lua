@@ -23,6 +23,7 @@ local last_lines_at_width = {}   -- width -> count of add_line() calls in that r
 
 _G.timeline = {
     get_dimensions = function() return widget_width, 32 end,
+    set_pan_offset_px = function() end,
     clear_commands = function()
         clear_calls = clear_calls + 1
         last_lines_at_width[widget_width] = 0

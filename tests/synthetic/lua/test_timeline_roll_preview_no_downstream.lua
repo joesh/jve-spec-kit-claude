@@ -70,6 +70,7 @@ local original_timeline = timeline
 local highlight_rects = {}
 _G.timeline = {
     get_dimensions = function() return viewport_width, viewport_height end,
+    set_pan_offset_px = function() end,
     clear_commands = function() highlight_rects = {} end,
     add_rect = function(_, x, y, w, h, color)
         table.insert(highlight_rects, {x = x, y = y, w = w, h = h, color = color})

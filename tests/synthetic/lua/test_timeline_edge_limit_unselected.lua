@@ -62,6 +62,7 @@ local drawn_rects = {}
 local original_timeline = timeline
 _G.timeline = {
     get_dimensions = function() return width, height end,
+    set_pan_offset_px = function() end,
     clear_commands = function() drawn_rects = {} end,
     add_rect = function(_, x, y, w, h, color)
         table.insert(drawn_rects, {x = x, y = y, w = w, h = h, color = color})

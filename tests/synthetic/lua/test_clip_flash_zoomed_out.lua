@@ -25,6 +25,7 @@ require("test_env")
 local draw_calls = {}
 _G.timeline = {
     get_dimensions = function() return 1920, 200 end,
+    set_pan_offset_px = function() end,
     clear_commands = function() end,
     add_rect = function(_w, x, y, width, height, color)
         table.insert(draw_calls, { x = x, y = y, width = width, height = height, color = color })

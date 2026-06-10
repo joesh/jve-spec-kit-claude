@@ -1239,6 +1239,12 @@ function M.render(view)
     if not ctx then return end
 
     timeline.clear_commands(view.widget)
+    -- Paint-time x-snapping anchors to the content grid so panning is a
+    -- rigid translation (clip widths can't breathe ±1 device px as the
+    -- fractional phase walks during scroll). The renderer needs the pan
+    -- offset in float pixels: viewport_start at the current px/frame scale.
+    timeline.set_pan_offset_px(view.widget,
+        ctx.viewport_start * (ctx.width / ctx.viewport_duration))
     render_track_backgrounds(view, ctx.state_module, ctx.layout_by_index, ctx.width, ctx.height)
 
     -- Base rendering must never bulk-scan all clips — per-track iteration

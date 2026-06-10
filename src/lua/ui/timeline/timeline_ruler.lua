@@ -75,6 +75,12 @@ function M.create(widget, state_module)
         local viewport_end_frames = viewport_start_frames + viewport_duration_frames
         local playhead_frame = state_module.get_playhead_position()
 
+        -- Ruler ticks pan with the timeline content: anchor paint-time
+        -- x-snapping to the content grid (same contract as the clip view)
+        -- so tick widths/positions translate rigidly while scrolling.
+        timeline.set_pan_offset_px(ruler.widget,
+            viewport_start_frames * (width / viewport_duration_frames))
+
         -- Ruler background
         timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
         timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)

@@ -14,6 +14,7 @@ require("test_env")
 -- Stub timeline drawing backend
 _G.timeline = {
     get_dimensions = function() return 800, 200 end,
+    set_pan_offset_px = function() end,
     clear_commands = function() end,
     add_rect = function() end,
     add_line = function() end,

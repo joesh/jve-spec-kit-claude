@@ -55,6 +55,15 @@ public:
                      const float* peaks, int peak_count, const QString& color,
                      bool reversed = false);
 
+    // Horizontal pan offset in float logical pixels: viewport_start mapped
+    // at the current pixels-per-frame scale. Paint-time x-snapping anchors
+    // to the CONTENT grid (x + pan) and translates by the offset rounded
+    // to whole device pixels, so panning is a rigid translation — no clip
+    // width may breathe between N and N+1 device columns as the fractional
+    // phase walks. Set once per frame alongside the draw commands. Pinned
+    // by testClipWidthRigidWhilePanning.
+    void setPanOffsetPx(qreal px) { pan_offset_px_ = px; }
+
     // Test method to demonstrate command system
     void renderTestTimeline();
     
@@ -116,6 +125,9 @@ private:
                                      const char* type_str,
                                      const char* callsite);
 
+    // See setPanOffsetPx.
+    qreal pan_offset_px_ = 0.0;
+
     // Drawing commands queue
     std::vector<DrawCommand> drawing_commands_;
 
@@ -158,4 +170,5 @@ extern "C" {
     int lua_timeline_set_resize_event_handler(lua_State* L);
     int lua_timeline_set_lua_state(lua_State* L);
     int lua_timeline_set_desired_height(lua_State* L);
+    int lua_timeline_set_pan_offset_px(lua_State* L);
 }

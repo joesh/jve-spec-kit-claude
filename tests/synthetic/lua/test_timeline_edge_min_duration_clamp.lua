@@ -63,6 +63,7 @@ end
 local original_timeline = timeline
 timeline = {
     get_dimensions = function() return width, height end,
+    set_pan_offset_px = function() end,
     clear_commands = function() end,
     add_rect = function() end,
     add_line = function() end,

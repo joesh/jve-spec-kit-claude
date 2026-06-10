@@ -174,8 +174,26 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
     // rects that share a float edge keep sharing the snapped edge —
     // gapless and seamless tiling. Pinned by testHairlineCrisp… and
     // testAbuttingRectsNoSeam.
+    //
+    // X snapping anchors to the CONTENT grid, not the viewport: scrolling
+    // moves viewport_start in whole frames but ppf is fractional, so every
+    // x coordinate shifts by a fractional device-pixel amount per step —
+    // snapping viewport coordinates directly makes each clip's width
+    // breathe between N and N+1 device columns at scroll positions that
+    // differ per clip (the field shimmers while panning). snapX rounds
+    // (v + pan) on the device grid and translates back by the pan offset
+    // rounded to whole device pixels: panning becomes a rigid translation
+    // (widths invariant), results stay on the device grid (crisp), and a
+    // single round of a monotonic value keeps zoom motion monotonic.
+    // Pinned by testClipWidthRigidWhilePanning. Y needs no anchor:
+    // vertical scroll offsets are whole logical pixels.
     const qreal dpr = devicePixelRatioF();
-    const auto snap = [dpr](qreal v) { return std::round(v * dpr) / dpr; };
+    const qreal pan = pan_offset_px_;
+    const qreal pan_snapped = std::round(pan * dpr) / dpr;
+    const auto snapX = [dpr, pan, pan_snapped](qreal v) {
+        return std::round((v + pan) * dpr) / dpr - pan_snapped;
+    };
+    const auto snapY = [dpr](qreal v) { return std::round(v * dpr) / dpr; };
 
     for (const auto& cmd : drawing_commands_) {
         painter.setPen(QPen(cmd.color, cmd.line_width));
@@ -183,10 +201,10 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
 
         switch (cmd.type) {
             case DrawCommand::RECT: {
-                const qreal left = snap(cmd.x);
-                const qreal top = snap(cmd.y);
-                const qreal right = snap(cmd.x + cmd.width);
-                const qreal bottom = snap(cmd.y + cmd.height);
+                const qreal left = snapX(cmd.x);
+                const qreal top = snapY(cmd.y);
+                const qreal right = snapX(cmd.x + cmd.width);
+                const qreal bottom = snapY(cmd.y + cmd.height);
                 painter.fillRect(QRectF(left, top, right - left, bottom - top), cmd.color);
                 break;
             }
@@ -198,7 +216,7 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
 
             case DrawCommand::LINE:
                 painter.setPen(QPen(cmd.color, cmd.line_width));
-                painter.drawLine(QLineF(snap(cmd.x), snap(cmd.y), snap(cmd.x2), snap(cmd.y2)));
+                painter.drawLine(QLineF(snapX(cmd.x), snapY(cmd.y), snapX(cmd.x2), snapY(cmd.y2)));
                 break;
 
             case DrawCommand::TRIANGLE: {
@@ -253,9 +271,9 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                     if (band_w < 1) band_w = 1;
                     // Same device-grid edge snapping as RECT — adjacent
                     // bands share float edges, so they keep tiling.
-                    const qreal bl = snap(cmd.x + i * px_step);
-                    const qreal br = snap(cmd.x + i * px_step + band_w);
-                    painter.drawRect(QRectF(bl, snap(y0), br - bl, snap(y0 + band_h) - snap(y0)));
+                    const qreal bl = snapX(cmd.x + i * px_step);
+                    const qreal br = snapX(cmd.x + i * px_step + band_w);
+                    painter.drawRect(QRectF(bl, snapY(y0), br - bl, snapY(y0 + band_h) - snapY(y0)));
                 }
                 break;
             }
@@ -694,6 +712,9 @@ void registerTimelineBindings(lua_State* L)
     lua_pushcfunction(L, lua_timeline_set_desired_height);
     lua_setfield(L, -2, "set_desired_height");
 
+    lua_pushcfunction(L, lua_timeline_set_pan_offset_px);
+    lua_setfield(L, -2, "set_pan_offset_px");
+
     lua_setglobal(L, "timeline");
 
 }
@@ -923,6 +944,20 @@ int lua_timeline_set_desired_height(lua_State* L)
 
     if (timeline) {
         timeline->setDesiredHeight(height);
+        lua_pushboolean(L, 1);
+    } else {
+        lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+int lua_timeline_set_pan_offset_px(lua_State* L)
+{
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
+    qreal pan_px = luaL_checknumber(L, 2);
+
+    if (timeline) {
+        timeline->setPanOffsetPx(pan_px);
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
