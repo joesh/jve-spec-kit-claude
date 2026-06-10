@@ -39,7 +39,24 @@ else
 #         thresholds flake. Dedicated CPU keeps them stable.
 #   - Structuring A → B (not everything in parallel) avoids the ~30s
 #     slowdown that N-way parallelism otherwise costs the perf batches.
+# Fast-path: if `.last-clean-make` is newer than every input the full
+# pipeline consumes, the previous green run still proves the tree is
+# clean — skip lint+build+tests entirely. Shares the freshness
+# comparator with hooks/pre-commit via scripts/check_clean_make.sh so
+# the two gates can't drift. Sibling Claude sessions sharing the
+# checkout benefit too: whichever one finishes `make -j4` first
+# refreshes the marker, and the others' pre-commit gates pass without
+# re-running anything.
 all: configure
+	@if { find src -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' -o -name '*.lua' \) -print0; \
+	      find tests -type f -name '*.lua' -not -path '*/autogen/*' -print0; \
+	      find keymaps -type f -print0 2>/dev/null; \
+	      find . -maxdepth 2 -name 'CMakeLists.txt' -not -path '*/build/*' -print0; \
+	      printf 'Makefile\0'; \
+	    } | scripts/check_clean_make.sh 2>/dev/null; then \
+		echo "make: .last-clean-make newer than every source — nothing to do."; \
+		exit 0; \
+	fi
 	@luacheck src tests > .luacheck.log 2>&1 & \
 	 LUACHECK_PID=$$!; \
 	 $(MAKE) -C $(BUILD_DIR) --no-print-directory; \

@@ -22,37 +22,20 @@ set -euo pipefail
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
 
 # --- 1) clean-build freshness ------------------------------------------------
-MARKER="$REPO_ROOT/.last-clean-make"
-if [ ! -f "$MARKER" ]; then
-    echo "PRE-COMMIT BLOCKED: no clean-build marker at ${MARKER#$REPO_ROOT/}" >&2
-    echo "Run \`make -j4\` to a green finish before committing." >&2
-    exit 1
-fi
-
-marker_mtime=$(stat -f %m "$MARKER")
-newest_src=""
-newest_mtime=0
-while IFS= read -r src; do
-    m=$(stat -f %m "$src")
-    if [ "$m" -gt "$newest_mtime" ]; then
-        newest_mtime=$m
-        newest_src=$src
-    fi
-done < <(
-    find "$REPO_ROOT/src" -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' -o -name '*.lua' \)
-    find "$REPO_ROOT/tests" -type f -name '*.lua' -not -path '*/autogen/*'
-    find "$REPO_ROOT/keymaps" -type f 2>/dev/null
-    find "$REPO_ROOT" -maxdepth 2 -name 'CMakeLists.txt' -not -path '*/build/*'
-    echo "$REPO_ROOT/Makefile"
-)
-
-if [ "$newest_mtime" -gt "$marker_mtime" ]; then
-    echo "PRE-COMMIT BLOCKED: last clean \`make -j4\` is older than newer source." >&2
-    echo "  newer source: ${newest_src#$REPO_ROOT/}" >&2
-    echo "  marker:       ${MARKER#$REPO_ROOT/}" >&2
+# Check only files being committed: if the last green `make -j4`
+# covered every staged change, this commit is verified — sibling
+# Claude sessions' untracked edits don't matter (they block THEIR own
+# commit gate, not ours). Comparator lives in scripts/check_clean_make.sh
+# so the Makefile fast-path uses identical mtime semantics.
+if ! git diff --cached --name-only -z --diff-filter=ACMR \
+        | "$REPO_ROOT/scripts/check_clean_make.sh" 2> /tmp/jve-precommit-freshness.err; then
+    echo "PRE-COMMIT BLOCKED: a staged file is newer than .last-clean-make." >&2
+    cat /tmp/jve-precommit-freshness.err >&2
     echo "Run \`make -j4\` to a green finish and re-stage." >&2
+    rm -f /tmp/jve-precommit-freshness.err
     exit 1
 fi
+rm -f /tmp/jve-precommit-freshness.err
 
 # --- 2) luacheck (whole repo) -----------------------------------------------
 # Matches `make -j4`'s luacheck scope: every src/ + tests/ .lua file, not
