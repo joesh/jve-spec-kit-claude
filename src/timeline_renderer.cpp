@@ -715,6 +715,9 @@ void registerTimelineBindings(lua_State* L)
     lua_pushcfunction(L, lua_timeline_set_pan_offset_px);
     lua_setfield(L, -2, "set_pan_offset_px");
 
+    lua_pushcfunction(L, lua_timeline_get_commands);
+    lua_setfield(L, -2, "get_commands");
+
     lua_setglobal(L, "timeline");
 
 }
@@ -961,6 +964,66 @@ int lua_timeline_set_pan_offset_px(lua_State* L)
         lua_pushboolean(L, 1);
     } else {
         lua_pushboolean(L, 0);
+    }
+    return 1;
+}
+
+// Read back the real pending draw-command queue as an array of tables.
+// Test witness: renderer tests assert on what will actually be painted —
+// produced through the real bindings — instead of stubbing the timeline
+// global. Fields mirror DrawCommand; type is "rect"|"text"|"line"|
+// "triangle"|"waveform".
+int lua_timeline_get_commands(lua_State* L)
+{
+    JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
+    if (!timeline) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    const auto& cmds = timeline->commands();
+    lua_createtable(L, static_cast<int>(cmds.size()), 0);
+    int index = 1;
+    for (const auto& cmd : cmds) {
+        lua_newtable(L);
+
+        const char* type_name = nullptr;
+        switch (cmd.type) {
+            case JVE::TimelineRenderer::DrawCommand::RECT:     type_name = "rect"; break;
+            case JVE::TimelineRenderer::DrawCommand::TEXT:     type_name = "text"; break;
+            case JVE::TimelineRenderer::DrawCommand::LINE:     type_name = "line"; break;
+            case JVE::TimelineRenderer::DrawCommand::TRIANGLE: type_name = "triangle"; break;
+            case JVE::TimelineRenderer::DrawCommand::WAVEFORM: type_name = "waveform"; break;
+        }
+        lua_pushstring(L, type_name);
+        lua_setfield(L, -2, "type");
+
+        lua_pushnumber(L, cmd.x);  lua_setfield(L, -2, "x");
+        lua_pushnumber(L, cmd.y);  lua_setfield(L, -2, "y");
+        lua_pushnumber(L, cmd.width);  lua_setfield(L, -2, "width");
+        lua_pushnumber(L, cmd.height); lua_setfield(L, -2, "height");
+        lua_pushnumber(L, cmd.x2); lua_setfield(L, -2, "x2");
+        lua_pushnumber(L, cmd.y2); lua_setfield(L, -2, "y2");
+        lua_pushnumber(L, cmd.x3); lua_setfield(L, -2, "x3");
+        lua_pushnumber(L, cmd.y3); lua_setfield(L, -2, "y3");
+
+        lua_pushstring(L, cmd.color.name().toUtf8().constData());
+        lua_setfield(L, -2, "color");
+        lua_pushinteger(L, cmd.line_width);
+        lua_setfield(L, -2, "line_width");
+
+        if (cmd.type == JVE::TimelineRenderer::DrawCommand::TEXT) {
+            lua_pushstring(L, cmd.text.toUtf8().constData());
+            lua_setfield(L, -2, "text");
+        }
+        if (cmd.type == JVE::TimelineRenderer::DrawCommand::WAVEFORM) {
+            lua_pushinteger(L, cmd.peak_count);
+            lua_setfield(L, -2, "peak_count");
+            lua_pushboolean(L, cmd.reversed);
+            lua_setfield(L, -2, "reversed");
+        }
+
+        lua_rawseti(L, -2, index++);
     }
     return 1;
 }

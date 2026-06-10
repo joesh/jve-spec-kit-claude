@@ -89,18 +89,10 @@ public:
     // Set desired height for layout system (called from Lua)
     void setDesiredHeight(int height);
 
-protected:
-    void paintEvent(QPaintEvent* event) override;
-    void mousePressEvent(QMouseEvent* event) override;
-    void mouseDoubleClickEvent(QMouseEvent* event) override;
-    void mouseReleaseEvent(QMouseEvent* event) override;
-    void mouseMoveEvent(QMouseEvent* event) override;
-    void wheelEvent(QWheelEvent* event) override;
-    void keyPressEvent(QKeyEvent* event) override;
-    void resizeEvent(QResizeEvent* event) override;
-
-private:
-    // Drawing command structure
+    // Drawing command structure. Public so the get_commands binding can
+    // expose the real pending queue to Lua — renderer tests assert on
+    // what will actually be painted instead of stubbing the timeline
+    // global (the queue is the widget's output contract with the painter).
     struct DrawCommand {
         enum Type { RECT, TEXT, LINE, TRIANGLE, WAVEFORM } type;
         qreal x, y, width, height;
@@ -114,6 +106,19 @@ private:
         bool reversed = false;        // For WAVEFORM: if true, draw peaks right-to-left (reverse clip)
     };
 
+    const std::vector<DrawCommand>& commands() const { return drawing_commands_; }
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void mousePressEvent(QMouseEvent* event) override;
+    void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void mouseReleaseEvent(QMouseEvent* event) override;
+    void mouseMoveEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
+    void keyPressEvent(QKeyEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+
+private:
     // Execute all drawing commands
     void executeDrawingCommands(QPainter& painter);
 
@@ -171,4 +176,5 @@ extern "C" {
     int lua_timeline_set_lua_state(lua_State* L);
     int lua_timeline_set_desired_height(lua_State* L);
     int lua_timeline_set_pan_offset_px(lua_State* L);
+    int lua_timeline_get_commands(lua_State* L);
 }

@@ -141,6 +141,7 @@ launch_p() {
 
 launch_p "batch_waveform" "$BINARY" --test "$INTEG_DIR/batch_waveform.lua"
 launch_p "batch_editing"  "$BINARY" --test "$INTEG_DIR/batch_editing.lua"
+launch_p "batch_timeline_render" "$BINARY" --test "$INTEG_DIR/batch_timeline_render.lua"
 
 # Slow tests (optional)
 if [[ "$RUN_SLOW" == "1" ]]; then
