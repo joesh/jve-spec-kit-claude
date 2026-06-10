@@ -35,11 +35,11 @@
 -- which the current --test harness doesn't fully wire up. Tracked in
 -- todo_t025b_send_to_resolve_end_to_end.
 --
--- Run via:
+-- Run via (absolute path — relative resolves bundle-relative):
 --   ./build/bin/jve.app/Contents/MacOS/jve --test \
---       tests/live/test_send_identity.lua
+--       $PWD/tests/synthetic/integration/live_resolve/test_send_identity.lua
 
-local fixture = require("live.live_fixture")
+local fixture = require("synthetic.integration.live_resolve.live_fixture")
 
 local fix = fixture.start("/tmp/jve-live-send-identity.sock")
 fixture.skip_unless_live(fix, "test_send_identity")

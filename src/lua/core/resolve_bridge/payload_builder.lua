@@ -6,8 +6,8 @@
 ---
 ---   {
 ---     project   = { name, fps },
----     media_refs = { {file_uuid, name, path, native_rate, duration_frames,
----                     start_tc_frame, track_type}, ... },
+---     media_refs = { {file_uuid, name, file_path, native_rate,
+---                     duration_frames, start_tc_frame, track_type}, ... },
 ---     sequence  = { name, fps,
 ---                   tracks = { { type, clips = { {...}, ... } }, ... } }
 ---   }
@@ -118,7 +118,10 @@ local function media_to_payload(media, track_type)
     return {
         file_uuid        = media.id,
         name             = media.name,
-        path             = media:get_file_path(),
+        -- drt_writer's media_ref contract (drt_writer.lua §author doc)
+        -- names this field file_path; build_clip_element and the
+        -- media-pool item emitters read media.file_path.
+        file_path        = media:get_file_path(),
         native_rate      = media_native_rate(media),
         duration_frames  = media.duration,
         start_tc_frame   = tc_origin,
@@ -154,8 +157,18 @@ function M.build(db, project_id, sequence_id)
         },
         media_refs = {},
         sequence = {
-            name = seq.name,
-            fps  = fps_number(seq),
+            name   = seq.name,
+            fps    = fps_number(seq),
+            -- drt_writer's media-pool folder XML requires the timeline
+            -- resolution. Schema permits NULL width/height only on
+            -- masters without video; an editing sequence being sent to
+            -- Resolve must carry both.
+            width  = assert(seq.width,
+                "payload_builder: sequence missing width — id="
+                .. tostring(sequence_id)),
+            height = assert(seq.height,
+                "payload_builder: sequence missing height — id="
+                .. tostring(sequence_id)),
             tracks = {},
         },
     }

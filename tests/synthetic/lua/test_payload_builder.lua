@@ -129,6 +129,8 @@ check("sequence fps is exactly 30000/1001",
     payload.sequence.fps == NTSC_FPS)
 check("project name carried", payload.project.name == "P")
 check("sequence name carried", payload.sequence.name == "Edit 1")
+check("sequence resolution carried (writer media-pool XML needs it)",
+    payload.sequence.width == 1920 and payload.sequence.height == 1080)
 
 check("exactly one media ref", #payload.media_refs == 1)
 local mref = payload.media_refs[1]
@@ -139,8 +141,10 @@ check("media duration in native frames",
     mref and mref.duration_frames == MEDIA_DURATION)
 check("media native rate is exactly 30000/1001",
     mref and mref.native_rate == NTSC_FPS)
-check("media path carried",
-    mref and mref.path == "/footage/A005_C012.mov")
+-- Field name per drt_writer's media_ref input contract (the payload's
+-- consumer): file_path, read by build_clip_element + media-pool emitters.
+check("media file_path carried",
+    mref and mref.file_path == "/footage/A005_C012.mov")
 
 check("one video track", #payload.sequence.tracks == 1
     and payload.sequence.tracks[1].type == "video")

@@ -401,7 +401,13 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
                 "reason":   "absent_from_live_timeline",
             })
 
+    try:
+        timeline_uid = _api("timeline.GetUniqueId", timeline.GetUniqueId)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+
     return _ok(envelope_id, {
+        "resolve_timeline_id":   timeline_uid,
         "mapping":               mapping,
         "unrelinked":            unrelinked,
         "unkeyed_resolve_items": unkeyed_resolve_items,
@@ -865,8 +871,16 @@ def verb_delete_timeline(args, _resolve, project, envelope_id,
         # caller's teardown doesn't fail on a clean second run.
         return _ok(envelope_id, {"deleted": False})
 
+    # DeleteTimelines lives on MediaPool, not Project (Resolve scripting
+    # API; calling the nonexistent Project attribute raised
+    # "'NoneType' object is not callable" against live 20.3 — caught by
+    # the T026 live teardown 2026-06-09).
+    media_pool = project.GetMediaPool()
+    if media_pool is None:
+        return _error(envelope_id, "resolve_api_error",
+            "GetMediaPool() returned None")
     try:
-        ok = project.DeleteTimelines([target])
+        ok = media_pool.DeleteTimelines([target])
     except Exception as exc:
         return _error(envelope_id, "resolve_api_error",
             f"DeleteTimelines raised: {exc}")
