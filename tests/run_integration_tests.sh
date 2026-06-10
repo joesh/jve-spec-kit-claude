@@ -200,7 +200,8 @@ for t in \
   test_browser_activation_routes_through_commands.lua \
   test_scroll_persistence_reopen.lua \
   test_scroll_persistence_cold_start.lua \
-  test_scroll_survives_tab_switch.lua
+  test_scroll_survives_tab_switch.lua \
+  test_timeline_h_scrollbar.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"

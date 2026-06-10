@@ -1218,6 +1218,28 @@ int lua_set_scroll_area_v_user_scroll_handler(lua_State* L) {
     return 0;
 }
 
+// Standalone scrollbar USER-scroll handler — same actionTriggered
+// rationale as lua_set_scroll_area_v_user_scroll_handler above, for a
+// bare QScrollBar (the timeline's horizontal bar, whose axis is the
+// model's time viewport rather than any widget's pixel range).
+int lua_set_scroll_bar_user_scroll_handler(lua_State* L) {
+    QScrollBar* sb = get_widget<QScrollBar>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!sb || !handler_name) return 0;
+
+    std::string handler_str = std::string(handler_name);
+    QObject::connect(sb, &QScrollBar::actionTriggered, [L, sb, handler_str](int) {
+        // sliderPosition is the user's target at action time (value may
+        // not have caught up yet for tracking drags).
+        LuaHandlerCaller cb(L, handler_str.c_str(), "signal.scroll_bar_user_scroll");
+        if (cb.ready()) {
+            lua_pushinteger(L, sb->sliderPosition());
+            cb.invoke(1, 0);
+        }
+    });
+    return 0;
+}
+
 // Scroll area vertical range handler. Fires when the scrollable range
 // changes (content resize, viewport resize). The model owns the scroll
 // position; the view re-applies it whenever Qt's range catches up with

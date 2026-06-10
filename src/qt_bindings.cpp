@@ -314,6 +314,10 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_wheel_handler); lua_setglobal(L, "qt_set_scroll_area_wheel_handler");
     lua_pushcfunction(L, lua_get_scroll_area_v_metrics); lua_setglobal(L, "qt_get_scroll_area_v_metrics");
     lua_pushcfunction(L, lua_get_scroll_area_v_gutter); lua_setglobal(L, "qt_get_scroll_area_v_gutter");
+    lua_pushcfunction(L, lua_create_scroll_bar); lua_setglobal(L, "qt_create_scroll_bar");
+    lua_pushcfunction(L, lua_set_scroll_bar_metrics); lua_setglobal(L, "qt_set_scroll_bar_metrics");
+    lua_pushcfunction(L, lua_get_scroll_bar_metrics); lua_setglobal(L, "qt_get_scroll_bar_metrics");
+    lua_pushcfunction(L, lua_set_scroll_bar_user_scroll_handler); lua_setglobal(L, "qt_set_scroll_bar_user_scroll_handler");
     lua_pushcfunction(L, lua_get_splitter_handle); lua_setglobal(L, "qt_get_splitter_handle");
     lua_pushcfunction(L, lua_update_widget); lua_setglobal(L, "qt_update_widget");
 
