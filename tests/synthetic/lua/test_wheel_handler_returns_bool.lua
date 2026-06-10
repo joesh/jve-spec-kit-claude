@@ -8,11 +8,13 @@
 -- boundary so the bug is visible during make -j4 (luacheck + lua tests)
 -- rather than only at runtime when a wheel event finally fires.
 --
--- Domain expectation: handle_wheel(view, dx, dy, mods) returns a bool.
--- True ⇒ Qt scrolls vertically as usual (e.g. real vertical gesture).
--- False ⇒ C++ accepts the event without propagating, pinning vertical
--- position (e.g. the asymmetric axis lock has horizontal_only or
--- tentative active and is suppressing vertical drift).
+-- Domain expectation (model-owned scroll): handle_wheel(view, dx, dy,
+-- mods) ALWAYS returns false — vertical scrolling goes through the
+-- injected view.vertical_scroll entry point (the model write path), so
+-- C++ must never forward to QWidget::wheelEvent where native
+-- QScrollArea scrolling would move the view behind the model's back.
+-- A vertical-dominant gesture is observable as vertical_scroll.by(dy)
+-- calls, not as a true return.
 
 require("test_env")
 
@@ -38,11 +40,21 @@ local mock_state = {
     set_viewport_start_time = function() end,
     flush_pending_notify = function() end,
 }
-local view = { state = mock_state, widget = "mock_widget" }
+local vertical_scroll_dys = {}
+local view = {
+    state = mock_state,
+    widget = "mock_widget",
+    -- The panel injects this in production; vertical wheel intent must
+    -- arrive here (model write path), never via Qt propagation.
+    vertical_scroll = { by = function(dy) table.insert(vertical_scroll_dys, dy) end },
+}
 
 -- handle_wheel calls timeline.get_dimensions to convert pixels → frames.
 -- Stub it so the function reaches the return statement.
-_G.timeline = { get_dimensions = function() return 1000 end }
+_G.timeline = {
+    get_dimensions = function() return 1000 end,
+    set_pan_offset_px = function() end,
+}
 
 -- =============================================================================
 -- Test 1: horizontal-dominant gesture returns false (suppress propagation)
@@ -61,7 +73,8 @@ assert(result_h == false,
 print("  PASS: horizontal-dominant gesture returns false")
 
 -- =============================================================================
--- Test 2: pure-vertical gesture returns true (propagate vertical to Qt)
+-- Test 2: pure-vertical gesture scrolls via the injected entry point,
+-- still returns false (Qt must never scroll natively)
 -- =============================================================================
 view._scroll_axis_state = nil  -- fresh gesture state (also: a wall-clock gap
                                -- would reset it, but the simpler way is to
@@ -72,9 +85,12 @@ for _ = 1, 8 do
 end
 assert(type(result_v) == "boolean",
     "handle_wheel must return a boolean for vertical gestures, got " .. type(result_v))
-assert(result_v == true,
-    "sustained-vertical gesture must return true (allow Qt to scroll), got " .. tostring(result_v))
-print("  PASS: sustained-vertical gesture returns true")
+assert(result_v == false,
+    "vertical gesture must return false — vertical scroll goes through the "
+    .. "model write path, never Qt propagation; got " .. tostring(result_v))
+assert(#vertical_scroll_dys > 0,
+    "sustained-vertical gesture must reach the injected vertical_scroll entry point")
+print("  PASS: sustained-vertical gesture scrolls via model path, returns false")
 
 -- =============================================================================
 -- Test 3: handle_wheel rejects non-numeric deltas (NSF input validation)

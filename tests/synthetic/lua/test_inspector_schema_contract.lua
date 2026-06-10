@@ -29,9 +29,10 @@ check("FIELD_TYPES has INTEGER",   ft.INTEGER   == "INTEGER")
 check("FIELD_TYPES has DOUBLE",    ft.DOUBLE    == "DOUBLE")
 check("FIELD_TYPES has BOOLEAN",   ft.BOOLEAN   == "BOOLEAN")
 check("FIELD_TYPES has TIMECODE",          ft.TIMECODE          == "TIMECODE")
+check("FIELD_TYPES has TIMESTAMP",         ft.TIMESTAMP         == "TIMESTAMP")
 local key_count = 0
 for _ in pairs(ft) do key_count = key_count + 1 end
-check("FIELD_TYPES has exactly 7 keys (no stale)", key_count == 7,
+check("FIELD_TYPES has exactly 8 keys (no stale)", key_count == 8,
     "got " .. key_count)
 
 -- PROPERTY_TYPES enumeration.
