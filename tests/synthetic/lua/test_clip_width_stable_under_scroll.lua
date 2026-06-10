@@ -4,13 +4,17 @@
 -- frame extent must draw the same pixel width regardless of viewport scroll.
 --
 -- Bug symptom: when zoomed out, clips strobe/breathe by ±1 px as the
--- timeline scrolls, because viewport_start was folded *inside* the floor
--- in time_to_pixel — so the fractional parts of (clip_start - vs) * ppf
--- and (clip_end - vs) * ppf shift independently with vs.
+-- timeline scrolls, because time_to_pixel quantized to integer pixels
+-- with viewport_start folded inside the floor — the fractional parts of
+-- (clip_start - vs) * ppf and (clip_end - vs) * ppf shifted
+-- independently with vs.
 --
 -- Domain assertion: pixel width of a clip with fixed frame bounds is a
 -- function of (clip_start, clip_end, ppf) only. Translating the viewport
--- in whole frames must not change it.
+-- in whole frames must not change it. time_to_pixel is an exact float
+-- map (quantization happens at paint time, antialiased), so "must not
+-- change" means within float-arithmetic noise — far below a hundredth
+-- of a pixel — not bit-exact equality.
 
 package.path = "src/lua/?.lua;src/lua/?/init.lua;tests/?.lua;" .. package.path
 
@@ -44,24 +48,26 @@ for vs = 4500, 5500 do
     if not first_width then first_width = w end
 end
 
--- All recorded widths must equal first_width.
+-- All recorded widths must equal first_width (within float noise; a real
+-- strobe is a full ±1 px, five orders of magnitude above this tolerance).
+local EPSILON = 1e-6
 local mismatches = {}
 for _, rec in ipairs(widths) do
-    if rec.w ~= first_width then
+    if math.abs(rec.w - first_width) > EPSILON then
         table.insert(mismatches, rec)
     end
 end
 
 if #mismatches > 0 then
-    print(string.format("first_width = %d", first_width))
+    print(string.format("first_width = %.9f", first_width))
     for i = 1, math.min(8, #mismatches) do
         local rec = mismatches[i]
-        print(string.format("  vs=%d  width=%d  (expected %d)", rec.vs, rec.w, first_width))
+        print(string.format("  vs=%d  width=%.9f  (expected %.9f)", rec.vs, rec.w, first_width))
     end
     error(string.format(
         "%d/%d scroll steps produced a different clip width — strobing regression",
         #mismatches, #widths))
 end
 
-print(string.format("  PASS: all %d scroll steps held width=%d", #widths, first_width))
+print(string.format("  PASS: all %d scroll steps held width=%.3f", #widths, first_width))
 print("\n✅ test_clip_width_stable_under_scroll.lua passed")

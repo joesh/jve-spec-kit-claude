@@ -4,15 +4,15 @@
 -- a clip that has non-zero pixel width must draw consistently on every scroll
 -- step — no flashing on/off as the viewport translates by whole frames.
 --
--- Previously, time_to_pixel folded viewport_start *inside* the floor:
--- floor((t - vs) * ppf). The fractional parts of clip_start*ppf and
--- clip_end*ppf shifted independently as vs changed, so a fixed clip's
--- pixel width strobed ±1 px during scroll, and clips whose visible_width
--- collapsed to 0 flashed off entirely.
+-- Previously, time_to_pixel quantized to integer pixels, and the floor's
+-- interaction with viewport_start made a fixed clip's pixel width strobe
+-- ±1 px during scroll; clips whose visible_width collapsed to 0 flashed
+-- off entirely.
 --
--- Fix: time_to_pixel uses an absolute pixel grid — floor(t*ppf) -
--- floor(vs*ppf). Clip widths in pixel space are now invariant under scroll.
--- Sub-pixel clips cull cleanly (deterministic 0 width) instead of strobing.
+-- Fix: time_to_pixel is the exact float map (t - vs) * ppf — no
+-- quantization until the antialiased painter. Clip widths in pixel space
+-- are invariant under scroll (within float noise), and sub-pixel clips
+-- draw a 1px sliver instead of flashing.
 --
 -- Domain assertion: a clip with multi-pixel width at the current zoom
 -- draws on every scroll step inside its visibility window, with the same
@@ -83,9 +83,9 @@ local state = {
         return clips
     end,
     time_to_pixel = function(t, width)
+        -- Mirrors production viewport_state.time_to_pixel: exact float map.
         local px_per_frame = width / VIEWPORT_DURATION
-        return math.floor((t or 0) * px_per_frame)
-            - math.floor(viewport_start_time * px_per_frame)
+        return ((t or 0) - viewport_start_time) * px_per_frame
     end,
     debug_begin_layout_capture = function() end,
     debug_record_track_layout = function() end,
@@ -145,7 +145,9 @@ for vs = 0, CLIP_START do
         else
             local w = widths[1]
             if not first_width then first_width = w end
-            if w ~= first_width then
+            -- Float draw coords: equal within arithmetic noise. A real
+            -- strobe is a full ±1 px, five orders of magnitude larger.
+            if math.abs(w - first_width) > 1e-6 then
                 table.insert(mismatches, { vs = vs, w = w })
             end
         end

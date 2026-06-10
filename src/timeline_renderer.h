@@ -41,13 +41,17 @@ public:
     // Set Lua state for callbacks
     void setLuaState(lua_State* L) { lua_state_ = L; }
 
-    // Drawing command interface (for future Lua integration)
+    // Drawing command interface. Coordinates are qreal: the Lua side maps
+    // time→pixel with an exact linear function (no integer snapping — see
+    // viewport_state.time_to_pixel), and the antialiased painter resolves
+    // fractional coverage. Quantizing here would reintroduce the ±1 px
+    // boundary jiggle during zoom that the float pipeline exists to fix.
     void clearCommands();
-    void addRect(int x, int y, int width, int height, const QString& color);
-    void addText(int x, int y, const QString& text, const QString& color);
-    void addLine(int x1, int y1, int x2, int y2, const QString& color, int width = 1);
-    void addTriangle(int x1, int y1, int x2, int y2, int x3, int y3, const QString& color);
-    void addWaveform(int x, int y, int width, int height,
+    void addRect(qreal x, qreal y, qreal width, qreal height, const QString& color);
+    void addText(qreal x, qreal y, const QString& text, const QString& color);
+    void addLine(qreal x1, qreal y1, qreal x2, qreal y2, const QString& color, int width = 1);
+    void addTriangle(qreal x1, qreal y1, qreal x2, qreal y2, qreal x3, qreal y3, const QString& color);
+    void addWaveform(qreal x, qreal y, qreal width, qreal height,
                      const float* peaks, int peak_count, const QString& color,
                      bool reversed = false);
 
@@ -90,9 +94,9 @@ private:
     // Drawing command structure
     struct DrawCommand {
         enum Type { RECT, TEXT, LINE, TRIANGLE, WAVEFORM } type;
-        int x, y, width, height;
-        int x2, y2; // For lines
-        int x3, y3; // For triangles (third point)
+        qreal x, y, width, height;
+        qreal x2, y2; // For lines
+        qreal x3, y3; // For triangles (third point)
         QString text;
         QColor color;
         int line_width = 1;

@@ -194,6 +194,45 @@ local function stroke_outline_rect(view, x, y, w, h, color)
     timeline.add_rect(view.widget, x + w - t, y,         t, h, color)
 end
 
+-- Horizontal pixel span of a clip in the current viewport. Returns
+-- visible_x, draw_width, x, clip_width — x/clip_width are the unclamped
+-- pixel position/width (callers need them for waveform source windows
+-- and edge-dash decisions) — or nil when the clip lies fully outside the
+-- viewport horizontally. Exposed on M so the draw-stability contract
+-- test can pin it directly (same pattern as lower_bound_start_frames).
+--
+-- Sliver floor: a clip that overlaps the visible time window is ALWAYS
+-- drawn, at minimum one pixel column. On the absolute pixel grid (see
+-- viewport_state.time_to_pixel) a sub-pixel clip's width comes out 0 or
+-- 1 depending on where its start lands relative to the grid lines, and
+-- the grid re-aligns whenever pixels-per-frame changes — without the
+-- floor, thin clips strobe on/off during a continuous zoom drag.
+local function clip_h_span(state_module, clip_start, clip_duration, width)
+    local x = state_module.time_to_pixel(clip_start, width)
+    local clip_end_px = state_module.time_to_pixel(clip_start + clip_duration, width)
+    local clip_width = clip_end_px - x
+    if x + clip_width < 0 or x > width then return nil end
+    local visible_x = x
+    local visible_width = clip_width
+    if visible_x < 0 then
+        visible_width = visible_width + visible_x
+        visible_x = 0
+    end
+    if visible_x + visible_width > width then
+        visible_width = width - visible_x
+    end
+    if visible_width < 1 then
+        visible_width = 1
+        -- A clip whose first visible frame is the last frame of the
+        -- window maps to x == width; the sliver shifts back onto the
+        -- final pixel column instead of landing offscreen.
+        if visible_x + visible_width > width then
+            visible_x = width - 1
+        end
+    end
+    return visible_x, visible_width, x, clip_width
+end
+
 local function draw_preview_outline(view, clip, start_value, duration_value, state_module, width, height)
     assert(clip, "draw_preview_outline: clip is required (caller must filter nil)")
     assert(clip.track_id, "draw_preview_outline: clip.track_id missing (clip_id="
@@ -211,29 +250,11 @@ local function draw_preview_outline(view, clip, start_value, duration_value, sta
     local track_height = view.get_track_visual_height(clip.track_id)
     if not track_height or track_height <= 0 then return end
 
-    local end_value = start_value + duration_value
-    local start_px = state_module.time_to_pixel(start_value, width)
-    local end_px = state_module.time_to_pixel(end_value, width)
-    local width_px = end_px - start_px
-    if width_px < 1 then width_px = 1 end
-
-    -- Viewport cull + clip-to-viewport to avoid drawing thousands of offscreen
-    -- outlines during ripple previews.
-    local visible_x = start_px
-    local visible_w = width_px
-    if visible_x > width or (visible_x + visible_w) < 0 then
-        return
-    end
-    if visible_x < 0 then
-        visible_w = visible_w + visible_x
-        visible_x = 0
-    end
-    if visible_x + visible_w > width then
-        visible_w = width - visible_x
-    end
-    if visible_w < 1 then
-        return
-    end
+    -- Shared cull + clamp + sliver floor; avoids drawing thousands of
+    -- offscreen outlines during ripple previews while keeping sub-pixel
+    -- preview targets visible.
+    local visible_x, visible_w = clip_h_span(state_module, start_value, duration_value, width)
+    if not visible_x then return end
 
     local clip_y = track_y + 5
     local clip_height = track_height - 10
@@ -790,31 +811,13 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
     local width, height = ctx.width, ctx.height
     local selected_lookup = ctx.selected_lookup
 
-    local y = track_layout.y
-    local track_height = track_layout.height
-    local clip_end = clip_start + clip_duration
-    local x = state_module.time_to_pixel(clip_start, width)
-    local clip_end_px = state_module.time_to_pixel(clip_end, width)
-    y = y + 5
-    local clip_width = clip_end_px - x
-    local clip_height = track_height - 10
+    local y = track_layout.y + 5
+    local clip_height = track_layout.height - 10
+    if y + clip_height <= 0 or y >= height then return end
 
-    local visible_x = x
-    local visible_width = clip_width
-    if visible_x < 0 then
-        visible_width = visible_width + visible_x
-        visible_x = 0
-    end
-    if visible_x + visible_width > width then
-        visible_width = width - visible_x
-    end
-
-    if x + clip_width < 0 or x > width or y + clip_height <= 0 or y >= height then
-        return
-    end
-    if visible_width < 1 then return end
-
-    local draw_width = visible_width
+    local visible_x, draw_width, x, clip_width =
+        clip_h_span(state_module, clip_start, clip_duration, width)
+    if not visible_x then return end
     local clip_enabled = clip.enabled ~= false
 
     media_status.ensure_clip_status(clip)
@@ -862,10 +865,14 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
             local peak_start = reversed and vis_src_out or vis_src_in
             local peak_end = reversed and vis_src_in or vis_src_out
 
+            -- Peak queries are per whole pixel column; draw coords are
+            -- float (exact time→pixel map), so round the column count at
+            -- this boundary only.
+            local wave_px = math.floor(draw_width + 0.5)
             local peaks, count, actual_start, actual_end = peak_cache.get_visible_peaks(
-                (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, draw_width)
+                (clip.resolved_media and clip.resolved_media.id), peak_start, peak_end, wave_px)
             if peaks and count > 0 then
-                local samples_per_pixel = (peak_end - peak_start) / draw_width
+                local samples_per_pixel = (peak_end - peak_start) / wave_px
                 local mip_level = peak_constants.select_level(samples_per_pixel)
                 local max_drift = peak_constants.SAMPLES_PER_LEVEL[mip_level]
                 log_waveform_range_anomalies((clip.resolved_media and clip.resolved_media.id),
@@ -890,7 +897,7 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
         end
 
         local label_padding = 10
-        local max_label_width = visible_width - label_padding
+        local max_label_width = draw_width - label_padding
         if max_label_width > 35 then
             -- Audio clips store source_in/source_out in SAMPLES; the raw
             -- shortfall in samples displayed as "Nf" reads as video
@@ -933,7 +940,9 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
         if x + clip_width > width then timeline.add_rect(view.widget, width - OUTLINE_THICKNESS, y + (clip_height - dash_height)/2, OUTLINE_THICKNESS, dash_height, dash_col) end
     end
 
-    if not outline_only and draw_width > 0 then
+    -- draw_width > 1, not > 0: on a 1px sliver the stripe would overpaint
+    -- the entire body and the sliver would twinkle in the boundary color.
+    if not outline_only and draw_width > 1 then
         local boundary_col = assert(state_module.colors.clip_boundary,
             "timeline_view_renderer: state_module.colors.clip_boundary is nil " ..
             "— expected color for the right-edge boundary stripe on each clip")
@@ -1259,5 +1268,6 @@ end
 -- on every render and would clobber a test fixture).
 M.assert_affected_clip_entry = assert_affected_clip_entry
 M.lower_bound_start_frames = lower_bound_start_frames
+M.clip_h_span = clip_h_span
 
 return M

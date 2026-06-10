@@ -368,12 +368,19 @@ end
 
 -- Convert time (integer frame) to pixel position.
 --
--- Uses an absolute pixel grid: each frame maps to a deterministic absolute
--- pixel index floor(t * ppf), and the viewport offset is subtracted *after*
--- flooring. This makes pixel widths of fixed-frame extents (clips, gaps,
--- mark ranges) invariant under scroll — without it, sub-pixel zoom causes
--- adjacent floors to shift independently as viewport_start changes, and
--- clips strobe ±1 px while scrolling.
+-- Exact linear map, NO integer quantization: px = (t - viewport_start) * ppf.
+-- The result is a float; the draw pipeline carries float coordinates to an
+-- antialiased QPainter, which resolves fractional coverage at paint time.
+--
+-- Why no rounding here: integer snapping of a continuously-scaling map
+-- cannot be both pan-rigid and zoom-monotonic. The previous absolute grid
+-- (floor(t*ppf) - floor(vs*ppf)) made widths scroll-invariant but made
+-- boundary positions wobble ±1 px non-monotonically during zoom (the two
+-- floors step at different moments as ppf sweeps) — the whole timeline
+-- jiggled during zoom drags. The exact map holds both invariants: widths
+-- depend only on (extent, ppf), and positions move monotonically with ppf.
+-- Regression tests: test_clip_width_stable_under_scroll.lua,
+-- test_boundary_monotonic_under_zoom.lua.
 function M.time_to_pixel(time_obj, viewport_width)
     local cache = cache_strict("viewport_state.time_to_pixel")
     assert(type(time_obj) == "number" and math.floor(time_obj) == time_obj,
@@ -389,8 +396,7 @@ function M.time_to_pixel(time_obj, viewport_width)
         "viewport_state.time_to_pixel: viewport_duration must be positive, got " .. tostring(duration_frames))
 
     local pixels_per_frame = viewport_width / duration_frames
-    return math.floor(time_obj * pixels_per_frame)
-        - math.floor(start_frames * pixels_per_frame)
+    return (time_obj - start_frames) * pixels_per_frame
 end
 
 -- Convert pixel position to time (returns integer frame).
@@ -410,12 +416,11 @@ function M.pixel_to_time(pixel, viewport_width)
         "viewport_state.pixel_to_time: viewport_duration must be positive, got " .. tostring(duration_frames))
 
     local pixels_per_frame = viewport_width / duration_frames
-    local abs_pixel = pixel + math.floor(start_frames * pixels_per_frame)
     -- Mouse coordinates can fall outside the widget (e.g. drag past the
     -- left edge), so the converted frame can be negative. Clamp to frame 0
     -- because the timeline has no negative-time domain — callers ask for
     -- "what time is the cursor at" and frame 0 is the floor.
-    return math.max(0, math.floor(abs_pixel / pixels_per_frame + 0.5))
+    return math.max(0, math.floor(start_frames + pixel / pixels_per_frame + 0.5))
 end
 
 function M.push_viewport_guard()

@@ -40,7 +40,7 @@ void TimelineRenderer::clearCommands()
     drawing_commands_.clear();
 }
 
-void TimelineRenderer::addRect(int x, int y, int width, int height, const QString& color)
+void TimelineRenderer::addRect(qreal x, qreal y, qreal width, qreal height, const QString& color)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::RECT;
@@ -52,7 +52,7 @@ void TimelineRenderer::addRect(int x, int y, int width, int height, const QStrin
     drawing_commands_.push_back(cmd);
 }
 
-void TimelineRenderer::addText(int x, int y, const QString& text, const QString& color)
+void TimelineRenderer::addText(qreal x, qreal y, const QString& text, const QString& color)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::TEXT;
@@ -63,7 +63,7 @@ void TimelineRenderer::addText(int x, int y, const QString& text, const QString&
     drawing_commands_.push_back(cmd);
 }
 
-void TimelineRenderer::addLine(int x1, int y1, int x2, int y2, const QString& color, int width)
+void TimelineRenderer::addLine(qreal x1, qreal y1, qreal x2, qreal y2, const QString& color, int width)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::LINE;
@@ -76,7 +76,7 @@ void TimelineRenderer::addLine(int x1, int y1, int x2, int y2, const QString& co
     drawing_commands_.push_back(cmd);
 }
 
-void TimelineRenderer::addTriangle(int x1, int y1, int x2, int y2, int x3, int y3, const QString& color)
+void TimelineRenderer::addTriangle(qreal x1, qreal y1, qreal x2, qreal y2, qreal x3, qreal y3, const QString& color)
 {
     DrawCommand cmd;
     cmd.type = DrawCommand::TRIANGLE;
@@ -90,7 +90,7 @@ void TimelineRenderer::addTriangle(int x1, int y1, int x2, int y2, int x3, int y
     drawing_commands_.push_back(cmd);
 }
 
-void TimelineRenderer::addWaveform(int x, int y, int width, int height,
+void TimelineRenderer::addWaveform(qreal x, qreal y, qreal width, qreal height,
                                     const float* peaks, int peak_count,
                                     const QString& color, bool reversed)
 {
@@ -168,24 +168,24 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
         
         switch (cmd.type) {
             case DrawCommand::RECT:
-                painter.fillRect(cmd.x, cmd.y, cmd.width, cmd.height, cmd.color);
+                painter.fillRect(QRectF(cmd.x, cmd.y, cmd.width, cmd.height), cmd.color);
                 break;
-                
+
             case DrawCommand::TEXT:
                 painter.setPen(cmd.color);
-                painter.drawText(cmd.x, cmd.y, cmd.text);
+                painter.drawText(QPointF(cmd.x, cmd.y), cmd.text);
                 break;
-                
+
             case DrawCommand::LINE:
                 painter.setPen(QPen(cmd.color, cmd.line_width));
-                painter.drawLine(cmd.x, cmd.y, cmd.x2, cmd.y2);
+                painter.drawLine(QLineF(cmd.x, cmd.y, cmd.x2, cmd.y2));
                 break;
 
             case DrawCommand::TRIANGLE: {
-                QPolygon triangle;
-                triangle << QPoint(cmd.x, cmd.y)
-                         << QPoint(cmd.x2, cmd.y2)
-                         << QPoint(cmd.x3, cmd.y3);
+                QPolygonF triangle;
+                triangle << QPointF(cmd.x, cmd.y)
+                         << QPointF(cmd.x2, cmd.y2)
+                         << QPointF(cmd.x3, cmd.y3);
                 painter.setPen(Qt::NoPen);
                 painter.setBrush(cmd.color);
                 painter.drawPolygon(triangle);
@@ -195,9 +195,9 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
             case DrawCommand::WAVEFORM: {
                 if (cmd.peak_count <= 0 || cmd.width <= 0) break;
                 if (static_cast<int>(cmd.peak_data.size()) < cmd.peak_count * 2) break;
-                float center_y = cmd.y + cmd.height * 0.5f;
-                float half_h = cmd.height * 0.5f;
-                float px_step = static_cast<float>(cmd.width) / cmd.peak_count;
+                qreal center_y = cmd.y + cmd.height * 0.5;
+                qreal half_h = cmd.height * 0.5;
+                qreal px_step = cmd.width / cmd.peak_count;
                 // Each peak fills a vertical band [px_start, px_end) so when
                 // peak_count < width (the common case — mipmaps return one
                 // peak per N source samples, often fewer than the visible
@@ -214,26 +214,25 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                     float mn = cmd.peak_data[pi * 2];
                     float mx = cmd.peak_data[pi * 2 + 1];
                     if (mn >= mx) continue;   // true silence: nothing to draw
-                    int y0 = static_cast<int>(center_y - mx * half_h);
-                    int y1 = static_cast<int>(center_y - mn * half_h);
+                    qreal y0 = center_y - mx * half_h;
+                    qreal y1 = center_y - mn * half_h;
                     // At small wave_heights, low-amplitude peaks have
-                    // (mx - mn) * half_h < 1, so y0 and y1 round to the same
-                    // int and y1 - y0 == 0. Without clamping to 1 here, the
-                    // whole waveform disappears at small track heights — the
-                    // pre-rectangle drawLine fix had the same behavior. NLE
-                    // convention is to compress (not hide) low-amp peaks.
-                    int band_h = y1 - y0;
+                    // (mx - mn) * half_h < 1. Without clamping to 1 here,
+                    // the band thins toward invisibility at small track
+                    // heights. NLE convention is to compress (not hide)
+                    // low-amp peaks.
+                    qreal band_h = y1 - y0;
                     if (band_h < 1) band_h = 1;
-                    int px_start = cmd.x + static_cast<int>(i * px_step);
-                    int px_end = cmd.x + static_cast<int>((i + 1) * px_step);
-                    // band_w == 0 happens when px_step < 1 (peak_count > width,
-                    // i.e. extreme zoom-out). Clamp to 1 so the peak is still
-                    // visible — overlapping peaks then paint over each other,
-                    // which is the right semantic for "too zoomed out to see
-                    // each peak". Not a fallback hiding a bug.
-                    int band_w = px_end - px_start;
+                    qreal px_start = cmd.x + i * px_step;
+                    // band_w < 1 happens when px_step < 1 (peak_count >
+                    // width, i.e. extreme zoom-out). Clamp to 1 so the peak
+                    // is still visible — overlapping peaks then paint over
+                    // each other, which is the right semantic for "too
+                    // zoomed out to see each peak". Not a fallback hiding
+                    // a bug.
+                    qreal band_w = px_step;
                     if (band_w < 1) band_w = 1;
-                    painter.drawRect(px_start, y0, band_w, band_h);
+                    painter.drawRect(QRectF(px_start, y0, band_w, band_h));
                 }
                 break;
             }
@@ -691,10 +690,10 @@ int lua_timeline_clear_commands(lua_State* L)
 int lua_timeline_add_rect(lua_State* L)
 {
     JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
-    int x = lua_tointeger(L, 2);
-    int y = lua_tointeger(L, 3);
-    int width = lua_tointeger(L, 4);
-    int height = lua_tointeger(L, 5);
+    qreal x = lua_tonumber(L, 2);
+    qreal y = lua_tonumber(L, 3);
+    qreal width = lua_tonumber(L, 4);
+    qreal height = lua_tonumber(L, 5);
     const char* color = lua_tostring(L, 6);
 
     if (timeline && color) {
@@ -709,8 +708,8 @@ int lua_timeline_add_rect(lua_State* L)
 int lua_timeline_add_text(lua_State* L)
 {
     JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
-    int x = lua_tointeger(L, 2);
-    int y = lua_tointeger(L, 3);
+    qreal x = lua_tonumber(L, 2);
+    qreal y = lua_tonumber(L, 3);
     const char* text = lua_tostring(L, 4);
     const char* color = lua_tostring(L, 5);
 
@@ -726,10 +725,10 @@ int lua_timeline_add_text(lua_State* L)
 int lua_timeline_add_line(lua_State* L)
 {
     JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
-    int x1 = lua_tointeger(L, 2);
-    int y1 = lua_tointeger(L, 3);
-    int x2 = lua_tointeger(L, 4);
-    int y2 = lua_tointeger(L, 5);
+    qreal x1 = lua_tonumber(L, 2);
+    qreal y1 = lua_tonumber(L, 3);
+    qreal x2 = lua_tonumber(L, 4);
+    qreal y2 = lua_tonumber(L, 5);
     const char* color = lua_tostring(L, 6);
     int width = lua_tointeger(L, 7);
 
@@ -745,12 +744,12 @@ int lua_timeline_add_line(lua_State* L)
 int lua_timeline_add_triangle(lua_State* L)
 {
     JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
-    int x1 = lua_tointeger(L, 2);
-    int y1 = lua_tointeger(L, 3);
-    int x2 = lua_tointeger(L, 4);
-    int y2 = lua_tointeger(L, 5);
-    int x3 = lua_tointeger(L, 6);
-    int y3 = lua_tointeger(L, 7);
+    qreal x1 = lua_tonumber(L, 2);
+    qreal y1 = lua_tonumber(L, 3);
+    qreal x2 = lua_tonumber(L, 4);
+    qreal y2 = lua_tonumber(L, 5);
+    qreal x3 = lua_tonumber(L, 6);
+    qreal y3 = lua_tonumber(L, 7);
     const char* color = lua_tostring(L, 8);
 
     if (timeline && color) {
@@ -765,10 +764,10 @@ int lua_timeline_add_triangle(lua_State* L)
 int lua_timeline_add_waveform(lua_State* L)
 {
     JVE::TimelineRenderer* timeline = (JVE::TimelineRenderer*)lua_to_widget(L, 1);
-    int x = lua_tointeger(L, 2);
-    int y = lua_tointeger(L, 3);
-    int width = lua_tointeger(L, 4);
-    int height = lua_tointeger(L, 5);
+    qreal x = lua_tonumber(L, 2);
+    qreal y = lua_tonumber(L, 3);
+    qreal width = lua_tonumber(L, 4);
+    qreal height = lua_tonumber(L, 5);
     // Arg 6: lightuserdata pointer to float array [min0,max0,min1,max1,...]
     const float* peaks = nullptr;
     if (lua_islightuserdata(L, 6)) {

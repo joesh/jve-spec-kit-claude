@@ -201,7 +201,8 @@ for t in \
   test_scroll_persistence_reopen.lua \
   test_scroll_persistence_cold_start.lua \
   test_scroll_survives_tab_switch.lua \
-  test_timeline_zoom_scroller.lua
+  test_timeline_zoom_scroller.lua \
+  test_clip_draw_stability.lua
 do
   if [[ -f "$INTEG_DIR/$t" ]]; then
     launch_p "$t" "$BINARY" --test "$INTEG_DIR/$t"
