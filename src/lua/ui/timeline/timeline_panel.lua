@@ -2833,6 +2833,35 @@ function M.create(opts)
     -- luacheck: globals qt_create_scroll_bar
     local h_scrollbar = qt_create_scroll_bar("horizontal")
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scrollbar, "Expanding", "Fixed")
+    -- Explicit stylesheet, not native rendering: macOS draws a bare
+    -- QScrollBar in the transient overlay style — a hairline that fades
+    -- out when idle (the pane bars escape this via their scroll areas'
+    -- AlwaysOn policy). Styling the handle opts the bar out of the
+    -- platform style entirely, so it's permanently visible. min-width
+    -- keeps the thumb grabbable on long timelines where the honest
+    -- proportion (viewport/extent) would shrink it to slivers.
+    qt_constants.PROPERTIES.SET_STYLE(h_scrollbar, string.format([[
+        QScrollBar:horizontal {
+            background: %s;
+            border-top: 1px solid %s;
+            height: 14px;
+            margin: 0;
+        }
+        QScrollBar::handle:horizontal {
+            background: %s;
+            border-radius: 5px;
+            min-width: 24px;
+            margin: 2px;
+        }
+        QScrollBar::handle:horizontal:hover { background: %s; }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: none;
+        }
+    ]], color("SCROLL_BACKGROUND_COLOR"), color("SCROLL_BORDER_COLOR"),
+        color("DROPDOWN_BORDER_COLOR"), color("HOVER_BACKGROUND_COLOR")))
     local h_scroll_gutter = qt_constants.WIDGET.CREATE()
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scroll_gutter, "Fixed", "Fixed")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(h_scroll_gutter, 0)

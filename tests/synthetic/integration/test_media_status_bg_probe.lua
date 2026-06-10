@@ -170,7 +170,9 @@ do
     local done_sub = Signals.connect("media_probe_complete",
         function() probe_done = true end)
     media_status.start_background_probe(nil)
-    wait_until(function() return probe_done end, 5,
+    -- Same generous ceiling as part (A): real FFmpeg probe under
+    -- parallel suite load; wait_until polls, healthy case is sub-second.
+    wait_until(function() return probe_done end, 30,
         "bg probe to complete")
     Signals.disconnect(done_sub)
 
