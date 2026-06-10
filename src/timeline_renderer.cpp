@@ -8,6 +8,7 @@
 #include <QApplication>
 #include <QWheelEvent>
 #include <QPolygon>
+#include <cmath>
 
 namespace JVE {
 
@@ -162,14 +163,33 @@ void TimelineRenderer::paintEvent(QPaintEvent* /* event */)
 
 void TimelineRenderer::executeDrawingCommands(QPainter& painter)
 {
+    // Rect/line geometry snaps to the DEVICE pixel grid here, in the one
+    // place that knows the device resolution. The Lua side delivers exact
+    // float coordinates (viewport_state.time_to_pixel does no snapping);
+    // a single round of that monotonic value keeps motion monotonic under
+    // zoom — unlike the old difference-of-floors grid — while unsnapped
+    // fractional edges under AA would paint partial-alpha seams between
+    // abutting clips and make 1px boundary stripes pulse while panning.
+    // Edges snap INDEPENDENTLY (left and right, not position+width), so
+    // rects that share a float edge keep sharing the snapped edge —
+    // gapless and seamless tiling. Pinned by testHairlineCrisp… and
+    // testAbuttingRectsNoSeam.
+    const qreal dpr = devicePixelRatioF();
+    const auto snap = [dpr](qreal v) { return std::round(v * dpr) / dpr; };
+
     for (const auto& cmd : drawing_commands_) {
         painter.setPen(QPen(cmd.color, cmd.line_width));
         painter.setBrush(QBrush(cmd.color));
-        
+
         switch (cmd.type) {
-            case DrawCommand::RECT:
-                painter.fillRect(QRectF(cmd.x, cmd.y, cmd.width, cmd.height), cmd.color);
+            case DrawCommand::RECT: {
+                const qreal left = snap(cmd.x);
+                const qreal top = snap(cmd.y);
+                const qreal right = snap(cmd.x + cmd.width);
+                const qreal bottom = snap(cmd.y + cmd.height);
+                painter.fillRect(QRectF(left, top, right - left, bottom - top), cmd.color);
                 break;
+            }
 
             case DrawCommand::TEXT:
                 painter.setPen(cmd.color);
@@ -178,7 +198,7 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
 
             case DrawCommand::LINE:
                 painter.setPen(QPen(cmd.color, cmd.line_width));
-                painter.drawLine(QLineF(cmd.x, cmd.y, cmd.x2, cmd.y2));
+                painter.drawLine(QLineF(snap(cmd.x), snap(cmd.y), snap(cmd.x2), snap(cmd.y2)));
                 break;
 
             case DrawCommand::TRIANGLE: {
@@ -223,7 +243,6 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                     // low-amp peaks.
                     qreal band_h = y1 - y0;
                     if (band_h < 1) band_h = 1;
-                    qreal px_start = cmd.x + i * px_step;
                     // band_w < 1 happens when px_step < 1 (peak_count >
                     // width, i.e. extreme zoom-out). Clamp to 1 so the peak
                     // is still visible — overlapping peaks then paint over
@@ -232,7 +251,11 @@ void TimelineRenderer::executeDrawingCommands(QPainter& painter)
                     // a bug.
                     qreal band_w = px_step;
                     if (band_w < 1) band_w = 1;
-                    painter.drawRect(QRectF(px_start, y0, band_w, band_h));
+                    // Same device-grid edge snapping as RECT — adjacent
+                    // bands share float edges, so they keep tiling.
+                    const qreal bl = snap(cmd.x + i * px_step);
+                    const qreal br = snap(cmd.x + i * px_step + band_w);
+                    painter.drawRect(QRectF(bl, snap(y0), br - bl, snap(y0 + band_h) - snap(y0)));
                 }
                 break;
             }

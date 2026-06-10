@@ -319,6 +319,61 @@ private slots:
         QVERIFY(!lastMouseEvent.shift);
         QVERIFY(!lastMouseEvent.alt);
     }
+
+    // The Lua side delivers exact float coordinates (no integer snapping
+    // in the time->pixel map), so rasterization quality is the painter's
+    // job. Domain rules pinned here:
+    //
+    // 1. A hairline (1px) rect renders at FULL intensity at every
+    //    fractional x position. Without device-grid snapping, AA smears
+    //    a fractional hairline across two columns at partial alpha, and
+    //    the timeline's clip-boundary stripes pulse bright/dim while
+    //    panning (Joe's "scrolling flickers", 2026-06-09).
+    void testHairlineCrispAtFractionalPositions() {
+        timeline->resize(200, 60);
+        const qreal offsets[] = {10.0, 10.25, 10.5, 10.75};
+        for (qreal x : offsets) {
+            timeline->clearCommands();
+            timeline->addRect(x, 10, 1, 40, "#ffffff");
+            QImage img = timeline->grab().toImage();
+            const qreal dpr = img.devicePixelRatio();
+            const int row = int(30 * dpr);
+            // A 1-logical-px hairline must occupy exactly dpr device
+            // columns at full intensity — a fractional position smeared
+            // by AA lights dpr+1 columns with dim ends and never reaches
+            // a stable appearance while panning.
+            int maxv = 0, lit = 0;
+            for (int c = int(5 * dpr); c < int(20 * dpr); ++c) {
+                const int v = qRed(img.pixel(c, row));
+                maxv = qMax(maxv, v);
+                if (v > 55) lit++;  // background is #232323 (35)
+            }
+            QVERIFY2(maxv == 255, qPrintable(QString(
+                "hairline at x=%1 peaked at %2/255 — AA smeared it across "
+                "columns; it will pulse while panning").arg(x).arg(maxv)));
+            QVERIFY2(lit <= int(dpr + 0.5), qPrintable(QString(
+                "hairline at x=%1 lights %2 device columns (expected %3) — "
+                "fractional edges bleed while panning").arg(x).arg(lit).arg(int(dpr + 0.5))));
+        }
+    }
+
+    // 2. Two same-color rects sharing a fractional edge (abutting clips)
+    //    tile seamlessly — no darker AA seam column at the shared edge.
+    void testAbuttingRectsNoSeam() {
+        timeline->resize(200, 60);
+        timeline->clearCommands();
+        timeline->addRect(10.0, 10, 30.4, 40, "#808080");
+        timeline->addRect(40.4, 10, 30.0, 40, "#808080");
+        QImage img = timeline->grab().toImage();
+        const qreal dpr = img.devicePixelRatio();
+        const int row = int(30 * dpr);
+        for (int c = int(12 * dpr); c < int(68 * dpr); ++c) {
+            const int v = qRed(img.pixel(c, row));
+            QVERIFY2(v == 0x80, qPrintable(QString(
+                "column %1 = %2 (expected 128) — AA seam/gap at the shared "
+                "fractional edge between abutting clips").arg(c).arg(v)));
+        }
+    }
 };
 
 // Static member initialization
