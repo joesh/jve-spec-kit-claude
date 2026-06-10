@@ -141,8 +141,11 @@ local function wait_for_bind(proc, socket_path, timeout_ms)
         end
         -- If the helper died mid-startup, fail with a distinct message
         -- so log readers don't chase a phantom "slow bind". finished_cb
-        -- has already cleared state.process_handle by this point — we
-        -- query the QProcess slot directly via the local proc handle.
+        -- leaves state.process_handle set (so _teardown can still
+        -- destroy the slot — calling qt_process_destroy from inside
+        -- finished_cb would luaL_unref the in-flight callback's own
+        -- ref, which is dicey). We query the QProcess slot directly
+        -- via the local proc handle.
         if qt_process_state(proc) == "not_running" then
             return "helper exited during startup before binding socket "
                 .. socket_path
@@ -159,6 +162,14 @@ end
 local function spawn_helper()
     assert(state.helper_script_path,
         "helper_supervisor: configure() must be called first")
+
+    -- A prior helper may have exited asynchronously (finished_cb fired)
+    -- without _teardown having run yet — finished_cb deliberately
+    -- leaves state.process_handle set so we can destroy the slot here.
+    -- Without this, overwriting state.process_handle at line ~176 would
+    -- leak the dead helper's ProcSlot + four luaL_ref'd Lua callbacks
+    -- on every respawn.
+    _teardown()
 
     state.spawn_sequence = state.spawn_sequence + 1
     -- os.tmpname yields a fresh unique /tmp/lua_XXXXXX path per call;
@@ -185,7 +196,14 @@ local function spawn_helper()
             state.client_handle:close()
             state.client_handle = nil
         end
-        state.process_handle = nil
+        -- Intentionally do NOT clear state.process_handle. The slot
+        -- still owns ProcSlot + Lua callback refs that only
+        -- qt_process_destroy releases; clearing here would leak them
+        -- because _teardown gates destroy on state.process_handle.
+        -- spawn_helper destroys the prior handle before overwriting,
+        -- and _teardown destroys on shutdown / failure paths.
+        -- qt_process_terminate/destroy on an already-exited proc is a
+        -- safe no-op (Qt's QProcess::kill checks state internally).
     end)
 
     qt_process_set_stderr_cb(proc, function(chunk)

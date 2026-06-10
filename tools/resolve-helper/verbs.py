@@ -1109,11 +1109,18 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # observed Resolve state is unchanged when read_grades returns.
     prior_page = None
     if bake_lut_dir is not None:
+        # Capture prior page BEFORE switching to Color so the finally
+        # block can restore it. If GetCurrentPage raises, refuse to
+        # switch — otherwise the finally would have no prior to restore
+        # (prior_page stays None, guard `prior_page is not None` skips
+        # OpenPage(prior_page), Resolve stays stuck on Color despite the
+        # contract promising the user's page is observably unchanged).
         try:
             prior_page = resolve.GetCurrentPage()
         except Exception as exc:
-            sys.stderr.write(
-                f"[read_grades] resolve.GetCurrentPage raised: {exc}\n")
+            return _error(envelope_id, "resolve_api_error",
+                f"GetCurrentPage failed; refusing to switch to Color "
+                f"because we cannot restore the user's page: {exc}")
         try:
             resolve.OpenPage("color")
         except Exception as exc:

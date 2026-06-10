@@ -174,6 +174,14 @@ static int lua_qt_process_state(lua_State* L) {
         case QProcess::NotRunning: lua_pushstring(L, "not_running"); break;
         case QProcess::Starting:   lua_pushstring(L, "starting"); break;
         case QProcess::Running:    lua_pushstring(L, "running"); break;
+        default:
+            // QProcess::State is a Qt enum — only the three values above
+            // are documented. A fall-through would leave the Lua stack
+            // empty and `return 1` would yield a garbage Lua value to
+            // wait_for_bind's qt_process_state(proc) check (rule 1.14).
+            return luaL_error(L,
+                "qt_process_state: unknown QProcess::State value %d",
+                (int)slot->proc->state());
     }
     return 1;
 }
