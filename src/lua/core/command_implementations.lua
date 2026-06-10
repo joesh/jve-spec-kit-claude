@@ -31,6 +31,7 @@ local command_modules = {
     "toggle_source_record_tab",
     "toggle_timecode_focus", "toggle_track_preference", "toggle_track_waveform_display",
     "trim_head", "trim_tail",
+    "zoom_timeline_viewport",
 }
 M.command_modules = command_modules
 

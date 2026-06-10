@@ -3,6 +3,7 @@
 local timeline_state = require("ui.timeline.timeline_state")
 local timeline_view = require("ui.timeline.timeline_view")
 local timeline_ruler = require("ui.timeline.timeline_ruler")
+local timeline_zoom_scroller = require("ui.timeline.timeline_zoom_scroller")
 local timeline_scrollbar = require("ui.timeline.timeline_scrollbar")
 local ui_constants = require("core.ui_constants")
 local selection_hub = require("ui.selection_hub")
@@ -2816,62 +2817,33 @@ function M.create(opts)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(vertical_splitter, "Expanding", "Expanding")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, vertical_splitter)
 
-    -- Horizontal timeline scrollbar: projects the model's time viewport
-    -- in FRAMES (value = viewport start, page = viewport duration,
-    -- range = [sequence TC start, extent − duration]) — a standalone
-    -- QScrollBar, not a scroll area's, because the horizontal axis is
-    -- virtual time, not any widget's pixel range. Gestures dispatch the
-    -- same ScrollTimelineViewport command as a horizontal wheel; the
-    -- state listener (below) re-projects after every model change so
-    -- pans, zooms, and clamps keep the thumb honest. The trailing
-    -- spacer mirrors the vertical-scrollbar gutter so the bar's track
-    -- spans the same pixels as the lanes (see sync_ruler_gutter).
+    -- Timeline zoom scroller: Premiere-style horizontal scroller whose
+    -- thumb mirrors the visible time window (drag to pan, drag either
+    -- thumb end to zoom with the opposite edge anchored). A custom-
+    -- painted ScriptableTimeline widget — see timeline_zoom_scroller.
+    -- The trailing spacer mirrors the vertical-scrollbar gutter so the
+    -- scroller's track spans the same pixels as the lanes (see
+    -- sync_ruler_gutter).
     local h_scroll_row = qt_constants.WIDGET.CREATE()
     local h_scroll_row_layout = qt_constants.LAYOUT.CREATE_HBOX()
     qt_constants.CONTROL.SET_LAYOUT_SPACING(h_scroll_row_layout, 0)
     qt_constants.CONTROL.SET_LAYOUT_MARGINS(h_scroll_row_layout, 0, 0, 0, 0)
-    -- luacheck: globals qt_create_scroll_bar
-    local h_scrollbar = qt_create_scroll_bar("horizontal")
-    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scrollbar, "Expanding", "Fixed")
-    -- Explicit stylesheet, not native rendering: macOS draws a bare
-    -- QScrollBar in the transient overlay style — a hairline that fades
-    -- out when idle (the pane bars escape this via their scroll areas'
-    -- AlwaysOn policy). Styling the handle opts the bar out of the
-    -- platform style entirely, so it's permanently visible. min-width
-    -- keeps the thumb grabbable on long timelines where the honest
-    -- proportion (viewport/extent) would shrink it to slivers.
-    qt_constants.PROPERTIES.SET_STYLE(h_scrollbar, string.format([[
-        QScrollBar:horizontal {
-            background: %s;
-            border-top: 1px solid %s;
-            height: 14px;
-            margin: 0;
-        }
-        QScrollBar::handle:horizontal {
-            background: %s;
-            border-radius: 5px;
-            min-width: 24px;
-            margin: 2px;
-        }
-        QScrollBar::handle:horizontal:hover { background: %s; }
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            width: 0;
-        }
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-            background: none;
-        }
-    ]], color("SCROLL_BACKGROUND_COLOR"), color("SCROLL_BORDER_COLOR"),
-        color("DROPDOWN_BORDER_COLOR"), color("HOVER_BACKGROUND_COLOR")))
+    local h_scroller_widget = qt_constants.WIDGET.CREATE_TIMELINE()
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scroller_widget, "Expanding", "Fixed")
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(h_scroller_widget,
+        timeline_zoom_scroller.SCROLLER_HEIGHT)
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(h_scroller_widget,
+        timeline_zoom_scroller.SCROLLER_HEIGHT)
     local h_scroll_gutter = qt_constants.WIDGET.CREATE()
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scroll_gutter, "Fixed", "Fixed")
     qt_constants.PROPERTIES.SET_MIN_WIDTH(h_scroll_gutter, 0)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(h_scroll_gutter, 0)
-    qt_constants.LAYOUT.ADD_WIDGET(h_scroll_row_layout, h_scrollbar)
+    qt_constants.LAYOUT.ADD_WIDGET(h_scroll_row_layout, h_scroller_widget)
     qt_constants.LAYOUT.ADD_WIDGET(h_scroll_row_layout, h_scroll_gutter)
     qt_constants.LAYOUT.SET_ON_WIDGET(h_scroll_row, h_scroll_row_layout)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(h_scroll_row, "Expanding", "Fixed")
     qt_constants.LAYOUT.ADD_WIDGET(timeline_area_layout, h_scroll_row)
-    M.timeline_h_scrollbar = h_scrollbar
+    M.timeline_zoom_scroller = timeline_zoom_scroller.create(h_scroller_widget, state)
     M._h_scroll_gutter = h_scroll_gutter
 
     -- Scrollbar gestures (drags, page clicks, arrow steps) write the
@@ -2906,23 +2878,6 @@ function M.create(opts)
         M.apply_pane_scroll("audio")
     end
     qt_set_scroll_area_v_range_handler(M.timeline_audio_scroll, "audio_scroll_range_changed")
-
-    -- Horizontal-bar gestures (thumb drags, page clicks, arrow steps)
-    -- land here with the user's absolute target in frames. Same
-    -- actionTriggered intent signal as the vertical panes.
-    _G["timeline_h_user_scrolled"] = function(value)
-        M.user_scroll_timeline_to(value)
-    end
-    -- luacheck: globals qt_set_scroll_bar_user_scroll_handler
-    qt_set_scroll_bar_user_scroll_handler(
-        M.timeline_h_scrollbar, "timeline_h_user_scrolled")
-
-    -- Re-project the bar on every model change: pans (wheel or bar),
-    -- zooms (pageStep follows the viewport duration), extent growth
-    -- (playhead past content), tab switches. Projection emits no
-    -- user-scroll signal, so this can't echo into the write path.
-    state.add_listener(function() M.sync_h_scrollbar() end)
-    M.sync_h_scrollbar()
 
     -- The ruler-gutter spacer mirrors the scrollbar's reserved width.
     -- The style hint isn't trustworthy until the widget is realized
@@ -3486,57 +3441,12 @@ function M.sync_ruler_gutter()
     if not gutter then return end  -- widget destroyed (teardown)
     qt_constants.PROPERTIES.SET_MIN_WIDTH(M._ruler_gutter, gutter)
     qt_constants.PROPERTIES.SET_MAX_WIDTH(M._ruler_gutter, gutter)
-    -- The horizontal bar's row mirrors the same gutter so its track ends
+    -- The zoom scroller's row mirrors the same gutter so its track ends
     -- where the lanes' content does.
     if M._h_scroll_gutter then
         qt_constants.PROPERTIES.SET_MIN_WIDTH(M._h_scroll_gutter, gutter)
         qt_constants.PROPERTIES.SET_MAX_WIDTH(M._h_scroll_gutter, gutter)
     end
-end
-
---- Project the model's time viewport onto the horizontal scrollbar.
---- Pure read→write: frames in, frames out, no echo (programmatic
---- setters never emit the user-scroll signal). On a blank panel the
---- range collapses to [0,0], which renders the bar inert.
-function M.sync_h_scrollbar()
-    if not M.timeline_h_scrollbar then
-        return  -- panel not built yet (bootstrap)
-    end
-    local start = state.get_viewport_start_time()
-    local duration = state.get_viewport_duration()
-    -- luacheck: globals qt_set_scroll_bar_metrics
-    if not start or not duration then
-        qt_set_scroll_bar_metrics(M.timeline_h_scrollbar, 0, 0, 0, 0)
-        return
-    end
-    local extent = state.get_timeline_extent()
-    local floor = state.get_start_timecode_frame()
-    assert(type(floor) == "number",
-        "timeline_panel.sync_h_scrollbar: displayed tab has a viewport but "
-        .. "no sequence_timecode_start_frame (sequence load did not run)")
-    local max_start = math.max(floor, extent - duration)
-    qt_set_scroll_bar_metrics(
-        M.timeline_h_scrollbar, floor, max_start, start, duration)
-end
-
---- User gesture: pan the time viewport so it starts at an absolute
---- frame (the horizontal bar's thumb target). Dispatches the same
---- ScrollTimelineViewport command as a horizontal wheel — the model
---- clamps to the sequence extent — then re-projects so the thumb snaps
---- to the clamped result even when the command was a no-op.
-function M.user_scroll_timeline_to(start_frame)
-    assert(M.timeline_h_scrollbar,
-        "timeline_panel.user_scroll_timeline_to: panel not built — "
-        .. "gestures cannot precede panel creation")
-    local current = state.get_viewport_start_time()
-    if not current then return end  -- blank panel: bar is inert ([0,0])
-    local delta = start_frame - current
-    if delta ~= 0 then
-        require("core.command_manager").execute("ScrollTimelineViewport", {
-            delta_frames = delta,
-        })
-    end
-    M.sync_h_scrollbar()
 end
 
 --- User gesture: scroll a pane by a wheel delta (widget px). Matches
@@ -3599,7 +3509,6 @@ local function rebuild_for_displayed_tab()
     M.apply_pane_scroll("video")
     M.apply_pane_scroll("audio")
     M.sync_ruler_gutter()
-    M.sync_h_scrollbar()
 
     -- Tab widget: ensure it exists in the strip and apply current styling.
     -- The underline tracks the DISPLAYED tab (which is what we just swapped

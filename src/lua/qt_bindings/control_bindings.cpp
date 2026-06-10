@@ -55,46 +55,6 @@ int lua_create_slider(lua_State* L) {
     return 1;
 }
 
-// Standalone QScrollBar — the timeline's horizontal bar projects the
-// model's time viewport (frames), so it can't be a QScrollArea's bar
-// (those ranges are pixel ranges owned by Qt layout).
-int lua_create_scroll_bar(lua_State* L) {
-    const char* orient = luaL_checkstring(L, 1);
-    Qt::Orientation o = (strcmp(orient, "vertical") == 0) ? Qt::Vertical : Qt::Horizontal;
-    QScrollBar* sb = new QScrollBar(o);
-    lua_push_widget(L, sb);
-    return 1;
-}
-
-// Programmatic projection of model state onto a standalone scrollbar:
-// range, page size, and position in one call. Range is set before value
-// so the value isn't clamped against a stale range. Emits no
-// actionTriggered (that signal is user-interaction-only), so projecting
-// can never echo back into the model write path.
-int lua_set_scroll_bar_metrics(lua_State* L) {
-    QScrollBar* sb = get_widget<QScrollBar>(L, 1);
-    if (!sb) return 0;
-    int min = static_cast<int>(luaL_checkinteger(L, 2));
-    int max = static_cast<int>(luaL_checkinteger(L, 3));
-    int value = static_cast<int>(luaL_checkinteger(L, 4));
-    int pageStep = static_cast<int>(luaL_checkinteger(L, 5));
-    sb->setRange(min, max);
-    sb->setPageStep(pageStep);
-    sb->setValue(value);
-    return 0;
-}
-
-// Read back a standalone scrollbar's geometry: value, min, max, pageStep.
-int lua_get_scroll_bar_metrics(lua_State* L) {
-    QScrollBar* sb = get_widget<QScrollBar>(L, 1);
-    if (!sb) return 0;
-    lua_pushinteger(L, sb->value());
-    lua_pushinteger(L, sb->minimum());
-    lua_pushinteger(L, sb->maximum());
-    lua_pushinteger(L, sb->pageStep());
-    return 4;
-}
-
 LUA_BIND_SETTER_BOOL(lua_set_checked, QAbstractButton, setChecked)
 LUA_BIND_GETTER_BOOL(lua_get_checked, QAbstractButton, isChecked)
 
