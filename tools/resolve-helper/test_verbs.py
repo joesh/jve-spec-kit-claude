@@ -7,7 +7,7 @@ Resolve API state.
 import tempfile
 import unittest
 
-from verbs import _validate_read_grades_args
+from verbs import _validate_read_grades_args, _validate_apply_test_grade_args
 
 
 class ValidateReadGradesArgsTests(unittest.TestCase):
@@ -84,6 +84,98 @@ class ValidateReadGradesArgsTests(unittest.TestCase):
             self.assertEqual(ok, "ok")
             self.assertEqual(payload["item_ids"], {"a"})
             self.assertEqual(payload["bake_lut_dir"], tmp)
+
+
+class ValidateApplyTestGradeArgsTests(unittest.TestCase):
+    # Contract per helper-protocol.md §apply_test_grade (test-only):
+    # args = { resolve_item_id, cdl?: {slope:[r,g,b], offset:[r,g,b],
+    # power:[r,g,b], sat}, lut_path?, change_token } — at least one of
+    # cdl / lut_path required. change_token is validated separately by
+    # _validate_change_token; this validator owns the grade payload.
+
+    CDL = {"slope": [1.2, 0.9, 0.85], "offset": [0.02, -0.01, 0.03],
+           "power": [0.95, 1.1, 1.05], "sat": 0.8}
+
+    def test_cdl_only_ok(self):
+        ok, payload = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": dict(self.CDL),
+             "change_token": {}})
+        self.assertEqual(ok, "ok")
+        self.assertEqual(payload["resolve_item_id"], "uid1")
+        self.assertEqual(payload["cdl"]["sat"], 0.8)
+        self.assertIsNone(payload["lut_path"])
+
+    def test_lut_only_ok(self):
+        ok, payload = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "lut_path": "/luts/k2383.cube",
+             "change_token": {}})
+        self.assertEqual(ok, "ok")
+        self.assertEqual(payload["lut_path"], "/luts/k2383.cube")
+        self.assertIsNone(payload["cdl"])
+
+    def test_both_cdl_and_lut_ok(self):
+        ok, payload = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": dict(self.CDL),
+             "lut_path": "/luts/k2383.cube", "change_token": {}})
+        self.assertEqual(ok, "ok")
+        self.assertIsNotNone(payload["cdl"])
+        self.assertIsNotNone(payload["lut_path"])
+
+    def test_neither_cdl_nor_lut_rejected(self):
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("cdl", msg)
+        self.assertIn("lut_path", msg)
+
+    def test_missing_resolve_item_id_rejected(self):
+        ok, msg = _validate_apply_test_grade_args(
+            {"cdl": dict(self.CDL), "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("resolve_item_id", msg)
+
+    def test_cdl_triple_wrong_arity_rejected(self):
+        bad = dict(self.CDL); bad["slope"] = [1.0, 1.0]
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": bad, "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("slope", msg)
+
+    def test_cdl_non_number_component_rejected(self):
+        bad = dict(self.CDL); bad["offset"] = [0.1, "x", 0.2]
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": bad, "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("offset", msg)
+
+    def test_cdl_missing_sat_rejected(self):
+        bad = dict(self.CDL); del bad["sat"]
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": bad, "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("sat", msg)
+
+    def test_cdl_unknown_key_rejected(self):
+        bad = dict(self.CDL); bad["gamma"] = 1.0
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": bad, "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("gamma", msg)
+
+    def test_lut_path_relative_rejected(self):
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "lut_path": "k2383.cube",
+             "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("absolute", msg)
+
+    def test_unknown_args_field_rejected(self):
+        ok, msg = _validate_apply_test_grade_args(
+            {"resolve_item_id": "uid1", "cdl": dict(self.CDL),
+             "drx": "/x.drx", "change_token": {}})
+        self.assertEqual(ok, "error")
+        self.assertIn("drx", msg)
+
 
 
 if __name__ == "__main__":

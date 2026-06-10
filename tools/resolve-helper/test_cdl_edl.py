@@ -26,6 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cdl_edl import (
     CdlEdlParseError,
     classify_fidelity,
+    any_beyond_primary_tools,
+    is_identity_cdl,
     integer_frame_rate_from_setting,
     parse_cdl_edl,
     tc_to_frames,
@@ -467,6 +469,78 @@ class ClassifyFidelityTests(unittest.TestCase):
             classify_fidelity(
                 any_non_cdl_tools=False, item_lut_ref=42,
                 cdl_present=True)
+
+
+class AnyBeyondPrimaryToolsTests(unittest.TestCase):
+    # Empirical model (live-probed 2026-06-10 against Resolve 20.3, VM):
+    # Graph.GetToolsInNode(n) lists ALL corrector activity by display
+    # name — bare primary corrections appear as 'Primary Balance' /
+    # 'Saturation, Hue & Lum Mix', a node LUT as 'LUT: <name>', an
+    # untouched node as None/[]. The earlier "empty list == primary
+    # only" model mis-classified every CDL-graded clip as
+    # unrepresentable (T034 live run).
+
+    def test_bare_setcdl_graph_is_primary_only(self):
+        self.assertFalse(any_beyond_primary_tools(
+            [["Primary Balance", "Saturation, Hue & Lum Mix"]]))
+
+    def test_untouched_node_none(self):
+        self.assertFalse(any_beyond_primary_tools([None]))
+
+    def test_untouched_node_empty_list(self):
+        self.assertFalse(any_beyond_primary_tools([[]]))
+
+    def test_lut_tool_is_beyond_primary(self):
+        self.assertTrue(any_beyond_primary_tools(
+            [["LUT: DCI-P3 Kodak 2383 D60"]]))
+
+    def test_unknown_tool_name_fails_safe_to_beyond(self):
+        # Fail-safe direction: an unrecognized tool name must DOWNGRADE
+        # (never over-claim primary) — FR-015.
+        self.assertTrue(any_beyond_primary_tools(
+            [["Primary Balance"], ["Curves"]]))
+
+    def test_non_list_node_entry_raises(self):
+        with self.assertRaises(CdlEdlParseError):
+            any_beyond_primary_tools(["Primary Balance"])
+
+    def test_non_string_tool_name_raises(self):
+        with self.assertRaises(CdlEdlParseError):
+            any_beyond_primary_tools([[42]])
+
+
+
+class IsIdentityCdlTests(unittest.TestCase):
+    # Live-probed 2026-06-10 (VM Resolve 20.3): the EDL+CDL export
+    # emits an IDENTITY ASC_SOP/ASC_SAT block for ungraded clips
+    # (slope 1,1,1 / offset 0,0,0 / power 1,1,1 / sat 1.0) — the
+    # earlier Anamnesis observation (block absent entirely) is the
+    # other ungraded shape. Both mean "no CDL grade".
+
+    def _entry(self, **kw):
+        e = {"slope": [1.0, 1.0, 1.0], "offset": [0.0, 0.0, 0.0],
+             "power": [1.0, 1.0, 1.0], "sat": 1.0}
+        e.update(kw)
+        return e
+
+    def test_identity_block(self):
+        self.assertTrue(is_identity_cdl(self._entry()))
+
+    def test_real_slope_not_identity(self):
+        self.assertFalse(is_identity_cdl(
+            self._entry(slope=[1.2, 0.9, 0.85])))
+
+    def test_single_offset_component_not_identity(self):
+        self.assertFalse(is_identity_cdl(
+            self._entry(offset=[0.0, 0.0, 0.03])))
+
+    def test_sat_only_grade_not_identity(self):
+        self.assertFalse(is_identity_cdl(self._entry(sat=0.8)))
+
+    def test_power_only_grade_not_identity(self):
+        self.assertFalse(is_identity_cdl(
+            self._entry(power=[1.0, 1.05, 1.0])))
+
 
 
 if __name__ == "__main__":

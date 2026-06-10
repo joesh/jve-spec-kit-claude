@@ -163,6 +163,7 @@ end
 local STATE_CHANGING_VERBS_REQUIRE_TOKEN = {
     import_timeline        = true,
     stamp_identity_marker  = true,
+    apply_test_grade       = true,
     delete_timeline        = true,
 }
 

@@ -46,6 +46,8 @@ import tempfile
 from cdl_edl import (
     CdlEdlParseError,
     classify_fidelity,
+    any_beyond_primary_tools,
+    is_identity_cdl,
     integer_frame_rate_from_setting,
     parse_cdl_edl,
 )
@@ -826,6 +828,136 @@ def verb_stamp_identity_marker(args, _resolve, project, envelope_id,
     return _ok(envelope_id, {"stamped": True})
 
 
+# ─── Test-only grade application (T034/T033 live fixtures) ───────────
+#
+# State-changing. Exposed ONLY so the fidelity-downgrade (T034) and
+# pixel-compare (T033) live tests can put a KNOWN grade on a fixture
+# timeline item — the operator-equivalent of grading the clip in
+# Resolve's UI. Same test-only posture as delete_timeline: no JVE-side
+# command exists; misuse protection is change_token + the idempotency
+# ledger. The verb maps one-to-one onto Resolve's documented item APIs:
+# SetCDL (primary corrector values) and SetLUT (node LUT carrier).
+
+_CDL_TRIPLE_KEYS = ("slope", "offset", "power")
+
+
+def _validate_apply_test_grade_args(args):
+    # Pure-data validator (offline-testable). Returns ("ok", payload)
+    # or ("error", message). change_token is owned by
+    # _validate_change_token at the verb boundary, not here.
+    resolve_item_id = args.get("resolve_item_id")
+    if not isinstance(resolve_item_id, str) or not resolve_item_id:
+        return ("error", "apply_test_grade args.resolve_item_id "
+            "required (non-empty string)")
+
+    extras = sorted(k for k in args.keys() if k not in
+        ("resolve_item_id", "cdl", "lut_path", "change_token"))
+    if extras:
+        return ("error",
+            f"apply_test_grade: unknown args fields: {extras}")
+
+    cdl = args.get("cdl")
+    lut_path = args.get("lut_path")
+    if cdl is None and lut_path is None:
+        return ("error", "apply_test_grade: at least one of args.cdl "
+            "/ args.lut_path required")
+
+    if cdl is not None:
+        if not isinstance(cdl, dict):
+            return ("error", "apply_test_grade args.cdl must be a map")
+        cdl_extras = sorted(k for k in cdl.keys()
+            if k not in _CDL_TRIPLE_KEYS + ("sat",))
+        if cdl_extras:
+            return ("error",
+                f"apply_test_grade cdl: unknown keys: {cdl_extras}")
+        for key in _CDL_TRIPLE_KEYS:
+            triple = cdl.get(key)
+            if (not isinstance(triple, list) or len(triple) != 3
+                    or not all(isinstance(v, (int, float))
+                               and not isinstance(v, bool)
+                               for v in triple)):
+                return ("error", f"apply_test_grade cdl.{key} must be "
+                    "[r, g, b] numbers")
+        sat = cdl.get("sat")
+        if not isinstance(sat, (int, float)) or isinstance(sat, bool):
+            return ("error", "apply_test_grade cdl.sat must be a number")
+
+    if lut_path is not None:
+        if not isinstance(lut_path, str) or not lut_path:
+            return ("error", "apply_test_grade args.lut_path must be a "
+                "non-empty string")
+        if not lut_path.startswith("/"):
+            return ("error", "apply_test_grade args.lut_path must be "
+                "an absolute path")
+
+    return ("ok", {"resolve_item_id": resolve_item_id,
+                   "cdl": cdl, "lut_path": lut_path})
+
+
+def _cdl_triple_str(triple):
+    return " ".join(repr(float(v)) for v in triple)
+
+
+@_stateful_verb
+def verb_apply_test_grade(args, _resolve, project, envelope_id,
+                           helper_version):
+    del helper_version
+
+    token_check = _validate_change_token(args, "apply_test_grade")
+    if token_check[0] != "ok":
+        return _error(envelope_id, "bad_request", token_check[1])
+    args_check = _validate_apply_test_grade_args(args)
+    if args_check[0] != "ok":
+        return _error(envelope_id, "bad_request", args_check[1])
+    payload = args_check[1]
+
+    timeline, err = _require_current_timeline(project, envelope_id)
+    if err is not None:
+        return err
+
+    try:
+        item = _find_timeline_item_by_uid(
+            timeline, payload["resolve_item_id"])
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+    if item is None:
+        return _error(envelope_id, "handle_stale",
+            f"resolve_item_id {payload['resolve_item_id']!r} not found "
+            "in current timeline")
+
+    if payload["cdl"] is not None:
+        cdl = payload["cdl"]
+        cdl_map = {
+            "NodeIndex":  "1",
+            "Slope":      _cdl_triple_str(cdl["slope"]),
+            "Offset":     _cdl_triple_str(cdl["offset"]),
+            "Power":      _cdl_triple_str(cdl["power"]),
+            "Saturation": repr(float(cdl["sat"])),
+        }
+        try:
+            ok = item.SetCDL(cdl_map)
+        except Exception as exc:
+            return _error(envelope_id, "resolve_api_error",
+                f"SetCDL raised: {exc}")
+        if not ok:
+            return _error(envelope_id, "resolve_api_error",
+                "SetCDL returned False — Resolve refused the CDL")
+
+    if payload["lut_path"] is not None:
+        try:
+            ok = item.SetLUT(1, payload["lut_path"])
+        except Exception as exc:
+            return _error(envelope_id, "resolve_api_error",
+                f"SetLUT raised: {exc}")
+        if not ok:
+            return _error(envelope_id, "resolve_api_error",
+                f"SetLUT(1, {payload['lut_path']!r}) returned False — "
+                "Resolve refused the LUT (bad path or unsupported "
+                "format)")
+
+    return _ok(envelope_id, {"applied": True})
+
+
 # ─── Timeline delete (T025b test cleanup; FR-024 follow-on) ──────────
 #
 # State-changing. Exposed PRIMARILY for the SendToResolve end-to-end
@@ -958,45 +1090,43 @@ def _timeline_integer_frame_rate(timeline):
             f"timelineFrameRate {setting!r}: {exc}") from exc
 
 
-def _item_lut_ref(item):
-    # TimelineItem.GetLUT() returns a local path string when an
-    # item-level LUT is bound, None otherwise. Empty string is treated
-    # as None (defensive — Resolve sometimes returns "" for no LUT).
-    lut = _api("item.GetLUT()", item.GetLUT)
-    if lut is None:
-        return None
-    if isinstance(lut, str):
-        return lut if lut != "" else None
-    raise RuntimeError(
-        f"item.GetLUT() returned non-string non-None: "
-        f"{type(lut).__name__} = {lut!r}")
-
-
-def _any_non_cdl_tools(item):
-    # Walk the item's node graph; GetToolsInNode(n) returns the list of
-    # NON-primary tools attached to node n (curves, qualifier, OFX,
-    # masks). An empty list per node = primary-only correction.
+def _inspect_node_graph(item):
+    # One walk of the item's node graph feeding both fidelity inputs:
+    #   per_node_tools — GetToolsInNode(n) per node, handed verbatim to
+    #     cdl_edl.any_beyond_primary_tools (which owns the
+    #     primary-vs-beyond partition; live-probed 2026-06-10: Resolve
+    #     names ALL corrector activity, incl. bare primaries — the old
+    #     "empty list == primary-only" model classified every graded
+    #     clip unrepresentable).
+    #   lut_ref — first non-empty GetLUT(n) across nodes (the README
+    #     contract takes a 1-based nodeIndex; the previous argless
+    #     item.GetLUT() call was off-contract and only saw node 1 at
+    #     best). Empty string = no LUT on that node.
+    # Returns (per_node_tools, lut_ref_or_None).
     graph = _api("item.GetNodeGraph()", item.GetNodeGraph)
     if graph is None:
-        # Item has no color graph at all — treat as primary-only
-        # (degenerate; the EDL will still carry identity CDL).
-        return False
+        # Item has no color graph at all — degenerate ungraded shape.
+        return [], None
     num_nodes = _api("graph.GetNumNodes()", graph.GetNumNodes)
     if not isinstance(num_nodes, int) or num_nodes < 0:
         raise RuntimeError(
             f"graph.GetNumNodes() returned non-int / negative: "
             f"{num_nodes!r}")
+    per_node_tools = []
+    lut_ref = None
     for n in range(1, num_nodes + 1):
-        tools = _api(f"graph.GetToolsInNode({n})", graph.GetToolsInNode, n)
-        if tools is None:
+        per_node_tools.append(
+            _api(f"graph.GetToolsInNode({n})", graph.GetToolsInNode, n))
+        lut = _api(f"item.GetLUT({n})", item.GetLUT, n)
+        if lut is None or lut == "":
             continue
-        if not isinstance(tools, list):
+        if not isinstance(lut, str):
             raise RuntimeError(
-                f"graph.GetToolsInNode({n}) returned non-list: "
-                f"{type(tools).__name__}")
-        if tools:
-            return True
-    return False
+                f"item.GetLUT({n}) returned non-string non-None: "
+                f"{type(lut).__name__} = {lut!r}")
+        if lut_ref is None:
+            lut_ref = lut
+    return per_node_tools, lut_ref
 
 
 def _bake_item_lut(item, resolve_item_id, bake_lut_dir, resolve):
@@ -1198,14 +1328,19 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             # {"none", "partial", "unrepresentable"} accordingly
             # (helper-protocol.md §read_grades, spec.md FR-015).
             cdl_entry = cdl_by_rec_in.get(record_start)
+            # Identity block ≡ no CDL grade (Resolve emits identity
+            # SOP/SAT for ungraded clips on some timelines, omits the
+            # block on others — see cdl_edl.is_identity_cdl).
+            if cdl_entry is not None and is_identity_cdl(cdl_entry):
+                cdl_entry = None
             try:
-                item_lut = _item_lut_ref(item)
-                any_tools = _any_non_cdl_tools(item)
+                per_node_tools, item_lut = _inspect_node_graph(item)
             except RuntimeError as exc:
                 return _error(envelope_id, "resolve_api_error", str(exc))
             try:
                 fidelity = classify_fidelity(
-                    any_non_cdl_tools=any_tools,
+                    any_non_cdl_tools=any_beyond_primary_tools(
+                        per_node_tools),
                     item_lut_ref=item_lut,
                     cdl_present=(cdl_entry is not None))
             except CdlEdlParseError as exc:
@@ -1257,6 +1392,7 @@ VERB_TABLE = {
     "read_timeline":   verb_read_timeline,
     "read_grades":     verb_read_grades,
     "stamp_identity_marker": verb_stamp_identity_marker,
+    "apply_test_grade": verb_apply_test_grade,
     "delete_timeline": verb_delete_timeline,
 }
 

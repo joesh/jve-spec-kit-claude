@@ -92,6 +92,10 @@ fi
 # needs more (keep it explicit — implicit env propagation across SSH is a
 # debug nightmare).
 echo "[vm-dispatch] $(basename "$0") → $_VM_HOST" >&2
+# PATH: non-login ssh shells omit /opt/homebrew/bin, so bare shellouts
+# to brew-installed tools (ffmpeg in timeline_render's render_env.lua)
+# fail "command not found" on the guest while passing on the host.
+# Match the host dev environment explicitly.
 $_VM_SSH "$_VM_USER@$_VM_HOST" \
-    "cd $_VM_GUEST_PATH && JVE_IN_VM=1 JVE_SMOKE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL"
+    "cd $_VM_GUEST_PATH && PATH=/opt/homebrew/bin:\$PATH JVE_IN_VM=1 JVE_SMOKE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL"
 exit $?

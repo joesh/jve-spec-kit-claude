@@ -243,6 +243,74 @@ _KNOWN_TC_COUNTER_RATES = frozenset({24, 25, 30, 48, 50, 60})
 _FIDELITY_VALUES = ("primary", "partial", "unrepresentable")
 
 
+# Tool display names Resolve's Graph.GetToolsInNode emits for BARE
+# primary-corrector activity — i.e. exactly the operations ASC CDL can
+# represent (SOP via the wheels, SAT via the sat control). Empirically
+# probed 2026-06-10 against live Resolve 20.3 (VM): a SetCDL-graded
+# node reports these two names; an untouched node reports None/[].
+#
+# Known fidelity blind spot (accepted, documented): Resolve names the
+# control GROUP, not which sliders moved — 'Saturation, Hue & Lum Mix'
+# also covers Hue and Lum Mix changes that CDL canNOT carry. Resolve's
+# own EDL+CDL export has the same blind spot (it emits SOP/SAT and
+# silently drops hue/lum-mix), so "primary" here matches the
+# industry-standard CDL exchange semantics. Unknown tool names fail
+# SAFE: they classify beyond-primary and the grade downgrades (FR-015
+# never over-claims).
+PRIMARY_CORRECTOR_TOOL_NAMES = frozenset({
+    "Primary Balance",
+    "Saturation, Hue & Lum Mix",
+})
+
+
+def any_beyond_primary_tools(per_node_tools):
+    """True if any node carries a tool beyond bare primary correction.
+
+    Args:
+      per_node_tools: list with one entry per node — each entry is the
+        Graph.GetToolsInNode(n) result: a list of tool display-name
+        strings, or None (Resolve returns None for untouched nodes).
+
+    Raises CdlEdlParseError on shape violations (non-list node entry,
+    non-string tool name) — Resolve API drift must surface, not skew
+    classification.
+    """
+    for node_idx, tools in enumerate(per_node_tools, start=1):
+        if tools is None:
+            continue
+        if not isinstance(tools, list):
+            raise CdlEdlParseError(
+                f"any_beyond_primary_tools: node {node_idx} entry must "
+                f"be list or None, got {type(tools).__name__}")
+        for name in tools:
+            if not isinstance(name, str):
+                raise CdlEdlParseError(
+                    f"any_beyond_primary_tools: node {node_idx} tool "
+                    f"name must be str, got {type(name).__name__}")
+            if name not in PRIMARY_CORRECTOR_TOOL_NAMES:
+                return True
+    return False
+
+
+def is_identity_cdl(cdl_entry):
+    """True when a parsed CDL block is the identity transform.
+
+    Live-probed 2026-06-10 (VM Resolve 20.3): the EDL+CDL export emits
+    an identity ASC_SOP/ASC_SAT block (slope 1,1,1 / offset 0,0,0 /
+    power 1,1,1 / sat 1.0) for ungraded clips — while the 2026-06-04
+    Anamnesis observation saw ungraded clips with NO block at all. Both
+    shapes mean "no CDL grade"; callers treat an identity block as
+    cdl-absent for fidelity classification, so an untouched clip
+    classifies "none" rather than minting a pointless primary grade.
+    Exact float comparison is correct: Resolve prints identity as exact
+    1.000000/0.000000 literals and the parser float()s them losslessly.
+    """
+    return (cdl_entry["slope"]  == [1.0, 1.0, 1.0]
+        and cdl_entry["offset"] == [0.0, 0.0, 0.0]
+        and cdl_entry["power"]  == [1.0, 1.0, 1.0]
+        and cdl_entry["sat"]    == 1.0)
+
+
 def classify_fidelity(any_non_cdl_tools, item_lut_ref, cdl_present):
     """Decide FR-015 fidelity bucket from observed Resolve state.
 
@@ -257,11 +325,13 @@ def classify_fidelity(any_non_cdl_tools, item_lut_ref, cdl_present):
 
     Returns one of `"primary" | "partial" | "unrepresentable" | "none"`.
 
-    `cdl_present` is a real signal, not an anomaly: ungraded clips and
-    LUT-only / non-CDL-only graphs do NOT produce ASC_SOP/ASC_SAT in
-    the EDL+CDL export (empirically disproved on the Anamnesis
-    sequence, 2026-06-04). The earlier "Resolve emits CDL for every
-    clip" assumption was wrong.
+    `cdl_present` is a real signal, not an anomaly: ungraded clips
+    surface either as NO ASC_SOP/ASC_SAT block (Anamnesis sequence,
+    2026-06-04) or as an IDENTITY block (T034 fixture timeline,
+    2026-06-10) — callers filter identity blocks to cdl_present=False
+    via `is_identity_cdl` before classifying. The earlier "Resolve
+    emits a real CDL for every clip" assumption was wrong in both
+    directions.
 
     Semantics:
       cdl_present == True:

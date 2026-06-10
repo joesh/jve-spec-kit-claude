@@ -34,6 +34,9 @@ _VERB_EXTRA_KEY_FIELDS = {
     # — two delete_timeline calls with the same change_token but
     # different uids would otherwise collide.
     "delete_timeline":       ["resolve_timeline_id"],
+    # apply_test_grade: same token applied to two items (or with two
+    # different grades) must not conflate.
+    "apply_test_grade":      ["resolve_item_id", "cdl", "lut_path"],
 }
 
 
