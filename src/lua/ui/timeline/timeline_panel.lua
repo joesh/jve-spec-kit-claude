@@ -2656,26 +2656,42 @@ function M.create(opts)
     -- Set initial 50/50 split (will be synchronized with headers_main_splitter)
     qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, {1, 1})
 
-    -- Create rubber band for drag selection (parented to splitter so it can span both views)
+    -- Create rubber band for drag selection. Parented to timeline_area
+    -- (the plain container holding ruler + splitter + scroller, so the
+    -- band can span both views) — NOT to vertical_splitter: QSplitter
+    -- adopts every child widget as a pane, keeping hidden ones collapsed,
+    -- so showing a splitter-parented band grants it a layout slice and
+    -- shrinks/shifts the real panes (the "timeline jumps on drag-select"
+    -- bug; see test_drag_select_no_layout_jump).
     -- Note: rubber band starts hidden (QRubberBand::hide() called in C++)
-    local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(vertical_splitter)
+    local rubber_band = qt_constants.WIDGET.CREATE_RUBBER_BAND(timeline_area)
     M._rubber_band = rubber_band  -- accessible by cancel signal handler
 
     -- Panel drag coordination callbacks
     -- Called by view during drag to update rubber band geometry
     -- View passes its local coordinates, panel converts to splitter coords
 
+    -- Selection math stays in splitter coords; only the band's on-screen
+    -- geometry is mapped into its parent's (timeline_area) space.
+    local function set_band_geometry_in_splitter_coords(x, y, w, h)
+        local gx, gy = qt_constants.WIDGET.MAP_TO_GLOBAL(vertical_splitter, x, y)
+        local ax, ay = qt_constants.WIDGET.MAP_FROM_GLOBAL(timeline_area, gx, gy)
+        qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY(rubber_band, ax, ay, w, h)
+    end
+
     -- Show rubber band on first move
     local rubber_band_visible = false
     local function show_rubber_band_if_needed()
         if not rubber_band_visible then
-            qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY(
-                rubber_band,
+            set_band_geometry_in_splitter_coords(
                 drag_state.splitter_start_x,
                 drag_state.splitter_start_y,
                 0, 0
             )
             qt_constants.DISPLAY.SET_VISIBLE(rubber_band, true)
+            -- The band is created before the splitter joins the layout;
+            -- raise it above its siblings or it paints underneath them.
+            qt_constants.DISPLAY.RAISE(rubber_band)
             rubber_band_visible = true
         end
     end
@@ -2704,7 +2720,7 @@ function M.create(opts)
         local rect_height = math.abs(current_y_splitter - drag_state.splitter_start_y)
 
         -- Update rubber band geometry
-        qt_constants.WIDGET.SET_RUBBER_BAND_GEOMETRY(rubber_band, rect_x, rect_y, rect_width, rect_height)
+        set_band_geometry_in_splitter_coords(rect_x, rect_y, rect_width, rect_height)
 
         -- TODO: Query views for clips in rectangle and update visual feedback
     end
