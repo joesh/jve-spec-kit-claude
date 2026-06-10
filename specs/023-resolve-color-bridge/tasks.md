@@ -6,7 +6,7 @@
 ## Format: `[ID] [P?] Description`
 - **[P]** = different file, no dependency on another unstarted task → may run in parallel.
 - **🔬 SPIKE** = investigation against a real Resolve Studio; produces a findings note, **no production code**; ends at a STOP gate.
-- **🟢 LIVE** = test requiring a real running Resolve Studio + human-launched runner (cannot pass in headless CI; record real output).
+- **🟢 LIVE** = test requiring a real running Resolve Studio (cannot pass in headless CI; record real output). Resolve Studio runs in the always-on UTM test VM (`joes-virtual-machine.local`; see `scripts/_run_in_vm.sh` + memory `project_vm_test_environment`) — live tests are agent-drivable through the existing runners, which auto-dispatch to the VM.
 - Exact file paths are given. TDD is mandatory (constitution III): a test task and its "verify it FAILS" step precede the implementation that satisfies it.
 
 ## Conventions for every task here

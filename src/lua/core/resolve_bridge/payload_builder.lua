@@ -67,10 +67,12 @@ local function load_clips_for_track(db, track_id)
             .. tostring(id))
         rows[#rows + 1] = {
             id              = loaded.id,
-            media_uuid      = loaded.media_id,  -- renamed to avoid
-                                                -- legacy-identifier
-                                                -- pattern; semantically
-                                                -- still the media id
+            -- Clip.load resolves the media chain (nested master →
+            -- media_ref → media) into clip.resolved_media; nil when the
+            -- clip references a non-master sequence. The caller asserts
+            -- a media link exists before authoring a DRT.
+            media_uuid      = loaded.resolved_media
+                                and loaded.resolved_media.id,
             source_in       = loaded.source_in,
             source_out      = loaded.source_out,
             sequence_start  = loaded.sequence_start,
@@ -99,17 +101,27 @@ end
 local function media_to_payload(media, track_type)
     -- drt_writer expects a flat media_ref record. We fold in track_type
     -- so the writer can pick video vs audio media-pool item shape.
+    -- Media.load exposes duration as `duration` (native frames) and the
+    -- TC origin via `get_start_tc()` (frames at native rate, from
+    -- metadata) — there are no flat duration_frames/start_tc_frame
+    -- fields on the loaded object.
     assert(type(media.name) == "string" and media.name ~= "",
         "payload_builder: media missing name — id=" .. tostring(media.id))
+    assert(type(media.duration) == "number" and media.duration > 0,
+        "payload_builder: media duration must be positive native frames — "
+        .. "id=" .. tostring(media.id)
+        .. " duration=" .. tostring(media.duration))
+    local tc_origin = media:get_start_tc()
+    assert(type(tc_origin) == "number",
+        "payload_builder: media has no TC origin — TC must always be set "
+        .. "(rule timecode-is-truth) — id=" .. tostring(media.id))
     return {
         file_uuid        = media.id,
         name             = media.name,
         path             = media:get_file_path(),
         native_rate      = media_native_rate(media),
-        duration_frames  = media.duration_frames,
-        start_tc_frame   = assert(media.start_tc_frame,
-            "payload_builder: media missing start_tc_frame — "
-            .. "TC must always be set (rule timecode-is-truth)"),
+        duration_frames  = media.duration,
+        start_tc_frame   = tc_origin,
         track_type       = track_type,
     }
 end
