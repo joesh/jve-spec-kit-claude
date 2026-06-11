@@ -2,23 +2,22 @@
 -- downstream content; the renderer must paint at least one preview-color
 -- rect that intersects each downstream clip's shifted position.
 --
--- Two sub-scenarios (both single-track to avoid the cross-track clip-ID
--- issue in edge_preview for multi-track ripple drags):
+-- Three sub-scenarios:
 --
---   A. Gap in-edge drag rightward — V1 has a real gap between two clips;
---      dragging the gap's in-edge rightward (+200 frames) shrinks the gap
---      and shifts the downstream clip; a preview-color rect must intersect
---      the downstream clip's shifted region on V1.
+--   A. Gap out-edge ripple rightward — V1 has a real gap between two
+--      clips; ripple-dragging the gap's out-edge rightward (+200 frames)
+--      grows the gap and shifts the downstream clip; a preview-color rect
+--      must intersect the downstream clip's shifted region on V1.
 --
 --   B. Gap-only leading track — a clip on V1 is deleted after placement,
 --      leaving only a gap before the surviving downstream clip.  Dragging
 --      the gap's out-edge left by -200 frames must mark the downstream
 --      clip's shifted position with a preview-color rect.
 --
--- Note: multi-track gap-drag preview (original test_timeline_gap_downstream_preview
---   scenario) is not covered here due to a production cross-track clip-ID
---   issue in edge_preview for non-lead tracks; co-selected edge rendering
---   on non-lead tracks lands on the wrong band.
+--   C. Multi-track propagation — same drag as A with a clip on V2 sharing
+--      the downstream position; V2's clip shifts too and must get its own
+--      preview-color rect ON V2'S BAND (the original
+--      test_timeline_gap_downstream_preview scenario).
 --
 -- Converted from test_timeline_gap_downstream_preview.lua and
 --   test_timeline_gap_only_preview.lua (both stubbed _G.timeline and
@@ -66,14 +65,41 @@ local function preview_rect_in_region(widget, px_left, px_right, band)
     return false
 end
 
--- Initiate an edge drag without releasing.  Press 3px inside the clip/gap
+-- Assert the preview outline's right boundary lands at the shifted clip's
+-- END.  This is what distinguishes a ripple (whole clip shifts; outline
+-- ends at start+duration+delta) from a roll (clip end fixed; outline ends
+-- at the original end).  Checks the rightmost preview-color rect edge on
+-- the band against `expected_right_px` within tolerance.
+local function assert_preview_right_edge(widget, expected_right_px, band, label)
+    local max_right = nil
+    for _, r in ipairs(env.rects(widget, PREVIEW_COLOR)) do
+        local y_overlap = r.y < band.y + band.height and (r.y + r.height) > band.y
+        if y_overlap then
+            local right = r.x + r.width
+            if not max_right or right > max_right then max_right = right end
+        end
+    end
+    assert(max_right, label .. ": no preview-color rect on the band at all")
+    assert(math.abs(max_right - expected_right_px) <= 12, string.format(
+        "%s: preview outline's right boundary is at x=%.1f, expected ~%.1f "
+        .. "(shifted clip end). A roll-style outline (clip end fixed) would "
+        .. "land elsewhere — the gesture must ripple-shift the whole clip.",
+        label, max_right, expected_right_px))
+end
+
+-- Initiate an edge drag without releasing.  Press 5px inside the clip/gap
 -- body near `edge_frame`, move past threshold, then move to `delta_px`.
--- `inside_dir`: "right" → press is 3px to the right of edge_frame (gap in-edge);
---               "left"  → press is 3px to the left  (gap out-edge / clip out-edge).
+-- 5px selects a single-edge RIPPLE grab: ROLL_ZONE_PX=7 makes ±3px of the
+-- boundary a roll grab (both edges, no ripple); EDGE_ZONE_PX=7 caps the
+-- grab range, so 4..7px on one side is the ripple band.
+-- `inside_dir`: "right" → press is 5px to the right of edge_frame
+--               (grabs the right-hand element's in-edge);
+--               "left"  → press is 5px to the left
+--               (grabs the left-hand element's out-edge).
 local function begin_drag(h, edge_frame, mid_y, delta_px, inside_dir)
     inside_dir = inside_dir or "right"
     local ex      = env.x_of(edge_frame)
-    local press_x = (inside_dir == "right") and (ex + 3) or (ex - 3)
+    local press_x = (inside_dir == "right") and (ex + 5) or (ex - 5)
     h({ type = "press", x = press_x, y = mid_y, button = 1,
         shift = false, alt = false, ctrl = false, command = false })
     local dir_sign = (delta_px >= 0) and 1 or -1
@@ -86,15 +112,15 @@ local function begin_drag(h, edge_frame, mid_y, delta_px, inside_dir)
 end
 
 ------------------------------------------------------------------------
--- Sub-test A: single-track gap in-edge drag shifts downstream content
+-- Sub-test A: single-track gap out-edge ripple shifts downstream content
 --
--- V1:  clip [0,1000) — gap [1000,1600) — clip [1600,1000)
+-- V1:  clip [0,1000) — gap [1000,1600) — clip [1600,2600)
 --
--- Drag the gap's in-edge rightward by +200 frames (shrinks the gap).
--- Downstream V1 clip at [1600,1000) shifts to ~[1800,1000).
+-- Ripple-drag the gap's out-edge rightward by +200 frames (grows the
+-- gap).  Downstream V1 clip at [1600,2600) shifts to [1800,2800).
 -- A preview-color rect must intersect that shifted region on V1's band.
 ------------------------------------------------------------------------
-print("  A: gap in-edge drag marks downstream clip in preview color")
+print("  A: gap out-edge ripple marks downstream clip in preview color")
 do
     local seq = env.fresh_sequence("GapRipplePreview A")
     local tracks = env.tracks()
@@ -115,13 +141,14 @@ do
     -- Band for the downstream clip [1600,2600) — where the preview must land.
     local v1_right_band = find_band(widget, 1600, 2600)
 
-    -- Drag gap in-edge (frame 1600) rightward +200. The downstream clip
-    -- shifts right: 1600 → 1800.
+    -- Ripple-grab the gap's out-edge (boundary at frame 1600, press on
+    -- the gap side) and drag rightward +200. The gap grows; the
+    -- downstream clip shifts right: 1600 → 1800.
     local delta_frames = 200
     local delta_px     = env.x_of(1600 + delta_frames) - env.x_of(1600)
 
     local h = env.mouse_handler(widget)
-    begin_drag(h, 1600, v1_mid_y, delta_px, "right")
+    local press_x = begin_drag(h, 1600, v1_mid_y, delta_px, "left")
 
     local shifted_start = 1600 + delta_frames   -- 1800
     local shifted_dur   = 1000
@@ -134,8 +161,9 @@ do
             sl, sr,
             v1_right_band.y, v1_right_band.y + v1_right_band.height,
             #env.draw_commands(widget)))
+    assert_preview_right_edge(widget, sr, v1_right_band, "A")
 
-    h({ type = "release", x = env.x_of(1600) + 3 + delta_px, y = v1_mid_y, button = 1,
+    h({ type = "release", x = press_x + delta_px, y = v1_mid_y, button = 1,
         shift = false, alt = false, ctrl = false, command = false })
     env.pump(80)
     print("    OK")
@@ -204,13 +232,14 @@ do
     local v1_band  = find_band(widget, 500, 1200)
     local v1_mid_y = v1_band.y + v1_band.height / 2
 
-    -- Drag gap out-edge (frame 500) leftward by -200 frames.
-    -- delta_px is negative (leftward).
+    -- Ripple-grab the gap's out-edge (boundary at frame 500, press on the
+    -- gap side) and drag leftward -200 frames. The gap shrinks; the
+    -- downstream clip shifts left: 500 → 300.
     local delta_frames  = -200
     local delta_px      = env.x_of(500 + delta_frames) - env.x_of(500)
 
     local h = env.mouse_handler(widget)
-    begin_drag(h, 500, v1_mid_y, delta_px, "left")
+    local press_x = begin_drag(h, 500, v1_mid_y, delta_px, "left")
 
     -- Downstream clip shifts from 500 to 300.
     local shifted_start = 500 + delta_frames   -- 300
@@ -225,8 +254,74 @@ do
             sl, sr,
             v1_band.y, v1_band.y + v1_band.height,
             #env.draw_commands(widget)))
+    assert_preview_right_edge(widget, sr, v1_band, "B")
 
-    h({ type = "release", x = env.x_of(500) - 3 + delta_px, y = v1_mid_y, button = 1,
+    h({ type = "release", x = press_x + delta_px, y = v1_mid_y, button = 1,
+        shift = false, alt = false, ctrl = false, command = false })
+    env.pump(80)
+    print("    OK")
+end
+
+------------------------------------------------------------------------
+-- Sub-test C: multi-track propagation — V2's downstream clip gets its
+-- own preview-color rect on V2's band
+--
+-- V1:  clip [0,1000) — gap — clip [1600,2600)
+-- V2:  clip [1600,2600)
+--
+-- Same drag as A (gap out-edge ripple +200).  The ripple propagates to
+-- V2, whose clip shifts 1600 → 1800; a preview-color rect must intersect
+-- that shifted region on V2's band, not just on V1's.
+------------------------------------------------------------------------
+print("  C: multi-track — propagated track's clip marked on its own band")
+do
+    local seq = env.fresh_sequence("GapRipplePreview C")
+    local tracks = env.tracks()
+    assert(tracks.V1 and tracks.V2, "need V1 and V2 tracks")
+
+    env.place_clips(seq, {
+        { track_id = tracks.V1.id, position = 0,    duration = 1000 },
+        { track_id = tracks.V1.id, position = 1600, duration = 1000 },
+        { track_id = tracks.V2.id, position = 1600, duration = 1000 },
+    })
+    env.view_frames(3200, 0)
+
+    local widget = env.video_widget()
+
+    local v1_first_band = find_band(widget, 0, 1000)
+    local v1_mid_y      = v1_first_band.y + v1_first_band.height / 2
+
+    -- Two bands share the [1600,2600) span; the one on a different row
+    -- than V1's first clip is V2's.
+    local v2_band = nil
+    local c2_l, c2_r = env.x_of(1600), env.x_of(2600)
+    for _, r in ipairs(env.rects(widget)) do
+        if r.height > 10
+            and math.abs(r.x - c2_l) < 10 and math.abs((r.x + r.width) - c2_r) < 10
+            and math.abs(r.y - v1_first_band.y) > 4 then
+            v2_band = r
+        end
+    end
+    assert(v2_band, "C: V2 clip rect not found on a distinct band")
+
+    local delta_frames = 200
+    local delta_px     = env.x_of(1600 + delta_frames) - env.x_of(1600)
+
+    local h = env.mouse_handler(widget)
+    local press_x = begin_drag(h, 1600, v1_mid_y, delta_px, "left")
+
+    local sl = env.x_of(1600 + delta_frames)
+    local sr = env.x_of(1600 + delta_frames + 1000)
+    assert(preview_rect_in_region(widget, sl, sr, v2_band),
+        string.format(
+            "C: no preview-color rect intersects V2's shifted clip region "
+            .. "(x=%.0f..%.0f, y=%d..%d) in %d draw cmds — propagated-track "
+            .. "preview missing or on the wrong band",
+            sl, sr, v2_band.y, v2_band.y + v2_band.height,
+            #env.draw_commands(widget)))
+    assert_preview_right_edge(widget, sr, v2_band, "C")
+
+    h({ type = "release", x = press_x + delta_px, y = v1_mid_y, button = 1,
         shift = false, alt = false, ctrl = false, command = false })
     env.pump(80)
     print("    OK")
