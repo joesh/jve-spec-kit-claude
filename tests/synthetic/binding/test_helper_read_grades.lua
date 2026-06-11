@@ -141,6 +141,16 @@ do
     assert(type(r.result.grades) == "table",
         "result.grades must be an array")
     for i, row in ipairs(r.result.grades) do assert_grade_row(row, i) end
+    -- warnings: always present (possibly empty) — the in-band anomaly
+    -- channel for bake/page-restore failures (helper-protocol.md
+    -- §read_grades). JVE's sync handler asserts on it as a
+    -- version-skew tripwire, so the contract test must pin it.
+    assert(type(r.result.warnings) == "table",
+        "result.warnings must be an array (always present)")
+    for i, w in ipairs(r.result.warnings) do
+        assert(type(w) == "string", string.format(
+            "result.warnings[%d] must be a string", i))
+    end
     print(string.format("  ✓ omit item_ids → ok, %d grade(s) of valid shape",
         #r.result.grades))
 end

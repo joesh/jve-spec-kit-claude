@@ -1268,6 +1268,16 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             return _error(envelope_id, "bad_request",
                 f"bake_lut_dir {bake_lut_dir!r} not creatable: {exc}")
 
+    # In-band anomaly channel (helper-protocol.md §read_grades
+    # `warnings`): bake/page anomalies that don't fail the sync but
+    # leave user-visible damage (clips without a grade carrier, Resolve
+    # stuck on the Color page) MUST reach the JVE client, which logs
+    # them at warn — default-visible. stderr alone proved invisible in
+    # the 2026-06-10 incident (supervisor relays stderr at event level,
+    # off by default). The list object is shared with the response so
+    # the page-restore finally below can append after _ok() is built.
+    warnings = []
+
     # ExportLUT requires the Color page to be the active Resolve page —
     # empirically confirmed by t033_probe_export_lut.py (without
     # OpenPage("color") every call returns False; with it, items with
@@ -1289,6 +1299,16 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             return _error(envelope_id, "resolve_api_error",
                 f"GetCurrentPage failed; refusing to switch to Color "
                 f"because we cannot restore the user's page: {exc}")
+        if prior_page == "color":
+            # Resolve sitting on the Color page when a sync begins is
+            # the signature of an earlier sync killed mid-bake (the
+            # page-restore finally never ran — observed 2026-06-10).
+            # The restore below is skipped by design (nothing to
+            # restore TO); say so instead of silently normalizing it.
+            warnings.append(
+                "Resolve was already on the Color page when the sync "
+                "began — the prior-page restore is skipped (possibly "
+                "left there by an earlier interrupted sync)")
         try:
             resolve.OpenPage("color")
         except Exception as exc:
@@ -1303,6 +1323,9 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # any of those failing left Resolve stuck on Color even though the
     # contract promised to restore the user's prior page.
     grades = []
+    bake_attempts = 0
+    bake_failures = 0
+    page_probed_after_failure = False
     try:
         timeline, err = _require_current_timeline(project, envelope_id)
         if err is not None:
@@ -1383,28 +1406,75 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             baked_path = None
             if (bake_lut_dir is not None
                     and fidelity in ("partial", "unrepresentable")):
+                bake_attempts += 1
                 baked_path = _bake_item_lut(
                     item, resolve_item_id, bake_lut_dir, resolve)
+                if baked_path is None:
+                    bake_failures += 1
+                    if not page_probed_after_failure:
+                        # One-shot diagnosis of the dominant failure
+                        # mode: the user (or anything else) switched
+                        # Resolve off the Color page mid-bake, which
+                        # makes this and every later ExportLUT fail
+                        # (observed 2026-06-10: ~620 clips silently
+                        # lost their grade carrier). Probe once, not
+                        # per failure — one warning, not hundreds.
+                        page_probed_after_failure = True
+                        try:
+                            now_page = resolve.GetCurrentPage()
+                        except Exception as exc:
+                            warnings.append(
+                                "LUT bake failed and the page probe "
+                                f"also raised: {exc}")
+                        else:
+                            if now_page != "color":
+                                warnings.append(
+                                    "Resolve left the Color page "
+                                    f"mid-bake (now on {now_page!r}) — "
+                                    "subsequent bakes will fail; "
+                                    "re-run SyncGradesFromResolve")
             if baked_path is not None:
                 row["lut"] = {"ref": baked_path}
             elif item_lut is not None:
                 row["lut"] = {"ref": item_lut}
             grades.append(row)
-        response = _ok(envelope_id, {"grades": grades})
+        if bake_failures > 0:
+            warnings.append(
+                f"{bake_failures} of {bake_attempts} LUT bake(s) "
+                "failed — affected clips carry no displayable grade "
+                "in JVE (shown ungraded)")
+        # `warnings` is the same list object the finally below appends
+        # to — restore anomalies land in the already-built response.
+        response = _ok(envelope_id,
+            {"grades": grades, "warnings": warnings})
     except RuntimeError as exc:
         response = _error(envelope_id, "resolve_api_error", str(exc))
     finally:
         # Restore the user's Resolve page if we switched it. Done in
         # finally so success, RuntimeError, and any future early-return
         # all leave Resolve in the page the user invoked us from.
+        # Verified afterwards: a restore that raises OR silently
+        # doesn't take leaves the user stranded on the Color page —
+        # exactly the 2026-06-10 incident — so both shapes append to
+        # `warnings` (visible in the ok-response; error responses are
+        # already loud).
         if bake_lut_dir is not None and prior_page is not None \
                 and prior_page != "color":
             try:
                 resolve.OpenPage(prior_page)
+                now_page = resolve.GetCurrentPage()
             except Exception as exc:
                 sys.stderr.write(
                     f"[read_grades] OpenPage({prior_page!r}) restore "
                     f"raised: {exc}\n")
+                warnings.append(
+                    f"page restore to {prior_page!r} raised: {exc} — "
+                    "Resolve is likely still on the Color page")
+            else:
+                if now_page != prior_page:
+                    warnings.append(
+                        f"page restore to {prior_page!r} did not take "
+                        f"(Resolve reports {now_page!r})")
 
     return response
 

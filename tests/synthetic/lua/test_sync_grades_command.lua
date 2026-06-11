@@ -109,6 +109,9 @@ local response = {
         { resolve_item_id = "live_none", cdl = to_wire(POST_CDL_none),
           fidelity = "primary", lut = nil },
     },
+    -- always present per helper-protocol.md §read_grades (possibly
+    -- empty); the execute handler asserts it as a version-skew tripwire
+    warnings = {},
 }
 local captured = sync_grades.apply(response, "s", db, now + 60)
 

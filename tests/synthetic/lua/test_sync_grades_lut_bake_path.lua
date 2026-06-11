@@ -76,7 +76,54 @@ local g = ClipGrade.load("clip_partial", db)
 check("partial row written", g ~= nil and g.fidelity == "partial")
 check("lut_ref stored verbatim from row.lut.ref",
     g and g.lut_ref == lut_path)
+check("carrier present -> no_carrier_count is 0",
+    captured.no_carrier_count == 0)
 sync_grades.restore(captured, db)
+
+-- ─── apply: partial/unrepresentable WITHOUT lut.ref = clip with no
+-- displayable carrier (renders ungraded; view_grade_pull returns nil).
+-- The 2026-06-10 incident silently produced 623 of these when the
+-- user switched Resolve off the Color page mid-bake. apply() must
+-- count them (captured.no_carrier_count) so the sync can warn. ──────
+db:exec(([[
+    INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id,
+        sequence_id, sequence_start_frame, duration_frames,
+        source_in_frame, source_out_frame, source_in_subframe,
+        source_out_subframe, enabled, created_at, modified_at,
+        master_layer_track_id, master_audio_track_id, fps_mismatch_policy,
+        volume, playhead_frame)
+    VALUES ('clip_partial2', 'proj_alpha', 'P2', 't', 'seq_one', 'seq_one',
+        96, 96, 0, 96, NULL, NULL, 1, %d, %d, NULL, NULL,
+        'resample', 1.0, 0);
+]]):format(now, now))
+identity_ledger.upsert("clip_partial2",
+    { resolve_item_id = "live_partial2" }, db)
+
+local no_carrier_response = {
+    grades = {
+        {
+            resolve_item_id = "live_partial",
+            fidelity        = "partial",
+            lut             = { ref = lut_path },
+        },
+        {
+            resolve_item_id = "live_partial2",
+            fidelity        = "unrepresentable",
+            -- bake failed Resolve-side: no lut field at all
+        },
+    },
+}
+local captured2 = sync_grades.apply(no_carrier_response, "seq_one", db,
+    now + 120)
+check("carrier-less unrepresentable row still written",
+    (function()
+        local g2 = ClipGrade.load("clip_partial2", db)
+        return g2 ~= nil and g2.fidelity == "unrepresentable"
+            and g2.lut_ref == nil
+    end)())
+check("no_carrier_count counts exactly the carrier-less row",
+    captured2.no_carrier_count == 1)
+sync_grades.restore(captured2, db)
 
 -- ─── M.execute: helper_args MUST carry bake_lut_dir derived from
 -- ~/.jve/resolve_bake/<project_id>/ ─────────────────────────────────
@@ -88,7 +135,9 @@ function fake_client:request(verb, helper_args, cb, opts)
     captured_helper_args = helper_args
     captured_request_opts = opts
     -- Return empty grades; we're testing the OUTGOING shape.
-    cb({ result = { grades = {} } }, nil, nil)
+    -- warnings is part of the read_grades contract (always present,
+    -- possibly empty — helper-protocol.md §read_grades).
+    cb({ result = { grades = {}, warnings = {} } }, nil, nil)
 end
 local orig_with_client = supervisor.with_client
 supervisor.with_client = function(_notify, _args, fn) fn(fake_client) end

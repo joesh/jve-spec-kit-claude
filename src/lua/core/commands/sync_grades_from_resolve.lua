@@ -210,6 +210,13 @@ function M.apply(response, sequence_id, db, synced_at)
     local captured = {
         entries                 = {},
         unmatched_resolve_items = {},
+        -- Carrier-less grades: fidelity partial/unrepresentable with
+        -- no lut_ref — view_grade_pull returns nil for these, so the
+        -- clip displays UNGRADED despite a grade existing in Resolve.
+        -- Normal cause: the Resolve-side LUT bake failed (e.g. the
+        -- user left the Color page mid-bake — 2026-06-10 incident:
+        -- 623 clips silently affected). Counted here, warned below.
+        no_carrier_count        = 0,
     }
     local seen_clip_ids = {}
     for i, row in ipairs(response.grades) do
@@ -261,6 +268,11 @@ function M.apply(response, sequence_id, db, synced_at)
                 }, db)
             else
                 local new_grade = new_grade_from_response_row(row, i, synced_at)
+                if new_grade.fidelity ~= "primary"
+                        and new_grade.lut_ref == nil then
+                    captured.no_carrier_count =
+                        captured.no_carrier_count + 1
+                end
                 ClipGrade.upsert(clip_id, new_grade, db)
 
                 -- Update ledger fingerprint so subsequent SyncGrades can
@@ -296,6 +308,16 @@ function M.apply(response, sequence_id, db, synced_at)
     log.event("SyncGradesFromResolve.apply: %d grade(s) applied, "
         .. "%d stale-marked, %d unmatched resolve_item_id(s)",
         applied, stale_marked, #captured.unmatched_resolve_items)
+    -- warn (default-visible), not event: each of these clips has a
+    -- grade in Resolve but displays UNGRADED in JVE — user-visible
+    -- damage that was silent in the 2026-06-10 incident (623 clips).
+    if captured.no_carrier_count > 0 then
+        log.warn("SyncGradesFromResolve.apply: %d grade(s) have no "
+            .. "displayable carrier (LUT bake failed Resolve-side?) — "
+            .. "those clips display ungraded; re-run Sync Grades with "
+            .. "Resolve left undisturbed during the bake",
+            captured.no_carrier_count)
+    end
 
     -- FR-016: the View pulls grades from model state. Until now nothing
     -- told a parked monitor that its model row changed; the next
@@ -399,6 +421,24 @@ function M.execute(args, db, command)
                 -- popped). Masking an internal invariant violation as
                 -- resolve_api_error would conflate origin (rule 2.21)
                 -- and downgrade rule 1.14.
+                --
+                -- Helper anomaly channel (helper-protocol.md
+                -- §read_grades `warnings`): bake/page anomalies that
+                -- didn't fail the verb but leave user-visible damage
+                -- (clips without a grade carrier, Resolve stuck on the
+                -- Color page). Logged at warn so they're visible at
+                -- default log level — stderr-only proved invisible in
+                -- the 2026-06-10 incident. The shape assert doubles as
+                -- a version-skew tripwire: a resident helper process
+                -- predating this contract omits the field; restart
+                -- JVE (the helper respawns with current code).
+                assert(type(response.result.warnings) == "table",
+                    "SyncGradesFromResolve: read_grades response has no "
+                    .. "warnings array — helper process predates the "
+                    .. "protocol; restart JVE to respawn the helper")
+                for _, w in ipairs(response.result.warnings) do
+                    log.warn("read_grades: %s", w)
+                end
                 local captured = M.apply(response.result, sequence_id, db,
                     os.time())
                 -- Persist captured onto the live command so the undoer
