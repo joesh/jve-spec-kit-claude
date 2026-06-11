@@ -408,6 +408,84 @@ do
     layout:cleanup()
 end
 
+-- Capture warnings emitted through the logger's pure-Lua fallback
+-- (which writes to io.stderr at call time). Returns the captured
+-- text alongside the wrapped function's results.
+local function with_captured_stderr(fn)
+    local captured = {}
+    local real_stderr = io.stderr
+    io.stderr = {  -- luacheck: ignore 122 (capture seam, same as test_assert_project_id_is_live)
+        write = function(_, s) table.insert(captured, s) end,
+        flush = function() end,
+    }
+    local results = {pcall(fn)}
+    io.stderr = real_stderr  -- luacheck: ignore 122
+    assert(results[1], results[2])
+    return table.concat(captured), unpack(results, 2)
+end
+
+print("\n--- resolve_occlusions: moved clip wholly outside window → no warning ---")
+do
+    -- A clip nudged right by at least its own duration vacates its old
+    -- span entirely: the destination window and the clip's current
+    -- position are disjoint. That is a clean, ordinary move — the
+    -- editor must not report a diagnostic about the clip it is moving.
+    local layout = ripple_layout.create({
+        clips = {
+            order = {"v1_left"},
+            v1_left = {sequence_start = 240, duration = 24, source_in = 0}
+        }
+    })
+
+    local warned, ok, _, actions = with_captured_stderr(function()
+        return ClipMutator.resolve_occlusions(layout.db, {
+            track_id = layout.tracks.v1.id,
+            sequence_start = 264,   -- destination of a +24 move of a 24-frame clip
+            duration = 24,
+            pending_clips = {
+                clip_v1_left = {sequence_start = 264, duration = 24}
+            },
+            sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
+        })
+    end)
+    check("clean move ok", ok == true)
+    check("clean move 0 actions", #(actions or {}) == 0)
+    check("clean move emits no missing-clip warning",
+        not warned:find("was not found on track", 1, true))
+
+    layout:cleanup()
+end
+
+print("\n--- resolve_occlusions: pending id absent from track → warning ---")
+do
+    -- A pending state for a clip that does not exist on the track at
+    -- all means the caller passed a stale or wrong-track id — that IS
+    -- worth a diagnostic.
+    local layout = ripple_layout.create({
+        clips = {
+            order = {"v1_left"},
+            v1_left = {sequence_start = 240, duration = 24, source_in = 0}
+        }
+    })
+
+    local warned, ok = with_captured_stderr(function()
+        return ClipMutator.resolve_occlusions(layout.db, {
+            track_id = layout.tracks.v1.id,
+            sequence_start = 264,
+            duration = 24,
+            pending_clips = {
+                ghost_clip = {sequence_start = 264, duration = 24}
+            },
+            sequence_frame_rate = {fps_numerator = 1000, fps_denominator = 1}
+        })
+    end)
+    check("ghost pending ok", ok == true)
+    check("ghost pending warns",
+        warned:find("was not found on track", 1, true) ~= nil)
+
+    layout:cleanup()
+end
+
 -- ═══════════════════════════════════════════════════════════════
 -- 3. resolve_ripple (DB-backed tests)
 -- ═══════════════════════════════════════════════════════════════

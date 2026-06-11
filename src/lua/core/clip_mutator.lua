@@ -565,10 +565,23 @@ function ClipMutator.resolve_occlusions(db, params)
         end
     end
 
+    local track_clip_ids = nil
     for clip_id, pending_state in pairs(pending_lookup) do
         if not pending_state._seen and not pending_state._virtual then
-            log.warn("resolve_occlusions: pending clip %s was not found on track %s",
-                tostring(clip_id), tostring(track_id))
+            -- Unseen just means the clip's current span lies outside the
+            -- queried window — normal for a move of at least its own
+            -- duration. Only an id absent from the track altogether
+            -- indicates a stale or wrong-track id from the caller.
+            if not track_clip_ids then
+                track_clip_ids = {}
+                for _, row in ipairs(track_clips) do
+                    track_clip_ids[row.id] = true
+                end
+            end
+            if not track_clip_ids[clip_id] then
+                log.warn("resolve_occlusions: pending clip %s was not found on track %s",
+                    tostring(clip_id), tostring(track_id))
+            end
         end
     end
 

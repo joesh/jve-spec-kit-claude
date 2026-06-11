@@ -13,7 +13,7 @@ Date: 2026-06-10
 | 3 | T034 fidelity downgrade LIVE | ✅ PASSED; classifier model corrected live | 67e64c4d |
 | 4 | T037 reconform LIVE | ✅ PASSED; blade inherits grade via ClipGrade.copy_to | bbd36e9f |
 | 5 | T050 connect-imported LIVE | ✅ PASSED 3/3 position-matched, grades on right clips | 3352408a |
-| 6 | T055 edit readback LIVE | ⏳ NEXT — unblocked by #5 (read_timeline src ranges now real) | — |
+| 6 | T055 edit readback LIVE | ✅ PASSED 2026-06-11 (B applied A+B+B+C verbs incl. disable; C conflict kept local; D local-kept). Fixed en route: drt_writer `<Flags>` enabled-fidelity (silent re-enable corruption); resolve_occlusions false "pending not found" warn on moves ≥ clip duration | — |
 | 7 | T042 edge cases + T033 pixel compare | ⏳ | — |
 | 8 | T014 sentinel flip + T043 remnants + T044/T045 | ⏳ (T044 gate: `make -j4` exit 0 on 2026-06-10) | — |
 

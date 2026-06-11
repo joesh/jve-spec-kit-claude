@@ -441,6 +441,10 @@ local function build_clip_element(clip, media, track_type, state)
     assert(track_type == "video" or track_type == "audio",
         "drt_writer.build_clip_element: track_type must be 'video' or 'audio', "
         .. "got " .. tostring(track_type))
+    assert(type(clip.enabled) == "boolean",
+        "drt_writer.build_clip_element: clip.enabled boolean required for "
+        .. "clip " .. clip.id .. " — <Flags> carries the disabled bit and "
+        .. "omitting it would silently re-enable the clip in Resolve")
 
     local in_offset = clip.source_in - media.start_tc_frame
     assert(in_offset >= 0, string.format(
@@ -469,7 +473,10 @@ local function build_clip_element(clip, media, track_type, state)
         text_elem("WasDisbanded", "false"),
         self_close("MarkersBA"),
         text_elem("UiMemento", "0"),
-        text_elem("Flags", "0"),
+        -- <Flags> bit 2 = item disabled (live-probed 2026-06-10:
+        -- SetClipEnabled(False) + DRT export flips exactly 0 → 2;
+        -- drp_importer reads the same bit back via Flags % 4 < 2).
+        text_elem("Flags", clip.enabled and "0" or "2"),
         text_elem("PriorityIndex", "0"),
         self_close("EffectFiltersBA"),
         self_close("ImportExportMetadataBA"),

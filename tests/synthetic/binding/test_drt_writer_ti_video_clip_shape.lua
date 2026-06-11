@@ -135,6 +135,44 @@ check(thumb_dbid ~= LEAK_THUMB_DBID,
     .. " — must be freshly minted per export to avoid cross-archive "
     .. "collision in the same Resolve instance")
 
+-- <Flags> carries the item's enabled state: 0 = enabled, bit 2 set =
+-- disabled (live-probed 2026-06-10: exporting a timeline whose second
+-- item was SetClipEnabled(False) flips exactly <Flags>0</Flags> →
+-- <Flags>2</Flags> on that item; the DRP importer reads the same bit
+-- at drp_importer.lua's Flags%4 check). Without this, a JVE user's
+-- disabled clip arrives in Resolve enabled — and the first
+-- SyncEditsFromResolve then classifies the discrepancy resolve_only
+-- and silently re-enables the JVE clip.
+expect_inside("<Flags>0</Flags>",
+    "enabled clip must carry <Flags>0</Flags>")
+
+local function author_disabled_variant()
+    local p2 = fixture.build_a005_payload()
+    for _, track in ipairs(p2.sequence.tracks) do
+        for _, c in ipairs(track.clips) do
+            c.enabled = false
+        end
+    end
+    local out2 = fixture.out_path(
+        "test_drt_writer_ti_video_clip_shape_disabled")
+    os.remove(out2)
+    writer.author_a005_compatible(out2, p2)
+    local xml2 = fixture.unzip_member(out2, "SeqContainer/*.xml")
+    local v_clip = p2.sequence.tracks[1].clips[1]
+    local lo, hi = xml2:find(
+        string.format('<Sm2TiVideoClip DbId="%s">', v_clip.id), 1, true)
+    check(lo, "disabled variant: Sm2TiVideoClip not found")
+    local close = xml2:find("</Sm2TiVideoClip>", hi, true)
+    check(close, "disabled variant: Sm2TiVideoClip not closed")
+    local subtree = xml2:sub(lo, close)
+    check(fixture.plain_count(subtree, "<Flags>2</Flags>") == 1,
+        "disabled clip must carry <Flags>2</Flags> in its "
+        .. "Sm2TiVideoClip (got: "
+        .. tostring(subtree:match("<Flags>[^<]*</Flags>")) .. ")")
+    os.remove(out2)
+end
+author_disabled_variant()
+
 os.remove(OUT)
 
 print("✅ test_drt_writer_ti_video_clip_shape.lua passed")

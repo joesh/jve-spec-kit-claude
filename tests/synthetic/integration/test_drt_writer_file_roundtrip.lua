@@ -66,6 +66,7 @@ local CLIPS = {
         duration        = 240,                    -- 10 sec
         source_in       = TC_1H_AT_23976 + 120,   -- 5 sec into media (offset from file TC origin)
         name            = "A_take03 sel",
+        enabled         = true,
     },
     {
         id              = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -74,6 +75,7 @@ local CLIPS = {
         duration        = 360,
         source_in       = 60,                     -- 2.5 sec into media (tc=0 file)
         name            = "B_take01 sel",
+        enabled         = true,
     },
     {
         id              = "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
@@ -82,6 +84,7 @@ local CLIPS = {
         duration        = 480,
         source_in       = 2 * TC_1H_AT_23976 + 300, -- 12.5 sec into media (tc=02:00:00:00 origin)
         name            = "C_take07 sel",
+        enabled         = true,
     },
 }
 
