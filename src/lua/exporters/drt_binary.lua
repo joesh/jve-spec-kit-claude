@@ -221,13 +221,23 @@ function M.encode_bt_video_time(t)
     assert(type(t.frame_rate) == "number", "encode_bt_video_time: frame_rate required")
     assert(type(t.unique_id) == "string", "encode_bt_video_time: unique_id required")
 
-    -- Four real fields (decode_bt_video_time requires field_count >= 4); the
-    -- importer only reads UniqueId, NumFrames, FrameRate back.
+    -- Reference shape (live Resolve 20.3 DRT export, dissected
+    -- 2026-06-10): FIVE fields — FrameRate as a 0x000c payload
+    -- (LE double + 8 zero bytes) and a trailing DbType string
+    -- "BtVideoTime". The earlier four-field shape (FrameRate as
+    -- 0x0006 BE double, no DbType) round-tripped through JVE's own
+    -- decoder but Resolve failed to parse the media extents from it:
+    -- linked items came back with a degenerate source range clamped to
+    -- media end (src 108..108 on a 108-frame file). JVE's decoder
+    -- accepts both shapes (0x000c reads the LE double from the first
+    -- 8 payload bytes).
     local fields = encode_field("UniqueId", 0x000a, t.unique_id)
         .. encode_field("StartFrame", 0x0002, 0)
         .. encode_field("NumFrames", 0x0002, t.num_frames)
-        .. encode_field("FrameRate", 0x0006, t.frame_rate)
-    local header = M.write_be32(1) .. M.write_be32(4)
+        .. encode_field("FrameRate", 0x000c,
+            double_to_le_bytes(t.frame_rate) .. string.rep("\0", 8))
+        .. encode_field("DbType", 0x000a, "BtVideoTime")
+    local header = M.write_be32(1) .. M.write_be32(5)
     return to_hex(header .. fields)
 end
 
@@ -275,6 +285,12 @@ end
 -- ---------------------------------------------------------------------------
 -- Sm2Mp*.FieldsBlob — inverse of decode_fields_blob
 -- On-wire: [BE32 version][BE32 declared_size][0x81 marker][zstd frame].
+-- declared_size counts the bytes AFTER the 8-byte header (marker + zstd
+-- frame), NOT the decompressed payload — uniform across every framed blob
+-- in the reference DRT export (6/6, ver 2) and the gold DRP (1365/1365,
+-- ver 10001). Resolve trusts it on import: a decompressed-size value made
+-- it read the wrong byte count and materialize a broken ' import' pool
+-- item with no file path (live-bisected 2026-06-10, VM Resolve 20.3).
 -- Requires the qt_zstd_compress C++ binding (added in T005); fail-fast if absent.
 -- ---------------------------------------------------------------------------
 
@@ -294,7 +310,7 @@ function M.encode_fields_blob(payload, version)
         "encode_fields_blob: qt_zstd_compress binding not available")
     local frame, zstd_err = qt_zstd_compress(payload)
     assert(frame, "encode_fields_blob: qt_zstd_compress failed: " .. tostring(zstd_err))
-    local wrapper = M.write_be32(version) .. M.write_be32(#payload) .. string.char(0x81)
+    local wrapper = M.write_be32(version) .. M.write_be32(#frame + 1) .. string.char(0x81)
     return to_hex(wrapper .. frame)
 end
 
@@ -332,6 +348,69 @@ end
 local function encode_pb_len_field(field_num, payload)
     return encode_pb_tag(field_num, PB_WIRE_LEN)
         .. encode_pb_varint(#payload) .. payload
+end
+
+-- ---------------------------------------------------------------------------
+-- BtVideoInfo/BtAudioInfo <Clip> blob — the field Resolve binds media by
+-- on DRT import (live-dissected 2026-06-10 against Resolve 20.3: a DRT
+-- whose Clip blob carried a stale directory imported with
+-- GetSourceStartFrame()=None even though the XML <MediaFilePath> was
+-- valid; the reference export with the true directory linked, including
+-- into a clean media pool, materializing the pool item).
+--
+-- Decompressed payload schema (protobuf; inverse of
+-- drp_binary.decode_bt_clip_path's f1/f2 reads):
+--   f1 LEN directory          f2 LEN filename
+--   f3 LEN ctime-style date   f5 LEN codec ('avc1' / 'AAC')
+--   video only: f6 LEN clip display name, f7 LEN uuid string
+--   then an opaque varint tail (f13 onward) matching the pristine
+--   reference export. The t050b reference (real Resolve 20.3 DRT export
+--   of the A005 fixture, 2026-06-10) carries the IDENTICAL tail for the
+--   video and audio shapes; an earlier kitchen-sink capture's video blob
+--   had an extra f14 varint (20862 — file-instance-specific residue)
+--   which the reference omits, so we omit it too. The tail is template
+--   residue scoped by author_a005_compatible's existing media gate; an
+--   encoder for arbitrary media must derive it (tracked with the
+--   writer's other a005-gate limits).
+-- ---------------------------------------------------------------------------
+
+local BT_CLIP_TAIL = "6880fbb2ba9ad6ce0278048001649001808001"
+
+local function hex_to_bytes_local(hex)
+    return (hex:gsub("%x%x", function(h)
+        return string.char(tonumber(h, 16))
+    end))
+end
+
+--- Encode a BtVideoInfo/BtAudioInfo <Clip> blob (FieldsBlob-framed hex).
+--- @param t table {directory, filename, date, codec,
+---                 clip_name?, clip_uuid?}  — clip_name/clip_uuid are the
+---                video-shape fields and must be supplied together;
+---                their absence selects the audio shape.
+function M.encode_bt_clip_blob(t)
+    assert(type(t) == "table", "encode_bt_clip_blob: table required")
+    for _, key in ipairs({ "directory", "filename", "date", "codec" }) do
+        assert(type(t[key]) == "string" and t[key] ~= "",
+            "encode_bt_clip_blob: " .. key .. " required (non-empty string)")
+    end
+    assert((t.clip_name == nil) == (t.clip_uuid == nil),
+        "encode_bt_clip_blob: clip_name and clip_uuid are the video-shape "
+        .. "pair — supply both or neither")
+    local payload = encode_pb_len_field(1, t.directory)
+        .. encode_pb_len_field(2, t.filename)
+        .. encode_pb_len_field(3, t.date)
+        .. encode_pb_len_field(5, t.codec)
+    if t.clip_name ~= nil then
+        assert(type(t.clip_name) == "string" and t.clip_name ~= "",
+            "encode_bt_clip_blob: clip_name must be non-empty string")
+        assert(type(t.clip_uuid) == "string" and t.clip_uuid ~= "",
+            "encode_bt_clip_blob: clip_uuid must be non-empty string")
+        payload = payload
+            .. encode_pb_len_field(6, t.clip_name)
+            .. encode_pb_len_field(7, t.clip_uuid)
+    end
+    payload = payload .. hex_to_bytes_local(BT_CLIP_TAIL)
+    return M.encode_fields_blob(payload, 2)
 end
 
 -- ---------------------------------------------------------------------------

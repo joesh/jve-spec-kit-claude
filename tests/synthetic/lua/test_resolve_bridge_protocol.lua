@@ -48,7 +48,7 @@ local req_str = protocol.build_request({
     verb = "import_timeline",
     args = {
         drt_path     = "/tmp/jve/out.drt",
-        media_roots  = { "/Volumes/Media" },
+        media_paths  = { "/Volumes/Media/clip.mov" },
         change_token = change_token,
     },
 })
@@ -101,7 +101,7 @@ local req_resend = protocol.build_request({
     verb = "import_timeline",
     args = {
         drt_path     = "/tmp/jve/out.drt",
-        media_roots  = { "/Volumes/Media" },
+        media_paths  = { "/Volumes/Media/clip.mov" },
         change_token = change_token,
     },
 })
@@ -116,7 +116,7 @@ local req_bumped = protocol.build_request({
     verb = "import_timeline",
     args = {
         drt_path     = "/tmp/jve/out.drt",
-        media_roots  = { "/Volumes/Media" },
+        media_paths  = { "/Volumes/Media/clip.mov" },
         change_token = {
             project_id = "p-7",
             sequence_id = "s-3",

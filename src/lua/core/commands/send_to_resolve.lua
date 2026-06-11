@@ -9,8 +9,11 @@
 ---   1. payload_builder.build → drt_writer-shaped payload.
 ---   2. drt_writer.author → a .drt on disk.
 ---   3. helper_supervisor.ensure_client → connected client.
----   4. client:request("import_timeline", {drt_path, media_roots,
----        change_token}) — change_token computed from active sequence.
+---   4. client:request("import_timeline", {drt_path, media_paths,
+---        change_token}) — change_token computed from active sequence;
+---        media_paths derived from the export payload's media_refs (the
+---        helper pre-imports each into Resolve's pool so the DRT's items
+---        link byte-correctly — helper-protocol.md §import_timeline).
 ---   5. identity_ledger.upsert per mapping row.
 ---
 --- Not undoable (FR-017 is for SYNC, not SEND). The Resolve side has its
@@ -64,14 +67,6 @@ function M.execute(args, db, _command)
         "SendToResolve: project_id required")
     assert(type(args.sequence_id) == "string" and args.sequence_id ~= "",
         "SendToResolve: sequence_id required")
-    -- media_roots is an OPTIONAL search-path filter for the helper's
-    -- relinker. Contract: nil ≡ {} ≡ "rely on absolute paths embedded
-    -- in the DRT" — the correct semantic for in-place media. Menu /
-    -- shortcut callers omit it; a future Send-dialog will populate it.
-    assert(args.media_roots == nil or type(args.media_roots) == "table",
-        "SendToResolve: media_roots, when supplied, must be a table "
-        .. "(array of search paths)")
-
     local seq = Sequence.load(args.sequence_id)
     assert(seq, "SendToResolve: sequence not found: " .. args.sequence_id)
     assert(seq.mutation_generation,
@@ -100,12 +95,25 @@ function M.execute(args, db, _command)
     supervisor.with_client(notify, args, function(client)
         local token = change_token.build(args.project_id, args.sequence_id,
             seq.mutation_generation)
-        -- Per the media_roots contract above: nil maps to the empty
-        -- filter set at the wire boundary (helper expects an array).
-        local helper_media_roots = args.media_roots or {}
+        -- Distinct media file paths this DRT references. The helper
+        -- pre-imports each into Resolve's pool before importing the
+        -- timeline — Resolve links items byte-correctly only against
+        -- pool clips; materializing from the DRT's embedded pool XML
+        -- yields degenerate item source ranges (live-bisected
+        -- 2026-06-10, helper-protocol.md §import_timeline).
+        local media_paths, seen_paths = {}, {}
+        for _, ref in ipairs(payload.media_refs) do
+            assert(type(ref.file_path) == "string" and ref.file_path ~= "",
+                "SendToResolve: media_ref missing file_path (file_uuid="
+                .. tostring(ref.file_uuid) .. ")")
+            if not seen_paths[ref.file_path] then
+                seen_paths[ref.file_path] = true
+                media_paths[#media_paths + 1] = ref.file_path
+            end
+        end
         client:request("import_timeline", {
             drt_path        = out_path,
-            media_roots     = helper_media_roots,
+            media_paths     = media_paths,
             clip_positions  = authored.emit_order,
             change_token    = token,
         }, function(response, code, message)
@@ -152,7 +160,6 @@ local SPEC = {
     args = {
         project_id  = { required = true },
         sequence_id = { required = true },
-        media_roots = { required = false, kind = "table" },
         on_complete = { required = false, kind = "function" },
     },
 }

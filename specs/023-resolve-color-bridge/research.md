@@ -105,7 +105,7 @@ Therefore JVE persists a **bridge identity ledger**: a new table mapping `(jve_c
 ## 3. The roundtrip, end to end (JVE-grounded)
 
 1. **JVE → DRT** (§6). JVE authors a `.drt` from the active sequence, writing the proven identity field (§2.1) per clip and MediaRefs against `media.file_uuid`.
-2. **Helper → Resolve.** `import_timeline` imports the DRT, relinks media against `media_roots`, reads back the identity join, returns `{ mapping, unrelinked }`. JVE records the mapping in its identity ledger (§2.2).
+2. **Helper → Resolve.** `import_timeline` pre-imports `media_paths` into the pool, imports the DRT, reads back the identity join, returns `{ mapping, unrelinked }`. JVE records the mapping in its identity ledger (§2.2).
 3. **Colorist grades in Resolve** (human step).
 4. **Helper → JVE grades.** `read_grades` returns per-clip CDL and/or LUT-ref with a mandatory `fidelity` flag (§4.4).
 5. **JVE stores + displays.** `SyncGradesFromResolve` command (§5.3) writes grades into the V12 color model; the renderer's color stage (§5.4) applies CDL; SequenceMonitor displays graded frames (pull-based, MVC).
@@ -135,7 +135,7 @@ Response: `{ "v": 1, "id": "<same id>", "ok": true, "result": {...} }` or `{ "v"
 | Verb | Args | Result | Notes |
 |---|---|---|---|
 | `ping` | — | `{ alive, resolve_connected, resolve_version, helper_version }` | Liveness + version surface to gate on. |
-| `import_timeline` | `{ drt_path, media_roots[], jve_change_token }` | `{ mapping:[{jve_guid, resolve_item_id}], unrelinked:[...] }` | Imports JVE-authored DRT, relinks against `media_roots`, returns the identity join (§2.1). Idempotent on `jve_change_token` (§4.3). Reports media it could not relink rather than proceeding silently. |
+| `import_timeline` | `{ drt_path, media_paths[], jve_change_token }` | `{ mapping:[{jve_guid, resolve_item_id}], unrelinked:[...] }` | Pre-imports `media_paths` into the pool (load-bearing: items only link byte-correctly against pool clips already present), imports JVE-authored DRT, returns the identity join (§2.1). Idempotent on `jve_change_token` (§4.3). Reports media it could not import rather than proceeding silently. |
 | `read_identities` | — | `{ items:[{resolve_item_id, jve_guid}] }` | Current Resolve items with recovered join keys. Reconciles after manual changes in Resolve. |
 | `read_grades` | `{ item_ids?:[...] }` | `{ grades:[{jve_guid, cdl?:{slope[3],offset[3],power[3],sat}, lut?:{ref}, fidelity:"primary"\|"partial"\|"unrepresentable"}] }` | Read-back is thinner than write (§4.4). `fidelity` mandatory and honest. |
 | `queue_render` | `{ spec, jve_change_token }` | `{ job_id }` | Later phase. Idempotent on `jve_change_token` + spec hash. |

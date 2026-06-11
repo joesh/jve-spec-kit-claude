@@ -3,8 +3,8 @@
 --
 -- Asserts every observable surface of the verb that does NOT require a
 -- live import:
---   • bad_request paths (missing drt_path, malformed media_roots,
---     nonexistent file) — these reach helper.py without ever touching
+--   • bad_request paths (missing drt_path, malformed media_paths,
+--     nonexistent files) — these reach helper.py without ever touching
 --     Resolve and exercise the validation block.
 --   • Structured error envelope (closed-set code, non-empty message).
 --   • Idempotency-key gate (FR-008): omitting change_token must NOT be
@@ -35,7 +35,7 @@ local VALID_TOKEN = {
 -- ─── bad_request: missing drt_path ──────────────────────────────────────
 do
     local r = fixture.request(fix, "import_timeline", {
-        media_roots = { "/tmp" },
+        media_paths = { "/tmp" },
         change_token = VALID_TOKEN,
     })
     fixture.assert_structured_error(r, "bad_request", "missing drt_path")
@@ -45,18 +45,59 @@ do
     print("  ✓ missing drt_path → bad_request")
 end
 
--- ─── bad_request: malformed media_roots ─────────────────────────────────
+-- ─── bad_request: malformed media_paths ─────────────────────────────────
 do
     local r = fixture.request(fix, "import_timeline", {
         drt_path = "/tmp/does-not-matter.drt",
-        media_roots = "/tmp",  -- string, contract says list[string]
+        media_paths = "/tmp",  -- string, contract says list[string]
         change_token = VALID_TOKEN,
     })
-    fixture.assert_structured_error(r, "bad_request", "media_roots wrong type")
-    assert(r.error.message:find("media_roots", 1, true),
+    fixture.assert_structured_error(r, "bad_request", "media_paths wrong type")
+    assert(r.error.message:find("media_paths", 1, true),
         "bad_request should name the wrong-typed arg: "
         .. r.error.message)
-    print("  ✓ malformed media_roots → bad_request")
+    print("  ✓ malformed media_paths → bad_request")
+end
+
+-- ─── bad_request: media_paths entry not a non-empty string ─────────────
+do
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path = "/tmp/does-not-matter.drt",
+        media_paths = { "" },
+        change_token = VALID_TOKEN,
+    })
+    fixture.assert_structured_error(r, "bad_request", "empty media_paths entry")
+    assert(r.error.message:find("media_paths", 1, true),
+        "bad_request should name media_paths: " .. r.error.message)
+    print("  ✓ empty media_paths entry → bad_request")
+end
+
+-- ─── bad_request: media_paths entry does not exist ──────────────────────
+-- Pre-import is what makes Resolve link DRT items byte-correctly
+-- (materializing from the DRT's embedded pool XML yields degenerate
+-- item source ranges — live-bisected 2026-06-10); a missing media file
+-- can therefore never produce a faithful timeline. Checked before any
+-- Resolve mutation.
+do
+    local tmp_drt = "/tmp/jve-contract-import-media.drt"
+    local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
+    local missing = "/tmp/jve-contract-no-such-media-" .. os.time() .. ".mp4"
+    os.remove(missing)
+    local r = fixture.request(fix, "import_timeline", {
+        drt_path        = tmp_drt,
+        media_paths     = { missing },
+        clip_positions  = {
+            { clip_id = "c1", track_type = "video",
+              track_index = 1, record_start = 0 },
+        },
+        change_token    = VALID_TOKEN,
+    })
+    os.remove(tmp_drt)
+    fixture.assert_structured_error(r, "bad_request",
+        "nonexistent media_paths entry")
+    assert(r.error.message:find(missing, 1, true),
+        "message should name the missing media path: " .. r.error.message)
+    print("  ✓ nonexistent media_paths entry → bad_request")
 end
 
 -- ─── bad_request: drt_path does not exist ───────────────────────────────
@@ -65,7 +106,7 @@ do
     os.remove(missing)  -- belt-and-braces in case of collision
     local r = fixture.request(fix, "import_timeline", {
         drt_path = missing,
-        media_roots = {},
+        media_paths = {},
         change_token = VALID_TOKEN,
     })
     fixture.assert_structured_error(r, "bad_request", "drt_path nonexistent")
@@ -105,7 +146,7 @@ do
     f:close()
     local r = fixture.request(fix, "import_timeline", {
         drt_path     = tmp_drt,
-        media_roots  = {},
+        media_paths  = {},
         change_token = VALID_TOKEN,
     })
     os.remove(tmp_drt)
@@ -121,7 +162,7 @@ do
     local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
     local r = fixture.request(fix, "import_timeline", {
         drt_path        = tmp_drt,
-        media_roots     = {},
+        media_paths     = {},
         clip_positions  = "not-a-list",
         change_token    = VALID_TOKEN,
     })
@@ -139,7 +180,7 @@ do
     local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
     local r = fixture.request(fix, "import_timeline", {
         drt_path        = tmp_drt,
-        media_roots     = {},
+        media_paths     = {},
         clip_positions  = {
             { clip_id = "c1", track_type = "purple",
               track_index = 1, record_start = 0 },
@@ -162,7 +203,7 @@ do
     local f = io.open(tmp_drt, "w"); f:write("x"); f:close()
     local r = fixture.request(fix, "import_timeline", {
         drt_path        = tmp_drt,
-        media_roots     = {},
+        media_paths     = {},
         clip_positions  = {
             { clip_id = "c1", track_type = "video",
               track_index = 1, record_start = 0 },

@@ -50,6 +50,7 @@ local M = {}
 
 local Track             = require("models.track")
 local Sequence          = require("models.sequence")
+local Clip              = require("models.clip")
 local database          = require("core.database")
 local change_token      = require("core.resolve_bridge.change_token")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
@@ -90,28 +91,35 @@ end
 -- track type tomorrow only needs an entry here.
 
 
--- Iterate JVE clips on a track via the database.select_rows helper.
--- The helper guarantees prepare → bind → exec → next → finalize so a
+-- Iterate JVE clips on a track. The id-list select goes through
+-- database.select_rows (prepare → bind → exec → next → finalize, so a
 -- caller cannot recreate the missing-exec bug that originally produced
--- "0 JVE clip(s)" here (2026-06-03 fix). Returns lightweight tables in
--- matcher-input shape.
+-- "0 JVE clip(s)" here — 2026-06-03 fix); each clip then loads via
+-- Clip.load so the media link follows the ONE V13 chain (nested master
+-- → media_ref → media, honoring the master's default layer when
+-- master_layer_track_id is unset) — the same mechanism payload_builder
+-- uses on the send side. A hand-rolled JOIN here previously required
+-- master_layer_track_id to be set and silently yielded nil media paths
+-- for default-layer clips, which the matcher then reported as
+-- content_mismatch (T050 live, 2026-06-10). Returns lightweight tables
+-- in matcher-input shape.
 local function load_clips_on_track(db, track)
     local wire_track_type = wire.JVE_TO_WIRE_TRACK_TYPE[track.track_type] or error(
         "ConnectToResolveProject: unsupported track.track_type "
         .. tostring(track.track_type))
-    return database.select_rows(db, [[
-        SELECT c.id, c.name, c.sequence_start_frame, c.duration_frames,
-               c.source_in_frame, c.source_out_frame,
-               m.file_path
-        FROM clips c
-        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id AND mr.track_id = c.master_layer_track_id
-        LEFT JOIN media m ON m.id = mr.media_id
-        WHERE c.track_id = ?
-        ORDER BY c.sequence_start_frame
-    ]], { track.id }, function(stmt)
-        return {
-            id              = stmt:value(0),
-            name            = stmt:value(1),
+    local ids = database.select_rows(db,
+        "SELECT id FROM clips WHERE track_id = ? "
+        .. "ORDER BY sequence_start_frame",
+        { track.id }, function(stmt) return stmt:value(0) end)
+    local rows = {}
+    for _, id in ipairs(ids) do
+        local loaded = Clip.load(id)
+        assert(loaded,
+            "ConnectToResolveProject: clip vanished between id-list "
+            .. "and load: " .. tostring(id))
+        rows[#rows + 1] = {
+            id              = loaded.id,
+            name            = loaded.name,
             track_id        = track.id,
             -- Wire-side track_type derived from the schema value
             -- (uppercase "VIDEO"/"AUDIO") so a future widening that
@@ -119,13 +127,17 @@ local function load_clips_on_track(db, track)
             -- correctly (rule 2.13 — no hidden assumptions).
             track_type      = wire_track_type,
             track_index     = track.track_index,
-            sequence_start  = stmt:value(2),
-            duration        = stmt:value(3),
-            source_in       = stmt:value(4),
-            source_out      = stmt:value(5),
-            media_file_path = stmt:value(6),
+            sequence_start  = loaded.sequence_start,
+            duration        = loaded.duration,
+            source_in       = loaded.source_in,
+            source_out      = loaded.source_out,
+            -- nil when the clip's source is a non-master sequence
+            -- (compound) — such a clip can never content-match a live
+            -- media item and surfaces as ambiguous, not silently.
+            media_file_path = loaded.media_path,
         }
-    end)
+    end
+    return rows
 end
 
 -- Build the list of JVE clips the matcher walks AND the list of audio

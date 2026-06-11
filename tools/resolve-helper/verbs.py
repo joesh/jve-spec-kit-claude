@@ -305,13 +305,13 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
         return _error(envelope_id, "bad_request", token_check[1])
 
     drt_path = args.get("drt_path")
-    media_roots = args.get("media_roots")
+    media_paths = args.get("media_paths")
     if not isinstance(drt_path, str) or not drt_path:
         return _error(envelope_id, "bad_request", "drt_path missing")
-    if not isinstance(media_roots, list) or not all(
-            isinstance(r, str) for r in media_roots):
+    if not isinstance(media_paths, list) or not all(
+            isinstance(p, str) and p for p in media_paths):
         return _error(envelope_id, "bad_request",
-            "media_roots must be list[string]")
+            "media_paths must be list[non-empty string]")
     if not os.path.exists(drt_path):
         return _error(envelope_id, "bad_request",
             f"drt_path does not exist: {drt_path}")
@@ -319,6 +319,17 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
     if positions_check[0] != "ok":
         return _error(envelope_id, "bad_request", positions_check[1])
     clip_positions = positions_check[1]
+
+    # Pre-import is what makes Resolve link the DRT's items to real pool
+    # clips with byte-correct source ranges; materializing pool items
+    # from the DRT's embedded XML instead yields degenerate item ranges
+    # (live-bisected 2026-06-10, VM Resolve 20.3). A missing media file
+    # can therefore never produce a faithful timeline — reject before
+    # any Resolve mutation.
+    missing_media = [p for p in media_paths if not os.path.exists(p)]
+    if missing_media:
+        return _error(envelope_id, "bad_request",
+            f"media_paths do not exist: {missing_media}")
 
     try:
         prev_ids = _snapshot_timeline_ids(project)
@@ -329,6 +340,19 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
     if media_pool is None:
         return _error(envelope_id, "resolve_api_error",
             "GetMediaPool() returned None")
+
+    # ImportMedia is idempotent on an already-present path (live-probed
+    # 2026-06-10: re-import returns the existing pool item, no duplicate).
+    for path in media_paths:
+        try:
+            got = media_pool.ImportMedia([path])
+        except Exception as exc:
+            return _error(envelope_id, "resolve_api_error",
+                f"ImportMedia({path!r}) raised: {exc}")
+        if not got:
+            return _error(envelope_id, "relink_failed",
+                f"ImportMedia({path!r}) returned falsy — Resolve could "
+                f"not import the media this DRT references")
 
     try:
         imported = media_pool.ImportTimelineFromFile(drt_path)

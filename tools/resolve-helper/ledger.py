@@ -25,11 +25,11 @@ import json
 # different (resolve_item_id, custom_data) would otherwise COLLIDE —
 # the second would silently return the first's cached response, a
 # replay lie (review items #18 + #19). Same class for import_timeline:
-# two imports with the same token but different drt_path / media_roots
+# two imports with the same token but different drt_path / media_paths
 # / clip_positions would conflate.
 _VERB_EXTRA_KEY_FIELDS = {
     "stamp_identity_marker": ["resolve_item_id", "custom_data"],
-    "import_timeline":       ["drt_path", "media_roots", "clip_positions"],
+    "import_timeline":       ["drt_path", "media_paths", "clip_positions"],
     # delete_timeline carries its own resolve_timeline_id discriminator
     # — two delete_timeline calls with the same change_token but
     # different uids would otherwise collide.

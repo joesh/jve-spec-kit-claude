@@ -152,6 +152,13 @@ check("video clip wire track_type lowercase",
     video_clips[1] and video_clips[1].track_type == "video")
 check("video clip track_index preserved",
     video_clips[1] and video_clips[1].track_index == 1)
+-- The position channel's content check compares the clip's media file
+-- path against the live item's (FR-011c) — a clip whose source chain
+-- goes master → media_ref → media must surface that media's path, the
+-- same chain every other consumer resolves (clip.resolved_media).
+check("video clip media_file_path resolved via master chain",
+    video_clips[1]
+    and video_clips[1].media_file_path == "/tmp/jve/_placeholder.mov")
 
 -- ── V1 audio-skipped reporting (FR-024) ────────────────────────────
 check("audio_skipped has the audio clip (V1 scope)",

@@ -92,15 +92,29 @@ local REFERENCE_PROJECT_NAME  = "JVE_T008_reference"
 local REFERENCE_SEQUENCE_NAME = "JVE_T008_ref_seq"
 local REFERENCE_PROJECT_CFG   = "JVE_T008_reference.Cfg"
 
--- Reference values inside the kitchen-sink-borrowed Sm2MpVideoClip template
+-- Reference values inside the Sm2MpVideoClip template
 -- (drt_canonical/full_reference_mp_video_clip_a005.xml). See phase0-findings.md
--- §K3 for substitution rationale. The MpFolder back-ref UUID is the
--- kitchen-sink's mp_folder DbId (NOT the empty-reference's — those differ),
--- so it gets handled inline rather than via the REFERENCE_DBIDS sweep.
-local A005_TEMPLATE_DBID                = "1665f18c-e385-4ffe-85b2-5ec5ab03d635"
-local A005_TEMPLATE_MP_FOLDER_BACKREF   = "d0bfec57-7a39-4c33-91eb-67bbc4db5cc0"
-local A005_TEMPLATE_UNIQUE_MP_ITEM_ID   = "35350146-9c4c-434b-a193-c99bbfa5303a"
+-- §K3 for substitution rationale. The template is a PRISTINE pool item from
+-- a real Resolve 20.3 DRT export of the A005 fixture (2026-06-10 t050b
+-- probe): single embedded-AAC channel group whose FieldsBlob MediaRef
+-- equals the template's own BtAudioInfo DbId. The previous kitchen-sink
+-- capture carried a custom-audio channel map whose MediaRef dangled in
+-- our single-media DRTs — Resolve materialized the pool item as a broken
+-- "' import'" placeholder (empty File Path, garbage name). The MpFolder
+-- back-ref UUID is the capture project's mp_folder DbId (NOT the
+-- empty-reference's — those differ), so it gets handled inline rather
+-- than via the REFERENCE_DBIDS sweep.
+local A005_TEMPLATE_DBID                = "07caaf98-6659-4345-8968-de92c0b17e50"
+local A005_TEMPLATE_MP_FOLDER_BACKREF   = "fe7a26e6-8c49-49a6-be20-f21689c9a41f"
+local A005_TEMPLATE_UNIQUE_MP_ITEM_ID   = "297f29a9-65e8-499a-bcec-1d42da0ec926"
 local A005_TEMPLATE_NAME                = "A005_C052_0925BL_001.mp4"
+-- ctime-style date inside the re-encoded <Clip> blobs. Template residue
+-- (the reference capture's file mtime): Resolve binds by directory +
+-- filename, not by this string — live-verified 2026-06-10 by a linked
+-- import whose blob date predated the actual file by two years. A
+-- general-media writer should stat the real file mtime; gated with the
+-- rest of the a005-class limits.
+local A005_TEMPLATE_CLIP_DATE           = "Mon May 27 00:09:20 2024"
 
 -- ─── UUID minting ───────────────────────────────────────────────────────────
 --
@@ -673,6 +687,50 @@ local function build_media_pool_video_item(media, dbids, state)
     if name ~= A005_TEMPLATE_NAME then
         tpl = plain_gsub_required(tpl, A005_TEMPLATE_NAME, name)
     end
+
+    -- Rewrite the BtVideoInfo/BtAudioInfo <Clip> blobs from the payload.
+    -- These carry the directory/filename Resolve binds media by on import
+    -- (live-dissected 2026-06-10: the template's canned blobs froze a
+    -- 2024 host path, so every import elsewhere came in silently offline
+    -- — srcS=None — which read_timeline then classifies non_media,
+    -- breaking position/content matching). Date string + codec are
+    -- template residue scoped by this writer's a005-class media gate
+    -- (same posture as the opaque varint tail — see
+    -- drt_binary.encode_bt_clip_blob).
+    local directory = media.file_path:match("^(.*)/[^/]+$")
+    assert(directory and directory ~= "", string.format(
+        "drt_writer.build_media_pool_video_item: media.file_path must be "
+        .. "absolute with a directory component, got %q", media.file_path))
+    local clip_common = {
+        directory = directory,
+        filename  = name,
+        date      = A005_TEMPLATE_CLIP_DATE,
+    }
+    local video_blob = enc.encode_bt_clip_blob({
+        directory = clip_common.directory,
+        filename  = clip_common.filename,
+        date      = clip_common.date,
+        codec     = "avc1",
+        clip_name = name,
+        clip_uuid = fresh_uuid(0xa2, state),
+    })
+    local audio_blob = enc.encode_bt_clip_blob({
+        directory = clip_common.directory,
+        filename  = clip_common.filename,
+        date      = clip_common.date,
+        codec     = "AAC",
+    })
+    local clip_blobs = { video_blob, audio_blob }
+    local clip_i = 0
+    local clips_replaced
+    tpl, clips_replaced = tpl:gsub("<Clip>[0-9a-f]+</Clip>", function()
+        clip_i = clip_i + 1
+        return "<Clip>" .. clip_blobs[clip_i] .. "</Clip>"
+    end)
+    assert(clips_replaced == 2, string.format(
+        "drt_writer.build_media_pool_video_item: expected exactly 2 "
+        .. "<Clip> blobs in the A005 template (BtVideoInfo + BtAudioInfo),"
+        .. " substituted %d — template structure changed?", clips_replaced))
 
     return "  <Element>\n" .. tpl .. "  </Element>\n"
 end

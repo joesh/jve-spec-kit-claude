@@ -32,6 +32,7 @@
 --   ./build/bin/jve.app/Contents/MacOS/jve --test \
 --       $PWD/tests/synthetic/integration/live_resolve/test_idempotency.lua
 
+local test_env = require("test_env")
 local fixture = require("synthetic.integration.live_resolve.live_fixture")
 local drt_writer = require("exporters.drt_writer")
 
@@ -39,13 +40,12 @@ local drt_writer = require("exporters.drt_writer")
 local FPS = 24000 / 1001
 local MEDIA_FRAMES = 108
 
-local function repo_root()
-    local src = debug.getinfo(1, "S").source:sub(2)
-    return src:gsub("/tests/synthetic/integration/live_resolve/[^/]+$", "")
-end
-
-local media_path = repo_root()
-    .. "/tests/fixtures/media/A005_C052_0925BL_001.mp4"
+-- Share path: the DRT is imported ON the guest, and the helper now
+-- pre-imports media_paths into Resolve's pool — the path must exist
+-- there AND be readable by Resolve (scp'd copies in the synced tree do
+-- not survive sync-to-vm.sh).
+local media_path = test_env.resolve_repo_path(
+    "tests/fixtures/media/A005_C052_0925BL_001.mp4")
 
 local payload = {
     project = { name = "JVE T026 idempotency", fps = FPS },
@@ -138,7 +138,7 @@ local token = {
 }
 local import_args = {
     drt_path       = drt_path,
-    media_roots    = {},
+    media_paths    = { media_path },
     clip_positions = authored.emit_order,
     change_token   = token,
 }

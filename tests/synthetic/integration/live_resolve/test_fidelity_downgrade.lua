@@ -31,10 +31,12 @@ local drt_writer = require("exporters.drt_writer")
 local FPS = 24000 / 1001
 local MEDIA_FRAMES = 108
 
-local function repo_root()
-    local src = debug.getinfo(1, "S").source:sub(2)
-    return src:gsub("/tests/synthetic/integration/live_resolve/[^/]+$", "")
-end
+-- Share path: the helper pre-imports media_paths into Resolve's pool —
+-- the path must exist on the guest AND be readable by Resolve (scp'd
+-- copies in the synced tree do not survive sync-to-vm.sh).
+local test_env = require("test_env")
+local MEDIA_PATH = test_env.resolve_repo_path(
+    "tests/fixtures/media/A005_C052_0925BL_001.mp4")
 
 local MEDIA_UUID = "0b34aaaa-aaaa-4aaa-8aaa-00000000000a"
 local CLIP_A = "0b34c0de-1111-4aaa-8aaa-000000000001"  -- CDL primary
@@ -75,8 +77,7 @@ local payload = {
     media_refs = {
         {
             file_uuid       = MEDIA_UUID,
-            file_path       = repo_root()
-                .. "/tests/fixtures/media/A005_C052_0925BL_001.mp4",
+            file_path       = MEDIA_PATH,
             native_rate     = FPS,
             duration_frames = MEDIA_FRAMES,
             start_tc_frame  = 0,
@@ -125,7 +126,7 @@ local token = {
 local imported = fixture.expect_ok(
     fixture.request(fix, "import_timeline", {
         drt_path       = drt_path,
-        media_roots    = {},
+        media_paths    = { MEDIA_PATH },
         clip_positions = authored.emit_order,
         change_token   = token,
     }), "import_timeline")
