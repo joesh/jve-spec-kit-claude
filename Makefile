@@ -33,7 +33,8 @@ else
 #   - luacheck runs in the background alongside the C++ build (~8s wall
 #     overlapped, ~0s added).
 #   - Tests run in two phases after build completes:
-#     (A) lua + binding in parallel — both CPU-bound but short; max ≈ 12s.
+#     (A) lua + binding + helper (Python, offline-pure, <1s) in
+#         parallel — all CPU-bound but short; max ≈ 12s.
 #     (B) integration alone — its perf-sensitive batches assert on
 #         wall-clock latency (p95 cadence ≤ 80ms); under parallel load the
 #         thresholds flake. Dedicated CPU keeps them stable.
@@ -50,6 +51,7 @@ else
 all: configure
 	@if { find src -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' -o -name '*.lua' \) -print0; \
 	      find tests -type f -name '*.lua' -not -path '*/autogen/*' -print0; \
+	      find tools/resolve-helper -type f -name '*.py' -print0; \
 	      find keymaps -type f -print0 2>/dev/null; \
 	      find . -maxdepth 2 -name 'CMakeLists.txt' -not -path '*/build/*' -print0; \
 	      printf 'Makefile\0'; \
@@ -63,7 +65,7 @@ all: configure
 	 wait $$LUACHECK_PID; LUACHECK_RC=$$?; \
 	 if [ $$LUACHECK_RC -ne 0 ]; then cat .luacheck.log; rm -f .luacheck.log; exit $$LUACHECK_RC; fi; \
 	 rm -f .luacheck.log
-	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests --no-print-directory -j2
+	@$(MAKE) -C $(BUILD_DIR) lua_tests binding_tests helper_tests --no-print-directory -j3
 	@$(MAKE) -C $(BUILD_DIR) integration_tests --no-print-directory
 	@python3 tests/live/runner/coverage.py --axis keymap
 	@touch .last-clean-make

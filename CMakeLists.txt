@@ -648,6 +648,19 @@ add_test(NAME lua_suite
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 )
 
+# Resolve-helper Python unit tests — offline-pure (fakes only, no
+# Resolve/VM/jve), <1s. No jve dependency: nothing in them touches the
+# binary, so they run even while the C++ build is broken.
+add_custom_target(helper_tests
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_helper_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running resolve-helper Python unit tests"
+)
+add_test(NAME helper_suite
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_helper_tests.sh
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+
 add_custom_target(binding_tests
     COMMAND ${CMAKE_COMMAND} -E env "JVE_BINARY=$<TARGET_FILE:jve>"
             ${CMAKE_SOURCE_DIR}/scripts/run_binding_tests.sh
