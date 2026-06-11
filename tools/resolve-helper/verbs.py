@@ -1154,6 +1154,40 @@ def _inspect_node_graph(item):
     return per_node_tools, lut_ref
 
 
+def _timeline_graph_tool_names(timeline):
+    # Flat list of tool display-names across the timeline node graph
+    # (`Timeline.GetNodeGraph()`). t052 (2026-06-11, VM probe) proved
+    # ExportLUT IGNORES timeline-level grades — they cannot be carried
+    # per-clip at all — so read_grades reports their presence as a
+    # warning (JVE's display omits them for EVERY clip). Returns []
+    # when the graph is absent or untouched.
+    graph = _api("timeline.GetNodeGraph()", timeline.GetNodeGraph)
+    if graph is None:
+        return []
+    num_nodes = _api("timelineGraph.GetNumNodes()", graph.GetNumNodes)
+    if not isinstance(num_nodes, int) or num_nodes < 0:
+        raise RuntimeError(
+            f"timeline graph GetNumNodes() returned non-int / "
+            f"negative: {num_nodes!r}")
+    names = []
+    for n in range(1, num_nodes + 1):
+        tools = _api(f"timelineGraph.GetToolsInNode({n})",
+                     graph.GetToolsInNode, n)
+        if tools is None:
+            continue
+        if not isinstance(tools, list):
+            raise RuntimeError(
+                f"timeline graph GetToolsInNode({n}) must return list "
+                f"or None, got {type(tools).__name__}")
+        for name in tools:
+            if not isinstance(name, str):
+                raise RuntimeError(
+                    f"timeline graph node {n} tool name must be str, "
+                    f"got {type(name).__name__}")
+            names.append(name)
+    return names
+
+
 def _item_group_has_tools(item, group_tools_cache):
     # Color-group classification input (t051, 2026-06-11): an item's
     # look can live entirely in its group's pre/post-clip graphs —
@@ -1401,6 +1435,18 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             integer_rate = _timeline_integer_frame_rate(timeline)
         except RuntimeError as exc:
             return _error(envelope_id, "resolve_api_error", str(exc))
+
+        try:
+            tl_tool_names = _timeline_graph_tool_names(timeline)
+        except RuntimeError as exc:
+            return _error(envelope_id, "resolve_api_error", str(exc))
+        if tl_tool_names:
+            warnings.append(
+                "timeline-level grade present (tools: "
+                + ", ".join(tl_tool_names)
+                + ") — Resolve applies it to every clip but it cannot "
+                "be baked per-clip (ExportLUT ignores timeline grades, "
+                "t052 probe); JVE's display omits it")
 
         try:
             cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)

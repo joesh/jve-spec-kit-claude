@@ -298,9 +298,17 @@ class _FakeItem:
 
 
 class _FakeTimeline:
-    def __init__(self, items, cdl_at_one_hour=False):
+    def __init__(self, items, cdl_at_one_hour=False,
+                 timeline_graph_tools=None):
         self._items = items
         self._cdl_at_one_hour = cdl_at_one_hour
+        # one entry per timeline-graph node (None = untouched node);
+        # default single clean node like a real fresh timeline graph
+        self._tl_tools = (timeline_graph_tools
+                          if timeline_graph_tools is not None else [None])
+
+    def GetNodeGraph(self):
+        return _FakeGroupGraph(self._tl_tools)
 
     def GetSetting(self, key):
         assert key == "timelineFrameRate"
@@ -547,6 +555,39 @@ class ReadGradesGroupClassificationTests(unittest.TestCase):
                            group=group, own_tools=None)]
         with tempfile.TemporaryDirectory() as d:
             rows = self._run(items, d)
+        self.assertEqual(rows["uid-a"]["fidelity"], "none")
+
+    def test_timeline_level_grade_warns(self):
+        # t052 (2026-06-11, VM probe): ExportLUT IGNORES timeline-level
+        # grades — they cannot be carried per-clip at all, so JVE's
+        # display omits them for EVERY clip (the gold timeline carries
+        # an OFX DCTL + Sizing at timeline level — Joe's darker/bluer
+        # report). The verb must say so, once per sync.
+        resolve = _FakeResolve("edit")
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        project = _FakeProject(_FakeTimeline(
+            items, timeline_graph_tools=[["OFX: DCTL"], ["Sizing"]]))
+
+        class _Handle:
+            def acquire(self):
+                return ("ok", resolve, project)
+
+        resp = verbs.verb_read_grades({}, _Handle(), "env-tg1", "test")
+        self.assertTrue(resp["ok"], f"verb failed: {resp!r}")
+        tl_warns = [w for w in resp["result"]["warnings"]
+                    if "timeline-level grade" in w]
+        self.assertEqual(len(tl_warns), 1, resp["result"]["warnings"])
+        self.assertIn("OFX: DCTL", tl_warns[0])
+
+    def test_clean_timeline_graph_no_warning(self):
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run(items, d)
+        # _run asserts ok; the clean-run warnings==[] case is pinned by
+        # ReadGradesWarningsTests.test_clean_bake_run_has_empty_warnings
+        # whose fake timeline now carries the default clean graph.
         self.assertEqual(rows["uid-a"]["fidelity"], "none")
 
     def test_group_verdict_cached_per_group(self):
