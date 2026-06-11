@@ -40,104 +40,10 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(type(nudge_frames) == "number", "Nudge: nudge_amount must be integer frames")
 
         local nudge_type
-        local updates_by_clip = {}
-        local mutated_clip_ids = {}
-        
+
         local active_sequence_id = command_helper.resolve_active_sequence_id(args.sequence_id, timeline_state)
         if active_sequence_id and active_sequence_id ~= args.sequence_id then
             command:set_parameter("sequence_id", active_sequence_id)
-        end
-
-        local function register_update(clip)
-            if not clip or not clip.id then
-                return
-            end
-            mutated_clip_ids[clip.id] = true
-            -- Use canonical *_value payload shape that clip_state.apply_mutations
-            -- consumes — the raw clip-field shape was a schema mismatch that
-            -- silently no-op'd in-memory cache updates while DB writes landed.
-            updates_by_clip[clip.id] = command_helper.clip_update_payload(
-                clip, active_sequence_id)
-        end
-
-        local function apply_updates_if_needed(default_sequence_id)
-            if next(updates_by_clip) == nil then
-                return false
-            end
-
-            local updates = {}
-            local sequence_id = default_sequence_id
-            for _, update in pairs(updates_by_clip) do
-                table.insert(updates, update)
-                sequence_id = sequence_id or update.track_sequence_id
-            end
-
-            command_helper.add_update_mutation(command, sequence_id, updates)
-            return true
-        end
-
-        local function capture_updates_via_reload(default_sequence_id)
-            if next(mutated_clip_ids) == nil then
-                return true  -- Nothing to capture is success (not error)
-            end
-            local fallback_updates = {}
-            local sequence_id = default_sequence_id
-            for clip_id in pairs(mutated_clip_ids) do
-                local clip = Clip.load_optional(clip_id)
-                -- NSF: If we mutated a clip, it should still exist
-                assert(clip, string.format("Nudge.capture_updates_via_reload: mutated clip %s no longer exists", clip_id))
-                local update_payload = command_helper.clip_update_payload(clip, sequence_id)
-                assert(update_payload, string.format("Nudge.capture_updates_via_reload: clip_update_payload failed for clip %s", clip_id))
-                sequence_id = sequence_id or update_payload.track_sequence_id
-                table.insert(fallback_updates, update_payload)
-            end
-            assert(#fallback_updates > 0, "Nudge.capture_updates_via_reload: no updates captured but mutated_clip_ids was non-empty")
-            sequence_id = sequence_id or fallback_updates[1].track_sequence_id
-            assert(sequence_id, "Nudge.capture_updates_via_reload: could not resolve sequence_id from any update")
-            command_helper.add_update_mutation(command, sequence_id, fallback_updates)
-            return true
-        end
-
-        local function capture_updates_from_selection(default_sequence_id)
-            local collected_ids = {}
-            if type(args.selected_clip_ids) == "table" then
-                for _, clip_id in ipairs(args.selected_clip_ids) do
-                    if clip_id then
-                        collected_ids[clip_id] = true
-                    end
-                end
-            end
-            if type(args.selected_edges) == "table" then
-                for _, edge_info in ipairs(args.selected_edges) do
-                    if edge_info and edge_info.clip_id then
-                        collected_ids[edge_info.clip_id] = true
-                    end
-                end
-            end
-            if next(collected_ids) == nil then
-                return false
-            end
-            local updates = {}
-            local sequence_id = default_sequence_id
-            for clip_id in pairs(collected_ids) do
-                local clip = Clip.load_optional(clip_id)
-                if clip then
-                    local update_payload = command_helper.clip_update_payload(clip, sequence_id)
-                    if update_payload then
-                        sequence_id = sequence_id or update_payload.track_sequence_id
-                        table.insert(updates, update_payload)
-                    end
-                end
-            end
-            if #updates == 0 then
-                return false
-            end
-            sequence_id = sequence_id or updates[1].track_sequence_id
-            if not sequence_id then
-                return false
-            end
-            command_helper.add_update_mutation(command, sequence_id, updates)
-            return true
         end
 
         local planned_mutations = {}
@@ -223,9 +129,7 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                         edge_type = edge_info.edge_type
                     })
                 else
-                    mutated_clip_ids[clip.id] = true
                     table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
-                    register_update(clip)
                 end
             end
 
@@ -276,7 +180,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     any_change = true
                 end
                 clip.__new_start = new_start
-                mutated_clip_ids[clip.id] = true
                 table.insert(move_targets, clip)
                 table.insert(preview_clips, {
                     clip_id = clip.id,
@@ -368,7 +271,6 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                 for _, clip in ipairs(move_targets) do
                     clip.sequence_start = clip.__new_start or clip.sequence_start
                     table.insert(planned_mutations, clip_mutator.plan_update(clip, original_states_map[clip.id]))
-                    register_update(clip)
                 end
             end
 
@@ -389,18 +291,16 @@ function M.register(command_executors, command_undoers, db, set_last_error)
             return false, "Failed to apply mutations: " .. tostring(apply_err)
         end
 
-        local captured_mutations = apply_updates_if_needed(active_sequence_id)
-        if not captured_mutations then
-            local recovered = capture_updates_via_reload(active_sequence_id)
-            if not recovered then
-                recovered = capture_updates_from_selection(active_sequence_id)
-            end
-            if not recovered then
-                log.warn("Nudge: failed to capture timeline mutations for "
-                    .. "timeline cache (sequence=%s)",
-                    tostring(active_sequence_id or "nil"))
-            end
-        end
+        -- Report EVERY applied planner mutation to the timeline cache —
+        -- moved clips AND occlusion results (head/tail trims, full-cover
+        -- deletes, straddle-split inserts). The previous bespoke capture
+        -- chain registered only the nudged clips, so occluded neighbours
+        -- kept their stale pre-trim geometry in the UI until a reload.
+        local report_seq_id = active_sequence_id or args.sequence_id
+        assert(report_seq_id and report_seq_id ~= "", string.format(
+            "Nudge: cannot report timeline mutations without a sequence_id "
+            .. "(nudge_type=%s)", tostring(nudge_type)))
+        command_helper.report_planner_mutations(command, report_seq_id, planned_mutations)
 
         return true
     end
