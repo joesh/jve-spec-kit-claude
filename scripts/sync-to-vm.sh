@@ -115,6 +115,7 @@ rsync -az --delete \
     keymaps \
     menus.xml \
     scripts/run_binding_tests.sh \
+    scripts/run_group_bake_probe.sh \
     tests/run_integration_tests.sh \
     scripts/_run_in_vm.sh \
     "$USER@$HOST:$GUEST_PATH/"

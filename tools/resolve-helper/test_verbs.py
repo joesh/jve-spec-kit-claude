@@ -223,20 +223,59 @@ class ValidateApplyTestGradeArgsTests(unittest.TestCase):
 # surfaces each anomaly to the JVE client (which logs at warn).
 
 class _FakeGraph:
+    """Item node graph. Default tools are beyond-primary → the item
+    classifies unrepresentable (bake candidate); None = untouched."""
+    def __init__(self, tools=("Custom Curves",)):
+        self._tools = list(tools) if tools else None
+
     def GetNumNodes(self):
         return 1
 
     def GetToolsInNode(self, n):
         assert n == 1
-        return ["Custom Curves"]  # beyond-primary → unrepresentable
+        return self._tools
+
+
+class _FakeGroupGraph:
+    """Group pre/post-clip graph; counts walks for the cache test."""
+    def __init__(self, tools_by_node):
+        self._tools_by_node = tools_by_node  # list, one entry per node
+        self.walk_count = 0
+
+    def GetNumNodes(self):
+        return len(self._tools_by_node)
+
+    def GetToolsInNode(self, n):
+        self.walk_count += 1
+        return self._tools_by_node[n - 1]
+
+
+class _FakeColorGroup:
+    def __init__(self, name, pre_tools, post_tools):
+        self._name = name
+        self.pre = _FakeGroupGraph(pre_tools)
+        self.post = _FakeGroupGraph(post_tools)
+
+    def GetName(self):
+        return self._name
+
+    def GetPreClipNodeGraph(self):
+        return self.pre
+
+    def GetPostClipNodeGraph(self):
+        return self.post
 
 
 class _FakeItem:
     """Timeline item whose grade exceeds CDL (bake candidate)."""
-    def __init__(self, uid, start, export_lut):
+    def __init__(self, uid, start, export_lut, group=None,
+                 own_tools=("Custom Curves",)):
         self._uid = uid
         self._start = start
         self._export_lut = export_lut  # fn(kind, path) -> bool
+        self._group = group
+        self._own_tools = list(own_tools) if own_tools else None
+        self.export_lut_calls = 0
 
     def GetUniqueId(self):
         return self._uid
@@ -245,28 +284,44 @@ class _FakeItem:
         return self._start
 
     def GetNodeGraph(self):
-        return _FakeGraph()
+        return _FakeGraph(self._own_tools)
 
     def GetLUT(self, n):
         return ""
 
+    def GetColorGroup(self):
+        return self._group
+
     def ExportLUT(self, kind, path):
+        self.export_lut_calls += 1
         return self._export_lut(kind, path)
 
 
 class _FakeTimeline:
-    def __init__(self, items):
+    def __init__(self, items, cdl_at_one_hour=False):
         self._items = items
+        self._cdl_at_one_hour = cdl_at_one_hour
 
     def GetSetting(self, key):
         assert key == "timelineFrameRate"
         return "24"
 
     def Export(self, path, fmt, kind):
-        # Minimal CMX-3600 shell with zero CDL events — every item
-        # classifies via the no-CDL branch (tools ⇒ unrepresentable).
+        # Minimal CMX-3600 shell. Default: zero CDL events — items
+        # classify via the no-CDL branch. With cdl_at_one_hour, one
+        # non-identity SOP/SAT event at record 01:00:00:00 (frame 86400
+        # at the fake's 24 fps) so an item starting there reads
+        # cdl_present=True.
         with open(path, "w", encoding="utf-8") as f:
-            f.write("TITLE: fake\n\n")
+            f.write("TITLE: fake\nFCM: NON-DROP FRAME\n\n")
+            if self._cdl_at_one_hour:
+                f.write(
+                    "001  AX       V     C        "
+                    "00:00:00:00 00:00:04:00 01:00:00:00 01:00:04:00\n"
+                    "*ASC_SOP (1.050000 0.980000 0.920000)"
+                    "(0.010000 0.000000 -0.020000)"
+                    "(1.100000 1.000000 0.950000)\n"
+                    "*ASC_SAT 0.850000\n")
         return True
 
     def GetTrackCount(self, track_type):
@@ -335,12 +390,12 @@ class ReadGradesWarningsTests(unittest.TestCase):
         # page restored to where the user was
         self.assertEqual(resolve.page, "edit")
 
-    def test_mid_bake_page_departure_warns_once_and_counts(self):
+    def test_mid_bake_page_departure_warns_once_and_stops_baking(self):
         resolve = _FakeResolve("edit")
 
         def bake_then_user_switches(kind, path):
             # simulate the user flipping Resolve back to Edit between
-            # bakes — this and every later ExportLUT fails
+            # bakes — this and every later ExportLUT would fail
             resolve.page = "edit"
             return False
 
@@ -354,8 +409,14 @@ class ReadGradesWarningsTests(unittest.TestCase):
         departure = [w for w in result["warnings"] if "mid-bake" in w]
         self.assertEqual(len(departure), 1, result["warnings"])
         self.assertIn("edit", departure[0])
-        counts = [w for w in result["warnings"] if "2 of 3" in w]
+        # Once the page is verifiably lost, further ExportLUT calls are
+        # doomed (Color page is a hard prerequisite) — uid-c must be
+        # SKIPPED, not attempted (1 failed of 2 attempted).
+        self.assertEqual(items[2].export_lut_calls, 0)
+        counts = [w for w in result["warnings"] if "1 of 2" in w]
         self.assertEqual(len(counts), 1, result["warnings"])
+        skipped = [w for w in result["warnings"] if "skipped" in w]
+        self.assertEqual(len(skipped), 1, result["warnings"])
 
     def test_prior_page_color_warns_restore_skipped(self):
         # Resolve already on Color when the sync begins (the signature
@@ -382,6 +443,126 @@ class ReadGradesWarningsTests(unittest.TestCase):
         restore = [w for w in result["warnings"]
                    if "restore" in w and "edit" in w]
         self.assertEqual(len(restore), 1, result["warnings"])
+
+    def test_modal_blocks_color_switch_skips_all_bakes(self):
+        # 2026-06-11 VM incident: a missing-DCTL modal blocked Resolve's
+        # UI — OpenPage("color") didn't take and every ExportLUT was
+        # doomed. The verb must detect the failed switch (verify via
+        # GetCurrentPage), warn ONCE naming the likely modal, and skip
+        # every bake attempt rather than failing 1000 times.
+        resolve = _FakeResolve("edit")
+        resolve.refuse_open_pages = {"color"}
+        items = [_FakeItem("uid-a", 86400, _write_cube),
+                 _FakeItem("uid-b", 86500, _write_cube)]
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run(resolve, items, d)
+        self.assertEqual(items[0].export_lut_calls, 0)
+        self.assertEqual(items[1].export_lut_calls, 0)
+        blocked = [w for w in result["warnings"]
+                   if "modal" in w and "No LUT bakes attempted" in w]
+        self.assertEqual(len(blocked), 1, result["warnings"])
+        # rows still emitted (classification works without bakes)
+        self.assertEqual(len(result["grades"]), 2)
+
+
+# ─── read_grades color-group classification (t051: H1 — ExportLUT
+# bakes group grades, so group activity must defeat none/primary) ────
+
+class ReadGradesGroupClassificationTests(unittest.TestCase):
+    def _run(self, items, bake_dir, cdl_at_one_hour=False):
+        resolve = _FakeResolve("edit")
+        project = _FakeProject(
+            _FakeTimeline(items, cdl_at_one_hour=cdl_at_one_hour))
+
+        class _Handle:
+            def acquire(self):
+                return ("ok", resolve, project)
+
+        resp = verbs.verb_read_grades(
+            {"bake_lut_dir": bake_dir} if bake_dir else {},
+            _Handle(), "env-g1", "test")
+        self.assertTrue(resp["ok"], f"verb failed: {resp!r}")
+        return {row["resolve_item_id"]: row
+                for row in resp["result"]["grades"]}
+
+    def test_group_tools_defeat_none(self):
+        # The 01:02:31:13 case: item's own graph untouched, no CDL, no
+        # item LUT — but the color group carries the whole look.
+        # Pre-t051 this classified "none" and the clip displayed
+        # ungraded in JVE despite being fully graded in Resolve.
+        group = _FakeColorGroup("School",
+                                pre_tools=[["Primary Balance"]],
+                                post_tools=[None])
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=group, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run(items, d)
+        row = rows["uid-a"]
+        self.assertNotEqual(row["fidelity"], "none", row)
+        self.assertIn("lut", row, "group-graded clip must carry the "
+                      "baked LUT (ExportLUT bakes group grades — t051)")
+
+    def test_group_tools_defeat_primary(self):
+        # CDL-primary item inside a graded group: the EDL CDL carries
+        # no group contribution, so "primary" would misrepresent the
+        # look (FR-015 never over-claims). Downgrades to the
+        # bake-carried shape — unrepresentable (the established label
+        # for tools-without-user-LUT; the bake is the carrier), no cdl
+        # claimed, lut present.
+        group = _FakeColorGroup("School",
+                                pre_tools=[["Custom Curves"]],
+                                post_tools=[None])
+        item = _FakeItem("uid-a", 86400, _write_cube,
+                         group=group, own_tools=None)
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run([item], d, cdl_at_one_hour=True)
+        row = rows["uid-a"]
+        self.assertEqual(row["fidelity"], "unrepresentable", row)
+        self.assertNotIn("cdl", row)
+        self.assertIn("lut", row)
+
+    def test_clean_item_with_cdl_still_primary(self):
+        # Control for defeat_primary: same CDL event, NO group — the
+        # classification must remain primary with the CDL attached.
+        item = _FakeItem("uid-a", 86400, _write_cube,
+                         group=None, own_tools=None)
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run([item], d, cdl_at_one_hour=True)
+        row = rows["uid-a"]
+        self.assertEqual(row["fidelity"], "primary", row)
+        self.assertIn("cdl", row)
+
+    def test_ungrouped_clean_item_still_none(self):
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run(items, d)
+        self.assertEqual(rows["uid-a"]["fidelity"], "none")
+
+    def test_group_without_tools_still_none(self):
+        group = _FakeColorGroup("Empty",
+                                pre_tools=[None],
+                                post_tools=[None])
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=group, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._run(items, d)
+        self.assertEqual(rows["uid-a"]["fidelity"], "none")
+
+    def test_group_verdict_cached_per_group(self):
+        # 1074 items share ~15 groups on a real timeline — the group
+        # graphs must be walked once per GROUP, not once per item.
+        group = _FakeColorGroup("School",
+                                pre_tools=[["Primary Balance"]],
+                                post_tools=[None])
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=group, own_tools=None),
+                 _FakeItem("uid-b", 86500, _write_cube,
+                           group=group, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            self._run(items, d)
+        self.assertEqual(group.pre.walk_count, 1,
+                         "group graph walked once per group, not per item")
 
 
 if __name__ == "__main__":

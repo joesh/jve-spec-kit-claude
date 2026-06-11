@@ -292,6 +292,42 @@ def any_beyond_primary_tools(per_node_tools):
     return False
 
 
+def any_group_tools(per_node_tools):
+    """True if any COLOR-GROUP graph node carries ANY tool at all.
+
+    Args:
+      per_node_tools: list with one entry per node across the group's
+        pre-clip + post-clip graphs — each entry a
+        Graph.GetToolsInNode(n) result (list of names, or None).
+
+    Unlike `any_beyond_primary_tools`, primary-corrector names are NOT
+    filtered out: the per-event EDL CDL carries only the ITEM's primary
+    — a group-level "Primary Balance" is invisible to it, so any group
+    activity whatsoever means the CDL alone misrepresents the look
+    (FR-015 never over-claims). The carrier is the per-item LUT bake,
+    which t051 (2026-06-11, VM live probe) proved includes group
+    pre/post grades.
+
+    Raises CdlEdlParseError on shape violations — Resolve API drift
+    must surface, not skew classification.
+    """
+    for node_idx, tools in enumerate(per_node_tools, start=1):
+        if tools is None:
+            continue
+        if not isinstance(tools, list):
+            raise CdlEdlParseError(
+                f"any_group_tools: node {node_idx} entry must be "
+                f"list or None, got {type(tools).__name__}")
+        for name in tools:
+            if not isinstance(name, str):
+                raise CdlEdlParseError(
+                    f"any_group_tools: node {node_idx} tool name must "
+                    f"be str, got {type(name).__name__}")
+        if tools:
+            return True
+    return False
+
+
 def is_identity_cdl(cdl_entry):
     """True when a parsed CDL block is the identity transform.
 

@@ -47,6 +47,7 @@ from cdl_edl import (
     CdlEdlParseError,
     classify_fidelity,
     any_beyond_primary_tools,
+    any_group_tools,
     is_identity_cdl,
     integer_frame_rate_from_setting,
     parse_cdl_edl,
@@ -1153,6 +1154,46 @@ def _inspect_node_graph(item):
     return per_node_tools, lut_ref
 
 
+def _item_group_has_tools(item, group_tools_cache):
+    # Color-group classification input (t051, 2026-06-11): an item's
+    # look can live entirely in its group's pre/post-clip graphs —
+    # invisible to the item node graph AND to the EDL CDL. ExportLUT
+    # bakes group grades (t051 live probe), so group activity makes the
+    # item bake-eligible. Group graphs are walked once per GROUP, not
+    # per item (~15 groups vs ~1000 items on a real timeline); cache is
+    # keyed by group name, unique per project (AddColorGroup enforces).
+    group = _api("item.GetColorGroup()", item.GetColorGroup)
+    if group is None:
+        return False
+    name = _api("group.GetName()", group.GetName)
+    if not isinstance(name, str) or name == "":
+        raise RuntimeError(
+            f"group.GetName() returned non-string/empty: {name!r}")
+    if name in group_tools_cache:
+        return group_tools_cache[name]
+    per_node_tools = []
+    for label, getter in (("GetPreClipNodeGraph", group.GetPreClipNodeGraph),
+                          ("GetPostClipNodeGraph", group.GetPostClipNodeGraph)):
+        graph = _api(f"group.{label}()", getter)
+        if graph is None:
+            continue
+        num_nodes = _api("groupGraph.GetNumNodes()", graph.GetNumNodes)
+        if not isinstance(num_nodes, int) or num_nodes < 0:
+            raise RuntimeError(
+                f"group {label} GetNumNodes() returned non-int / "
+                f"negative: {num_nodes!r}")
+        for n in range(1, num_nodes + 1):
+            per_node_tools.append(_api(
+                f"groupGraph.GetToolsInNode({n})",
+                graph.GetToolsInNode, n))
+    try:
+        verdict = any_group_tools(per_node_tools)
+    except CdlEdlParseError as exc:
+        raise RuntimeError(str(exc)) from exc
+    group_tools_cache[name] = verdict
+    return verdict
+
+
 def _bake_item_lut(item, resolve_item_id, bake_lut_dir, resolve):
     # Resolve's TimelineItem.ExportLUT bakes the full node-graph result
     # (primaries + curves + CST/ACES + Gamut Mapping). Qualifiers,
@@ -1286,6 +1327,10 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # requested, and restore the user's prior page afterwards so the
     # observed Resolve state is unchanged when read_grades returns.
     prior_page = None
+    # Bakes run only after the Color-page switch VERIFIABLY took (set
+    # below); cleared again mid-run if the page is lost (modal dialog,
+    # user navigation) so remaining doomed ExportLUT calls are skipped.
+    bake_enabled = False
     if bake_lut_dir is not None:
         # Capture prior page BEFORE switching to Color so the finally
         # block can restore it. If GetCurrentPage raises, refuse to
@@ -1314,7 +1359,27 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
         except Exception as exc:
             sys.stderr.write(
                 f"[read_grades] resolve.OpenPage('color') raised: "
-                f"{exc} — bakes will likely fail\n")
+                f"{exc}\n")
+        # Verify the switch actually took. A modal dialog (e.g. the
+        # missing-DCTL prompt observed 2026-06-11 when the Color page
+        # loaded a graph referencing an uninstalled .dctle) blocks
+        # Resolve's UI: OpenPage/GetCurrentPage return None and every
+        # ExportLUT is doomed. Detect it HERE — one warning and zero
+        # doomed bake attempts, instead of one silent failure per clip.
+        try:
+            page_after_switch = resolve.GetCurrentPage()
+        except Exception as exc:
+            page_after_switch = None
+            warnings.append(
+                f"GetCurrentPage raised after the Color switch: {exc}")
+        if page_after_switch == "color":
+            bake_enabled = True
+        else:
+            warnings.append(
+                "Color page switch did not take (Resolve reports "
+                f"{page_after_switch!r}) — a modal dialog is likely "
+                "blocking Resolve's UI; dismiss it in Resolve and "
+                "re-run SyncGradesFromResolve. No LUT bakes attempted.")
 
     # Single try/finally from this point forward so EVERY early return
     # below the OpenPage("color") switch goes through the page-restore
@@ -1325,7 +1390,8 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     grades = []
     bake_attempts = 0
     bake_failures = 0
-    page_probed_after_failure = False
+    bake_skipped = 0
+    group_tools_cache = {}
     try:
         timeline, err = _require_current_timeline(project, envelope_id)
         if err is not None:
@@ -1382,12 +1448,20 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                 cdl_entry = None
             try:
                 per_node_tools, item_lut = _inspect_node_graph(item)
+                group_has_tools = _item_group_has_tools(
+                    item, group_tools_cache)
             except RuntimeError as exc:
                 return _error(envelope_id, "resolve_api_error", str(exc))
             try:
+                # Group activity ORs into the beyond-CDL input: the
+                # EDL CDL carries only the ITEM's primary, so any
+                # group-level tool (even a bare group primary) makes
+                # the CDL misrepresent the look — downgrade and carry
+                # via the bake, which includes group grades (t051,
+                # 2026-06-11 VM probe).
                 fidelity = classify_fidelity(
-                    any_non_cdl_tools=any_beyond_primary_tools(
-                        per_node_tools),
+                    any_non_cdl_tools=(any_beyond_primary_tools(
+                        per_node_tools) or group_has_tools),
                     item_lut_ref=item_lut,
                     cdl_present=(cdl_entry is not None))
             except CdlEdlParseError as exc:
@@ -1406,43 +1480,50 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             baked_path = None
             if (bake_lut_dir is not None
                     and fidelity in ("partial", "unrepresentable")):
-                bake_attempts += 1
-                baked_path = _bake_item_lut(
-                    item, resolve_item_id, bake_lut_dir, resolve)
-                if baked_path is None:
+                if not bake_enabled:
+                    bake_skipped += 1
+                else:
+                    bake_attempts += 1
+                    baked_path = _bake_item_lut(
+                        item, resolve_item_id, bake_lut_dir, resolve)
+                if baked_path is None and bake_enabled:
                     bake_failures += 1
-                    if not page_probed_after_failure:
-                        # One-shot diagnosis of the dominant failure
-                        # mode: the user (or anything else) switched
-                        # Resolve off the Color page mid-bake, which
-                        # makes this and every later ExportLUT fail
-                        # (observed 2026-06-10: ~620 clips silently
-                        # lost their grade carrier). Probe once, not
-                        # per failure — one warning, not hundreds.
-                        page_probed_after_failure = True
-                        try:
-                            now_page = resolve.GetCurrentPage()
-                        except Exception as exc:
+                    # Diagnose the dominant failure mode: the user (or
+                    # anything else — a modal dialog) took Resolve off
+                    # the Color page mid-bake, which dooms this and
+                    # every later ExportLUT (observed 2026-06-10: ~620
+                    # clips silently lost their grade carrier). One
+                    # probe, one warning, and bake_enabled drops so the
+                    # doomed remainder is skipped, not attempted.
+                    try:
+                        now_page = resolve.GetCurrentPage()
+                    except Exception as exc:
+                        warnings.append(
+                            "LUT bake failed and the page probe "
+                            f"also raised: {exc}")
+                    else:
+                        if now_page != "color":
+                            bake_enabled = False
                             warnings.append(
-                                "LUT bake failed and the page probe "
-                                f"also raised: {exc}")
-                        else:
-                            if now_page != "color":
-                                warnings.append(
-                                    "Resolve left the Color page "
-                                    f"mid-bake (now on {now_page!r}) — "
-                                    "subsequent bakes will fail; "
-                                    "re-run SyncGradesFromResolve")
+                                "Resolve left the Color page mid-bake "
+                                f"(now on {now_page!r}"
+                                + (" — likely a modal dialog blocking "
+                                   "the UI" if now_page is None else "")
+                                + ") — halting remaining bakes; re-run "
+                                "SyncGradesFromResolve")
             if baked_path is not None:
                 row["lut"] = {"ref": baked_path}
             elif item_lut is not None:
                 row["lut"] = {"ref": item_lut}
             grades.append(row)
-        if bake_failures > 0:
+        if bake_attempts > 0 and (bake_failures > 0 or bake_skipped > 0):
             warnings.append(
                 f"{bake_failures} of {bake_attempts} LUT bake(s) "
-                "failed — affected clips carry no displayable grade "
-                "in JVE (shown ungraded)")
+                "failed"
+                + (f"; {bake_skipped} skipped after the Color page "
+                   "was lost" if bake_skipped else "")
+                + " — affected clips carry no displayable grade in "
+                "JVE (shown ungraded)")
         # `warnings` is the same list object the finally below appends
         # to — restore anomalies land in the already-built response.
         response = _ok(envelope_id,
