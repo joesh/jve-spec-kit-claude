@@ -109,8 +109,13 @@ end
 
 ------------------------------------------------------------------------
 -- Sub-test B: offline (FileNotFound) → "OFFLINE - " prefix
+--
+-- The file really disappears: faking FileNotFound on a file that exists
+-- gets corrected back to online by the dir watcher's existence re-probe
+-- (correct production behavior — the watcher's whole job). So we rename
+-- the fixture away and let the real watcher detect the loss.
 ------------------------------------------------------------------------
-print("  B: offline (FileNotFound) → 'OFFLINE - ' prefix")
+print("  B: offline (file really removed) → 'OFFLINE - ' prefix")
 do
     local seq = env.fresh_sequence("Offline Label B")
     local tracks = env.tracks()
@@ -120,9 +125,13 @@ do
     })
     env.view_frames(480, 0)
 
-    -- Mark the media offline via the TMB path (FileNotFound = file missing).
-    media_status.update_from_tmb(TC_FIXTURE_PATH, true, "FileNotFound")
-    env.pump(150)
+    -- Ensure the path is registered with the FS watcher (idempotent).
+    media_status.register(TC_FIXTURE_PATH)
+
+    -- Really remove the file; the real watcher flips it to FileNotFound.
+    local hidden = TC_FIXTURE_PATH .. ".hidden"
+    assert(os.rename(TC_FIXTURE_PATH, hidden),
+        "B: failed to rename fixture away")
 
     local cmd = assert_label_prefix("OFFLINE - ", "offline clip")
     assert(type(cmd.text) == "string",
@@ -131,6 +140,9 @@ do
     assert(cmd.text:find("clip@", 1, true),
         string.format("OFFLINE label should contain clip name; got: %q", cmd.text))
 
+    -- Put the file back; the watcher flips it online again.
+    assert(os.rename(hidden, TC_FIXTURE_PATH),
+        "B: failed to restore fixture")
     mark_online()
     print("    OK")
 end

@@ -461,6 +461,16 @@ end
 local function reprobe_and_notify(media_path)
     local old = status_cache[media_path]
     local new_status = probe(media_path)
+    -- probe() checks only existence (io.open). A codec-level verdict
+    -- (Unsupported / DecodeFailed, from TMB or the codec probe) on a
+    -- file that still exists is outside its competence — the file was
+    -- present when it failed to decode, so "it opens" refutes nothing.
+    -- Keep the stronger verdict. Disappearance still wins: FileNotFound
+    -- replaces any verdict, and reappearance starts fresh as online.
+    if not new_status.offline and old and old.offline
+        and old.error_code ~= nil and old.error_code ~= "FileNotFound" then
+        new_status = old
+    end
     status_cache[media_path] = new_status
 
     -- Update watches if status category changed (missing ↔ exists)
