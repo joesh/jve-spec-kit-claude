@@ -195,6 +195,11 @@ for t in \
   test_panel_maximize.lua \
   test_focus_manager.lua \
   test_media_status_bg_probe.lua \
+  test_media_status_codec_error_persistence.lua \
+  test_monitor_mark_bar_wheel.lua \
+  test_source_zoom.lua \
+  test_sequence_monitor.lua \
+  test_sequence_monitor_no_orphan_engine.lua \
   test_playback_engine_filter.lua \
   test_playback_routes_to_displayed_tab.lua \
   test_mark_routing.lua \
