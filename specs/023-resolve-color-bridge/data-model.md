@@ -87,7 +87,7 @@ exists.
 - **Reconcile (FR-012)**: on re-send / re-connect, for each current JVE clip —
   - `clip.id` matches a live Resolve item id → direct link (the common case for imported clips);
   - else positional/content match (`media.file_uuid` + source TC + timeline position, FR-011c);
-  - blade/split fragment of a prior clip → both fragments inherit the parent's `resolve_item_id` and grade (bladed both-inherit). Exact fragment-recognition is a Phase-4 de-risk decision (spec Deferred).
+  - blade/split fragment of a prior clip → both fragments inherit the parent's `resolve_item_id` and grade (bladed both-inherit). **Resolved 2026-06-10 (Phase-4 de-risk)**: grade inheritance happens **at blade time** — `SplitClip` copies the parent's `clip_grade` row onto the right fragment via `ClipGrade.copy_to` (the left fragment keeps the parent's clip id, hence its row). A blade is render-invariant by domain definition, the View pulls grades by clip id, and self-carrying fragments eliminate the fragment-recognition problem. Ledger rows stay parent-only until the next send (each re-send stamps fragments with their own ids, after which they map directly).
   - unmatched → reported, not silently dropped.
 - **Deleted**: only by FK cascade.
 

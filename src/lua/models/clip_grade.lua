@@ -150,6 +150,31 @@ function M.fingerprint(grade)
     return table.concat(parts, "|")
 end
 
+--- Copy a grade row from one clip to another (spec 023 FR-012
+--- bladed-both-inherit). SplitClip calls this so the right fragment —
+--- a brand-new clip id — renders identically to the parent: a blade is
+--- a timeline edit and must not change what the viewer sees. Returns
+--- true when a grade was copied, false when the source is ungraded
+--- (correct domain outcome, not a fallback: ungraded parent ⇒
+--- ungraded halves).
+--- @param from_clip_id string
+--- @param to_clip_id   string
+--- @param db           table|nil optional SQLite connection
+function M.copy_to(from_clip_id, to_clip_id, db)
+    assert(type(from_clip_id) == "string" and from_clip_id ~= "",
+        "ClipGrade.copy_to: from_clip_id required")
+    assert(type(to_clip_id) == "string" and to_clip_id ~= "",
+        "ClipGrade.copy_to: to_clip_id required")
+    assert(from_clip_id ~= to_clip_id,
+        "ClipGrade.copy_to: from == to (" .. from_clip_id .. ")")
+    local grade = M.load(from_clip_id, db)
+    if grade == nil then
+        return false
+    end
+    M.upsert(to_clip_id, grade, db)
+    return true
+end
+
 --- Load a grade by clip_id; returns nil if no row.
 --- `db` is optional — model layer owns SQL access (per the SQL-isolation
 --- policy in core/database.lua), so views/pull-helpers can call

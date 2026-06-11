@@ -16,9 +16,10 @@
 -- source_offset = owner_delta_to_source(clip.fps_mismatch_policy, split_offset,
 --                                      owner.fps, nested.fps).
 --
--- Both halves preserve master_layer_track_id, fps_mismatch_policy, and all
--- clip_channel_override rows from the original — the editor's interpretive
--- intent survives a cut.
+-- Both halves preserve master_layer_track_id, fps_mismatch_policy, all
+-- clip_channel_override rows, and the clip_grade row (spec 023 FR-012
+-- bladed-both-inherit) from the original — the editor's interpretive
+-- intent AND the rendered look survive a cut.
 --
 -- This command splits ONE clip. The interactive "Split" wrapper routes
 -- playhead-at-armed-tracks across multiple SplitClip calls and reassembles
@@ -34,8 +35,9 @@
 
 local M = {}
 
-local Clip     = require("models.clip")
-local Sequence = require("models.sequence")
+local Clip      = require("models.clip")
+local ClipGrade = require("models.clip_grade")
+local Sequence  = require("models.sequence")
 local database = require("core.database")
 local uuid     = require("uuid")
 local log      = require("core.logger").for_area("commands")
@@ -171,6 +173,11 @@ function M.execute(args)
         })
 
         Clip.copy_channel_overrides(args.clip_id, right_id)
+        -- FR-012 (spec 023) bladed-both-inherit: the right fragment is
+        -- a new clip id, and the View pulls grades by clip id — copy
+        -- the parent's grade so the cut is render-invariant. Undo
+        -- deletes the right clip and the FK cascade removes its grade.
+        ClipGrade.copy_to(args.clip_id, right_id)
     end)
     if not ok then
         database.rollback_to_savepoint(SAVEPOINT)
