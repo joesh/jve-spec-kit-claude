@@ -2,13 +2,14 @@
 """Spike: does TimelineItem.ExportLUT bake TIMELINE-level grades, and
 does the timeline node graph expose its tools to scripting?
 
-VERDICT DOWNGRADED by t053 (2026-06-11): this probe's instrument was
-render-inert — scripted timeline-graph SetLUT reads back cleanly but
-never reaches stills, gallery grabs, or queue renders, so the
-"ExportLUT IGNORES timeline grades" result below says nothing about
-REAL (UI-authored) timeline grades; that remains open pending a
-one-time manual grade on the VM. Q2 (scripting sees timeline-graph
-tools) stands.
+VERDICT DOWNGRADED by t053 (2026-06-11), then REFUTED by t054
+(2026-06-12): this probe's instrument was render-inert — scripted
+timeline-graph SetLUT reads back cleanly but never reaches stills,
+gallery grabs, or queue renders — so the "ExportLUT IGNORES timeline
+grades" result below was measured against a grade that never
+rendered. Against a REAL (UI-authored) timeline grade, ExportLUT DOES
+bake it (t054: 33pt bake reproduces the timeline-graded still to max
+0.0023/channel). Q2 (scripting sees timeline-graph tools) stands.
 
 Follow-on to t051 (group grades — H1, baked). The timeline node graph
 (`Timeline.GetNodeGraph()`, README:400) applies to every clip and is

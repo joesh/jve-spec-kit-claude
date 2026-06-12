@@ -16,6 +16,11 @@ is proven sound: lattice -> still -> readback is bit-exact, page-free
 (modal-immune), and carries item-level grades. Closing the question
 needs a one-time manually-authored timeline grade on the VM.
 
+CLOSED by t054 (2026-06-12, real UI-authored timeline grade): stills
+DO carry real timeline grades (this probe's capture path is
+production-viable) and per-item ExportLUT bakes carry them too — see
+t054_probe_real_timeline_grade.py.
+
 Original premise: t052 reported ExportLUT ignores timeline grades and
 the scripting README has no Timeline/Graph LUT export, leaving
 empirical capture as the remaining programmatic path:

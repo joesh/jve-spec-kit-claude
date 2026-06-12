@@ -54,7 +54,15 @@ def sample_gray(path, v):
 
 
 def trilerp(size, data, r, g, b):
-    """Trilinear sample of a loaded cube at (r, g, b) in [0, 1]."""
+    """Trilinear interpolation ("trilerp" — graphics shorthand from the
+    lerp family) of a loaded cube at (r, g, b) in [0, 1].
+
+    A .cube stores output colors only at size^3 grid points; for an
+    arbitrary input we take the 8 surrounding grid corners and blend
+    linearly along the red axis, then green, then blue. This is how
+    Resolve itself evaluates a 3D LUT between grid points, so values
+    computed here are comparable to Resolve's rendered output. Exact
+    (no blend) when the input lies on a grid point."""
     def axis(v):
         v = min(max(v, 0.0), 1.0) * (size - 1)
         lo = min(int(v), size - 2)

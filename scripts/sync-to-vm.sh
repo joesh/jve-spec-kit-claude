@@ -118,6 +118,7 @@ rsync -az --delete \
     scripts/run_group_bake_probe.sh \
     scripts/run_timeline_graph_probe.sh \
     scripts/run_timeline_lut_capture_probe.sh \
+    scripts/run_real_timeline_grade_probe.sh \
     tests/run_integration_tests.sh \
     scripts/_run_in_vm.sh \
     "$USER@$HOST:$GUEST_PATH/"

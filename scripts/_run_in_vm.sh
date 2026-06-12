@@ -96,6 +96,12 @@ echo "[vm-dispatch] $(basename "$0") → $_VM_HOST" >&2
 # to brew-installed tools (ffmpeg in timeline_render's render_env.lua)
 # fail "command not found" on the guest while passing on the host.
 # Match the host dev environment explicitly.
+# Runner args are forwarded (%q-quoted to survive the ssh hop) — "$@"
+# here is the sourcing runner's own positional params.
+_VM_ARGS=""
+for _vm_arg in "$@"; do
+    _VM_ARGS="$_VM_ARGS $(printf '%q' "$_vm_arg")"
+done
 $_VM_SSH "$_VM_USER@$_VM_HOST" \
-    "cd $_VM_GUEST_PATH && PATH=/opt/homebrew/bin:\$PATH JVE_IN_VM=1 JVE_SMOKE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL"
+    "cd $_VM_GUEST_PATH && PATH=/opt/homebrew/bin:\$PATH JVE_IN_VM=1 JVE_SMOKE_IN_VM=1 RUN_SLOW_TESTS='${RUN_SLOW_TESTS:-0}' bash $_VM_SELF_REL$_VM_ARGS"
 exit $?

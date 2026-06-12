@@ -558,12 +558,13 @@ class ReadGradesGroupClassificationTests(unittest.TestCase):
         self.assertEqual(rows["uid-a"]["fidelity"], "none")
 
     def test_timeline_level_grade_warns(self):
-        # Timeline-level grades may not reach per-clip bakes — t053
-        # (2026-06-11, VM probes) showed scripted timeline-graph writes
-        # are render-inert, leaving t052's "ExportLUT ignores them"
-        # verdict unproven either way. The gold timeline carries an
-        # OFX DCTL + Sizing at timeline level. The verb must report
-        # the presence, once per sync.
+        # Timeline-level grades ARE carried by per-clip LUT bakes
+        # (t054, 2026-06-12, VM live, real UI-authored grade) but NOT
+        # by CDL-only or carrier-less sync — the EDL CDL holds only
+        # the item's own primary, so those clips display without the
+        # timeline look. The verb must report the presence, once per
+        # sync, so JVE can surface the gap. The gold timeline carries
+        # an OFX DCTL + Sizing at timeline level.
         resolve = _FakeResolve("edit")
         items = [_FakeItem("uid-a", 86400, _write_cube,
                            group=None, own_tools=None)]
