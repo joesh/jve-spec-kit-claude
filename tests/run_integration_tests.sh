@@ -215,6 +215,8 @@ for t in \
   test_transport_first_open_defaults_to_record.lua \
   test_audio_handover_contract.lua \
   test_playback_edit_invalidation.lua \
+  test_av_handover_ordering.lua \
+  test_audio_play_unfed_no_crash.lua \
   test_fullscreen_viewer.lua \
   test_edit_history_window_project_switch.lua \
   test_edit_source_popup_invariants.lua \
