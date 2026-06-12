@@ -217,6 +217,10 @@ for t in \
   test_playback_edit_invalidation.lua \
   test_av_handover_ordering.lua \
   test_audio_play_unfed_no_crash.lua \
+  test_reverse_clip_source_traversal.lua \
+  test_controller_owns_audio_transport.lua \
+  test_video_display_on_seek.lua \
+  test_playback_transport_state_machine.lua \
   test_fullscreen_viewer.lua \
   test_edit_history_window_project_switch.lua \
   test_edit_source_popup_invariants.lua \
