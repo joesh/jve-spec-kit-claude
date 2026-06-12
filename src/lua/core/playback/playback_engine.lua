@@ -847,6 +847,21 @@ function PlaybackEngine:_on_controller_position(frame, stopped)
     self._on_position_changed(frame)
 
     if stopped then
+        -- Position reports are coalesced and dispatched async to the main
+        -- queue (reportPosition's dispatch_async): a report queued by a
+        -- Stop can drain AFTER a subsequent Play in the same runloop turn
+        -- (fast J-K-L, scripted stop+play). The report's `stopped` flag is
+        -- a snapshot from queue time — re-check the controller's CURRENT
+        -- truth at delivery and drop the stale report if it is playing
+        -- again. A report draining after the controller is already gone
+        -- (teardown) has nothing to re-check; for that case "stopped" is
+        -- the truth — fall through.
+        if self._playback_controller
+            and qt_constants.PLAYBACK.IS_PLAYING(self._playback_controller) then
+            log.event("_on_controller_position: stale stopped report "
+                .. "(frame=%d) dropped — controller is playing again", frame)
+            return
+        end
         self.state = "stopped"
         self.direction = 0
         self:_stop_audio()

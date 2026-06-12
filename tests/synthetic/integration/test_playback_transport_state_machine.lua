@@ -313,9 +313,13 @@ do
     stop_and_settle()
 
     -- Play mode reaching the same boundary does NOT latch — a real stop
-    -- arrives instead (stopped=true).
+    -- arrives instead (stopped=true). C++ boundary auto-stop flips
+    -- m_playing false BEFORE reporting (displayLinkTick's exchange);
+    -- mirror that order — the engine's stale-report guard correctly
+    -- drops a stopped report whose controller still claims to play.
     rec:play()
     assert(rec.transport_mode == "play", "play mode")
+    qt_constants.PLAYBACK.STOP(rec._playback_controller)
     rec:_on_controller_position(LAST, true)
     assert(not rec.latched, "play mode must NOT latch")
     assert(rec.state == "stopped", "play mode boundary stops")
@@ -365,15 +369,11 @@ end
 -- ════════════════════════════════════════════════════════════════════════════
 -- The symmetric counterpart to TS-6's end-boundary latch. We enter reverse
 -- shuttle and deliver the start-boundary position through the engine's own
--- C++→Lua callback SYNCHRONOUSLY, asserting the latch before the async audio
--- pump has any chance to sustain reverse playback toward time 0 — sustained
--- reverse-to-zero trips an independent C++ AudioPump bug (push_start asserts
--- "unexpected reverse past time 0", contradicting its own comment that the
--- floor division handles it) that then poisons the next Play. That bug is
--- out of this conversion's scope; see memory todo
--- todo_audiopump_reverse_past_zero_and_dead_thread_poison. We clear the latch
--- with stop() (a forward unlatch-Play is already covered by TS-7), so no
--- subsequent Play can hit a poisoned pump.
+-- C++→Lua callback SYNCHRONOUSLY (no CVDisplayLink runs headless, so the
+-- boundary position never arrives organically). Sustained real
+-- reverse-to-zero playback — including the once-poisonous follow-up Play —
+-- is pinned end-to-end by test_reverse_to_zero_playback.lua (the AudioPump
+-- reverse-past-zero assert and dead-thread-join bugs were fixed 2026-06-12).
 print("\n-- (TS-8) reverse shuttle latches at the start boundary --")
 do
     stop_and_settle()

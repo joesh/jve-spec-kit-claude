@@ -282,6 +282,13 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
     m_running.store(true, std::memory_order_relaxed);
     ResetPushState();
 
+    // The pump thread can self-terminate (a caught assert/exception sets
+    // m_running=false) leaving m_thread joinable, and Stop() early-returns
+    // on !m_running without joining. Reassigning a joinable std::thread is
+    // std::terminate — join the finished thread first.
+    if (m_thread.joinable()) {
+        m_thread.join();
+    }
     m_thread = std::thread([this]() {
         jve_init_thread_lua_state();
         try {
@@ -303,16 +310,18 @@ void AudioPump::Start(emp::TimelineMediaBuffer* tmb, sse::ScrubStretchEngine* ss
 void AudioPump::Stop() {
     m_stop_requested.store(true, std::memory_order_relaxed);
 
-    if (!m_running.load(std::memory_order_relaxed)) {
-        return;
-    }
-
+    // Join UNCONDITIONALLY of m_running: a pump thread that self-terminated
+    // (caught exception sets m_running=false) is still joinable, and both
+    // the destructor and a subsequent Start() must not see a joinable
+    // thread (destroying or reassigning one is std::terminate).
     if (m_thread.joinable()) {
         m_thread.join();
     }
 
-    m_running.store(false, std::memory_order_relaxed);
-    JVE_LOG_EVENT(Audio, "AudioPump: stopped");
+    if (m_running.load(std::memory_order_relaxed)) {
+        m_running.store(false, std::memory_order_relaxed);
+        JVE_LOG_EVENT(Audio, "AudioPump: stopped");
+    }
 }
 
 bool AudioPump::IsRunning() const {
@@ -409,11 +418,12 @@ void AudioPump::pumpLoop() {
             //   TMB extract: sample_idx = (offset * sr) / 1e6  (truncated again)
             // Double truncation can skip or repeat 1 sample at the boundary.
             // With alignment: boundaries fall on exact sample positions.
-            // NSF: push_start must be non-negative. Playhead is clamped to [0, total_frames)
-            // and sse_time starts at 0, so this should always hold. If reverse playback
-            // ever crosses time 0, the floor division below handles it correctly.
-            JVE_ASSERT(push_start >= 0,
-                "AudioPump: push_start is negative — unexpected reverse past time 0");
+            // push_start legitimately goes negative when sustained reverse
+            // playback crosses time 0 (holding J to the start boundary). The
+            // negative-floor alignment below and the fetch-window clamp
+            // ("before the start") handle it: the window collapses to empty,
+            // nothing more is pushed, SSE drains to silence, and the engine's
+            // start-boundary latch parks playback at frame 0.
             // Floor to second boundary. Integer division truncates toward zero, which
             // equals floor for non-negative values. For negative values (defensive):
             // subtract (denominator-1) before dividing to get true floor.

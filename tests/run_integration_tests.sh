@@ -217,6 +217,7 @@ for t in \
   test_playback_edit_invalidation.lua \
   test_av_handover_ordering.lua \
   test_audio_play_unfed_no_crash.lua \
+  test_reverse_to_zero_playback.lua \
   test_reverse_clip_source_traversal.lua \
   test_controller_owns_audio_transport.lua \
   test_video_display_on_seek.lua \
