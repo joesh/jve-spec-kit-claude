@@ -1166,15 +1166,17 @@ def _timeline_graph_tool_names(timeline):
     # Flat list of tool display-names across the timeline node graph
     # (`Timeline.GetNodeGraph()`). Per-clip ExportLUT bakes DO carry
     # timeline-level grades — proven against a real UI-authored
-    # timeline grade (t054, 2026-06-12, VM live: bake of an ungraded
-    # item reproduced the timeline-graded still to max 0.0023). CDL
-    # extraction does NOT: the EDL CDL carries only the item's own
-    # primary, so clips synced CDL-only (and carrier-less clips)
-    # display without the timeline look. read_grades warns so JVE can
-    # surface that gap. Returns [] when the graph is absent or
-    # untouched. (History: t052's "ExportLUT ignores timeline grades"
-    # was an instrument failure — scripted timeline-graph writes are
-    # render-inert, t053.)
+    # timeline grade (t054: bake of an ungraded item reproduced the
+    # timeline-graded still to max 0.0023; t055: the bake COMPOSES a
+    # clip's own grade with the timeline grade, timeline applied
+    # after). CDL extraction does NOT: the EDL CDL carries only the
+    # item's own primary. So timeline activity feeds classification
+    # exactly like group activity (force-bake) — see the classify
+    # call in verb_read_grades — and read_grades warns only when no
+    # bake dir was supplied (nothing produced a carrier). Returns []
+    # when the graph is absent or untouched. (History: t052's
+    # "ExportLUT ignores timeline grades" was an instrument failure —
+    # scripted timeline-graph writes are render-inert, t053.)
     graph = _api("timeline.GetNodeGraph()", timeline.GetNodeGraph)
     if graph is None:
         return []
@@ -1456,14 +1458,22 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             tl_tool_names = _timeline_graph_tool_names(timeline)
         except RuntimeError as exc:
             return _error(envelope_id, "resolve_api_error", str(exc))
-        if tl_tool_names:
+        # Timeline activity feeds classification exactly like group
+        # activity (force-bake): under a timeline grade every clip's
+        # rendered look exceeds its own CDL, so primary/none downgrade
+        # and the bake — which composes clip grade then timeline grade
+        # (t055) — becomes the carrier. With a bake dir that carrier
+        # is produced below; without one the look is uncarriable and
+        # the user must hear it.
+        tl_has_tools = bool(tl_tool_names)
+        if tl_has_tools and bake_lut_dir is None:
             warnings.append(
                 "timeline-level grade present (tools: "
                 + ", ".join(tl_tool_names)
-                + ") — Resolve applies it to every clip; per-clip LUT "
-                "bakes include it (t054), but clips synced CDL-only "
-                "or carrier-less do NOT — their JVE display is "
-                "missing the timeline look")
+                + ") — Resolve applies it to every clip and only LUT "
+                "bakes carry it (t054/t055); this sync ran without "
+                "bake_lut_dir, so JVE's display is missing the "
+                "timeline look on every clip")
 
         try:
             cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)
@@ -1516,15 +1526,17 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             except RuntimeError as exc:
                 return _error(envelope_id, "resolve_api_error", str(exc))
             try:
-                # Group activity ORs into the beyond-CDL input: the
-                # EDL CDL carries only the ITEM's primary, so any
-                # group-level tool (even a bare group primary) makes
-                # the CDL misrepresent the look — downgrade and carry
-                # via the bake, which includes group grades (t051,
-                # 2026-06-11 VM probe).
+                # Group AND timeline activity OR into the beyond-CDL
+                # input: the EDL CDL carries only the ITEM's primary,
+                # so any group-level tool (t051) or timeline-graph
+                # tool (t054/t055) makes the CDL misrepresent the
+                # look — downgrade and carry via the bake, which
+                # composes group and timeline grades into the per-item
+                # cube (timeline applied after the clip grade, t055).
                 fidelity = classify_fidelity(
                     any_non_cdl_tools=(any_beyond_primary_tools(
-                        per_node_tools) or group_has_tools),
+                        per_node_tools) or group_has_tools
+                        or tl_has_tools),
                     item_lut_ref=item_lut,
                     cdl_present=(cdl_entry is not None))
             except CdlEdlParseError as exc:

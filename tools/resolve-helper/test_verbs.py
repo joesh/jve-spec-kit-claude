@@ -473,6 +473,98 @@ class ReadGradesWarningsTests(unittest.TestCase):
         self.assertEqual(len(result["grades"]), 2)
 
 
+# ─── read_grades timeline-graph classification (force-bake, t054 +
+# t055: ExportLUT composes the timeline grade into every item's bake
+# — timeline applied AFTER the clip grade — so timeline activity must
+# defeat none/primary exactly like group activity does) ──────────────
+
+class ReadGradesTimelineClassificationTests(unittest.TestCase):
+    def _run(self, items, bake_dir, timeline_graph_tools,
+             cdl_at_one_hour=False):
+        resolve = _FakeResolve("edit")
+        project = _FakeProject(_FakeTimeline(
+            items, cdl_at_one_hour=cdl_at_one_hour,
+            timeline_graph_tools=timeline_graph_tools))
+
+        class _Handle:
+            def acquire(self):
+                return ("ok", resolve, project)
+
+        resp = verbs.verb_read_grades(
+            {"bake_lut_dir": bake_dir} if bake_dir else {},
+            _Handle(), "env-tl1", "test")
+        self.assertTrue(resp["ok"], f"verb failed: {resp!r}")
+        return resp["result"]
+
+    def _rows(self, result):
+        return {row["resolve_item_id"]: row
+                for row in result["grades"]}
+
+    def test_timeline_tools_defeat_primary(self):
+        # A CDL-primary clip under a timeline grade: Resolve displays
+        # clipCDL then timeline grade on every frame, so the CDL alone
+        # misrepresents the look. The clip must be carried by the bake
+        # (which composes both — t055) instead of shipped CDL-only.
+        items = [_FakeItem("uid-a", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._rows(self._run(
+                items, d, [["Primary Offset"]], cdl_at_one_hour=True))
+        row = rows["uid-a"]
+        self.assertNotEqual(row["fidelity"], "primary", row)
+        self.assertIn("lut", row, "clip under a timeline grade must "
+                      "carry the baked LUT (bake composes clip + "
+                      "timeline grades — t055)")
+        self.assertNotIn("cdl", row, "CDL alongside the bake would "
+                         "double-apply the primary (the bake already "
+                         "contains it)")
+
+    def test_timeline_tools_defeat_none(self):
+        # An ungraded clip under a timeline grade displays GRADED in
+        # Resolve (the timeline grade applies to every clip — t054
+        # proved its bake carries exactly that). 'none' would make
+        # JVE drop the grade row and show it ungraded.
+        items = [_FakeItem("uid-b", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._rows(self._run(
+                items, d, [["Primary Offset"]]))
+        row = rows["uid-b"]
+        self.assertNotEqual(row["fidelity"], "none", row)
+        self.assertIn("lut", row, "ungraded clip under a timeline "
+                      "grade must carry the baked LUT (= the timeline "
+                      "grade — t054)")
+
+    def test_clean_timeline_graph_unchanged(self):
+        # Regression guard: no timeline grade → primary stays a CDL
+        # carrier (exact, no bake) and ungraded stays none.
+        primary = _FakeItem("uid-p", 86400, _write_cube,
+                            group=None, own_tools=None)
+        ungraded = _FakeItem("uid-n", 172800, _write_cube,
+                             group=None, own_tools=None)
+        with tempfile.TemporaryDirectory() as d:
+            rows = self._rows(self._run(
+                [primary, ungraded], d, None, cdl_at_one_hour=True))
+        self.assertEqual(rows["uid-p"]["fidelity"], "primary")
+        self.assertIn("cdl", rows["uid-p"])
+        self.assertNotIn("lut", rows["uid-p"])
+        self.assertEqual(primary.export_lut_calls, 0)
+        self.assertEqual(rows["uid-n"]["fidelity"], "none")
+
+    def test_timeline_grade_with_bake_dir_no_warning(self):
+        # With a bake dir the bakes carry the timeline look — presence
+        # alone is no longer user-visible damage, so the warning is
+        # reserved for the carrier-less (no bake_lut_dir) sync; bake
+        # failures keep their own warning.
+        items = [_FakeItem("uid-c", 86400, _write_cube,
+                           group=None, own_tools=None)]
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run(items, d, [["Primary Offset"]])
+        tl_warns = [w for w in result["warnings"]
+                    if "timeline-level grade" in w]
+        self.assertEqual(tl_warns, [], result["warnings"])
+
+
 # ─── read_grades color-group classification (t051: H1 — ExportLUT
 # bakes group grades, so group activity must defeat none/primary) ────
 
@@ -558,13 +650,13 @@ class ReadGradesGroupClassificationTests(unittest.TestCase):
         self.assertEqual(rows["uid-a"]["fidelity"], "none")
 
     def test_timeline_level_grade_warns(self):
-        # Timeline-level grades ARE carried by per-clip LUT bakes
-        # (t054, 2026-06-12, VM live, real UI-authored grade) but NOT
-        # by CDL-only or carrier-less sync — the EDL CDL holds only
-        # the item's own primary, so those clips display without the
-        # timeline look. The verb must report the presence, once per
-        # sync, so JVE can surface the gap. The gold timeline carries
-        # an OFX DCTL + Sizing at timeline level.
+        # A sync WITHOUT bake_lut_dir under a timeline-level grade:
+        # only LUT bakes carry timeline grades (t054/t055) and this
+        # sync produced none, so every clip's JVE display misses the
+        # timeline look — the verb must say so, once per sync. (With
+        # a bake dir the warning must NOT fire — covered by
+        # ReadGradesTimelineClassificationTests.) The gold timeline
+        # carries an OFX DCTL + Sizing at timeline level.
         resolve = _FakeResolve("edit")
         items = [_FakeItem("uid-a", 86400, _write_cube,
                            group=None, own_tools=None)]
