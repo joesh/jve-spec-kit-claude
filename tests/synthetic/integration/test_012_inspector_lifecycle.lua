@@ -28,7 +28,7 @@
 --   * exact begin_command_event/end_command_event call counts — internal plumbing.
 --
 -- Run: ./build/bin/jve.app/Contents/MacOS/jve --test \
---        tests/synthetic/integration/inspector/test_012_inspector_lifecycle.lua
+--        tests/synthetic/integration/test_012_inspector_lifecycle.lua
 
 local qt_constants = require("core.qt_constants")
 require("test_env")

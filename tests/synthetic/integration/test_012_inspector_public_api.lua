@@ -29,7 +29,7 @@
 --     self-source guard only.
 --
 -- Run: ./build/bin/jve.app/Contents/MacOS/jve --test \
---        tests/synthetic/integration/inspector/test_012_inspector_public_api.lua
+--        tests/synthetic/integration/test_012_inspector_public_api.lua
 
 local qt_constants = require("core.qt_constants")
 require("test_env")

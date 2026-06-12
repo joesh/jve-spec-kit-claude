@@ -200,6 +200,18 @@ for t in \
   test_source_zoom.lua \
   test_sequence_monitor.lua \
   test_sequence_monitor_no_orphan_engine.lua \
+  test_tmb_audio_contract.lua \
+  test_offline_frame_rendering.lua \
+  test_playback_engine_log_tag.lua \
+  test_012_inspector_lifecycle.lua \
+  test_012_inspector_widget_state.lua \
+  test_012_inspector_public_api.lua \
+  test_012_collapsible_section.lua \
+  test_playback_engine_contract.lua \
+  test_decode_mode_command.lua \
+  test_fullscreen_viewer.lua \
+  test_edit_history_window_project_switch.lua \
+  test_edit_source_popup_invariants.lua \
   test_playback_engine_filter.lua \
   test_playback_routes_to_displayed_tab.lua \
   test_mark_routing.lua \

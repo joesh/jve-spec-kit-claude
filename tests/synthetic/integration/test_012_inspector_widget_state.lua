@@ -29,7 +29,7 @@
 --   * Qt widget-creation failure paths — testing Qt itself, not JVE domain logic.
 --
 -- Run: ./build/bin/jve.app/Contents/MacOS/jve --test \
---        tests/synthetic/integration/inspector/test_012_inspector_widget_state.lua
+--        tests/synthetic/integration/test_012_inspector_widget_state.lua
 
 local qt_constants = require("core.qt_constants")
 require("test_env")

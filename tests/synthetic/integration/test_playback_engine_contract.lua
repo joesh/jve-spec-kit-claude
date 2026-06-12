@@ -4,7 +4,8 @@
 --   test_contract_engine.lua
 --   test_engine_seek_asserts_below_start_frame.lua
 --   test_playback_engine_controller_integration.lua
---   test_zero_source_range_clip.lua          (speed-ratio assert only)
+-- ALSO CARRIES (originals kept — only their speed-ratio rules duplicated here):
+--   test_zero_source_range_clip.lua          (speed-ratio assert)
 --   test_reverse_clip_playback.lua           (speed-ratio domain rules)
 --
 -- SCENARIOS KEPT (domain rules):
