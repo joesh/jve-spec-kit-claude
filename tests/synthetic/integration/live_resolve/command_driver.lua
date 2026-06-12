@@ -58,9 +58,12 @@ function M.run_bridge_command(name, signal_name, args)
     return result
 end
 
---- Single helper verb round-trip through the supervisor's client.
---- Asserts ok=true; returns response.result.
-function M.helper_request(verb, args)
+--- Single helper verb round-trip returning a normalized envelope —
+--- for edge-case tests that EXPECT structured errors. The client
+--- delivers ok responses as the parsed envelope and structured errors
+--- as (nil, code, message) (client.lua dispatch_line); normalize both
+--- to { ok, result?, error? = {code, message} }.
+function M.helper_request_envelope(verb, args)
     local c = assert(supervisor.ensure_client(),
         "command_driver: supervisor.ensure_client failed")
     local done, response, code, message = false, nil, nil, nil
@@ -68,11 +71,26 @@ function M.helper_request(verb, args)
         done, response, code, message = true, r, cd, m
     end)
     M.pump_until(verb .. " response", 1500, function() return done end)
-    assert(response and response.ok == true, string.format(
-        "command_driver: %s failed: %s/%s — %s", verb, tostring(code),
-        tostring(message),
-        tostring(response and response.error
-            and response.error.message)))
+    if response ~= nil then
+        assert(response.ok == true, string.format(
+            "command_driver: client delivered a non-ok envelope as "
+            .. "success for %s", verb))
+        return response
+    end
+    assert(code ~= nil, string.format(
+        "command_driver: %s produced neither envelope nor error code",
+        verb))
+    return { ok = false, error = { code = code, message = message } }
+end
+
+--- Single helper verb round-trip through the supervisor's client.
+--- Asserts ok=true; returns response.result.
+function M.helper_request(verb, args)
+    local response = M.helper_request_envelope(verb, args)
+    assert(response.ok == true, string.format(
+        "command_driver: %s failed — %s/%s", verb,
+        tostring(response.error and response.error.code),
+        tostring(response.error and response.error.message)))
     return response.result
 end
 

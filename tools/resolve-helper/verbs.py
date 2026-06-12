@@ -45,6 +45,7 @@ import tempfile
 
 from cdl_edl import (
     CdlEdlParseError,
+    LocaleRateCorruptionError,
     classify_fidelity,
     any_beyond_primary_tools,
     any_group_tools,
@@ -698,6 +699,8 @@ def verb_read_timeline(args, _resolve, project, envelope_id, helper_version):
     # integer TC counter so the caller asserts equality before matching.
     try:
         integer_rate = _timeline_integer_frame_rate(timeline)
+    except LocaleRateCorruptionError as exc:
+        return _error(envelope_id, "locale_rate_corruption", str(exc))
     except RuntimeError as exc:
         return _error(envelope_id, "resolve_api_error", str(exc))
 
@@ -1110,6 +1113,11 @@ def _timeline_integer_frame_rate(timeline):
         timeline.GetSetting, "timelineFrameRate")
     try:
         return integer_frame_rate_from_setting(setting)
+    except LocaleRateCorruptionError:
+        # Distinct closed-set wire code (FR-020): every rate-reading
+        # verb maps this to `locale_rate_corruption` so JVE refuses the
+        # conform instead of treating it as a generic API failure.
+        raise
     except CdlEdlParseError as exc:
         raise RuntimeError(
             f"timelineFrameRate {setting!r}: {exc}") from exc
@@ -1437,6 +1445,8 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
 
         try:
             integer_rate = _timeline_integer_frame_rate(timeline)
+        except LocaleRateCorruptionError as exc:
+            return _error(envelope_id, "locale_rate_corruption", str(exc))
         except RuntimeError as exc:
             return _error(envelope_id, "resolve_api_error", str(exc))
 

@@ -29,6 +29,7 @@ from cdl_edl import (
     any_beyond_primary_tools,
     is_identity_cdl,
     integer_frame_rate_from_setting,
+    LocaleRateCorruptionError,
     parse_cdl_edl,
     tc_to_frames,
 )
@@ -163,6 +164,41 @@ class FrameRateSettingTests(unittest.TestCase):
         # integer rates.
         self.assertEqual(integer_frame_rate_from_setting(24), 24)
         self.assertEqual(integer_frame_rate_from_setting(60), 60)
+
+    def test_locale_truncated_fractional_rates_raise_distinct_error(self):
+        # FR-020: non-US locale decimal settings have made the API
+        # report fractional rates as integers (23.976 → 23, research.md
+        # §8). Every such truncation is unambiguous — 23/29/47/59 are
+        # not TC counter rates and only arise as truncations of
+        # 23.976/29.97/47.952/59.94 — so they must raise the DISTINCT
+        # LocaleRateCorruptionError (verbs map it to the closed-set
+        # wire code `locale_rate_corruption`), not the generic
+        # unrecognised-rate error.
+        for corrupted, fractional in (
+                ("23", 23.976), (23, 23.976), (23.0, 23.976),
+                ("29", 29.97), (29, 29.97),
+                ("47", 47.952),
+                ("59", 59.94), (59.0, 59.94)):
+            with self.assertRaises(LocaleRateCorruptionError) as cm:
+                integer_frame_rate_from_setting(corrupted)
+            msg = str(cm.exception)
+            self.assertIn("locale", msg.lower())
+            self.assertIn(str(fractional), msg)
+
+    def test_locale_error_is_a_parse_error_subtype(self):
+        # Existing catch-alls on CdlEdlParseError must still see it;
+        # only the verb layer special-cases the subtype for the wire
+        # code.
+        self.assertTrue(issubclass(LocaleRateCorruptionError,
+                                   CdlEdlParseError))
+
+    def test_non_integral_near_miss_is_generic_not_locale(self):
+        # 23.2 is garbage, not the integer-truncation signature; the
+        # locale diagnosis would mislead. Generic unrecognised-rate
+        # error applies.
+        with self.assertRaises(CdlEdlParseError) as cm:
+            integer_frame_rate_from_setting("23.2")
+        self.assertNotIsInstance(cm.exception, LocaleRateCorruptionError)
 
     def test_bool_raises(self):
         # bool is a subclass of int — without the explicit guard, True

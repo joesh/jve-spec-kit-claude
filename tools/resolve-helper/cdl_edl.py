@@ -27,6 +27,15 @@ class CdlEdlParseError(ValueError):
     pass
 
 
+class LocaleRateCorruptionError(CdlEdlParseError):
+    """timelineFrameRate read back as an integer truncation of a known
+    fractional rate (23.976 → 23 etc.) — the non-US-locale decimal
+    corruption (FR-020). Subtype of CdlEdlParseError so blanket parse
+    handling still applies; the verb layer maps this subtype to the
+    closed-set wire code `locale_rate_corruption`."""
+    pass
+
+
 # CMX-3600 event header (line starts with the event number):
 #   NNN  REEL VV    T        SRC_IN SRC_OUT REC_IN REC_OUT  [transition param]
 # `VV` is one or two chars (V/A/B/V1/A1/AA), `T` is the transition type
@@ -238,6 +247,16 @@ def parse_cdl_edl(edl_text, integer_frame_rate):
 # their TC counters; anything else surfaces rather than silently
 # rounding (FR-020 spirit applied to TC math).
 _KNOWN_TC_COUNTER_RATES = frozenset({24, 25, 30, 48, 50, 60})
+
+# Integer truncations of the fractional rates (the locale corruption
+# signature, FR-020). None of these is a legitimate TC counter rate, so
+# seeing one can ONLY mean the truncation happened upstream.
+_LOCALE_TRUNCATED_FRACTIONAL_RATES = {
+    23: 23.976,
+    29: 29.97,
+    47: 47.952,
+    59: 59.94,
+}
 
 
 _FIDELITY_VALUES = ("primary", "partial", "unrepresentable")
@@ -457,6 +476,15 @@ def integer_frame_rate_from_setting(timeline_frame_rate_setting):
             f"timelineFrameRate must be str/int/float, got "
             f"{type(timeline_frame_rate_setting).__name__}")
     rounded = round(f)
+    if f == rounded and rounded in _LOCALE_TRUNCATED_FRACTIONAL_RATES:
+        fractional = _LOCALE_TRUNCATED_FRACTIONAL_RATES[rounded]
+        raise LocaleRateCorruptionError(
+            f"timelineFrameRate read back as the integer "
+            f"{timeline_frame_rate_setting!r} — {rounded} is not a TC "
+            f"counter rate and only arises as the locale "
+            f"fractional-rate truncation of {fractional} (FR-020; "
+            f"non-US decimal-separator locales make the API truncate "
+            f"fractional rates). Refusing to proceed with a wrong rate.")
     if rounded not in _KNOWN_TC_COUNTER_RATES:
         raise CdlEdlParseError(
             f"timelineFrameRate {timeline_frame_rate_setting!r} (rounded "

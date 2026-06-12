@@ -85,7 +85,7 @@ class ResolveHandle:
                 f"GetProductName failed: {exc}")
         if product != "DaVinci Resolve Studio":
             self._terminal_error = (
-                "resolve_api_error",
+                "not_studio",
                 f"connected Resolve is {product!r}, not Studio",
             )
             code, msg = self._terminal_error
