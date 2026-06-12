@@ -558,11 +558,12 @@ class ReadGradesGroupClassificationTests(unittest.TestCase):
         self.assertEqual(rows["uid-a"]["fidelity"], "none")
 
     def test_timeline_level_grade_warns(self):
-        # t052 (2026-06-11, VM probe): ExportLUT IGNORES timeline-level
-        # grades — they cannot be carried per-clip at all, so JVE's
-        # display omits them for EVERY clip (the gold timeline carries
-        # an OFX DCTL + Sizing at timeline level — Joe's darker/bluer
-        # report). The verb must say so, once per sync.
+        # Timeline-level grades may not reach per-clip bakes — t053
+        # (2026-06-11, VM probes) showed scripted timeline-graph writes
+        # are render-inert, leaving t052's "ExportLUT ignores them"
+        # verdict unproven either way. The gold timeline carries an
+        # OFX DCTL + Sizing at timeline level. The verb must report
+        # the presence, once per sync.
         resolve = _FakeResolve("edit")
         items = [_FakeItem("uid-a", 86400, _write_cube,
                            group=None, own_tools=None)]

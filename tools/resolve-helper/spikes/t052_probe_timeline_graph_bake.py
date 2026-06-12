@@ -2,6 +2,14 @@
 """Spike: does TimelineItem.ExportLUT bake TIMELINE-level grades, and
 does the timeline node graph expose its tools to scripting?
 
+VERDICT DOWNGRADED by t053 (2026-06-11): this probe's instrument was
+render-inert — scripted timeline-graph SetLUT reads back cleanly but
+never reaches stills, gallery grabs, or queue renders, so the
+"ExportLUT IGNORES timeline grades" result below says nothing about
+REAL (UI-authored) timeline grades; that remains open pending a
+one-time manual grade on the VM. Q2 (scripting sees timeline-graph
+tools) stands.
+
 Follow-on to t051 (group grades — H1, baked). The timeline node graph
 (`Timeline.GetNodeGraph()`, README:400) applies to every clip and is
 the remaining classification blind spot of the same shape
@@ -41,6 +49,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))  # tools/resolve-helper
 
 from resolve_handle import ResolveHandle  # noqa: E402
+from spikes.cube_util import cubes_identical, sample_gray  # noqa: E402
 
 PROBE_TIMELINE = "jve-t052-probe"
 WORK_DIR = "/tmp/jve-t052"
@@ -51,58 +60,20 @@ STOCK_LUT = ("/Library/Application Support/Blackmagic Design/"
              "DaVinci Resolve/LUT/Film Looks/DCI-P3 Kodak 2383 D60.cube")
 
 
-def load_cube(path):
-    size, data = None, []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith(("#", "TITLE")):
-                continue
-            if line.startswith("LUT_3D_SIZE"):
-                size = int(line.split()[1])
-                continue
-            if line.startswith(("DOMAIN_MIN", "DOMAIN_MAX", "LUT_1D")):
-                continue
-            parts = line.split()
-            if len(parts) == 3:
-                data.append(tuple(float(x) for x in parts))
-    assert size and len(data) == size ** 3, f"{path}: bad cube"
-    return size, data
-
-
-def cubes_identical(path_a, path_b, tol=0.0005):
-    size_a, data_a = load_cube(path_a)
-    size_b, data_b = load_cube(path_b)
-    if size_a != size_b:
-        return False
-    return all(abs(a - b) <= tol
-               for ta, tb in zip(data_a, data_b)
-               for a, b in zip(ta, tb))
-
-
-def sample_gray(path, v):
-    size, data = load_cube(path)
-    i = round(v * (size - 1))
-    return data[(i * size + i) * size + i]
-
-
 def main():
     os.makedirs(WORK_DIR, exist_ok=True)
     if not os.path.isfile(STOCK_LUT):
-        print(f"FATAL: stock LUT missing on this machine: {STOCK_LUT}")
-        return 1
+        raise RuntimeError(f"stock LUT missing on this machine: {STOCK_LUT}")
 
     handle = ResolveHandle()
     status = handle.acquire()
     if status[0] != "ok":
-        print(f"FATAL: acquire failed: {status!r}")
-        return 1
+        raise RuntimeError(f"acquire failed: {status!r}")
     _, resolve, project = status
 
     gold = project.GetCurrentTimeline()
     if gold is None:
-        print("FATAL: no current timeline in VM Resolve — open one first")
-        return 1
+        raise RuntimeError("no current timeline in VM Resolve — open one first")
     print(f"current timeline: {gold.GetName()}")
 
     # Q2 documentation pass (read-only): what the gold timeline's graph
@@ -119,9 +90,8 @@ def main():
     probe_tl = gold.DuplicateTimeline(PROBE_TIMELINE)
     print(f"DuplicateTimeline({PROBE_TIMELINE!r}): {probe_tl is not None}")
     if probe_tl is None:
-        print("FATAL: timeline duplication failed (name collision "
+        raise RuntimeError("timeline duplication failed (name collision "
               "from an earlier run? delete it in Resolve and re-run)")
-        return 1
 
     prior_page = resolve.GetCurrentPage()
     print(f"GetCurrentPage at start: {prior_page!r}")
@@ -133,8 +103,7 @@ def main():
             return 1
         dup_items = probe_tl.GetItemListInTrack("video", 1) or []
         if not dup_items:
-            print("FATAL: duplicate's V1 has no items")
-            return 1
+            raise RuntimeError("duplicate's V1 has no items")
         item = dup_items[0]
         print(f"probe item: {item.GetName()!r}")
 
@@ -150,9 +119,8 @@ def main():
         page_now = resolve.GetCurrentPage()
         print(f"OpenPage('color'): {ok}, page now: {page_now!r}")
         if page_now != "color":
-            print("FATAL: Color page switch did not take (modal "
+            raise RuntimeError("Color page switch did not take (modal "
                   "blocking?) — dismiss in the VM Resolve and re-run")
-            return 1
 
         # A fresh timeline's graph reports 0 nodes (observed on the
         # first throwaway run); the Color page may materialize node 1
@@ -164,14 +132,12 @@ def main():
         ok = item.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, BASELINE_CUBE)
         print(f"baseline ExportLUT: {ok}")
         if not ok or not os.path.isfile(BASELINE_CUBE):
-            print("FATAL: baseline bake failed — cannot compare")
-            return 1
+            raise RuntimeError("baseline bake failed — cannot compare")
         ok = item.ExportLUT(resolve.EXPORT_LUT_33PTCUBE, BASELINE2_CUBE)
         print(f"baseline ExportLUT (repeat): {ok}")
         if not ok or not cubes_identical(BASELINE_CUBE, BASELINE2_CUBE):
-            print("FATAL: repeated baseline bakes differ — "
+            raise RuntimeError("repeated baseline bakes differ — "
                   "identical-vs-different verdict unavailable")
-            return 1
         print("baseline determinism: OK")
 
         # Place the probe grade on the inherited graph's node 1

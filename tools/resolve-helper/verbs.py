@@ -1156,11 +1156,15 @@ def _inspect_node_graph(item):
 
 def _timeline_graph_tool_names(timeline):
     # Flat list of tool display-names across the timeline node graph
-    # (`Timeline.GetNodeGraph()`). t052 (2026-06-11, VM probe) proved
-    # ExportLUT IGNORES timeline-level grades — they cannot be carried
-    # per-clip at all — so read_grades reports their presence as a
-    # warning (JVE's display omits them for EVERY clip). Returns []
-    # when the graph is absent or untouched.
+    # (`Timeline.GetNodeGraph()`). Whether per-clip ExportLUT bakes
+    # carry timeline-level grades is UNVERIFIED: t052's negative
+    # verdict was invalidated by t053 (2026-06-11, VM probes) — every
+    # scripted write to a timeline graph (SetLUT, ApplyGradeFromDRX)
+    # is render-inert despite clean readback, so t052's instrument
+    # never produced a live timeline grade to bake. Until a real
+    # (UI-authored) timeline grade is verified on the VM, read_grades
+    # reports presence as a warning: JVE's display MAY be missing it
+    # on every clip. Returns [] when the graph is absent or untouched.
     graph = _api("timeline.GetNodeGraph()", timeline.GetNodeGraph)
     if graph is None:
         return []
@@ -1444,9 +1448,11 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             warnings.append(
                 "timeline-level grade present (tools: "
                 + ", ".join(tl_tool_names)
-                + ") — Resolve applies it to every clip but it cannot "
-                "be baked per-clip (ExportLUT ignores timeline grades, "
-                "t052 probe); JVE's display omits it")
+                + ") — Resolve applies it to every clip; whether "
+                "per-clip bakes carry it is unverified (t052/t053 "
+                "probes — scripted timeline-graph writes are render-"
+                "inert, so it cannot be tested via scripting); JVE's "
+                "display may be missing it")
 
         try:
             cdl_by_rec_in = _export_edl_cdl(timeline, resolve, integer_rate)

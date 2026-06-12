@@ -33,6 +33,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))  # tools/resolve-helper
 
 from resolve_handle import ResolveHandle  # noqa: E402
+from spikes.cube_util import cubes_identical, sample_gray  # noqa: E402
 
 GROUP_NAME = "jve-t051-probe"
 WORK_DIR = "/tmp/jve-t051"
@@ -45,71 +46,30 @@ STOCK_LUT = ("/Library/Application Support/Blackmagic Design/"
              "DaVinci Resolve/LUT/Film Looks/DCI-P3 Kodak 2383 D60.cube")
 
 
-def load_cube(path):
-    size, data = None, []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith(("#", "TITLE")):
-                continue
-            if line.startswith("LUT_3D_SIZE"):
-                size = int(line.split()[1])
-                continue
-            if line.startswith(("DOMAIN_MIN", "DOMAIN_MAX", "LUT_1D")):
-                continue
-            parts = line.split()
-            if len(parts) == 3:
-                data.append(tuple(float(x) for x in parts))
-    assert size and len(data) == size ** 3, f"{path}: bad cube"
-    return size, data
-
-
-def cubes_identical(path_a, path_b, tol=0.0005):
-    size_a, data_a = load_cube(path_a)
-    size_b, data_b = load_cube(path_b)
-    if size_a != size_b:
-        return False
-    return all(abs(a - b) <= tol
-               for ta, tb in zip(data_a, data_b)
-               for a, b in zip(ta, tb))
-
-
-def sample_gray(path, v):
-    # Nearest-neighbor on the gray diagonal (R fastest per Adobe spec).
-    size, data = load_cube(path)
-    i = round(v * (size - 1))
-    return data[(i * size + i) * size + i]
-
-
 def main():
     os.makedirs(WORK_DIR, exist_ok=True)
     if not os.path.isfile(STOCK_LUT):
-        print(f"FATAL: stock LUT missing on this machine: {STOCK_LUT}")
-        return 1
+        raise RuntimeError(f"stock LUT missing on this machine: {STOCK_LUT}")
 
     handle = ResolveHandle()
     status = handle.acquire()
     if status[0] != "ok":
-        print(f"FATAL: acquire failed: {status!r}")
-        return 1
+        raise RuntimeError(f"acquire failed: {status!r}")
     _, resolve, project = status
 
     timeline = project.GetCurrentTimeline()
     if timeline is None:
-        print("FATAL: no current timeline in VM Resolve — open one first")
-        return 1
+        raise RuntimeError("no current timeline in VM Resolve — open one first")
     print(f"timeline: {timeline.GetName()}")
 
     items = timeline.GetItemListInTrack("video", 1) or []
     if not items:
-        print("FATAL: V1 has no items")
-        return 1
+        raise RuntimeError("V1 has no items")
     item = items[0]
     print(f"item: {item.GetName()!r} uid={item.GetUniqueId()}")
     if item.GetColorGroup() is not None:
-        print("FATAL: item already in a color group — refusing "
+        raise RuntimeError("item already in a color group — refusing "
               "(cleanup could clobber fixture state)")
-        return 1
 
     prior_page = resolve.GetCurrentPage()
     print(f"GetCurrentPage at start: {prior_page!r}")
@@ -122,10 +82,9 @@ def main():
               f"page now: {resolve.GetCurrentPage()!r}")
         prior_page = resolve.GetCurrentPage()
         if prior_page is None:
-            print("FATAL: Resolve reports no current page even after "
+            raise RuntimeError("Resolve reports no current page even after "
                   "OpenPage('edit') — a modal window is likely blocking "
                   "the VM Resolve UI; dismiss it and re-run")
-            return 1
     ok = resolve.OpenPage("color")
     print(f"OpenPage('color'): {ok}, page now: "
           f"{resolve.GetCurrentPage()!r}")
@@ -137,16 +96,14 @@ def main():
         ok = item.ExportLUT(cube_kind, BASELINE_CUBE)
         print(f"baseline ExportLUT: {ok}")
         if not ok or not os.path.isfile(BASELINE_CUBE):
-            print("FATAL: baseline bake failed — cannot compare")
-            return 1
+            raise RuntimeError("baseline bake failed — cannot compare")
         # Determinism gate: identical-vs-different is only meaningful
         # if two bakes of the SAME state agree.
         ok = item.ExportLUT(cube_kind, BASELINE2_CUBE)
         print(f"baseline ExportLUT (repeat): {ok}")
         if not ok or not cubes_identical(BASELINE_CUBE, BASELINE2_CUBE):
-            print("FATAL: repeated baseline bakes differ — "
+            raise RuntimeError("repeated baseline bakes differ — "
                   "identical-vs-different verdict unavailable")
-            return 1
         print("baseline determinism: OK")
 
         group = project.AddColorGroup(GROUP_NAME)
@@ -171,9 +128,8 @@ def main():
                     applied_on = label
                     break
         if applied_on is None:
-            print("FATAL: could not place the probe LUT on either "
+            raise RuntimeError("could not place the probe LUT on either "
                   "group graph — inconclusive")
-            return 1
 
         ok = item.ExportLUT(cube_kind, GROUPED_CUBE)
         print(f"grouped ExportLUT: {ok}")
