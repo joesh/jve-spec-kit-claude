@@ -14,7 +14,7 @@ Date: 2026-06-10
 | 4 | T037 reconform LIVE | ✅ PASSED; blade inherits grade via ClipGrade.copy_to | bbd36e9f |
 | 5 | T050 connect-imported LIVE | ✅ PASSED 3/3 position-matched, grades on right clips | 3352408a |
 | 6 | T055 edit readback LIVE | ✅ PASSED 2026-06-11 (B applied A+B+B+C verbs incl. disable; C conflict kept local; D local-kept). Fixed en route: drt_writer `<Flags>` enabled-fidelity (silent re-enable corruption); resolve_occlusions false "pending not found" warn on moves ≥ clip duration | — |
-| 7 | T042 edge cases + T033 pixel compare | ⏳ | — |
+| 7 | T042 edge cases + T033 pixel compare | ✅ T042 PASSED 2026-06-11 (FR-009 live; not_studio + locale_rate_corruption emitters fixed). T033 PASSED 2026-06-12 first run: jve_apply_cdl(resolve_ungraded) ≈ resolve_graded, mean 0.31/255 max 1.07/255 — CDL convention pinned; SetCDL proven render-live | 0a3361c8 + — |
 | 8 | T014 sentinel flip + T043 remnants + T044/T045 | ⏳ (T044 gate: `make -j4` exit 0 on 2026-06-10) | — |
 
 ## T050 root cause (the DRT media-linkage gap, RESOLVED)

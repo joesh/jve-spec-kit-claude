@@ -219,7 +219,7 @@ Read-back grades mutate the model **only through a command** (§0.8). New comman
 
 CDL is a per-pixel op → belongs in the renderer, GPU shader (CLAUDE.md: C++ for performance-critical rendering; `feedback_malloc_cost` — no per-frame allocation). The renderer **pulls** each clip's grade from the model (MVC; renderer is not a model writer — `feedback_renderer_not_media_status_writer`) and applies, per channel: `out = (in * slope + offset) ^ power`, then saturation against Rec.709 luma. LUT-ref application (3D LUT sampling) is a second, optional stage. Park mode pulls; the 60Hz hot path may push the grade alongside the frame.
 
-`UNVERIFIED`: exact CDL math conventions Resolve uses (working color space, whether sat is pre/post CDL, clamping). Phase 3 pins this by applying a *known* CDL in Resolve, reading it back, rendering the same clip in JVE, and comparing pixels — not by reading a CDL spec and assuming.
+**VERIFIED 2026-06-12 (T033 live pixel compare)**: Resolve's primary-CDL convention matches JVE's EMP implementation exactly — ASC S-2014-009-01 `(in·slope + offset)^power`, saturation AFTER the per-channel CDL against BT.709 luma, clamp to [0,1] — `jve_apply_cdl(resolve_ungraded_render) ≈ resolve_graded_render` at mean 0.31/255, max 1.07/255 over 8262 samples (`tests/synthetic/integration/live_resolve/test_primary_cdl_pixel.lua`). The compare deliberately feeds Resolve's own ungraded render into JVE's primitive so project-level color management (the spec-024 gap, t033c) cancels out of the measurement.
 
 ### 5.5 UX (stated for contract honesty; full UI is its own spec)
 
