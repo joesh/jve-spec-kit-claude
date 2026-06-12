@@ -58,5 +58,28 @@ Former scenario covering `QueueResolveRender` + auto-relink. Preserved at git ta
 - **Deleted graded clip**: delete a graded clip in JVE → its `clip_grade` + `resolve_bridge_link` rows are gone (cascade).
 - **Resolve item removed**: remove an item in Resolve, sync → that JVE clip's grade is retained but marked `stale`.
 
+## Observed results (T045 walkthrough — recorded 2026-06-12, VM Resolve Studio 20.3)
+
+Every automatable scenario passes as an observable fact via the committed live suite (each test asserts model/timeline state, never "the call returned"):
+
+| Step | Evidence | Status |
+|---|---|---|
+| 0 ping + version | every live test's `skip_unless_live` gate logs `resolve_version` (e.g. T026 run) | ✅ live |
+| 1 send, N items, byte-equal identity | T026 (2 mapped + relinked), T037 (identities intact across re-send), T055/T033 (mapping consumed downstream) | ✅ live |
+| 1b connect imported + grades land right | T050 — 3/3 position-matched, e1 markers correctly ignored, SyncGrades lands each CDL on the right e2 clip | ✅ live |
+| 2 primary CDL sync + display + pixel-match | T037 (values round-trip), T033 (`jve_apply_cdl(resolve_ungraded) ≈ resolve_graded`, mean 0.31/255 max 1.07/255 / 8262 samples), viewer pull: `test_view_grade_pull` + `test_piece3_lut3d_surface_pull` | ✅ live |
+| 3 fidelity honesty | T034 live (CDL→primary, LUT→partial, untouched→none; identity-CDL filter); badge + §5.5 affordance: `test_inspectable_fidelity_affordance`. **Power-window leg manual** — no scripting write surface (T034 note) | ✅ live (one manual leg ⚠) |
+| 4 undo the sync | `test_sync_grades_command` black-box undo round-trip (offline; same command path the live flow uses) | ✅ offline |
+| 5 blade + re-send inherit | T037 live (both halves carry parent grade, bystander untouched, fresh timeline uid) | ✅ live |
+| 6 idempotency | T026 live (same token ⇒ deep-identical response incl. timeline uid; population unchanged) | ✅ live |
+| 8 edit pull + conflict | T055 live (B applied via ToggleClipEnabled+OverwriteTrimEdge×2+Nudge; C conflict keeps local; D local-only kept) | ✅ live |
+| Edge: free Resolve ⇒ not_studio | `test_resolve_handle_gates.py` (real product strings at the fusionscript boundary). **No free Resolve install exists to exercise live** | ✅ unit (live impossible ⚠) |
+| Edge: stale handle on project switch | T042 live (probe switches project → `handle_stale` → recovery) | ✅ live |
+| Edge: locale rate corruption | `test_cdl_edl.py` + `test_verbs.py` (truncation signatures 23/29/47/59 → `locale_rate_corruption`, conform refused). **Real non-US-locale Resolve not exercised** (would require relocaling the VM) | ✅ unit (live manual ⚠) |
+| Edge: deleted graded clip cascade | `test_resolve_bridge_link_schema` (FK CASCADE) | ✅ offline |
+| Edge: Resolve item removed ⇒ stale | `test_clip_grade_model` + FR-013a stale walk in `sync_grades_from_resolve` | ✅ offline |
+
+Three legs cannot be automated and remain operator steps: power-window ⇒ `unrepresentable` (no scripting write surface), a genuinely free (non-Studio) Resolve, and a real non-US-locale Resolve. Unit coverage pins each contract; the live behaviors await a manual pass.
+
 ## Definition of green
 All seven scenarios pass as observable facts, the edge checks behave as specified, `ping` reports `resolve_version`, and the locale guard is exercised. No test passes by its own setup.

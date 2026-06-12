@@ -129,6 +129,13 @@ function ClipInspectable:get(field)
             assert(type(grade.synced_at) == "number" and grade.synced_at >= 0,
                 "ClipGrade synced_at must be a non-negative number")
         end
+        if field == "fidelity" and (grade.fidelity == "partial"
+                or grade.fidelity == "unrepresentable") then
+            -- Spec 023 §5.5 / FR-015: JVE renders these clips UNGRADED
+            -- (only primary CDL is displayable), so the badge must say
+            -- why the viewer doesn't match Resolve.
+            return grade.fidelity .. " — full grade requires Resolve render"
+        end
         return grade[field]
     end
 

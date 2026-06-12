@@ -15,7 +15,7 @@ Date: 2026-06-10
 | 5 | T050 connect-imported LIVE | ✅ PASSED 3/3 position-matched, grades on right clips | 3352408a |
 | 6 | T055 edit readback LIVE | ✅ PASSED 2026-06-11 (B applied A+B+B+C verbs incl. disable; C conflict kept local; D local-kept). Fixed en route: drt_writer `<Flags>` enabled-fidelity (silent re-enable corruption); resolve_occlusions false "pending not found" warn on moves ≥ clip duration | — |
 | 7 | T042 edge cases + T033 pixel compare | ✅ T042 PASSED 2026-06-11 (FR-009 live; not_studio + locale_rate_corruption emitters fixed). T033 PASSED 2026-06-12 first run: jve_apply_cdl(resolve_ungraded) ≈ resolve_graded, mean 0.31/255 max 1.07/255 — CDL convention pinned; SetCDL proven render-live | 0a3361c8 + — |
-| 8 | T014 sentinel flip + T043 remnants + T044/T045 | ⏳ (T044 gate: `make -j4` exit 0 on 2026-06-10) | — |
+| 8 | T014 sentinel flip + T043 remnants + T044/T045 | ✅ 2026-06-12: T014 todo closed (sentinel already removed by contract-test tightening; success-shape live-covered by T026/T050/T055). T043 done (keymap/tooltips landed earlier; §5.5 affordance added — partial/unrepresentable badge says "full grade requires Resolve render"). T044 done (gate green incl. helper py tests). T045 results recorded in quickstart.md — all automatable scenarios pass; 3 operator legs remain (power-window unrepresentable, free Resolve, non-US locale) | — |
 
 ## T050 root cause (the DRT media-linkage gap, RESOLVED)
 Three defects, all live-bisected on VM Resolve 20.3:
