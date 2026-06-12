@@ -1283,6 +1283,76 @@ def _bake_item_lut(item, resolve_item_id, bake_lut_dir, resolve):
     return out_path
 
 
+def _frames_to_tc(frame, integer_rate):
+    # Absolute timeline frame → "HH:MM:SS:FF" at the timeline's integer
+    # TC rate — the conversion the t053/t054/t055 probes used for
+    # SetCurrentTimecode parking (proven against live Resolve).
+    total_seconds = frame // integer_rate
+    return "%02d:%02d:%02d:%02d" % (
+        total_seconds // 3600, (total_seconds // 60) % 60,
+        total_seconds % 60, frame % integer_rate)
+
+
+def _find_park_anchor(timeline):
+    # First video item whose media file exists on this machine (the
+    # helper runs on the Resolve host, so the pool clip's File Path is
+    # directly checkable — the t055 run-3 online test). Items without
+    # a file-backed pool clip (generators, Text+) are skipped: t055
+    # proved online media is a good page-open state and offline/gap is
+    # a bad one; non-file items are unproven either way. Returns None
+    # when no clip qualifies.
+    for track_type, _tidx, item in _iter_all_timeline_items(timeline):
+        if track_type != "video":
+            continue
+        try:
+            mp_item = item.GetMediaPoolItem()
+            path = mp_item.GetClipProperty("File Path") if mp_item else ""
+        except Exception as exc:
+            raise RuntimeError(
+                f"park-anchor scan: GetMediaPoolItem/GetClipProperty "
+                f"raised: {exc}") from exc
+        if path and os.path.exists(path):
+            return item
+    return None
+
+
+def _park_playhead_on(timeline, anchor, integer_rate, warnings):
+    # Move the playhead to the middle of `anchor` (mid-clip is the
+    # t054/t055-proven parking shape — no boundary ambiguity) so the
+    # Color-page switch happens with a valid online clip under the
+    # playhead. Returns the prior playhead TC for the finally-restore,
+    # or None when the playhead was NOT moved (unreadable prior TC or
+    # refused move — both warned, never silent).
+    try:
+        prior_tc = timeline.GetCurrentTimecode()
+    except Exception as exc:
+        raise RuntimeError(
+            f"GetCurrentTimecode raised before playhead park: "
+            f"{exc}") from exc
+    if not isinstance(prior_tc, str) or prior_tc == "":
+        # Refuse to move what we cannot restore (same doctrine as the
+        # prior-page capture above the Color switch).
+        warnings.append(
+            f"playhead park skipped: GetCurrentTimecode returned "
+            f"{prior_tc!r} — if the playhead sits on offline media or "
+            "a gap, every LUT bake refuses (t055)")
+        return None
+    try:
+        mid = anchor.GetStart() + anchor.GetDuration() // 2
+        moved = timeline.SetCurrentTimecode(
+            _frames_to_tc(mid, integer_rate))
+    except Exception as exc:
+        raise RuntimeError(
+            f"playhead park (SetCurrentTimecode) raised: {exc}") from exc
+    if not moved:
+        warnings.append(
+            "playhead park refused (SetCurrentTimecode returned "
+            "falsy) — if the playhead sits on offline media or a gap, "
+            "every LUT bake refuses (t055)")
+        return None
+    return prior_tc
+
+
 def _cdl_to_wire(cdl_entry):
     # Translate the parser's `{slope:[r,g,b], offset:[r,g,b],
     # power:[r,g,b], sat:float}` to the helper-protocol.md §read_grades
@@ -1369,74 +1439,20 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
     # the page-restore finally below can append after _ok() is built.
     warnings = []
 
-    # ExportLUT requires the Color page to be the active Resolve page —
-    # empirically confirmed by t033_probe_export_lut.py (without
-    # OpenPage("color") every call returns False; with it, items with
-    # real node graphs bake successfully). The API doesn't document
-    # this prerequisite. We switch only when a bake is actually
-    # requested, and restore the user's prior page afterwards so the
-    # observed Resolve state is unchanged when read_grades returns.
     prior_page = None
     # Bakes run only after the Color-page switch VERIFIABLY took (set
     # below); cleared again mid-run if the page is lost (modal dialog,
     # user navigation) so remaining doomed ExportLUT calls are skipped.
     bake_enabled = False
-    if bake_lut_dir is not None:
-        # Capture prior page BEFORE switching to Color so the finally
-        # block can restore it. If GetCurrentPage raises, refuse to
-        # switch — otherwise the finally would have no prior to restore
-        # (prior_page stays None, guard `prior_page is not None` skips
-        # OpenPage(prior_page), Resolve stays stuck on Color despite the
-        # contract promising the user's page is observably unchanged).
-        try:
-            prior_page = resolve.GetCurrentPage()
-        except Exception as exc:
-            return _error(envelope_id, "resolve_api_error",
-                f"GetCurrentPage failed; refusing to switch to Color "
-                f"because we cannot restore the user's page: {exc}")
-        if prior_page == "color":
-            # Resolve sitting on the Color page when a sync begins is
-            # the signature of an earlier sync killed mid-bake (the
-            # page-restore finally never ran — observed 2026-06-10).
-            # The restore below is skipped by design (nothing to
-            # restore TO); say so instead of silently normalizing it.
-            warnings.append(
-                "Resolve was already on the Color page when the sync "
-                "began — the prior-page restore is skipped (possibly "
-                "left there by an earlier interrupted sync)")
-        try:
-            resolve.OpenPage("color")
-        except Exception as exc:
-            sys.stderr.write(
-                f"[read_grades] resolve.OpenPage('color') raised: "
-                f"{exc}\n")
-        # Verify the switch actually took. A modal dialog (e.g. the
-        # missing-DCTL prompt observed 2026-06-11 when the Color page
-        # loaded a graph referencing an uninstalled .dctle) blocks
-        # Resolve's UI: OpenPage/GetCurrentPage return None and every
-        # ExportLUT is doomed. Detect it HERE — one warning and zero
-        # doomed bake attempts, instead of one silent failure per clip.
-        try:
-            page_after_switch = resolve.GetCurrentPage()
-        except Exception as exc:
-            page_after_switch = None
-            warnings.append(
-                f"GetCurrentPage raised after the Color switch: {exc}")
-        if page_after_switch == "color":
-            bake_enabled = True
-        else:
-            warnings.append(
-                "Color page switch did not take (Resolve reports "
-                f"{page_after_switch!r}) — a modal dialog is likely "
-                "blocking Resolve's UI; dismiss it in Resolve and "
-                "re-run SyncGradesFromResolve. No LUT bakes attempted.")
+    # Playhead TC to put back in the finally — set only when the park
+    # before the Color switch actually moved the playhead.
+    prior_timecode = None
 
-    # Single try/finally from this point forward so EVERY early return
-    # below the OpenPage("color") switch goes through the page-restore
-    # finally. Prior shape had three pre-loop returns (require_timeline,
-    # timeline_integer_frame_rate, export_edl_cdl) outside the try —
-    # any of those failing left Resolve stuck on Color even though the
-    # contract promised to restore the user's prior page.
+    # Single try/finally so EVERY early return goes through the
+    # page+playhead restore finally. The Color switch itself lives
+    # INSIDE the try (after timeline acquisition — the park needs the
+    # timeline), so a failed timeline/rate read never touches Resolve's
+    # page at all.
     grades = []
     bake_attempts = 0
     bake_failures = 0
@@ -1453,6 +1469,82 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             return _error(envelope_id, "locale_rate_corruption", str(exc))
         except RuntimeError as exc:
             return _error(envelope_id, "resolve_api_error", str(exc))
+
+        # ExportLUT requires the Color page to be the active Resolve
+        # page — empirically confirmed by t033_probe_export_lut.py
+        # (without OpenPage("color") every call returns False; with it,
+        # items with real node graphs bake successfully). The API
+        # doesn't document this prerequisite. t055 found a second,
+        # nastier gate: the page must be OPENED while the playhead's
+        # current clip is valid + online — opened over offline media or
+        # a gap, EVERY subsequent ExportLUT refuses (all items) until
+        # the page is re-opened in a good state. So before the switch
+        # we park the playhead on the first online clip, and the
+        # finally puts both page and playhead back so the observed
+        # Resolve state is unchanged when read_grades returns.
+        if bake_lut_dir is not None:
+            # Capture prior page BEFORE switching to Color so the
+            # finally block can restore it. If GetCurrentPage raises,
+            # refuse to switch — otherwise the finally would have no
+            # prior to restore (prior_page stays None, guard skips
+            # OpenPage(prior_page), Resolve stays stuck on Color
+            # despite the contract promising the user's page is
+            # observably unchanged).
+            try:
+                prior_page = resolve.GetCurrentPage()
+            except Exception as exc:
+                return _error(envelope_id, "resolve_api_error",
+                    f"GetCurrentPage failed; refusing to switch to Color "
+                    f"because we cannot restore the user's page: {exc}")
+            if prior_page == "color":
+                # Resolve sitting on the Color page when a sync begins
+                # is the signature of an earlier sync killed mid-bake
+                # (the page-restore finally never ran — observed
+                # 2026-06-10). The restore below is skipped by design
+                # (nothing to restore TO); say so instead of silently
+                # normalizing it.
+                warnings.append(
+                    "Resolve was already on the Color page when the sync "
+                    "began — the prior-page restore is skipped (possibly "
+                    "left there by an earlier interrupted sync)")
+            anchor = _find_park_anchor(timeline)
+            if anchor is None:
+                warnings.append(
+                    "no online clip found to anchor the Color-page "
+                    "switch — opening the Color page with the playhead "
+                    "on offline media or a gap makes every LUT bake "
+                    "refuse (t055); bring media online and re-run "
+                    "SyncGradesFromResolve")
+            else:
+                prior_timecode = _park_playhead_on(
+                    timeline, anchor, integer_rate, warnings)
+            try:
+                resolve.OpenPage("color")
+            except Exception as exc:
+                sys.stderr.write(
+                    f"[read_grades] resolve.OpenPage('color') raised: "
+                    f"{exc}\n")
+            # Verify the switch actually took. A modal dialog (e.g. the
+            # missing-DCTL prompt observed 2026-06-11 when the Color
+            # page loaded a graph referencing an uninstalled .dctle)
+            # blocks Resolve's UI: OpenPage/GetCurrentPage return None
+            # and every ExportLUT is doomed. Detect it HERE — one
+            # warning and zero doomed bake attempts, instead of one
+            # silent failure per clip.
+            try:
+                page_after_switch = resolve.GetCurrentPage()
+            except Exception as exc:
+                page_after_switch = None
+                warnings.append(
+                    f"GetCurrentPage raised after the Color switch: {exc}")
+            if page_after_switch == "color":
+                bake_enabled = True
+            else:
+                warnings.append(
+                    "Color page switch did not take (Resolve reports "
+                    f"{page_after_switch!r}) — a modal dialog is likely "
+                    "blocking Resolve's UI; dismiss it in Resolve and "
+                    "re-run SyncGradesFromResolve. No LUT bakes attempted.")
 
         try:
             tl_tool_names = _timeline_graph_tool_names(timeline)
@@ -1631,6 +1723,26 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
                     warnings.append(
                         f"page restore to {prior_page!r} did not take "
                         f"(Resolve reports {now_page!r})")
+        # Put the user's playhead back where it was (parked before the
+        # Color switch to dodge the t055 page-open gate). Same loudness
+        # contract as the page restore: a raise or a refusal lands in
+        # `warnings`, never silent. Runs after the page restore so the
+        # SetCurrentTimecode happens from the user's own page — the
+        # spike-proven context (t054/t055 parked from the Edit page).
+        if prior_timecode is not None:
+            try:
+                playhead_back = timeline.SetCurrentTimecode(prior_timecode)
+            except Exception as exc:
+                playhead_back = False
+                sys.stderr.write(
+                    f"[read_grades] playhead restore "
+                    f"SetCurrentTimecode({prior_timecode!r}) raised: "
+                    f"{exc}\n")
+            if not playhead_back:
+                warnings.append(
+                    f"playhead restore to {prior_timecode} failed — "
+                    "Resolve's playhead is parked where the sync "
+                    "left it")
 
     return response
 

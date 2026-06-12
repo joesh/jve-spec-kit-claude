@@ -4,6 +4,7 @@ The verbs themselves require a live Resolve handle; the validators don't.
 These tests cover the wire boundary contracts that are independent of
 Resolve API state.
 """
+import os
 import tempfile
 import unittest
 
@@ -266,15 +267,33 @@ class _FakeColorGroup:
         return self.post
 
 
+# A file guaranteed to exist on the test machine — "online media" for
+# the page-open-gate fakes (t055: online = the clip's File Path exists
+# on the machine Resolve runs on).
+_ONLINE_PATH = os.path.abspath(__file__)
+
+
+class _FakeMediaPoolItem:
+    def __init__(self, file_path):
+        self._file_path = file_path
+
+    def GetClipProperty(self, key):
+        assert key == "File Path"
+        return self._file_path
+
+
 class _FakeItem:
     """Timeline item whose grade exceeds CDL (bake candidate)."""
     def __init__(self, uid, start, export_lut, group=None,
-                 own_tools=("Custom Curves",)):
+                 own_tools=("Custom Curves",), duration=48,
+                 file_path=_ONLINE_PATH):
         self._uid = uid
         self._start = start
         self._export_lut = export_lut  # fn(kind, path) -> bool
         self._group = group
         self._own_tools = list(own_tools) if own_tools else None
+        self._duration = duration
+        self._file_path = file_path  # None = no media-pool item
         self.export_lut_calls = 0
 
     def GetUniqueId(self):
@@ -282,6 +301,14 @@ class _FakeItem:
 
     def GetStart(self):
         return self._start
+
+    def GetDuration(self):
+        return self._duration
+
+    def GetMediaPoolItem(self):
+        if self._file_path is None:
+            return None
+        return _FakeMediaPoolItem(self._file_path)
 
     def GetNodeGraph(self):
         return _FakeGraph(self._own_tools)
@@ -297,15 +324,56 @@ class _FakeItem:
         return self._export_lut(kind, path)
 
 
+_FAKE_FPS = 24
+
+
+def _fake_tc(frame):
+    """Frame → 'HH:MM:SS:FF' at the fake's 24 fps."""
+    ff = frame % _FAKE_FPS
+    ss = (frame // _FAKE_FPS) % 60
+    mm = (frame // (_FAKE_FPS * 60)) % 60
+    hh = frame // (_FAKE_FPS * 3600)
+    return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+
+
+def _fake_tc_frames(tc):
+    hh, mm, ss, ff = (int(p) for p in tc.split(":"))
+    return ((hh * 3600 + mm * 60 + ss) * _FAKE_FPS) + ff
+
+
 class _FakeTimeline:
     def __init__(self, items, cdl_at_one_hour=False,
-                 timeline_graph_tools=None):
+                 timeline_graph_tools=None, playhead_frame=86400):
         self._items = items
         self._cdl_at_one_hour = cdl_at_one_hour
+        self.playhead_frame = playhead_frame
+        self.set_tc_calls = []  # frames, in call order
         # one entry per timeline-graph node (None = untouched node);
         # default single clean node like a real fresh timeline graph
         self._tl_tools = (timeline_graph_tools
                           if timeline_graph_tools is not None else [None])
+
+    def GetCurrentTimecode(self):
+        return _fake_tc(self.playhead_frame)
+
+    def SetCurrentTimecode(self, tc):
+        frame = _fake_tc_frames(tc)
+        self.set_tc_calls.append(frame)
+        self.playhead_frame = frame
+        return True
+
+    def playhead_on_online_item(self):
+        """t055's 'good state': the playhead's current clip exists and
+        its media file is on disk. A gap (no item under the playhead)
+        or offline media is the bad state that poisons every
+        subsequent ExportLUT until the Color page is re-opened."""
+        for item in self._items:
+            start = item.GetStart()
+            if start <= self.playhead_frame < start + item.GetDuration():
+                mp_item = item.GetMediaPoolItem()
+                return (mp_item is not None and os.path.exists(
+                    mp_item.GetClipProperty("File Path")))
+        return False
 
     def GetNodeGraph(self):
         return _FakeGroupGraph(self._tl_tools)
@@ -349,15 +417,23 @@ class _FakeProject:
 
 
 class _FakeResolve:
-    """Stateful page model: OpenPage mutates, GetCurrentPage reads."""
+    """Stateful page model: OpenPage mutates, GetCurrentPage reads.
+
+    With `gate_timeline` set, models the t055 page-open gate: opening
+    the Color page while the timeline's playhead sits on offline media
+    or a gap poisons the session — every subsequent ExportLUT (via
+    _gated_cube_writer) refuses until the page is re-opened in a good
+    state."""
     EXPORT_EDL = object()
     EXPORT_CDL = object()
     EXPORT_LUT_33PTCUBE = object()
 
-    def __init__(self, page):
+    def __init__(self, page, gate_timeline=None):
         self.page = page
         self.open_page_calls = []
         self.refuse_open_pages = set()  # pages OpenPage won't reach
+        self._gate_timeline = gate_timeline
+        self.color_open_poisoned = False
 
     def GetCurrentPage(self):
         return self.page
@@ -367,6 +443,9 @@ class _FakeResolve:
         if page in self.refuse_open_pages:
             return False
         self.page = page
+        if page == "color" and self._gate_timeline is not None:
+            self.color_open_poisoned = (
+                not self._gate_timeline.playhead_on_online_item())
         return True
 
 
@@ -374,6 +453,16 @@ def _write_cube(_kind, path):
     with open(path, "w", encoding="utf-8") as f:
         f.write("LUT_3D_SIZE 2\n" + "0 0 0\n" * 8)
     return True
+
+
+def _gated_cube_writer(resolve):
+    """ExportLUT behavior under the t055 gate: refuses while the Color
+    page was last opened in a bad state, writes normally otherwise."""
+    def write(kind, path):
+        if resolve.color_open_poisoned:
+            return False
+        return _write_cube(kind, path)
+    return write
 
 
 class ReadGradesWarningsTests(unittest.TestCase):
@@ -471,6 +560,87 @@ class ReadGradesWarningsTests(unittest.TestCase):
         self.assertEqual(len(blocked), 1, result["warnings"])
         # rows still emitted (classification works without bakes)
         self.assertEqual(len(result["grades"]), 2)
+
+
+# ─── read_grades page-open gate (t055: ExportLUT refuses for EVERY
+# item when the Color page is opened while the playhead sits on
+# offline media or a gap; re-opening on a valid online clip fixes the
+# same calls — so read_grades must park the playhead on an online clip
+# BEFORE the switch, and put it back afterwards) ─────────────────────
+
+class ReadGradesPageOpenGateTests(unittest.TestCase):
+    def _run(self, timeline, resolve, bake_dir):
+        project = _FakeProject(timeline)
+
+        class _Handle:
+            def acquire(self):
+                return ("ok", resolve, project)
+
+        resp = verbs.verb_read_grades(
+            {"bake_lut_dir": bake_dir}, _Handle(), "env-pg1", "test")
+        self.assertTrue(resp["ok"], f"verb failed: {resp!r}")
+        return resp["result"]
+
+    def _rows(self, result):
+        return {row["resolve_item_id"]: row for row in result["grades"]}
+
+    def test_playhead_on_offline_clip_bakes_still_succeed(self):
+        # User left the playhead over an offline clip (t055 run-3
+        # state: project copy, media path doesn't exist on this
+        # machine), then synced. The offline clip's own bake refuses
+        # regardless (t055), but the ONLINE clip's bake must succeed —
+        # which requires the verb to anchor the Color-page switch on
+        # the online clip, not on wherever the playhead happens to be.
+        # The offline clip comes FIRST so a naive "park on first item"
+        # would re-poison the page open.
+        offline = _FakeItem("uid-off", 86400, lambda k, p: False,
+                            file_path="/nonexistent/anamnesis/A001.mov")
+        timeline = _FakeTimeline([offline], playhead_frame=86420)
+        resolve = _FakeResolve("edit", gate_timeline=timeline)
+        online = _FakeItem("uid-on", 86448, _gated_cube_writer(resolve))
+        timeline._items.append(online)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run(timeline, resolve, d)
+        rows = self._rows(result)
+        self.assertIn("lut", rows["uid-on"],
+                      "online clip's bake must survive a sync started "
+                      "with the playhead on offline media (t055): "
+                      f"warnings={result['warnings']}")
+        self.assertNotIn("lut", rows["uid-off"])
+        # the user's playhead and page both come back where they were
+        self.assertEqual(timeline.playhead_frame, 86420)
+        self.assertEqual(resolve.page, "edit")
+
+    def test_playhead_on_gap_bakes_still_succeed(self):
+        # Same gate, gap shape: playhead before the first clip.
+        timeline = _FakeTimeline([], playhead_frame=0)
+        resolve = _FakeResolve("edit", gate_timeline=timeline)
+        online = _FakeItem("uid-a", 86400, _gated_cube_writer(resolve))
+        timeline._items.append(online)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run(timeline, resolve, d)
+        rows = self._rows(result)
+        self.assertIn("lut", rows["uid-a"],
+                      "bake must survive a sync started with the "
+                      "playhead on a gap (t055): "
+                      f"warnings={result['warnings']}")
+        self.assertEqual(timeline.playhead_frame, 0)
+
+    def test_all_media_offline_specific_warning(self):
+        # Nothing to anchor on: every clip's media is missing. The
+        # sync can't be saved (each bake refuses individually too) —
+        # the user must hear WHY, not just a failure count.
+        offline = _FakeItem("uid-off", 86400, lambda k, p: False,
+                            file_path="/nonexistent/anamnesis/A001.mov")
+        timeline = _FakeTimeline([offline], playhead_frame=86420)
+        resolve = _FakeResolve("edit", gate_timeline=timeline)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run(timeline, resolve, d)
+        anchor_warns = [w for w in result["warnings"]
+                        if "online" in w]
+        self.assertEqual(len(anchor_warns), 1, result["warnings"])
+        # no anchor → the playhead must NOT have been moved
+        self.assertEqual(timeline.set_tc_calls, [])
 
 
 # ─── read_grades timeline-graph classification (force-bake, t054 +
