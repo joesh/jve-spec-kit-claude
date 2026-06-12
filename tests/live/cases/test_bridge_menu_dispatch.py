@@ -25,13 +25,12 @@ scope here — Resolve is not expected to be running during smoke.
 A `helper_unavailable` outcome surfaced via signal + counter
 increment is a PASS for this smoke; the menu wiring did its job.
 
-The four menu items exercised:
+The three menu items exercised:
     Color > Send Sequence to Resolve...
-    Color > Connect to Resolve Project
-    Color > Sync Grades from Resolve
+    Color > Copy Color Grading from Resolve
     Color > Sync Edits from Resolve
 
-Three of the four are sequence-scoped and gated by an active sequence
+All three are sequence-scoped and gated by an active sequence
 (menu_system.lua PER_SEQUENCE_COMMAND_NAMES). The Anamnesis template
 boots with a sequence loaded into the record tab, so the gate passes
 without extra setup beyond `ensure_record_tab()`.
@@ -69,8 +68,7 @@ BRIDGE_COUNTER_POLL_TIMEOUT_S = 6.0
 
 BRIDGE_MENU_ITEMS: tuple[str, ...] = (
     "Color > Send Sequence to Resolve...",
-    "Color > Connect to Resolve Project",
-    "Color > Sync Grades from Resolve",
+    "Color > Copy Color Grading from Resolve",
     "Color > Sync Edits from Resolve",
 )
 
@@ -83,9 +81,9 @@ class TestBridgeMenuDispatch(JVESmokeCase):
     one named failure rather than aborting the loop and masking the
     rest. Methods share the per-class anamnesis copy by design (see
     SMOKE_TEST_AUTHORING.md); no menu pick mutates anything that would
-    poison a sibling method's baseline — Connect writes only to
-    resolve_bridge_link, the others either author a side-file or fail
-    at helper-unavailable before touching any model state.
+    poison a sibling method's baseline — each either authors a
+    side-file / writes resolve_bridge_link rows, or fails at
+    helper-unavailable before touching any model state.
     """
 
     def setUp(self) -> None:
@@ -95,7 +93,7 @@ class TestBridgeMenuDispatch(JVESmokeCase):
         # has one bound at the record tab; this just confirms.
         self.ensure_record_tab()
 
-        # Force-load the four bridge command modules so their
+        # Force-load the three bridge command modules so their
         # register_op calls fire (and the completion counter is
         # initialized to 0) BEFORE this method's `snap_before` reads
         # it. The codebase loads command modules lazily on first
@@ -105,7 +103,6 @@ class TestBridgeMenuDispatch(JVESmokeCase):
         # fail-fast guard in bridge_completion.lua firing correctly,
         # just at the wrong audience. Idempotent: `require` is cached.
         self.eval('require("core.commands.send_to_resolve")')
-        self.eval('require("core.commands.connect_to_resolve_project")')
         self.eval('require("core.commands.sync_grades_from_resolve")')
         self.eval('require("core.commands.sync_edits_from_resolve")')
 
@@ -204,11 +201,6 @@ class TestBridgeMenuDispatch(JVESmokeCase):
 
     # ── one method per menu item (named for stable alphabetical order) ─
 
-    def test_01_color_connect_to_resolve_project(self) -> None:
-        self._assert_menu_pick_clean(
-            "Color > Connect to Resolve Project",
-            "ConnectToResolveProject")
-
     def test_02_color_send_sequence_to_resolve(self) -> None:
         self._assert_menu_pick_clean(
             "Color > Send Sequence to Resolve...",
@@ -216,7 +208,7 @@ class TestBridgeMenuDispatch(JVESmokeCase):
 
     def test_03_color_sync_grades_from_resolve(self) -> None:
         self._assert_menu_pick_clean(
-            "Color > Sync Grades from Resolve",
+            "Color > Copy Color Grading from Resolve",
             "SyncGradesFromResolve")
 
     def test_04_color_sync_edits_from_resolve(self) -> None:

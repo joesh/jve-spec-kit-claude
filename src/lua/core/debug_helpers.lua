@@ -276,13 +276,13 @@ end
 
 -- ─── Bridge command completion (spec 023 FR-023) ────────────────────
 
---- Per-op monotonic completion counter for the four bridge commands.
+--- Per-op monotonic completion counter for the bridge commands.
 --- Snap before a menu pick, settle, snap after — the delta is the
 --- "the async tail actually reached notify()" assertion that the
 --- bridge-menu smoke uses. A registered op that's never fired returns
 --- 0; an unregistered op asserts (catches typos before the smoke says
 --- "0 → 0, passes").
---- @param op_name string one of: "SendToResolve", "ConnectToResolveProject", "SyncGradesFromResolve", "SyncEditsFromResolve"
+--- @param op_name string one of: "SendToResolve", "SyncGradesFromResolve", "SyncEditsFromResolve"
 --- @return integer count
 function M.bridge_completion_count(op_name)
     return require("core.commands.bridge_completion").completion_count(op_name)

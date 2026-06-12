@@ -10,7 +10,7 @@ dialog is the timeline-level value.
 Live observed failure 2026-06-03 against `anamnesis-gold-timeline`:
 helper reported the active timeline as 24 fps; Resolve's own Timeline >
 Settings dialog showed 25 fps; the project default was 24.
-ConnectToResolveProject surfaced a spurious `timeline_rate_mismatch`
+the sync-time rate guard surfaced a spurious `timeline_rate_mismatch`
 against a JVE sequence correctly authored at 25.
 
 Run:  python3 -m unittest tests.test_helper_timeline_integer_frame_rate

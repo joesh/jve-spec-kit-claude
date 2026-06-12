@@ -53,23 +53,20 @@ local PER_SEQUENCE_COMMAND_NAMES = {
     "TimelineZoomFit", "TimelineZoomIn", "TimelineZoomOut",
     "TimelineZoomInAtMouse", "TimelineZoomOutAtMouse",
     -- spec 023 — bridge commands that act on the active sequence; grey out
-    -- when no sequence is active.
+    -- when no sequence is active. (Identity discovery + marker stamping
+    -- run automatically inside the syncs — no separate identity command.)
     "SendToResolve",
     "SyncGradesFromResolve",
     "SyncEditsFromResolve",
 }
 
 -- Commands that target the currently-active project (any sequence under
--- it). Greyed when no project is open. ConnectToResolveProject is the
--- one bridge command that doesn't need an active sequence (it walks
--- every sequence on the project's helper-side timeline) but DOES need
--- a project; without this gate, clicking it with no project open would
--- hard-assert on `project_id required`. Per-sequence implies per-
--- project, so the SendToResolve / SyncGradesFromResolve /
--- SyncEditsFromResolve entries don't need to be listed here (their
--- per-sequence gate already covers it).
+-- it) without needing an active sequence. Greyed when no project is
+-- open. Currently empty — every bridge command is per-sequence since
+-- the connect fold (discovery runs inside the syncs) — but the gate
+-- mechanism stays: per-sequence implies per-project, so only commands
+-- NOT in PER_SEQUENCE_COMMAND_NAMES belong here.
 local PER_PROJECT_COMMAND_NAMES = {
-    "ConnectToResolveProject",
 }
 
 -- Qt bindings (loaded from qt_constants global)
@@ -137,7 +134,7 @@ function M.init(window, cmd_mgr, proj_browser)
 
     -- Per-project menu grey-out: refresh on project_changed (open / new /
     -- close all emit it; open_project.lua:50 onward documents the
-    -- registered consumers). Without this hook the Color > Connect item
+    -- registered consumers). Without this hook a per-project menu item
     -- would stay enabled after a project is closed and crash on click.
     local Signals = require("core.signals")
     Signals.connect("project_changed", function(_project_id)

@@ -1,6 +1,6 @@
 #!/usr/bin/env luajit
 
--- Regression: ConnectToResolveProject.load_jve_clips_for_sequence
+-- Regression: discovery.load_jve_clips_for_sequence
 -- returned 0 even when the sequence had clips, because the internal
 -- load_clips_on_track did `db:prepare → bind_value → stmt:next()` and
 -- skipped the `stmt:exec()` step. Every other query in the codebase
@@ -23,12 +23,12 @@ local Media          = require("models.media")
 local Sequence       = require("models.sequence")
 local Track          = require("models.track")
 local command_manager = require("core.command_manager")
-local connect = require("core.commands.connect_to_resolve_project")
+local discovery = require("core.resolve_bridge.discovery")
 local dkjson = require("dkjson")
 
 _G.qt_create_single_shot_timer = function(_delay, cb) cb(); return nil end
 
-print("=== ConnectToResolveProject.load_jve_clips_for_sequence Tests ===\n")
+print("=== discovery.load_jve_clips_for_sequence Tests ===\n")
 
 local db_path = "/tmp/jve/test_connect_load_clips.db"
 os.remove(db_path)
@@ -134,7 +134,7 @@ end
 
 -- ── The regression: loader returns the populated video clip ────────
 local video_clips, audio_skipped =
-    connect.load_jve_clips_for_sequence("seq", db)
+    discovery.load_jve_clips_for_sequence("seq", db)
 
 check("load returns one video clip (not 0 — exec-after-prepare bug)",
     #video_clips == 1)
@@ -170,5 +170,5 @@ check("audio_skipped carries the structured reason",
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0,
-    "test_connect_to_resolve_project_load_clips.lua: failures present")
-print("✅ test_connect_to_resolve_project_load_clips.lua passed")
+    "test_bridge_discovery_load_clips.lua: failures present")
+print("✅ test_bridge_discovery_load_clips.lua passed")

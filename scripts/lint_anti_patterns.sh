@@ -156,7 +156,7 @@ lint_lua() {
     # `stmt:exec()` between bind and the first `stmt:next()`; without
     # it `next()` is false from the start and the iterator silently
     # returns zero rows (2026-06-03 "0 JVE clip(s)" bug in
-    # connect_to_resolve_project + payload_builder). Safe alternative:
+    # discovery.lua [née connect_to_resolve_project] + payload_builder). Safe alternative:
     # `database.select_rows(conn, sql, params, row_mapper)` which
     # encapsulates the full prepare→bind→exec→iter→finalize cycle.
     # Per-prepare opt-out: `-- lint-allow: R012 reason` on the

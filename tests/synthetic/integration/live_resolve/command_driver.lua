@@ -1,6 +1,6 @@
 --- Shared e2e driver for spec-023 LIVE tests that exercise the REAL
 --- bridge commands (SendToResolve / SyncGradesFromResolve /
---- ConnectToResolveProject) inside `jve --test` against the VM's
+--- SyncGradesFromResolve) inside `jve --test` against the VM's
 --- Resolve Studio.
 ---
 --- Lifted from test_reconform.lua when test_connect_imported.lua became

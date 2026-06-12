@@ -129,8 +129,19 @@ sync_grades.restore(captured2, db)
 -- ~/.jve/resolve_bake/<project_id>/ ─────────────────────────────────
 local captured_helper_args = nil
 local captured_request_opts = nil
+-- The sync's built-in auto-discovery (connect fold) pulls
+-- read_identities + read_timeline first; serve both empty so this test
+-- keeps exercising ONLY the outgoing read_grades shape.
+-- timeline_integer_rate matches the 24000/1001 sequence (integer TC
+-- counter 24). (Tracked mock debt — todo_remove_mocks_from_tests.)
 local fake_client = {}
 function fake_client:request(verb, helper_args, cb, opts)
+    if verb == "read_identities" then
+        cb({ result = { items = {} } }, nil, nil); return
+    elseif verb == "read_timeline" then
+        cb({ result = { items = {}, timeline_integer_rate = 24 } },
+            nil, nil); return
+    end
     assert(verb == "read_grades", "unexpected verb " .. tostring(verb))
     captured_helper_args = helper_args
     captured_request_opts = opts

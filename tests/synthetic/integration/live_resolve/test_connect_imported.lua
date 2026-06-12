@@ -1,6 +1,7 @@
--- T050 — LIVE first-connect of an imported project
+-- T050 — LIVE first sync of an imported project, no connect step
 --          (spec 023, FR-011b/c; quickstart "imported a graded DRP,
---          hook up the grade" flow).
+--          hook up the grade" flow; connect fold 2026-06-12 — identity
+--          discovery runs automatically inside every sync).
 --
 -- Scenario, built self-contained against the VM's Resolve Studio:
 --   1. Sequence e1 ("the original sender") SendToResolve's 3 clips —
@@ -10,19 +11,17 @@
 --      colorist's DRP": same edit (names, positions, source ranges,
 --      media) but FRESH clip ids and an EMPTY identity ledger — the
 --      resolve_bridge_link reset below constructs exactly the state a
---      newly-imported .jvp is in (it has never sent or connected).
---   4. ConnectToResolveProject(e2), pure discovery (no stamping):
---      the marker channel must MISS (the live markers carry e1's ids,
---      which are not in e2 — cross-sequence ids are ignored by
---      design), and the position/content channel must match all 3
---      pairs. Nothing unmatched, nothing ambiguous.
---   5. The matched mapping must be positionally correct: each e2 clip
---      links to the SAME live item the original send mapped at that
---      timeline position.
---   6. SyncGradesFromResolve(e2): each e2 clip receives exactly the
---      CDL applied to the item at its position — grades land on the
---      RIGHT clips, none scrambled.
---   7. Teardown: delete the fixture timeline.
+--      newly-imported .jvp is in (it has never sent or synced).
+--   4. SyncGradesFromResolve(e2) — the ONLY user action. Its built-in
+--      auto-discovery must run first: the marker channel must MISS
+--      (the live markers carry e1's ids, which are not in e2 —
+--      cross-sequence ids are ignored by design) and the position/
+--      content channel must match all 3 pairs, positionally correct,
+--      nothing unmatched/ambiguous — all asserted via the sync
+--      result's `discovery` report.
+--   5. The same single sync lands each position's exact CDL on the
+--      RIGHT e2 clip, none scrambled.
+--   6. Teardown: delete the fixture timeline.
 --
 -- ⚠ State-changing on the CURRENT Resolve project: run against the VM
 -- test environment only (memory: project_vm_test_environment).
@@ -199,22 +198,44 @@ print("  ✓ graded all 3 items (distinct CDLs by position)")
 assert(db:exec("DELETE FROM resolve_bridge_link"),
     "T050: ledger reset failed")
 
--- ── 4. first-connect: pure discovery ────────────────────────────────
-local connect = driver.run_bridge_command("ConnectToResolveProject",
-    "connect_to_resolve_project_completed",
+-- ── 4. first sync: auto-discovery + grades, ONE user action ─────────
+-- The connect fold (2026-06-12): there is no user-visible connect
+-- step. SyncGradesFromResolve runs discovery itself (read-only,
+-- ledger-idempotent) before pulling grades, and surfaces the match
+-- report on its result. This sync starts from the EMPTY ledger built
+-- in step 3 — if auto-discovery regressed, the join is empty and the
+-- ClipGrade asserts below fail.
+local sync = driver.run_bridge_command("SyncGradesFromResolve",
+    "sync_grades_from_resolve_completed",
     { project_id = "p1", sequence_id = "e2" })
-assert(#connect.matched == 3, string.format(
+local disc = sync.discovery
+assert(type(disc) == "table",
+    "T050: sync result must carry the auto-discovery report")
+assert(#disc.matched == 3, string.format(
     "T050: expected all 3 clips matched, got %d (unmatched=%d "
-    .. "ambiguous=%d)", #connect.matched, #connect.unmatched,
-    #connect.ambiguous))
-assert(#connect.unmatched == 0 and #connect.ambiguous == 0,
+    .. "ambiguous=%d)", #disc.matched, #disc.unmatched,
+    #disc.ambiguous))
+assert(#disc.unmatched == 0 and #disc.ambiguous == 0,
     "T050: nothing may be unmatched/ambiguous on an identical edit")
+assert(disc.rate_mismatch == nil,
+    "T050: rates agree by construction; position channel must run")
+assert(disc.already_linked == 0,
+    "T050: ledger was reset in step 3 — nothing may be pre-linked")
+-- Auto-stamp (FR-012): discovery stamps each new position match. The
+-- live items already carry e1's identity markers (written at import in
+-- step 1) with DIFFERENT customData, so all 3 stamps must REFUSE —
+-- conflicting identity is surfaced, never overwritten — while the
+-- ledger links (and the grade application below) work regardless.
+assert(#disc.stamp_failures == 3 and #disc.stamped == 0,
+    string.format("T050: expected 3 refused stamps on e1-marked items, "
+        .. "got stamped=%d skipped=%d failures=%d",
+        #disc.stamped, #disc.stamp_skipped, #disc.stamp_failures))
 local e2_pos_by_id, item_pos_by_id = {}, {}
 for i in ipairs(POSITIONS) do
     e2_pos_by_id[e2_ids[i]] = i
     item_pos_by_id[item_by_e1[e1_ids[i]]] = i
 end
-for _, m in ipairs(connect.matched) do
+for _, m in ipairs(disc.matched) do
     assert(m.source == "position_match", string.format(
         "T050: e1's markers must not match e2 ids (cross-sequence "
         .. "ignored); expected position_match, got %q for %s",
@@ -225,12 +246,9 @@ for _, m in ipairs(connect.matched) do
         "T050: positional mis-link — e2 clip at position %s linked to "
         .. "live item at position %s", tostring(cpos), tostring(ipos)))
 end
-print("  ✓ first-connect: 3/3 position-matched, positionally correct")
+print("  ✓ auto-discovery: 3/3 position-matched, positionally correct")
 
--- ── 5. grades land on the right clips ───────────────────────────────
-driver.run_bridge_command("SyncGradesFromResolve",
-    "sync_grades_from_resolve_completed",
-    { project_id = "p1", sequence_id = "e2" })
+-- ── 5. grades landed on the right clips (same single sync) ──────────
 for i, pos in ipairs(POSITIONS) do
     local g = ClipGrade.load(e2_ids[i], db)
     assert(g and g.fidelity == "primary" and cdl_close(g.cdl, pos.cdl),

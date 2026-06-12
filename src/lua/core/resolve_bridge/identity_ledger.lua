@@ -3,8 +3,9 @@
 --- One row per JVE clip mapping `jve_clip_uuid` → `resolve_item_id`. For
 --- imported clips (FR-011b) `resolve_item_id == jve_clip_uuid` (the importer
 --- adopts the Resolve timeline-item DbId as the clip id). For UUID-minted
---- clips (FR-011c) `resolve_item_id` is matched positionally/by content at
---- connect time.
+--- clips (FR-011c) `resolve_item_id` is matched positionally/by content by
+--- the auto-discovery that runs at the start of every sync
+--- (core/resolve_bridge/discovery.lua).
 ---
 --- This module owns read/write of `resolve_bridge_link` AND the pure-data
 --- reconcile algorithm (M.reconcile — direct / content_match /

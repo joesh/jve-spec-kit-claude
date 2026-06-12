@@ -79,7 +79,7 @@ ClipGrade.upsert("c_pre", {
     source = "user", stale = 0, synced_at = now,
 }, db)
 
--- Ledger seeding: ConnectToResolveProject would have populated these
+-- Ledger seeding: sync-time auto-discovery would have populated these
 -- rows. Post-FR-021 architectural fix, sync_grades joins helper
 -- response rows (keyed on resolve_item_id) to clip.id via the ledger
 -- — no ledger row ⇒ unmatched. The runtime resolve_item_id is NOT
@@ -223,11 +223,25 @@ db:exec("DELETE FROM clip_grade WHERE clip_id = 'c_none'")
 
 -- Fake client whose request() invokes cb synchronously with the response
 -- a real helper would deliver. Matches `helper-protocol.md §read_grades`.
+-- The sync's built-in auto-discovery (connect fold) pulls
+-- read_identities + read_timeline first; serve both empty (no markers,
+-- no live items) so discovery finds nothing to (re)link or stamp and
+-- the test keeps exercising ONLY the captured-persistence regression.
+-- timeline_integer_rate matches the 24000/1001 sequence (integer TC
+-- counter 24) so the rate guard passes. (Tracked mock debt —
+-- todo_remove_mocks_from_tests; do not grow this fake's behavior.)
 local fake_client = {}
 function fake_client:request(verb, _, cb)
-    assert(verb == "read_grades",
-        "fake_client: unexpected verb " .. tostring(verb))
-    cb({ result = response }, nil, nil)
+    if verb == "read_identities" then
+        cb({ result = { items = {} } }, nil, nil)
+    elseif verb == "read_timeline" then
+        cb({ result = { items = {}, timeline_integer_rate = 24 } },
+            nil, nil)
+    else
+        assert(verb == "read_grades",
+            "fake_client: unexpected verb " .. tostring(verb))
+        cb({ result = response }, nil, nil)
+    end
 end
 supervisor.ensure_client = function() return fake_client end
 

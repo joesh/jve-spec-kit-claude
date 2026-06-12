@@ -1,4 +1,4 @@
--- T049a — ConnectToResolveProject.match pure-data matcher
+-- T049a (moved by connect fold) — discovery.match pure-data matcher
 --           (spec 023, FR-011c).
 --
 -- Black-box: feed M.match a JVE-clip list, a helper read_identities
@@ -16,7 +16,7 @@
 
 require("test_env")
 
-local connect = require("core.commands.connect_to_resolve_project")
+local discovery = require("core.resolve_bridge.discovery")
 
 local pass, fail = 0, 0
 local function check(label, cond)
@@ -24,7 +24,7 @@ local function check(label, cond)
     else fail = fail + 1; print("FAIL: " .. label) end
 end
 
-print("\n=== ConnectToResolveProject.match Tests ===")
+print("\n=== discovery.match Tests ===")
 
 -- Common shape helpers.
 local function clip(id, ti, rec_start, src_in, src_out)
@@ -96,7 +96,7 @@ do
         tl_item("R1", 1, 0,   100, 0, 100, "c_a"),
         tl_item("R2", 1, 100, 100, 0, 100, "c_b"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 1: marker_matched c_a → R1",
         m.marker_matched["c_a"] == "R1")
     check("scenario 1: marker_matched c_b → R2",
@@ -118,7 +118,7 @@ do
         tl_item("R1", 1, 0,   100, 0, 100, "c_a"),
         tl_item("R2", 2, 100, 100, 0, 100, "c_b"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 2: marker_matched empty",
         next(m.marker_matched) == nil)
     check("scenario 2: pos_matched c_a → R1",
@@ -139,7 +139,7 @@ do
         tl_item("R_m", 1, 0,   100, 0, 100, "c_marked"),
         tl_item("R_p", 1, 100, 100, 0, 100, "c_pos"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 3: c_marked via marker",
         m.marker_matched["c_marked"] == "R_m")
     check("scenario 3: c_pos via position",
@@ -157,7 +157,7 @@ do
     local timeline = {
         tl_item("R1", 1, 0, 100, 0, 100, "c_a"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 4: c_a position-matched",
         m.pos_matched["c_a"] == "R1")
     check("scenario 4: c_orphan listed in unmatched",
@@ -177,7 +177,7 @@ do
     local timeline = {
         tl_item("R_shared", 1, 0, 100, 0, 100, "c_marker"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 5: c_marker via marker",
         m.marker_matched["c_marker"] == "R_shared")
     check("scenario 5: c_pos NOT pos_matched (R_shared already claimed)",
@@ -208,7 +208,7 @@ do
     local timeline = {
         tl_item("R_strange", 1, 0, 100, 0, 100, "c_in_seq"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     -- The cross-sequence jve_guid is not used for any clip in this
     -- sequence's match list. R_strange becomes a position match for
     -- c_in_seq instead (since R_strange isn't claimed by any marker
@@ -237,7 +237,7 @@ do
         tl_item("R_a", 1, 0,   100, 0, 100, "c_a"),    -- real media at (V1, 0)
         tl_item("R_b", 1, 100, 100, 0, 100, "c_b"),    -- real media at (V1, 100)
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 7: c_a position-matches the media item, not generator",
         m.pos_matched["c_a"] == "R_a")
     check("scenario 7: c_b position-matches",
@@ -259,7 +259,7 @@ do
         tl_item_non_media("R_gen2", 1, 0, 50),  -- same position, ok
         tl_item("R_a", 1, 100, 100, 0, 100, "c_a"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 7b: stacked non_media at same pos does not assert",
         m.pos_matched["c_a"] == "R_a")
 end
@@ -280,7 +280,7 @@ do
         source_out      = 100,
         enabled         = true,
     }
-    local ok, err = pcall(connect.match, jve_clips, identities, { bad_item })
+    local ok, err = pcall(discovery.match, jve_clips, identities, { bad_item })
     check("scenario 7c: missing kind asserts", not ok)
     check("scenario 7c: error names 'kind'",
         ok or tostring(err):find("kind", 1, true) ~= nil)
@@ -297,7 +297,7 @@ do
     local timeline = {
         tl_item("R_mismatch", 1, 0, 100, 0, 100, "c_different"),
     }
-    local m = connect.match(jve_clips, identities, timeline)
+    local m = discovery.match(jve_clips, identities, timeline)
     check("scenario 8: content mismatch is NOT pos_matched",
         m.pos_matched["c_a"] == nil)
     
@@ -312,13 +312,64 @@ do
     check("scenario 8: c_a surfaced as ambiguous (content_mismatch)", found)
 end
 
+-- ── Scenario 9: pre-claimed items (existing ledger links) ───────────
+-- A clip already linked to a live item never enters the channels; its
+-- item is pre-claimed. Another clip landing on that item by position
+-- must NOT steal it — it surfaces as ambiguous, never silently linked.
+do
+    local jve_clips = { clip("c_new", 1, 0, 0, 100) }
+    local identities = {}
+    -- The live item at c_new's position belongs to an existing link
+    -- (different clip). Content keys even "match" — claim still wins.
+    local timeline = {
+        tl_item("R_taken", 1, 0, 100, 0, 100, "c_new"),
+    }
+    local m = discovery.match(jve_clips, identities, timeline,
+        { R_taken = true })
+    check("scenario 9: pre-claimed item is not position-matched",
+        m.pos_matched["c_new"] == nil)
+    local found = false
+    for _, a in ipairs(m.ambiguous) do
+        if a.clip_id == "c_new" and a.resolve_item_id == "R_taken"
+            and a.reason == "position_match_already_claimed" then
+            found = true
+        end
+    end
+    check("scenario 9: surfaced as position_match_already_claimed", found)
+    check("scenario 9: clip reported unmatched", #m.unmatched == 1
+        and m.unmatched[1].clip_id == "c_new")
+end
+
+-- ── Scenario 10: marker names a clip on a pre-claimed item ──────────
+-- The persisted ledger says the item belongs to some OTHER clip, but
+-- its marker names this one — conflicting identity sources. Reported,
+-- never silently resolved either way (rule 2.32).
+do
+    local jve_clips = { clip("c_marked", 1, 0, 0, 100) }
+    local identities = {
+        { resolve_item_id = "R_owned", jve_guid = "c_marked" },
+    }
+    local m = discovery.match(jve_clips, identities, {},
+        { R_owned = true })
+    check("scenario 10: conflicting marker is not marker_matched",
+        m.marker_matched["c_marked"] == nil)
+    local found = false
+    for _, a in ipairs(m.ambiguous) do
+        if a.clip_id == "c_marked" and a.resolve_item_id == "R_owned"
+            and a.reason == "marker_conflicts_existing_link" then
+            found = true
+        end
+    end
+    check("scenario 10: surfaced as marker_conflicts_existing_link", found)
+end
+
 -- ── Failure paths: validate args (rule 2.32) ────────────────────────
 do
-    local ok1 = pcall(connect.match, nil, {}, {})
+    local ok1 = pcall(discovery.match, nil, {}, {})
     check("match: asserts on nil jve_clips", not ok1)
-    local ok2 = pcall(connect.match, {}, nil, {})
+    local ok2 = pcall(discovery.match, {}, nil, {})
     check("match: asserts on nil identities_items", not ok2)
-    local ok3 = pcall(connect.match, {}, {}, nil)
+    local ok3 = pcall(discovery.match, {}, {}, nil)
     check("match: asserts on nil timeline_items", not ok3)
 end
 
@@ -330,12 +381,12 @@ do
         tl_item("R1", 1, 0, 100, 0, 100, "c_a"),
         tl_item("R2", 1, 0, 100, 0, 100, "c_a"),  -- same (track, record_start)
     }
-    local ok, err = pcall(connect.match, jve_clips, identities, timeline)
+    local ok, err = pcall(discovery.match, jve_clips, identities, timeline)
     check("duplicate position key asserts", not ok)
     check("duplicate position key error names 'duplicate'",
         ok or tostring(err):find("duplicate", 1, true) ~= nil)
 end
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
-assert(fail == 0, "test_connect_to_resolve_project_match.lua: failures present")
-print("✅ test_connect_to_resolve_project_match.lua passed")
+assert(fail == 0, "test_bridge_discovery_match.lua: failures present")
+print("✅ test_bridge_discovery_match.lua passed")

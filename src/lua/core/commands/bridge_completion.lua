@@ -1,6 +1,6 @@
 --- bridge_completion: shared async-terminal surface for spec 023's
---- four bridge commands (SendToResolve, ConnectToResolveProject,
---- SyncGradesFromResolve, SyncEditsFromResolve).
+--- bridge commands (SendToResolve, SyncGradesFromResolve,
+--- SyncEditsFromResolve).
 ---
 --- Every bridge command is async-with-callback. `notify(args, result,
 --- code, message)` is the one terminal path; it
@@ -137,7 +137,7 @@ end
 --- response handler). command_manager holds the same command-object
 --- reference in the undo stack, so a late set_parameter is visible to
 --- the undoer when the user eventually presses undo. Non-undoable
---- bridge commands (SendToResolve, ConnectToResolveProject) ignore the
+--- bridge commands (SendToResolve, SyncEditsFromResolve) ignore the
 --- third argument.
 function M.register_executor(
         command_executors, op_name, execute_fn, db, set_last_error)

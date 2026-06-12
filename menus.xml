@@ -104,9 +104,8 @@
   <!-- Color Menu — DaVinci Resolve color roundtrip bridge (spec 023) -->
   <menu name="Color">
     <item name="Send Sequence to Resolve..." command="SendToResolve" tooltip="Export current sequence as DRT and open in Resolve Studio"/>
-    <item name="Connect to Resolve Project" command="ConnectToResolveProject" tooltip="Establish live link with currently open Resolve project"/>
     <separator/>
-    <item name="Sync Grades from Resolve" command="SyncGradesFromResolve" tooltip="Pull CDL grades from Resolve for all matched clips"/>
+    <item name="Copy Color Grading from Resolve" command="SyncGradesFromResolve" tooltip="Pull the current Resolve project's color grading onto this sequence's clips (matching and identity housekeeping happen automatically)"/>
     <item name="Sync Edits from Resolve" command="SyncEditsFromResolve" tooltip="Pull trim/move changes from Resolve and apply to JVE timeline"/>
   </menu>
 

@@ -83,7 +83,7 @@ exists.
 **Algorithmic invariant**: each `resolve_item_id` maps to at most one JVE clip. Blade-inherit fragments do **not** get their own ledger rows — only the parent's row is persisted; fragments inherit the parent's mapping at query time. `identity_ledger.lookup_clip_id` asserts the uniqueness (defensive against reconcile bugs); a future schema bump may enforce it via `UNIQUE(resolve_item_id)`.
 
 **Lifecycle**
-- **Created/updated**: by `SendToResolve` (outbound mapping), `ConnectToResolveProject` (inbound — id match per FR-011b, else positional per FR-011c), `SyncGradesFromResolve` (`grade_fingerprint`), and `SyncEditsFromResolve` (`edit_fingerprint`). Always inside a `command_event`.
+- **Created/updated**: by `SendToResolve` (outbound mapping), the sync-time auto-discovery (`core/resolve_bridge/discovery.lua`, runs inside both syncs — marker channel else positional per FR-011c), `SyncGradesFromResolve` (`grade_fingerprint`), and `SyncEditsFromResolve` (`edit_fingerprint`). Always inside a `command_event`.
 - **Reconcile (FR-012)**: on re-send / re-connect, for each current JVE clip —
   - `clip.id` matches a live Resolve item id → direct link (the common case for imported clips);
   - else positional/content match (`media.file_uuid` + source TC + timeline position, FR-011c);

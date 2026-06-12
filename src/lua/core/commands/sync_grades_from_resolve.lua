@@ -26,6 +26,7 @@ local M = {}
 local ClipGrade         = require("models.clip_grade")
 local Sequence          = require("models.sequence")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
+local discovery         = require("core.resolve_bridge.discovery")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local bridge_command    = require("core.commands.bridge_command")
 local Signals           = require("core.signals")
@@ -34,7 +35,7 @@ local log               = require("core.logger").for_area("commands")
 -- LUT bake cache root. Per-project subdir keeps bakes scoped to the
 -- project that produced them; survives JVE relaunches; cheap to GC by
 -- removing files whose `resolve_item_id` is no longer in the live
--- timeline (handled by ConnectToResolveProject — separate commit).
+-- timeline (not yet implemented — see memory todo).
 local function bake_lut_dir_for_project(project_id)
     assert(type(project_id) == "string" and project_id ~= "",
         "bake_lut_dir_for_project: project_id required")
@@ -65,8 +66,8 @@ end
 -- Helper response row shape (post-FR-021 architectural fix): keyed on
 -- the helper's NATIVE id (`resolve_item_id`), NOT on jve_guid. The
 -- helper holds no JVE state (FR-021); attribution to a JVE clip_id is
--- a Lua-side join through `identity_ledger` (populated by
--- ConnectToResolveProject's positional or marker-channel match per
+-- a Lua-side join through `identity_ledger` (populated by the
+-- sync-time auto-discovery's positional or marker-channel match per
 -- FR-011c). See helper-protocol.md §read_grades.
 --
 -- fidelity closed set: primary | partial | unrepresentable | none.
@@ -221,13 +222,14 @@ function M.apply(response, sequence_id, db, synced_at)
     local seen_clip_ids = {}
     for i, row in ipairs(response.grades) do
         -- Ledger-driven attribution (FR-021): helper emits its native
-        -- resolve_item_id; JVE owns the join to clip.id. Connect must
-        -- have populated the ledger first (positional per FR-011c, or
-        -- by marker for re-syncs). A row whose resolve_item_id has no
-        -- ledger entry is REPORTED, not silently dropped — symmetric
-        -- with the FR-011c unmatched-JVE-clip discipline. Typical
-        -- cause: colorist added a clip in Resolve after import; user
-        -- needs to re-Connect to pick it up.
+        -- resolve_item_id; JVE owns the join to clip.id. The ledger is
+        -- populated by the auto-discovery that ran at the start of
+        -- this same sync (positional per FR-011c, or by marker). A row
+        -- whose resolve_item_id has no ledger entry is REPORTED, not
+        -- silently dropped — symmetric with the FR-011c unmatched-JVE-
+        -- clip discipline. Typical cause: a Resolve item with no JVE
+        -- counterpart at its position (colorist-added clip whose
+        -- content matches nothing in the sequence).
         local clip_id = identity_ledger.lookup_clip_id(
             row.resolve_item_id, db)
         if clip_id == nil then
@@ -301,8 +303,9 @@ function M.apply(response, sequence_id, db, synced_at)
     -- Accounting (FR-011c report-not-skip discipline):
     --   applied      = response rows whose resolve_item_id is in the ledger.
     --   stale_marked = FR-013a walk added (ledger-linked clip absent from response).
-    --   unmatched    = helper rows with no ledger entry (colorist added a
-    --                  clip Resolve-side after import; user must re-Connect).
+    --   unmatched    = helper rows with no ledger entry even after this
+    --                  sync's auto-discovery (Resolve item matches no
+    --                  JVE clip by marker or position/content).
     local applied      = #response.grades - #captured.unmatched_resolve_items
     local stale_marked = #captured.entries - applied
     log.event("SyncGradesFromResolve.apply: %d grade(s) applied, "
@@ -394,78 +397,135 @@ function M.execute(args, db, command)
     local bake_lut_dir = bake_lut_dir_for_project(seq.project_id)
 
     supervisor.with_client(notify, args, function(client)
-        local helper_args = { bake_lut_dir = bake_lut_dir }
-        if args.item_ids then helper_args.item_ids = args.item_ids end
-        local sequence_id = args.sequence_id
-        -- Per-request timeout: read_grades with bake_lut_dir bakes one
-        -- LUT per timeline-item. t033 measured ~30 ms median per bake on
-        -- Anamnesis (~1069 clips ≈ 32 s for the bake alone); add Resolve
-        -- API latency for GetClipsInTimeline/EDL export and the verb
-        -- comfortably runs minutes on a large project. The client-wide
-        -- default request_timeout_ms (30 s, set by helper_supervisor)
-        -- would trip mid-bake, then the helper's eventual reply would
-        -- arrive against a cleared in-flight slot and log "unknown id".
-        -- 15 minutes is sized for 30k clips at the measured rate with
-        -- headroom — well above any real Anamnesis-class timeline.
-        local BAKE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
-        client:request("read_grades", helper_args,
-            function(response, code, message)
-                if response == nil then
-                    notify(args, nil, code, message)
+        -- Auto-discovery (FR-011c): establish/repair the ledger join
+        -- BEFORE pulling grades, so a freshly-imported project (or one
+        -- where the colorist added clips Resolve-side) syncs without a
+        -- separate user-run connect step. Read-only on Resolve,
+        -- idempotent on the ledger. A rate mismatch skips only the
+        -- position channel (marker matches + already-persisted links
+        -- still join grades correctly) — surfaced, then the sync
+        -- proceeds.
+        discovery.discover_and_link(client, args.sequence_id, db,
+            function(report, dcode, dmessage)
+                if report == nil then
+                    notify(args, nil, dcode, dmessage)
                     return
                 end
-                -- Async-tail asserts crash by design — see the contract
-                -- documented in bridge_completion.lua (executor's pcall
-                -- only catches sync-phase asserts before client:request
-                -- returns; this callback runs after that pcall has
-                -- popped). Masking an internal invariant violation as
-                -- resolve_api_error would conflate origin (rule 2.21)
-                -- and downgrade rule 1.14.
-                --
-                -- Helper anomaly channel (helper-protocol.md
-                -- §read_grades `warnings`): bake/page anomalies that
-                -- didn't fail the verb but leave user-visible damage
-                -- (clips without a grade carrier, Resolve stuck on the
-                -- Color page). Logged at warn so they're visible at
-                -- default log level — stderr-only proved invisible in
-                -- the 2026-06-10 incident. The shape assert doubles as
-                -- a version-skew tripwire: a resident helper process
-                -- predating this contract omits the field; restart
-                -- JVE (the helper respawns with current code).
-                assert(type(response.result.warnings) == "table",
-                    "SyncGradesFromResolve: read_grades response has no "
-                    .. "warnings array — helper process predates the "
-                    .. "protocol; restart JVE to respawn the helper")
-                for _, w in ipairs(response.result.warnings) do
-                    log.warn("read_grades: %s", w)
+                if report.rate_mismatch ~= nil then
+                    log.warn("SyncGradesFromResolve discovery: %s",
+                        report.rate_mismatch)
                 end
-                local captured = M.apply(response.result, sequence_id, db,
-                    os.time())
-                -- Persist captured onto the live command so the undoer
-                -- can find it. command_manager holds this same command-
-                -- object reference in the undo stack; a late
-                -- set_parameter from the async response handler is
-                -- visible to the undoer when the user eventually presses
-                -- undo. Without this, undo would hit the undoer's
-                -- "args.captured required" assert (contract break per
-                -- 2.13/2.32 — fail-loud is correct; a silent no-op
-                -- would leave the user with a broken "undo did
-                -- nothing" state).
-                command:set_parameter("captured", captured)
-                -- applied_count = response rows that landed on a JVE
-                -- clip (via ledger). Subtract unmatched so callers see
-                -- the count that actually mutated state, not the raw
-                -- helper row count (which can include unmatched
-                -- resolve_item_ids per FR-011c report-not-skip).
-                notify(args, {
-                    applied_count           = #response.result.grades
-                        - #captured.unmatched_resolve_items,
-                    unmatched_resolve_items = captured.unmatched_resolve_items,
-                    captured                = captured,
-                }, nil, nil)
-            end,
-            { timeout_ms = BAKE_REQUEST_TIMEOUT_MS })
+                if #report.ambiguous > 0 then
+                    log.warn("SyncGradesFromResolve discovery: %d "
+                        .. "ambiguous match(es) — those clips stay "
+                        .. "unlinked; see result.discovery.ambiguous",
+                        #report.ambiguous)
+                end
+                if #report.stamp_failures > 0 then
+                    log.warn("SyncGradesFromResolve discovery: %d "
+                        .. "identity-marker stamp(s) refused — links "
+                        .. "work but won't survive Resolve-side cuts; "
+                        .. "see result.discovery.stamp_failures",
+                        #report.stamp_failures)
+                end
+                M.request_and_apply_grades(client, args, report, db,
+                    command, bake_lut_dir)
+            end)
     end)
+end
+
+--- Second half of the sync: read_grades → apply → notify. Split out so
+--- execute() reads as the algorithm it is (discover → pull → apply).
+--- `report` is discovery's result, folded into the notify payload so
+--- callers see what got (un)linked alongside what got applied.
+function M.request_and_apply_grades(client, args, report, db, command,
+                                     bake_lut_dir)
+    local helper_args = { bake_lut_dir = bake_lut_dir }
+    if args.item_ids then helper_args.item_ids = args.item_ids end
+    local sequence_id = args.sequence_id
+    -- Per-request timeout: read_grades with bake_lut_dir bakes one
+    -- LUT per timeline-item. t033 measured ~30 ms median per bake on
+    -- Anamnesis (~1069 clips ≈ 32 s for the bake alone); add Resolve
+    -- API latency for GetClipsInTimeline/EDL export and the verb
+    -- comfortably runs minutes on a large project. The client-wide
+    -- default request_timeout_ms (30 s, set by helper_supervisor)
+    -- would trip mid-bake, then the helper's eventual reply would
+    -- arrive against a cleared in-flight slot and log "unknown id".
+    -- 15 minutes is sized for 30k clips at the measured rate with
+    -- headroom — well above any real Anamnesis-class timeline.
+    local BAKE_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+    client:request("read_grades", helper_args,
+        function(response, code, message)
+            if response == nil then
+                notify(args, nil, code, message)
+                return
+            end
+            -- Async-tail asserts crash by design — see the contract
+            -- documented in bridge_completion.lua (executor's pcall
+            -- only catches sync-phase asserts before client:request
+            -- returns; this callback runs after that pcall has
+            -- popped). Masking an internal invariant violation as
+            -- resolve_api_error would conflate origin (rule 2.21)
+            -- and downgrade rule 1.14.
+            --
+            -- Helper anomaly channel (helper-protocol.md
+            -- §read_grades `warnings`): bake/page anomalies that
+            -- didn't fail the verb but leave user-visible damage
+            -- (clips without a grade carrier, Resolve stuck on the
+            -- Color page). Logged at warn so they're visible at
+            -- default log level — stderr-only proved invisible in
+            -- the 2026-06-10 incident. The shape assert doubles as
+            -- a version-skew tripwire: a resident helper process
+            -- predating this contract omits the field; restart
+            -- JVE (the helper respawns with current code).
+            assert(type(response.result.warnings) == "table",
+                "SyncGradesFromResolve: read_grades response has no "
+                .. "warnings array — helper process predates the "
+                .. "protocol; restart JVE to respawn the helper")
+            for _, w in ipairs(response.result.warnings) do
+                log.warn("read_grades: %s", w)
+            end
+            local captured = M.apply(response.result, sequence_id, db,
+                os.time())
+            -- Persist captured onto the live command so the undoer
+            -- can find it. command_manager holds this same command-
+            -- object reference in the undo stack; a late
+            -- set_parameter from the async response handler is
+            -- visible to the undoer when the user eventually presses
+            -- undo. Without this, undo would hit the undoer's
+            -- "args.captured required" assert (contract break per
+            -- 2.13/2.32 — fail-loud is correct; a silent no-op
+            -- would leave the user with a broken "undo did
+            -- nothing" state).
+            command:set_parameter("captured", captured)
+            -- applied_count = response rows that landed on a JVE
+            -- clip (via ledger). Subtract unmatched so callers see
+            -- the count that actually mutated state, not the raw
+            -- helper row count (which can include unmatched
+            -- resolve_item_ids per FR-011c report-not-skip).
+            notify(args, {
+                applied_count           = #response.result.grades
+                    - #captured.unmatched_resolve_items,
+                unmatched_resolve_items = captured.unmatched_resolve_items,
+                captured                = captured,
+                -- What auto-discovery (FR-011c) just (un)linked — the
+                -- counterpart of applied_count for identity. Callers
+                -- and tests see matching outcomes per-sync instead of
+                -- via a separate connect command's result.
+                discovery               = {
+                    matched        = report.matched,
+                    already_linked = report.already_linked,
+                    unmatched      = report.unmatched,
+                    ambiguous      = report.ambiguous,
+                    audio_skipped  = report.audio_skipped,
+                    rate_mismatch  = report.rate_mismatch,
+                    stamped        = report.stamped,
+                    stamp_skipped  = report.stamp_skipped,
+                    stamp_failures = report.stamp_failures,
+                },
+            }, nil, nil)
+        end,
+        { timeout_ms = BAKE_REQUEST_TIMEOUT_MS })
 end
 
 local SPEC = {

@@ -24,7 +24,7 @@ M.JVE_TO_WIRE_TRACK_TYPE = {
 --- Single source of truth for the kind boundary — adding a new kind
 --- tomorrow requires changing this set + every caller that assumed the
 --- two-element discriminator. Without this lift, the assert was repeated
---- verbatim in connect_to_resolve_project.index_items_by_position and
+--- verbatim in discovery.index_items_by_position and
 --- sync_edits_from_resolve.translate_wire_response, so a closed-set
 --- widening could land in one and not the other.
 ---

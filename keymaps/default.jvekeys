@@ -165,4 +165,4 @@
 "Cmd+Option+R" = "SendToResolve"
 "Cmd+Option+G" = "SyncGradesFromResolve"
 "Cmd+Option+E" = "SyncEditsFromResolve"
-# ConnectToResolveProject intentionally unbound — less frequent setup command.
+# Identity discovery + marker stamping run automatically inside the syncs (no separate command).

@@ -22,6 +22,7 @@ local M = {}
 local Clip              = require("models.clip")
 local Track             = require("models.track")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
+local discovery         = require("core.resolve_bridge.discovery")
 local edit_diff         = require("core.resolve_bridge.edit_diff")
 local supervisor        = require("core.resolve_bridge.helper_supervisor")
 local command_manager   = require("core.command_manager")
@@ -979,20 +980,42 @@ function M.execute(args, db, _command)
         "SyncEditsFromResolve: user_choices must be a table or nil")
 
     supervisor.with_client(notify, args, function(client)
-        -- read_timeline contract args is `{item_ids?}`; sequence_id/
-        -- project_id are caller-side state used by apply() below, not
-        -- wire args.
-        client:request("read_timeline", {},
-            function(response, code, message)
-                if response == nil then
+        -- Auto-discovery (FR-011c): establish/repair the ledger join
+        -- BEFORE classifying edits, so a freshly-imported project
+        -- syncs without a separate user-run connect step. Discovery
+        -- already pulls read_timeline (its position channel needs it),
+        -- and its report hands the raw result back — reuse it instead
+        -- of paying a second helper roundtrip. A rate mismatch skips
+        -- only the position channel (surfaced below); the classify
+        -- walk then proceeds on marker matches + persisted links.
+        discovery.discover_and_link(client, args.sequence_id, db,
+            function(report, code, message)
+                if report == nil then
                     notify(args, nil, code, message)
                     return
+                end
+                if report.rate_mismatch ~= nil then
+                    log.warn("SyncEditsFromResolve discovery: %s",
+                        report.rate_mismatch)
+                end
+                if #report.ambiguous > 0 then
+                    log.warn("SyncEditsFromResolve discovery: %d "
+                        .. "ambiguous match(es) — those clips stay "
+                        .. "unlinked; see result.discovery.ambiguous",
+                        #report.ambiguous)
+                end
+                if #report.stamp_failures > 0 then
+                    log.warn("SyncEditsFromResolve discovery: %d "
+                        .. "identity-marker stamp(s) refused — links "
+                        .. "work but won't survive Resolve-side cuts; "
+                        .. "see result.discovery.stamp_failures",
+                        #report.stamp_failures)
                 end
                 -- Wire→classifier translation at the boundary between
                 -- the helper response and JVE-side processing. M.apply
                 -- consumes classifier shape (per-item JVE track_id).
-                local translated = M.translate_wire_response(response.result,
-                    args.sequence_id)
+                local translated = M.translate_wire_response(
+                    report.read_timeline_result, args.sequence_id)
                 -- Async-tail asserts crash by design — see the contract
                 -- documented in bridge_completion.lua (executor's pcall
                 -- only catches sync-phase asserts before client:request
@@ -1002,6 +1025,19 @@ function M.execute(args, db, _command)
                 -- and downgrade rule 1.14.
                 local result = M.apply(translated, args.sequence_id,
                     args.project_id, db, args.user_choices)
+                -- What auto-discovery just (un)linked — surfaced
+                -- alongside the edit buckets (FR-011c report-not-skip).
+                result.discovery = {
+                    matched        = report.matched,
+                    already_linked = report.already_linked,
+                    unmatched      = report.unmatched,
+                    ambiguous      = report.ambiguous,
+                    audio_skipped  = report.audio_skipped,
+                    rate_mismatch  = report.rate_mismatch,
+                    stamped        = report.stamped,
+                    stamp_skipped  = report.stamp_skipped,
+                    stamp_failures = report.stamp_failures,
+                }
                 notify(args, result, nil, nil)
             end)
     end)

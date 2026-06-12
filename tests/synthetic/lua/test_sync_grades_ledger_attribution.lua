@@ -6,8 +6,8 @@
 -- The user-visible flow this test pins:
 --   1. JVE imports a graded DRP (clips get adopted Sm2Ti DbIds as
 --      clip.id, OR fresh UUIDs for blades made after import).
---   2. ConnectToResolveProject runs positional match (no markers
---      exist in live Resolve yet — first connect after import).
+--   2. Sync-time auto-discovery runs positional match (no markers
+--      exist in live Resolve yet — first sync after import).
 --      identity_ledger gains a row per matched clip mapping
 --      clip.id → live resolve_item_id (= TimelineItem:GetUniqueId(),
 --      NOT the DRP DbId — see spec.md T047 spike).
@@ -76,7 +76,7 @@ db:exec(string.format([[
         NULL, NULL, 1, %d, %d, NULL, NULL, 'resample', 1.0, 0);
 ]], now, now, now, now, now, now, now, now))
 
--- ConnectToResolveProject populated these ledger rows by positional
+-- Sync-time auto-discovery populated these ledger rows by positional
 -- match (FR-011c). Note: resolve_item_id values are RUNTIME handles
 -- from GetUniqueId(), NOT equal to clip.id even when clip.id is the
 -- adopted DbId (spec.md T047 spike: 0/1003 match).

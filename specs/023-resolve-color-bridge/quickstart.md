@@ -14,10 +14,10 @@ Validates the seven acceptance scenarios (spec.md) against a **real Resolve Stud
 - Run command `SendToResolve` on a sequence of N clips. It authors a `.drt`, round-trips it through JVE's own importer (must read back as intended), then calls `import_timeline`.
 - **Assert**: the Resolve timeline contains **N items**; for a chosen item K, the recovered join key **byte-equals** the JVE clip id JVE wrote; any unrelinkable media appears in `unrelinked` (and the user is told), never silently missing.
 
-## 1b. Connect an imported graded project (FR-011b/c — inbound, the "I imported a graded DRP" flow)
+## 1b. Sync an imported graded project (FR-011b/c — inbound, the "I imported a graded DRP" flow)
 - Start from a JVE project that was **imported from a graded DRP** (so `clip.id` = the Resolve timeline-item id, FR-011b), with the same project open live in Resolve.
-- Run `ConnectToResolveProject`.
-- **Assert**: every clip with an adopted id links directly to its live timeline item (`jve_guid == resolve_item_id`); clips without an adopted id (e.g. blades made after import) match positionally; the unmatched count is reported, not silently zero. Then `SyncGradesFromResolve` and **assert grades land on the right clips** — this is the answer to "hook the imported DRP's grade up to the jvp."
+- Run `SyncGradesFromResolve` (menu: **Copy Color Grading from Resolve**) — the ONLY user action; identity discovery + marker stamping run automatically inside it (FR-011c, connect fold 2026-06-12).
+- **Assert**: the sync result's `discovery` table reports every clip matched (markers if previously stamped, else position/content), unmatched/ambiguous counts surfaced not silently zero, and **grades land on the right clips** — this is the answer to "hook the imported DRP's grade up to the jvp."
 
 ## 2. Grade a primary CDL, sync back, display (FR-014, 015, 016 — Scenario 2)
 - In Resolve, apply a known primary grade to one clip (e.g. slope `(1.05,0.98,0.92)`, offset `(0.01,0,-0.02)`, power `(1.1,1.0,0.95)`, sat `0.85`).
