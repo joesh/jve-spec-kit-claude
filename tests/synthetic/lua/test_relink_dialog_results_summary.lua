@@ -1,14 +1,12 @@
 #!/usr/bin/env luajit
 -- Test: media_relink_dialog._format_results_summary partitions failed
--- entries into "partial coverage" (candidate found, insufficient
--- extent) vs "not found" (nothing with a matching basename in the
--- search tree), and renders the list of each with the relevant detail.
---
--- The dialog previously only showed counts and "no clips matched"
--- wording when relinked == 0. Users post-relink had no visibility
--- into WHICH clips remained offline or why — now they do, and the
--- distinction drives whether to look for the file (not-found) or
--- accept the clip will stay offline with a shortfall note (partial).
+-- entries into "found but rejected" (kind="rejected" — a file with the
+-- right name exists but a matching rule turned it down, with the
+-- concrete mismatch in the reason) vs "not found" (kind="not_found" —
+-- nothing with a matching basename in the search tree), plus the
+-- "partial coverage" bucket from relinked[] entries carrying coverage.
+-- One line per unsuccessful media — the user scans the list to decide
+-- per file: locate it, fix rules, or accept it stays offline.
 package.path = package.path .. ";../src/lua/?.lua;../src/lua/?/init.lua;./?.lua;./?/init.lua"
 require("test_env")
 
@@ -34,6 +32,9 @@ local media_infos = {
     },
     ["mn1"] = {
         name = "B001.wav", path = "/Volumes/Audio/B001.wav",
+    },
+    ["mr1"] = {
+        name = "A003.mov", path = "/Volumes/Cam/A003.mov",
     },
     ["ok"] = { name = "C001.mov", path = "/Volumes/Cam/C001.mov" },
 }
@@ -61,8 +62,11 @@ local results = {
           } },
     },
     failed = {
-        { media_id = "mn1",
-          reason = "no filename match in search directory" },
+        { media_id = "mn1", kind = "not_found",
+          reason = "no file with this name in search folder" },
+        { media_id = "mr1", kind = "rejected",
+          reason = "found A003.mov: timecode 02:13:20:00 does not match "
+              .. "stored 01:06:41:00" },
     },
     ambiguous = {},
 }
@@ -87,20 +91,34 @@ assert(summary:find("3f at tail", 1, true), string.format(
 assert(summary:find("5f at head", 1, true) and summary:find("5f at tail", 1, true),
     string.format("both-end shortfall for mp2:\n%s", summary))
 
--- Not-found list names the media and includes the reason
-assert(summary:find("B001.wav", 1, true), "not-found must name B001.wav")
-assert(summary:find("no filename match", 1, true),
-    "not-found must include the reason: " .. summary)
+-- Found-but-rejected list: one line naming the media with its concrete
+-- rejection reason (which itself names the file and the mismatch).
+assert(summary:find("A003.mov", 1, true), "rejected must name A003.mov")
+assert(summary:find("timecode 02:13:20:00 does not match", 1, true),
+    "rejected line must carry the rule mismatch: " .. summary)
 
--- Partial list must NOT appear in the not-found section — so ensure
--- each partial media name appears BEFORE the not-found header.
+-- Not-found list names the media.
+assert(summary:find("B001.wav", 1, true), "not-found must name B001.wav")
+
+-- Section ordering: partial, then found-but-rejected, then not-found.
+-- Each entry must sit under its own header, not a neighboring one.
+local rej_header_pos = summary:find("Found, but didn", 1, true)
 local nf_header_pos = summary:find("Not found in search tree", 1, true)
+assert(rej_header_pos, "summary must have a found-but-rejected section")
+assert(nf_header_pos, "summary must have a not-found section")
 local a001_pos = summary:find("A001.mov", 1, true)
+local a003_pos = summary:find("A003.mov", 1, true)
 local b001_pos = summary:find("B001.wav", 1, true)
-assert(a001_pos < nf_header_pos,
-    "partial entries appear before Not-found section header")
+assert(a001_pos < rej_header_pos,
+    "partial entries appear before the rejected section header")
+assert(a003_pos > rej_header_pos and a003_pos < nf_header_pos,
+    "rejected entries appear between rejected and not-found headers")
 assert(b001_pos > nf_header_pos,
     "not-found entries appear after Not-found section header")
+
+-- Counts header reflects the rejected/not-found split.
+assert(summary:find("1 rejected", 1, true),
+    "summary must count found-but-rejected media: " .. summary)
 
 -- Audio-media shortfall: when the media's stored_rate is the audio
 -- sample rate (DRP imports of audio-only WAVs get start_tc_rate set to

@@ -20,10 +20,15 @@ local json = require("dkjson")
 local dir_exists = require("core.fs_utils").dir_exists
 
 --- Pure: build a human-readable rich-text summary of a relink-results
---- struct ({relinked, failed, ambiguous}). Partitions `failed` into
---- "partial coverage" (entries with coverage info — the relinker did
---- find a same-basename candidate but rejected it for extent) and
---- "not found" (everything else). Exposed so tests exercise the
+--- struct ({relinked, failed, ambiguous}). Buckets, in render order:
+---   partial   — relinked[] entries carrying coverage info (file found
+---               but short; clips past coverage stay offline with a note)
+---   rejected  — failed[] kind="rejected": name-matched file(s) exist
+---               but a matching rule turned every one down; the reason
+---               spells out the concrete mismatch
+---   not found — failed[] kind="not_found": nothing with the media's
+---               basename in the search tree
+--- One line per unsuccessful media. Exposed so tests exercise the
 --- partitioning + formatting without touching Qt.
 ---
 --- media_infos supplies per-media_id labels (name/path) so the summary
@@ -45,7 +50,21 @@ function M._format_results_summary(results, media_infos)
     end
     local n_relinked = #clean_relinked
     local n_ambiguous = results.ambiguous and #results.ambiguous or 0
-    local unfindable = results.failed or {}
+
+    -- Partition failed[] by the relinker's failure kind.
+    local not_found, rejected = {}, {}
+    for _, f in ipairs(results.failed or {}) do
+        if f.kind == "not_found" then
+            not_found[#not_found + 1] = f
+        elseif f.kind == "rejected" then
+            rejected[#rejected + 1] = f
+        else
+            error(string.format(
+                "_format_results_summary: failed entry for media %s has "
+                .. "unknown kind %s (expected not_found|rejected)",
+                tostring(f.media_id), tostring(f.kind)))
+        end
+    end
 
     local function name_for(media_id)
         local mi = media_infos and media_infos[media_id]
@@ -61,8 +80,8 @@ function M._format_results_summary(results, media_infos)
     local parts = {}
     parts[#parts + 1] = string.format(
         "<b>%d relinked</b> &nbsp;•&nbsp; <b>%d partial</b> &nbsp;•&nbsp; " ..
-        "<b>%d not found</b>",
-        n_relinked, #partial, #unfindable)
+        "<b>%d rejected</b> &nbsp;•&nbsp; <b>%d not found</b>",
+        n_relinked, #partial, #rejected, #not_found)
     if n_ambiguous > 0 then
         parts[#parts + 1] = string.format("&nbsp;•&nbsp; <b>%d ambiguous</b>",
             n_ambiguous)
@@ -114,17 +133,25 @@ function M._format_results_summary(results, media_infos)
         end
     end
 
-    if #unfindable > 0 then
-        parts[#parts + 1] = "<br/><br/><b>Not found in search tree:</b>"
-        for _, f in ipairs(unfindable) do
-            local nm = name_for(f.media_id)
-            local reason = f.reason or "unknown reason"
+    if #rejected > 0 then
+        parts[#parts + 1] = "<br/><br/><b>Found, but didn't match:</b>"
+        for _, f in ipairs(rejected) do
             parts[#parts + 1] = string.format(
-                "<br/>&nbsp;&nbsp;%s &nbsp;—&nbsp; %s", nm, reason)
+                "<br/>&nbsp;&nbsp;%s &nbsp;—&nbsp; %s",
+                name_for(f.media_id), f.reason)
         end
     end
 
-    if #partial == 0 and #unfindable == 0 and n_relinked > 0 then
+    if #not_found > 0 then
+        parts[#parts + 1] = "<br/><br/><b>Not found in search tree:</b>"
+        for _, f in ipairs(not_found) do
+            parts[#parts + 1] = string.format(
+                "<br/>&nbsp;&nbsp;%s", name_for(f.media_id))
+        end
+    end
+
+    if #partial == 0 and #rejected == 0 and #not_found == 0
+        and n_relinked > 0 then
         parts[#parts + 1] = "<br/><br/><i>All media relinked successfully.</i>"
     end
 
@@ -262,6 +289,11 @@ local function build_media_infos(media_list, widgets)
             media_file_original_tc = file_orig_tc,
             width = media.width or 0,   -- lint-allow: R010 media.width CHECK(NULL OR >0) — nullable for audio-only
             height = media.height or 0,  -- lint-allow: R010 media.height CHECK(NULL OR >0) — nullable for audio-only
+            -- Stored native timebase — the match_frame_rate rule compares
+            -- candidate probe fps against these (they were never passed
+            -- before, so the rule rejected every candidate when enabled).
+            fps_num = media.frame_rate and media.frame_rate.fps_numerator,
+            fps_den = media.frame_rate and media.frame_rate.fps_denominator,
             source_extent_start = extent_start,
             source_extent_end   = extent_end,
         }
@@ -549,25 +581,24 @@ function M.show(media_list, parent_window, opts)
     qt.LAYOUT.ADD_WIDGET(main_layout, error_label)
 
     -- Results summary: shown after relink completes. Distinguishes
-    -- three buckets:
+    -- four buckets:
     --   1. relinked — good matches we'll apply
     --   2. partial — same-basename file found but doesn't cover the
     --      full clip range; clips will be flagged on the timeline
-    --   3. unfindable — no same-basename file in the search tree
-    -- The user needs to see the per-media list for (2) and (3) so they
-    -- know which clips to expect as offline post-apply and why. Rich-
-    -- text QLabel is fine for a few hundred lines; if the list grows
-    -- past that, promote to a scrollable list widget later.
-    local results_summary = qt.WIDGET.CREATE_LABEL("")
+    --   3. rejected — same-basename file found but a matching rule
+    --      turned it down (reason per file)
+    --   4. not found — no same-basename file in the search tree
+    -- The user needs the per-media list for (2)-(4) — one line each —
+    -- to know which clips stay offline post-apply and why. Read-only
+    -- QTextEdit so hundreds of lines scroll instead of growing the
+    -- dialog; content is rich text via SET_TEXT_EDIT_HTML (SET_TEXT
+    -- routes QTextEdit to setPlainText).
+    local results_summary = qt.WIDGET.CREATE_TEXT_EDIT("")
+    qt.CONTROL.SET_TEXT_EDIT_READ_ONLY(results_summary, true)
     qt.PROPERTIES.SET_STYLE(results_summary,
         "color: #dddddd; font-family: monospace; font-size: 11px; " ..
         "padding: 6px; background: #1e1e1e; border: 1px solid #333;")
-    if qt.PROPERTIES.SET_WORD_WRAP then
-        qt.PROPERTIES.SET_WORD_WRAP(results_summary, true)
-    end
-    if qt.PROPERTIES.SET_TEXT_FORMAT then
-        qt.PROPERTIES.SET_TEXT_FORMAT(results_summary, "rich")
-    end
+    qt.PROPERTIES.SET_SIZE(results_summary, 660, 180)
     qt.DISPLAY.SET_VISIBLE(results_summary, false)
     qt.LAYOUT.ADD_WIDGET(main_layout, results_summary)
 
@@ -659,7 +690,7 @@ function M.show(media_list, parent_window, opts)
                 source_extent_end   = mi.source_extent_end,
             }
         end
-        qt.PROPERTIES.SET_TEXT(results_summary,
+        qt.CONTROL.SET_TEXT_EDIT_HTML(results_summary,
             M._format_results_summary(results, info_lookup))
         qt.DISPLAY.SET_VISIBLE(results_summary, true)
 

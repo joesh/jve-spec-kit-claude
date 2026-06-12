@@ -187,6 +187,16 @@ int lua_scroll_text_edit_to_end(lua_State* L) {
     return 0;
 }
 
+// CONTROL.SET_TEXT_EDIT_HTML(text_edit, html) — rich-text content for
+// scrollable report panes. Needed because PROPERTIES.SET_TEXT routes
+// QTextEdit through setPlainText, which renders HTML as literal tags.
+int lua_set_text_edit_html(lua_State* L) {
+    QTextEdit* te = get_widget<QTextEdit>(L, 1);
+    const char* html = luaL_checkstring(L, 2);
+    if (te) te->setHtml(QString::fromUtf8(html));
+    return 0;
+}
+
 // CONTROL.SET_BUTTON_AUTO_DEFAULT(button, bool)
 int lua_set_button_auto_default(lua_State* L) {
     QPushButton* btn = get_widget<QPushButton>(L, 1);

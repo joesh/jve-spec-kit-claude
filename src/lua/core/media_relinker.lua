@@ -34,6 +34,7 @@ local M = {}
 local log = require("core.logger").for_area("media")
 local shell_capture = require("core.fs_utils").shell_capture
 local dir_exists = require("core.fs_utils").dir_exists
+local frame_utils = require("core.frame_utils")
 
 --- Check if file exists at given path
 -- @param file_path string Absolute path to check
@@ -673,7 +674,10 @@ function M.check_extent_containment(extent_start, extent_end, probe_result, stor
 
     local cand_tc_value, cand_tc_rate = probe_candidate_tc(probe_result)
     if not cand_tc_value or not cand_tc_rate then
-        return false
+        -- Files without embedded TC have origin 00:00:00:00 — the decoder
+        -- computes file_pos = source_in - file_tc_origin with origin 0 for
+        -- TC-less files, so containment is evaluated against [0, duration).
+        cand_tc_value, cand_tc_rate = 0, stored_rate
     end
     if not probe_result.duration_frames then
         return false
@@ -811,6 +815,28 @@ local function collect_paths_to_check(candidate_index, matching_rules, media_pat
     return paths
 end
 
+-- Format frames-at-rate as HH:MM:SS:FF for failure diagnostics. Rate is
+-- the TC pair's own rate: video fps for V/V+A files, sample rate for
+-- audio-only TC (FF then counts samples within the second).
+local function format_tc(value, rate)
+    return frame_utils.format_timecode(value, rate)
+end
+
+local function format_fps(num, den)
+    if den == 1 then return tostring(num) end
+    return string.format("%.3f", num / den)
+end
+
+-- One user-readable line for "the file is there but its TC is wrong".
+-- Both sides render as HH:MM:SS:FF, each at its own rate.
+local function tc_mismatch_reason(cand_path, cand_tc_value, cand_tc_rate,
+                                  stored_value, stored_rate)
+    return string.format("found %s: timecode %s does not match stored %s",
+        get_filename(cand_path),
+        format_tc(cand_tc_value, cand_tc_rate),
+        format_tc(stored_value, stored_rate))
+end
+
 -- TC-matching pass for one candidate. Returns
 --   passed         — whether this candidate survives the TC criterion
 --   tc_value, rate — candidate's container TC (when probed)
@@ -818,6 +844,7 @@ end
 --                    containment fallback (FR-008/FR-009)
 --   probe_result   — cached probe (passed back so the caller doesn't
 --                    re-probe in the next pass)
+--   reason         — user-readable rejection reason (only when not passed)
 local function check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
     if not matching_rules.match_timecode then
         return true, nil, nil, false, nil
@@ -844,6 +871,9 @@ local function check_candidate_tc(cand_path, media_info, matching_rules, probe_f
         return true, cand_tc_value, cand_tc_rate, false, probe_result
     end
 
+    local reason = tc_mismatch_reason(
+        cand_path, cand_tc_value, cand_tc_rate, stored_value, stored_rate)
+
     -- Primary TC mismatch — check file_original_timecode (FR-008).
     local file_orig_tc = media_info.media_file_original_tc
     if file_orig_tc then
@@ -858,17 +888,18 @@ local function check_candidate_tc(cand_path, media_info, matching_rules, probe_f
         if matching_rules.accept_trimmed_media then
             return true, cand_tc_value, cand_tc_rate, true, probe_result
         end
-        return false, cand_tc_value, cand_tc_rate, false, probe_result
+        return false, cand_tc_value, cand_tc_rate, false, probe_result, reason
     end
     -- No file_original_tc → existing trimmed-media containment fallback.
     if matching_rules.accept_trimmed_media then
         return true, cand_tc_value, cand_tc_rate, true, probe_result
     end
-    return false, cand_tc_value, cand_tc_rate, false, probe_result
+    return false, cand_tc_value, cand_tc_rate, false, probe_result, reason
 end
 
 -- Resolution + frame-rate pass. probe_result is reused when the TC pass
--- already loaded it. Returns (passed, probe_result).
+-- already loaded it. Returns (passed, probe_result, reason) — reason is
+-- the user-readable rejection line, only when not passed.
 local function check_candidate_resolution_fps(cand_path, media_info, matching_rules,
                                                probe_fn, probe_result)
     if not (matching_rules.match_resolution or matching_rules.match_frame_rate) then
@@ -879,33 +910,49 @@ local function check_candidate_resolution_fps(cand_path, media_info, matching_ru
     if matching_rules.match_resolution then
         if probe_result.width ~= media_info.width
             or probe_result.height ~= media_info.height then
-            return false, probe_result
+            return false, probe_result, string.format(
+                "found %s: resolution %sx%s does not match stored %sx%s",
+                get_filename(cand_path),
+                tostring(probe_result.width), tostring(probe_result.height),
+                tostring(media_info.width), tostring(media_info.height))
         end
     end
     if matching_rules.match_frame_rate
         and probe_result.fps_num and probe_result.fps_den then
+        assert(media_info.fps_num and media_info.fps_den, string.format(
+            "check_candidate_resolution_fps: match_frame_rate requires "
+            .. "media_info.fps_num/fps_den for %s", media_info.media_path))
         if probe_result.fps_num ~= media_info.fps_num
             or probe_result.fps_den ~= media_info.fps_den then
-            return false, probe_result
+            return false, probe_result, string.format(
+                "found %s: frame rate %s does not match stored %s fps",
+                get_filename(cand_path),
+                format_fps(probe_result.fps_num, probe_result.fps_den),
+                format_fps(media_info.fps_num, media_info.fps_den))
         end
     end
     return true, probe_result
 end
 
+-- Returns (candidates, rejected): candidates are the paths that passed
+-- every enabled rule; rejected records each name-matched path a rule
+-- turned down, as {path, reason} with the concrete mismatch — fuel for
+-- the per-media failure diagnostics (a silently vanishing candidate is
+-- indistinguishable from "file not found" to the user).
 function M.find_candidates_for_media(media_info, candidate_index, matching_rules, probe_fn)
     assert(type(media_info) == "table", "find_candidates_for_media: media_info required")
     assert(type(candidate_index) == "table", "find_candidates_for_media: candidate_index required")
     assert(type(matching_rules) == "table", "find_candidates_for_media: matching_rules required")
 
-    local results = {}
+    local results, rejected = {}, {}
     local paths_to_check = collect_paths_to_check(
         candidate_index, matching_rules, media_info.media_path)
 
     for _, cand_path in ipairs(paths_to_check) do
-        local passed, cand_tc_value, cand_tc_rate, tc_mismatch, probe_result =
+        local passed, cand_tc_value, cand_tc_rate, tc_mismatch, probe_result, reason =
             check_candidate_tc(cand_path, media_info, matching_rules, probe_fn)
         if passed then
-            passed, probe_result = check_candidate_resolution_fps(
+            passed, probe_result, reason = check_candidate_resolution_fps(
                 cand_path, media_info, matching_rules, probe_fn, probe_result)
         end
         if passed then
@@ -916,9 +963,14 @@ function M.find_candidates_for_media(media_info, candidate_index, matching_rules
                 probe_result   = probe_result,
                 tc_mismatch    = tc_mismatch,
             }
+        else
+            assert(reason, string.format(
+                "find_candidates_for_media: rejection without a reason for %s "
+                .. "— every reject path must explain itself", cand_path))
+            rejected[#rejected + 1] = { path = cand_path, reason = reason }
         end
     end
-    return results
+    return results, rejected
 end
 
 -- =============================================================================
@@ -947,9 +999,11 @@ end
 --   * A tc_mismatch that fails extent but starts at/after the original
 --     file's TC and within a plausible trim window is a partial_fit
 --     candidate (tried lazily against per-clip ranges).
---   * A tc_mismatch that fails both is dropped.
+--   * A tc_mismatch that fails both is dropped — recorded in the third
+--     return value as {path, reason} so the failure diagnostics can tell
+--     the user the file WAS found and why it didn't qualify.
 local function partition_candidates(media_info, candidates, stored_rate, tc_remap_offset)
-    local viable, partial_fit = {}, {}
+    local viable, partial_fit, dropped = {}, {}, {}
 
     -- Decide whether this candidate's probed extent contains the media's
     -- full source range. Returns true only when both the extent fields
@@ -1003,11 +1057,25 @@ local function partition_candidates(media_info, candidates, stored_rate, tc_rema
                 -- within ~24h (reject random unrelated TC space).
                 if offset >= 0 and offset < 90000 * 24 then
                     partial_fit[#partial_fit + 1] = cand
+                else
+                    dropped[#dropped + 1] = {
+                        path = cand.path,
+                        reason = tc_mismatch_reason(cand.path,
+                            cand_tc_value, cand_tc_rate, ref_tc, stored_rate)
+                            .. " (not a trim of the original)",
+                    }
                 end
+            else
+                -- tc_mismatch implies both stored and candidate TC existed
+                -- at the match pass; losing them here is an internal error.
+                assert(false, string.format(
+                    "partition_candidates: tc_mismatch candidate %s lost its "
+                    .. "TC context (ref_tc=%s cand_tc=%s)",
+                    cand.path, tostring(ref_tc), tostring(cand_tc_value)))
             end
         end
     end
-    return viable, partial_fit
+    return viable, partial_fit, dropped
 end
 
 -- Pack the TC fields a Media row's metadata needs to be synced with the
@@ -1082,30 +1150,28 @@ end
 local function log_zero_fit_detail(cand, clips, stored_rate, tc_remap_offset)
     local pr = cand.probe_result
     local cand_tc_value, cand_tc_rate = probe_candidate_tc(pr)
-    -- TC and duration can be genuinely absent on probes that lacked metadata;
+    if not cand_tc_value then
+        -- TC-less candidate: origin 0 (matches the containment math).
+        cand_tc_value, cand_tc_rate = 0, stored_rate
+    end
+    -- Duration can be genuinely absent on probes that lacked metadata;
     -- this is a diagnostic-only path, so format "?" rather than fake-zero.
-    local cand_start_str, cand_end_str
-    if cand_tc_value then
-        local cand_start = cand_tc_value
-        if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
-            cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
-        end
-        cand_start_str = tostring(cand_start)
-        if pr.duration_frames then
-            local cand_dur = pr.duration_frames
-            if pr.fps_num and pr.fps_den then
-                local probe_rate = pr.fps_num / pr.fps_den
-                if math.abs(probe_rate - stored_rate) > 0.01 then
-                    cand_dur = math.floor(
-                        cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
-                end
+    local cand_start = cand_tc_value
+    if stored_rate and cand_tc_rate and cand_tc_rate ~= stored_rate then
+        cand_start = math.floor(cand_start * stored_rate / cand_tc_rate + 0.5)
+    end
+    local cand_start_str = tostring(cand_start)
+    local cand_end_str = "?"
+    if pr.duration_frames then
+        local cand_dur = pr.duration_frames
+        if pr.fps_num and pr.fps_den then
+            local probe_rate = pr.fps_num / pr.fps_den
+            if math.abs(probe_rate - stored_rate) > 0.01 then
+                cand_dur = math.floor(
+                    cand_dur * stored_rate * pr.fps_den / pr.fps_num + 0.5)
             end
-            cand_end_str = tostring(cand_start + cand_dur)
-        else
-            cand_end_str = "?"
         end
-    else
-        cand_start_str, cand_end_str = "?", "?"
+        cand_end_str = tostring(cand_start + cand_dur)
     end
     local c0 = clips[1]
     log.event(
@@ -1158,10 +1224,11 @@ local function coverage_for_candidate(cand, stored_rate)
     end
 
     local cov_value, cov_rate = probe_candidate_tc(pr)
-    -- A candidate with no probed TC can't anchor a partial_coverage note —
-    -- the start/end values would be lies. Caller (compute_partial_coverage)
-    -- treats nil as "skip this candidate".
-    if not cov_value then return nil end
+    if not cov_value then
+        -- TC-less candidate: anchored at origin 00:00:00:00, same
+        -- convention as check_extent_containment / the decoder.
+        cov_value, cov_rate = 0, stored_rate
+    end
     local cov_start = cov_value
     if cov_rate and cov_rate ~= stored_rate then
         cov_start = math.floor(cov_start * stored_rate / cov_rate + 0.5)
@@ -1195,17 +1262,33 @@ local function compute_partial_coverage(partial_fit, stored_rate)
     }
 end
 
--- Derive a human-readable reason string for why a media failed to relink.
-local function failure_reason(candidates, viable, partial_fit)
-    if #candidates == 0 then
-        return "no filename match in search directory"
+-- Derive the failure classification for a media nothing relinked.
+-- Returns (kind, reason):
+--   kind = "not_found" — no file with the media's basename anywhere in
+--          the search tree; the user needs to locate the file.
+--   kind = "rejected"  — name-matched file(s) exist but every one was
+--          turned down; reason concatenates the per-candidate mismatches
+--          so the user can fix rules or accept the file is different.
+local function failure_reason(candidates, rejected, dropped, partial_fit)
+    local notes = {}
+    for _, r in ipairs(rejected) do notes[#notes + 1] = r.reason end
+    for _, d in ipairs(dropped) do notes[#notes + 1] = d.reason end
+    for _, c in ipairs(partial_fit) do
+        -- Reaching failure with a partial_fit candidate means neither the
+        -- split nor the coverage promotion could use it — with TC-less
+        -- candidates anchored at origin 0, the only remaining cause is a
+        -- probe that yielded no usable duration.
+        notes[#notes + 1] = string.format(
+            "found %s: file duration unreadable", get_filename(c.path))
     end
-    if #partial_fit == 0 and #viable == 0 then
-        return string.format(
-            "%d candidate(s) found but all rejected by TC/extent filter",
-            #candidates)
+    if #notes == 0 then
+        assert(#candidates == 0, string.format(
+            "failure_reason: %d candidate(s) failed without any recorded "
+            .. "rejection — a reject path is silently dropping candidates",
+            #candidates))
+        return "not_found", "no file with this name in search folder"
     end
-    return "no matching candidate found"
+    return "rejected", table.concat(notes, "; ")
 end
 
 --- Classify a media into relinked/failed/ambiguous/split based on candidates.
@@ -1312,12 +1395,15 @@ local function try_partial_coverage_relink(out, media_info, partial_fit_candidat
     return true
 end
 
-local function classify_media(media_info, candidates, clip_loader)
+-- rejected: {path, reason} entries from find_candidates_for_media for
+-- name-matched files the match rules turned down. nil = none (tests
+-- exercising classification in isolation).
+local function classify_media(media_info, candidates, clip_loader, rejected)
     local stored_rate = media_info.media_start_tc_rate
     local tc_remap_offset = compute_tc_remap_offset(media_info)
     local out = { relinked = {}, failed = {}, ambiguous = {} }
 
-    local viable, partial_fit_candidates =
+    local viable, partial_fit_candidates, dropped =
         partition_candidates(media_info, candidates, stored_rate, tc_remap_offset)
 
     if #viable > 0 then
@@ -1334,11 +1420,13 @@ local function classify_media(media_info, candidates, clip_loader)
         return out
     end
 
-    local reason = failure_reason(candidates, viable, partial_fit_candidates)
+    local kind, reason = failure_reason(
+        candidates, rejected or {}, dropped, partial_fit_candidates)
     log.event("  FAILED: %s — %s", media_info.media_name, reason)
 
     out.failed[#out.failed + 1] = {
         media_id = media_info.media_id,
+        kind = kind,
         reason = reason,
     }
     return out
@@ -1559,10 +1647,10 @@ function M.relink_media_batch(media_infos, options, progress_cb)
         log.detail("media %d/%d: %s",
             i, total_media, media_info.media_name)
 
-        local candidates = M.find_candidates_for_media(
+        local candidates, rejected = M.find_candidates_for_media(
             media_info, candidate_index, matching_rules, cached_probe)
 
-        log.detail("  → %d candidate(s)", #candidates)
+        log.detail("  → %d candidate(s), %d rejected", #candidates, #rejected)
         for ci, c in ipairs(candidates) do
             log.detail("    [%d] %s (tc=%s@%s%s)", ci, c.path,
                 tostring(c.start_tc_value), tostring(c.start_tc_rate),
@@ -1574,7 +1662,8 @@ function M.relink_media_batch(media_infos, options, progress_cb)
         end
 
         local t_classify = qt_monotonic_s()
-        local media_results = classify_media(media_info, candidates, options.clip_loader)
+        local media_results = classify_media(
+            media_info, candidates, options.clip_loader, rejected)
         classify_total_seconds = classify_total_seconds + (qt_monotonic_s() - t_classify)
         merge_media_results(results, media_results)
 

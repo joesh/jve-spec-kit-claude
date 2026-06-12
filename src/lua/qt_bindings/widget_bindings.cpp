@@ -77,11 +77,12 @@ int lua_set_text_generic(lua_State* L) {
 int lua_get_text_generic(lua_State* L) {
     QWidget* w = get_widget<QWidget>(L, 1);
     if (!w) { lua_pushnil(L); return 1; }
-    
+
     if (QLabel* l = qobject_cast<QLabel*>(w)) lua_pushstring(L, l->text().toUtf8().constData());
     else if (QLineEdit* le = qobject_cast<QLineEdit*>(w)) lua_pushstring(L, le->text().toUtf8().constData());
+    else if (QTextEdit* te = qobject_cast<QTextEdit*>(w)) lua_pushstring(L, te->toPlainText().toUtf8().constData());
     else lua_pushnil(L);
-    
+
     return 1;
 }
 
