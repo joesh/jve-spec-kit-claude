@@ -209,6 +209,12 @@ for t in \
   test_012_collapsible_section.lua \
   test_playback_engine_contract.lua \
   test_decode_mode_command.lua \
+  test_transport_contract.lua \
+  test_transport_bootstrap_accessor.lua \
+  test_transport_subscribes_to_signals.lua \
+  test_transport_first_open_defaults_to_record.lua \
+  test_audio_handover_contract.lua \
+  test_playback_edit_invalidation.lua \
   test_fullscreen_viewer.lua \
   test_edit_history_window_project_switch.lua \
   test_edit_source_popup_invariants.lua \
