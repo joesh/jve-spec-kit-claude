@@ -207,7 +207,8 @@ Signals.connect("project_changed", function(_new_project_id)
     if _active then
         M.exit()
     end
-end, 5)  -- priority 5: before playback_controller (10)
+end, 4)  -- priority 4: must precede transport teardown (5) which clears
+          -- _playback_controller; clear_mirror_surface asserts if controller gone.
 
 --------------------------------------------------------------------------------
 -- app frontmost transitions: pause fullscreen when JVE loses focus so the
