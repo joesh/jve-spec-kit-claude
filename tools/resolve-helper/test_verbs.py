@@ -313,6 +313,12 @@ class _FakeItem:
     def GetNodeGraph(self):
         return _FakeGraph(self._own_tools)
 
+    def GetSourceStartFrame(self):
+        return self._start
+
+    def GetSourceEndFrame(self):
+        return self._start + self._duration
+
     def GetLUT(self, n):
         return ""
 
@@ -322,6 +328,50 @@ class _FakeItem:
     def ExportLUT(self, kind, path):
         self.export_lut_calls += 1
         return self._export_lut(kind, path)
+
+
+class _FakeNonMediaItem:
+    """Generator, Text+, or transition — no source range.
+    verb_read_grades must skip these silently."""
+    def __init__(self, uid, start, duration=48):
+        self._uid = uid
+        self._start = start
+        self._duration = duration
+        self.export_lut_calls = 0
+
+    def GetUniqueId(self):
+        return self._uid
+
+    def GetStart(self):
+        return self._start
+
+    def GetDuration(self):
+        return self._duration
+
+    def GetSourceStartFrame(self):
+        return None
+
+    def GetSourceEndFrame(self):
+        return None
+
+    def GetMediaPoolItem(self):
+        return None
+
+    def GetNodeGraph(self):
+        # beyond-primary tools so the old code would classify
+        # unrepresentable and attempt a bake — makes the skip
+        # assertion meaningful.
+        return _FakeGraph(tools=("Custom Curves",))
+
+    def GetLUT(self, n):
+        return ""
+
+    def GetColorGroup(self):
+        return None
+
+    def ExportLUT(self, kind, path):
+        self.export_lut_calls += 1
+        return False
 
 
 _FAKE_FPS = 24
@@ -868,6 +918,69 @@ class ReadGradesGroupClassificationTests(unittest.TestCase):
             self._run(items, d)
         self.assertEqual(group.pre.walk_count, 1,
                          "group graph walked once per group, not per item")
+
+
+# ─── read_grades non-media skip (generators, Text+, transitions) ──────
+#
+# Diagnosis (2026-06-13): discovery logs "skipping 24 non-media
+# timeline item(s)" and exactly 24 ExportLUT failures follow —
+# verb_read_grades iterated all video-track items without checking
+# the source range, so generators and transitions were classified and
+# baked. ExportLUT returns False for every one (Resolve can't bake
+# items with no pixel source). Fix: skip silently if GetSourceStartFrame
+# and GetSourceEndFrame are both non-int (same discriminator as
+# _read_video_item's kind="non_media" branch).
+
+class ReadGradesNonMediaSkipTests(unittest.TestCase):
+    def _run(self, items, bake_dir, timeline_graph_tools=None):
+        resolve = _FakeResolve("edit")
+        tl_tools = timeline_graph_tools if timeline_graph_tools is not None \
+            else [None]
+        project = _FakeProject(_FakeTimeline(items,
+            timeline_graph_tools=tl_tools))
+
+        class _Handle:
+            def acquire(self):
+                return ("ok", resolve, project)
+
+        resp = verbs.verb_read_grades(
+            {"bake_lut_dir": bake_dir}, _Handle(), "env-nm1", "test")
+        self.assertTrue(resp["ok"], f"verb failed: {resp!r}")
+        return resp["result"]
+
+    def test_non_media_item_absent_from_grades(self):
+        # A generator on the timeline must produce no grade row —
+        # there is no JVE clip to receive one and ExportLUT refuses.
+        non_media = _FakeNonMediaItem("uid-gen", 86400)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run([non_media], d)
+        ids = {row["resolve_item_id"] for row in result["grades"]}
+        self.assertNotIn("uid-gen", ids,
+            "generator/Text+/transition must not appear in grades[]")
+
+    def test_non_media_item_bake_never_attempted(self):
+        # ExportLUT must not be called even when a timeline-level grade
+        # makes the item classify as unrepresentable.
+        non_media = _FakeNonMediaItem("uid-gen", 86400)
+        with tempfile.TemporaryDirectory() as d:
+            self._run([non_media], d,
+                timeline_graph_tools=[["Primary Offset"]])
+        self.assertEqual(non_media.export_lut_calls, 0,
+            "ExportLUT must not be attempted on generators/transitions")
+
+    def test_media_item_alongside_non_media_still_processed(self):
+        # The skip must be selective — adjacent media clips must still
+        # appear in grades[].
+        non_media = _FakeNonMediaItem("uid-gen", 86400)
+        media = _FakeItem("uid-clip", 86500, _write_cube,
+                          group=None, own_tools=None)
+        with tempfile.TemporaryDirectory() as d:
+            result = self._run([non_media, media], d)
+        ids = {row["resolve_item_id"] for row in result["grades"]}
+        self.assertNotIn("uid-gen", ids)
+        self.assertIn("uid-clip", ids,
+            "media clip must still appear in grades[] when a non-media "
+            "item precedes it on the same track")
 
 
 if __name__ == "__main__":

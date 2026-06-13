@@ -1585,6 +1585,28 @@ def verb_read_grades(args, resolve, project, envelope_id, helper_version):
             if (item_id_filter is not None
                     and resolve_item_id not in item_id_filter):
                 continue
+            # Skip non-media items (generators, Text+, transitions):
+            # they have no integer source range, ExportLUT refuses for
+            # them, and no JVE clip can receive a grade row for them.
+            # Same discriminator as _read_video_item's kind="non_media"
+            # branch — both int or both None; partial-int is an API error.
+            try:
+                source_in  = item.GetSourceStartFrame()
+                source_out = item.GetSourceEndFrame()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"item source-range read raised: {exc}") from exc
+            src_in_is_int  = (isinstance(source_in,  int)
+                              and not isinstance(source_in,  bool))
+            src_out_is_int = (isinstance(source_out, int)
+                              and not isinstance(source_out, bool))
+            if src_in_is_int != src_out_is_int:
+                raise RuntimeError(
+                    f"item source TC partially present: "
+                    f"source_in={source_in!r} source_out={source_out!r}"
+                    f" — expected both int or both None")
+            if not src_in_is_int:
+                continue
             # FR-021: helper holds no JVE state. We emit our native
             # `resolve_item_id` (= TimelineItem:GetUniqueId()); the
             # Lua side joins to JVE clip.id via identity_ledger. No
