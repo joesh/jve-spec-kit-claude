@@ -108,6 +108,51 @@ sync_grades.restore(captured, db)
 check("restore drops the synced row (clip had no prior grade)",
     ClipGrade.load("c", db) == nil)
 
+-- lut wire validation: bad shapes must warn + skip, never crash.
+-- State at this point: restore dropped the synced row, so no grade exists.
+do
+    -- lut as a non-table (string) → validate_grade_wire_item rejects it
+    local ok, _ = pcall(sync_grades.apply,
+        { grades = {{ resolve_item_id = "live_c",
+                      fidelity = "partial",
+                      lut = "not_a_table" }} },
+        "s", db, now + 120)
+    check("lut as string does not crash apply", ok == true)
+    check("lut-as-string item is dropped (no grade created)",
+        ClipGrade.load("c", db) == nil)
+
+    -- lut as table with missing ref → validate_grade_wire_item rejects it
+    local ok2, _ = pcall(sync_grades.apply,
+        { grades = {{ resolve_item_id = "live_c",
+                      fidelity = "partial",
+                      lut = {} }} },
+        "s", db, now + 123)
+    check("lut table with no ref does not crash apply", ok2 == true)
+    check("lut-no-ref item is dropped (no grade created)",
+        ClipGrade.load("c", db) == nil)
+
+    -- lut as table with empty ref → validate_grade_wire_item rejects it
+    local ok3, _ = pcall(sync_grades.apply,
+        { grades = {{ resolve_item_id = "live_c",
+                      fidelity = "partial",
+                      lut = { ref = "" } }} },
+        "s", db, now + 126)
+    check("lut with empty ref does not crash apply", ok3 == true)
+    check("lut-empty-ref item is dropped (no grade created)",
+        ClipGrade.load("c", db) == nil)
+
+    -- valid lut → accepted, grade created with lut_ref
+    local ok4, _ = pcall(sync_grades.apply,
+        { grades = {{ resolve_item_id = "live_c",
+                      fidelity = "partial",
+                      lut = { ref = "/path/to/grade.cube" } }} },
+        "s", db, now + 129)
+    check("valid lut {ref} does not crash apply", ok4 == true)
+    local g2 = ClipGrade.load("c", db)
+    check("valid lut creates grade with lut_ref",
+        g2 ~= nil and g2.lut_ref == "/path/to/grade.cube")
+end
+
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
 assert(fail == 0, "test_sync_grades_wire_shape.lua: failures present")
 print("✅ test_sync_grades_wire_shape.lua passed")

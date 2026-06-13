@@ -139,6 +139,20 @@ local function validate_grade_wire_item(row, i)
             .. "carry cdl (FR-015 honest downgrade)",
             i, row.fidelity)
     end
+    -- lut is optional; when present must be {ref: non-empty string}
+    if row.lut ~= nil then
+        if type(row.lut) ~= "table" then
+            return string.format(
+                "sync_grades.apply: grade[%d].lut must be table, got %s",
+                i, type(row.lut))
+        end
+        if type(row.lut.ref) ~= "string" or row.lut.ref == "" then
+            return string.format(
+                "sync_grades.apply: grade[%d].lut.ref must be "
+                .. "non-empty string, got %s",
+                i, type(row.lut.ref))
+        end
+    end
     return nil
 end
 

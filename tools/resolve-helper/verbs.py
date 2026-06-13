@@ -489,9 +489,19 @@ def _iter_all_timeline_items(timeline):
         n_tracks = _api(f"GetTrackCount({track_type!r})",
             timeline.GetTrackCount, track_type)
         for tidx in range(1, n_tracks + 1):
-            items = _api(
+            raw = _api(
                 f"GetItemListInTrack({track_type!r}, {tidx})",
-                timeline.GetItemListInTrack, track_type, tidx) or []
+                timeline.GetItemListInTrack, track_type, tidx)
+            # Resolve returns None for empty tracks (documented); any other
+            # falsy return (False, 0) is an API failure, not an empty track.
+            if raw is None:
+                items = []
+            elif not isinstance(raw, list):
+                raise RuntimeError(
+                    f"GetItemListInTrack({track_type!r}, {tidx}) "
+                    f"returned unexpected type {type(raw).__name__!r}")
+            else:
+                items = raw
             for item in items:
                 yield track_type, tidx, item
 
@@ -630,7 +640,7 @@ def _read_video_item(item):
         enabled         = item.GetClipEnabled()
         name            = item.GetName()
         mp_item         = item.GetMediaPoolItem()
-        media_file_path = mp_item.GetClipProperty("File Path") if mp_item else ""
+        media_file_path = mp_item.GetClipProperty("File Path") if mp_item else None
     except Exception as exc:
         raise RuntimeError(
             f"timeline-item TC/enabled extraction raised: {exc}") from exc
@@ -1094,10 +1104,10 @@ def _export_edl_cdl(timeline, resolve, integer_rate):
     finally:
         try:
             os.unlink(edl_path)
-        except OSError:
-            # Best-effort cleanup; the leak is bounded to one temp file
-            # per call. Don't mask the real error with a cleanup failure.
-            pass
+        except OSError as exc:
+            # Best-effort cleanup — don't mask the real propagating error.
+            # Log so the temp file leak is observable in helper stderr.
+            sys.stderr.write(f"[read_grades] EDL temp cleanup failed: {edl_path!r}: {exc}\n")
 
 
 def _timeline_integer_frame_rate(timeline):
@@ -1309,7 +1319,7 @@ def _find_park_anchor(timeline):
             continue
         try:
             mp_item = item.GetMediaPoolItem()
-            path = mp_item.GetClipProperty("File Path") if mp_item else ""
+            path = mp_item.GetClipProperty("File Path") if mp_item else None
         except Exception as exc:
             raise RuntimeError(
                 f"park-anchor scan: GetMediaPoolItem/GetClipProperty "
