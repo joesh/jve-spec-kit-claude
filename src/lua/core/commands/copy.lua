@@ -17,8 +17,11 @@ function M.register(command_executors)
     command_executors["Copy"] = function(_command)
         local ok, err = clipboard_actions.copy()
         if not ok then
+            -- "Nothing to copy" (empty selection, no marks, wrong panel) is a
+            -- valid no-op. Returning false here trips the QShortcut handler's
+            -- fail-fast assert on every Cmd+C with no selection. Log for
+            -- visibility; the command still succeeded (it checked, found nothing).
             log.warn("Copy: %s", err or "nothing to copy")
-            return false
         end
         return true
     end

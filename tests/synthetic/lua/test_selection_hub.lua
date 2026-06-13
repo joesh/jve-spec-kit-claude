@@ -334,6 +334,53 @@ do
 end
 
 -- ============================================================
+-- Dedup: timeline-format items use item_type + clip.id, not type + id.
+-- Bug: items_signature used it.type and it.id, both nil for timeline items,
+-- making every timeline clip look identical → dedup fired on every navigation
+-- → inspector never updated after first find-navigate.
+-- ============================================================
+print("\n--- dedup: timeline item_type format ---")
+do
+    fresh()
+    local calls = 0
+    local last_items
+
+    selection_hub.set_active_panel("timeline")
+    selection_hub.register_listener(function(items, _)
+        calls = calls + 1
+        last_items = items
+    end)
+    calls = 0  -- reset after register-time notify
+
+    local mk_clip_item = function(clip_id)
+        return { item_type = "timeline_clip", clip = { id = clip_id } }
+    end
+
+    -- Navigate to clip A
+    selection_hub.update_selection("timeline", { mk_clip_item("clip_A") })
+    local after_A = calls
+    check("timeline clip_A selection fires listener", after_A >= 1)
+
+    -- Navigate to clip B — must fire (different clip)
+    selection_hub.update_selection("timeline", { mk_clip_item("clip_B") })
+    check("timeline clip_B selection fires listener", calls == after_A + 1)
+    check("listener receives clip_B item", last_items and last_items[1].clip.id == "clip_B")
+
+    -- Same clip again — must NOT fire (dedup)
+    selection_hub.update_selection("timeline", { mk_clip_item("clip_B") })
+    check("timeline same clip dedup no-op", calls == after_A + 1)
+
+    -- Navigate to sequence item
+    local seq_item = { item_type = "timeline_sequence", sequence_id = "seq_1" }
+    selection_hub.update_selection("timeline", { seq_item })
+    check("timeline sequence item fires listener", calls == after_A + 2)
+
+    -- Same sequence again — dedup
+    selection_hub.update_selection("timeline", { { item_type = "timeline_sequence", sequence_id = "seq_1" } })
+    check("timeline same sequence dedup no-op", calls == after_A + 2)
+end
+
+-- ============================================================
 -- Summary
 -- ============================================================
 print(string.format("\n=== Selection Hub: %d passed, %d failed ===", pass_count, fail_count))

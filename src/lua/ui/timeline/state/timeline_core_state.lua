@@ -309,7 +309,12 @@ local function flush_state_to_db()
 
     -- Use pcall to ensure we always end the command event even if commands fail
     local ok, err = pcall(function()
-        -- Persist playhead
+        -- Persist playhead — skipped during active playback. The C++ engine
+        -- writes the live position directly (sequence_monitor.save_playhead_to_db,
+        -- no signal). Running SetPlayhead here with the stale cached position
+        -- would emit playhead_changed, causing sequence_monitor to seek back to
+        -- the pre-play position and stop transport.
+        if not data.state.is_playing then
     local playhead_cmd = Command.create("SetPlayhead", project_id)
     playhead_cmd:set_parameters({
         project_id = project_id,
@@ -317,6 +322,7 @@ local function flush_state_to_db()
         playhead_position = displayed_cache.playhead_position,
     })
     command_manager.execute(playhead_cmd)
+        end
 
     -- Persist viewport (scroll offsets handled separately by persist_scroll_offsets)
     local viewport_cmd = Command.create("SetViewport", project_id)

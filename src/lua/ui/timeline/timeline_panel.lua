@@ -2269,9 +2269,8 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_container)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(video_scroll, true)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Expanding", "Expanding")
-    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AsNeeded")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(video_scroll, timeline_state.dimensions.track_header_width)
 
     -- Audio headers section with scroll area (same VBox shape as video).
     local audio_scroll = qt_constants.WIDGET.CREATE_SCROLL_AREA()
@@ -2279,9 +2278,8 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_container)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(audio_scroll, true)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Expanding", "Expanding")
-    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AsNeeded")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(audio_scroll, timeline_state.dimensions.track_header_width)
 
     -- Both builders ran above and registered every src-btn into
     -- src_btn_by_rec; render the projection now so the panel shows the
@@ -2304,7 +2302,6 @@ local function create_headers_column()
 
     -- Min-width enforces the column floor; no max lets the splitter drag it wider.
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(headers_wrapper, "MinimumExpanding", "Expanding")
-    qt_constants.PROPERTIES.SET_MIN_WIDTH(headers_wrapper, timeline_state.dimensions.track_header_width)
 
     -- Return wrapper, main splitter, scroll areas, inner content containers, and TC header.
     -- Callers need the inner containers and TC header to force-resize them when the
@@ -2948,7 +2945,7 @@ function M.create(opts)
             headers_width_orig = cur_w
         elseif event_type == "move" then
             local dx = global_x - headers_width_press_x
-            local new_w = math.max(INITIAL_HEADERS_WIDTH,
+            local new_w = math.max(ui_constants.TIMELINE.TRACK_HEADER_MIN_DRAG_WIDTH,
                 headers_width_orig + dx)
             qt_constants.PROPERTIES.SET_MIN_WIDTH(headers_column, new_w)
             qt_constants.PROPERTIES.SET_MAX_WIDTH(headers_column, new_w)
@@ -3052,34 +3049,18 @@ function M.create(opts)
     -- Header columns are passive followers of the timeline panes — they
     -- never scroll on their own. Capture wheel gestures over them and
     -- route through the model write path like any other scroll gesture
-    -- (the sync handlers above then mirror the result back to the
-    -- headers). Without this capture Qt would scroll the header area
-    -- natively, the model would never hear about it, and the next
-    -- model projection would snap the headers back.
-    -- Horizontal gestures pan the time viewport — same formula as the
-    -- ruler: (-dx / lane_width) * viewport_duration → frame delta.
-    local function header_pan_h(dx)
-        if not dx or math.abs(dx) < 1e-4 then return end
-        local width = (timeline.get_dimensions(M.video_widget))
-        if not width or width <= 0 then return end
-        local vdur = timeline_state.get_viewport_duration()
-        if not vdur or vdur <= 0 then return end
-        local delta_frames = math.floor((-dx / width) * vdur)
-        if delta_frames == 0 then return end
-        command_manager.execute("ScrollTimelineViewport", {delta_frames = delta_frames})
-        timeline_state.flush_pending_notify()
-    end
-
+    -- Vertical-dominant wheel events are consumed by WheelCaptureFilter
+    -- and routed here so the model owns the scroll position. Horizontal-
+    -- dominant events are passed through by the filter so the QScrollArea
+    -- scrolls the header pane natively (revealing buttons when narrow).
     -- luacheck: globals qt_set_scroll_area_wheel_handler
-    _G["header_video_wheel"] = function(dy, dx)
+    _G["header_video_wheel"] = function(dy)
         M.user_scroll_pane_by("video", dy)
-        header_pan_h(dx)
     end
     qt_set_scroll_area_wheel_handler(header_video_scroll, "header_video_wheel")
 
-    _G["header_audio_wheel"] = function(dy, dx)
+    _G["header_audio_wheel"] = function(dy)
         M.user_scroll_pane_by("audio", dy)
-        header_pan_h(dx)
     end
     qt_set_scroll_area_wheel_handler(header_audio_scroll, "header_audio_wheel")
 

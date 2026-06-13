@@ -233,12 +233,19 @@ protected:
             QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
             int k = keyEvent->key();
 
-            // Always-residual keys (any modifier combo): arrows, Escape
-            // Tab NOT claimed — Qt's native focusNextPrevChild handles Tab cycling.
+            // Always-residual keys (any modifier combo): arrows, Escape, Tab/Backtab.
+            // Tab/Backtab claimed here so the Lua KeyPress handler has sole ownership —
+            // the [Global] CycleFocus QShortcut would otherwise fire first, then the
+            // KeyPress handler fires ToggleTimecodeFocus, causing double-dispatch.
+            // The Lua handler decides per context: find_dialog text input → return false
+            // (native dialog Tab cycling); main window → TOML dispatch (ToggleTimecodeFocus
+            // @timeline or CycleFocus global); outside-main-window → all keys already
+            // claimed below.
             // Return NOT claimed — Qt's native default button / button click handles it.
             // F9/F10 NOT claimed — handled via TOML keymap / QShortcut.
             if (k == Qt::Key_Left || k == Qt::Key_Right ||
-                k == Qt::Key_Escape) {
+                k == Qt::Key_Escape ||
+                k == Qt::Key_Tab   || k == Qt::Key_Backtab) {
                 event->accept();
                 return true;
             }
@@ -563,13 +570,17 @@ protected:
         bool has_pixel = !we->pixelDelta().isNull();
         double deltaY = has_pixel ? we->pixelDelta().y() : we->angleDelta().y() / 8.0;
         double deltaX = has_pixel ? we->pixelDelta().x() : we->angleDelta().x() / 8.0;
+        // Horizontal-dominant: pass through so the QScrollArea can scroll
+        // the header pane natively (revealing controls when narrow).
+        if (std::abs(deltaX) > std::abs(deltaY)) {
+            return QObject::eventFilter(obj, event);
+        }
         LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.scroll_area_wheel");
         if (cb.ready()) {
             lua_pushnumber(lua_state, deltaY);
-            lua_pushnumber(lua_state, deltaX);
-            cb.invoke(2, 0);
+            cb.invoke(1, 0);
         }
-        return true;  // consumed — Qt must not also scroll natively
+        return true;  // consumed — vertical goes through model only
     }
 
 private:

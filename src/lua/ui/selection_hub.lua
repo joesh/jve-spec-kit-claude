@@ -26,15 +26,15 @@ local function get_items(panel_id)
 end
 
 --- Stable order-independent signature of a selection items list.
---- Items are {type, id} pairs; the listener-visible identity is the SET,
---- not the order. Sort + concat so reordered-but-equivalent lists
---- compare equal.
+--- Handles both browser items ({type, id}) and timeline items
+--- ({item_type, clip.id / sequence_id}).
 local function items_signature(items)
     if type(items) ~= "table" or #items == 0 then return "" end
     local parts = {}
     for i, it in ipairs(items) do
-        parts[i] = string.format("%s:%s",
-            tostring(it and it.type), tostring(it and it.id))
+        local t = it and (it.type or it.item_type) or "nil"
+        local id = it and (it.id or (it.clip and it.clip.id) or it.sequence_id) or "nil"
+        parts[i] = string.format("%s:%s", tostring(t), tostring(id))
     end
     table.sort(parts)
     return table.concat(parts, "|")
