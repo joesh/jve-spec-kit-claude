@@ -3056,14 +3056,30 @@ function M.create(opts)
     -- headers). Without this capture Qt would scroll the header area
     -- natively, the model would never hear about it, and the next
     -- model projection would snap the headers back.
+    -- Horizontal gestures pan the time viewport — same formula as the
+    -- ruler: (-dx / lane_width) * viewport_duration → frame delta.
+    local function header_pan_h(dx)
+        if not dx or math.abs(dx) < 1e-4 then return end
+        local width = (timeline.get_dimensions(M.video_widget))
+        if not width or width <= 0 then return end
+        local vdur = timeline_state.get_viewport_duration()
+        if not vdur or vdur <= 0 then return end
+        local delta_frames = math.floor((-dx / width) * vdur)
+        if delta_frames == 0 then return end
+        command_manager.execute("ScrollTimelineViewport", {delta_frames = delta_frames})
+        timeline_state.flush_pending_notify()
+    end
+
     -- luacheck: globals qt_set_scroll_area_wheel_handler
-    _G["header_video_wheel"] = function(dy)
+    _G["header_video_wheel"] = function(dy, dx)
         M.user_scroll_pane_by("video", dy)
+        header_pan_h(dx)
     end
     qt_set_scroll_area_wheel_handler(header_video_scroll, "header_video_wheel")
 
-    _G["header_audio_wheel"] = function(dy)
+    _G["header_audio_wheel"] = function(dy, dx)
         M.user_scroll_pane_by("audio", dy)
+        header_pan_h(dx)
     end
     qt_set_scroll_area_wheel_handler(header_audio_scroll, "header_audio_wheel")
 

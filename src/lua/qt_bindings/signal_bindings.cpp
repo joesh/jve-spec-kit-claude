@@ -560,13 +560,14 @@ protected:
             return QObject::eventFilter(obj, event);
         }
         QWheelEvent* we = static_cast<QWheelEvent*>(event);
-        double deltaY = !we->pixelDelta().isNull()
-            ? we->pixelDelta().y()
-            : we->angleDelta().y() / 8.0;
+        bool has_pixel = !we->pixelDelta().isNull();
+        double deltaY = has_pixel ? we->pixelDelta().y() : we->angleDelta().y() / 8.0;
+        double deltaX = has_pixel ? we->pixelDelta().x() : we->angleDelta().x() / 8.0;
         LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.scroll_area_wheel");
         if (cb.ready()) {
             lua_pushnumber(lua_state, deltaY);
-            cb.invoke(1, 0);
+            lua_pushnumber(lua_state, deltaX);
+            cb.invoke(2, 0);
         }
         return true;  // consumed — Qt must not also scroll natively
     }
