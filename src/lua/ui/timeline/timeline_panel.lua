@@ -3796,7 +3796,7 @@ function M:navigate_to_clip(clip_id)
                 tostring(clip_id)))
             timeline_state.set_playhead_position(clip.sequence_start)
             timeline_state.surface_playhead()
-            timeline_state.set_selection({{id = clip_id}})
+            timeline_state.set_selection({clip})
             return
         end
     end

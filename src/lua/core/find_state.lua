@@ -101,6 +101,35 @@ function M.previous()
     if current_index < 1 then current_index = #matches end
 end
 
+--- Jump to first match strictly after frame, wrapping to first if none.
+-- Clips without sequence_start_frame are skipped (browser clips).
+function M.next_from(frame)
+    assert(type(frame) == "number", "find_state.next_from: frame must be a number")
+    if #matches == 0 then return end
+    for i, clip in ipairs(matches) do
+        if clip.sequence_start_frame and clip.sequence_start_frame > frame then
+            current_index = i
+            return
+        end
+    end
+    current_index = 1
+end
+
+--- Jump to last match strictly before frame, wrapping to last if none.
+-- Clips without sequence_start_frame are skipped (browser clips).
+function M.prev_from(frame)
+    assert(type(frame) == "number", "find_state.prev_from: frame must be a number")
+    if #matches == 0 then return end
+    for i = #matches, 1, -1 do
+        local clip = matches[i]
+        if clip.sequence_start_frame and clip.sequence_start_frame < frame then
+            current_index = i
+            return
+        end
+    end
+    current_index = #matches
+end
+
 --- Save selection state before find (for Escape restore).
 -- @param sel array of clip IDs
 function M.save_selection(sel)

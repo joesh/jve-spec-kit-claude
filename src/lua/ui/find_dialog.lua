@@ -193,6 +193,12 @@ local function do_find()
     return true
 end
 
+local function get_playhead_frame()
+    local ok, ts = pcall(require, "ui.timeline.timeline_state")
+    if not ok or type(ts) ~= "table" then return nil end
+    return ts.get_playhead_position and ts.get_playhead_position()
+end
+
 local function do_find_next()
     log.event("do_find_next: active=%s count=%d idx=%d",
         tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
@@ -202,7 +208,12 @@ local function do_find_next()
         if not do_find() then return end
         return
     end
-    find_state.next()
+    local frame = get_playhead_frame()
+    if frame then
+        find_state.next_from(frame)
+    else
+        find_state.next()
+    end
     local match = find_state.get_current_match()
     local idx = find_state.get_current_index()
     log.event("do_find_next: after next idx=%d match=%s", idx, tostring(match))
@@ -221,7 +232,12 @@ local function do_find_prev()
         if not do_find() then return end
         return
     end
-    find_state.previous()
+    local frame = get_playhead_frame()
+    if frame then
+        find_state.prev_from(frame)
+    else
+        find_state.previous()
+    end
     local match = find_state.get_current_match()
     local idx = find_state.get_current_index()
     log.event("do_find_prev: after prev idx=%d match=%s", idx, tostring(match))

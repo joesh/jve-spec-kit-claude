@@ -161,6 +161,63 @@ check("query=Beta: 1 match", find_state.get_match_count() == 1)
 check("query=Beta: correct match", find_state.get_current_match() == "m2")
 
 -- ============================================================================
+-- Playhead-anchored navigation (next_from / prev_from)
+-- Next/Prev always start from the playhead position, not from a cycling index.
+-- Matches are at frames 10, 50, 90 in sorted order.
+-- ============================================================================
+print("--- playhead-anchored next_from / prev_from ---")
+
+local timeline_clips = {
+    {id = "ph1", name = "clipA", sequence_start_frame = 10},
+    {id = "ph2", name = "clipB", sequence_start_frame = 50},
+    {id = "ph3", name = "clipC", sequence_start_frame = 90},
+}
+find_state.clear()
+find_state.execute(timeline_clips, {column = "name", operator = "contains", value = "clip"})
+check("playhead setup: 3 matches", find_state.get_match_count() == 3)
+
+-- next_from: playhead before all matches → first match
+find_state.next_from(5)
+check("next_from 5 → ph1 (before all)", find_state.get_current_match() == "ph1")
+
+-- next_from: playhead in the gap between first and second → second match
+find_state.next_from(30)
+check("next_from 30 → ph2 (first strictly after 30)", find_state.get_current_match() == "ph2")
+
+-- next_from: playhead exactly ON a match → skip it, go to next one
+find_state.next_from(50)
+check("next_from 50 → ph3 (strictly after 50, not 50 itself)", find_state.get_current_match() == "ph3")
+
+-- next_from: playhead after all matches → wraps to first
+find_state.next_from(100)
+check("next_from 100 → ph1 (wrap)", find_state.get_current_match() == "ph1")
+
+-- prev_from: playhead after all matches → last match
+find_state.prev_from(100)
+check("prev_from 100 → ph3 (after all)", find_state.get_current_match() == "ph3")
+
+-- prev_from: playhead in the gap between second and third → second match
+find_state.prev_from(60)
+check("prev_from 60 → ph2 (last strictly before 60)", find_state.get_current_match() == "ph2")
+
+-- prev_from: playhead exactly ON a match → skip it, go to previous one
+find_state.prev_from(50)
+check("prev_from 50 → ph1 (strictly before 50, not 50 itself)", find_state.get_current_match() == "ph1")
+
+-- prev_from: playhead before all matches → wraps to last
+find_state.prev_from(5)
+check("prev_from 5 → ph3 (wrap)", find_state.get_current_match() == "ph3")
+
+-- next_from/prev_from are idempotent when playhead doesn't move:
+-- pressing Next twice at the same playhead gives the same result
+find_state.next_from(30)
+local first_press = find_state.get_current_match()
+find_state.next_from(30)
+local second_press = find_state.get_current_match()
+check("next_from idempotent: same result on repeated press at same frame",
+    first_press == second_press and first_press == "ph2")
+
+-- ============================================================================
 -- Summary
 -- ============================================================================
 print("")

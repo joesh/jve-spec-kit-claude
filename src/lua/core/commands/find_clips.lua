@@ -131,6 +131,12 @@ function M.register(command_executors, _, _, _)
         return {success = true}
     end
 
+    local function get_playhead_frame()
+        local ok, ts = pcall(require, "ui.timeline.timeline_state")
+        if not ok or type(ts) ~= "table" then return nil end
+        return ts.get_playhead_position and ts.get_playhead_position()
+    end
+
     command_executors["FindNext"] = function(_)
         log.event("FindNext: active=%s count=%d idx=%d",
             tostring(find_state.is_active()),
@@ -141,7 +147,12 @@ function M.register(command_executors, _, _, _)
             log.event("FindNext: no active session, opening Find dialog")
             return command_executors["Find"](_)
         end
-        find_state.next()
+        local frame = get_playhead_frame()
+        if frame then
+            find_state.next_from(frame)
+        else
+            find_state.next()
+        end
         local match = find_state.get_current_match()
         log.event("FindNext: after next idx=%d match=%s",
             find_state.get_current_index(), tostring(match))
@@ -154,7 +165,12 @@ function M.register(command_executors, _, _, _)
             log.event("FindPrevious: no active session, opening Find dialog")
             return command_executors["Find"](_)
         end
-        find_state.previous()
+        local frame = get_playhead_frame()
+        if frame then
+            find_state.prev_from(frame)
+        else
+            find_state.previous()
+        end
         navigate_to_match()
         return {success = true, current_match = find_state.get_current_match()}
     end
