@@ -192,11 +192,20 @@ function M.translate_wire_response(wire_response, sequence_id)
             end
         end
     end
-    local audio_skipped = wire_response.audio_items_skipped or 0
-    if non_media_skipped > 0 or audio_skipped > 0 then
-        log.event("SyncEdits: skipped %d non-media items and %d audio items "
-            .. "(audio deferred — see todo_t054)",
-            non_media_skipped, audio_skipped)
+    if non_media_skipped > 0 then
+        log.event("SyncEdits: skipped %d non-media items (generators/transitions/etc.)",
+            non_media_skipped)
+    end
+    local audio_skipped = wire_response.audio_items_skipped
+    if audio_skipped == nil then
+        log.warn("SyncEdits: helper did not send audio_items_skipped "
+            .. "(helper-protocol §read_timeline — version skew?)")
+    elseif type(audio_skipped) ~= "number" then
+        log.warn("SyncEdits: audio_items_skipped is not a number: "
+            .. tostring(audio_skipped))
+    elseif audio_skipped > 0 then
+        log.event("SyncEdits: skipped %d audio items (audio deferred — see todo_t054)",
+            audio_skipped)
     end
     return {
         items = out_items,

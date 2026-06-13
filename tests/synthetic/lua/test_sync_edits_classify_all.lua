@@ -477,6 +477,23 @@ do
     local bad_seq = pcall(sync_edits.translate_wire_response,
         { items = {} }, "")
     check("translate: asserts on empty sequence_id",  not bad_seq)
+
+    -- audio_items_skipped absent (older helper) → warn + continue, no crash
+    local ok_no_audio, r_no_audio = pcall(sync_edits.translate_wire_response,
+        { items = { wire_item("rs-na", "video", 1) } }, "s")
+    check("translate: absent audio_items_skipped does not crash",
+        ok_no_audio == true)
+    check("translate: items still flow when audio_items_skipped absent",
+        ok_no_audio and #r_no_audio.items == 1)
+
+    -- audio_items_skipped as non-number → warn + continue, no crash
+    local ok_bad_audio, r_bad_audio = pcall(sync_edits.translate_wire_response,
+        { items = { wire_item("rs-ba", "video", 1) },
+          audio_items_skipped = "five" }, "s")
+    check("translate: non-number audio_items_skipped does not crash",
+        ok_bad_audio == true)
+    check("translate: items still flow when audio_items_skipped is non-number",
+        ok_bad_audio and #r_bad_audio.items == 1)
 end
 
 -- End-to-end: wire response with missing-track sentinel flows through
