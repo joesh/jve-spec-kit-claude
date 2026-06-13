@@ -73,12 +73,12 @@ end
 
 local function find_clip(name)
     local stmt = db:prepare([[
-        SELECT c.id, c.media_id, c.source_in_frame, c.source_out_frame,
+        SELECT c.id, mr.media_id, c.source_in_frame, c.source_out_frame,
                c.duration_frames, m.file_path
         FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE t.sequence_id = ? AND c.name = ?
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE c.owner_sequence_id = ? AND c.name = ?
         LIMIT 1
     ]])
     stmt:bind_value(1, seq_id)
@@ -274,10 +274,10 @@ assert(not err2 or ok_05G, "00.5G-1 would still crash the playback engine")
 local offline_count
 do
     local stmt = db:prepare([[
-        SELECT COUNT(*) FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        LEFT JOIN media m ON c.media_id = m.id
-        WHERE t.sequence_id = ?
+        SELECT COUNT(DISTINCT c.id) FROM clips c
+        LEFT JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+        LEFT JOIN media m ON m.id = mr.media_id
+        WHERE c.owner_sequence_id = ?
           AND (m.file_path IS NULL OR m.file_path NOT LIKE '%/tests/fixtures/%')
     ]])
     stmt:bind_value(1, seq_id)
@@ -291,13 +291,13 @@ print(string.format("\n[7/7] Gold master clips still offline after relink + dedu
 -- Per-media breakdown
 do
     local stmt = db:prepare([[
-        SELECT substr(m.name, 1, 45), COUNT(c.id) FROM clips c
-        JOIN tracks t ON c.track_id = t.id
-        JOIN media m ON c.media_id = m.id
-        WHERE t.sequence_id = ?
+        SELECT substr(m.name, 1, 45), COUNT(DISTINCT c.id) FROM clips c
+        JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+        JOIN media m ON m.id = mr.media_id
+        WHERE c.owner_sequence_id = ?
           AND m.file_path NOT LIKE '%/tests/fixtures/%'
         GROUP BY m.id
-        ORDER BY COUNT(c.id) DESC
+        ORDER BY COUNT(DISTINCT c.id) DESC
     ]])
     stmt:bind_value(1, seq_id)
     if stmt:exec() then
@@ -345,9 +345,9 @@ for _, vfx_name in ipairs(vfx_override_names) do
 
         -- Count clips in gold master on this media
         local clip_stmt = db:prepare([[
-            SELECT COUNT(*) FROM clips c
-            JOIN tracks t ON c.track_id = t.id
-            WHERE t.sequence_id = ? AND c.media_id = ?
+            SELECT COUNT(DISTINCT c.id) FROM clips c
+            JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+            WHERE c.owner_sequence_id = ? AND mr.media_id = ?
         ]])
         clip_stmt:bind_value(1, seq_id)
         clip_stmt:bind_value(2, mid)

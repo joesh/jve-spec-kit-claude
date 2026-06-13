@@ -72,7 +72,7 @@ local function scan_directory(root_dir, extensions)
     end
     local ext_pattern = table.concat(ext_list, " -o ")
 
-    local cmd = string.format('find "%s" -type f \\( %s \\)', root_dir, ext_pattern)
+    local cmd = string.format('find -L "%s" -type f \\( %s \\)', root_dir, ext_pattern)
     log.event("scan_directory: %s", cmd)
 
     local output = shell_capture(cmd, "scan_directory")
