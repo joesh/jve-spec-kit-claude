@@ -557,8 +557,9 @@ private:
 class WheelCaptureFilter : public QObject
 {
 public:
-    WheelCaptureFilter(lua_State* L_ptr, const std::string& handler, QObject* parent)
-        : QObject(parent), lua_state(L_ptr), handler_name(handler) {}
+    WheelCaptureFilter(lua_State* L_ptr, const std::string& handler,
+                       QScrollArea* sa, QObject* parent)
+        : QObject(parent), lua_state(L_ptr), handler_name(handler), scroll_area(sa) {}
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override
@@ -570,10 +571,13 @@ protected:
         bool has_pixel = !we->pixelDelta().isNull();
         double deltaY = has_pixel ? we->pixelDelta().y() : we->angleDelta().y() / 8.0;
         double deltaX = has_pixel ? we->pixelDelta().x() : we->angleDelta().x() / 8.0;
-        // Horizontal-dominant: pass through so the QScrollArea can scroll
-        // the header pane natively (revealing controls when narrow).
+        // Horizontal-dominant: scroll content directly — no scrollbar shown.
         if (std::abs(deltaX) > std::abs(deltaY)) {
-            return QObject::eventFilter(obj, event);
+            if (scroll_area) {
+                QScrollBar* hbar = scroll_area->horizontalScrollBar();
+                hbar->setValue(hbar->value() - static_cast<int>(deltaX));
+            }
+            return true;
         }
         LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.scroll_area_wheel");
         if (cb.ready()) {
@@ -586,6 +590,7 @@ protected:
 private:
     lua_State* lua_state;
     std::string handler_name;
+    QScrollArea* scroll_area;  // raw ptr — lifetime tied to parent viewport
 };
 
 // ============================================================================
@@ -1265,7 +1270,7 @@ int lua_set_scroll_area_wheel_handler(lua_State* L) {
     if (!sa || !handler_name || !sa->viewport()) return 0;
 
     WheelCaptureFilter* filter =
-        new WheelCaptureFilter(L, handler_name, sa->viewport());
+        new WheelCaptureFilter(L, handler_name, sa, sa->viewport());
     sa->viewport()->installEventFilter(filter);
     return 0;
 }

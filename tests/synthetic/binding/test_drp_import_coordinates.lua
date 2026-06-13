@@ -302,7 +302,7 @@ print("\n--- 6: Total counts ---")
 local r3 = query_one("SELECT COUNT(*) FROM clips")
 assert(r3[1] == 126, "expected 126 timeline clips, got " .. tostring(r3[1]))
 local r4 = query_one("SELECT COUNT(*) FROM media")
-assert(r4[1] == 37, "expected 37 media, got " .. tostring(r4[1]))
+assert(r4[1] == 47, "expected 47 media, got " .. tostring(r4[1]))
 print(string.format("  PASS: %d clips, %d media", r3[1], r4[1]))
 
 -- ═══════════════════════════════════════════════════════════════

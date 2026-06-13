@@ -539,6 +539,41 @@ function M.compute_audio_clip_source(samples, file_rate,
     return subframe_math.unpack(total_ticks, tpf)
 end
 
+-- For each media_item carrying synced_audio_pool_ids (stamped by the DRP
+-- importer for AudioSource=CUSTOM pool items), resolve pool IDs to the media
+-- record IDs that were actually created in this import pass. Returns a map
+-- video_media_id → [audio_media_id, ...]. Empty table when no synced info
+-- is present.
+local function build_synced_audio_map(media_items, media_by_uuid) -- luacheck: ignore 211
+    local map = {}
+    for _, media_item in pairs(media_items) do
+        if not (media_item.synced_audio_pool_ids
+                and #media_item.synced_audio_pool_ids > 0) then
+            goto continue_item
+        end
+        local video_media = media_item.file_uuid
+            and media_by_uuid[media_item.file_uuid]
+        if not video_media then goto continue_item end
+
+        local audio_ids = {}
+        for _, pool_id in ipairs(media_item.synced_audio_pool_ids) do
+            local audio_media = media_by_uuid[pool_id]
+            if audio_media then
+                audio_ids[#audio_ids + 1] = audio_media.id
+            else
+                log.warn("importer_core: synced audio pool_id %s not in "
+                    .. "media_by_uuid (video media_id=%s)",
+                    tostring(pool_id), video_media.id)
+            end
+        end
+        if #audio_ids > 0 then
+            map[video_media.id] = audio_ids
+        end
+        ::continue_item::
+    end
+    return map
+end
+
 -- Resolve the bin a master sequence belongs in. Try, in order: pool-by-uuid
 -- → pool-by-name (via media_by_uuid/path lookup) → pool-by-basename →
 -- "Unorganized" fallback. Returns the bin id (always non-nil when an

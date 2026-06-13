@@ -2269,7 +2269,7 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(video_scroll, video_container)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(video_scroll, true)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(video_scroll, "Expanding", "Expanding")
-    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AsNeeded")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(video_scroll, "AlwaysOff")
 
     -- Audio headers section with scroll area (same VBox shape as video).
@@ -2278,7 +2278,7 @@ local function create_headers_column()
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(audio_scroll, audio_container)
     qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET_RESIZABLE(audio_scroll, true)
     qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(audio_scroll, "Expanding", "Expanding")
-    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AsNeeded")
+    qt_constants.CONTROL.SET_SCROLL_AREA_H_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
     qt_constants.CONTROL.SET_SCROLL_AREA_V_SCROLLBAR_POLICY(audio_scroll, "AlwaysOff")
 
     -- Both builders ran above and registered every src-btn into
