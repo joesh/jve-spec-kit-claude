@@ -17,6 +17,7 @@ local timecode_input = require("core.timecode_input")
 local Track = require("models.track")
 local Signals = require("core.signals")
 local track_state = require("ui.timeline.state.track_state")
+local color_utils = require("ui.color_utils")
 local drop_naming = require("ui.timeline.drop_naming")
 local routing_pref  = require("ui.source_routing_view_pref")
 local routing_state = require("ui.source_routing_view_state")
@@ -1743,6 +1744,26 @@ Signals.connect("track_mix_changed", refresh_track_button_styles)
 -- use `if active and color then ...` which treats INTEGER 0 as truthy (Lua
 -- semantics), so passing the raw int would render as "active" for both
 -- on and off.
+local function update_all_header_dim()
+    local any_solo = false
+    for _, t in ipairs(track_state.get_all()) do
+        if t.soloed == true or t.soloed == 1 then any_solo = true; break end
+    end
+    for tid, refs in pairs(track_button_refs) do
+        if refs.header_widget and refs.base_header_color then
+            local t = track_state.get_by_id(tid)
+            local is_muted  = t and (t.muted  == true or t.muted  == 1)
+            local is_soloed = t and (t.soloed == true or t.soloed == 1)
+            local dim = is_muted or (any_solo and not is_soloed)
+            local color = dim
+                and color_utils.dim_hex(refs.base_header_color, 0.5)
+                or refs.base_header_color
+            qt_constants.PROPERTIES.SET_STYLE(refs.header_widget,
+                build_track_header_stylesheet(color))
+        end
+    end
+end
+
 Signals.connect("track_preference_changed", function(track_id, property, new_val)
     local refs = track_button_refs[track_id]
     if not refs then return end
@@ -1750,9 +1771,11 @@ Signals.connect("track_preference_changed", function(track_id, property, new_val
     if property == "muted" and refs.mute_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.mute_btn,
             build_sm_btn_stylesheet(active, "#cc3333"))
+        update_all_header_dim()
     elseif property == "soloed" and refs.solo_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.solo_btn,
             build_sm_btn_stylesheet(active, "#ccaa00"))
+        update_all_header_dim()
     elseif property == "locked" and refs.lock_btn then
         qt_constants.PROPERTIES.SET_STYLE(refs.lock_btn,
             build_track_header_btn_stylesheet(active, "#ccaa00"))
@@ -2027,19 +2050,21 @@ local function build_track_header_row(track, track_type, header_color)
     end
 
     local refs_entry = {
-        mute_btn      = mute_btn,
-        solo_btn      = solo_btn,
-        lock_btn      = lock_btn,
-        sync_mode_btn = sync_btn,
-        src_btn       = src_btn,
-        rec_btn       = rec_btn,
-        wave_btn      = wave_btn,  -- nil for video tracks
-        seq_id        = seq_id,
-        rec_idx       = track.track_index,
-        track_type    = track_type,
-        cells         = cells,
-        lock_kind     = "icon",
-        label_text    = track.name,
+        mute_btn         = mute_btn,
+        solo_btn         = solo_btn,
+        lock_btn         = lock_btn,
+        sync_mode_btn    = sync_btn,
+        src_btn          = src_btn,
+        rec_btn          = rec_btn,
+        wave_btn         = wave_btn,  -- nil for video tracks
+        seq_id           = seq_id,
+        rec_idx          = track.track_index,
+        track_type       = track_type,
+        cells            = cells,
+        lock_kind        = "icon",
+        label_text       = track.name,
+        header_widget    = header,
+        base_header_color = header_color,
     }
 
     return header, header_height, refs_entry
@@ -3063,6 +3088,9 @@ function M.create(opts)
         M.user_scroll_pane_by("audio", dy)
     end
     qt_set_scroll_area_wheel_handler(header_audio_scroll, "header_audio_wheel")
+
+    -- luacheck: globals qt_link_scroll_areas_h
+    qt_link_scroll_areas_h(header_video_scroll, header_audio_scroll)
 
     -- (Headers column width is already pinned to track_header_width above
     -- via SET_MIN/MAX_WIDTH on headers_column; the drag-edge handler

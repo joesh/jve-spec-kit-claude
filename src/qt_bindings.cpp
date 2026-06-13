@@ -326,6 +326,7 @@ void registerQtBindings(lua_State* L)
     lua_pushcfunction(L, lua_set_scroll_area_h_scroll_handler); lua_setglobal(L, "qt_set_scroll_area_h_scroll_handler");
     lua_pushcfunction(L, lua_scroll_area_h_scroll_by); lua_setglobal(L, "qt_scroll_area_h_scroll_by");
     lua_pushcfunction(L, lua_scroll_area_h_scroll_info); lua_setglobal(L, "qt_scroll_area_h_scroll_info");
+    lua_pushcfunction(L, lua_link_scroll_areas_h); lua_setglobal(L, "qt_link_scroll_areas_h");
 
     // Register new database binding functions
 

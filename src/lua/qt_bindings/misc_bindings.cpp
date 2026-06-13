@@ -893,6 +893,23 @@ int lua_scroll_area_h_scroll_info(lua_State* L) {
     return 1;
 }
 
+// Bidirectionally link two scroll areas so their horizontal scroll positions
+// stay in sync. Uses valueChanged signals with a guard against re-entrancy.
+int lua_link_scroll_areas_h(lua_State* L) {
+    QScrollArea* sa1 = get_widget<QScrollArea>(L, 1);
+    QScrollArea* sa2 = get_widget<QScrollArea>(L, 2);
+    if (!sa1 || !sa2) return luaL_error(L, "qt_link_scroll_areas_h: two scroll areas required");
+    QScrollBar* hbar1 = sa1->horizontalScrollBar();
+    QScrollBar* hbar2 = sa2->horizontalScrollBar();
+    QObject::connect(hbar1, &QScrollBar::valueChanged, sa2, [hbar2](int value) {
+        if (hbar2->value() != value) hbar2->setValue(value);
+    });
+    QObject::connect(hbar2, &QScrollBar::valueChanged, sa1, [hbar1](int value) {
+        if (hbar1->value() != value) hbar1->setValue(value);
+    });
+    return 0;
+}
+
 int lua_set_parent(lua_State* L) {
     QWidget* child = get_widget<QWidget>(L, 1);
     QWidget* parent = nullptr;
