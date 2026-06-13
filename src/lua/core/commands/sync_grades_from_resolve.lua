@@ -237,10 +237,17 @@ function M.apply(response, sequence_id, db, synced_at)
                 #captured.unmatched_resolve_items + 1] = row.resolve_item_id
         else
             seen_clip_ids[clip_id] = true
-            local before = load_existing_row(clip_id, db)
+            local before      = load_existing_row(clip_id, db)
+            local link_before = identity_ledger.load(clip_id, db)
+            assert(link_before, string.format(
+                "sync_grades.apply: lookup_clip_id %q→%q but "
+                .. "load(%q) returned nil — identity_ledger "
+                .. "consistency violation",
+                row.resolve_item_id, clip_id, clip_id))
             captured.entries[#captured.entries + 1] = {
-                clip_id = clip_id,
-                before  = before,  -- nil if clip had no grade
+                clip_id     = clip_id,
+                before      = before,       -- nil if clip had no grade
+                link_before = link_before,  -- for ledger revert on undo
             }
 
             if row.fidelity == "none" then
@@ -253,20 +260,14 @@ function M.apply(response, sequence_id, db, synced_at)
                 if before ~= nil then
                     delete_grade(clip_id, db)
                 end
-                local existing_link = identity_ledger.load(clip_id, db)
-                assert(existing_link, string.format(
-                    "sync_grades.apply: lookup_clip_id %q→%q but "
-                    .. "load(%q) returned nil — identity_ledger "
-                    .. "consistency violation",
-                    row.resolve_item_id, clip_id, clip_id))
                 -- identity_ledger.upsert preserves existing
                 -- grade_fingerprint when the key is omitted; passing
                 -- "<none>" explicitly records the ungraded baseline
                 -- so the next sync's drift detection is right.
                 identity_ledger.upsert(clip_id, {
-                    resolve_item_id   = existing_link.resolve_item_id,
+                    resolve_item_id   = link_before.resolve_item_id,
                     grade_fingerprint = UNGRADED_FINGERPRINT,
-                    edit_fingerprint  = existing_link.edit_fingerprint,
+                    edit_fingerprint  = link_before.edit_fingerprint,
                 }, db)
             else
                 local new_grade = new_grade_from_response_row(row, i, synced_at)
@@ -279,16 +280,10 @@ function M.apply(response, sequence_id, db, synced_at)
 
                 -- Update ledger fingerprint so subsequent SyncGrades can
                 -- detect whether Resolve drifted vs JVE-local edits (FR-025).
-                local existing_link = identity_ledger.load(clip_id, db)
-                assert(existing_link, string.format(
-                    "sync_grades.apply: lookup_clip_id %q→%q but "
-                    .. "load(%q) returned nil — identity_ledger "
-                    .. "consistency violation",
-                    row.resolve_item_id, clip_id, clip_id))
                 identity_ledger.upsert(clip_id, {
-                    resolve_item_id   = existing_link.resolve_item_id,
+                    resolve_item_id   = link_before.resolve_item_id,
                     grade_fingerprint = ClipGrade.fingerprint(new_grade),
-                    edit_fingerprint  = existing_link.edit_fingerprint,
+                    edit_fingerprint  = link_before.edit_fingerprint,
                 }, db)
             end
         end
@@ -347,6 +342,16 @@ function M.restore(captured, db)
             delete_grade(entry.clip_id, db)
         else
             ClipGrade.upsert(entry.clip_id, entry.before, db)
+        end
+        -- Revert ledger fingerprint alongside the grade row so the next
+        -- SyncGrades compares against the correct pre-apply baseline.
+        -- stale-walk entries (no ledger write in apply) have no link_before.
+        if entry.link_before ~= nil then
+            identity_ledger.upsert(entry.clip_id, {
+                resolve_item_id   = entry.link_before.resolve_item_id,
+                grade_fingerprint = entry.link_before.grade_fingerprint,
+                edit_fingerprint  = entry.link_before.edit_fingerprint,
+            }, db)
         end
     end
     log.event("SyncGradesFromResolve.restore: %d grade(s) reverted",
@@ -411,23 +416,8 @@ function M.execute(args, db, command)
                     notify(args, nil, dcode, dmessage)
                     return
                 end
-                if report.rate_mismatch ~= nil then
-                    log.warn("SyncGradesFromResolve discovery: %s",
-                        report.rate_mismatch)
-                end
-                if #report.ambiguous > 0 then
-                    log.warn("SyncGradesFromResolve discovery: %d "
-                        .. "ambiguous match(es) — those clips stay "
-                        .. "unlinked; see result.discovery.ambiguous",
-                        #report.ambiguous)
-                end
-                if #report.stamp_failures > 0 then
-                    log.warn("SyncGradesFromResolve discovery: %d "
-                        .. "identity-marker stamp(s) refused — links "
-                        .. "work but won't survive Resolve-side cuts; "
-                        .. "see result.discovery.stamp_failures",
-                        #report.stamp_failures)
-                end
+                discovery.log_discovery_warnings(
+                    report, "SyncGradesFromResolve")
                 M.request_and_apply_grades(client, args, report, db,
                     command, bake_lut_dir)
             end)

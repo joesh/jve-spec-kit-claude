@@ -1776,14 +1776,27 @@ VERB_TABLE = {
     "read_timeline":   verb_read_timeline,
     "read_grades":     verb_read_grades,
     "stamp_identity_marker": verb_stamp_identity_marker,
-    "apply_test_grade": verb_apply_test_grade,
     "delete_timeline": verb_delete_timeline,
 }
 
+# Verbs that mutate Resolve state for test purposes only. Never reachable
+# in production (helper started without --allow-test-verbs).
+TEST_VERB_TABLE = {
+    "apply_test_grade": verb_apply_test_grade,
+}
 
-def dispatch(verb, args, handle, envelope_id, helper_version):
+
+def dispatch(verb, args, handle, envelope_id, helper_version,
+             allow_test_verbs=False):
     fn = VERB_TABLE.get(verb)
     if fn is None:
-        return _error(envelope_id, "bad_request",
-            f"unknown verb '{verb}'")
+        if TEST_VERB_TABLE.get(verb) is not None:
+            if not allow_test_verbs:
+                return _error(envelope_id, "bad_request",
+                    f"verb '{verb}' is only available with "
+                    "--allow-test-verbs (not set in production)")
+            fn = TEST_VERB_TABLE[verb]
+        else:
+            return _error(envelope_id, "bad_request",
+                f"unknown verb '{verb}'")
     return fn(args, handle, envelope_id, helper_version)

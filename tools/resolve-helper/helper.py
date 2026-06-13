@@ -36,6 +36,9 @@ def parse_args(argv):
         help="Unix socket path to listen on (matches qt_local_socket client)")
     p.add_argument("--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    p.add_argument("--allow-test-verbs", action="store_true", default=False,
+        help="Enable test-only verbs (apply_test_grade). "
+             "Never pass in production.")
     return p.parse_args(argv)
 
 
@@ -89,7 +92,7 @@ def _recover_envelope_id(line):
     return candidate if isinstance(candidate, str) else ""
 
 
-def handle_line(line, handle, ledger):
+def handle_line(line, handle, ledger, allow_test_verbs=False):
     # Returns (response_envelope, idempotency_key_or_None).
     # bad_request errors carry the empty correlation id ("") when the
     # client's line was unparseable — documented in helper-protocol.md.
@@ -126,11 +129,12 @@ def handle_line(line, handle, ledger):
             cached_resp["id"] = envelope_id
             return cached_resp, idem_key
 
-    response = dispatch(verb, args, handle, envelope_id, HELPER_VERSION)
+    response = dispatch(verb, args, handle, envelope_id, HELPER_VERSION,
+                        allow_test_verbs=allow_test_verbs)
     return response, idem_key
 
 
-def serve(sock, handle, ledger):
+def serve(sock, handle, ledger, allow_test_verbs=False):
     log = logging.getLogger("helper")
     while True:
         log.info("waiting for client on socket")
@@ -151,7 +155,8 @@ def serve(sock, handle, ledger):
                     decoded = line.decode("utf-8")
                     try:
                         response, idem_key = handle_line(
-                            decoded, handle, ledger)
+                            decoded, handle, ledger,
+                            allow_test_verbs=allow_test_verbs)
                     except Exception as exc:
                         # Dispatch crashed mid-verb: helper state past
                         # this point is suspect — the idempotency
@@ -201,7 +206,8 @@ def main(argv):
     handle = ResolveHandle()
     ledger = IdempotencyLedger()
     try:
-        serve(sock, handle, ledger)
+        serve(sock, handle, ledger,
+              allow_test_verbs=args.allow_test_verbs)
     finally:
         sock.close()
         if os.path.exists(args.socket):

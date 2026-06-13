@@ -69,11 +69,15 @@ function M.start(opts)
     qt_process_set_finished_cb(proc, function(code, status)
         io.write(string.format("[helper process] EXITED code=%d status=%s\n", code, tostring(status)))
     end)
-    qt_process_start(proc, "python3", {
+    local helper_args = {
         opts.repo_root .. "/tools/resolve-helper/helper.py",
         "--socket", opts.sock_path,
         "--log-level", opts.log_level,
-    })
+    }
+    if opts.allow_test_verbs then
+        helper_args[#helper_args + 1] = "--allow-test-verbs"
+    end
+    qt_process_start(proc, "python3", helper_args)
     assert(qt_process_wait_for_started(proc, opts.started_timeout_ms),
         string.format(
             "_helper_transport: helper did not start within %dms",

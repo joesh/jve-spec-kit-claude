@@ -70,7 +70,7 @@ local database          = require("core.database")
 local wire              = require("core.resolve_bridge.wire_decode")
 local identity_ledger   = require("core.resolve_bridge.identity_ledger")
 local change_token      = require("core.resolve_bridge.change_token")
-local log               = require("core.logger").for_area("commands")
+local log               = require("core.logger").for_area("bridge")
 
 -- Iterate JVE clips on a track. The id-list select goes through
 -- database.select_rows (prepare → bind → exec → next → finalize, so a
@@ -194,8 +194,7 @@ local function index_items_by_position(items)
     return by_pos, non_media_skipped
 end
 
-local function match_by_marker(jve_clips, identities_items, pre_claimed,
-                                ambiguous)
+local function match_by_marker(jve_clips, identities_items, already_claimed)
     -- read_identities returns {items: [{resolve_item_id, jve_guid}], ...}.
     -- Build clip_id → resolve_item_id map for jve_guids that name JVE
     -- clips actually in this sequence. Resolve items whose jve_guid
@@ -206,10 +205,11 @@ local function match_by_marker(jve_clips, identities_items, pre_claimed,
     for _, c in ipairs(jve_clips) do jve_clip_ids[c.id] = true end
 
     local marker_matched = {}  -- jve_clip_id → resolve_item_id
+    local ambiguous      = {}  -- {clip_id, resolve_item_id, reason}
     for _, item in ipairs(identities_items) do
         local guid = item.jve_guid
         if jve_clip_ids[guid] then
-            if pre_claimed[item.resolve_item_id] then
+            if already_claimed[item.resolve_item_id] then
                 -- The item already belongs to a DIFFERENT clip via a
                 -- persisted ledger link (clips with live existing
                 -- links never enter the channels), yet its marker
@@ -236,7 +236,7 @@ local function match_by_marker(jve_clips, identities_items, pre_claimed,
             end
         end
     end
-    return marker_matched
+    return marker_matched, ambiguous
 end
 
 local function match_by_position(jve_clips, items_by_pos, marker_matched,
@@ -317,11 +317,16 @@ function M.match(jve_clips, identities_items, timeline_items, pre_claimed)
 
     local ambiguous = {}
     local already_claimed = {}
-    for rid in pairs(pre_claimed or {}) do
-        already_claimed[rid] = true
+    if pre_claimed then
+        for rid in pairs(pre_claimed) do
+            already_claimed[rid] = true
+        end
     end
-    local marker_matched = match_by_marker(
-        jve_clips, identities_items, already_claimed, ambiguous)
+    local marker_matched, marker_ambiguous = match_by_marker(
+        jve_clips, identities_items, already_claimed)
+    for _, a in ipairs(marker_ambiguous) do
+        ambiguous[#ambiguous + 1] = a
+    end
     local items_by_pos, non_media_skipped =
         index_items_by_position(timeline_items)
     if non_media_skipped > 0 then
@@ -479,6 +484,31 @@ local function stamp_new_position_matches(client, token, pos_matched, done)
         end)
     end
     step()
+end
+
+--- Emit log.warn lines for non-fatal discovery conditions (rate mismatch,
+--- ambiguous matches, stamp failures). Called by SyncGradesFromResolve and
+--- SyncEditsFromResolve after discover_and_link succeeds.
+--- caller_prefix: short op name, e.g. "SyncGradesFromResolve".
+function M.log_discovery_warnings(report, caller_prefix)
+    assert(type(report) == "table",
+        "discovery.log_discovery_warnings: report required")
+    assert(type(caller_prefix) == "string" and caller_prefix ~= "",
+        "discovery.log_discovery_warnings: caller_prefix required")
+    if report.rate_mismatch ~= nil then
+        log.warn("%s discovery: %s", caller_prefix, report.rate_mismatch)
+    end
+    if #report.ambiguous > 0 then
+        log.warn("%s discovery: %d ambiguous match(es) — those clips stay "
+            .. "unlinked; see result.discovery.ambiguous",
+            caller_prefix, #report.ambiguous)
+    end
+    if #report.stamp_failures > 0 then
+        log.warn("%s discovery: %d identity-marker stamp(s) refused — links "
+            .. "work but won't survive Resolve-side cuts; "
+            .. "see result.discovery.stamp_failures",
+            caller_prefix, #report.stamp_failures)
+    end
 end
 
 --- Run full identity discovery against the live Resolve timeline:

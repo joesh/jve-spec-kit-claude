@@ -31,7 +31,7 @@
 local M = {}
 
 local Signals = require("core.signals")
-local log     = require("core.logger").for_area("media")
+local log     = require("core.logger").for_area("commands")
 
 -- (op_name → signal_name) and (op_name → integer counter). Keys are
 -- populated by `register_op` at command-module load. Reads are guarded

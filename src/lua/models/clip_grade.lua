@@ -51,8 +51,9 @@ local function assert_cdl_all_or_none(cdl)
         end
     end
     assert(#absent == 0 or #present == 0, string.format(
-        "ClipGrade.upsert: CDL must be all-9-channels-plus-saturation OR "
-        .. "all NULL; got %d present (%s) and %d absent (%s). Partial CDL "
+        "ClipGrade.upsert: CDL must supply all 10 channels "
+        .. "(slope/offset/power × R/G/B + saturation) OR all NULL; "
+        .. "got %d present (%s) and %d absent (%s). Partial CDL "
         .. "is a programming bug — either downgrade fidelity to 'partial' "
         .. "with cdl = nil, or supply every channel.",
         #present, table.concat(present, ","),
@@ -171,6 +172,11 @@ function M.copy_to(from_clip_id, to_clip_id, db)
     if grade == nil then
         return false
     end
+    -- A bladed fragment has no prior Resolve sync relationship; inheriting
+    -- stale=1 from the parent would mark it for re-sync before it has ever
+    -- been synced (wrong domain meaning — stale tracks sync staleness,
+    -- not timeline origin).
+    grade.stale = 0
     M.upsert(to_clip_id, grade, db)
     return true
 end

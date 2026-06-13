@@ -724,11 +724,6 @@ local function run_phase_b(to_apply_entries, per_clip, project_id,
                         state.phaseB_status = "ran_failed"
                         record_failure(state, "OverwriteTrimEdge",
                             { edge = "left", delta_frames = L }, err, result)
-                        table.insert(result.skipped, {
-                            clip_id         = entry.clip_id,
-                            resolve_item_id = entry.resolve_item_id,
-                            reason          = "phaseB_failed",
-                        })
                         log.warn("sync_edits: Phase B left-trim failed "
                             .. "for clip %s: %s", tostring(entry.clip_id),
                             tostring(err))
@@ -748,11 +743,6 @@ local function run_phase_b(to_apply_entries, per_clip, project_id,
                         state.phaseB_status = "ran_failed"
                         record_failure(state, "OverwriteTrimEdge",
                             { edge = "right", delta_frames = R }, err, result)
-                        table.insert(result.skipped, {
-                            clip_id         = entry.clip_id,
-                            resolve_item_id = entry.resolve_item_id,
-                            reason          = "phaseB_failed",
-                        })
                         log.warn("sync_edits: Phase B right-trim failed "
                             .. "for clip %s: %s", tostring(entry.clip_id),
                             tostring(err))
@@ -994,23 +984,8 @@ function M.execute(args, db, _command)
                     notify(args, nil, code, message)
                     return
                 end
-                if report.rate_mismatch ~= nil then
-                    log.warn("SyncEditsFromResolve discovery: %s",
-                        report.rate_mismatch)
-                end
-                if #report.ambiguous > 0 then
-                    log.warn("SyncEditsFromResolve discovery: %d "
-                        .. "ambiguous match(es) — those clips stay "
-                        .. "unlinked; see result.discovery.ambiguous",
-                        #report.ambiguous)
-                end
-                if #report.stamp_failures > 0 then
-                    log.warn("SyncEditsFromResolve discovery: %d "
-                        .. "identity-marker stamp(s) refused — links "
-                        .. "work but won't survive Resolve-side cuts; "
-                        .. "see result.discovery.stamp_failures",
-                        #report.stamp_failures)
-                end
+                discovery.log_discovery_warnings(
+                    report, "SyncEditsFromResolve")
                 -- Wire→classifier translation at the boundary between
                 -- the helper response and JVE-side processing. M.apply
                 -- consumes classifier shape (per-item JVE track_id).

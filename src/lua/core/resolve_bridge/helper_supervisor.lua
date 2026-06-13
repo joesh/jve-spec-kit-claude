@@ -22,7 +22,7 @@
 
 local client = require("core.resolve_bridge.client")
 local qt_constants = require("core.qt_constants")
-local log = require("core.logger").for_area("commands")
+local log = require("core.logger").for_area("bridge")
 
 local M = {}
 

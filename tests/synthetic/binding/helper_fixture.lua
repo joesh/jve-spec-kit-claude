@@ -37,6 +37,7 @@ function M.start(sock_path)
         bind_poll_count       = 100,        -- 100 * 50ms = 5s
         corr_prefix           = "corr",
         request_timeout_ticks = 1500,       -- 1500 * 20ms = 30s
+        allow_test_verbs      = true,       -- contract tests exercise verb gates
     })
 end
 
