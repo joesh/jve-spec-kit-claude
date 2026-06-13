@@ -164,34 +164,51 @@ end
 -- position-key collision check — otherwise a generator stacked over a
 -- media clip would falsely trip the duplicate-key assert.
 --
--- Returns the index + the count of non_media items skipped (logged by
--- the caller). `kind` is required (rule 2.32 — closed-set discipline
--- at the wire boundary; no silent default).
+-- Returns (by_pos, non_media_skipped, pos_key_collisions).
+-- `kind` is required (rule 2.32 — closed-set discipline at the wire
+-- boundary; no silent default).
+-- pos_key_collisions: [{resolve_item_id, reason}] for any pair of
+-- MEDIA items sharing a (track, record_start) key — a Resolve invariant
+-- violation, but externally-sourced data; route to ambiguous instead of
+-- asserting so one bad timeline doesn't crash the whole sync.
 local function index_items_by_position(items)
-    local by_pos = {}
-    local non_media_skipped = 0
+    local by_pos              = {}
+    local pos_key_collisions  = {}
+    local non_media_skipped   = 0
     for _, item in ipairs(items) do
-        wire.assert_item_kind(item.kind, string.format(
+        local valid, kind_err = wire.validate_item_kind(item.kind, string.format(
             "discovery: read_timeline item %s",
             tostring(item.resolve_item_id)))
-        if item.kind == "non_media" then
+        if not valid then
+            pos_key_collisions[#pos_key_collisions + 1] = {
+                resolve_item_id = item.resolve_item_id,
+                reason          = kind_err,
+            }
+        elseif item.kind == "non_media" then
             non_media_skipped = non_media_skipped + 1
         else
             local key = string.format("%s:%d:%d",
                 item.track_type, item.track_index, item.record_start)
-            -- Two MEDIA items at the same (track, record_start) would
-            -- be a Resolve invariant break; surface defensively rather
-            -- than silently picking the second.
-            assert(by_pos[key] == nil, string.format(
-                "discovery: duplicate position key %q on Resolve side "
-                .. "(resolve_item_id=%s and %s) — Resolve invariant "
-                .. "violated", key,
-                tostring(by_pos[key] and by_pos[key].resolve_item_id),
-                tostring(item.resolve_item_id)))
-            by_pos[key] = item
+            if by_pos[key] ~= nil then
+                -- Two MEDIA items at the same position — Resolve invariant
+                -- violation. Route both to collisions so neither is
+                -- position-matched; the caller merges them into ambiguous.
+                -- Never assert on external Resolve wire data.
+                pos_key_collisions[#pos_key_collisions + 1] = {
+                    resolve_item_id = by_pos[key].resolve_item_id,
+                    reason          = "position_key_collision",
+                }
+                pos_key_collisions[#pos_key_collisions + 1] = {
+                    resolve_item_id = item.resolve_item_id,
+                    reason          = "position_key_collision",
+                }
+                by_pos[key] = nil  -- neither wins the position index
+            else
+                by_pos[key] = item
+            end
         end
     end
-    return by_pos, non_media_skipped
+    return by_pos, non_media_skipped, pos_key_collisions
 end
 
 local function match_by_marker(jve_clips, identities_items, already_claimed)
@@ -222,17 +239,30 @@ local function match_by_marker(jve_clips, identities_items, already_claimed)
                 }
             else
                 -- Rule 2.32: No silent last-write-wins. If two Resolve
-                -- items claim the same JVE clip, that's an ambiguous
-                -- state that requires a loud failure (marker-channel
-                -- equivalent of the position-match collision check).
-                assert(marker_matched[guid] == nil, string.format(
-                    "discovery: duplicate identity marker for JVE clip "
-                    .. "%s (found on Resolve items %s and %s) — marker "
-                    .. "identity must be unique",
-                    tostring(guid),
-                    tostring(marker_matched[guid]),
-                    tostring(item.resolve_item_id)))
-                marker_matched[guid] = item.resolve_item_id
+                -- items carry the same JVE GUID (e.g. colorist duplicated
+                -- a clip — customData is copied), route both to ambiguous
+                -- rather than asserting: this is externally-sourced data
+                -- and an assert would crash the async sync tail.
+                if marker_matched[guid] ~= nil then
+                    -- De-list the first match so neither wins.
+                    ambiguous[#ambiguous + 1] = {
+                        clip_id         = guid,
+                        resolve_item_id = marker_matched[guid],
+                        reason          = "duplicate_identity_marker",
+                    }
+                    already_claimed[marker_matched[guid]] = nil
+                    marker_matched[guid] = nil
+                    ambiguous[#ambiguous + 1] = {
+                        clip_id         = guid,
+                        resolve_item_id = item.resolve_item_id,
+                        reason          = "duplicate_identity_marker",
+                    }
+                else
+                    marker_matched[guid] = item.resolve_item_id
+                    -- Prevent a second different GUID from also claiming
+                    -- this Resolve item in the same marker-channel pass.
+                    already_claimed[item.resolve_item_id] = true
+                end
             end
         end
     end
@@ -327,12 +357,18 @@ function M.match(jve_clips, identities_items, timeline_items, pre_claimed)
     for _, a in ipairs(marker_ambiguous) do
         ambiguous[#ambiguous + 1] = a
     end
-    local items_by_pos, non_media_skipped =
+    local items_by_pos, non_media_skipped, pos_key_collisions =
         index_items_by_position(timeline_items)
     if non_media_skipped > 0 then
         log.event("discovery: skipping %d non-media timeline item(s) "
             .. "(generators/transitions/etc. — DRP importer does not "
             .. "yet cover these kinds)", non_media_skipped)
+    end
+    for _, c in ipairs(pos_key_collisions) do
+        ambiguous[#ambiguous + 1] = c
+        log.warn("discovery: position-key collision for %s — "
+            .. "Resolve invariant violation; item excluded from match",
+            tostring(c.resolve_item_id))
     end
     for _, rid in pairs(marker_matched) do
         already_claimed[rid] = true
@@ -387,11 +423,14 @@ end
 -- Resolve timeline's, else a human-readable mismatch description. The
 -- position channel must not run on a mismatch (silently wrong links);
 -- policy on what to DO about it belongs to the caller.
+-- If timeline_integer_rate is missing from the wire response (version skew),
+-- skip the position channel conservatively rather than crashing JVE.
 local function rate_mismatch_reason(seq, sequence_id, timeline_integer_rate)
-    assert(type(timeline_integer_rate) == "number"
-        and timeline_integer_rate > 0,
-        "discovery: helper missing result.timeline_integer_rate "
-        .. "(helper-protocol §read_timeline)")
+    if type(timeline_integer_rate) ~= "number" or timeline_integer_rate <= 0 then
+        return "helper did not send result.timeline_integer_rate "
+            .. "(helper-protocol §read_timeline — version skew?); "
+            .. "position channel skipped conservatively"
+    end
     local jve_integer_rate = math.ceil(
         seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator)
     if jve_integer_rate == timeline_integer_rate then return nil end
@@ -474,6 +513,13 @@ local function stamp_new_position_matches(client, token, pos_matched, done)
                     resolve_item_id = pair.resolve_item_id,
                     code            = code,
                     message         = message,
+                }
+            elseif type(response.result) ~= "table" then
+                failures[#failures + 1] = {
+                    clip_id         = pair.clip_id,
+                    resolve_item_id = pair.resolve_item_id,
+                    code            = "bad_response",
+                    message         = "stamp_identity_marker: response.result missing",
                 }
             elseif response.result.stamped == true then
                 stamped[#stamped + 1] = pair

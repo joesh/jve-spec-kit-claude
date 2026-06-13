@@ -88,6 +88,46 @@ local function missing_track_sentinel(track_type, track_index)
         track_type, track_index)
 end
 
+-- Validate wire-protocol required fields for a media item before it enters
+-- the classifier. Returns nil on valid, or an error string on invalid.
+-- Belongs here (wire boundary) so classify_all can assert internal
+-- invariants without crashing on malformed external data.
+local function validate_media_wire_item(w, i)
+    if type(w.resolve_item_id) ~= "string" or w.resolve_item_id == "" then
+        return string.format(
+            "sync_edits.translate_wire_response: item[%d] "
+            .. "missing resolve_item_id", i)
+    end
+    if wire.WIRE_TO_JVE_TRACK_TYPE[w.track_type] == nil then
+        return string.format(
+            "sync_edits.translate_wire_response: item[%d] "
+            .. "track_type %q not in closed set {video, audio}",
+            i, tostring(w.track_type))
+    end
+    if type(w.track_index) ~= "number"
+            or w.track_index < 1
+            or w.track_index ~= math.floor(w.track_index) then
+        return string.format(
+            "sync_edits.translate_wire_response: item[%d] "
+            .. "track_index must be 1-based integer, got %s",
+            i, tostring(w.track_index))
+    end
+    for _, k in ipairs(REQUIRED_ITEM_NUMBER_FIELDS) do
+        if type(w[k]) ~= "number" then
+            return string.format(
+                "sync_edits.translate_wire_response: item[%d] "
+                .. "missing %s (number)", i, k)
+        end
+    end
+    if type(w.enabled) ~= "boolean" then
+        return string.format(
+            "sync_edits.translate_wire_response: item[%d] "
+            .. "enabled must be boolean, got %s",
+            i, tostring(w.enabled))
+    end
+    return nil
+end
+
 --- Translate a helper `read_timeline` wire response into the shape
 --- `classify_all` consumes. The helper returns positional track
 --- identity (`track_type`, `track_index`) because Resolve preserves DRT
@@ -120,41 +160,36 @@ function M.translate_wire_response(wire_response, sequence_id)
         -- adjustment clips, some Fusion comps) carry no source range
         -- and cannot participate in edit-fingerprint diffing — filter
         -- them out here at the translate seam so classify_all stays
-        -- strict on source_in/source_out presence.
-        wire.assert_item_kind(w.kind, string.format(
-            "sync_edits.translate_wire_response: item[%d]", i))
-        if w.kind == "non_media" then
+        -- strict on source_in/source_out presence. Unknown kinds
+        -- (helper newer than JVE) get a warn + skip — never a crash.
+        local kind_valid, kind_err = wire.validate_item_kind(w.kind,
+            string.format("sync_edits.translate_wire_response: item[%d]", i))
+        if not kind_valid then
+            log.warn(kind_err)
+        elseif w.kind == "non_media" then
             non_media_skipped = non_media_skipped + 1
         else
-            local jve_track_type = wire.WIRE_TO_JVE_TRACK_TYPE[w.track_type]
-            assert(jve_track_type ~= nil, string.format(
-                "sync_edits.translate_wire_response: item[%d] "
-                .. "track_type %q not in closed set {video, audio}",
-                i, tostring(w.track_type)))
-            assert(type(w.track_index) == "number"
-                    and w.track_index >= 1
-                    and w.track_index == math.floor(w.track_index),
-                string.format(
-                    "sync_edits.translate_wire_response: item[%d] "
-                    .. "track_index must be 1-based integer, got %s",
-                    i, tostring(w.track_index)))
-
-            local jve_track_id = Track.find_at(sequence_id,
-                jve_track_type, w.track_index)
-            if jve_track_id == nil then
-                jve_track_id = missing_track_sentinel(w.track_type,
-                    w.track_index)
+            local field_err = validate_media_wire_item(w, i)
+            if field_err ~= nil then
+                log.warn(field_err)
+            else
+                local jve_track_type = wire.WIRE_TO_JVE_TRACK_TYPE[w.track_type]
+                local jve_track_id   = Track.find_at(sequence_id,
+                    jve_track_type, w.track_index)
+                if jve_track_id == nil then
+                    jve_track_id = missing_track_sentinel(w.track_type,
+                        w.track_index)
+                end
+                out_items[#out_items + 1] = {
+                    resolve_item_id = w.resolve_item_id,
+                    track_id        = jve_track_id,
+                    record_start    = w.record_start,
+                    record_duration = w.record_duration,
+                    source_in       = w.source_in,
+                    source_out      = w.source_out,
+                    enabled         = w.enabled,
+                }
             end
-
-            out_items[#out_items + 1] = {
-                resolve_item_id = w.resolve_item_id,
-                track_id        = jve_track_id,
-                record_start    = w.record_start,
-                record_duration = w.record_duration,
-                source_in       = w.source_in,
-                source_out      = w.source_out,
-                enabled         = w.enabled,
-            }
         end
     end
     local audio_skipped = wire_response.audio_items_skipped or 0
@@ -169,6 +204,9 @@ function M.translate_wire_response(wire_response, sequence_id)
     }
 end
 
+-- Internal invariant guard — all wire field validation belongs in
+-- translate_wire_response (validate_media_wire_item). These asserts fire
+-- only if our own code produced malformed output, not on wire data.
 local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.items) == "table",
         "sync_edits.classify_all: response.items array required")
@@ -685,8 +723,8 @@ end
 -- therefore does not apply in V1 (no RippleTrim dispatched).
 --
 -- Cascade: phase0_failed → skip B (geom ops on a wrong-track clip are
--- meaningless). phaseB_failed → push `phaseB_failed` to result.skipped
--- and cascade-skip C (data-model.md §apply failure cascade). Within a
+-- meaningless). phaseB_failed → push entry to result.failed and
+-- cascade-skip C (data-model.md §apply failure cascade). Within a
 -- clip: left dispatched before right; if left fails, right is skipped
 -- (clip didn't converge — no point further mutating it). Reloads
 -- current state per clip so Phase 0's track-move doesn't stale-shadow

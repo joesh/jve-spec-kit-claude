@@ -335,10 +335,10 @@ def verb_import_timeline(args, _resolve, project, envelope_id, helper_version):
 
     try:
         prev_ids = _snapshot_timeline_ids(project)
+        media_pool = _api('project.GetMediaPool()', project.GetMediaPool)
     except RuntimeError as exc:
         return _error(envelope_id, "resolve_api_error", str(exc))
 
-    media_pool = project.GetMediaPool()
     if media_pool is None:
         return _error(envelope_id, "resolve_api_error",
             "GetMediaPool() returned None")
@@ -508,7 +508,7 @@ def _recover_jve_guid(item):
     # customData strings, that is ambiguous stamping (rule 2.32 — no
     # silent first-wins). Raise so the caller surfaces resolve_api_error
     # rather than committing the wrong jve_guid.
-    markers = item.GetMarkers()
+    markers = _api('item.GetMarkers()', item.GetMarkers)
     if markers is None:
          # Resolve API returns None if the item is invalid or an internal
          # error occurred. Don't fallback to {} (Rule 2.13).
@@ -1035,7 +1035,10 @@ def verb_delete_timeline(args, _resolve, project, envelope_id,
     # API; calling the nonexistent Project attribute raised
     # "'NoneType' object is not callable" against live 20.3 — caught by
     # the T026 live teardown 2026-06-09).
-    media_pool = project.GetMediaPool()
+    try:
+        media_pool = _api('project.GetMediaPool()', project.GetMediaPool)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
     if media_pool is None:
         return _error(envelope_id, "resolve_api_error",
             "GetMediaPool() returned None")

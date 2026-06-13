@@ -87,32 +87,66 @@ local FIDELITIES = {
 -- stored vs current fingerprint; "<none>" lets a removed-then-re-added
 -- Resolve grade trip the drift bit.
 local UNGRADED_FINGERPRINT = "<ungraded>"
+
+-- Wire-boundary validation for a single read_grades item. Returns nil on
+-- valid, or an error string on invalid. Belongs here so M.apply's
+-- assert_response_shape can be a true internal invariant guard.
+-- Callers MUST log.warn on error — never crash on wire data (rule 1.14).
+local function validate_grade_wire_item(row, i)
+    if type(row.resolve_item_id) ~= "string" or row.resolve_item_id == "" then
+        return string.format(
+            "sync_grades.apply: grade[%d] missing resolve_item_id", i)
+    end
+    if not FIDELITIES[row.fidelity] then
+        return string.format(
+            "sync_grades.apply: grade[%d] fidelity %q not in closed "
+            .. "set {primary, partial, unrepresentable, none}",
+            i, tostring(row.fidelity))
+    end
+    -- cdl is gated on fidelity=="primary" (FR-015 honest, never
+    -- approximated). Validate CDL structure here so cdl_wire_to_model
+    -- can assert as an internal invariant.
+    if row.fidelity == "primary" then
+        if type(row.cdl) ~= "table" then
+            return string.format(
+                "sync_grades.apply: grade[%d] fidelity=primary "
+                .. "requires cdl table", i)
+        end
+        for _, name in ipairs({"slope", "offset", "power"}) do
+            local t = row.cdl[name]
+            if type(t) ~= "table" or #t ~= 3 then
+                return string.format(
+                    "sync_grades.apply: grade[%d].cdl.%s must be "
+                    .. "3-element array, got %s", i, name, type(t))
+            end
+            for j = 1, 3 do
+                if type(t[j]) ~= "number" then
+                    return string.format(
+                        "sync_grades.apply: grade[%d].cdl.%s[%d] "
+                        .. "must be number, got %s",
+                        i, name, j, type(t[j]))
+                end
+            end
+        end
+        if type(row.cdl.sat) ~= "number" then
+            return string.format(
+                "sync_grades.apply: grade[%d].cdl.sat must be "
+                .. "number, got %s", i, type(row.cdl.sat))
+        end
+    elseif row.cdl ~= nil then
+        return string.format(
+            "sync_grades.apply: grade[%d] fidelity=%q must not "
+            .. "carry cdl (FR-015 honest downgrade)",
+            i, row.fidelity)
+    end
+    return nil
+end
+
+-- Internal invariant guard — wire validation is done by
+-- validate_grade_wire_item before items reach this point.
 local function assert_response_shape(response)
     assert(type(response) == "table" and type(response.grades) == "table",
         "sync_grades.apply: response.grades array required")
-    for i, row in ipairs(response.grades) do
-        assert(type(row.resolve_item_id) == "string"
-                and row.resolve_item_id ~= "",
-            string.format(
-                "sync_grades.apply: grade[%d] missing resolve_item_id",
-                i))
-        assert(FIDELITIES[row.fidelity], string.format(
-            "sync_grades.apply: grade[%d] fidelity %q not in closed "
-            .. "set {primary, partial, unrepresentable, none}",
-            i, tostring(row.fidelity)))
-        -- cdl is gated on fidelity=="primary" (FR-015 honest, never
-        -- approximated). Reject malformed combinations at the boundary.
-        if row.fidelity == "primary" then
-            assert(type(row.cdl) == "table", string.format(
-                "sync_grades.apply: grade[%d] fidelity=primary "
-                .. "requires cdl table", i))
-        else
-            assert(row.cdl == nil, string.format(
-                "sync_grades.apply: grade[%d] fidelity=%q must not "
-                .. "carry cdl (FR-015 honest downgrade)",
-                i, row.fidelity))
-        end
-    end
 end
 
 -- Translate the helper-protocol §read_grades WIRE CDL shape
@@ -120,10 +154,8 @@ end
 -- into JVE's clip_grade MODEL shape
 --   { slope_r, slope_g, slope_b, offset_r, offset_g, offset_b,
 --     power_r, power_g, power_b, saturation }
--- This IS the wire/model boundary; concentrating the rename in one
--- function keeps the model layer ignorant of the wire and vice versa
--- (FR-021 cleanliness). Asserts every triple has 3 numbers and sat is
--- a number — malformed input fails at the boundary (rule 1.14).
+-- Internal invariant asserts only — wire CDL structure is validated by
+-- validate_grade_wire_item before any item reaches this function.
 local function cdl_wire_to_model(wire, row_index)
     assert(type(wire) == "table", string.format(
         "sync_grades.apply: grade[%d].cdl must be table, got %s",
@@ -208,6 +240,19 @@ function M.apply(response, sequence_id, db, synced_at)
     assert(type(synced_at) == "number" and synced_at >= 0,
         "sync_grades.apply: synced_at unix timestamp required")
 
+    -- Wire-boundary filter: drop malformed items with log.warn so the
+    -- rest of apply can assert internal invariants without crashing on
+    -- bad external data (rule 1.14 / rule 2.32).
+    local valid_grades = {}
+    for i, row in ipairs(response.grades) do
+        local field_err = validate_grade_wire_item(row, i)
+        if field_err ~= nil then
+            log.warn(field_err)
+        else
+            valid_grades[#valid_grades + 1] = row
+        end
+    end
+
     local captured = {
         entries                 = {},
         unmatched_resolve_items = {},
@@ -220,7 +265,7 @@ function M.apply(response, sequence_id, db, synced_at)
         no_carrier_count        = 0,
     }
     local seen_clip_ids = {}
-    for i, row in ipairs(response.grades) do
+    for i, row in ipairs(valid_grades) do
         -- Ledger-driven attribution (FR-021): helper emits its native
         -- resolve_item_id; JVE owns the join to clip.id. The ledger is
         -- populated by the auto-discovery that ran at the start of
@@ -301,7 +346,7 @@ function M.apply(response, sequence_id, db, synced_at)
     --   unmatched    = helper rows with no ledger entry even after this
     --                  sync's auto-discovery (Resolve item matches no
     --                  JVE clip by marker or position/content).
-    local applied      = #response.grades - #captured.unmatched_resolve_items
+    local applied      = #valid_grades - #captured.unmatched_resolve_items
     local stale_marked = #captured.entries - applied
     log.event("SyncGradesFromResolve.apply: %d grade(s) applied, "
         .. "%d stale-marked, %d unmatched resolve_item_id(s)",
@@ -362,6 +407,11 @@ function M.restore(captured, db)
     Signals.emit("grades_changed", captured.sequence_id)
 end
 
+-- Forward declaration: defined after execute() (below), called from
+-- within execute's inner closure. Local must be visible at the closure's
+-- parse site.
+local request_and_apply_grades
+
 --- Full command path: pulls grades from helper, applies them, fires
 --- on_complete. Non-blocking — on_complete carries success/error.
 ---
@@ -418,18 +468,18 @@ function M.execute(args, db, command)
                 end
                 discovery.log_discovery_warnings(
                     report, "SyncGradesFromResolve")
-                M.request_and_apply_grades(client, args, report, db,
+                request_and_apply_grades(client, args, report, db,
                     command, bake_lut_dir)
             end)
     end)
 end
 
---- Second half of the sync: read_grades → apply → notify. Split out so
---- execute() reads as the algorithm it is (discover → pull → apply).
---- `report` is discovery's result, folded into the notify payload so
---- callers see what got (un)linked alongside what got applied.
-function M.request_and_apply_grades(client, args, report, db, command,
-                                     bake_lut_dir)
+-- Second half of the sync: read_grades → apply → notify. Split out so
+-- execute() reads as the algorithm it is (discover → pull → apply).
+-- `report` is discovery's result, folded into the notify payload so
+-- callers see what got (un)linked alongside what got applied.
+request_and_apply_grades = function(client, args, report, db, command,
+                                    bake_lut_dir)
     local helper_args = { bake_lut_dir = bake_lut_dir }
     if args.item_ids then helper_args.item_ids = args.item_ids end
     local sequence_id = args.sequence_id
@@ -464,14 +514,16 @@ function M.request_and_apply_grades(client, args, report, db, command,
             -- (clips without a grade carrier, Resolve stuck on the
             -- Color page). Logged at warn so they're visible at
             -- default log level — stderr-only proved invisible in
-            -- the 2026-06-10 incident. The shape assert doubles as
-            -- a version-skew tripwire: a resident helper process
-            -- predating this contract omits the field; restart
-            -- JVE (the helper respawns with current code).
-            assert(type(response.result.warnings) == "table",
-                "SyncGradesFromResolve: read_grades response has no "
-                .. "warnings array — helper process predates the "
-                .. "protocol; restart JVE to respawn the helper")
+            -- the 2026-06-10 incident. Missing field = version skew
+            -- (helper predates this protocol); surface as structured
+            -- error so the user can restart JVE to respawn the helper.
+            if type(response.result.warnings) ~= "table" then
+                notify(args, nil, "version_skew",
+                    "read_grades response has no warnings array — "
+                    .. "helper process predates this protocol; "
+                    .. "restart JVE to respawn the helper")
+                return
+            end
             for _, w in ipairs(response.result.warnings) do
                 log.warn("read_grades: %s", w)
             end

@@ -14,6 +14,8 @@
 -- decode_bt_*/decode_media_timemap take hex). Nested payloads (KeyframesBA,
 -- inner keyframes) are raw bytes — they live inside a 0x000c field.
 
+local drp_binary = require("importers.drp_binary")
+
 local M = {}
 
 -- ---------------------------------------------------------------------------
@@ -374,13 +376,9 @@ end
 --   writer's other a005-gate limits).
 -- ---------------------------------------------------------------------------
 
-local BT_CLIP_TAIL = "6880fbb2ba9ad6ce0278048001649001808001"
-
-local function hex_to_bytes_local(hex)
-    return (hex:gsub("%x%x", function(h)
-        return string.char(tonumber(h, 16))
-    end))
-end
+local BT_CLIP_TAIL = assert(
+    drp_binary.hex_to_bytes("6880fbb2ba9ad6ce0278048001649001808001"),
+    "BT_CLIP_TAIL: invalid hex literal")
 
 --- Encode a BtVideoInfo/BtAudioInfo <Clip> blob (FieldsBlob-framed hex).
 --- @param t table {directory, filename, date, codec,
@@ -409,7 +407,7 @@ function M.encode_bt_clip_blob(t)
             .. encode_pb_len_field(6, t.clip_name)
             .. encode_pb_len_field(7, t.clip_uuid)
     end
-    payload = payload .. hex_to_bytes_local(BT_CLIP_TAIL)
+    payload = payload .. BT_CLIP_TAIL
     return M.encode_fields_blob(payload, 2)
 end
 
@@ -434,8 +432,6 @@ end
 --                                   we always emit since clip identity
 --                                   is the carrier and required)
 -- ---------------------------------------------------------------------------
-
-local drp_binary = require("importers.drp_binary")
 
 local function encode_marker_color_message(marker)
     local color_value = drp_binary.MARKER_COLOR_VALUES[marker.color]

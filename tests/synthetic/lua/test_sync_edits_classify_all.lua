@@ -415,47 +415,65 @@ do
         translated.items[1].resolve_item_id == "rs-real")
 end
 
--- Wire validation (fail-fast at the wire→classifier boundary).
+-- Wire validation: malformed wire items are dropped with log.warn, never
+-- crash JVE (rule 1.14 — external Resolve wire data). Internal call
+-- contract violations (empty sequence_id) still assert.
 do
-    local bad_kind_missing = pcall(sync_edits.translate_wire_response,
+    -- missing kind → warn + skip (validate_item_kind returns false for nil)
+    local ok_mk, r_mk = pcall(sync_edits.translate_wire_response,
         { items = {{ resolve_item_id="x", track_type="video",
             track_index=1, source_in=0, source_out=1,
             record_start=0, record_duration=1, enabled=true }} }, "s")
-    check("translate: asserts on missing kind",
-        not bad_kind_missing)
+    check("translate: missing kind does not crash (wire data → dropped)",
+        ok_mk == true)
+    check("translate: missing-kind item is dropped from output",
+        ok_mk and #r_mk.items == 0)
 
-    local bad_kind_value = pcall(sync_edits.translate_wire_response,
+    -- kind outside closed set → warn + skip
+    local ok_kv, r_kv = pcall(sync_edits.translate_wire_response,
         { items = {{ resolve_item_id="x", kind="generator",
             track_type="video", track_index=1, source_in=0,
             source_out=1, record_start=0, record_duration=1,
             enabled=true }} }, "s")
-    check("translate: asserts on kind outside closed set",
-        not bad_kind_value)
+    check("translate: unknown kind does not crash (wire data → dropped)",
+        ok_kv == true)
+    check("translate: unknown-kind item is dropped from output",
+        ok_kv and #r_kv.items == 0)
 
-    local bad_type = pcall(sync_edits.translate_wire_response,
+    -- track_type outside closed set → warn + skip
+    local ok_tt, r_tt = pcall(sync_edits.translate_wire_response,
         { items = {{ resolve_item_id="x", kind="media",
             track_type="movie", track_index=1, source_in=0,
             source_out=1, record_start=0, record_duration=1,
             enabled=true }} }, "s")
-    check("translate: asserts on track_type outside closed set",
-        not bad_type)
+    check("translate: bad track_type does not crash (wire data → dropped)",
+        ok_tt == true)
+    check("translate: bad-track_type item is dropped from output",
+        ok_tt and #r_tt.items == 0)
 
-    local bad_idx_zero = pcall(sync_edits.translate_wire_response,
+    -- track_index=0 (1-based contract violation) → warn + skip
+    local ok_iz, r_iz = pcall(sync_edits.translate_wire_response,
         { items = {{ resolve_item_id="x", kind="media",
             track_type="video", track_index=0, source_in=0,
             source_out=1, record_start=0, record_duration=1,
             enabled=true }} }, "s")
-    check("translate: asserts on track_index=0 (1-based contract)",
-        not bad_idx_zero)
+    check("translate: track_index=0 does not crash (wire data → dropped)",
+        ok_iz == true)
+    check("translate: track_index=0 item is dropped from output",
+        ok_iz and #r_iz.items == 0)
 
-    local bad_idx_float = pcall(sync_edits.translate_wire_response,
+    -- non-integer track_index → warn + skip
+    local ok_if, r_if = pcall(sync_edits.translate_wire_response,
         { items = {{ resolve_item_id="x", kind="media",
             track_type="video", track_index=1.5, source_in=0,
             source_out=1, record_start=0, record_duration=1,
             enabled=true }} }, "s")
-    check("translate: asserts on non-integer track_index",
-        not bad_idx_float)
+    check("translate: non-integer track_index does not crash (wire data → dropped)",
+        ok_if == true)
+    check("translate: non-integer-track_index item is dropped from output",
+        ok_if and #r_if.items == 0)
 
+    -- empty sequence_id is an internal call-contract violation → still asserts
     local bad_seq = pcall(sync_edits.translate_wire_response,
         { items = {} }, "")
     check("translate: asserts on empty sequence_id",  not bad_seq)

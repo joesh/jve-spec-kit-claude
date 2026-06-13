@@ -217,7 +217,7 @@ function M.build(db, project_id, sequence_id)
                     .. "media %s", tostring(clip_row.id),
                     tostring(media_uuid)))
                 payload.media_refs[#payload.media_refs+1] =
-                    media_to_payload(m, t.track_type)
+                    media_to_payload(m, wire_type)
             end
         end
     end

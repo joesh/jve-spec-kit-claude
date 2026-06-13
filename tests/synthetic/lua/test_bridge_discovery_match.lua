@@ -264,14 +264,16 @@ do
         m.pos_matched["c_a"] == "R_a")
 end
 
--- ── Scenario 7c: items missing `kind` field must fail-fast (rule 2.32
---    no silent failure — the helper protocol requires kind). ──────────
+-- ── Scenario 7c: items with missing/unknown `kind` must NOT crash JVE
+--    (external Resolve wire data; rule 1.14). They must route to
+--    ambiguous with a reason that names "kind" (rule 2.32: no silent
+--    failure — the protocol violation surfaces in the report). ─────────
 do
     local jve_clips = { clip("c_a", 1, 0, 0, 100) }
     local identities = {}
     local bad_item = {
         resolve_item_id = "R_bad",
-        -- kind omitted
+        -- kind omitted — simulates protocol violation from helper
         track_type      = "video",
         track_index     = 1,
         record_start    = 0,
@@ -280,10 +282,14 @@ do
         source_out      = 100,
         enabled         = true,
     }
-    local ok, err = pcall(discovery.match, jve_clips, identities, { bad_item })
-    check("scenario 7c: missing kind asserts", not ok)
-    check("scenario 7c: error names 'kind'",
-        ok or tostring(err):find("kind", 1, true) ~= nil)
+    local ok, result = pcall(discovery.match, jve_clips, identities, { bad_item })
+    check("scenario 7c: missing kind does not crash (wire data → ambiguous)",
+        ok == true)
+    check("scenario 7c: bad-kind item lands in ambiguous",
+        ok and #result.ambiguous >= 1)
+    check("scenario 7c: ambiguous reason names 'kind'",
+        ok and result.ambiguous[1] and
+        tostring(result.ambiguous[1].reason):find("kind", 1, true) ~= nil)
 end
 
 -- ── Scenario 8: Content mismatch (name, media_file_path, source_in).
@@ -373,7 +379,11 @@ do
     check("match: asserts on nil timeline_items", not ok3)
 end
 
--- ── Defensive: duplicate Resolve position-keys → fail-fast assert ───
+-- ── Defensive: duplicate Resolve position-keys → ambiguous (not crash) ─
+-- Two Resolve items at identical (track, record_start) violate Resolve's
+-- own invariant but arrive as external wire data — must NOT crash the
+-- sync. Both items route to report.ambiguous with reason
+-- 'position_key_collision'; neither lands in pos_matched.
 do
     local jve_clips = { clip("c_a", 1, 0, 0, 100) }
     local identities = {}
@@ -381,10 +391,16 @@ do
         tl_item("R1", 1, 0, 100, 0, 100, "c_a"),
         tl_item("R2", 1, 0, 100, 0, 100, "c_a"),  -- same (track, record_start)
     }
-    local ok, err = pcall(discovery.match, jve_clips, identities, timeline)
-    check("duplicate position key asserts", not ok)
-    check("duplicate position key error names 'duplicate'",
-        ok or tostring(err):find("duplicate", 1, true) ~= nil)
+    local report = discovery.match(jve_clips, identities, timeline)
+    check("duplicate position key: no crash (external data → ambiguous)",
+        report ~= nil)
+    check("duplicate position key: both items in ambiguous",
+        #report.ambiguous == 2)
+    check("duplicate position key: reason is position_key_collision",
+        report.ambiguous[1] and
+        report.ambiguous[1].reason == "position_key_collision")
+    check("duplicate position key: pos_matched is empty",
+        next(report.pos_matched) == nil)
 end
 
 print(string.format("\n=== %d passed / %d failed ===", pass, fail))
