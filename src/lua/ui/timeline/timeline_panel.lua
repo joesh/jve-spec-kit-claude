@@ -3847,6 +3847,7 @@ function M:get_clips()
                 name = clip.name,
                 duration_frames = clip.duration,
                 enabled = clip.enabled ~= false,
+                offline = clip.offline == true,
                 volume = clip.volume,
                 sequence_start_frame = clip.sequence_start,
                 track_id = clip.track_id,

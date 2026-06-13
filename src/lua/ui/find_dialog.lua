@@ -48,6 +48,7 @@ local ws = {
     on_restore_selection = nil,
     -- State
     geometry_ready = false,
+    bool_field = false,  -- true when the current attr is a boolean type
 }
 
 -- ============================================================================
@@ -77,26 +78,58 @@ end
 
 local TEXT_OPERATORS = {"contains", "begins_with", "ends_with", "matches_exactly"}
 local NUMERIC_OPERATORS = {"equals", "greater_than", "less_than"}
+local BOOLEAN_VALUES = {"true", "false"}
 
-local function operators_for_field(field_name)
+local function field_type_for(field_name)
     local fields = query_engine.get_searchable_fields()
     for _, f in ipairs(fields) do
-        if f.name == field_name then
-            if f.type == "numeric" or f.type == "boolean" then
-                return NUMERIC_OPERATORS
-            end
-            return TEXT_OPERATORS
-        end
+        if f.name == field_name then return f.type end
     end
-    return TEXT_OPERATORS
+    return "text"
 end
 
 local function populate_operators(field_name)
     if not ws.op_combo then return end
+    local ftype = field_type_for(field_name)
+    ws.bool_field = (ftype == "boolean")
     qt.PROPERTIES.CLEAR_COMBOBOX(ws.op_combo)
-    for _, op in ipairs(operators_for_field(field_name)) do
-        qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
+    if ws.bool_field then
+        for _, v in ipairs(BOOLEAN_VALUES) do
+            qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, v)
+        end
+    elseif ftype == "numeric" then
+        for _, op in ipairs(NUMERIC_OPERATORS) do
+            qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
+        end
+    else
+        for _, op in ipairs(TEXT_OPERATORS) do
+            qt.PROPERTIES.ADD_COMBOBOX_ITEM(ws.op_combo, op)
+        end
     end
+end
+
+-- Returns the search value: op_combo selection for boolean fields, find_edit text otherwise.
+local function get_find_value()
+    if ws.bool_field then
+        return qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
+    end
+    return qt.PROPERTIES.GET_TEXT(ws.find_edit)
+end
+
+-- Returns the operator: always "equals" for boolean fields, op_combo text otherwise.
+local function get_find_operator()
+    if ws.bool_field then return "equals" end
+    return qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
+end
+
+-- True when the dialog's current field/operator/value differ from the active session.
+local function query_has_changed()
+    if not find_state.is_active() then return false end
+    local current = find_state.get_current_query()
+    if not current or #current == 0 then return false end
+    local q = current[1]
+    local col = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
+    return q.column ~= col or q.operator ~= get_find_operator() or q.value ~= get_find_value()
 end
 
 local function update_status(text)
@@ -117,10 +150,10 @@ local function do_find()
     end
 
     local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    local operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
-    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
+    local operator = get_find_operator()
+    local value = get_find_value()
     log.event("do_find: column=%s op=%s value=%s", tostring(column), tostring(operator), tostring(value))
-    if not value or value == "" then
+    if not ws.bool_field and (not value or value == "") then
         update_status("Enter search text")
         return false
     end
@@ -136,13 +169,15 @@ local function do_find()
     log.event("do_find: %d matches, current=%s, active=%s", count, tostring(current), tostring(find_state.is_active()))
     update_status(string.format("%d match%s", count, count == 1 and "" or "es"))
 
-    -- Persist only value / replace text. Column + operator do NOT persist:
+    -- Persist only text value / replace text. Column + operator do NOT persist:
     -- a prior session that left column=offline (boolean) traps the next
     -- session because the dialog reopens with a non-text field selected
     -- and the user's typed search can never match. The dialog's own
     -- default (Any + contains) is the right starting state every open.
+    -- Boolean values are driven by op_combo (not find_edit) so there is
+    -- nothing to restore into find_edit between sessions.
     save_settings({
-        last_value = value,
+        last_value = not ws.bool_field and value or nil,
         last_replace = ws.replace_edit and qt.PROPERTIES.GET_TEXT(ws.replace_edit) or nil,
     })
 
@@ -161,11 +196,10 @@ end
 local function do_find_next()
     log.event("do_find_next: active=%s count=%d idx=%d",
         tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
-    -- Auto-execute find on first press, then cycle
-    if not find_state.is_active() then
-        log.event("do_find_next: no active session, executing find first")
+    -- Re-execute if no session or the query fields have changed since last find.
+    if not find_state.is_active() or query_has_changed() then
+        log.event("do_find_next: query changed or no session, executing find")
         if not do_find() then return end
-        -- do_find already navigates to first match
         return
     end
     find_state.next()
@@ -181,9 +215,9 @@ end
 local function do_find_prev()
     log.event("do_find_prev: active=%s count=%d idx=%d",
         tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
-    -- Auto-execute find on first press, then cycle backward
-    if not find_state.is_active() then
-        log.event("do_find_prev: no active session, executing find first")
+    -- Re-execute if no session or the query fields have changed since last find.
+    if not find_state.is_active() or query_has_changed() then
+        log.event("do_find_prev: query changed or no session, executing find")
         if not do_find() then return end
         return
     end
@@ -282,12 +316,14 @@ local function create_window()
     populate_operators("name")
     qt.LAYOUT.ADD_WIDGET(row1, ws.op_combo)
 
-    -- Repopulate operator list when attribute changes — numeric/boolean fields
-    -- get NUMERIC_OPERATORS, text fields get TEXT_OPERATORS.
+    -- Repopulate operator list when attribute changes. For boolean fields op_combo
+    -- becomes the value selector ("true"/"false"); find_edit is disabled because
+    -- the value is not free-form text. For all other fields find_edit is enabled.
     -- luacheck: globals qt_set_combobox_change_handler
     register_handler("__find_dlg_attr_changed", function()
         local field = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
         populate_operators(field)
+        qt.CONTROL.SET_ENABLED(ws.find_edit, not ws.bool_field)
     end)
     qt_set_combobox_change_handler(ws.attr_combo, "__find_dlg_attr_changed")
     ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
@@ -516,12 +552,12 @@ end
 --- Get current query from the dialog's text fields.
 function M.get_current_query()
     if not ws.attr_combo or not ws.op_combo or not ws.find_edit then return nil end
-    local value = qt.PROPERTIES.GET_TEXT(ws.find_edit)
-    if not value or value == "" then return nil end
+    local value = get_find_value()
+    if not ws.bool_field and (not value or value == "") then return nil end
     return {
         column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
-        operator = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo),
-        value = value,
+        operator = get_find_operator(),
+        value = value or "",
     }
 end
 

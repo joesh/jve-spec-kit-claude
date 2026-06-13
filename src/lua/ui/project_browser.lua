@@ -2745,6 +2745,7 @@ function M:get_clips()
                 fps = clip.fps_float or 0,  -- lint-allow: R010 display-only
                 duration = clip.duration or 0,  -- lint-allow: R010 display-only
                 enabled = clip.enabled ~= false,
+                offline = clip.offline == true,
                 volume = clip.volume or 1.0,  -- lint-allow: R010 display-only
                 width = clip.width or media.width or 0,  -- lint-allow: R010 nullable (audio-only)
                 height = clip.height or media.height or 0,  -- lint-allow: R010 nullable (audio-only)

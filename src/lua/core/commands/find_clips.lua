@@ -6,6 +6,7 @@
 -- @file find_clips.lua
 
 local find_state = require("core.find_state")
+local Signals = require("core.signals")
 local log = require("core.logger").for_area("ui.find")
 
 local M = {}
@@ -59,6 +60,15 @@ end
 -- ============================================================================
 
 function M.register(command_executors, _, _, _)
+
+    -- Re-execute find when timeline content changes (clips renamed, relinked, etc.)
+    Signals.connect("sequence_content_changed", function()
+        if not find_state.is_active() then return end
+        local find_dialog = require("ui.find_dialog")
+        if not find_dialog.is_visible() then return end
+        log.event("sequence_content_changed: re-executing find with fresh clips")
+        re_execute_for_view()
+    end)
 
     -- Register focus change listener to re-execute find for new view
     local focus_manager = require("ui.focus_manager")
