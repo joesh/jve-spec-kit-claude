@@ -544,7 +544,7 @@ end
 -- record IDs that were actually created in this import pass. Returns a map
 -- video_media_id → [audio_media_id, ...]. Empty table when no synced info
 -- is present.
-local function build_synced_audio_map(media_items, media_by_uuid) -- luacheck: ignore 211
+local function build_synced_audio_map(media_items, media_by_uuid)
     local map = {}
     for _, media_item in pairs(media_items) do
         if not (media_item.synced_audio_pool_ids
@@ -775,6 +775,9 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
+    local synced_audio_by_media_id =
+        build_synced_audio_map(parse_result.media_items, media_by_uuid)
+
     sub_report(20, "Importing timelines…")
 
     -- Import timelines
@@ -861,7 +864,9 @@ function M.import_into_project(project_id, parse_result, opts)
                         goto continue_clip
                     end
 
-                    local master_seq_id = Sequence.ensure_master(media_id, project_id)
+                    local synced_audio = synced_audio_by_media_id[media_id]
+                    local master_seq_id = Sequence.ensure_master(media_id, project_id,
+                        synced_audio and { synced_audio_media_ids = synced_audio } or nil)
                     -- Track the master in result.sequence_ids so the
                     -- undoer deletes it. Direct capture (rather than a
                     -- post-loop find_master_for_media JOIN) covers masters

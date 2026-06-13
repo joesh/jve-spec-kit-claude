@@ -86,7 +86,9 @@ assert(result4.duration_samples == 5550080, string.format(
     "Expected Duration=5550080, got %s", tostring(result4.duration_samples)))
 assert(result4.sample_rate == 48000, string.format(
     "Expected SampleRate=48000, got %s", tostring(result4.sample_rate)))
-print("  ✓ TracksBA (embedded): Duration=5550080 samples, SampleRate=48000")
+assert(result4.num_channels == 2, string.format(
+    "Expected NumChannels=2 (embedded stereo), got %s", tostring(result4.num_channels)))
+print("  ✓ TracksBA (embedded): Duration=5550080 samples, SampleRate=48000, NumChannels=2")
 
 --------------------------------------------------------------------------------
 -- Test 5: Decode TracksBA blob (standalone audio: APM_Adobe_Going Home_v3.wav)
@@ -104,7 +106,9 @@ assert(result5.duration_samples == 3130909, string.format(
     "Expected Duration=3130909, got %s", tostring(result5.duration_samples)))
 assert(result5.sample_rate == 48000, string.format(
     "Expected SampleRate=48000, got %s", tostring(result5.sample_rate)))
-print("  ✓ TracksBA (standalone): Duration=3130909 samples, SampleRate=48000")
+assert(result5.num_channels == 2, string.format(
+    "Expected NumChannels=2 (standalone stereo), got %s", tostring(result5.num_channels)))
+print("  ✓ TracksBA (standalone): Duration=3130909 samples, SampleRate=48000, NumChannels=2")
 
 --------------------------------------------------------------------------------
 -- Test 6: Edge cases — nil/empty/truncated/garbage → nil

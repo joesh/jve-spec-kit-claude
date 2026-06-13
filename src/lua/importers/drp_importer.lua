@@ -355,8 +355,9 @@ local function extract_media_duration(clip_elem)
             local result = decode_bt_audio_duration(get_text(tracks_elem))
             if result and result.duration_samples and result.duration_samples > 0 then
                 info.audio_duration = {
-                    samples = result.duration_samples,
-                    sample_rate = result.sample_rate,
+                    samples      = result.duration_samples,
+                    sample_rate  = result.sample_rate,
+                    num_channels = result.num_channels,
                 }
             end
         end
@@ -1867,9 +1868,121 @@ local function apply_pmc_metadata(entry, pmc)
     if pmc.file_tc_seconds then
         entry.file_tc_seconds = pmc.file_tc_seconds
     end
+
+    -- For audio-only pool items (external WAVs), the DRP's TracksBA.StartTime
+    -- IS the audio TC origin (no Set Timecode override possible on audio). Map
+    -- it to media_start_time so build_media_metadata can write
+    -- start_tc_audio_samples — the field ensure_master reads to place the
+    -- synced audio clip on the timeline.
+    if pmc.clip_type == "audio" and pmc.file_tc_seconds then
+        entry.media_start_time = pmc.file_tc_seconds
+    end
+
+    -- Audio channel count:
+    -- Sm2MpAudioClip (audio-only): one BtAudioInfo in XML regardless of channel
+    -- count; TracksBA.NumChannels is the authoritative per-file value.
+    -- Sm2MpVideoClip (A/V): one BtAudioInfo per embedded channel; XML count is
+    -- authoritative (TracksBA of the first BtAudioInfo only covers that channel).
+    if pmc.clip_type == "audio" then
+        local n = pmc.audio_duration and pmc.audio_duration.num_channels
+        if n and n > 0 then
+            entry.audio_channels = n
+        end
+    elseif pmc.own_bt_audio_info_ids and #pmc.own_bt_audio_info_ids > 0 then
+        entry.audio_channels = #pmc.own_bt_audio_info_ids
+    end
 end
 M._apply_pmc_metadata = apply_pmc_metadata  -- exported for tests
 M._parse_master_clip_element = parse_master_clip_element
+
+-- For each video pool item with AudioSource=AUDIO_SOURCE_CUSTOM, resolve
+-- the external audio pool items via the btai_dbid reverse index, ensure they
+-- are present in media_items, and stamp synced_audio_pool_ids on the video
+-- media entry so importer_core can forward the info to ensure_master.
+--
+-- The FieldsBlob on an AUDIO_SOURCE_CUSTOM Sm2MpVideoClip carries an ordered
+-- list of BtAudioInfo DbId UUIDs (audio_refs). UUIDs that appear in the pool
+-- item's own_bt_audio_info_ids are the camera's embedded scratch audio;
+-- UUIDs owned by OTHER pool items identify the external synced WAV files.
+--
+-- @param master_clips table: array from media_pool_hierarchy.master_clips
+-- @param media_get    function: (file_uuid, file_path) → entry or nil
+-- @param media_put    function: (entry) — inserts/updates media_items
+local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
+    -- Pass 1: build btai_dbid → owning pmc reverse index
+    local btai_to_pmc = {}
+    for _, pmc in ipairs(master_clips) do
+        for _, btai_id in ipairs(pmc.own_bt_audio_info_ids or {}) do
+            btai_to_pmc[btai_id] = pmc
+        end
+    end
+
+    -- Pass 2: for each CUSTOM-audio video pmc, find external audio pmcs
+    for _, pmc in ipairs(master_clips) do
+        if pmc.audio_source ~= "AUDIO_SOURCE_CUSTOM" or not pmc.audio_refs then
+            goto continue_pmc
+        end
+
+        local own_btai = {}
+        for _, id in ipairs(pmc.own_bt_audio_info_ids or {}) do
+            own_btai[id] = true
+        end
+
+        -- Walk audio_refs in wire order; collect distinct external pmc ids
+        local synced_pool_ids = {}
+        local seen_pool_ids   = {}
+        for _, ref_id in ipairs(pmc.audio_refs) do
+            if own_btai[ref_id] then goto next_ref end
+            local audio_pmc = btai_to_pmc[ref_id]
+            if not audio_pmc then
+                log.warn("drp_importer: audio_ref '%s' on pmc '%s' not in btai index "
+                    .. "— sync linkage incomplete", ref_id, pmc.name or "?")
+                goto next_ref
+            end
+            if not audio_pmc.id then goto next_ref end
+            if seen_pool_ids[audio_pmc.id] then goto next_ref end
+            seen_pool_ids[audio_pmc.id] = true
+            synced_pool_ids[#synced_pool_ids + 1] = audio_pmc.id
+            -- Ensure external audio is in media_items (may be absent when not
+            -- directly placed on any edit timeline track)
+            if not media_get(audio_pmc.id, audio_pmc.file_path) then
+                if not audio_pmc.file_path or audio_pmc.file_path == "" then
+                    log.warn("drp_importer: synced audio pmc id=%s has no file_path; "
+                        .. "cannot add to media_items", tostring(audio_pmc.id))
+                    goto next_ref
+                end
+                local entry = {
+                    file_uuid = audio_pmc.id,
+                    name      = audio_pmc.name or audio_pmc.file_path,
+                    file_path = audio_pmc.file_path,
+                    duration  = 0,
+                    alt_paths = {},
+                }
+                apply_pmc_metadata(entry, audio_pmc)
+                media_put(entry)
+                log.event("drp_importer: added synced audio to media_items: '%s' (id=%s)",
+                    audio_pmc.name or "?", audio_pmc.id)
+            end
+            ::next_ref::
+        end
+
+        if #synced_pool_ids > 0 then
+            local video_entry = media_get(pmc.id, pmc.file_path)
+            if video_entry then
+                video_entry.synced_audio_pool_ids = synced_pool_ids
+                log.event("drp_importer: '%s' has %d synced audio file(s)",
+                    pmc.name or "?", #synced_pool_ids)
+            else
+                log.warn("drp_importer: CUSTOM-audio pmc '%s' (id=%s) not in media_items "
+                    .. "— synced_audio_pool_ids not stamped",
+                    pmc.name or "?", tostring(pmc.id))
+            end
+        end
+
+        ::continue_pmc::
+    end
+end
+M._resolve_synced_audio_linkage = resolve_synced_audio_linkage  -- exported for tests
 
 -- Build the MediaRef→{path, name, audio sample rate} maps from the
 -- decoded media pool hierarchy. Timeline clips reference pool master
@@ -2371,6 +2484,11 @@ function M.parse_drp_file(drp_path, progress_cb)
             end
         end
     end
+
+    -- Stamp synced_audio_pool_ids on video media entries for CUSTOM-audio pool
+    -- items. Must run after apply_pmc_metadata (needs decoded blob paths) and
+    -- after UUID enrichment (needs media_get to resolve by id).
+    resolve_synced_audio_linkage(media_pool_hierarchy.master_clips, media_get, media_put)
 
     os.execute("rm -rf " .. tmp_dir)
 

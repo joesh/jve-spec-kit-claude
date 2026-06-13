@@ -102,3 +102,14 @@ f2 LEN  = marker collection
 
 ---
 **Net:** the inbound grade pull is fully proven and ready to implement via positional join + EDL/CDL export. Marker-carried `clip.id` is the durable bidirectional identity channel (live API). Offline DRP marker *import* is a separate feature gated on the marker→clip linkage RE.
+
+## 7. Dual-system audio mediaseq construction (landed 2026-06-13)
+
+**Finding:** DRP pool items with `AudioSource=AUDIO_SOURCE_CUSTOM` have a `FieldsBlob` carrying ordered BtAudioInfo DbId UUIDs — external WAV refs first (× N channels), then camera's own BtAudioInfo (× M channels). When the DRP importer created the mediaseq for such a clip it ignored all sync data: only the camera scratch tracks were placed, and they were not muted.
+
+**Fix shipped:**
+- `drp_importer.resolve_synced_audio_linkage` — builds a `btai_dbid → owning_pmc` reverse index after all pool items are parsed; for each `AUDIO_SOURCE_CUSTOM` video pmc walks `audio_refs`, separates own vs. external UUIDs, ensures each external audio file is in `media_items`, stamps `video_entry.synced_audio_pool_ids = [...]`.
+- `importer_core.build_synced_audio_map` — after the media import loop, resolves `synced_audio_pool_ids` (pool UUIDs) → DB media record IDs; passed to `Sequence.ensure_master` as `opts.synced_audio_media_ids`.
+- `master_builder.add_synced_audio_streams` — creates one AUDIO track per channel of each external audio file, TC-aligned (`sequence_start_frame = floor(audio_tc * fps_num / (fps_den * sample_rate) + 0.5)`), `muted=false`; camera tracks are built with `muted=true` when `synced_audio_media_ids` is present.
+
+**Test:** `tests/synthetic/lua/test_synced_audio_master_tracks.lua` (6 assertions, green). Verified TDD-first (test failed before implementation).

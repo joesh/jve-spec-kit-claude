@@ -452,11 +452,11 @@ function M.decode_bt_video_time(hex_str)
     }
 end
 
---- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate, start_time_seconds}
+--- Decode BtAudioInfo/TracksBA blob → {duration_samples, sample_rate, num_channels, start_time_seconds}
 -- Header: 31 bytes (version, track metadata, field_count at byte offset 27)
 -- Fields: UniqueId, StartTime, SampleRate, NumChannels, IdxTrack, Duration, DbType, ...
 -- @param hex_str string: hex-encoded TracksBA blob
--- @return table|nil: {duration_samples=int, sample_rate=int, start_time_seconds=number|nil} or nil
+-- @return table|nil: {duration_samples=int, sample_rate=int, num_channels=int|nil, start_time_seconds=number|nil} or nil
 function M.decode_bt_audio_duration(hex_str)
     local bytes = M.hex_to_bytes(hex_str)
     if not bytes or #bytes < 40 then return nil end
@@ -473,9 +473,11 @@ function M.decode_bt_audio_duration(hex_str)
     if sample_rate <= 0 then return nil end
     if duration <= 0 then return nil end
 
+    local num_channels = fields["NumChannels"]
     return {
-        duration_samples = duration,
-        sample_rate = sample_rate,
+        duration_samples   = duration,
+        sample_rate        = sample_rate,
+        num_channels       = (num_channels and num_channels > 0) and num_channels or nil,
         start_time_seconds = fields["StartTime"],
     }
 end

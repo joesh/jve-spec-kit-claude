@@ -17,11 +17,13 @@ local drp = require("importers.drp_importer")
 
 print("=== test_drp_av_media_sample_rate.lua ===")
 
--- Three representative pmcs from a real production DRP:
+-- Representative pmcs (drawn from real production DRP shapes):
 --   av      — A/V file: has both num_frames and audio_duration
 --   av_hz   — A/V file at 44.1kHz, to rule out hard-coded 48000 assumptions
---   vo     — video-only file: num_frames, no audio_duration
---   ao     — audio-only file: audio_duration, no num_frames
+--   av_4ch  — A/V file with 4 embedded audio channels (own_bt_audio_info_ids count)
+--   vo      — video-only file: num_frames, no audio_duration
+--   ao      — audio-only file (Sm2MpAudioClip): audio_duration with num_channels
+--   ao_nch  — audio-only file: audio_duration but num_channels absent (older DRP)
 local pmcs = {
     av = {
         num_frames   = 6000,  -- 4 minutes at 25fps
@@ -33,12 +35,24 @@ local pmcs = {
         frame_rate   = 25,
         audio_duration = { samples = 2646000, sample_rate = 44100 },
     },
+    av_4ch = {
+        clip_type    = "video",
+        num_frames   = 3600,
+        frame_rate   = 24,
+        audio_duration = { samples = 8640000, sample_rate = 48000 },
+        own_bt_audio_info_ids = { "a1", "a2", "a3", "a4" },
+    },
     vo = {
         num_frames = 240,
         frame_rate = 24,
     },
     ao = {
-        audio_duration = { samples = 480000, sample_rate = 48000 },
+        clip_type      = "audio",
+        audio_duration = { samples = 480000, sample_rate = 48000, num_channels = 3 },
+    },
+    ao_nch = {
+        clip_type      = "audio",
+        audio_duration = { samples = 240000, sample_rate = 48000 },  -- no num_channels
     },
 }
 
@@ -94,5 +108,37 @@ assert(ao.audio_sample_rate == 48000,
 assert(ao.frame_rate == 48000, string.format(
     "audio-only: frame_rate stands in for sample rate (48000), got %s", tostring(ao.frame_rate)))
 print("  ✓ Audio-only: sample rate recorded, duration in samples")
+
+-- ─────────────────────────────────────────────────────────────────────
+-- audio_channels: Sm2MpAudioClip uses TracksBA.NumChannels (one BtAudioInfo
+-- in XML regardless of actual channel count); Sm2MpVideoClip uses the count
+-- of own_bt_audio_info_ids (one element per embedded channel).
+-- ─────────────────────────────────────────────────────────────────────
+
+-- A/V (2-embedded-channel): own_bt_audio_info_ids absent → audio_channels nil
+-- (the test pmc above has no own_bt_audio_info_ids and no clip_type)
+assert(av.audio_channels == nil,
+    string.format("A/V no btai: audio_channels must be nil, got %s", tostring(av.audio_channels)))
+print("  ✓ A/V file (no own_bt_audio_info_ids): audio_channels nil")
+
+-- A/V 4-channel: own_bt_audio_info_ids count drives audio_channels for video clips
+local av4 = apply(pmcs.av_4ch)
+assert(av4.audio_channels == 4, string.format(
+    "A/V 4ch: audio_channels must be 4 (from #own_bt_audio_info_ids), got %s",
+    tostring(av4.audio_channels)))
+print("  ✓ A/V 4-channel: audio_channels=4 from own_bt_audio_info_ids count")
+
+-- Audio-only 3-channel: TracksBA.NumChannels drives audio_channels for audio clips
+assert(ao.audio_channels == 3, string.format(
+    "audio-only 3ch: audio_channels must be 3 (from TracksBA.NumChannels), got %s",
+    tostring(ao.audio_channels)))
+print("  ✓ Audio-only 3-channel: audio_channels=3 from TracksBA.NumChannels")
+
+-- Audio-only without NumChannels: audio_channels left nil (no silent default)
+local ao_nch = apply(pmcs.ao_nch)
+assert(ao_nch.audio_channels == nil, string.format(
+    "audio-only no NumChannels: audio_channels must be nil, got %s",
+    tostring(ao_nch.audio_channels)))
+print("  ✓ Audio-only (no NumChannels field): audio_channels nil, not defaulted")
 
 print("\n✅ test_drp_av_media_sample_rate.lua passed")

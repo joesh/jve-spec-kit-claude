@@ -208,8 +208,78 @@ function Sequence.ensure_master(media_id, project_id, opts)
         Sequence.update(seq.id, { default_video_layer_track_id = vtrack.id })
     end
 
+    -- Create synced (external) audio tracks after the camera scratch tracks.
+    -- Each external audio file gets one AUDIO track per channel, not muted.
+    -- sequence_start_frame is the video-fps frame that corresponds to the
+    -- external WAV's TC origin (TC-based sync: matching TC = same position).
+    local function add_synced_audio_streams(seq, dims, now, synced_audio_media_ids)
+        local base_index = dims.has_audio and dims.media.audio_channels or 0 -- lint-allow: R010 ternary: has_audio=false → 0 is correct; has_audio=true → audio_channels > 0 is invariant from load_media_dims
+        -- Cumulative track offset across all synced files. Files may have
+        -- different channel counts, so each file starts after the last
+        -- channel of the previous file (not at a fixed stride).
+        local synced_track_offset = 0
+        for _, audio_media_id in ipairs(synced_audio_media_ids) do
+            local audio_media = Media.load(audio_media_id)
+            assert(audio_media, string.format(
+                "Sequence.ensure_master: synced audio media not found: %s",
+                tostring(audio_media_id)))
+            assert(audio_media.audio_channels > 0, string.format(
+                "Sequence.ensure_master: synced audio media %s has no audio channels",
+                tostring(audio_media_id)))
+            local sample_rate = audio_media.audio_sample_rate
+            assert(sample_rate and sample_rate > 0, string.format(
+                "Sequence.ensure_master: synced audio media %s has no audio_sample_rate",
+                tostring(audio_media_id)))
+            local audio_tc = audio_media:get_audio_start_tc()
+            assert(audio_tc ~= nil, string.format(
+                "Sequence.ensure_master: synced audio media %s has no audio TC origin",
+                tostring(audio_media_id)))
+            -- Convert audio TC origin to video-fps frame position for sequence placement.
+            -- TC-based sync: the audio and video share the same wall-clock origin, so
+            -- the audio's TC in samples converts cleanly to the video's TC in frames.
+            local seq_start = math.floor(
+                audio_tc * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
+            -- source range: audio-file-natural samples [TC_origin, TC_origin + file_duration]
+            -- duration_frames: video-fps span covering the video clip's duration
+            local duration_samples = audio_media.duration
+            assert(type(duration_samples) == "number" and duration_samples > 0, string.format(
+                "Sequence.ensure_master: synced audio media %s has no duration",
+                tostring(audio_media_id)))
+            for ch = 1, audio_media.audio_channels do
+                local track_index = base_index + synced_track_offset + ch
+                local atrack = Track.create_audio(
+                    string.format("Sync %d", track_index), seq.id, {
+                        index = track_index,
+                        muted = false,
+                    })
+                assert(atrack:save(), string.format(
+                    "Sequence.ensure_master: failed to save synced audio track %d",
+                    track_index))
+                MediaRef.create({
+                    project_id           = project_id,
+                    owner_sequence_id    = seq.id,
+                    track_id             = atrack.id,
+                    media_id             = audio_media_id,
+                    source_in_frame      = audio_tc,
+                    source_out_frame     = audio_tc + duration_samples,
+                    sequence_start_frame = seq_start,
+                    duration_frames      = dims.duration_frames,
+                    audio_sample_rate    = sample_rate,
+                    enabled              = true,
+                    volume               = 1.0,
+                    playhead_frame       = 0,
+                    created_at           = now,
+                    modified_at          = now,
+                })
+            end
+            synced_track_offset = synced_track_offset + audio_media.audio_channels
+        end
+    end
+
     local function add_audio_streams(seq, dims, now)
         if not dims.has_audio then return end
+        local camera_muted = opts.synced_audio_media_ids ~= nil
+            and #opts.synced_audio_media_ids > 0
         local replay_audio_track_ids     = opts.audio_track_ids     or {}
         local replay_audio_media_ref_ids = opts.audio_media_ref_ids or {}
         -- Audio MR placement (sequence_start_frame, duration_frames) is in
@@ -248,6 +318,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 string.format("Audio %d", ch), seq.id, {
                     id    = replay_audio_track_ids[ch],
                     index = ch,
+                    muted = camera_muted,
                 })
             assert(atrack:save(), "Sequence.ensure_master: failed to save audio track")
             MediaRef.create({
@@ -278,6 +349,9 @@ function Sequence.ensure_master(media_id, project_id, opts)
     local now  = os.time()
     add_video_stream(seq, dims, now)
     add_audio_streams(seq, dims, now)
+    if opts.synced_audio_media_ids and #opts.synced_audio_media_ids > 0 then
+        add_synced_audio_streams(seq, dims, now, opts.synced_audio_media_ids)
+    end
 
     if opts.bin_id then
         local tag_service = require("core.tag_service")
