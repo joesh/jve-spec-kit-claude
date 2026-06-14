@@ -67,7 +67,9 @@ We've got lots of context available when anything goes wrong:
 - **2.6**: Short Functions and Logical File Splitting - Functions should be short and focused on a single responsibility; Files should be relatively short and split into logical units when they grow large; NEVER create monolithic functions that handle multiple concerns; Split large files into cohesive modules based on functionality; Aim for functions that fit on one screen and files that are easy to navigate
 
 - **2.7**: ALWAYS use make -j4 for parallel builds - never use plain make
-- **2.8**: Proper attribution: "Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: Codex"
+- **2.8**: Proper attribution. The assisting LLM MUST name its own model, version, and reasoning effort — never a bare "Claude"/"Codex":
+  `Authored-By: Joe Shapiro <joe@shapiro.net> With-Help-From: <model> <version> (<variant if any>, effort=<level>)`
+  Examples: `With-Help-From: Claude Opus 4.8 (1M context, effort=high)`; `With-Help-From: Codex GPT-5 (effort=medium)`. Fill in YOUR actual model/version/effort at commit time; omit the `effort=` clause if unknown rather than guessing.
 - **2.9**: ASSUME FAILURE UNTIL PROVEN OTHERWISE - Default assumption: Nothing is working until specifically verified
 - **2.13**: MANDATORY No Fallbacks or Default Values - NEVER use fallback values - they hide errors and mask problems; ALWAYS fail explicitly when required data is missing; NEVER assume defaults - get actual values or error; Surface all errors immediately - no silent failures
 - **2.15**: No Backward Compatibility - Default assumption: we DO NOT maintain backward compatibility for schemas, APIs, data stores, or workflows; delete legacy paths as soon as replacements exist; never add shims, migrations, or old-code preservation unless Joe explicitly reverses this rule
