@@ -34,6 +34,7 @@ local M = View.new("timeline")
 -- so tests can exercise them without pulling Qt into the require graph.
 -- Re-exposed below as M.metrics for the panel's public surface.
 local metrics = require("ui.timeline.timeline_panel_metrics")
+local DIM_HEADER_SOLO_MUTE  = 0.5
 local MIN_TRACK_HEIGHT      = metrics.MIN_TRACK_HEIGHT
 local RESIZE_EDGE_PX        = metrics.RESIZE_EDGE_PX
 local TRAILING_ALIGNMENT_PX = metrics.TRAILING_ALIGNMENT_PX
@@ -1689,8 +1690,10 @@ local function wire_patch_buttons(src_btn, rec_btn, sequence_id, rec_track_id, r
         payload_provider_name)
 end
 
--- Track button references for MVC re-pull on undo/redo
--- { [track_id] = { mute_btn, solo_btn, lock_btn, sync_mode_btn, src_btn, rec_btn, seq_id, src_idx } }
+-- Track button references for MVC re-pull on undo/redo.
+-- { [track_id] = { mute_btn, solo_btn, lock_btn, sync_mode_btn, src_btn, rec_btn,
+--                  wave_btn, seq_id, rec_idx, track_type, cells, lock_kind,
+--                  label_text, header_widget, base_header_color } }
 local track_button_refs = {}
 
 local function refresh_track_button_styles()
@@ -1749,13 +1752,17 @@ local function update_all_header_dim()
     local all_tracks     = track_state.get_all()
     local any_video_solo = track_dim.any_solo_for_type(all_tracks, "VIDEO")
     local any_audio_solo = track_dim.any_solo_for_type(all_tracks, "AUDIO")
+    local track_by_id = {}
+    for _, t in ipairs(all_tracks) do track_by_id[t.id] = t end
     for tid, refs in pairs(track_button_refs) do
         if refs.header_widget and refs.base_header_color then
-            local t = track_state.get_by_id(tid)
+            local t = track_by_id[tid]
             if t then
+                assert(refs.track_type == "AUDIO" or refs.track_type == "VIDEO",
+                    "update_all_header_dim: unknown track_type " .. tostring(refs.track_type))
                 local any_solo_type = (refs.track_type == "AUDIO") and any_audio_solo or any_video_solo
                 local color = track_dim.should_dim(t, any_solo_type)
-                    and color_utils.dim_hex(refs.base_header_color, 0.5)
+                    and color_utils.dim_hex(refs.base_header_color, DIM_HEADER_SOLO_MUTE)
                     or refs.base_header_color
                 qt_constants.PROPERTIES.SET_STYLE(refs.header_widget,
                     build_track_header_stylesheet(color))

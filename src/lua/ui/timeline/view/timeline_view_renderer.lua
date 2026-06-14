@@ -85,7 +85,11 @@ local function build_edge_signature(edges)
     return table.concat(parts, "|")
 end
 
-local IMPLIED_EDGE_DIM_FACTOR = 0.55
+local IMPLIED_EDGE_DIM_FACTOR        = 0.55
+local DIM_CLIP_BODY_SOLO             = 0.35
+local DIM_CLIP_TEXT_SOLO             = 0.5
+local DIM_CLIP_BODY_OFFLINE_DISABLED = 0.5
+local DIM_CLIP_TEXT_OFFLINE_DISABLED = 0.7
 
 local function coerce_clip_entries(entries)
     if not entries then
@@ -835,8 +839,8 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
         -- as "not participating in the cut right now" rather than
         -- demanding attention. Standard NLE convention.
         if not clip_enabled then
-            body_color = color_utils.dim_hex(body_color, 0.5)
-            text_color = color_utils.dim_hex(text_color, 0.7)
+            body_color = color_utils.dim_hex(body_color, DIM_CLIP_BODY_OFFLINE_DISABLED)
+            text_color = color_utils.dim_hex(text_color, DIM_CLIP_TEXT_OFFLINE_DISABLED)
         end
     elseif clip_enabled then
         body_color = is_audio and state_module.colors.clip_audio or state_module.colors.clip_video
@@ -845,14 +849,16 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
         body_color = is_audio and state_module.colors.clip_audio_disabled or state_module.colors.clip_video_disabled
         text_color = state_module.colors.clip_disabled_text
     end
-    if not body_color then body_color = state_module.colors.clip end
+    assert(body_color, string.format(
+        "draw_clip_instance: nil body_color for clip %s offline=%s enabled=%s",
+        tostring(clip.id), tostring(clip.offline), tostring(clip_enabled)))
 
     local track_obj = track_state.get_by_id(render_track_id)
     if track_obj then
         local any_solo_type  = is_audio and ctx.any_audio_solo or ctx.any_video_solo
         if track_dim.should_dim(track_obj, any_solo_type) then
-            body_color = color_utils.dim_hex(body_color, 0.35)
-            text_color = color_utils.dim_hex(text_color, 0.5)
+            body_color = color_utils.dim_hex(body_color, DIM_CLIP_BODY_SOLO)
+            text_color = color_utils.dim_hex(text_color, DIM_CLIP_TEXT_SOLO)
         end
     end
 

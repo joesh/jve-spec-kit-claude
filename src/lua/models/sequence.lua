@@ -717,7 +717,10 @@ function Sequence:set_in(frame)
     assert(type(frame) == "number", "Sequence:set_in: frame must be a number")
     local dur = self:content_duration()
     if dur > 0 then
-        local start = self.start_timecode_frame or 0
+        assert(self.start_timecode_frame,
+            string.format("Sequence:set_in(%s): sequence has content but no start_timecode_frame",
+                tostring(self.id)))
+        local start = self.start_timecode_frame
         local end_frame = start + dur
         assert(frame >= start and frame < end_frame,
             string.format("Sequence:set_in(%s): frame %d out of [%d, %d)",
@@ -733,7 +736,10 @@ function Sequence:set_out(frame)
     assert(type(frame) == "number", "Sequence:set_out: frame must be a number")
     local dur = self:content_duration()
     if dur > 0 then
-        local start = self.start_timecode_frame or 0
+        assert(self.start_timecode_frame,
+            string.format("Sequence:set_out(%s): sequence has content but no start_timecode_frame",
+                tostring(self.id)))
+        local start = self.start_timecode_frame
         local end_frame = start + dur
         assert(frame >= start and frame <= end_frame,
             string.format("Sequence:set_out(%s): frame %d out of [%d, %d]",
