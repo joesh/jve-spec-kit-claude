@@ -983,11 +983,17 @@ local function assert_window_in_bounds(clip_id, source_in, source_out,
         .. "source_out=(%d,%s) (empty window)",
         tostring(clip_id), source_in, tostring(sub_in),
         source_out, tostring(sub_out)))
-    local lo = math.min(source_in, source_out)
-    assert(lo >= 0, string.format(
-        "Clip window invariant: clip %s has negative source bound %d "
-        .. "(source_in=%d, source_out=%d)",
-        tostring(clip_id), lo, source_in, source_out))
+    -- Validate the lowest source frame actually PLAYED, not the raw bound.
+    -- Forward clips play [source_in, source_out); reverse clips (source_in >
+    -- source_out, the universal reverse convention) play [source_out+1,
+    -- source_in] — their source_out is the EXCLUSIVE lower bound, which is
+    -- legitimately −1 when a reverse clip reaches source frame 0. Checking the
+    -- raw min would reject that valid clip; check the played floor instead.
+    local lowest_played = math.min(source_in, source_out + 1)
+    assert(lowest_played >= 0, string.format(
+        "Clip window invariant: clip %s has negative lowest played source "
+        .. "frame %d (source_in=%d, source_out=%d)",
+        tostring(clip_id), lowest_played, source_in, source_out))
 end
 
 local function to_int_bool(v)

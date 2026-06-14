@@ -101,6 +101,7 @@ function M.build_a005_payload()
                             sequence_start = M.TC_1H,
                             duration       = M.A005_DURATION_FRAMES,
                             source_in      = 0,
+                            source_out     = M.A005_DURATION_FRAMES,  -- forward: source_in + duration
                             name           = "A005 spike clip",
                             enabled        = true,
                         },
@@ -115,6 +116,7 @@ function M.build_a005_payload()
                             sequence_start = M.TC_1H,
                             duration       = M.A005_DURATION_FRAMES,
                             source_in      = 0,
+                            source_out     = M.A005_DURATION_FRAMES,  -- forward: source_in + duration
                             name           = "A005 spike audio",
                             enabled        = true,
                         },

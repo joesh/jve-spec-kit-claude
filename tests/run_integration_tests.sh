@@ -156,6 +156,7 @@ fi
 for t in \
   test_zstd_bindings.lua \
   test_drt_writer_file_roundtrip.lua \
+  test_drt_reverse_clip_roundtrip.lua \
   test_drt_round_trip_validator.lua \
   test_drp_reverse_audio_pair.lua \
   test_layout_sanity.lua \

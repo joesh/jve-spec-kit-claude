@@ -45,10 +45,12 @@ local function fresh_payload()
         { id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
           media_uuid = MEDIA[1].file_uuid, sequence_start = 0,
           duration = 240, source_in = TC_1H_AT_23976 + 120,
+          source_out = TC_1H_AT_23976 + 120 + 240,   -- forward: source_in + duration
           name = "A sel", enabled = true },
         { id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
           media_uuid = MEDIA[2].file_uuid, sequence_start = 240,
           duration = 360, source_in = 60,
+          source_out = 60 + 360,                       -- forward: source_in + duration
           name = "B sel", enabled = true },
     }
     return {

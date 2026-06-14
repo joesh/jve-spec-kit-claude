@@ -65,6 +65,7 @@ local CLIPS = {
         sequence_start  = 0,
         duration        = 240,                    -- 10 sec
         source_in       = TC_1H_AT_23976 + 120,   -- 5 sec into media (offset from file TC origin)
+        source_out      = TC_1H_AT_23976 + 120 + 240,  -- forward: source_in + duration
         name            = "A_take03 sel",
         enabled         = true,
     },
@@ -74,6 +75,7 @@ local CLIPS = {
         sequence_start  = 240,                    -- butts up against A
         duration        = 360,
         source_in       = 60,                     -- 2.5 sec into media (tc=0 file)
+        source_out      = 60 + 360,               -- forward: source_in + duration
         name            = "B_take01 sel",
         enabled         = true,
     },
@@ -83,6 +85,7 @@ local CLIPS = {
         sequence_start  = 720,                    -- 5-sec gap after B (240+360+120 gap)
         duration        = 480,
         source_in       = 2 * TC_1H_AT_23976 + 300, -- 12.5 sec into media (tc=02:00:00:00 origin)
+        source_out      = 2 * TC_1H_AT_23976 + 300 + 480,  -- forward: source_in + duration
         name            = "C_take07 sel",
         enabled         = true,
     },

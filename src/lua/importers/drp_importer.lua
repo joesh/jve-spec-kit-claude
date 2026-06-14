@@ -1460,70 +1460,64 @@ local function parse_resolve_tracks(seq_elem, opts)
             -- of the MTBA retime curve). Walk the curve to get source seconds,
             -- then convert to native_rate units (media frames or samples).
             if retime_keyframes and #retime_keyframes >= 2 then
-                local in_sec = in_value / frame_rate
-                local out_sec = (in_value + duration_raw) / frame_rate
-                local y_in_sec = eval_curve(retime_keyframes, in_sec)
-                local y_out_sec = eval_curve(retime_keyframes, out_sec)
-                -- Normalize reverse curves up front: y_first is the lower source
-                -- time (first frame in ascending source order), y_last the higher.
-                -- Mark clip_speed negative so the source_in/source_out swap at the
-                -- end of this function runs.
-                local y_first, y_last = y_in_sec, y_out_sec
-                if y_out_sec < y_in_sec then
-                    y_first, y_last = y_out_sec, y_in_sec
-                    clip_speed = -math.abs(clip_speed)
-                end
+                -- <In> is in playback timeline frames at sequence rate (the X
+                -- axis of the MTBA retime curve). Walk the curve to get source
+                -- seconds at the played playback frames, then convert to
+                -- native_rate units (media frames or samples).
+                --
                 -- Snap at FRAME granularity (not sample). The curve-eval lands
                 -- within a few float ULPs of the true seconds value; at
                 -- native_rate=48000 a 1-ULP miss amplifies to a 1-sample shift.
                 -- Resolve's Media-Managed exports cut source on whole-frame
-                -- boundaries (no sub-frame audio edits, video is frame-
-                -- quantized) so the result must land on a frame boundary.
-                --
-                -- Empirical rule (matches Resolve's Media-Manage exports across
-                -- this branch's project for both accel and decel curves):
-                --   in:  CEIL  — the first whole source-frame whose span
-                --                starts at-or-after y_first; this is the head
-                --                boundary of the trimmed file.
-                --   out: FLOOR — the last whole source-frame fully consumed
-                --                by the clip; ceil would claim a partial frame
-                --                past the file's tail.
-                -- A small ULP-tolerance (1e-6 frames ≈ 0.04 ms at 25 fps) keeps
-                -- "essentially integer" values from snapping the wrong way.
-                local y_in_frames   = y_first * frame_rate
-                local y_last_frames = y_last  * frame_rate
-                local in_frame  = math.ceil (y_in_frames   - 1e-6)
-                local out_frame = math.floor(y_last_frames + 1e-6)
-                -- Resolve writes retime keyframes whose first-anchor Y is
-                -- occasionally sub-frame negative (observed Y in [-0.01, 0)
-                -- seconds with zero bezier tangents — a direct Resolve
-                -- encoding, not float noise). Resolve's Inspector shows
-                -- Source In = media frame 0 for these clips; a frame before
-                -- the file doesn't exist. Snap from -1 to 0 when y_first is
-                -- within one frame of zero. Beyond that magnitude is a real
-                -- parser bug: the assert below still fires.
-                if in_frame < 0 and y_in_frames > -1.0 then
-                    in_frame = 0
+                -- boundaries so the result must land on one. A 1e-6-frame
+                -- tolerance keeps "essentially integer" values snapping right.
+                local in_sec   = in_value / frame_rate
+                local out_sec  = (in_value + duration_raw) / frame_rate
+                local y_in_sec  = eval_curve(retime_keyframes, in_sec)
+                local y_out_sec = eval_curve(retime_keyframes, out_sec)
+                if y_out_sec >= y_in_sec then
+                    -- FORWARD retime: source ascends with playback. <In> maps to
+                    -- the inclusive head (CEIL — first whole frame at-or-after
+                    -- y_in); the exclusive playback end <In>+<Duration> maps to
+                    -- the exclusive tail (FLOOR — last whole frame consumed).
+                    local in_frame  = math.ceil (y_in_sec  * frame_rate - 1e-6)
+                    local out_frame = math.floor(y_out_sec * frame_rate + 1e-6)
+                    -- Resolve occasionally writes a sub-frame-negative first
+                    -- anchor (Y in [-0.01,0)); Inspector shows Source In = frame
+                    -- 0. Snap -1→0 within one frame; larger magnitude still
+                    -- asserts below.
+                    if in_frame < 0 and y_in_sec * frame_rate > -1.0 then
+                        in_frame = 0
+                    end
+                    in_offset = math.floor(in_frame * native_rate / frame_rate + 0.5)
+                    source_duration =
+                        math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
+                else
+                    -- REVERSE retime: source descends with playback. The clip
+                    -- plays D = duration_raw inclusive playback frames
+                    -- [In .. In+D-1]; the HIGHEST source frame sits at the first
+                    -- played frame (In), the LOWEST at the LAST played frame
+                    -- (In+D-1) — NOT the exclusive end In+D. Evaluating the low
+                    -- boundary at the exclusive end lands one source frame below
+                    -- the lowest played frame: fractional rates hid this (the
+                    -- old CEIL bumped it back up), but integer rates
+                    -- (native==fps, e.g. 24fps video) land exactly and lost a
+                    -- frame, inflating the span to D+1. Eval both boundaries at
+                    -- PLAYED frames and FLOOR both → ascending span == D for
+                    -- every rate. (Verified against the Resolve fixture "test
+                    -- audio, reverse audio.drp" and a 24fps video round-trip.)
+                    clip_speed = -math.abs(clip_speed)
+                    local last_played_sec = (in_value + duration_raw - 1) / frame_rate
+                    local y_low_sec = eval_curve(retime_keyframes, last_played_sec)
+                    local highest = math.floor(y_in_sec  * frame_rate + 1e-6)
+                    local lowest  = math.floor(y_low_sec * frame_rate + 1e-6)
+                    if lowest < 0 and y_low_sec * frame_rate > -1.0 then
+                        lowest = 0
+                    end
+                    in_offset = math.floor(lowest * native_rate / frame_rate + 0.5)
+                    source_duration =
+                        math.floor((highest + 1) * native_rate / frame_rate + 0.5) - in_offset
                 end
-                -- Inclusive→exclusive correction for reverse curves. The
-                -- y_first/y_last swap above normalizes to ascending source
-                -- order but changes which playback endpoint y_last came from:
-                --   forward: y_last = source time at playback-OUT → out_frame
-                --            is the EXCLUSIVE upper boundary (frame after last).
-                --   reverse: y_last = source time at playback-IN → out_frame
-                --            is the INCLUSIVE highest source frame played.
-                -- source_duration below treats out_frame as exclusive, so a
-                -- reverse clip would drop its top (first-played) frame. Make
-                -- the boundary exclusive so the reverse span equals the
-                -- forward span it mirrors. (Verified against the Resolve
-                -- fixture "test audio, reverse audio.drp": a -100% reverse
-                -- must cover the exact source region of its forward twin.)
-                if clip_speed < 0 then
-                    out_frame = out_frame + 1
-                end
-                in_offset = math.floor(in_frame * native_rate / frame_rate + 0.5)
-                source_duration =
-                    math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
             else
                 -- No curve: <In> is source frames at sequence rate.
                 -- Snap at FRAME granularity for the same reason as the retimed

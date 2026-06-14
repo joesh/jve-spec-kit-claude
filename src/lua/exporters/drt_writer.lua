@@ -344,6 +344,55 @@ local function build_media_timemap_ba(duration_frames, media_native_rate)
         .. zeros .. enc.encode_be_double(d_secs)
 end
 
+-- Reverse-clip retiming — the full keyframe-curve MediaTimemapBA plus the
+-- windowing <In> value (byte-exact encoder validated in
+-- test_drt_reverse_mtba_golden.lua; end-to-end round-trip in
+-- test_drt_reverse_clip_roundtrip.lua).
+--
+-- Resolve authors a retime curve that spans the ENTIRE source media
+-- (YMax = XMax = full media duration in seconds for a -100% reverse) and
+-- selects each clip's region with <In> (the playback-timeline frame where the
+-- clip enters the curve) + <Duration>. The descending curve (0,YMax)→(XMax,0)
+-- is the reverse signal. drp_importer reads <In> as a playback-X coordinate,
+-- walks the curve to source seconds, and recovers source_in/source_out.
+-- These values are the exact byte-inverse of that read path. Confirmed against
+-- the real fixture "test audio, reverse audio.drp": a clip playing source
+-- samples 82000..148000 backward carries In=161 over a full-media 9.76 s curve.
+--
+-- Reverse convention: clip.source_in = highest played source frame (inclusive
+-- entry); clip.source_out = lowest played source frame minus 1 (exclusive).
+--
+-- @return in_value (playback-timeline frames), mtba_hex
+local function build_reverse_retime(clip, media, seq_fps, state)
+    local native = media.native_rate
+    assert(type(media.duration_frames) == "number" and media.duration_frames > 0,
+        "drt_writer.build_reverse_retime: media.duration_frames required — the "
+        .. "reverse retime curve spans the full source media")
+    local full_secs = media.duration_frames / native       -- YMax = XMax (-100%)
+    -- Highest played source frame, file-relative, native units (inclusive).
+    local high_native = clip.source_in - media.start_tc_frame
+    assert(high_native >= 0, string.format(
+        "drt_writer.build_reverse_retime: clip %s highest played source frame "
+        .. "(%d) is below media TC origin (%d)",
+        clip.id, clip.source_in, media.start_tc_frame))
+    -- <In> inverts drp_importer's reverse branch, which recovers the highest
+    -- played source frame as floor(YMax*fps − In + ε). The curve walk works in
+    -- sequence-rate frames, so target highest_fps = the highest played source
+    -- frame expressed in fps frames; In is the playback-X that lands there.
+    local highest_fps = math.floor(high_native * seq_fps / native + 1e-6)
+    local in_value = math.floor(full_secs * seq_fps - highest_fps + 1e-6)
+    assert(in_value >= 0, string.format(
+        "drt_writer.build_reverse_retime: clip %s computed <In>=%d < 0 — "
+        .. "source window outside media bounds", clip.id, in_value))
+    local mtba = enc.encode_media_timemap({
+        y_max     = full_secs,
+        x_max     = full_secs,
+        unique_id = fresh_uuid(0xC0, state),
+        keyframes = { { x = 0, y = full_secs }, { x = full_secs, y = 0 } },
+    })
+    return in_value, mtba
+end
+
 -- PreConformMediaExtents — 16-byte blob copied verbatim from
 -- resolve_authored_single_clip. Format-level decode tracked in
 -- todo_drt_preconform_media_extents_decode.md.
@@ -412,7 +461,7 @@ local TI_AUDIO_CLIP_FIELDS_BLOB =
     "d29636d9df17f845d84cdb298043099c67f29ad65ed444a245a4317983067b44" ..
     "cfa2693ca682d6a684af5ba2bc5057a902030040865bee3b7348"
 
-local function build_clip_element(clip, media, track_type, state)
+local function build_clip_element(clip, media, track_type, state, seq_fps)
     assert(type(clip.id) == "string" and clip.id ~= "",
         "drt_writer.build_clip_element: clip.id required")
     assert(type(clip.name) == "string" and clip.name ~= "",
@@ -426,6 +475,12 @@ local function build_clip_element(clip, media, track_type, state)
         "drt_writer.build_clip_element: clip.duration positive required")
     assert(type(clip.source_in) == "number" and clip.source_in >= 0,
         "drt_writer.build_clip_element: clip.source_in non-negative (absolute TC)")
+    assert(type(clip.source_out) == "number" and clip.source_out >= 0,
+        "drt_writer.build_clip_element: clip.source_out non-negative required "
+        .. "(reverse detection compares source_in vs source_out)")
+    assert(type(seq_fps) == "number" and seq_fps > 0,
+        "drt_writer.build_clip_element: seq_fps (sequence timeline fps) "
+        .. "required — drives a reverse clip's retime-curve X axis")
     assert(type(media) == "table",
         "drt_writer.build_clip_element: media table required for clip "
         .. clip.id .. " (media_uuid=" .. clip.media_uuid .. ")")
@@ -446,11 +501,24 @@ local function build_clip_element(clip, media, track_type, state)
         .. "clip " .. clip.id .. " — <Flags> carries the disabled bit and "
         .. "omitting it would silently re-enable the clip in Resolve")
 
-    local in_offset = clip.source_in - media.start_tc_frame
-    assert(in_offset >= 0, string.format(
-        "drt_writer.build_clip_element: clip %s source_in (%d) < media "
-        .. "start_tc_frame (%d) — source_in below file TC origin invalid",
-        clip.id, clip.source_in, media.start_tc_frame))
+    -- Reverse clips (source_in > source_out) need the full retime-curve MTBA
+    -- with <In>=0 — the source extent rides in the curve's Y values. Forward
+    -- clips use <In> as the file-relative source offset and the no-retime MTBA.
+    local is_reverse = clip.source_in > clip.source_out
+    local in_element, mtba_blob
+    if is_reverse then
+        local in_value
+        in_value, mtba_blob = build_reverse_retime(clip, media, seq_fps, state)
+        in_element = build_in_element(in_value)
+    else
+        local in_offset = clip.source_in - media.start_tc_frame
+        assert(in_offset >= 0, string.format(
+            "drt_writer.build_clip_element: clip %s source_in (%d) < media "
+            .. "start_tc_frame (%d) — source_in below file TC origin invalid",
+            clip.id, clip.source_in, media.start_tc_frame))
+        in_element = build_in_element(in_offset)
+        mtba_blob  = build_media_timemap_ba(clip.duration, media.native_rate)
+    end
 
     local media_start_seconds = media.start_tc_frame / media.native_rate
     local tag = (track_type == "audio") and "Sm2TiAudioClip" or "Sm2TiVideoClip"
@@ -483,7 +551,7 @@ local function build_clip_element(clip, media, track_type, state)
         text_elem("RenderTextEnabled",  is_video and "true"  or "false"),
         text_elem("RenderTextGanged",   is_video and "true"  or "false"),
         text_elem("RenderTextPrefixed", is_video and "true"  or "false"),
-        build_in_element(in_offset),
+        in_element,
         text_elem("MixedFrameRateAlignment", "0"),
         text_elem("MediaRef",       clip.media_uuid),
         -- Bare integer for integral seconds (Resolve writes "0" not
@@ -497,8 +565,7 @@ local function build_clip_element(clip, media, track_type, state)
         self_close("MediaReelNumber"),
         text_elem("MediaFrameRate", enc.encode_le_double(media.native_rate)
                                     .. "0000000000000000"),
-        text_elem("MediaTimemapBA",
-            build_media_timemap_ba(clip.duration, media.native_rate)),
+        text_elem("MediaTimemapBA", mtba_blob),
         text_elem("LastChangedTime", "0"),
         text_elem("LastRenderedTime", "0"),
         text_elem("IsMarkedForCaching", "false"),
@@ -545,9 +612,12 @@ end
 local TRACK_FIELDS_BLOB_NUM_LAYERS =
     "000000010000000100000012004e0075006d004c00610079006500720073000000020000000000"
 
-local function build_track_element(track, seq_dbid, media_by_uuid, state)
+local function build_track_element(track, seq_dbid, media_by_uuid, state, seq_fps)
     assert(type(track.clips) == "table",
         "drt_writer.build_track_element: track.clips array required")
+    assert(type(seq_fps) == "number" and seq_fps > 0,
+        "drt_writer.build_track_element: seq_fps required (threaded to "
+        .. "build_clip_element for reverse-clip retime curves)")
     assert(track.type == "video" or track.type == "audio",
         "drt_writer.build_track_element: track.type must be 'video' or "
         .. "'audio', got " .. tostring(track.type))
@@ -560,7 +630,7 @@ local function build_track_element(track, seq_dbid, media_by_uuid, state)
         assert(media, "drt_writer.build_track_element: track clip references "
             .. "unknown media_uuid " .. tostring(c.media_uuid))
         items[#items + 1] = elem("Element",
-            build_clip_element(c, media, track.type, state))
+            build_clip_element(c, media, track.type, state, seq_fps))
     end
 
     return elem("Element", elem("Sm2TiTrack", table.concat({
@@ -585,10 +655,13 @@ local function build_seq_container_xml(seq, seq_dbid, container_dbid, state,
                                        media_by_uuid)
     assert(type(seq.tracks) == "table" and #seq.tracks >= 1,
         "drt_writer.build_seq_container_xml: sequence.tracks non-empty array")
+    assert(type(seq.fps) == "number" and seq.fps > 0,
+        "drt_writer.build_seq_container_xml: sequence.fps required (timeline "
+        .. "fps drives reverse-clip retime-curve X axis)")
 
     local video_tracks, audio_tracks = {}, {}
     for _, t in ipairs(seq.tracks) do
-        local rendered = build_track_element(t, seq_dbid, media_by_uuid, state)
+        local rendered = build_track_element(t, seq_dbid, media_by_uuid, state, seq.fps)
         if t.type == "audio" then
             audio_tracks[#audio_tracks + 1] = rendered
         else

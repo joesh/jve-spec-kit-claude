@@ -39,8 +39,9 @@ payload.media_refs[1].start_tc_frame = fixture.TC_1H
 -- other's source_in below the file's TC origin and trip the writer's assert.
 for _, track in ipairs(payload.sequence.tracks) do
     for _, c in ipairs(track.clips) do
-        c.duration  = CLIP_DURATION
-        c.source_in = fixture.TC_1H + CLIP_SOURCE_IN_OFFSET
+        c.duration   = CLIP_DURATION
+        c.source_in  = fixture.TC_1H + CLIP_SOURCE_IN_OFFSET
+        c.source_out = c.source_in + c.duration   -- forward selection
     end
 end
 
