@@ -62,6 +62,9 @@ local module_aliases = {
     FindNext = "core.commands.find_clips",
     FindPrevious = "core.commands.find_clips",
     FindReplace = "core.commands.find_clips",
+    SelectAllMatches = "core.commands.find_clips",
+    FindReplaceCurrent = "core.commands.find_clips",
+    FindReplaceAll = "core.commands.find_clips",
     ClearFind = "core.commands.find_clips",
 
     -- Sift commands (multi-register)

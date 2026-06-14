@@ -1,17 +1,15 @@
 --- Unified Find & Filter dialog: non-modal floating window.
 --
--- Combines Find, Find & Replace, and Sift into one floating panel.
--- Cmd+F opens in Find mode, Cmd+H opens with Replace expanded,
--- Cmd+Shift+F opens with Sift focus.
---
--- Non-modal: stays open while user works. Eventually dockable.
+-- Pure view: renders query controls and dispatches commands.
+-- All find execution, navigation, and selection logic lives in
+-- core/commands/find_clips.lua. The dialog owns only its widgets
+-- and settings persistence.
 --
 -- @file find_dialog.lua
 -- luacheck: globals qt_set_line_edit_return_pressed_handler qt_set_line_edit_text_changed_handler qt_create_single_shot_timer
 
 local qt = require("core.qt_constants")
 local query_engine = require("core.query_engine")
-local find_state = require("core.find_state")
 local command_manager = require("core.command_manager")
 local db_module = require("core.database")
 local dialog_prefs = require("core.dialog_prefs")
@@ -35,20 +33,11 @@ local ws = {
     replace_label = nil,
     scope_combo = nil,
     status_label = nil,
-    -- Replace controls
     rep_btn = nil,
     rep_all_btn = nil,
-    -- Context
-    clips = nil,
-    context = nil,       -- "browser" | "timeline"
-    project_id = nil,
-    on_find = nil,
-    on_navigate = nil,
-    save_selection = nil,
-    on_restore_selection = nil,
-    -- State
     geometry_ready = false,
-    bool_field = false,  -- true when the current attr is a boolean type
+    bool_field = false,
+    visible = false,
 }
 
 -- ============================================================================
@@ -108,7 +97,11 @@ local function populate_operators(field_name)
     end
 end
 
--- Returns the search value: op_combo selection for boolean fields, find_edit text otherwise.
+local function get_find_operator()
+    if ws.bool_field then return "equals" end
+    return qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
+end
+
 local function get_find_value()
     if ws.bool_field then
         return qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
@@ -116,135 +109,30 @@ local function get_find_value()
     return qt.PROPERTIES.GET_TEXT(ws.find_edit)
 end
 
--- Returns the operator: always "equals" for boolean fields, op_combo text otherwise.
-local function get_find_operator()
-    if ws.bool_field then return "equals" end
-    return qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.op_combo)
-end
+-- ============================================================================
+-- Status bar
+-- ============================================================================
 
--- True when the dialog's current field/operator/value differ from the active session.
-local function query_has_changed()
-    if not find_state.is_active() then return false end
-    local current = find_state.get_current_query()
-    if not current or #current == 0 then return false end
-    local q = current[1]
-    local col = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    return q.column ~= col or q.operator ~= get_find_operator() or q.value ~= get_find_value()
-end
-
-local function update_status(text)
+function M.update_status(text)
     if ws.status_label then
         qt.PROPERTIES.SET_TEXT(ws.status_label, text)
     end
 end
 
 -- ============================================================================
--- Actions
+-- Build query args from current widget state
 -- ============================================================================
 
-local function do_find()
-    log.event("do_find: clips=%d", ws.clips and #ws.clips or 0)
-    if not ws.clips or #ws.clips == 0 then
-        update_status("No clips")
-        return false
-    end
-
-    local column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
-    local operator = get_find_operator()
-    local value = get_find_value()
-    log.event("do_find: column=%s op=%s value=%s", tostring(column), tostring(operator), tostring(value))
-    if not ws.bool_field and (not value or value == "") then
-        update_status("Enter search text")
-        return false
-    end
-
-    if not find_state.is_active() and ws.save_selection then
-        find_state.save_selection(ws.save_selection())
-    end
-
-    find_state.execute(ws.clips, {column = column, operator = operator, value = value})
-
-    local count = find_state.get_match_count()
-    local current = find_state.get_current_match()
-    log.event("do_find: %d matches, current=%s, active=%s", count, tostring(current), tostring(find_state.is_active()))
-    update_status(string.format("%d match%s", count, count == 1 and "" or "es"))
-
-    -- Persist only text value / replace text. Column + operator do NOT persist:
-    -- a prior session that left column=offline (boolean) traps the next
-    -- session because the dialog reopens with a non-text field selected
-    -- and the user's typed search can never match. The dialog's own
-    -- default (Any + contains) is the right starting state every open.
-    -- Boolean values are driven by op_combo (not find_edit) so there is
-    -- nothing to restore into find_edit between sessions.
-    save_settings({
-        last_value = not ws.bool_field and value or nil,
-        last_replace = ws.replace_edit and qt.PROPERTIES.GET_TEXT(ws.replace_edit) or nil,
-    })
-
-    if ws.on_find and count > 0 then
-        log.event("do_find: calling on_find callback")
-        ws.on_find({
-            match_count = count,
-            current_match = current,
-        })
-    else
-        log.event("do_find: no on_find callback or 0 matches (on_find=%s)", tostring(ws.on_find))
-    end
-    return true
+local function get_query_args()
+    return {
+        column   = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
+        operator = get_find_operator(),
+        value    = get_find_value(),
+    }
 end
 
-local function get_playhead_frame()
-    local ok, ts = pcall(require, "ui.timeline.timeline_state")
-    if not ok or type(ts) ~= "table" then return nil end
-    return ts.get_playhead_position and ts.get_playhead_position()
-end
-
-local function do_find_next()
-    log.event("do_find_next: active=%s count=%d idx=%d",
-        tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
-    -- Re-execute if no session or the query fields have changed since last find.
-    if not find_state.is_active() or query_has_changed() then
-        log.event("do_find_next: query changed or no session, executing find")
-        if not do_find() then return end
-        return
-    end
-    local frame = get_playhead_frame()
-    if frame then
-        find_state.next_from(frame)
-    else
-        find_state.next()
-    end
-    local match = find_state.get_current_match()
-    local idx = find_state.get_current_index()
-    log.event("do_find_next: after next idx=%d match=%s", idx, tostring(match))
-    update_status(string.format("Match %d of %d", idx, find_state.get_match_count()))
-    if ws.on_navigate and match then
-        ws.on_navigate(match, idx)
-    end
-end
-
-local function do_find_prev()
-    log.event("do_find_prev: active=%s count=%d idx=%d",
-        tostring(find_state.is_active()), find_state.get_match_count(), find_state.get_current_index())
-    -- Re-execute if no session or the query fields have changed since last find.
-    if not find_state.is_active() or query_has_changed() then
-        log.event("do_find_prev: query changed or no session, executing find")
-        if not do_find() then return end
-        return
-    end
-    local frame = get_playhead_frame()
-    if frame then
-        find_state.prev_from(frame)
-    else
-        find_state.previous()
-    end
-    local match = find_state.get_current_match()
-    local idx = find_state.get_current_index()
-    log.event("do_find_prev: after prev idx=%d match=%s", idx, tostring(match))
-    update_status(string.format("Match %d of %d", idx, find_state.get_match_count()))
-    if ws.on_navigate and match then
-        ws.on_navigate(match, idx)
-    end
+local function has_query_value(args)
+    return ws.bool_field or (args.value and args.value ~= "")
 end
 
 local function has_replace_text()
@@ -253,40 +141,56 @@ local function has_replace_text()
     return text and text ~= ""
 end
 
-local function do_replace()
-    log.event("do_replace: has_text=%s active=%s", tostring(has_replace_text()), tostring(find_state.is_active()))
-    if not has_replace_text() then return end
-    if not find_state.is_active() then return end
-    local current_id = find_state.get_current_match()
-    if not current_id then return end
-    log.event("do_replace: replacing clip %s", current_id)
-    command_manager.execute_interactive("ReplaceClipProperty", {
-        clip_id = current_id,
-        column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
-        find_value = qt.PROPERTIES.GET_TEXT(ws.find_edit),
-        replace_value = qt.PROPERTIES.GET_TEXT(ws.replace_edit),
-        project_id = ws.project_id,
+-- ============================================================================
+-- Button actions — dispatch commands only
+-- ============================================================================
+
+local function do_find()
+    local args = get_query_args()
+    if not has_query_value(args) then M.update_status("Enter search text"); return end
+    save_settings({
+        last_column  = args.column,
+        last_operator = not ws.bool_field and args.operator or nil,
+        last_value   = not ws.bool_field and args.value or nil,
+        last_replace = qt.PROPERTIES.GET_TEXT(ws.replace_edit),
     })
-    do_find_next()
+    command_manager.execute_interactive("Find", args)
+end
+
+local function do_find_next()
+    local args = get_query_args()
+    if not has_query_value(args) then M.update_status("Enter search text"); return end
+    command_manager.execute_interactive("FindNext", args)
+end
+
+local function do_find_prev()
+    local args = get_query_args()
+    if not has_query_value(args) then M.update_status("Enter search text"); return end
+    command_manager.execute_interactive("FindPrevious", args)
+end
+
+local function do_select_all()
+    local args = get_query_args()
+    if not has_query_value(args) then M.update_status("Enter search text"); return end
+    command_manager.execute_interactive("SelectAllMatches", args)
+end
+
+local function do_replace()
+    if not has_replace_text() then return end
+    local args = get_query_args()
+    args.replace_value = qt.PROPERTIES.GET_TEXT(ws.replace_edit)
+    command_manager.execute_interactive("FindReplaceCurrent", args)
 end
 
 local function do_replace_all()
-    log.event("do_replace_all: has_text=%s active=%s", tostring(has_replace_text()), tostring(find_state.is_active()))
     if not has_replace_text() then return end
-    if not find_state.is_active() then
-        if not do_find() then return end
-    end
-    local match_ids = find_state.get_matches()
-    log.event("do_replace_all: %d matches to replace", #match_ids)
-    if #match_ids == 0 then return end
-    command_manager.execute_interactive("ReplaceAllClipProperties", {
-        clip_ids = match_ids,
-        column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
-        find_value = qt.PROPERTIES.GET_TEXT(ws.find_edit),
-        replace_value = qt.PROPERTIES.GET_TEXT(ws.replace_edit),
-        project_id = ws.project_id,
-    })
-    update_status(string.format("Replaced %d", #match_ids))
+    local args = get_query_args()
+    args.replace_value = qt.PROPERTIES.GET_TEXT(ws.replace_edit)
+    command_manager.execute_interactive("FindReplaceAll", args)
+end
+
+local function do_clear()
+    command_manager.execute_interactive("ClearFind", {})
 end
 
 -- ============================================================================
@@ -301,7 +205,6 @@ local function create_window()
     local window = qt.WIDGET.CREATE_TOOL_WINDOW()
     qt.WIDGET.SET_WINDOW_FLAGS(window, 0x0000000B)  -- Qt::Tool
     qt.PROPERTIES.SET_TITLE(window, "Find & Filter")
-    -- Apply global stylesheet (separate window doesn't inherit from main window)
     local ui_constants = require("core.ui_constants")
     qt_set_widget_stylesheet(window, ui_constants.STYLES.MAIN_WINDOW_TITLE_BAR)  -- luacheck: globals qt_set_widget_stylesheet
 
@@ -332,32 +235,23 @@ local function create_window()
     populate_operators("name")
     qt.LAYOUT.ADD_WIDGET(row1, ws.op_combo)
 
-    -- Repopulate operator list when attribute changes. For boolean fields op_combo
-    -- becomes the value selector ("true"/"false"); find_edit is disabled because
-    -- the value is not free-form text. For all other fields find_edit is enabled.
-    -- luacheck: globals qt_set_combobox_change_handler
     register_handler("__find_dlg_attr_changed", function()
         local field = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo)
         populate_operators(field)
         qt.CONTROL.SET_ENABLED(ws.find_edit, not ws.bool_field)
     end)
-    qt_set_combobox_change_handler(ws.attr_combo, "__find_dlg_attr_changed")
+    qt_set_combobox_change_handler(ws.attr_combo, "__find_dlg_attr_changed")  -- luacheck: globals qt_set_combobox_change_handler
     ws.find_edit = qt.WIDGET.CREATE_LINE_EDIT("")
     qt.PROPERTIES.SET_PLACEHOLDER_TEXT(ws.find_edit, "search text")
     qt.LAYOUT.ADD_WIDGET(row1, ws.find_edit)
-    -- Return in find field → execute the search fresh. NOT do_find_next:
-    -- if a prior search left find_state active with 0 matches, do_find_next
-    -- sees is_active=true, calls find_state.next() (no-op on 0 matches),
-    -- and the user is stuck — typing new text + Enter does nothing.
-    -- "Enter in the search field = run this search" is also how every
-    -- macOS Find dialog behaves. Next button / Cmd+G stays for "cycle
-    -- within the active search."
+    -- Return in the search field re-executes find from the start (same as
+    -- clicking Find), not advance-to-next. This matches macOS Find convention
+    -- and recovers when find_state is active with 0 matches.
     register_handler("__find_dlg_edit_return", do_find)
     qt_set_line_edit_return_pressed_handler(ws.find_edit, "__find_dlg_edit_return")
     qt.LAYOUT.ADD_LAYOUT(layout, row1)
 
     -- Row 2: Replace with  [________replace________]
-    -- "Replace with" label aligns with the combos above, edit field aligns with find field
     local row2 = qt.LAYOUT.CREATE_HBOX()
     ws.replace_label = qt.WIDGET.CREATE_LABEL("Replace with")
     qt.LAYOUT.ADD_WIDGET(row2, ws.replace_label)
@@ -366,7 +260,6 @@ local function create_window()
     qt.LAYOUT.ADD_WIDGET(row2, ws.replace_edit)
     qt.LAYOUT.ADD_LAYOUT(layout, row2)
 
-    -- Monitor replace field: enable/disable Replace buttons
     register_handler("__find_dlg_replace_changed", function()
         local has_text = has_replace_text()
         qt.CONTROL.SET_ENABLED(ws.rep_btn, has_text)
@@ -385,7 +278,6 @@ local function create_window()
     qt.LAYOUT.ADD_STRETCH(row3)
     qt.LAYOUT.ADD_LAYOUT(layout, row3)
 
-    -- Button styles: focus ring via :focus, default button via accent color
     local btn_focus = "QPushButton:focus { border: 1px solid #5ac8fa; }"
     local default_btn_style = "QPushButton { background-color: #0a84ff; color: white; "
         .. "border-radius: 4px; padding: 3px 12px; } "
@@ -396,7 +288,7 @@ local function create_window()
     local row5 = qt.LAYOUT.CREATE_HBOX()
 
     local next_btn = qt.WIDGET.CREATE_BUTTON("Next")
-    qt.PROPERTIES.SET_STYLE(next_btn, default_btn_style)  -- Default button: accent blue
+    qt.PROPERTIES.SET_STYLE(next_btn, default_btn_style)
     register_handler("__find_dlg_next", do_find_next)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(next_btn, "__find_dlg_next")
     qt.LAYOUT.ADD_WIDGET(row5, next_btn)
@@ -408,39 +300,12 @@ local function create_window()
     qt.LAYOUT.ADD_WIDGET(row5, prev_btn)
 
     local all_btn = qt.WIDGET.CREATE_BUTTON("All")
-    register_handler("__find_dlg_all", function()
-        log.event("do_select_all")
-        -- Execute find if not active
-        if not find_state.is_active() then
-            if not do_find() then return end
-        end
-        -- Select all matches via view
-        local match_ids = find_state.get_matches()
-        log.event("do_select_all: %d matches to select", #match_ids)
-        if #match_ids > 0 and ws.on_select_all then
-            ws.on_select_all(match_ids)
-        end
-        update_status(string.format("Selected %d", #match_ids))
-    end)
+    register_handler("__find_dlg_all", do_select_all)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(all_btn, "__find_dlg_all")
     qt.LAYOUT.ADD_WIDGET(row5, all_btn)
 
-    -- Sift buttons removed — sift will return as a proper browser-only filter UI
-    -- with visible criteria chips. See find_dialog_with_sift.lua.bak for the code.
-
     local clear_btn = qt.WIDGET.CREATE_BUTTON("Clear")
-    register_handler("__find_dlg_clear", function()
-        log.event("do_clear_find")
-        -- Restore pre-find selection before clearing state
-        if ws.on_restore_selection then
-            local prev_sel = find_state.get_previous_selection()
-            if prev_sel then
-                ws.on_restore_selection(prev_sel)
-            end
-        end
-        find_state.clear()
-        update_status("")
-    end)
+    register_handler("__find_dlg_clear", do_clear)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(clear_btn, "__find_dlg_clear")
     qt.LAYOUT.ADD_WIDGET(row5, clear_btn)
 
@@ -460,7 +325,6 @@ local function create_window()
     register_handler("__find_dlg_rep_all", do_replace_all)
     qt.CONTROL.SET_BUTTON_CLICK_HANDLER(ws.rep_all_btn, "__find_dlg_rep_all")
     qt.LAYOUT.ADD_WIDGET(row6, ws.rep_all_btn)
-
 
     qt.LAYOUT.ADD_LAYOUT(layout, row6)
 
@@ -505,47 +369,24 @@ end
 -- ============================================================================
 
 --- Show the unified Find & Filter panel.
--- @param opts {clips, context, project_id, on_find, on_navigate, save_selection, on_restore_selection}
-function M.show(opts)
-    assert(opts, "find_dialog.show: opts required")
-    log.event("find_dialog.show: context=%s clips=%d project=%s on_find=%s on_navigate=%s",
-        tostring(opts.context), opts.clips and #opts.clips or 0, tostring(opts.project_id),
-        tostring(opts.on_find), tostring(opts.on_navigate))
-
-    -- Update context
-    ws.clips = opts.clips
-    ws.context = opts.context or "browser"
-    ws.project_id = opts.project_id
-    ws.on_find = opts.on_find
-    ws.on_navigate = opts.on_navigate
-    ws.on_select_all = opts.on_select_all
-    ws.save_selection = opts.save_selection
-    ws.on_restore_selection = opts.on_restore_selection
-
-    -- Create window on first call
+function M.show()
+    log.event("find_dialog.show")
     if not ws.window then
         log.event("find_dialog.show: creating window")
         ws.window = create_window()
         restore_settings()
     end
 
-    -- Show and bring to front
-    log.event("find_dialog.show: displaying window")
     ws.visible = true
     qt.DISPLAY.SHOW(ws.window)
     qt.DISPLAY.RAISE(ws.window)
     qt.DISPLAY.ACTIVATE(ws.window)
 
-    -- Put the caret in the search field on every show (not just first
-    -- creation) and pre-select any existing query text so reopening Find
-    -- replaces the prior term by typing. Without this the dialog comes up
-    -- with focus indeterminate and j/k/l-style keypresses land elsewhere.
     if ws.find_edit then
         qt_set_focus(ws.find_edit)  -- luacheck: globals qt_set_focus
         qt_line_edit_select_all(ws.find_edit)  -- luacheck: globals qt_line_edit_select_all
     end
 
-    -- Enable geometry persistence after layout settles
     qt_create_single_shot_timer(50, function()
         ws.geometry_ready = true
     end)
@@ -559,22 +400,13 @@ function M.hide()
     end
 end
 
---- Update the clip list (called when focus changes views).
-function M.update_clips(clips)
-    ws.clips = clips
-    log.event("find_dialog.update_clips: %d clips", clips and #clips or 0)
-end
-
 --- Get current query from the dialog's text fields.
+--- Used by find_clips.lua to re-execute find on content/focus changes.
 function M.get_current_query()
     if not ws.attr_combo or not ws.op_combo or not ws.find_edit then return nil end
-    local value = get_find_value()
-    if not ws.bool_field and (not value or value == "") then return nil end
-    return {
-        column = qt.PROPERTIES.GET_COMBOBOX_CURRENT_TEXT(ws.attr_combo),
-        operator = get_find_operator(),
-        value = value or "",
-    }
+    local args = get_query_args()
+    if not ws.bool_field and (not args.value or args.value == "") then return nil end
+    return args
 end
 
 --- Check if the panel is currently visible.
