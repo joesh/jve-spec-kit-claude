@@ -717,7 +717,11 @@ end
 -- Sm2Mp*.FieldsBlob decoding (synced-clip support).
 --
 -- On-wire shape:
---     [BE32 version][BE32 declared_size][0x81 marker][zstd frame]
+--     [BE32 version][BE32 declared_size][marker byte][Fields payload]
+--
+-- The marker byte (offset 9) tags the payload variant: 0x81 = zstd-compressed
+-- (the common case), 0x80 = short uncompressed (video-only media, no MediaRefs).
+-- See decode_fields_blob_bytes for the per-variant handling.
 --
 -- The zstd frame decompresses to a protobuf-ish payload. For synced-clip
 -- resolution we don't parse the protobuf fully — we only need the ordered
@@ -743,10 +747,23 @@ function M.decode_fields_blob_bytes(bytes)
     local ok, err = require_string_size(bytes, 10, "FieldsBlob bytes")
     if not ok then return nil, err end
 
+    -- Byte 9 is a one-byte variant tag for the Fields payload that follows
+    -- (the payload always starts at byte 10):
+    --   0x81 = zstd-compressed Fields payload. Camera-original media whose
+    --          FieldsBlob carries the synced/embedded MediaRef audio list —
+    --          large enough that Resolve zstd-compresses it.
+    --   0x80 = SHORT, UNCOMPRESSED Fields payload. Observed on video-only
+    --          media (e.g. VFX renders) carrying no MediaRef audio list:
+    --          a ~40-byte protobuf with no zstd frame. The payload IS the
+    --          content, so there is nothing to decompress. extract_media_refs
+    --          finds no refs here, which is correct (no synced audio).
     local marker = bytes:byte(9)
+    if marker == 0x80 then
+        return bytes:sub(10)
+    end
     if marker ~= 0x81 then
         return nil, string.format(
-            "FieldsBlob wrapper byte 9 must be 0x81, got 0x%02x", marker)
+            "FieldsBlob wrapper byte 9 must be 0x80 or 0x81, got 0x%02x", marker)
     end
 
     if type(qt_zstd_decompress) ~= "function" then
@@ -1074,10 +1091,11 @@ local function unwrap_marker_blob(fields_blob_hex)
     -- decode_fields_blob_bytes. Non-marker per-item BlobData (e.g. retime
     -- curve, sibling state) is wrapped in a different envelope and must
     -- be silently skipped, not surfaced as a marker-blob parse failure.
-    -- decode_fields_blob_bytes ALSO checks byte 9, but its err message
-    -- ("FieldsBlob wrapper byte 9 must be 0x81...") would be wrapped
-    -- and surfaced — breaking the documented (nil, nil) "not a marker
-    -- blob" contract above.
+    -- decode_fields_blob_bytes ALSO inspects byte 9, but it would treat a
+    -- 0x80 BlobData as a valid (uncompressed) FieldsBlob and a non-0x80/0x81
+    -- byte as an error to surface — either way breaking the documented
+    -- (nil, nil) "not a marker blob" contract above. Marker blobs are only
+    -- ever the 0x81 zstd variant, so gate on that here.
     if #blob_data < 10 or blob_data:byte(9) ~= 0x81 then return nil end
 
     local payload, err = M.decode_fields_blob_bytes(blob_data)
