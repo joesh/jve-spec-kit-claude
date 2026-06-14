@@ -369,6 +369,64 @@ do
     check("scenario 10: surfaced as marker_conflicts_existing_link", found)
 end
 
+-- ── Scenario 11: direct-id channel — clip.id == resolve_item_id ──────
+-- A clip imported from a DRP exported off this Resolve project carries
+-- the Resolve timeline-item id as its own clip.id (Sm2Ti DbId adopted on
+-- import == live GetUniqueId for a consistent export — inbound-findings
+-- §2). That id equality IS the identity — the strongest, rate-
+-- independent signal. It must link EVEN WHEN name and source_in diverge
+-- (those are representation, not identity: absolute-TC vs media-relative
+-- source_in, custom vs media name).
+do
+    local jve_clips = {
+        clip("ID-MATCH-1", 1, 5000, 99, 200),  -- source_in=99, name "C-ID-MATCH-1"
+    }
+    local identities = {}  -- no markers stamped
+    local timeline = {
+        {
+            resolve_item_id = "ID-MATCH-1",      -- SAME as clip.id
+            kind            = "media",
+            track_type      = "video",
+            track_index     = 1,
+            record_start    = 5000,
+            record_duration = 100,
+            source_in       = 0,                  -- diverges from clip.source_in=99
+            source_out      = 100,
+            enabled         = true,
+            name            = "Totally Different Label",  -- diverges from clip.name
+            media_file_path = "/some/other/path.mov",     -- diverges too
+        },
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 11: clip.id == resolve_item_id links via id channel",
+        m.id_matched and m.id_matched["ID-MATCH-1"] == "ID-MATCH-1")
+    check("scenario 11: id match wins despite name/source_in/path divergence",
+        #m.ambiguous == 0)
+    check("scenario 11: id-matched clip is not unmatched",
+        #m.unmatched == 0)
+    check("scenario 11: id match does not also double-count as position",
+        m.pos_matched["ID-MATCH-1"] == nil)
+end
+
+-- ── Scenario 12: id channel beats marker when both present ───────────
+-- If a clip both has clip.id == an item id AND a marker naming it, the
+-- direct-id channel claims it (highest priority); it must not be double-
+-- reported or marked ambiguous.
+do
+    local jve_clips = { clip("DUAL", 1, 0, 0, 100) }
+    local identities = { id_item("DUAL", "DUAL") }  -- marker on item "DUAL" naming clip "DUAL"
+    local timeline = {
+        tl_item("DUAL", 1, 0, 100, 0, 100, "DUAL"),
+    }
+    local m = discovery.match(jve_clips, identities, timeline)
+    check("scenario 12: id channel links DUAL",
+        m.id_matched and m.id_matched["DUAL"] == "DUAL")
+    check("scenario 12: no ambiguity from id+marker overlap",
+        #m.ambiguous == 0)
+    check("scenario 12: clip not left unmatched",
+        #m.unmatched == 0)
+end
+
 -- ── Failure paths: validate args (rule 2.32) ────────────────────────
 do
     local ok1 = pcall(discovery.match, nil, {}, {})

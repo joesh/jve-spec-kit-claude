@@ -18,13 +18,24 @@
 --- 2026-06-12: 1199 false "ambiguous" on a fully-linked project).
 --- Their items are pre-claimed so no channel can re-assign them.
 ---
---- Two match channels for the rest, per FR-011c priority order:
----   (a) **Clip marker carrying `clip.id`** in `customData`
+--- Three match channels for the rest, in priority order:
+---   (a) **Direct id** — `clip.id == resolve_item_id`. A clip imported
+---       from a DRP exported off this Resolve project carries the
+---       Resolve timeline-item id (`Sm2Ti DbId`) as its own `clip.id`,
+---       and for a consistent export that equals the live
+---       `TimelineItem:GetUniqueId()` (inbound-findings.md §2 — verified
+---       3/3). So id equality IS the identity: exact UUID match, no
+---       representation-dependent field, rate-independent. A stale /
+---       cross-instance DRP simply produces no overlap and falls through
+---       to (b)/(c). The id is its own durable anchor, so id matches are
+---       persisted to the ledger but NOT marker-stamped (see below).
+---   (b) **Clip marker carrying `clip.id`** in `customData`
 ---       (`TimelineItem:AddMarker`/`GetMarkers`). Recovered via the
 ---       helper's `read_identities` verb (T029a). Id-anchored:
----       Resolve `customData` IS the JVE `clip.id`.
----   (b) **Position match** (V1 scope) — for each JVE clip not yet
----       linked via (a), find a `read_timeline` row on the same
+---       Resolve `customData` IS the JVE `clip.id`. The durable channel
+---       for clips whose live id has churned (re-edit) since export.
+---   (c) **Position match** (V1 scope) — for each JVE clip not yet
+---       linked via (a)/(b), find a `read_timeline` row on the same
 ---       `(track_type, track_index)` whose `record_start` equals the
 ---       JVE clip's `sequence_start`. Track identity is positional
 ---       (helper-protocol.md §read_timeline); record_start uniquely
@@ -39,9 +50,9 @@
 --- different real times when the JVE sequence and the Resolve timeline
 --- disagree on TC rate. On mismatch the position channel is SKIPPED
 --- (never silently mismatched) and the report carries the reason; the
---- marker channel is id-anchored and rate-independent, so it always
---- runs. Syncs surface the skip as a warning and proceed on marker
---- matches + already-persisted links.
+--- direct-id and marker channels are id-anchored and rate-independent,
+--- so they always run. Syncs surface the skip as a warning and proceed
+--- on id + marker matches + already-persisted links.
 ---
 --- Match results land in `resolve_bridge_link` via
 --- `identity_ledger.upsert` — idempotent on the ledger. Unmatched JVE
@@ -289,10 +300,31 @@ local function match_by_position(jve_clips, items_by_pos, marker_matched,
                     pos_matched[clip.id] = hit.resolve_item_id
                     already_claimed[hit.resolve_item_id] = true
                 else
+                    -- Capture WHICH of the three content keys diverged
+                    -- (and a sample of each side) so the report names the
+                    -- failing field, not just "content_mismatch" (rule
+                    -- 2.32 — the differing field is the load-bearing fact).
+                    local fields = {}
+                    if hit.name ~= clip.name then
+                        fields[#fields + 1] = "name"
+                    end
+                    if hit.source_in ~= clip.source_in then
+                        fields[#fields + 1] = "source_in"
+                    end
+                    if hit.media_file_path ~= clip.media_file_path then
+                        fields[#fields + 1] = "media_file_path"
+                    end
                     ambiguous[#ambiguous + 1] = {
                         clip_id         = clip.id,
                         resolve_item_id = hit.resolve_item_id,
                         reason          = "content_mismatch",
+                        mismatch_fields = fields,
+                        jve_name        = clip.name,
+                        resolve_name    = hit.name,
+                        jve_source_in   = clip.source_in,
+                        resolve_source_in = hit.source_in,
+                        jve_media_path    = clip.media_file_path,
+                        resolve_media_path = hit.media_file_path,
                     }
                 end
             elseif hit ~= nil then
@@ -307,10 +339,36 @@ local function match_by_position(jve_clips, items_by_pos, marker_matched,
     return pos_matched, ambiguous
 end
 
-local function build_unmatched_list(jve_clips, marker_matched, pos_matched)
+-- Direct-id channel (highest priority, rate-independent). A clip
+-- imported from a DRP exported off this Resolve project carries the
+-- Resolve timeline-item id as its own clip.id (Sm2Ti DbId adopted on
+-- import == live GetUniqueId for a consistent export — inbound-findings
+-- §2). So `clip.id == resolve_item_id` IS the identity: exact UUID
+-- equality, no representation-dependent field involved. A stale/cross-
+-- instance DRP simply produces no overlap and falls through to the
+-- marker/position channels. id_matched needs no marker stamp — the id
+-- itself is the durable anchor (caller stamps only no-anchor matches).
+local function match_by_direct_id(jve_clips, timeline_items, already_claimed)
+    local live_ids = {}
+    for _, item in ipairs(timeline_items) do
+        live_ids[item.resolve_item_id] = true
+    end
+    local id_matched = {}  -- clip_id → resolve_item_id (== clip_id)
+    for _, clip in ipairs(jve_clips) do
+        if live_ids[clip.id] and not already_claimed[clip.id] then
+            id_matched[clip.id] = clip.id
+            already_claimed[clip.id] = true  -- resolve_item_id == clip.id
+        end
+    end
+    return id_matched
+end
+
+local function build_unmatched_list(jve_clips, id_matched, marker_matched,
+                                    pos_matched)
     local unmatched = {}
     for _, clip in ipairs(jve_clips) do
-        if marker_matched[clip.id] == nil
+        if id_matched[clip.id]     == nil
+            and marker_matched[clip.id] == nil
             and pos_matched[clip.id]    == nil then
             unmatched[#unmatched + 1] = {
                 clip_id    = clip.id,
@@ -324,7 +382,9 @@ end
 
 --- Pure-data matcher (no DB, no helper) — exposed for unit testing.
 --- Given the matcher-shape JVE clips plus the helper's identities +
---- timeline payloads, produces the four buckets:
+--- timeline payloads, produces the buckets:
+---   • `id_matched`:     clip_id → resolve_item_id via direct-id channel
+---     (clip.id == resolve_item_id; highest priority, rate-independent)
 ---   • `marker_matched`: clip_id → resolve_item_id via marker channel
 ---   • `pos_matched`:    clip_id → resolve_item_id via position channel
 ---   • `ambiguous`:      [{clip_id, resolve_item_id, reason}, ...] for
@@ -335,7 +395,12 @@ end
 --- a marker naming a different clip on such an item is reported
 --- ambiguous (`marker_conflicts_existing_link`), and a position hit on
 --- one reports `position_match_already_claimed`.
-function M.match(jve_clips, identities_items, timeline_items, pre_claimed)
+--- `skip_position` (optional): when true, the position channel is not
+--- run (caller passes this on a TC-rate mismatch — record_start is
+--- rate-relative, so position would be silently wrong). The direct-id
+--- and marker channels are rate-independent and ALWAYS run.
+function M.match(jve_clips, identities_items, timeline_items, pre_claimed,
+                 skip_position)
     assert(type(jve_clips)        == "table",
         "discovery.match: jve_clips array required")
     assert(type(identities_items) == "table",
@@ -352,35 +417,54 @@ function M.match(jve_clips, identities_items, timeline_items, pre_claimed)
             already_claimed[rid] = true
         end
     end
+    -- Direct-id channel first: clip.id == resolve_item_id is the
+    -- strongest, rate-independent identity signal. Its claims block the
+    -- marker/position channels from re-assigning the same items.
+    local id_matched = match_by_direct_id(
+        jve_clips, timeline_items, already_claimed)
+    -- Clips settled by id skip the remaining channels entirely.
+    local unsettled = {}
+    for _, c in ipairs(jve_clips) do
+        if id_matched[c.id] == nil then unsettled[#unsettled + 1] = c end
+    end
     local marker_matched, marker_ambiguous = match_by_marker(
-        jve_clips, identities_items, already_claimed)
+        unsettled, identities_items, already_claimed)
     for _, a in ipairs(marker_ambiguous) do
         ambiguous[#ambiguous + 1] = a
-    end
-    local items_by_pos, non_media_skipped, pos_key_collisions =
-        index_items_by_position(timeline_items)
-    if non_media_skipped > 0 then
-        log.event("discovery: skipping %d non-media timeline item(s) "
-            .. "(generators/transitions/etc. — DRP importer does not "
-            .. "yet cover these kinds)", non_media_skipped)
-    end
-    for _, c in ipairs(pos_key_collisions) do
-        ambiguous[#ambiguous + 1] = c
-        log.warn("discovery: position-key collision for %s — "
-            .. "Resolve invariant violation; item excluded from match",
-            tostring(c.resolve_item_id))
     end
     for _, rid in pairs(marker_matched) do
         already_claimed[rid] = true
     end
-    local pos_matched, pos_ambiguous = match_by_position(
-        jve_clips, items_by_pos, marker_matched, already_claimed)
-    for _, a in ipairs(pos_ambiguous) do
-        ambiguous[#ambiguous + 1] = a
+    -- Position channel (skipped on TC-rate mismatch — record_start is
+    -- rate-relative). Runs over `unsettled` only: an id-matched clip's
+    -- own item is already_claimed, so re-running it here would mis-report
+    -- position_match_already_claimed against itself.
+    local pos_matched = {}
+    if not skip_position then
+        local items_by_pos, non_media_skipped, pos_key_collisions =
+            index_items_by_position(timeline_items)
+        if non_media_skipped > 0 then
+            log.event("discovery: skipping %d non-media timeline item(s) "
+                .. "(generators/transitions/etc. — DRP importer does not "
+                .. "yet cover these kinds)", non_media_skipped)
+        end
+        for _, c in ipairs(pos_key_collisions) do
+            ambiguous[#ambiguous + 1] = c
+            log.warn("discovery: position-key collision for %s — "
+                .. "Resolve invariant violation; item excluded from match",
+                tostring(c.resolve_item_id))
+        end
+        local pos_ambiguous
+        pos_matched, pos_ambiguous = match_by_position(
+            unsettled, items_by_pos, marker_matched, already_claimed)
+        for _, a in ipairs(pos_ambiguous) do
+            ambiguous[#ambiguous + 1] = a
+        end
     end
     local unmatched = build_unmatched_list(
-        jve_clips, marker_matched, pos_matched)
+        jve_clips, id_matched, marker_matched, pos_matched)
     return {
+        id_matched     = id_matched,
         marker_matched = marker_matched,
         pos_matched    = pos_matched,
         ambiguous      = ambiguous,
@@ -545,9 +629,61 @@ function M.log_discovery_warnings(report, caller_prefix)
         log.warn("%s discovery: %s", caller_prefix, report.rate_mismatch)
     end
     if #report.ambiguous > 0 then
-        log.warn("%s discovery: %d ambiguous match(es) — those clips stay "
-            .. "unlinked; see result.discovery.ambiguous",
-            caller_prefix, #report.ambiguous)
+        -- Histogram by reason so the WARN (on by default) names WHICH
+        -- bucket the clips fell into — a bare count can't distinguish a
+        -- per-clip content_mismatch from a per-item-pair
+        -- position_key_collision, and the reason is the load-bearing
+        -- fact for diagnosis (rule 2.32).
+        local by_reason = {}
+        for _, a in ipairs(report.ambiguous) do
+            by_reason[a.reason] = (by_reason[a.reason] or 0) + 1
+        end
+        local parts = {}
+        for reason, n in pairs(by_reason) do
+            parts[#parts + 1] = string.format("%s=%d", reason, n)
+        end
+        table.sort(parts)
+        log.warn("%s discovery: %d ambiguous match(es) [%s] — those clips "
+            .. "stay unlinked; see result.discovery.ambiguous",
+            caller_prefix, #report.ambiguous, table.concat(parts, ", "))
+        -- Surface one content_mismatch sample so the WARN names the
+        -- diverging field + both sides' values (rule 2.32 — diagnosis
+        -- needs the actual values, not just the bucket).
+        local field_combo, source_in_deltas, sample = {}, {}, nil
+        for _, a in ipairs(report.ambiguous) do
+            if a.reason == "content_mismatch" then
+                sample = sample or a
+                local combo = table.concat(a.mismatch_fields or {}, ",")
+                field_combo[combo] = (field_combo[combo] or 0) + 1
+                if type(a.jve_source_in) == "number"
+                    and type(a.resolve_source_in) == "number" then
+                    local d = a.jve_source_in - a.resolve_source_in
+                    source_in_deltas[d] = (source_in_deltas[d] or 0) + 1
+                end
+            end
+        end
+        local combo_parts = {}
+        for combo, n in pairs(field_combo) do
+            combo_parts[#combo_parts + 1] = string.format("{%s}=%d", combo, n)
+        end
+        table.sort(combo_parts)
+        local delta_parts = {}
+        for d, n in pairs(source_in_deltas) do
+            delta_parts[#delta_parts + 1] = string.format("%+d:%d", d, n)
+        end
+        table.sort(delta_parts)
+        log.warn("%s discovery: content_mismatch field combos [%s]; "
+            .. "source_in (jve-resolve) delta histogram [%s]",
+            caller_prefix, table.concat(combo_parts, ", "),
+            table.concat(delta_parts, ", "))
+        if sample then
+            log.warn("%s discovery: content_mismatch sample clip=%s "
+                .. "source_in(jve=%s resolve=%s) media_path(jve=%q)",
+                caller_prefix, tostring(sample.clip_id),
+                tostring(sample.jve_source_in),
+                tostring(sample.resolve_source_in),
+                tostring(sample.jve_media_path))
+        end
     end
     if #report.stamp_failures > 0 then
         log.warn("%s discovery: %d identity-marker stamp(s) refused — links "
@@ -610,21 +746,27 @@ function M.discover_and_link(client, sequence_id, db, on_done)
                     clips_to_match[#clips_to_match + 1] = c
                 end
             end
-            -- On rate mismatch the position channel gets an EMPTY item
-            -- list — "no positional data" — so only the id-anchored
-            -- marker channel can produce links. Never silently
-            -- position-match across disagreeing rates.
+            -- The direct-id and marker channels are rate-independent, so
+            -- they always run on the full item list; only the position
+            -- channel is skipped on a TC-rate mismatch (record_start is
+            -- rate-relative). Never silently position-match across rates.
             local matched = M.match(clips_to_match, idr.result.items,
-                mismatch == nil and rtr.result.items or {}, pre_claimed)
+                rtr.result.items, pre_claimed, mismatch ~= nil)
             local matched_log = {}
+            -- id_matched: clip.id == resolve_item_id is the durable anchor
+            -- itself, so it is persisted to the ledger but NOT stamped —
+            -- only the no-anchor (position) matches get a marker below.
+            persist_matches(matched.id_matched, db,
+                "direct_id", matched_log)
             persist_matches(matched.marker_matched, db,
                 "marker", matched_log)
             persist_matches(matched.pos_matched, db,
                 "position_match", matched_log)
             log.event("discovery: %d already linked, %d newly matched "
-                .. "(%d marker, %d position), %d unmatched, "
+                .. "(%d id, %d marker, %d position), %d unmatched, "
                 .. "%d ambiguous%s",
                 already_linked, #matched_log,
+                table_len(matched.id_matched),
                 table_len(matched.marker_matched),
                 table_len(matched.pos_matched),
                 #matched.unmatched, #matched.ambiguous,
@@ -642,6 +784,7 @@ function M.discover_and_link(client, sequence_id, db, on_done)
                     on_done({
                         matched              = matched_log,
                         already_linked       = already_linked,
+                        id_matched           = matched.id_matched,
                         marker_matched       = matched.marker_matched,
                         pos_matched          = matched.pos_matched,
                         unmatched            = matched.unmatched,
