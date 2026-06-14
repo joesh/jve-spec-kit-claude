@@ -22,18 +22,16 @@
 ---   (a) **Direct id** — `clip.id == resolve_item_id`. A clip imported
 ---       from a DRP exported off this Resolve project carries the
 ---       Resolve timeline-item id (`Sm2Ti DbId`) as its own `clip.id`.
----       Where that equals the live `TimelineItem:GetUniqueId()`, id
----       equality IS the identity: exact UUID match, no representation-
----       dependent field, rate-independent. This channel links only the
----       ids that actually coincide; a clip whose id matches no live
----       item falls through to (b)/(c). (NOTE: the conditions under
----       which an imported DRP's adopted DbIds equal the live
----       GetUniqueId are NOT characterized — FR-011b cites a 0/1003
----       spike, yet 1202/1202 was measured on a real media-managed
----       project; the disagreement is unexplained, so this channel
----       assumes neither outcome and just matches whatever ids coincide.)
----       The id is its own durable anchor, so id matches are persisted
----       to the ledger but NOT marker-stamped (see below).
+---       `TimelineItem:GetUniqueId()` returns that same persisted
+---       `Sm2Ti DbId`, so id equality IS the identity within a consistent
+---       project snapshot: exact UUID match, no representation-dependent
+---       field, rate-independent (3/3 fresh export, 1202/1202 live —
+---       reconciled in spec FR-011c; the old "0/1003" was a stale
+---       cross-instance fixture, not a namespace gap). This channel links
+---       the ids that coincide; a clip whose id matches no live item
+---       (stale/cross-instance, or churned by a re-edit) falls through to
+---       (b)/(c). The id is its own durable anchor, so id matches are
+---       persisted to the ledger but NOT marker-stamped (see below).
 ---   (b) **Clip marker carrying `clip.id`** in `customData`
 ---       (`TimelineItem:AddMarker`/`GetMarkers`). Recovered via the
 ---       helper's `read_identities` verb (T029a). Id-anchored:
@@ -347,13 +345,13 @@ end
 -- Direct-id channel (highest priority, rate-independent). A clip
 -- imported from a DRP exported off this Resolve project carries the
 -- Resolve timeline-item id as its own clip.id (Sm2Ti DbId adopted on
--- import). Where that equals the live GetUniqueId, `clip.id ==
--- resolve_item_id` IS the identity: exact UUID equality, no
--- representation-dependent field involved. This links only the ids that
--- actually coincide; a clip whose id matches no live item falls through
--- to the marker/position channels. (When adopted DbIds do/don't equal
--- the live GetUniqueId is not characterized — see the module docstring's
--- FR-011b note.) id_matched needs no marker stamp — the id itself is the
+-- import). GetUniqueId returns that same persisted DbId, so within a
+-- consistent project snapshot `clip.id == resolve_item_id` IS the
+-- identity: exact UUID equality, no representation-dependent field
+-- involved (reconciled — see module docstring (a)). This links the ids
+-- that coincide; a clip whose id matches no live item (stale/cross-
+-- instance, or churned by a re-edit) falls through to the marker/position
+-- channels. id_matched needs no marker stamp — the id itself is the
 -- durable anchor (caller stamps only no-anchor matches).
 local function match_by_direct_id(jve_clips, timeline_items, already_claimed)
     local live_ids = {}
