@@ -1,4 +1,5 @@
 #include "sse.h"
+#include "jve_log.h"
 
 #include <vector>
 #include <cmath>
@@ -322,12 +323,17 @@ private:
             // If we're at the start of a new hop, prepare the next snippet
             if (m_scrub_pos >= m_hop_frames || !m_snippet_valid) {
                 if (!prepare_next_snippet()) {
-                    // Starved - fill remaining with silence
-                    m_starved = true;
+                    if (m_source_buffer.chunk_count() > 0) {
+                        // Chunks present but fetch_time is outside the buffered range — real starvation
+                        m_starved = true;
+                        JVE_LOG_WARN(Audio, "SSE scrub starved at %.3fs chunks=%d",
+                            m_current_time_us / 1e6, (int)m_source_buffer.chunk_count());
+                    }
+                    // else: buffer empty — no audio clips at this position, silence is correct
                     int64_t remaining = out_frames - frames_produced;
                     std::memset(out + frames_produced * ch, 0,
                                 remaining * ch * sizeof(float));
-                    advance_time(remaining);  // Keep clock moving through silence
+                    advance_time(remaining);
                     return out_frames;
                 }
                 m_scrub_pos = 0;
@@ -382,13 +388,16 @@ private:
             fetch_time, m_config.sample_rate, out, out_frames);
 
         if (!have_source) {
-            m_starved = true;
-            int64_t buf_min = 0, buf_max = 0;
-            m_source_buffer.get_time_range(&buf_min, &buf_max, m_config.sample_rate);
-            fprintf(stderr, "[audio] SSE STARVED: fetch=%.3fs current=%.3fs buf=[%.3f..%.3f)s chunks=%d frames=%lld\n",
-                fetch_time / 1e6, m_current_time_us / 1e6,
-                buf_min / 1e6, buf_max / 1e6,
-                (int)m_source_buffer.chunk_count(), (long long)out_frames);
+            if (m_source_buffer.chunk_count() > 0) {
+                // Chunks present but fetch_time is outside the buffered range — real starvation
+                m_starved = true;
+                int64_t buf_min = 0, buf_max = 0;
+                m_source_buffer.get_time_range(&buf_min, &buf_max, m_config.sample_rate);
+                JVE_LOG_WARN(Audio, "SSE passthrough starved: fetch=%.3fs buf=[%.3f..%.3f)s chunks=%d frames=%lld",
+                    fetch_time / 1e6, buf_min / 1e6, buf_max / 1e6,
+                    (int)m_source_buffer.chunk_count(), (long long)out_frames);
+            }
+            // else: buffer empty — no audio clips at this timeline position, silence is correct
             std::memset(out, 0, out_frames * ch * sizeof(float));
             advance_time(out_frames);
             return out_frames;

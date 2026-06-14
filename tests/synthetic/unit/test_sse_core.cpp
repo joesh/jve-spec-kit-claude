@@ -245,7 +245,8 @@ private slots:
         QVERIFY(true);
     }
 
-    void test_render_without_source_sets_starved() {
+    void test_render_without_source_does_not_starve() {
+        // Empty buffer = no audio clips at this position; silence is expected, not starvation
         sse::SseConfig cfg = sse::default_config();
         auto engine = sse::ScrubStretchEngine::Create(cfg);
 
@@ -254,8 +255,8 @@ private slots:
         std::vector<float> output(512 * cfg.channels);
         int64_t produced = engine->Render(output.data(), 512);
 
-        QCOMPARE(produced, static_cast<int64_t>(512));  // Returns requested even when starved
-        QVERIFY(engine->Starved());
+        QCOMPARE(produced, static_cast<int64_t>(512));
+        QVERIFY(!engine->Starved());  // No chunks pushed — silence, not starvation
         QVERIFY(is_silence(output.data(), 512, cfg.channels));
     }
 
@@ -380,7 +381,8 @@ private slots:
         QVERIFY(!engine->Starved());
     }
 
-    void test_starved_flag_set_when_no_source() {
+    void test_starved_flag_not_set_when_buffer_empty() {
+        // Empty buffer = no audio clips at this position; silence, not starvation
         sse::SseConfig cfg = sse::default_config();
         auto engine = sse::ScrubStretchEngine::Create(cfg);
 
@@ -389,14 +391,33 @@ private slots:
         std::vector<float> output(512 * cfg.channels);
         engine->Render(output.data(), 512);
 
+        QVERIFY(!engine->Starved());
+    }
+
+    void test_starved_flag_set_when_chunks_present_but_time_misses() {
+        // Real starvation: audio was pushed but requested time is outside buffered range
+        sse::SseConfig cfg = sse::default_config();
+        auto engine = sse::ScrubStretchEngine::Create(cfg);
+
+        std::vector<float> pcm = generate_sine_pcm(48000, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), 48000, 0);
+
+        engine->SetTarget(10000000, 1.0f, sse::QualityMode::Q1);  // 10 seconds — past buffer
+
+        std::vector<float> output(512 * cfg.channels);
+        engine->Render(output.data(), 512);
+
         QVERIFY(engine->Starved());
     }
 
     void test_clear_starved_flag() {
+        // ClearStarvedFlag resets starvation state set by real starvation
         sse::SseConfig cfg = sse::default_config();
         auto engine = sse::ScrubStretchEngine::Create(cfg);
 
-        engine->SetTarget(0, 1.0f, sse::QualityMode::Q1);
+        std::vector<float> pcm = generate_sine_pcm(48000, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), 48000, 0);
+        engine->SetTarget(10000000, 1.0f, sse::QualityMode::Q1);  // 10 seconds — past buffer
 
         std::vector<float> output(512 * cfg.channels);
         engine->Render(output.data(), 512);
@@ -407,10 +428,13 @@ private slots:
     }
 
     void test_starved_cleared_by_reset() {
+        // Reset clears starvation state
         sse::SseConfig cfg = sse::default_config();
         auto engine = sse::ScrubStretchEngine::Create(cfg);
 
-        engine->SetTarget(0, 1.0f, sse::QualityMode::Q1);
+        std::vector<float> pcm = generate_sine_pcm(48000, cfg.channels, 440, cfg.sample_rate);
+        engine->PushSourcePcm(pcm.data(), 48000, 0);
+        engine->SetTarget(10000000, 1.0f, sse::QualityMode::Q1);  // 10 seconds — past buffer
 
         std::vector<float> output(512 * cfg.channels);
         engine->Render(output.data(), 512);
