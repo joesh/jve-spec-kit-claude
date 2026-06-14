@@ -42,6 +42,7 @@ import functools
 import os
 import sys
 import tempfile
+import uuid
 
 from cdl_edl import (
     CdlEdlParseError,
@@ -996,6 +997,180 @@ def verb_apply_test_grade(args, _resolve, project, envelope_id,
     return _ok(envelope_id, {"applied": True})
 
 
+# ─── Reference-timeline authoring (capture real Resolve MTBA bytes) ───
+#
+# State-changing, TEST-ONLY. Drives Resolve to author one forward clip
+# on a fresh timeline at a caller-specified frame rate, then export that
+# timeline to a .drt file. Intent: capture REAL Resolve-authored
+# MediaTimemapBA bytes at rates OTHER than 23.976, to inform generalizing
+# the DRT writer's forward-curve encoding (drt_writer.build_media_timemap_ba,
+# currently hardcoded ε=1/24000 and asserted 23.976-only).
+# UNRESOLVED (2026-06-14): the .drt timeline export observed so far emits
+# the 9-byte short MTBA form (02 + one BE double, NO epsilon); the
+# 41-byte long form with ε came from a .drp PROJECT export. So whether
+# this verb's .drt output is even the right artifact to derive ε from is
+# an open question — do not treat its output as the ε source until that
+# is settled. No production caller — only the live-VM probe reaches it
+# (needs --allow-test-verbs).
+@_stateful_verb
+def verb_author_reference_timeline(args, resolve, project, envelope_id,
+                                    helper_version):
+    del helper_version
+
+    # No change_token: this verb authors a brand-new throwaway timeline,
+    # not an edit to any JVE-identified sequence — there is no
+    # mutation_generation to guard against (unlike apply_test_grade /
+    # delete_timeline, which target existing identified state).
+    media_path = args.get("media_path")
+    timeline_fps = args.get("timeline_fps")
+    out_drt_path = args.get("out_drt_path")
+    if not isinstance(media_path, str) or not media_path:
+        return _error(envelope_id, "bad_request", "media_path missing")
+    if not isinstance(timeline_fps, str) or not timeline_fps:
+        return _error(envelope_id, "bad_request",
+            "timeline_fps must be a non-empty Resolve rate string "
+            "(e.g. '23.976', '25', '59.94')")
+    if not isinstance(out_drt_path, str) or not out_drt_path:
+        return _error(envelope_id, "bad_request", "out_drt_path missing")
+    if not os.path.exists(media_path):
+        return _error(envelope_id, "bad_request",
+            f"media_path does not exist: {media_path}")
+
+    export_drt = getattr(resolve, "EXPORT_DRT", None)
+    if export_drt is None:
+        return _error(envelope_id, "not_implemented",
+            "resolve.EXPORT_DRT unavailable on this Resolve build — "
+            "cannot export a .drt reference")
+
+    try:
+        pm = _api('resolve.GetProjectManager()', resolve.GetProjectManager)
+    except RuntimeError as exc:
+        return _error(envelope_id, "resolve_api_error", str(exc))
+    if pm is None:
+        return _error(envelope_id, "resolve_api_error",
+            "GetProjectManager() returned None")
+
+    # Author in a fresh, EMPTY project set to the target rate, then
+    # restore + delete it (this also leaves the colorist's project
+    # untouched). OBSERVED 2026-06-14, NOT a general rule: SetSetting(
+    # 'timelineFrameRate', …) returned False both at project level (the
+    # colorist's project already owns timelines) and at timeline level
+    # after useCustomSettings='1'. The CAUSE was not diagnosed — this is
+    # not evidence that a per-timeline rate is impossible, only that
+    # those two specific calls failed. The fresh-empty-project path is
+    # the one confirmed to work here; revisit if the per-timeline failure
+    # is later understood.
+    try:
+        orig = pm.GetCurrentProject()
+        orig_name = orig.GetName() if orig is not None else None
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"GetCurrentProject/GetName raised: {exc}")
+
+    # Unique per call so a sweep (many rates in one helper process) and
+    # any crashed prior run never collide — no pre-delete, no swallowed
+    # cleanup error.
+    ref_name = f"jve_ref_{timeline_fps}_{uuid.uuid4().hex[:8]}"
+
+    def _restore():
+        # Best-effort teardown: close the ref project, reopen the
+        # colorist's, delete the throwaway. Each step that fails is
+        # surfaced on stderr (the helper's log channel) — never silently
+        # swallowed — but one failed step must not block the others.
+        for label, fn in (
+                ("CloseProject(current)",
+                 lambda: pm.CloseProject(pm.GetCurrentProject())),
+                ("LoadProject(orig)",
+                 (lambda: pm.LoadProject(orig_name)) if orig_name
+                 else (lambda: None)),
+                ("DeleteProject(ref)",
+                 lambda: pm.DeleteProject(ref_name))):
+            try:
+                fn()
+            except Exception as exc:  # noqa: BLE001 - best-effort cleanup
+                print(f"[author_reference_timeline] restore step "
+                      f"{label} failed: {exc}", file=sys.stderr)
+
+    try:
+        ref_proj = pm.CreateProject(ref_name)
+    except Exception as exc:
+        return _error(envelope_id, "resolve_api_error",
+            f"CreateProject({ref_name!r}) raised: {exc}")
+    if not ref_proj:
+        _restore()
+        return _error(envelope_id, "resolve_api_error",
+            f"CreateProject({ref_name!r}) returned falsy (name clash?)")
+
+    # From here CreateProject succeeded → ALWAYS restore before returning.
+    try:
+        # NDF: drop-frame affects TC display only, not source frame
+        # counts, but keeps 29.97/59.94 exports unambiguous. On a fresh
+        # empty project the rate is settable.
+        for key, val in (("timelineFrameRate", timeline_fps),
+                         ("timelineDropFrameTimecode", "0")):
+            if not ref_proj.SetSetting(key, val):
+                _restore()
+                return _error(envelope_id, "resolve_api_error",
+                    f"ref project SetSetting({key}={val!r}) returned "
+                    f"False — Resolve rejected the value")
+
+        media_pool = ref_proj.GetMediaPool()
+        if media_pool is None:
+            _restore()
+            return _error(envelope_id, "resolve_api_error",
+                "ref project GetMediaPool() returned None")
+        items = media_pool.ImportMedia([media_path])
+        if not items:
+            _restore()
+            return _error(envelope_id, "relink_failed",
+                f"ImportMedia({media_path!r}) returned falsy")
+        clip = items[0]
+
+        timeline = media_pool.CreateTimelineFromClips(
+            f"jve_ref_tl_{timeline_fps}", [clip])
+        if not timeline or timeline is True:
+            timeline = ref_proj.GetCurrentTimeline()
+        if timeline is None:
+            _restore()
+            return _error(envelope_id, "resolve_api_error",
+                "CreateTimelineFromClips produced no timeline")
+
+        if not timeline.Export(out_drt_path, export_drt):
+            _restore()
+            return _error(envelope_id, "resolve_api_error",
+                f"timeline.Export({out_drt_path!r}, EXPORT_DRT) "
+                f"returned False")
+        if not os.path.exists(out_drt_path):
+            _restore()
+            return _error(envelope_id, "resolve_api_error",
+                f"Export claimed success but file absent: {out_drt_path}")
+
+        # Capture the single item's identity + live source range, and the
+        # fps Resolve actually applied (it may snap to a supported value).
+        item_info = None
+        for track_type, tidx, item in _iter_all_timeline_items(timeline):
+            item_info = {
+                "resolve_item_id": item.GetUniqueId(),
+                "track_type":      track_type,
+                "track_index":     tidx,
+                "source_in":       item.GetSourceStartFrame(),
+                "record_start":    item.GetStart(),
+            }
+            break
+        fps_applied = ref_proj.GetSetting("timelineFrameRate")
+    except Exception as exc:
+        _restore()
+        return _error(envelope_id, "resolve_api_error",
+            f"reference authoring raised: {exc}")
+
+    _restore()
+    return _ok(envelope_id, {
+        "drt_path":         out_drt_path,
+        "timeline_fps_set": fps_applied,
+        "item":             item_info,
+    })
+
+
 # ─── Timeline delete (T025b test cleanup; FR-024 follow-on) ──────────
 #
 # State-changing. Exposed PRIMARILY for the SendToResolve end-to-end
@@ -1796,6 +1971,7 @@ VERB_TABLE = {
 # in production (helper started without --allow-test-verbs).
 TEST_VERB_TABLE = {
     "apply_test_grade": verb_apply_test_grade,
+    "author_reference_timeline": verb_author_reference_timeline,
 }
 
 

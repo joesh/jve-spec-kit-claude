@@ -27,7 +27,11 @@ local function repo_root()
         debug.getinfo(1, "S").source, "tests/synthetic/integration/live_resolve")
 end
 
-function M.start(sock_path)
+--- `opts` (optional): { allow_test_verbs = true } when the test drives
+--- a TEST_VERB_TABLE verb (apply_test_grade, author_reference_timeline).
+--- Production live tests omit it and reach only the production verbs.
+function M.start(sock_path, opts)
+    opts = opts or {}
     return transport.start({
         sock_path             = sock_path,
         repo_root             = repo_root(),
@@ -36,6 +40,7 @@ function M.start(sock_path)
         bind_poll_count       = 200,        -- 200 * 50ms = 10s
         corr_prefix           = "live",
         request_timeout_ticks = 3000,       -- 3000 * 20ms = 60s
+        allow_test_verbs      = opts.allow_test_verbs or false,
     })
 end
 
