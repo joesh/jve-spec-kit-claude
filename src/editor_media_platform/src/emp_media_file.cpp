@@ -100,10 +100,25 @@ static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
 static int64_t parse_timecode_tag(const char* tc_str, int32_t fps_num, int32_t fps_den) {
     if (!tc_str || fps_num <= 0 || fps_den <= 0) return 0;
     int hh = 0, mm = 0, ss = 0, ff = 0;
-    // %*c matches either ':' (non-drop) or ';' (drop-frame)
-    if (sscanf(tc_str, "%d:%d:%d%*c%d", &hh, &mm, &ss, &ff) != 4) return 0;
-    double fps = static_cast<double>(fps_num) / fps_den;
-    return static_cast<int64_t>(((hh * 3600) + (mm * 60) + ss) * fps + ff);
+    char sep = ':';
+    // Capture the frame separator: ':' = non-drop, ';' = drop-frame.
+    if (sscanf(tc_str, "%d:%d:%d%c%d", &hh, &mm, &ss, &sep, &ff) != 5) return 0;
+    int64_t total_sec = static_cast<int64_t>(hh) * 3600 + mm * 60 + ss;
+    if (sep == ';') {
+        // Drop-frame timecode is engineered so its label tracks real wall-clock
+        // time; the frame count is therefore seconds * the TRUE fractional rate
+        // (e.g. 01:00:00;00 @29.97 -> 107892, frame-accurate to the exact
+        // drop-frame arithmetic, which is a separate concern: todo_drop_frame_timecode).
+        double fps = static_cast<double>(fps_num) / fps_den;
+        return static_cast<int64_t>(total_sec * fps + ff);
+    }
+    // Non-drop SMPTE timecode counts NOMINAL frames: the label HH:MM:SS:FF is
+    // frame number (HH*3600 + MM*60 + SS) * round(fps) + FF. Converting with the
+    // TRUE fractional rate (e.g. 23.976) undercounts ~87 frames/hour
+    // (01:00:00:00 @23.976 -> 86313 instead of 86400) and corrupts every
+    // TC-origin-dependent calc.
+    int64_t nominal_fps = (static_cast<int64_t>(fps_num) + fps_den / 2) / fps_den;
+    return total_sec * nominal_fps + ff;
 }
 
 // Find the first non-null "timecode" tag across metadata dictionaries.
