@@ -1089,6 +1089,16 @@ assert(type(core.persist_state_to_db) == "function",
 Signals.connect("project_will_change", function(outgoing_id)
     if not outgoing_id or outgoing_id == "" then return end
     core.persist_state_to_db(true)
+    -- Detach the displayed tab BEFORE the database connection swaps. A
+    -- long import (e.g. a large DRP) pumps Qt events mid-swap to drive
+    -- the progress bar (progress_panel), which reentrantly repaints the
+    -- timeline. With the outgoing tab still displayed, that repaint asks
+    -- the INCOMING database for a sequence it does not contain and
+    -- TimelineTab:get_marks asserts. A fresh empty strip renders blank
+    -- (get_display_mark_* → nil) until project_changed repopulates it for
+    -- the new project. The flush above ran first, so no view-state is lost.
+    tab_strip = TimelineTabStrip.new()
+    strip_holder.set(tab_strip)
 end, 40)
 
 -- Register for project_changed signal

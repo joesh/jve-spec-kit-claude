@@ -13,7 +13,10 @@ end, priority)  -- priority is optional; default 100
 -- Unsubscribe
 Signals.disconnect(conn_id)
 
--- Emit (called only by core/project_open.lua and core/commands/new_project.lua)
+-- Emit (centralized in core/database.lua set_path, which runs on every DB
+-- swap — invoked via database.init from open_project / new_project /
+-- project_open). Fires after the outgoing connection's project_id is read
+-- and BEFORE the outgoing connection is closed.
 Signals.emit("project_will_change", outgoing_project_id_or_nil)
 ```
 
@@ -37,6 +40,7 @@ When `Signals.emit("project_will_change", ...)` is called, ALL of the following 
 A `project_will_change` handler:
 
 - **MAY** write to the outgoing project's DB (e.g. `database.set_project_setting(outgoing_project_id, ...)`).
+- **MUST** detach any UI view that holds a live reference to an outgoing-project entity, AFTER flushing that view's state. The incoming DB swaps in immediately after this signal, and a long import (large DRP) reentrantly repaints the UI mid-swap; a view still pointing at an outgoing sequence/clip would query the incoming DB for a row it does not contain and assert. `timeline_state` resets its tab strip here (priority 40) so the timeline renders blank until `project_changed` repopulates it.
 - **MAY** cancel pending Qt single-shot timers it scheduled (set flags, call cancel APIs).
 - **MAY** signal cancellation to background workers and wait for drain (see `worker_cancel_drain.md`).
 - **MUST NOT** attempt to write to the incoming project (it doesn't exist).
