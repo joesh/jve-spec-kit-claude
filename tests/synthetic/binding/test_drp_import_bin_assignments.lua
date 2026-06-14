@@ -145,18 +145,23 @@ check("some masterclips assigned to DRP folder bins", mc_in_drp_folder > 0)
 -- Find masterclip seq for a media with "A001" in the name (known to be in Footage)
 local footage_bin = bins_by_name["Footage"]
 if footage_bin then
-    local footage_mc = scalar([[
-        SELECT s.id FROM sequences s
+    -- Full-pool import (FR-011a) creates masters for EVERY A001* pool clip, and
+    -- those live in different bins — so an arbitrary `LIMIT 1` pick is not
+    -- guaranteed to be the Footage one. Assert the real intent directly: at
+    -- least one A001 master clip landed in the Footage bin.
+    local a001_masters = scalar([[
+        SELECT COUNT(*) FROM sequences s
         JOIN media m ON s.name = m.name
         WHERE s.kind = 'master' AND m.name LIKE 'A001%'
-        LIMIT 1
     ]])
-    if footage_mc then
+    if (a001_masters or 0) > 0 then
         local in_footage = scalar([[
-            SELECT COUNT(*) FROM tag_assignments
-            WHERE entity_id = ? AND tag_id = ? AND entity_type = 'master_clip'
-        ]], footage_mc, footage_bin.id)
-        check("A001 masterclip is in Footage bin", (in_footage or 0) > 0)
+            SELECT COUNT(*) FROM sequences s
+            JOIN media m ON s.name = m.name
+            JOIN tag_assignments ta ON ta.entity_id = s.id AND ta.entity_type = 'master_clip'
+            WHERE s.kind = 'master' AND m.name LIKE 'A001%' AND ta.tag_id = ?
+        ]], footage_bin.id)
+        check("an A001 masterclip is in Footage bin", (in_footage or 0) > 0)
     else
         print("  (no A001 masterclip found, skipping specific check)")
     end

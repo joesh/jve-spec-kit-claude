@@ -367,10 +367,20 @@ function Sequence.find_master_for_media(media_id)
     assert(media_id and media_id ~= "",
         "Sequence.find_master_for_media: media_id is required")
     local conn = resolve_db()
+    -- "The master FOR media X" is X's OWN source master — the one whose
+    -- primary (camera/NULL) tracks hold X — NOT a master that merely borrows
+    -- X as dual-system sync audio (source_kind='sync'). A field-recorder WAV
+    -- is both its own pool master AND the sync audio of a camera clip's master;
+    -- without the source_kind filter this returns either one nondeterministically
+    -- (created_at ties to the second), which would (a) misdirect pool-mark
+    -- application and (b) make ensure_master think the WAV already has a master
+    -- and never create its own.
     local stmt = conn:prepare([[
         SELECT s.id FROM sequences s
         JOIN media_refs mr ON mr.owner_sequence_id = s.id
+        JOIN tracks t ON t.id = mr.track_id
         WHERE s.kind = 'master' AND mr.media_id = ?
+          AND (t.source_kind IS NULL OR t.source_kind <> 'sync')
         ORDER BY s.created_at ASC, s.id ASC
         LIMIT 1
     ]])

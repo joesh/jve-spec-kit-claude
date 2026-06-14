@@ -301,8 +301,11 @@ print("\n--- 6: Total counts ---")
 -- V13: every row in clips is a "timeline" row (clips must be owned by a kind='sequence' sequence).
 local r3 = query_one("SELECT COUNT(*) FROM clips")
 assert(r3[1] == 126, "expected 126 timeline clips, got " .. tostring(r3[1]))
+-- Full-pool import (FR-011a): every media-pool item materializes, not just
+-- the media placed on a timeline. sample_project.drp's pool carries 3 clips
+-- that no timeline uses (verified: 0 duplicate file_uuid); they now import too.
 local r4 = query_one("SELECT COUNT(*) FROM media")
-assert(r4[1] == 47, "expected 47 media, got " .. tostring(r4[1]))
+assert(r4[1] == 50, "expected 50 media (full media pool), got " .. tostring(r4[1]))
 print(string.format("  PASS: %d clips, %d media", r3[1], r4[1]))
 
 -- ═══════════════════════════════════════════════════════════════

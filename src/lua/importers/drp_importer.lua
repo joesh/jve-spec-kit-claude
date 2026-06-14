@@ -1882,13 +1882,24 @@ local function apply_pmc_metadata(entry, pmc)
         entry.file_tc_seconds = pmc.file_tc_seconds
     end
 
-    -- For audio-only pool items (external WAVs), the DRP's TracksBA.StartTime
-    -- IS the audio TC origin (no Set Timecode override possible on audio). Map
-    -- it to media_start_time so build_media_metadata can write
-    -- start_tc_audio_samples — the field ensure_master reads to place the
-    -- synced audio clip on the timeline.
-    if pmc.clip_type == "audio" and pmc.file_tc_seconds then
+    -- TC origin. TracksBA.StartTime is the file container TC, shared by the
+    -- clip's video and embedded-audio streams (no Set Timecode override is
+    -- possible on a raw pool item). Media placed on a timeline already had
+    -- media_start_time set by the timeline parse — which may encode a Set
+    -- Timecode override — so only fill it when absent. This covers pool-only
+    -- clips (filed in a bin, never on a timeline): without it
+    -- build_media_metadata emits no TC and ensure_master has no video/audio
+    -- TC origin to build the master from.
+    if pmc.file_tc_seconds and entry.media_start_time == nil then
         entry.media_start_time = pmc.file_tc_seconds
+    end
+
+    -- A pool video clip with frames is a video source: flag it so the media
+    -- row receives the project's video dimensions and ensure_master builds a
+    -- video track (media_width is gated on has_video). Timeline entries
+    -- already carry has_video from the timeline parse.
+    if pmc.clip_type == "video" and pmc.num_frames and pmc.num_frames > 0 then
+        entry.has_video = true
     end
 
     -- audio-only: one BtAudioInfo in XML regardless of ch count; TracksBA.NumChannels is authoritative. A/V: one BtAudioInfo per channel, so count is right.
@@ -2488,8 +2499,30 @@ function M.parse_drp_file(drp_path, progress_cb)
         local entry = media_get(pmc.id, pmc.file_path)
 
         if not entry and pmc.id then
-            log.detail("pmc %s (id=%s): no media entry (encrypted blob, unreferenced)",
-                pmc.name or "?", pmc.id)
+            -- Materialize pool-only clips — filed in a bin but never placed on
+            -- a timeline — so the FULL media pool imports, not just the media
+            -- used in the edit. Anchor on the decoded blob path; fall back to
+            -- the clip name for media-managed projects that stripped the
+            -- source path (offline media, relink by basename — same anchor
+            -- rule as resolve_synced_audio_linkage). A pmc with neither a path
+            -- nor a name carries no usable reference and stays unmaterialized;
+            -- a pmc whose blob yielded no duration is filtered later by
+            -- try_import_media_item (zero-duration).
+            local anchor = pmc.file_path
+            if not anchor or anchor == "" then anchor = pmc.name end
+            if anchor and anchor ~= "" then
+                entry = {
+                    file_uuid = pmc.id,
+                    name      = pmc.name or anchor,
+                    file_path = anchor,
+                    duration  = 0,
+                    alt_paths = {},
+                }
+                media_put(entry)
+            else
+                log.detail("pmc %s (id=%s): no file reference — cannot materialize",
+                    pmc.name or "?", pmc.id)
+            end
         end
 
         if entry then

@@ -126,6 +126,25 @@ function M:get_audio_start_tc()
     return nil, nil
 end
 
+--- Can a master source sequence be built from this media WITHOUT probing the
+--- file? True only when the project file already supplied the TC origin each
+--- present stream needs: a video stream needs start_tc_value, an audio stream
+--- needs start_tc_audio_samples (the exact fields Sequence.ensure_master
+--- asserts on). Reads metadata only — never opens the file — so importers can
+--- honour the no-probe rule: build the master now when the TC is known, defer
+--- it to relink/probe otherwise.
+--- @return boolean
+function M:has_master_source_tc()
+    local meta = self:_parsed_metadata()
+    if not meta then return false end
+    local has_video = self.width and self.width > 0
+    local has_audio = self.audio_channels and self.audio_channels > 0
+    if not (has_video or has_audio) then return false end
+    if has_video and meta.start_tc_value == nil then return false end
+    if has_audio and meta.start_tc_audio_samples == nil then return false end
+    return true
+end
+
 --- Get the file's original container TC (from DRP's TracksBA.StartTime).
 -- Present only when a Set Timecode override was applied in the authoring NLE,
 -- causing the displayed TC to differ from the file's container TC.

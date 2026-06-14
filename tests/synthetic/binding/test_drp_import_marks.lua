@@ -69,6 +69,12 @@ print("Test 1: Master clip playhead propagation...")
 -- V13: pool master-clip marks/playhead live on media_refs rows inside
 -- the per-media master sequence (kind='master'). Query media_refs joined
 -- to the media row for the name and the track for V/A type.
+--
+-- A pool mark belongs to the media's OWN master (its primary camera/NULL
+-- track). Full-pool import (FR-011a) also gives dual-system sync WAVs their
+-- own masters, so a WAV's media additionally appears on source_kind='sync'
+-- tracks inside the camera clips that borrow it — those sync refs carry the
+-- consuming clip's edit, not the WAV's pool mark, so exclude them here.
 local stmt = db:prepare([[
     SELECT mr.id, mr.playhead_frame, mr.mark_in_frame, mr.mark_out_frame,
            m.name AS media_name, t.track_type
@@ -77,6 +83,7 @@ local stmt = db:prepare([[
     JOIN tracks t ON mr.track_id = t.id
     JOIN sequences s ON mr.owner_sequence_id = s.id
     WHERE s.kind = 'master'
+      AND (t.source_kind IS NULL OR t.source_kind <> 'sync')
 ]])
 assert(stmt, "Failed to prepare master clips query")
 assert(stmt:exec(), "Master clips query failed")

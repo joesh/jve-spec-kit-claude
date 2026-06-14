@@ -763,16 +763,56 @@ function M.import_into_project(project_id, parse_result, opts)
     -- find_dedup_match for the (path, media_start_time) dedup contract.
     local media_by_uuid = {}
     local media_by_path = {}
+    local imported_media = {}
     for _, media_item in pairs(parse_result.media_items) do
         local media = try_import_media_item(media_item, project_id, project_settings,
                                             media_by_uuid, media_by_path)
         if media then
             table.insert(result.media_ids, media.id)
+            table.insert(imported_media, media)
         end
     end
 
     local synced_audio_by_media_id =
         build_synced_audio_map(parse_result.media_items, media_by_uuid)
+
+    -- Full-pool import: give EVERY imported media item a master source
+    -- sequence, not just the media placed on a timeline. A clip filed in a bin
+    -- but never cut into the edit must still be browseable in the media pool
+    -- and openable in the source viewer — both require a kind='master'
+    -- sequence. The per-timeline clip loop below also calls ensure_master, but
+    -- it is idempotent (returns the existing master), so those calls become
+    -- no-ops for media handled here. Bin assignment mirrors the per-clip path;
+    -- add_to_bin is INSERT-OR-IGNORE, so a double assignment is harmless.
+    sub_report(18, "Building source clips…")
+    for _, media in ipairs(imported_media) do
+        -- A master needs a known TC origin per present stream, and importers
+        -- must not probe the file to get one. Pool clips whose project file
+        -- carried no TC (encrypted / undecodable blob) import as relinkable
+        -- media rows now and gain a master when the media is relinked or
+        -- probed — "import everything we can" rather than asserting and
+        -- aborting the whole import on one TC-less clip.
+        if media:has_master_source_tc() then
+            local synced_audio = synced_audio_by_media_id[media.id]
+            local master_seq_id = Sequence.ensure_master(media.id, project_id,
+                synced_audio and { synced_audio_media_ids = synced_audio } or nil)
+            if not created_master_set[master_seq_id] then
+                created_master_set[master_seq_id] = true
+                table.insert(result.sequence_ids, master_seq_id)
+            end
+            local bin = resolve_master_bin(
+                { file_uuid = media.id, file_path = media.file_path },
+                media_by_uuid, media_by_path,
+                pool_uuid_to_bin, pool_name_to_bin, unorganized_bin_id)
+            if bin then
+                tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
+            end
+        else
+            log.warn("import: pool media '%s' (%s) has no source timecode in the "
+                .. "project file — imported as a relinkable clip; its master "
+                .. "source sequence builds on relink/probe", media.name, media.id)
+        end
+    end
 
     sub_report(20, "Importing timelines…")
 
