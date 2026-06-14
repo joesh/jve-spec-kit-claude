@@ -1941,9 +1941,13 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
             if seen_pool_ids[audio_pmc.id] then goto next_ref end
             seen_pool_ids[audio_pmc.id] = true
             synced_pool_ids[#synced_pool_ids + 1] = audio_pmc.id
-            -- Ensure external audio is in media_items (may be absent when not
-            -- directly placed on any edit timeline track)
-            if not media_get(audio_pmc.id, audio_pmc.file_path) then
+            -- Ensure external audio is in media_items and has its UUID registered.
+            -- Pass 1 (parse_media_pool) seeds entries by file_path with no file_uuid;
+            -- if we only detect that case here we must stamp file_uuid so that
+            -- importer_core.register_media_row keys it into media_by_uuid (which
+            -- build_synced_audio_map needs to map pool_id → DB media id).
+            local existing = media_get(audio_pmc.id, audio_pmc.file_path)
+            if not existing then
                 if not audio_pmc.file_path or audio_pmc.file_path == "" then
                     log.warn("drp_importer: synced audio pmc id=%s has no file_path; "
                         .. "cannot add to media_items", tostring(audio_pmc.id))
@@ -1960,6 +1964,11 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
                 media_put(entry)
                 log.event("drp_importer: added synced audio to media_items: '%s' (id=%s)",
                     audio_pmc.name or "?", audio_pmc.id)
+            elseif not existing.file_uuid or existing.file_uuid == "" then
+                -- Entry was seeded path-only; upgrade it with the UUID so
+                -- media_by_uuid can find it by pool_id in build_synced_audio_map.
+                existing.file_uuid = audio_pmc.id
+                media_put(existing)
             end
             ::next_ref::
         end
