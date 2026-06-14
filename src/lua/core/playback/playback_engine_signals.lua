@@ -19,23 +19,37 @@ local M = {}
 function M.install(PlaybackEngine)
 
 --- Handler: a track's muted/soloed/locked/enabled flag changed.
--- Recomputes _effective_video_track_indices when the track belongs to our
--- sequence and the changed property affects composite selection (muted/soloed).
+-- For VIDEO: recomputes _effective_video_track_indices and re-renders the
+-- current monitor frame so mute takes effect immediately in park mode.
+-- For AUDIO: pushes updated mix params so mute takes effect in the running
+-- audio pipeline without waiting for a clip change.
 function PlaybackEngine:_on_track_preference_changed_signal(track_id, property, _new_val, _prev_val)
     assert(type(track_id) == "string" and track_id ~= "", string.format(
         "PlaybackEngine:_on_track_preference_changed_signal: track_id must be non-empty string, got %s",
         type(track_id)))
     if property ~= "muted" and property ~= "soloed" then return end
     if not self.loaded_sequence_id then return end
-    -- Only refresh if this track belongs to our sequence. Load is lightweight
-    -- (single-row SELECT); Track.load asserts presence.
     local Track = require("models.track")
     local track = Track.load(track_id)
     assert(track, string.format(
         "PlaybackEngine:_on_track_preference_changed_signal: track %s not found", track_id))
     if track.sequence_id ~= self.loaded_sequence_id then return end
-    self:_refresh_video_track_states()
-    log.event("Video effective indices refreshed: track=%s %s changed", track_id, property)
+    if track.track_type == "VIDEO" then
+        self:_refresh_video_track_states()
+        -- Re-render current frame so mute is visible immediately in park mode.
+        -- During playback the next CVDisplayLink tick re-renders anyway.
+        if self._tmb and not self:is_playing() then
+            self:_display_frame_from_renderer(math.floor(self._position))
+        end
+    elseif track.track_type == "AUDIO" then
+        self:_refresh_audio_mix()
+    else
+        assert(false, string.format(
+            "PlaybackEngine:_on_track_preference_changed_signal: unknown track_type %q for track %s",
+            tostring(track.track_type), track_id))
+    end
+    log.event("track %s %s changed: refreshed %s playback state",
+        track_id, property, track.track_type)
 end
 
 --- Handler: timeline edit touched `seq_id`. Only react when it's our

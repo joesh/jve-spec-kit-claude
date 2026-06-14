@@ -572,11 +572,12 @@ protected:
         double deltaY = has_pixel ? we->pixelDelta().y() : we->angleDelta().y() / 8.0;
         double deltaX = has_pixel ? we->pixelDelta().x() : we->angleDelta().x() / 8.0;
         // Horizontal-dominant: scroll content directly — no scrollbar shown.
+        // Negate deltaX: positive pixel-delta = finger moved right = content moves
+        // right = scrollbar value decreases (natural scrolling convention).
         if (std::abs(deltaX) > std::abs(deltaY)) {
-            if (scroll_area) {
-                QScrollBar* hbar = scroll_area->horizontalScrollBar();
-                hbar->setValue(hbar->value() - static_cast<int>(deltaX));
-            }
+            JVE_ASSERT(scroll_area, "WheelCaptureFilter: scroll_area null — invariant violated");
+            QScrollBar* hbar = scroll_area->horizontalScrollBar();
+            hbar->setValue(hbar->value() - static_cast<int>(deltaX));
             return true;
         }
         LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.scroll_area_wheel");
