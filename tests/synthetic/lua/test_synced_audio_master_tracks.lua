@@ -80,12 +80,16 @@ assert(ext_audio_media:save())
 
 local function query_tracks(seq_id)
     local stmt = assert(db:prepare(
-        "SELECT track_type, muted FROM tracks WHERE sequence_id = ? ORDER BY track_index"))
+        "SELECT track_type, muted, source_kind FROM tracks WHERE sequence_id = ? ORDER BY track_index"))
     stmt:bind_value(1, seq_id)
     assert(stmt:exec())
     local tracks = {}
     while stmt:next() do
-        tracks[#tracks + 1] = { track_type = stmt:value(0), muted = stmt:value(1) == 1 }
+        tracks[#tracks + 1] = {
+            track_type  = stmt:value(0),
+            muted       = stmt:value(1) == 1,
+            source_kind = stmt:value(2),
+        }
     end
     stmt:finalize()
     return tracks
@@ -146,13 +150,10 @@ local synced_ext_audio    = {}
 for _, t in ipairs(synced_tracks) do
     if t.track_type == "VIDEO" then
         synced_video_tracks[#synced_video_tracks + 1] = t
-    elseif t.track_type == "AUDIO" then
-        -- camera audio comes first (indices 1..2), sync audio after (indices 3..7)
-        if #synced_camera_audio < 2 then
-            synced_camera_audio[#synced_camera_audio + 1] = t
-        else
-            synced_ext_audio[#synced_ext_audio + 1] = t
-        end
+    elseif t.source_kind == "camera" then
+        synced_camera_audio[#synced_camera_audio + 1] = t
+    elseif t.source_kind == "sync" then
+        synced_ext_audio[#synced_ext_audio + 1] = t
     end
 end
 
@@ -197,12 +198,7 @@ assert(total_refs == 8, string.format(
     "synced mediaseq: expected 8 media_refs (1V + 2A + 5A), got %d", total_refs))
 print("  ✓ synced mediaseq: correct media_ref count (1V + 2A camera + 5A sync)")
 
--- ─── Test 5: multiple synced audio files with DIFFERENT channel counts ────────
---
--- Regression: track_index formula used current file's channel count as stride.
--- For files [3ch, 4ch, 3ch] with camera_ch=1:
---   Broken:  cam@1, sync1@2,3,4  sync2@6,7,8,9  sync3@8,9,10 ← collision at 8,9
---   Correct: cam@1, sync1@2,3,4  sync2@5,6,7,8  sync3@9,10,11
+-- ─── Test 5: multiple synced files with DIFFERENT channel counts — no track collision ─
 
 local audio3a = Media.create({
     id = "ext3a", project_id = "p", name = "S1.wav",
@@ -266,11 +262,9 @@ local het_sync_unmuted_ok = true
 for _, t in ipairs(het_tracks) do
     if t.track_type == "AUDIO" then
         het_audio_count = het_audio_count + 1
-        if het_audio_count == 1 then
-            -- camera track must be muted
+        if t.source_kind == "camera" then
             if not t.muted then het_cam_muted_ok = false end
-        else
-            -- sync tracks must NOT be muted
+        elseif t.source_kind == "sync" then
             if t.muted then het_sync_unmuted_ok = false end
         end
     end

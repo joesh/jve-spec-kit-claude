@@ -218,6 +218,11 @@ CREATE TABLE IF NOT EXISTS tracks (
     autoselect INTEGER NOT NULL DEFAULT 1
         CHECK (autoselect IN (0,1)),
 
+    -- Dual-system audio: 'camera' = scratch audio from the video file (muted when synced);
+    -- 'sync' = external audio replacement. NULL for sequence tracks (not master tracks).
+    source_kind TEXT DEFAULT NULL
+        CHECK (source_kind IN ('camera', 'sync')),
+
     UNIQUE(sequence_id, track_type, track_index)
 );
 

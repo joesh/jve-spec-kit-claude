@@ -214,10 +214,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
     -- external WAV's TC origin (TC-based sync: matching TC = same position).
     local function add_synced_audio_streams(seq, dims, now, synced_audio_media_ids)
         local base_index = dims.has_audio and dims.media.audio_channels or 0 -- lint-allow: R010 ternary: has_audio=false → 0 is correct; has_audio=true → audio_channels > 0 is invariant from load_media_dims
-        -- Cumulative track offset across all synced files. Files may have
-        -- different channel counts, so each file starts after the last
-        -- channel of the previous file (not at a fixed stride).
-        local synced_track_offset = 0
+        local synced_track_offset = 0  -- cumulative; each file starts after the last channel of the previous
         for _, audio_media_id in ipairs(synced_audio_media_ids) do
             local audio_media = Media.load(audio_media_id)
             assert(audio_media, string.format(
@@ -239,18 +236,19 @@ function Sequence.ensure_master(media_id, project_id, opts)
             -- the audio's TC in samples converts cleanly to the video's TC in frames.
             local seq_start = math.floor(
                 audio_tc * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
-            -- source range: audio-file-natural samples [TC_origin, TC_origin + file_duration]
-            -- duration_frames: video-fps span covering the video clip's duration
             local duration_samples = audio_media.duration
             assert(type(duration_samples) == "number" and duration_samples > 0, string.format(
                 "Sequence.ensure_master: synced audio media %s has no duration",
                 tostring(audio_media_id)))
+            local audio_duration_frames = math.floor(
+                duration_samples * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
             for ch = 1, audio_media.audio_channels do
                 local track_index = base_index + synced_track_offset + ch
                 local atrack = Track.create_audio(
                     string.format("Sync %d", track_index), seq.id, {
-                        index = track_index,
-                        muted = false,
+                        index       = track_index,
+                        muted       = false,
+                        source_kind = "sync",
                     })
                 assert(atrack:save(), string.format(
                     "Sequence.ensure_master: failed to save synced audio track %d",
@@ -263,7 +261,7 @@ function Sequence.ensure_master(media_id, project_id, opts)
                     source_in_frame      = audio_tc,
                     source_out_frame     = audio_tc + duration_samples,
                     sequence_start_frame = seq_start,
-                    duration_frames      = dims.duration_frames,
+                    duration_frames      = audio_duration_frames,
                     audio_sample_rate    = sample_rate,
                     enabled              = true,
                     volume               = 1.0,
@@ -316,9 +314,10 @@ function Sequence.ensure_master(media_id, project_id, opts)
         for ch = 1, dims.media.audio_channels do
             local atrack = Track.create_audio(
                 string.format("Audio %d", ch), seq.id, {
-                    id    = replay_audio_track_ids[ch],
-                    index = ch,
-                    muted = camera_muted,
+                    id          = replay_audio_track_ids[ch],
+                    index       = ch,
+                    muted       = camera_muted,
+                    source_kind = "camera",
                 })
             assert(atrack:save(), "Sequence.ensure_master: failed to save audio track")
             MediaRef.create({

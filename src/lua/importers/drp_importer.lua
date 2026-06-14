@@ -1878,13 +1878,11 @@ local function apply_pmc_metadata(entry, pmc)
         entry.media_start_time = pmc.file_tc_seconds
     end
 
-    -- Audio channel count:
-    -- Sm2MpAudioClip (audio-only): one BtAudioInfo in XML regardless of channel
-    -- count; TracksBA.NumChannels is the authoritative per-file value.
-    -- Sm2MpVideoClip (A/V): one BtAudioInfo per embedded channel; XML count is
-    -- authoritative (TracksBA of the first BtAudioInfo only covers that channel).
+    -- audio-only: one BtAudioInfo in XML regardless of ch count; TracksBA.NumChannels is authoritative. A/V: one BtAudioInfo per channel, so count is right.
     if pmc.clip_type == "audio" then
-        local n = pmc.audio_duration and pmc.audio_duration.num_channels
+        assert(pmc.audio_duration, string.format(
+            "apply_pmc_metadata: audio clip has no audio_duration (pmc missing TracksBA?)"))
+        local n = pmc.audio_duration.num_channels
         if n and n > 0 then
             entry.audio_channels = n
         end

@@ -539,11 +539,7 @@ function M.compute_audio_clip_source(samples, file_rate,
     return subframe_math.unpack(total_ticks, tpf)
 end
 
--- For each media_item carrying synced_audio_pool_ids (stamped by the DRP
--- importer for AudioSource=CUSTOM pool items), resolve pool IDs to the media
--- record IDs that were actually created in this import pass. Returns a map
--- video_media_id → [audio_media_id, ...]. Empty table when no synced info
--- is present.
+-- Resolve AUDIO_SOURCE_CUSTOM pool IDs → DB media IDs; returns video_media_id → [audio_media_id, ...].
 local function build_synced_audio_map(media_items, media_by_uuid)
     local map = {}
     for _, media_item in pairs(media_items) do

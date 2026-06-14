@@ -110,13 +110,10 @@ assert(ao.frame_rate == 48000, string.format(
 print("  ✓ Audio-only: sample rate recorded, duration in samples")
 
 -- ─────────────────────────────────────────────────────────────────────
--- audio_channels: Sm2MpAudioClip uses TracksBA.NumChannels (one BtAudioInfo
--- in XML regardless of actual channel count); Sm2MpVideoClip uses the count
--- of own_bt_audio_info_ids (one element per embedded channel).
+-- audio_channels: audio-only clips use TracksBA.NumChannels; A/V clips use #own_bt_audio_info_ids.
 -- ─────────────────────────────────────────────────────────────────────
 
--- A/V (2-embedded-channel): own_bt_audio_info_ids absent → audio_channels nil
--- (the test pmc above has no own_bt_audio_info_ids and no clip_type)
+-- A/V with no own_bt_audio_info_ids: audio_channels nil
 assert(av.audio_channels == nil,
     string.format("A/V no btai: audio_channels must be nil, got %s", tostring(av.audio_channels)))
 print("  ✓ A/V file (no own_bt_audio_info_ids): audio_channels nil")

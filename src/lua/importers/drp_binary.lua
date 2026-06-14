@@ -474,10 +474,13 @@ function M.decode_bt_audio_duration(hex_str)
     if duration <= 0 then return nil end
 
     local num_channels = fields["NumChannels"]
+    assert(num_channels == nil or num_channels > 0, string.format(
+        "decode_bt_audio_duration: NumChannels=%s is invalid (blob corrupt?)",
+        tostring(num_channels)))
     return {
         duration_samples   = duration,
         sample_rate        = sample_rate,
-        num_channels       = (num_channels and num_channels > 0) and num_channels or nil,
+        num_channels       = num_channels,
         start_time_seconds = fields["StartTime"],
     }
 end

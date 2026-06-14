@@ -112,4 +112,10 @@ f2 LEN  = marker collection
 - `importer_core.build_synced_audio_map` — after the media import loop, resolves `synced_audio_pool_ids` (pool UUIDs) → DB media record IDs; passed to `Sequence.ensure_master` as `opts.synced_audio_media_ids`.
 - `master_builder.add_synced_audio_streams` — creates one AUDIO track per channel of each external audio file, TC-aligned (`sequence_start_frame = floor(audio_tc * fps_num / (fps_den * sample_rate) + 0.5)`), `muted=false`; camera tracks are built with `muted=true` when `synced_audio_media_ids` is present.
 
-**Test:** `tests/synthetic/lua/test_synced_audio_master_tracks.lua` (6 assertions, green). Verified TDD-first (test failed before implementation).
+**Review-pass fixes (2026-06-13):**
+- `tracks.source_kind` column added (`'camera'` | `'sync'` | NULL) — semantic discriminator stamped by `master_builder`; replaces positional counting in tests and any future consumer (schema V13, nullable, DEFAULT NULL for non-master tracks).
+- `add_synced_audio_streams`: `duration_frames` on synced-audio MediaRefs now computed from the external file's actual sample count (`floor(samples * fps_num / (fps_den * sr) + 0.5)`) instead of using the primary video's frame count.
+- `drp_binary.decode_bt_audio_duration`: changed silent nil-on-zero `NumChannels` to an assert (present-but-zero = blob corruption, not legitimate absence).
+- `drp_importer.apply_pmc_metadata`: added assert that `audio_duration` is present for audio-type PMCs; removed double-nil-guard on `own_bt_audio_info_ids.num_channels`.
+
+**Test:** `tests/synthetic/lua/test_synced_audio_master_tracks.lua` (all assertions green, source_kind-based partitioning). `tests/synthetic/lua/test_drp_av_media_sample_rate.lua` (audio_channels coverage, green).

@@ -62,6 +62,7 @@ local function build_track(track_type, name, sequence_id, opts)
         -- matches schema DEFAULT 1). New track participates in selection-
         -- driven ops until the user opts out via the rec-patch-id click.
         autoselect = opts.autoselect ~= false,
+        source_kind = opts.source_kind or nil,
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -91,7 +92,8 @@ function Track.load(id)
 
     local stmt = conn:prepare([[
         SELECT id, sequence_id, name, track_type, track_index,
-               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect
+               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect,
+               source_kind
         FROM tracks WHERE id = ?
     ]])
 
@@ -125,6 +127,7 @@ function Track.load(id)
         pan = stmt:value(10),
         sync_mode = sync_mode_val,
         autoselect = stmt:value(12) == 1,
+        source_kind = stmt:value(13),
         created_at = os.time(),
         modified_at = os.time()
     }
@@ -141,7 +144,8 @@ function Track.find_by_sequence(sequence_id, track_type)
 
     local sql = [[
         SELECT id, sequence_id, name, track_type, track_index,
-               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect
+               enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect,
+               source_kind
         FROM tracks
         WHERE sequence_id = ?
     ]]
@@ -192,6 +196,7 @@ function Track.find_by_sequence(sequence_id, track_type)
             pan = stmt:value(10),
             sync_mode = sync_mode_val,
             autoselect = stmt:value(12) == 1,
+            source_kind = stmt:value(13),
             created_at = os.time(),
             modified_at = os.time()
         }
@@ -279,8 +284,8 @@ function Track:save()
 
     local stmt = conn:prepare([[
         INSERT INTO tracks
-        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan, sync_mode, autoselect, source_kind)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             sequence_id = excluded.sequence_id,
             name = excluded.name,
@@ -293,7 +298,8 @@ function Track:save()
             volume = excluded.volume,
             pan = excluded.pan,
             sync_mode = excluded.sync_mode,
-            autoselect = excluded.autoselect
+            autoselect = excluded.autoselect,
+            source_kind = excluded.source_kind
     ]])
 
     assert(stmt, "Track.save: failed to prepare insert statement")
@@ -311,6 +317,7 @@ function Track:save()
     stmt:bind_value(11, self.pan)
     stmt:bind_value(12, self.sync_mode)
     stmt:bind_value(13, self.autoselect and 1 or 0)
+    stmt:bind_value(14, self.source_kind)
 
     local ok = stmt:exec()
     if not ok then
