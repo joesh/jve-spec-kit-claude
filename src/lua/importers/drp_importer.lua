@@ -1948,22 +1948,30 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
             -- build_synced_audio_map needs to map pool_id → DB media id).
             local existing = media_get(audio_pmc.id, audio_pmc.file_path)
             if not existing then
-                if not audio_pmc.file_path or audio_pmc.file_path == "" then
-                    log.warn("drp_importer: synced audio pmc id=%s has no file_path; "
-                        .. "cannot add to media_items", tostring(audio_pmc.id))
-                    goto next_ref
-                end
+                -- Media-managed Resolve projects copy media into a managed
+                -- folder and DISCARD the original source path for pool-only
+                -- dual-system sync WAVs — the .drp then carries only the
+                -- filename + audio format, no directory anywhere. Represent
+                -- these as OFFLINE audio media keyed by the Resolve clip id,
+                -- using the filename as the relink anchor (no directory →
+                -- media_status reports offline; relink matches by basename).
+                -- Online pool clips still carry a full decoded file_path.
+                local anchor = audio_pmc.file_path
+                if not anchor or anchor == "" then anchor = audio_pmc.name end
+                assert(anchor and anchor ~= "", string.format(
+                    "drp_importer: synced audio pmc id=%s has neither file_path "
+                    .. "nor name — cannot anchor offline media", tostring(audio_pmc.id)))
                 local entry = {
                     file_uuid = audio_pmc.id,
-                    name      = audio_pmc.name or audio_pmc.file_path,
-                    file_path = audio_pmc.file_path,
+                    name      = audio_pmc.name or anchor,
+                    file_path = anchor,
                     duration  = 0,
                     alt_paths = {},
                 }
                 apply_pmc_metadata(entry, audio_pmc)
                 media_put(entry)
-                log.event("drp_importer: added synced audio to media_items: '%s' (id=%s)",
-                    audio_pmc.name or "?", audio_pmc.id)
+                log.event("drp_importer: added synced audio to media_items: '%s' (id=%s, path=%s)",
+                    audio_pmc.name or "?", audio_pmc.id, anchor)
             elseif not existing.file_uuid or existing.file_uuid == "" then
                 -- Entry was seeded path-only; upgrade it with the UUID so
                 -- media_by_uuid can find it by pool_id in build_synced_audio_map.
