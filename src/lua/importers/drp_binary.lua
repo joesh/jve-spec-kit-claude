@@ -780,6 +780,11 @@ end
 -- UUID that is a BtAudioInfo DbId resolving to an audio pool item.
 local MEDIAREF_NAME_UTF16LE = ("MediaRef"):gsub(".", "%0\0")
 local UUID_VALUE_LEN_BE32   = string.char(0, 0, 0, 72)  -- 72-byte UTF-16BE UUID
+-- Max framing bytes between the end of the "MediaRef" field name and its BE32
+-- value-length prefix in a Fusion Fields container (type tag + padding).
+-- Bounding the search this tightly prevents matching an unrelated 0x00000048
+-- length marker belonging to a later field. Observed = 12 across the DRP corpus.
+local MEDIAREF_NAME_TO_VALUE_MAX_GAP = 12
 
 -- Read a 72-byte UTF-16BE canonical dashed UUID at `pos`; nil if the bytes
 -- there are not a well-formed UUID (high byte of each wide char must be 0x00).
@@ -826,7 +831,7 @@ function M.extract_media_refs(bytes)
         -- The value's [BE32 length=72] marker sits a few framing bytes past the
         -- name; the UUID begins immediately after it.
         local len_pos = bytes:find(UUID_VALUE_LEN_BE32, value_pos, true)
-        if len_pos and len_pos <= value_pos + 12 then
+        if len_pos and len_pos <= value_pos + MEDIAREF_NAME_TO_VALUE_MAX_GAP then
             local uuid = read_utf16be_uuid(bytes, len_pos + 4)
             if uuid then out[#out + 1] = uuid end
         end

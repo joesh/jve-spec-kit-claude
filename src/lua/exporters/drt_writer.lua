@@ -26,6 +26,7 @@ local M = {}
 
 local enc            = require("exporters.drt_binary")
 local identity_marker = require("exporters.drt_identity_marker")
+local rcm            = require("core.retime_curve_math")
 
 -- ─── Canonical-template loading ─────────────────────────────────────────────
 --
@@ -379,8 +380,8 @@ local function build_reverse_retime(clip, media, seq_fps, state)
     -- played source frame as floor(YMax*fps − In + ε). The curve walk works in
     -- sequence-rate frames, so target highest_fps = the highest played source
     -- frame expressed in fps frames; In is the playback-X that lands there.
-    local highest_fps = math.floor(high_native * seq_fps / native + 1e-6)
-    local in_value = math.floor(full_secs * seq_fps - highest_fps + 1e-6)
+    local highest_fps = rcm.snap_floor(high_native * seq_fps / native)
+    local in_value = rcm.snap_floor(full_secs * seq_fps - highest_fps)
     assert(in_value >= 0, string.format(
         "drt_writer.build_reverse_retime: clip %s computed <In>=%d < 0 — "
         .. "source window outside media bounds", clip.id, in_value))
@@ -475,9 +476,16 @@ local function build_clip_element(clip, media, track_type, state, seq_fps)
         "drt_writer.build_clip_element: clip.duration positive required")
     assert(type(clip.source_in) == "number" and clip.source_in >= 0,
         "drt_writer.build_clip_element: clip.source_in non-negative (absolute TC)")
-    assert(type(clip.source_out) == "number" and clip.source_out >= 0,
-        "drt_writer.build_clip_element: clip.source_out non-negative required "
-        .. "(reverse detection compares source_in vs source_out)")
+    assert(type(clip.source_out) == "number",
+        "drt_writer.build_clip_element: clip.source_out (number) required")
+    -- Reverse clips (source_in > source_out) carry source_out = lowest played
+    -- frame − 1, legitimately −1 when the clip plays down to source frame 0
+    -- (exclusive-lower-bound convention; mirrors clip.lua assert_window_in_bounds).
+    -- Only forward clips require source_out >= 0.
+    local is_reverse = clip.source_in > clip.source_out
+    assert(is_reverse or clip.source_out >= 0, string.format(
+        "drt_writer.build_clip_element: forward clip %s has negative "
+        .. "source_out %d", clip.id, clip.source_out))
     assert(type(seq_fps) == "number" and seq_fps > 0,
         "drt_writer.build_clip_element: seq_fps (sequence timeline fps) "
         .. "required — drives a reverse clip's retime-curve X axis")
@@ -501,10 +509,11 @@ local function build_clip_element(clip, media, track_type, state, seq_fps)
         .. "clip " .. clip.id .. " — <Flags> carries the disabled bit and "
         .. "omitting it would silently re-enable the clip in Resolve")
 
-    -- Reverse clips (source_in > source_out) need the full retime-curve MTBA
-    -- with <In>=0 — the source extent rides in the curve's Y values. Forward
-    -- clips use <In> as the file-relative source offset and the no-retime MTBA.
-    local is_reverse = clip.source_in > clip.source_out
+    -- Reverse clips need the full-media descending retime curve; <In> is the
+    -- computed playback-X offset (build_reverse_retime) that windows the curve
+    -- to this clip's source region — NOT zero, and the source extent is NOT
+    -- baked into the curve's Y values. Forward clips use <In> as the
+    -- file-relative source offset and the no-retime MTBA.
     local in_element, mtba_blob
     if is_reverse then
         local in_value

@@ -473,7 +473,7 @@ end
 -- region the importer's reverse convention encodes. (+1 sample is why this
 -- can't live at pick_nested: it needs the rate, and +1 frame is wrong for
 -- sub-frame audio source positions.)
-local function resolve_mref_source_and_extent(r, reversed,
+local function compute_mref_source_and_extent(r, reversed,
         m_lo_f, m_lo_s, m_hi_f, m_hi_s, tpf, master_clock_hz)
     local is_video = (r.track_type == "VIDEO")
     if reversed then
@@ -525,7 +525,7 @@ local function pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
     -- Direction is a property of the request: a reverse clip hands down its
     -- natural window (source_in > source_out) so HIGH > LOW in tick space.
     -- Overlap + clipping work on ascending bounds; direction is re-applied
-    -- per-mref inside resolve_mref_source_and_extent.
+    -- per-mref inside compute_mref_source_and_extent.
     local reversed =
         pack_pos_ticks(lo_f, lo_s, tpf) > pack_pos_ticks(hi_f, hi_s, tpf)
     local a_lo_f, a_lo_s, a_hi_f, a_hi_s
@@ -542,7 +542,7 @@ local function pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             local m_lo_f, m_lo_s, m_hi_f, m_hi_s =
                 clip_to_mref_extent(r, a_lo_f, a_lo_s, a_hi_f, a_hi_s)
             local file_in, file_out, seq_start_f, seq_end_f =
-                resolve_mref_source_and_extent(r, reversed,
+                compute_mref_source_and_extent(r, reversed,
                     m_lo_f, m_lo_s, m_hi_f, m_hi_s, tpf, master_clock_hz)
             local base = build_mref_entry_base(r, seq_start_f, seq_end_f,
                 file_in, file_out, outer_chain)

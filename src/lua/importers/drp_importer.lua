@@ -21,6 +21,7 @@ local M = {}
 local log = require("core.logger").for_area("media")
 local importer_core = require("importers.importer_core")
 local subframe_math = require("core.subframe_math")
+local rcm = require("core.retime_curve_math")
 local drp_binary = require("importers.drp_binary")
 local fs_utils = require("core.fs_utils")
 local shell_capture = fs_utils.shell_capture
@@ -1456,21 +1457,13 @@ local function parse_resolve_tracks(seq_elem, opts)
                 media_tc_origin = M.mst_to_tc_origin(media_start_time, native_rate)
             end
 
-            -- <In> is in playback timeline frames at sequence rate (the X axis
-            -- of the MTBA retime curve). Walk the curve to get source seconds,
-            -- then convert to native_rate units (media frames or samples).
             if retime_keyframes and #retime_keyframes >= 2 then
                 -- <In> is in playback timeline frames at sequence rate (the X
                 -- axis of the MTBA retime curve). Walk the curve to get source
                 -- seconds at the played playback frames, then convert to
-                -- native_rate units (media frames or samples).
-                --
-                -- Snap at FRAME granularity (not sample). The curve-eval lands
-                -- within a few float ULPs of the true seconds value; at
-                -- native_rate=48000 a 1-ULP miss amplifies to a 1-sample shift.
-                -- Resolve's Media-Managed exports cut source on whole-frame
-                -- boundaries so the result must land on one. A 1e-6-frame
-                -- tolerance keeps "essentially integer" values snapping right.
+                -- native_rate units (media frames or samples). Snap at FRAME
+                -- granularity via rcm (Resolve cuts source on whole-frame
+                -- boundaries; see core.retime_curve_math for the why).
                 local in_sec   = in_value / frame_rate
                 local out_sec  = (in_value + duration_raw) / frame_rate
                 local y_in_sec  = eval_curve(retime_keyframes, in_sec)
@@ -1480,8 +1473,8 @@ local function parse_resolve_tracks(seq_elem, opts)
                     -- the inclusive head (CEIL — first whole frame at-or-after
                     -- y_in); the exclusive playback end <In>+<Duration> maps to
                     -- the exclusive tail (FLOOR — last whole frame consumed).
-                    local in_frame  = math.ceil (y_in_sec  * frame_rate - 1e-6)
-                    local out_frame = math.floor(y_out_sec * frame_rate + 1e-6)
+                    local in_frame  = rcm.snap_ceil (y_in_sec  * frame_rate)
+                    local out_frame = rcm.snap_floor(y_out_sec * frame_rate)
                     -- Resolve occasionally writes a sub-frame-negative first
                     -- anchor (Y in [-0.01,0)); Inspector shows Source In = frame
                     -- 0. Snap -1→0 within one frame; larger magnitude still
@@ -1489,9 +1482,9 @@ local function parse_resolve_tracks(seq_elem, opts)
                     if in_frame < 0 and y_in_sec * frame_rate > -1.0 then
                         in_frame = 0
                     end
-                    in_offset = math.floor(in_frame * native_rate / frame_rate + 0.5)
+                    in_offset = rcm.frames_to_native(in_frame, native_rate, frame_rate)
                     source_duration =
-                        math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
+                        rcm.frames_to_native(out_frame, native_rate, frame_rate) - in_offset
                 else
                     -- REVERSE retime: source descends with playback. The clip
                     -- plays D = duration_raw inclusive playback frames
@@ -1509,14 +1502,14 @@ local function parse_resolve_tracks(seq_elem, opts)
                     clip_speed = -math.abs(clip_speed)
                     local last_played_sec = (in_value + duration_raw - 1) / frame_rate
                     local y_low_sec = eval_curve(retime_keyframes, last_played_sec)
-                    local highest = math.floor(y_in_sec  * frame_rate + 1e-6)
-                    local lowest  = math.floor(y_low_sec * frame_rate + 1e-6)
+                    local highest = rcm.snap_floor(y_in_sec  * frame_rate)
+                    local lowest  = rcm.snap_floor(y_low_sec * frame_rate)
                     if lowest < 0 and y_low_sec * frame_rate > -1.0 then
                         lowest = 0
                     end
-                    in_offset = math.floor(lowest * native_rate / frame_rate + 0.5)
+                    in_offset = rcm.frames_to_native(lowest, native_rate, frame_rate)
                     source_duration =
-                        math.floor((highest + 1) * native_rate / frame_rate + 0.5) - in_offset
+                        rcm.frames_to_native(highest + 1, native_rate, frame_rate) - in_offset
                 end
             else
                 -- No curve: <In> is source frames at sequence rate.
@@ -1530,11 +1523,11 @@ local function parse_resolve_tracks(seq_elem, opts)
                 -- shorter than naïve duration scaling when <In> has a fraction).
                 local in_real_frames  = in_value + in_sub_frame
                 local out_real_frames = in_real_frames + duration_raw
-                local in_frame  = math.ceil (in_real_frames  - 1e-6)
-                local out_frame = math.floor(out_real_frames + 1e-6)
-                in_offset       = math.floor(in_frame  * native_rate / frame_rate + 0.5)
+                local in_frame  = rcm.snap_ceil (in_real_frames)
+                local out_frame = rcm.snap_floor(out_real_frames)
+                in_offset       = rcm.frames_to_native(in_frame, native_rate, frame_rate)
                 source_duration =
-                    math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
+                    rcm.frames_to_native(out_frame, native_rate, frame_rate) - in_offset
             end
 
             -- Sanity: MST max = 86400s (midnight). At 48kHz = ~4.1B samples.

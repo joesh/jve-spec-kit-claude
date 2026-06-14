@@ -6,9 +6,10 @@ require("test_env")
 -- A reverse clip authored by exporters.drt_writer must parse back via
 -- importers.drp_importer with its reverse identity intact: source_in (highest
 -- played source frame, inclusive) > source_out (lowest played minus one,
--- exclusive). The exporter emits the full keyframe-curve MediaTimemapBA with
--- <In>=0; the importer walks that curve to recover the source range. This is
--- the offline gate before the live Resolve VM round-trip.
+-- exclusive). The exporter emits the full-media keyframe-curve MediaTimemapBA
+-- and a computed <In> that windows the curve to the clip's source region; the
+-- importer walks that curve to recover the source range. This is the offline
+-- gate before the live Resolve VM round-trip.
 --
 -- The payload carries a FORWARD selection and its REVERSE twin playing the
 -- EXACT SAME source content backward, so the test proves (a) the forward path
@@ -50,6 +51,14 @@ local MEDIA = {
         start_tc_frame  = TC_1H,               -- file TC origin 01:00:00:00
         native_rate     = FR_23976,
     },
+    {
+        -- TC origin 0 so a reverse clip can play DOWN TO source frame 0.
+        file_uuid       = "22222222-2222-4222-8222-222222222222",
+        file_path       = "/Volumes/Media/B_tc0.mov",
+        duration_frames = 7200,
+        start_tc_frame  = 0,
+        native_rate     = FR_23976,
+    },
 }
 
 -- FORWARD selection: source_in = first played, source_out = one-past-last.
@@ -76,12 +85,27 @@ local REV = {
     enabled         = true,
 }
 
+-- REVERSE-TO-ZERO: plays source frames 0..119 backward against the tc=0 media.
+-- Lowest played frame is source frame 0, so source_out = 0 - 1 = -1 (the
+-- exclusive lower bound legitimately sits one below frame 0). This is the case
+-- that a naive `source_out >= 0` export guard wrongly rejects.
+local REV0 = {
+    id              = "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    media_uuid      = MEDIA[2].file_uuid,
+    sequence_start  = 2 * PLAY_LEN,            -- after FWD and REV
+    duration        = 120,
+    source_in       = 119,                     -- highest played (inclusive)
+    source_out      = -1,                      -- lowest played (0) minus 1
+    name            = "B rev-to-zero sel",
+    enabled         = true,
+}
+
 local PAYLOAD = {
     project = { name = "reverse round-trip", fps = FR_23976 },
     media_refs = MEDIA,
     sequence = {
         name = "Seq1", fps = FR_23976, width = 1920, height = 1080,
-        tracks = { { type = "video", clips = { FWD, REV } } },
+        tracks = { { type = "video", clips = { FWD, REV, REV0 } } },
     },
 }
 
@@ -138,6 +162,22 @@ check(gr.source_in == gf.source_out - 1,
     "reverse highest-played frame must equal forward's last played frame")
 check(gr.source_out + 1 == gf.source_in,
     "reverse lowest-played frame must equal forward's first played frame")
+
+-- ── Reverse-to-zero clip: source_out = -1 must survive export + round-trip. ─
+local gz = got_by_id[REV0.id]
+check(gz, "reverse-to-zero clip.id did not survive the round-trip")
+check(gz.source_in > gz.source_out,
+    "reverse-to-zero clip must read back reversed (source_in > source_out)")
+check(gz.source_in == REV0.source_in,
+    ("reverse-to-zero source_in %d → %s"):format(
+        REV0.source_in, tostring(gz.source_in)))
+check(gz.source_out == REV0.source_out,
+    ("reverse-to-zero source_out %d (lowest played 0 minus 1) → %s — a "
+    .. "`source_out >= 0` export guard rejects this valid clip"):format(
+        REV0.source_out, tostring(gz.source_out)))
+check(gz.duration == REV0.duration,
+    ("reverse-to-zero duration %d → %s"):format(
+        REV0.duration, tostring(gz.duration)))
 
 os.remove(OUT)
 
