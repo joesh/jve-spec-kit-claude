@@ -1760,7 +1760,12 @@ local function update_all_header_dim()
             if t then
                 assert(refs.track_type == "AUDIO" or refs.track_type == "VIDEO",
                     "update_all_header_dim: unknown track_type " .. tostring(refs.track_type))
-                local any_solo_type = (refs.track_type == "AUDIO") and any_audio_solo or any_video_solo
+                local any_solo_type
+                if refs.track_type == "AUDIO" then
+                    any_solo_type = any_audio_solo
+                else
+                    any_solo_type = any_video_solo
+                end
                 local color = track_dim.should_dim(t, any_solo_type)
                     and color_utils.dim_hex(refs.base_header_color, DIM_HEADER_SOLO_MUTE)
                     or refs.base_header_color

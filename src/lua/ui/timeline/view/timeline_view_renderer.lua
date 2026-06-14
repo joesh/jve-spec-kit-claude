@@ -855,7 +855,12 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
 
     local track_obj = track_state.get_by_id(render_track_id)
     if track_obj then
-        local any_solo_type  = is_audio and ctx.any_audio_solo or ctx.any_video_solo
+        local any_solo_type
+        if is_audio then
+            any_solo_type = ctx.any_audio_solo
+        else
+            any_solo_type = ctx.any_video_solo
+        end
         if track_dim.should_dim(track_obj, any_solo_type) then
             body_color = color_utils.dim_hex(body_color, DIM_CLIP_BODY_SOLO)
             text_color = color_utils.dim_hex(text_color, DIM_CLIP_TEXT_SOLO)
