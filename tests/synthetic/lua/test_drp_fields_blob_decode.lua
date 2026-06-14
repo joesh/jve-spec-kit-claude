@@ -136,6 +136,97 @@ assert(distinct_un[UNSYNC_VID_EMBED], string.format(
 print(string.format("  ✓ unsynced refs: %d×embedded", distinct_un[UNSYNC_VID_EMBED]))
 
 -- ─────────────────────────────────────────────────────────────────────
+-- Media-managed clips: audio refs are ONLY the `MediaRef` field values, not
+-- every UUID in the blob.
+--
+-- A media-managed Resolve project's video FieldsBlob additionally carries
+-- per-clip/version `UniqueId` UUIDs (under VideoMetadata), codec refs, etc.
+-- These are NOT audio. extract_media_refs must return only the BtAudioInfo
+-- DbIds referenced via `MediaRef` fields — a UUID-shape scrape used to sweep
+-- the UniqueId noise in too, making the importer report thousands of
+-- non-existent "failed audio links".
+--
+-- This is a real Sm2MpVideoClip FieldsBlob from a media-managed export
+-- (A035_11200051_C049.mov). Ground truth from the archive's BtAudioInfo set:
+--   audio refs (MediaRef → BtAudioInfo, per channel):
+--     a288f8cf-b6d5-433a-a805-5a1175a85942  (×4 channels)
+--     5ed0f471-64bf-4eb6-b196-9fb2d0e5dd7f  (×2 channels)
+--   non-audio noise that must NOT appear (a VideoMetadata UniqueId):
+--     0436b52f-ba85-4bb3-94ea-ab8c8451d19c
+-- ─────────────────────────────────────────────────────────────────────
+local MEDIA_MANAGED_VIDEO_HEX =
+    "000000020000059a8128b52ffd6004127d2c00ca48540d47e094386b90d0185f4810c611" ..
+    "e180b07c33abea286e4e25f928783a4b210d1bb3033f768458d97db35c866a9c9697bd47" ..
+    "fd8db0976db4b4dcf8f31828981aadd676a80ad0fedf29b100b800c600e5e378eaef6ff3" ..
+    "d19bdcbcdb3c3c5cbc7b3c1df579b73a3ab93a3939b87904f5fb4b1204267ffef63b6d75" ..
+    "75d8f79a6f621e1a7b5c8fd50e64ae916d4e33ebd2ff9ab5cba6679bdf09a3fc87febbcd" ..
+    "e62da3dfd3d9598ffe15991bffaf04a9b0f22f9a76bbec7bbb6d96cdd7d3efaf4b7b7ed9" ..
+    "eb175e9f0dfb0405f79ffce29d1ff473bf0889828fd7e16630617252ba0e2d4b13cb49e9" ..
+    "3a5cd945633929a59100151f56ac10010825080d60111a60231469783a09a0c15a5e7571" ..
+    "74f40e257e9fe464f978b93a1efe997d3fb7b976cbfde59acd6bb7a3af36b53bd8c0790b" ..
+    "4dff1e1727cfbb187e7627f8f839ca4b777dafade175d9311e1f9bb79ba79bb7ecbacc04" ..
+    "fe121e20d80f6ed9f5ccb0596eed5ac68382639404f48f3a367ba9d3d3c72ff8b97a59fe" ..
+    "7ddeddc57371d4dddfa9c5d5bd51c4d739c0c568611886e14a8b052a44708cb0f0cd38c3" ..
+    "5c22c4eb987861fb38b00342c18577686ebff9deba7dddc122dbe92e70f1a33184ad4ee0" ..
+    "67c2315b27734def0bc7c6ce5c4eb4bb6e605fa7cb6238d166971673520999e4189412c3" ..
+    "74e42443c5038c1937afd7cc625797ed22a1dce1f07aecf6f9924fd8d7db6bd7cc4efbfe" ..
+    "f28da2a7e2f78b9277e6e2d77da8c1d1cf101b088b5abb2e6cbe365b13289d8fe5e2e0a9" ..
+    "c3cfc1ef1d3879b72adebdbf3bd4dfe8a83f8f0edbecb35de64e801c081377c360ebdc74" ..
+    "44b692db08e7d92dfbfa32ca93cafb8222006df477f683db67316fd5e2e12ad5dede2454" ..
+    "f4a9bb4bb31c5c4457f7bc032f968b69665ed93a21b4e747ce8710a4daabd2cd0859bbb5" ..
+    "4d44fa6f357e8f85113888a82c68b1328011fa2d5377e55dfd5b44818beaa34909ce0547" ..
+    "3bc328cca252bda87474717214d5bbcd6f340579fe13d62ccb3c5360933f36cc2db30c33" ..
+    "85599e39b68459af7e19e69961bb6e1df36a951f2506069039ee76e348a4dcad63eb14f9" ..
+    "e1610789143768ca94982a55b40ccbf2eb5490343b10bc62774bef762499226f0aa20954" ..
+    "208bde981f0520e88126f153a144d5f8993ed074a1b632c96ab112810dac0d8352f45833" ..
+    "dfe8791ef87d3363e8ad480180fda80141244949052345490a2ae9500221226355e60112" ..
+    "e8865c479432849090444482092490918282324ad206566021e91d08d7019a87ed2c2328" ..
+    "02b28ac44828508a74f01e4ec4758c7ff37b541e440b050a968a0729455c49100d337231" ..
+    "1e9c85632a9ecd5e0c068164e7d3fe17ce07624286c70ee0713877121548b2e08c85c52b" ..
+    "c812b4e1119138ca4f0e1380ab98d736a9880022f7905a04dbc2970471cf5f6a27d41718" ..
+    "0103f3bd1c1a40259203023c06f761066429b2b4e2c77209c3c058bbcaf268d6424660c4" ..
+    "f66aafeeb1263940523d9d15acb3bf4716b6decf011deaf91c6dce1d527970d708e35c56" ..
+    "00fc58a3a8a92c83c31d2c7c86bd067753b64c9ee24f0054cb844fb7ca71c95a9c87fa8a" ..
+    "41e0edf163885a3cf85840f7efcd78df08a73a8824c2b8e9e119efbe45e5352018658859" ..
+    "a51411e62065ebc23384b85d20a94005ae8539f06fe1a648cab960f61df63f92c50da763" ..
+    "fb531fe35dd364ae015ad86b4c243b3634158f10a735a467a623748d044eb08d15322ab2" ..
+    "f50695c91791e20330c23ae8a05bb0d1fc682ce00450e7bf353a9f4ec1273606cfa76f56" ..
+    "bd5e4050063321b61648f0fa92d7aa893a01232660acfed001a81447352efe71c4be2a11" ..
+    "9b8a8c1b56c763b6f84b242ca52a319e0057130626480a215ccc4f272a76501871da58c8" ..
+    "61d58e5055e1444da00d444ba05d5b3d23b1b3e6b27af15e813164a02faabdedb5998ad4" ..
+    "d353483e96899bc7a2d630ea407760239d1452af280046ec553ae6ff973ca7402093a14d" ..
+    "a506"
+
+local mm_bytes = assert(drp_binary.decode_fields_blob(MEDIA_MANAGED_VIDEO_HEX),
+    "media-managed FieldsBlob failed to decode")
+local mm_refs = drp_binary.extract_media_refs(mm_bytes)
+local mm_counts = {}
+for _, u in ipairs(mm_refs) do mm_counts[u] = (mm_counts[u] or 0) + 1 end
+
+local MM_AUDIO_A = "a288f8cf-b6d5-433a-a805-5a1175a85942"
+local MM_AUDIO_B = "5ed0f471-64bf-4eb6-b196-9fb2d0e5dd7f"
+local MM_NOISE   = "0436b52f-ba85-4bb3-94ea-ab8c8451d19c"
+
+assert(mm_counts[MM_AUDIO_A] == 4, string.format(
+    "media-managed clip's primary audio ref must appear once per channel (4×), got %s",
+    tostring(mm_counts[MM_AUDIO_A])))
+assert(mm_counts[MM_AUDIO_B] == 2, string.format(
+    "media-managed clip's second audio ref must appear once per channel (2×), got %s",
+    tostring(mm_counts[MM_AUDIO_B])))
+assert(not mm_counts[MM_NOISE], string.format(
+    "non-audio VideoMetadata UniqueId (%s) must NOT be returned as an audio ref",
+    MM_NOISE))
+-- The blob contains exactly two distinct audio sources; everything else in it
+-- is non-audio and must be excluded.
+local mm_distinct = 0
+for _ in pairs(mm_counts) do mm_distinct = mm_distinct + 1 end
+assert(mm_distinct == 2, string.format(
+    "media-managed clip must yield exactly 2 distinct audio refs (no UniqueId/"
+    .. "codec noise), got %d", mm_distinct))
+print(string.format("  ✓ media-managed refs: %d×A, %d×B, 0 noise (UniqueId excluded)",
+    mm_counts[MM_AUDIO_A], mm_counts[MM_AUDIO_B]))
+
+-- ─────────────────────────────────────────────────────────────────────
 -- Error surfaces: malformed wrapper → (nil, err); too-short → (nil, err).
 -- Importer uses these error strings to attach clip context in logs.
 -- ─────────────────────────────────────────────────────────────────────

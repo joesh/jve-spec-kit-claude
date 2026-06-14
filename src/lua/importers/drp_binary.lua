@@ -772,51 +772,65 @@ function M.decode_fields_blob(hex_str)
     return M.decode_fields_blob_bytes(bytes)
 end
 
---- Extract all UTF-16BE UUID strings from a decompressed FieldsBlob.
+-- A Sm2Mp*.FieldsBlob is a Fusion "Fields" container: a flat sequence of
+-- [name][value] pairs (with nested sub-containers). Field *names* are stored
+-- UTF-16LE; a blob *value* that follows is [BE32 length][bytes] in UTF-16BE —
+-- the two halves use opposite endianness, a Fusion quirk, not a typo. Audio
+-- references are the values of fields named `MediaRef`, each a 72-byte UTF-16BE
+-- UUID that is a BtAudioInfo DbId resolving to an audio pool item.
+local MEDIAREF_NAME_UTF16LE = ("MediaRef"):gsub(".", "%0\0")
+local UUID_VALUE_LEN_BE32   = string.char(0, 0, 0, 72)  -- 72-byte UTF-16BE UUID
+
+-- Read a 72-byte UTF-16BE canonical dashed UUID at `pos`; nil if the bytes
+-- there are not a well-formed UUID (high byte of each wide char must be 0x00).
+local function read_utf16be_uuid(bytes, pos)
+    if pos + 71 > #bytes then return nil end
+    local chars = {}
+    for k = 0, 35 do
+        local hi, lo = bytes:byte(pos + k * 2), bytes:byte(pos + k * 2 + 1)
+        if hi ~= 0 then return nil end
+        chars[#chars + 1] = string.char(lo)
+    end
+    local uuid = table.concat(chars):lower()
+    if uuid:match("^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-"
+            .. "%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then
+        return uuid
+    end
+    return nil
+end
+
+--- Extract the ordered list of BtAudioInfo DbIds a FieldsBlob references
+--- through its `MediaRef` fields.
 --
--- The Sm2MpVideoClip FieldsBlob embeds a `MediaRef` field per audio
--- stream the pool item claims (own embedded audio, synced external
--- audio, or both). Each MediaRef's value is a 72-byte UTF-16BE encoding
--- of a canonical dashed UUID. Rather than walk the protobuf, we scan
--- the decompressed bytes for the canonical UUID shape. The order matches
--- the protobuf field order (callers rely on that for source-index ↔ file
--- mapping).
+-- We key on the field NAME, not on UUID-shaped bytes anywhere in the blob: the
+-- payload also carries many unrelated UUIDs (per-clip/version `UniqueId`s under
+-- VideoMetadata, codec refs, …). A name-blind scrape swept those up, and the
+-- importer then logged thousands of "audio_ref not in btai index" false
+-- positives for UUIDs that were never audio. Anchoring on `MediaRef` yields
+-- exactly the audio references and nothing else.
 --
--- Returns UUIDs in on-wire order, duplicates preserved: callers can
--- build a distinct set or count occurrences as needed.
+-- Returns UUIDs in on-wire order, duplicates preserved: a synced clip repeats
+-- its primary external audio ref once per channel, so callers can use the
+-- order and repetition count for channel ↔ source mapping.
 -- @param bytes string: decompressed FieldsBlob payload
 -- @return table: array of lowercase dashed UUID strings
 function M.extract_media_refs(bytes)
     assert(type(bytes) == "string",
         "extract_media_refs: bytes string required")
     local out = {}
-    local n = #bytes
-    local i = 1
-    while i <= n - 71 do
-        -- Cheap filter: UTF-16BE hex digits always have a 0x00 high
-        -- byte; a canonical UUID has '-' at char offset 8 (byte 16).
-        if bytes:byte(i) == 0 and bytes:byte(i + 16) == 0
-            and bytes:byte(i + 17) == 0x2d then
-            local s = bytes:sub(i, i + 71)
-            local chars = {}
-            local ok = true
-            for j = 1, 72, 2 do
-                if s:byte(j) ~= 0 then ok = false; break end
-                chars[#chars + 1] = string.char(s:byte(j + 1))
-            end
-            if ok then
-                local ascii = table.concat(chars)
-                if ascii:match(
-                        "^%x%x%x%x%x%x%x%x%-%x%x%x%x%-%x%x%x%x%-"
-                        .. "%x%x%x%x%-%x%x%x%x%x%x%x%x%x%x%x%x$") then
-                    out[#out + 1] = ascii:lower()
-                    i = i + 72
-                    goto continue
-                end
-            end
+    local search = 1
+    while true do
+        local name_pos = bytes:find(MEDIAREF_NAME_UTF16LE, search, true)
+        if not name_pos then break end
+        local value_pos = name_pos + #MEDIAREF_NAME_UTF16LE
+        -- The value's [BE32 length=72] marker sits a few framing bytes past the
+        -- name; the UUID begins immediately after it.
+        local len_pos = bytes:find(UUID_VALUE_LEN_BE32, value_pos, true)
+        if len_pos and len_pos <= value_pos + 12 then
+            local uuid = read_utf16be_uuid(bytes, len_pos + 4)
+            if uuid then out[#out + 1] = uuid end
         end
-        i = i + 1
-        ::continue::
+        search = value_pos
     end
     return out
 end
