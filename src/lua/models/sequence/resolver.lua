@@ -457,11 +457,57 @@ local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, o
     end
 end
 
+-- Compute one media_ref's file-natural source range AND its master-frame
+-- extent for a request sub-range already clipped to the mref. Single place
+-- that knows playback DIRECTION, because reverse needs sample-accurate math
+-- (the +1 native unit below) and the audio sample rate — both of which live
+-- here at the leaf, not up at pick_nested (018 single-rounding-rule; the
+-- inter-layer currency stays (frame, subframe)).
+--
+-- Forward: source ascends with the request; extent is the request's frames.
+-- Reverse (request HIGH > LOW in tick space): the request's HIGH end is the
+-- inclusive entry source position and the LOW end is the exclusive lower
+-- bound, so source descends (source_in > source_out) and the played extent is
+-- each exclusive bound shifted up by ONE native unit — one frame for video,
+-- one sample for audio — recovering the inclusive-high / exclusive-low played
+-- region the importer's reverse convention encodes. (+1 sample is why this
+-- can't live at pick_nested: it needs the rate, and +1 frame is wrong for
+-- sub-frame audio source positions.)
+local function resolve_mref_source_and_extent(r, reversed,
+        m_lo_f, m_lo_s, m_hi_f, m_hi_s, tpf, master_clock_hz)
+    local is_video = (r.track_type == "VIDEO")
+    if reversed then
+        local file_in, file_out
+        if is_video then
+            file_in, file_out = compute_video_source_range(r, m_hi_f, m_lo_f)
+        else
+            file_in  = compute_audio_source_sample(r, m_hi_f, m_hi_s, tpf, master_clock_hz)
+            file_out = compute_audio_source_sample(r, m_lo_f, m_lo_s, tpf, master_clock_hz)
+        end
+        local one_unit = is_video and tpf
+            or subframe_math.samples_to_ticks(1, r.audio_sample_rate, master_clock_hz)
+        local lo_played = math.floor(
+            (pack_pos_ticks(m_lo_f, m_lo_s, tpf) + one_unit) / tpf)
+        local hi_played = math.floor(
+            (pack_pos_ticks(m_hi_f, m_hi_s, tpf) + one_unit) / tpf)
+        return file_in, file_out, lo_played, hi_played
+    end
+    local file_in, file_out
+    if is_video then
+        file_in, file_out = compute_video_source_range(r, m_lo_f, m_hi_f)
+    else
+        file_in  = compute_audio_source_sample(r, m_lo_f, m_lo_s, tpf, master_clock_hz)
+        file_out = compute_audio_source_sample(r, m_hi_f, m_hi_s, tpf, master_clock_hz)
+    end
+    return file_in, file_out, m_lo_f, m_hi_f
+end
+
 -- Resolve a master sequence over a request range expressed as (frame, subframe)
 -- endpoints in the master's own fps timebase + project master-clock ticks.
 -- Iterate media_refs that overlap; emit one ResolvedEntry per row (V) or per
 -- channel (A). Video entries' file-source range stays in master.fps frames
 -- (FR-003); audio entries are sample-precise via subframe_math (FR-008).
+-- Direction-aware: a reverse request (HIGH > LOW) yields descending source.
 --
 -- Track selectors (symmetric per FR-005 / FR-023):
 --   layer_track_id    — non-nil restricts V media_refs to that track.
@@ -476,22 +522,29 @@ local function pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
     local master_clock_hz = fetch_master_clock_hz(db, project_id, context)
     local tpf = subframe_math.ticks_per_frame(master_clock_hz, fps_num, fps_den)
 
+    -- Direction is a property of the request: a reverse clip hands down its
+    -- natural window (source_in > source_out) so HIGH > LOW in tick space.
+    -- Overlap + clipping work on ascending bounds; direction is re-applied
+    -- per-mref inside resolve_mref_source_and_extent.
+    local reversed =
+        pack_pos_ticks(lo_f, lo_s, tpf) > pack_pos_ticks(hi_f, hi_s, tpf)
+    local a_lo_f, a_lo_s, a_hi_f, a_hi_s
+    if reversed then
+        a_lo_f, a_lo_s, a_hi_f, a_hi_s = hi_f, hi_s, lo_f, lo_s
+    else
+        a_lo_f, a_lo_s, a_hi_f, a_hi_s = lo_f, lo_s, hi_f, hi_s
+    end
+
     local entries = {}
     for _, r in ipairs(list_media_refs(db, seq_id, nil)) do
         if mref_passes_filter(r, layer_track_id, audio_track_id)
-           and mref_overlaps_request(r, lo_f, lo_s, hi_f, hi_s, tpf) then
+           and mref_overlaps_request(r, a_lo_f, a_lo_s, a_hi_f, a_hi_s, tpf) then
             local m_lo_f, m_lo_s, m_hi_f, m_hi_s =
-                clip_to_mref_extent(r, lo_f, lo_s, hi_f, hi_s)
-            local file_in, file_out
-            if r.track_type == "VIDEO" then
-                file_in, file_out = compute_video_source_range(r, m_lo_f, m_hi_f)
-            else
-                file_in = compute_audio_source_sample(
-                    r, m_lo_f, m_lo_s, tpf, master_clock_hz)
-                file_out = compute_audio_source_sample(
-                    r, m_hi_f, m_hi_s, tpf, master_clock_hz)
-            end
-            local base = build_mref_entry_base(r, m_lo_f, m_hi_f,
+                clip_to_mref_extent(r, a_lo_f, a_lo_s, a_hi_f, a_hi_s)
+            local file_in, file_out, seq_start_f, seq_end_f =
+                resolve_mref_source_and_extent(r, reversed,
+                    m_lo_f, m_lo_s, m_hi_f, m_hi_s, tpf, master_clock_hz)
+            local base = build_mref_entry_base(r, seq_start_f, seq_end_f,
                 file_in, file_out, outer_chain)
             if r.track_type == "VIDEO" then
                 emit_video_entry(entries, r, base)
@@ -548,6 +601,17 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                               outer_chain, layer_filter_for_v,
                               audio_filter_for_a)
     local entries = {}
+    -- A reversed REQUEST (HIGH > LOW) only arises when a reversed clip
+    -- recurses into the sequence it references. Reverse is resolved at the
+    -- master leaf (direction-aware), so a reversed range reaching this
+    -- sequence-of-sequences layer means a reversed clip references a NESTED
+    -- (non-master) sequence — a case the nested path does not yet handle.
+    -- Fail loud rather than silently returning nothing (1.14).
+    assert(outer_lo_f <= outer_hi_f, string.format(
+        "Sequence.pick_nested: reversed request [%d,%d) into nested sequence %s "
+        .. "— reversed clips referencing nested sequences are not supported "
+        .. "(reverse is resolved at the master leaf).",
+        outer_lo_f, outer_hi_f, tostring(seq_id)))
     -- 018: clip overlap is still resolved on integer frame extents (the
     -- query bound). Subframe granularity at the outer endpoints can only
     -- include clips that frame-overlap; sub-frame-only overlap on this
@@ -662,27 +726,17 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                 c_lo_s, c_hi_s = 0, 0
             end
 
-            -- Reversed VIDEO clips store source_in > source_out (DRP importer
-            -- swaps them to signal reverse playback). pick_seq_range requires
-            -- lo < hi, so normalize to the forward-covering interval
-            -- [source_out+1, source_in+1) and restore the reversed convention
-            -- on returned entries so compute_video_speed_ratio yields -1.
-            local is_reversed_video = (c.track_type == "VIDEO"
-                                       and c.source_in > c.source_out)
-            local inner_lo_f, inner_hi_f, inner_lo_s, inner_hi_s
-            if is_reversed_video then
-                inner_lo_f = c.source_out + 1
-                inner_hi_f = c.source_in  + 1
-                inner_lo_s = 0
-                inner_hi_s = 0
-            else
-                inner_lo_f = c.source_in
-                inner_hi_f = c.source_out
-                inner_lo_s = c_lo_s
-                inner_hi_s = c_hi_s
-            end
+            -- Pass the clip's NATURAL source window — no direction
+            -- normalization here. Forward clips give source_in < source_out;
+            -- reverse clips (DRP importer stores source_in > source_out to
+            -- signal backward playback) give source_in > source_out. The
+            -- master leaf is direction-aware: it resolves descending source
+            -- and emits an entry with source_in > source_out, sample-accurate
+            -- for audio (the +1-native-unit math needs the rate, which only
+            -- the leaf has). Uniform across VIDEO and AUDIO — no per-medium
+            -- reverse branch, no entry restoration.
             local inner = pick_seq_range(db, c.sequence_id,
-                inner_lo_f, inner_lo_s, inner_hi_f, inner_hi_s,
+                c.source_in, c_lo_s, c.source_out, c_hi_s,
                 context, inner_chain,
                 layer_for_inner, audio_for_inner)
 
@@ -690,13 +744,6 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
             local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
             for _, e in ipairs(inner) do
                 if e.media_kind == want_kind then
-                    if is_reversed_video then
-                        -- Restore reversed source convention: source_in > source_out
-                        -- signals backward traversal to compute_video_speed_ratio
-                        -- and the TMB decode loop.
-                        e.source_in  = c.source_in
-                        e.source_out = c.source_out
-                    end
                     -- Translate master-coord -> outer-coord; the inner
                     -- entry's sequence_start/duration are in this clip's
                     -- nested-timebase, so we use this clip's source ratio.

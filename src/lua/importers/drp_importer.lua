@@ -1505,6 +1505,22 @@ local function parse_resolve_tracks(seq_elem, opts)
                 if in_frame < 0 and y_in_frames > -1.0 then
                     in_frame = 0
                 end
+                -- Inclusive→exclusive correction for reverse curves. The
+                -- y_first/y_last swap above normalizes to ascending source
+                -- order but changes which playback endpoint y_last came from:
+                --   forward: y_last = source time at playback-OUT → out_frame
+                --            is the EXCLUSIVE upper boundary (frame after last).
+                --   reverse: y_last = source time at playback-IN → out_frame
+                --            is the INCLUSIVE highest source frame played.
+                -- source_duration below treats out_frame as exclusive, so a
+                -- reverse clip would drop its top (first-played) frame. Make
+                -- the boundary exclusive so the reverse span equals the
+                -- forward span it mirrors. (Verified against the Resolve
+                -- fixture "test audio, reverse audio.drp": a -100% reverse
+                -- must cover the exact source region of its forward twin.)
+                if clip_speed < 0 then
+                    out_frame = out_frame + 1
+                end
                 in_offset = math.floor(in_frame * native_rate / frame_rate + 0.5)
                 source_duration =
                     math.floor(out_frame * native_rate / frame_rate + 0.5) - in_offset
@@ -1560,11 +1576,21 @@ local function parse_resolve_tracks(seq_elem, opts)
                 "parse_resolve_tracks: clip '%s' has negative source_extent_frames=%d",
                 clip_name, source_extent_frames))
 
-            -- Compute source_out, then swap for reverse clips.
-            -- Reverse: source_in = high frame (playback start), source_out = low frame.
+            -- Compute source_out (exclusive upper bound), then convert for
+            -- reverse clips. The forward span is frames
+            -- [source_in_native, source_out_native) = {S .. S+dur-1}. A reverse
+            -- clip plays that span backward: the entry point is the last
+            -- forward frame (S+dur-1, inclusive) and the exclusive boundary
+            -- going downward is S-1. Storing inclusive-high / exclusive-low
+            -- mirrors the forward inclusive-low / exclusive-high convention, so
+            -- (source_out - source_in) = -dur keeps speed_ratio = -1 and the
+            -- universal decode source_in + offset*speed walks S+dur-1 .. S with
+            -- no reverse special-case anywhere downstream.
             local source_out_native = source_in_native + source_duration
             if clip_speed < 0 then
-                source_in_native, source_out_native = source_out_native, source_in_native
+                local forward_high  = source_out_native - 1  -- S+dur-1, last forward frame
+                local exclusive_low = source_in_native  - 1  -- S-1, one below the lowest frame
+                source_in_native, source_out_native = forward_high, exclusive_low
             end
 
             -- Extract per-clip volume from EffectFiltersBA (direct child of clip element)

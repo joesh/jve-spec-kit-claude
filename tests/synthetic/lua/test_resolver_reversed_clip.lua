@@ -115,7 +115,6 @@ assert(e.source_in > e.source_out, string.format(
 print("  ✓ entry.source_in > entry.source_out (reversed convention preserved)")
 
 -- ─── Test 3: compute_video_speed_ratio yields -1.0 ────────────────────────
-e.duration = e.duration  -- already set by resolver
 local speed = tmb_clip_builder.compute_video_speed_ratio(e)
 assert(math.abs(speed + 1.0) < 0.001, string.format(
     "reversed clip: speed_ratio must be -1.0, got %.4f", speed))
@@ -141,18 +140,24 @@ assert(e.source_out == SOURCE_OUT, string.format(
 print(string.format("  ✓ source range preserved: source_in=%d, source_out=%d",
     e.source_in, e.source_out))
 
--- ─── Test 6: TMB frame formula gives correct file frames ──────────────────
--- At outer offset 0: source_frame = SOURCE_IN + 0 * speed = 190
--- file_frame = 190 - mr.source_in(100) = 90  (90th frame of the file)
--- At outer offset 89 (last): source_frame = 190 + 89 * (-1) = 101
--- file_frame = 101 - 100 = 1  (1st frame of the file)
-local tmb_source_at_offset0 = e.source_in + 0 * speed       -- = 190
-local tmb_source_at_offset89 = e.source_in + 89 * speed     -- = 101
-assert(tmb_source_at_offset0 == 190, string.format(
-    "TMB source frame at offset 0 must be 190 (got %.1f)", tmb_source_at_offset0))
-assert(tmb_source_at_offset89 == 101, string.format(
-    "TMB source frame at offset 89 must be 101 (got %.1f)", tmb_source_at_offset89))
-print(string.format("  ✓ TMB frame formula: offset 0 → source %d, offset 89 → source %d",
-    tmb_source_at_offset0, tmb_source_at_offset89))
+-- ─── Test 6: the clip plays exactly the right source frames, backward ─────
+-- Domain (not the decode formula): a reversed clip shows the same frames a
+-- forward clip of this span would, last-first. The highest played frame is the
+-- entry (source_in = 190); the lowest is the frame just above the exclusive
+-- lower bound (source_out + 1 = 101). For a 1× reverse the number of distinct
+-- played frames equals the timeline duration. These endpoints are what the
+-- viewer sees first and last — derived from the span, never by re-applying
+-- source_in + offset × speed (that would just verify the formula with itself).
+local highest_played = e.source_in        -- first frame shown (clip entry)
+local lowest_played  = e.source_out + 1   -- last frame shown (exclusive bound + 1)
+assert(highest_played == 190, string.format(
+    "highest played source frame must be 190 (clip entry), got %d", highest_played))
+assert(lowest_played == 101, string.format(
+    "lowest played source frame must be 101 (source_out+1), got %d", lowest_played))
+assert(highest_played - lowest_played + 1 == OUTER_DUR, string.format(
+    "number of played frames must equal duration %d, got %d",
+    OUTER_DUR, highest_played - lowest_played + 1))
+print(string.format("  ✓ plays source [%d..%d] backward (%d frames = duration)",
+    lowest_played, highest_played, OUTER_DUR))
 
 print("✅ test_resolver_reversed_clip.lua passed")

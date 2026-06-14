@@ -3,18 +3,26 @@
 -- correctly when the clip's timeline duration reaches the curve's domain
 -- boundary.
 --
--- Domain: A reverse clip plays source frames from a HIGH frame down to a
--- LOW frame. After import, the model convention is that `source_in` holds
--- the clip's playback-start (high) frame and `source_out` the playback-end
--- (low) frame, with `clip_speed` negative to mark the reverse direction.
+-- Domain: A reverse clip plays the SAME source span a forward clip would,
+-- but last-frame-first. The forward span is frames [S, S+dur). Reversed, the
+-- playback entry is the last forward frame (S+dur-1, inclusive) and the
+-- exclusive boundary going downward is S-1 — mirroring forward's inclusive
+-- low / exclusive high. So the model convention is `source_in` = highest
+-- forward frame (inclusive, = playback start), `source_out` = lowest frame
+-- minus one (exclusive lower bound), with `clip_speed` negative to mark the
+-- direction. (source_out - source_in) = -dur keeps speed_ratio = -1, and the
+-- universal decode source_in + offset*speed walks the span down with no
+-- reverse special-case anywhere downstream.
 --
 -- For extreme retimes (e.g. 493× reverse) the curve's valid domain (XMax
 -- playback seconds) can be shorter than the clip's timeline duration. When
 -- the curve is evaluated past XMax the source position is clamped to the
 -- curve's final Y value (the file's first frame, Y=0 for a reverse curve
--- that spans the whole master clip). The clip's playable source range then
--- stops at source frame 0 — never below — and the importer must:
---   - produce non-negative source-frame offsets
+-- that spans the whole master clip). The clip's lowest played source frame
+-- is the file's first frame (the TC origin); the exclusive lower bound
+-- (source_out) then sits one below it (origin-1), exactly as a forward clip's
+-- exclusive source_out can sit one past its last frame. The importer must:
+--   - keep the lowest played frame (source_out + 1) at/after the TC origin
 --   - report `source_in > source_out` (reverse convention)
 --   - mark `clip_speed < 0`
 --
@@ -128,15 +136,42 @@ assert(clip.source_in > clip.source_out,
         clip.source_in, clip.source_out))
 
 -- ---------------------------------------------------------------------------
--- Assertion 3: both endpoints are inside the source file (source frame
--- indices must be at or after the file's TC origin, i.e. non-negative
--- relative to MEDIA_TC_ORIGIN).
+-- Assertion 3: EXACT endpoints. The fixture's forward source span is derived
+-- from the curve: the highest source time it reaches is YMax=927.584s × 25fps
+-- = 23189.6 frames, so the highest WHOLE source frame played is frame 23189
+-- (relative), anchored at the file TC origin (90000) → absolute frame 113189.
+-- The lowest is the file's first frame (90000). So the played source region is
+-- {90000 .. 113189} (23190 frames). Reversed playback enters at the highest
+-- frame (113189) and the exclusive lower bound sits one below the lowest
+-- (90000 - 1 = 89999).
+--
+-- The exact convention here is anchored by the real Resolve A/B fixture
+-- "test audio, reverse audio.drp" (see integration_test_drp_reverse_audio_pair):
+-- a reverse clip covers the SAME source region as its forward twin, so its
+-- span equals the forward span and source_in is the highest played frame.
+--
+-- Two off-by-one regressions this guards:
+--   (a) old plain swap stored the exclusive upper bound as source_in (entry
+--       one frame PAST the span) — fixed by the inclusive-high/exclusive-low
+--       swap in the importer.
+--   (b) the reverse curve branch counted out_frame as exclusive when, after
+--       the y_first/y_last swap, it is the INCLUSIVE highest frame — dropping
+--       the top (first-played) frame and making the reverse span one frame
+--       short. Fixed by the reverse +1 in the importer's source_duration.
 -- ---------------------------------------------------------------------------
-assert(clip.source_out >= MEDIA_TC_ORIGIN,
-    string.format("source_out must be at or after file TC origin %d, got %d",
-        MEDIA_TC_ORIGIN, clip.source_out))
-assert(clip.source_in >= MEDIA_TC_ORIGIN,
-    string.format("source_in must be at or after file TC origin %d, got %d",
-        MEDIA_TC_ORIGIN, clip.source_in))
+local FORWARD_SPAN_LOW  = 90000    -- TC origin = file's first frame
+local FORWARD_SPAN_HIGH = 113189   -- origin + 23190 - 1 (last forward frame)
+assert(clip.source_in == FORWARD_SPAN_HIGH,
+    string.format("reverse source_in must be the highest forward frame %d, got %d",
+        FORWARD_SPAN_HIGH, clip.source_in))
+assert(clip.source_out == FORWARD_SPAN_LOW - 1,
+    string.format("reverse source_out must be lowest frame - 1 (exclusive) %d, got %d",
+        FORWARD_SPAN_LOW - 1, clip.source_out))
+
+-- The lowest PLAYED frame (source_out + 1) stays at/after the file TC origin;
+-- the exclusive bound itself is allowed to sit one below.
+assert(clip.source_out + 1 >= MEDIA_TC_ORIGIN,
+    string.format("lowest played frame (source_out+1=%d) must be >= TC origin %d",
+        clip.source_out + 1, MEDIA_TC_ORIGIN))
 
 print("\n✅ test_drp_reverse_clip_import.lua passed")
