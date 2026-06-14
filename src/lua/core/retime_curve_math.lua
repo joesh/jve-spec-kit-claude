@@ -27,8 +27,13 @@ function M.snap_ceil(scaled)
 end
 
 -- Convert a sequence-rate frame index to the media's native units (frames for
--- video, samples for audio), rounding to nearest.
+-- video, samples for audio), rounding to nearest. Asserts the rates so a zero
+-- frame_rate fails loudly here rather than silently propagating NaN (1.14).
 function M.frames_to_native(frame, native_rate, frame_rate)
+    assert(native_rate > 0 and frame_rate > 0, string.format(
+        "retime_curve_math.frames_to_native: rates must be > 0 "
+        .. "(native_rate=%s frame_rate=%s)",
+        tostring(native_rate), tostring(frame_rate)))
     return math.floor(frame * native_rate / frame_rate + 0.5)
 end
 

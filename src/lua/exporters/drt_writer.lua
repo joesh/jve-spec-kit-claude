@@ -377,9 +377,10 @@ local function build_reverse_retime(clip, media, seq_fps, state)
         .. "(%d) is below media TC origin (%d)",
         clip.id, clip.source_in, media.start_tc_frame))
     -- <In> inverts drp_importer's reverse branch, which recovers the highest
-    -- played source frame as floor(YMax*fps − In + ε). The curve walk works in
-    -- sequence-rate frames, so target highest_fps = the highest played source
-    -- frame expressed in fps frames; In is the playback-X that lands there.
+    -- played source frame as snap_floor(YMax*fps − In) (= floor(… + ε)). The
+    -- curve walk works in sequence-rate frames, so target highest_fps = the
+    -- highest played source frame expressed in fps frames; In is the
+    -- playback-X that lands there.
     local highest_fps = rcm.snap_floor(high_native * seq_fps / native)
     local in_value = rcm.snap_floor(full_secs * seq_fps - highest_fps)
     assert(in_value >= 0, string.format(
