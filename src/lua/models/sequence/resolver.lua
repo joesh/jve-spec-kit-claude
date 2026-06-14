@@ -514,11 +514,23 @@ local function translate_to_outer(e, c, source_lo)
     -- at Insert/Set time when c.duration_frames was written).
     local source_span = c.source_out - c.source_in
     local owner_per_source = c.duration / source_span
-    local outer_offset_lo = (e.sequence_start - source_lo) * owner_per_source
-    local outer_dur       = e.duration * owner_per_source
-    e.sequence_start = c.sequence_start + round_int(outer_offset_lo
-        + (source_lo - c.source_in) * owner_per_source)
-    e.duration       = round_int(outer_dur)
+
+    if owner_per_source < 0 then
+        -- Reversed clip: inner low frame → outer high frame, inner high → outer low.
+        -- The outer-start corresponds to the HIGHEST inner frame (= e.sequence_start
+        -- + e.duration - 1) because the clip traverses source in descending order.
+        local abs_opr    = -owner_per_source
+        local inner_last = e.sequence_start + e.duration - 1
+        e.sequence_start = c.sequence_start
+            + round_int((c.source_in - inner_last) * abs_opr)
+        e.duration       = round_int(e.duration * abs_opr)
+    else
+        local outer_offset_lo = (e.sequence_start - source_lo) * owner_per_source
+        local outer_dur       = e.duration * owner_per_source
+        e.sequence_start = c.sequence_start + round_int(outer_offset_lo
+            + (source_lo - c.source_in) * owner_per_source)
+        e.duration       = round_int(outer_dur)
+    end
     return e
 end
 
@@ -649,8 +661,28 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
                     tostring(c.id)))
                 c_lo_s, c_hi_s = 0, 0
             end
+
+            -- Reversed VIDEO clips store source_in > source_out (DRP importer
+            -- swaps them to signal reverse playback). pick_seq_range requires
+            -- lo < hi, so normalize to the forward-covering interval
+            -- [source_out+1, source_in+1) and restore the reversed convention
+            -- on returned entries so compute_video_speed_ratio yields -1.
+            local is_reversed_video = (c.track_type == "VIDEO"
+                                       and c.source_in > c.source_out)
+            local inner_lo_f, inner_hi_f, inner_lo_s, inner_hi_s
+            if is_reversed_video then
+                inner_lo_f = c.source_out + 1
+                inner_hi_f = c.source_in  + 1
+                inner_lo_s = 0
+                inner_hi_s = 0
+            else
+                inner_lo_f = c.source_in
+                inner_hi_f = c.source_out
+                inner_lo_s = c_lo_s
+                inner_hi_s = c_hi_s
+            end
             local inner = pick_seq_range(db, c.sequence_id,
-                c.source_in, c_lo_s, c.source_out, c_hi_s,
+                inner_lo_f, inner_lo_s, inner_hi_f, inner_hi_s,
                 context, inner_chain,
                 layer_for_inner, audio_for_inner)
 
@@ -658,6 +690,13 @@ local function pick_nested(db, seq_id, outer_lo_f, outer_lo_s,
             local want_kind = (c.track_type == "VIDEO") and "video" or "audio"
             for _, e in ipairs(inner) do
                 if e.media_kind == want_kind then
+                    if is_reversed_video then
+                        -- Restore reversed source convention: source_in > source_out
+                        -- signals backward traversal to compute_video_speed_ratio
+                        -- and the TMB decode loop.
+                        e.source_in  = c.source_in
+                        e.source_out = c.source_out
+                    end
                     -- Translate master-coord -> outer-coord; the inner
                     -- entry's sequence_start/duration are in this clip's
                     -- nested-timebase, so we use this clip's source ratio.
