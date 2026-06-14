@@ -145,6 +145,7 @@ do
         y_max = 2.0,           -- source seconds consumed
         x_max = 4.0,           -- timeline seconds occupied
         is_reverse = false,
+        unique_id = "11111111-2222-3333-4444-555555555555",
         keyframes = { { x = 0.0, y = 0.0 }, { x = 4.0, y = 2.0 } },
     }
     local hex = enc.encode_media_timemap(slow)
@@ -161,6 +162,7 @@ do
         y_max = 3.0,
         x_max = 3.0,
         is_reverse = true,
+        unique_id = "66666666-7777-8888-9999-aaaaaaaaaaaa",
         keyframes = { { x = 0.0, y = 3.0 }, { x = 3.0, y = 0.0 } },
     }
     local rout = dec.decode_media_timemap(enc.encode_media_timemap(rev))

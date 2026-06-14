@@ -247,40 +247,70 @@ end
 -- KeyframesBA + MediaTimemapBA — inverse of parse_keyframes / decode_media_timemap
 -- ---------------------------------------------------------------------------
 
--- One inner keyframe blob: [BE32 ver][BE32 inner_fc=2][TLV X, Y]. parse_inner_keyframe
--- reads inner_fc at offset 4 and decodes X, Y as doubles.
+-- One inner keyframe blob: [BE32 ver][BE32 inner_fc=7][TLV interp,YOut,YIn,Y,XOut,XIn,X].
+-- Real Resolve keyframes (dissected from "test audio, reverse audio.drp")
+-- carry SEVEN fields, in this order: interp (int), then the bezier
+-- tangent/value pairs YOut/YIn/Y and XOut/XIn/X (doubles). Resolve only
+-- exercises X (master-timeline seconds) and Y (source seconds); the tangents
+-- and interp are 0 for the linear ±speed ramps we emit. JVE's decoder reads
+-- only X/Y, but Resolve's parser requires the full field set (the minimal
+-- 2-field form parsed in JVE but Resolve refused to render — same failure
+-- class as the short MTBA forms).
 local function encode_inner_keyframe(kf)
-    local fields = encode_field("X", 0x0006, kf.x) .. encode_field("Y", 0x0006, kf.y)
-    return M.write_be32(1) .. M.write_be32(2) .. fields
+    local fields = encode_field("interp", 0x0002, 0)
+        .. encode_field("YOut", 0x0006, 0)
+        .. encode_field("YIn",  0x0006, 0)
+        .. encode_field("Y",    0x0006, kf.y)
+        .. encode_field("XOut", 0x0006, 0)
+        .. encode_field("XIn",  0x0006, 0)
+        .. encode_field("X",    0x0006, kf.x)
+    return M.write_be32(1) .. M.write_be32(7) .. fields
 end
 
 -- KeyframesBA payload: [BE32 ver][BE32 kf_count][TLV "0".."n-1" each 0x000c→inner].
 -- parse_keyframes reads kf_count at offset 4; needs kf_count ∈ [2,100].
+--
+-- `keyframes` arrives sorted ASCENDING by x. The name attached to each keyframe
+-- is its ascending-x rank (the x=0 keyframe is always "0"), which is how the
+-- decoder keys them. But Resolve writes the field BLOCKS in DESCENDING order
+-- (highest-x / highest-name first) — verified byte-exact against the reverse
+-- curve in "test audio, reverse audio.drp" ("1" block precedes "0"). The
+-- decoder is name-keyed so order is semantically irrelevant, but emitting
+-- Resolve's order keeps the output byte-identical to its own exports.
 local function encode_keyframes(keyframes)
     assert(#keyframes >= 2 and #keyframes <= 100,
         "encode_keyframes: keyframe count must be in [2,100], got " .. #keyframes)
     local body = {}
-    for i = 1, #keyframes do
+    for i = #keyframes, 1, -1 do
         body[#body + 1] = encode_field(tostring(i - 1), 0x000c, encode_inner_keyframe(keyframes[i]))
     end
     return M.write_be32(1) .. M.write_be32(#keyframes) .. table.concat(body)
 end
 
---- MediaTimemapBA (large 0x01 format) — inverse of decode_media_timemap.
---- The decoder derives speed_ratio = y_max/x_max and reverse-flag from the
---- keyframe slope, and sanity-checks the keyframe endpoints against y_max/x_max
---- (first≈(0,0)→last≈(x_max,y_max) forward, or (0,y_max)→(x_max,0) reverse).
---- @param tm table: { y_max>0, x_max>0, is_reverse:boolean, keyframes={{x,y},...} }
+--- MediaTimemapBA (large 0x01 format) — inverse of decode_media_timemap, in
+--- the full SIX-field shape Resolve authors (dissected from the reverse clip
+--- in "test audio, reverse audio.drp"): YMax, XMax, UniqueId, LastValidYOffset,
+--- KeyframesBA, DbType. The decoder reads only YMax/XMax/KeyframesBA; Resolve's
+--- own parser needs the rest (UniqueId per-curve UUID, LastValidYOffset = YMax,
+--- DbType = "Sm2TimeMap"). speed_ratio = YMax/XMax and the direction come from
+--- the keyframe slope: forward (0,0)→(XMax,YMax), reverse (0,YMax)→(XMax,0).
+--- @param tm table: { y_max>0, x_max>0, unique_id:string, keyframes={{x,y},...} }
 --- @return string: hex-encoded MediaTimemapBA blob
 function M.encode_media_timemap(tm)
     assert(type(tm.y_max) == "number" and tm.y_max > 0, "encode_media_timemap: y_max must be > 0")
     assert(type(tm.x_max) == "number" and tm.x_max > 0, "encode_media_timemap: x_max must be > 0")
     assert(type(tm.keyframes) == "table", "encode_media_timemap: keyframes required")
+    assert(type(tm.unique_id) == "string" and #tm.unique_id == 36,
+        "encode_media_timemap: unique_id must be a 36-char UUID string (Resolve "
+        .. "mints one per retime curve)")
 
     local fields = encode_field("YMax", 0x0006, tm.y_max)
         .. encode_field("XMax", 0x0006, tm.x_max)
+        .. encode_field("UniqueId", 0x000a, tm.unique_id)
+        .. encode_field("LastValidYOffset", 0x0006, tm.y_max)
         .. encode_field("KeyframesBA", 0x000c, encode_keyframes(tm.keyframes))
-    local header = M.write_be32(1) .. M.write_be32(3)  -- version=1, field_count=3
+        .. encode_field("DbType", 0x000a, "Sm2TimeMap")
+    local header = M.write_be32(1) .. M.write_be32(6)  -- version=1, field_count=6
     return to_hex(header .. fields)
 end
 
