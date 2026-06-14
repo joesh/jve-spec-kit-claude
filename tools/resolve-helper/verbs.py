@@ -1036,6 +1036,44 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
         return _error(envelope_id, "bad_request",
             f"media_path does not exist: {media_path}")
 
+    # Optional trim: author the clip windowed [source_in_frame, +duration)
+    # into the media rather than the whole clip. Both args present or both
+    # absent. Used to learn Resolve's own source-frame convention for a
+    # trimmed forward clip (does GetSourceStartFrame / exported <In> equal
+    # the media-relative offset?). JSON numbers may arrive as float.
+    def _as_int(v):
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, int):
+            return v
+        if isinstance(v, float) and v.is_integer():
+            return int(v)
+        return None
+    raw_in = args.get("source_in_frame")
+    raw_dur = args.get("source_duration_frames")
+    trimming = raw_in is not None or raw_dur is not None
+    source_in_frame = source_duration = None
+    if trimming:
+        source_in_frame = _as_int(raw_in)
+        source_duration = _as_int(raw_dur)
+        if source_in_frame is None or source_in_frame < 0:
+            return _error(envelope_id, "bad_request",
+                "source_in_frame must be a non-negative integer when "
+                "trimming (media-relative source frame)")
+        if source_duration is None or source_duration <= 0:
+            return _error(envelope_id, "bad_request",
+                "source_duration_frames must be a positive integer when "
+                "trimming")
+
+    # Closed-set args (matches delete_timeline / apply_test_grade) — reject
+    # unknown fields rather than silently ignoring (rule 2.13).
+    extras = sorted(k for k in args.keys() if k not in (
+        "media_path", "timeline_fps", "out_drt_path",
+        "source_in_frame", "source_duration_frames"))
+    if extras:
+        return _error(envelope_id, "bad_request",
+            f"author_reference_timeline: unknown args fields: {extras}")
+
     export_drt = getattr(resolve, "EXPORT_DRT", None)
     if export_drt is None:
         return _error(envelope_id, "not_implemented",
@@ -1126,10 +1164,32 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
                 f"ImportMedia({media_path!r}) returned falsy")
         clip = items[0]
 
-        timeline = media_pool.CreateTimelineFromClips(
-            f"jve_ref_tl_{timeline_fps}", [clip])
-        if not timeline or timeline is True:
-            timeline = ref_proj.GetCurrentTimeline()
+        tl_name = f"jve_ref_tl_{timeline_fps}"
+        if trimming:
+            # Window the clip [source_in_frame, +duration) via AppendToTimeline
+            # (endFrame inclusive). CreateTimelineFromClips has no trim hook.
+            timeline = media_pool.CreateEmptyTimeline(tl_name)
+            if not timeline or timeline is True:
+                timeline = ref_proj.GetCurrentTimeline()
+            if timeline is None:
+                _restore()
+                return _error(envelope_id, "resolve_api_error",
+                    "CreateEmptyTimeline produced no timeline")
+            end_frame = source_in_frame + source_duration - 1
+            appended = media_pool.AppendToTimeline([{
+                "mediaPoolItem": clip,
+                "startFrame":    source_in_frame,
+                "endFrame":      end_frame,
+            }])
+            if not appended:
+                _restore()
+                return _error(envelope_id, "resolve_api_error",
+                    f"AppendToTimeline(start={source_in_frame}, "
+                    f"end={end_frame}) returned falsy")
+        else:
+            timeline = media_pool.CreateTimelineFromClips(tl_name, [clip])
+            if not timeline or timeline is True:
+                timeline = ref_proj.GetCurrentTimeline()
         if timeline is None:
             _restore()
             return _error(envelope_id, "resolve_api_error",
@@ -1154,7 +1214,9 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
                 "track_type":      track_type,
                 "track_index":     tidx,
                 "source_in":       item.GetSourceStartFrame(),
+                "source_out":      item.GetSourceEndFrame(),
                 "record_start":    item.GetStart(),
+                "record_duration": item.GetDuration(),
             }
             break
         fps_applied = ref_proj.GetSetting("timelineFrameRate")
