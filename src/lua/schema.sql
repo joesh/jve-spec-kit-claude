@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (13);
+INSERT OR IGNORE INTO schema_version (version) VALUES (14);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,

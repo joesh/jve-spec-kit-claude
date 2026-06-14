@@ -9,7 +9,7 @@ local log = require("core.logger").for_area("database")
 -- opened — per the no-backward-compat rule, incompatible projects must
 -- be re-imported from the original source (.drp) to create a fresh DB
 -- at the current version. No ALTER TABLE migration path.
-M.SCHEMA_VERSION = 13
+M.SCHEMA_VERSION = 14
 
 M.SCHEMA_INCOMPATIBLE_MSG =
     "Project schema V%d is incompatible with this version of JVE (requires V%d).\n\n" ..
