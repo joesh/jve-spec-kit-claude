@@ -18,6 +18,7 @@ local Track = require("models.track")
 local Signals = require("core.signals")
 local track_state = require("ui.timeline.state.track_state")
 local color_utils = require("ui.color_utils")
+local track_dim   = require("ui.timeline.track_dim_logic")
 local drop_naming = require("ui.timeline.drop_naming")
 local routing_pref  = require("ui.source_routing_view_pref")
 local routing_state = require("ui.source_routing_view_state")
@@ -1745,21 +1746,20 @@ Signals.connect("track_mix_changed", refresh_track_button_styles)
 -- semantics), so passing the raw int would render as "active" for both
 -- on and off.
 local function update_all_header_dim()
-    local any_solo = false
-    for _, t in ipairs(track_state.get_all()) do
-        if t.soloed == true or t.soloed == 1 then any_solo = true; break end
-    end
+    local all_tracks     = track_state.get_all()
+    local any_video_solo = track_dim.any_solo_for_type(all_tracks, "VIDEO")
+    local any_audio_solo = track_dim.any_solo_for_type(all_tracks, "AUDIO")
     for tid, refs in pairs(track_button_refs) do
         if refs.header_widget and refs.base_header_color then
             local t = track_state.get_by_id(tid)
-            local is_muted  = t and (t.muted  == true or t.muted  == 1)
-            local is_soloed = t and (t.soloed == true or t.soloed == 1)
-            local dim = is_muted or (any_solo and not is_soloed)
-            local color = dim
-                and color_utils.dim_hex(refs.base_header_color, 0.5)
-                or refs.base_header_color
-            qt_constants.PROPERTIES.SET_STYLE(refs.header_widget,
-                build_track_header_stylesheet(color))
+            if t then
+                local any_solo_type = (refs.track_type == "AUDIO") and any_audio_solo or any_video_solo
+                local color = track_dim.should_dim(t, any_solo_type)
+                    and color_utils.dim_hex(refs.base_header_color, 0.5)
+                    or refs.base_header_color
+                qt_constants.PROPERTIES.SET_STYLE(refs.header_widget,
+                    build_track_header_stylesheet(color))
+            end
         end
     end
 end

@@ -347,7 +347,6 @@ function PlaybackEngine:_push_all_audio_mix_params()
     local edit_time_us = helpers.calc_time_us_from_frame(
         math.floor(self:get_position()), self.fps_num, self.fps_den)
     audio_playback.apply_mix(self._tmb, mix_params, edit_time_us)
-    log.event("_push_all_audio_mix_params: %d tracks", #mix_params)
 end
 
 --- Init audio session using stored sample rate (no media_cache dependency).

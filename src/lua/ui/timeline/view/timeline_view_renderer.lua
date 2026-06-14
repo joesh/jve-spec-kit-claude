@@ -11,6 +11,7 @@ local media_status = require("core.media.media_status")
 local offline_note = require("core.media.offline_note")
 local edge_drag_renderer = require("ui.timeline.edge_drag_renderer")
 local color_utils = require("ui.color_utils")
+local track_dim   = require("ui.timeline.track_dim_logic")
 local Command = require("command")
 local command_manager = require("core.command_manager")
 local log = require("core.logger").for_area("timeline")
@@ -846,6 +847,15 @@ local function draw_clip_instance(ctx, clip, render_track_id, clip_start, clip_d
     end
     if not body_color then body_color = state_module.colors.clip end
 
+    local track_obj = track_state.get_by_id(render_track_id)
+    if track_obj then
+        local any_solo_type  = is_audio and ctx.any_audio_solo or ctx.any_video_solo
+        if track_dim.should_dim(track_obj, any_solo_type) then
+            body_color = color_utils.dim_hex(body_color, 0.35)
+            text_color = color_utils.dim_hex(text_color, 0.5)
+        end
+    end
+
     if not outline_only then
         timeline.add_rect(view.widget, visible_x, y, draw_width, clip_height, body_color)
 
@@ -1064,6 +1074,10 @@ local function build_render_ctx(view)
         edge_drag_state = state_module.get_active_edge_drag_state()
     end
 
+    local all_tracks    = track_state.get_all()
+    local any_video_solo = track_dim.any_solo_for_type(all_tracks, "VIDEO")
+    local any_audio_solo = track_dim.any_solo_for_type(all_tracks, "AUDIO")
+
     return {
         view              = view,
         state_module      = state_module,
@@ -1082,6 +1096,8 @@ local function build_render_ctx(view)
         clip_drag_owns    = clip_drag_owns,
         edge_drag_state   = edge_drag_state,
         dragging_edges    = edge_drag_state and edge_drag_state.type == "edges",
+        any_video_solo    = any_video_solo,
+        any_audio_solo    = any_audio_solo,
         perf_t0           = os.clock(),
     }
 end

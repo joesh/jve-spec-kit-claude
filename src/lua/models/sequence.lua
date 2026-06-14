@@ -844,11 +844,11 @@ local function finalize_to_flat(e, media_cache)
     return e
 end
 
--- Filter to one media kind, drop offline entries (TMB requires a non-empty
--- path; park-mode offline overlay is driven separately by media_status —
--- see todo_offline_overlay_during_playback.md), then promote to flat.
--- Also overlap-filter to the requested [from, to) since the resolver may
--- have widened the recursion window.
+-- Filter to one media kind, drop entries with nil/empty media_path (TMB
+-- requires a non-empty path; park-mode offline overlay is driven separately
+-- by media_status — see todo_offline_overlay_during_playback.md), then
+-- promote to flat. Also overlap-filter to the requested [from, to) since
+-- the resolver may have widened the recursion window.
 local function filter_and_finalize(entries, kind, from_frame, to_frame)
     local out = {}
     local cache = {}
