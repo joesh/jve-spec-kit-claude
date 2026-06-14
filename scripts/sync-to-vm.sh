@@ -43,6 +43,11 @@
 #   - .git/                       (guest doesn't need git)
 #   - build/* except the .app     (host cmake cache has absolute host paths)
 #   - tests/fixtures/media/       (588 GB of rushes; smokes don't touch them)
+#                                 EXCEPT the two small A005_C052_0925BL_001
+#                                 mp4s shipped explicitly below — live DRT
+#                                 round-trip tests need real online media so
+#                                 Resolve reports a real source range (an
+#                                 offline import collapses it to media length)
 #   - tests/, src/cpp/, etc.      (host-only — guest never builds)
 #
 # Prereqs (one-time): host has built `make -j4` so build/bin/jve.app
@@ -110,6 +115,8 @@ rsync -az --delete \
     tools/resolve-helper \
     "tests/fixtures/premiere/2026-03-20-anamnesis joe edit.prproj" \
     "tests/fixtures/media/anamnesis-trimmed/2026-03-28-anamnesis-GOLD-MASTER-CANDIDATE.drt" \
+    tests/fixtures/media/A005_C052_0925BL_001_tc01.mp4 \
+    tests/fixtures/media/A005_C052_0925BL_001.mp4 \
     src/lua \
     resources \
     keymaps \
