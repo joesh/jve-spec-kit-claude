@@ -257,25 +257,52 @@ function M.decode_bt_clip_path(hex_str)
     -- Field 1: directory (tag 0x0a = field 1, wire type LEN)
     if bytes:byte(proto_start) ~= 0x0a then return nil end
     local dir_len, dir_data_pos = M.decode_protobuf_varint(bytes, proto_start + 1)
-    if not dir_len or dir_data_pos + dir_len - 1 > #bytes then return nil end
-    local directory = bytes:sub(dir_data_pos, dir_data_pos + dir_len - 1)
+    if not dir_len or dir_data_pos > #bytes then return nil end
+    local directory = ""
+    if dir_data_pos + dir_len - 1 <= #bytes then
+        directory = bytes:sub(dir_data_pos, dir_data_pos + dir_len - 1)
+    end
 
-    -- Field 2: filename (tag 0x12 = field 2, wire type LEN)
-    local f2_pos = dir_data_pos + dir_len
-    if f2_pos > #bytes or bytes:byte(f2_pos) ~= 0x12 then return nil end
-    local fname_len, fname_data_pos = M.decode_protobuf_varint(bytes, f2_pos + 1)
-    if not fname_len or fname_data_pos + fname_len - 1 > #bytes then return nil end
-    local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
+    -- Dual-system external WAV clip blobs carry a corrupt directory-length varint
+    -- that overruns the real directory into the following filename/date fields
+    -- (it reads ~19 bytes long). The overrun pulls protobuf tag bytes (0x12, 0x1a)
+    -- into the string, which the control-char guard below would reject — dropping
+    -- the path entirely. A protobuf string field is always followed by the next
+    -- field's tag byte (0x0a / 0x12 / 0x1a, all < 0x20), so the true directory is
+    -- the leading run of printable bytes. When the declared length yields control
+    -- chars (or overruns the buffer), re-delimit the directory by that printable
+    -- run and recompute the filename-field position from its real length.
+    if directory == "" or directory:find("[%z\1-\31]") then
+        local run_end = dir_data_pos
+        while run_end <= #bytes do
+            local byte_val = bytes:byte(run_end)
+            if byte_val < 0x20 or byte_val >= 0x7f then break end
+            run_end = run_end + 1
+        end
+        directory = bytes:sub(dir_data_pos, run_end - 1)
+    end
+    if #directory == 0 then return nil, nil end
 
-    -- Both components must be non-empty to form a valid path
-    if #directory == 0 or #filename == 0 then return nil, nil end
-
-    -- Reject garbled directories (protobuf field data leak). Valid paths never contain control chars.
-    if directory:find("[%z\1-\31]") then
-        log.warn("decode_bt_clip_path: garbled directory in blob (raw=%s), skipping",
+    -- A genuine source path is absolute (POSIX '/' or Windows drive 'X:\'). Any
+    -- other leading byte is a protobuf field-data leak, not a path.
+    if not (directory:sub(1, 1) == "/" or directory:match("^%a:[/\\]")) then
+        log.warn("decode_bt_clip_path: non-path directory in blob (raw=%s), skipping",
             directory:sub(1, 30))
         return nil, nil
     end
+
+    -- Field 2: filename (tag 0x12 = field 2, wire type LEN). The filename length
+    -- varint is reliable (unlike the directory's), so trust it — the byte after a
+    -- filename can be a printable higher-field tag (e.g. 0x2a), which a printable-
+    -- run scan would wrongly swallow. No filename field ⇒ hand back the directory
+    -- so the caller can fall back to the XML <Name>.
+    local f2_pos = dir_data_pos + #directory
+    if f2_pos > #bytes or bytes:byte(f2_pos) ~= 0x12 then return nil, directory end
+    local fname_len, fname_data_pos = M.decode_protobuf_varint(bytes, f2_pos + 1)
+    if not fname_len or fname_data_pos + fname_len - 1 > #bytes then return nil, directory end
+    local filename = bytes:sub(fname_data_pos, fname_data_pos + fname_len - 1)
+
+    if #filename == 0 then return nil, directory end
 
     -- Filename may contain control chars (protobuf date fields leaking into
     -- the filename field — common in audio clip blobs). When this happens,
