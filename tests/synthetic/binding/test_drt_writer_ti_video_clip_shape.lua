@@ -35,14 +35,18 @@ end
 -- become invalid (which is correct — the spec is per-config).
 -- Provenance: unzip the .drp → SeqContainer/<dbid>.xml lines 38-39.
 local PINNED_MEDIA_FRAME_RATE = "872211b5dcf937400000000000000000"
--- 41-byte 0x02 long form: type tag + be(d) + 0×8 + be(d+1/24000) + 0×8 + be(d)
--- where d = 107/23.976. See todo_drt_media_timemap_ba_format.md for the
--- partial-decode notes; pinned literal here is from
--- resolve_authored_single_clip.drp (the Resolve-authored reference where
--- the clip is rendered in the timeline).
-local PINNED_MEDIA_TIMEMAP_BA =
-    "024011d9e60f04c75600000000000000004011d9f0fb38a94c"
-    .. "00000000000000004011d9e60f04c756"
+-- 9-byte 0x02 forward form: type tag + be(d), where d = 107/23.976.
+-- This is the shape a Resolve-authored **.drt** uses for a forward
+-- un-retimed clip (retime-test.drt; see feedback_drt_drp_follow_fixtures).
+-- The 41-byte `02|be(d)|0×8|be(d+1/24000)|0×8|be(d)` long form is a
+-- **.drp**-only encoding (resolve_authored_single_clip.drp). Since this
+-- writer authors a .drt, the 9-byte form is correct. A live import
+-- experiment (test_drt_mtba_short_vs_long_render.lua, 2026-06-14)
+-- confirmed the 9-byte form renders identically to the 41-byte form
+-- (record_duration=24, kind=media), disproving the earlier 2026-05-31
+-- "short form refuses to render" claim. The 9-byte form is also
+-- rate-general — no epsilon constant, works at any native rate.
+local PINNED_MEDIA_TIMEMAP_BA = "024011d9e60f04c756"
 local PINNED_CURRENT_SELECTOR_IDX = "1083179008"
 
 local payload = fixture.build_a005_payload()
@@ -113,10 +117,10 @@ expect_inside(
 -- against this pinned literal.
 expect_inside(
     "<MediaTimemapBA>" .. PINNED_MEDIA_TIMEMAP_BA .. "</MediaTimemapBA>",
-    "MediaTimemapBA must match Resolve's literal bytes for "
-    .. "108-frame A005-at-23.976 — 41-byte long form is the shape "
-    .. "Resolve actually renders; the 9-byte short form correlated with "
-    .. "Resolve refusing to instantiate the clip in the TL (2026-05-31).")
+    "MediaTimemapBA must match the .drt forward 9-byte form for "
+    .. "108-frame A005-at-23.976 (02|be(107/23.976)). The .drt fixture "
+    .. "uses this form; a live import experiment confirmed it renders "
+    .. "identically to the .drp 41-byte long form (2026-06-14).")
 expect_inside(
     "<CurrentSelectorIdx>" .. PINNED_CURRENT_SELECTOR_IDX
         .. "</CurrentSelectorIdx>",

@@ -468,14 +468,26 @@ Two bugs surfaced during the round-trip acceptance test:
   Fix: sweep both ASCII and UTF-16BE encodings; post-sweep asserts on
   both. Regression: `tests/test_drt_writer_fields_blob_uuid_sweep.lua`.
 
-- **`MediaTimemapBA` long form.** The 9-byte 0x02 short form (just
-  `02 + be(d)`) correlated with Resolve refusing to render visible
-  clips. The actual on-wire shape for a rendered clip is 41 bytes:
-  `02 | be(d) | 0×8 | be(d + 1/24000) | 0×8 | be(d)` where
-  `d = (duration_frames − 1) / native_rate`. Epsilon `1/24000` is
-  hard-coded for 23.976; non-23.976 rates are gated by assert in
-  `build_media_timemap_ba` (tracked in `todo_drt_media_timemap_ba_
-  format.md`).
+- **`MediaTimemapBA` form — 9-byte, rate-general (corrected 2026-06-14).**
+  The forward un-retimed clip uses the 9-byte 0x02 form `02 | be(d)`,
+  `d = (duration_frames − 1) / native_rate`. This is what a Resolve-authored
+  **`.drt`** writes (`retime-test.drt`) and is the shape this writer emits
+  (matching the K3 table above). It is rate-general — no epsilon, no
+  rate-specific constant.
+  - The 2026-06-01 claim here ("9-byte refuses to render; 41 bytes
+    `02|be(d)|0×8|be(d+1/24000)|0×8|be(d)` required") was **wrong on two
+    counts**: (1) the 41-byte form with the `1/24000` epsilon is a
+    **`.drp`**-only encoding (`resolve_authored_single_clip.drp`) — `.drt`
+    and `.drp` encode the same clip differently, and JVE authors a `.drt`;
+    (2) a live import experiment
+    (`tests/synthetic/integration/live_resolve/test_drt_mtba_short_vs_long_render.lua`,
+    2026-06-14) imported both forms into Resolve and read them back —
+    **identical** (`record_duration=24`, `kind=media`). The original
+    non-render was almost certainly the UTF-16BE sweep miss / SelectorIdx
+    bugs found the same day, not the MTBA length.
+  - The `1/24000` hard-code and the `native_rate == 24000/1001` assert have
+    been removed from `build_media_timemap_ba`. `todo_drt_media_timemap_ba_format.md`
+    (forward case) is resolved.
 
 - **`CurrentSelectorIdx` magic value.** Resolve writes `1083179008`
   (= `0x40903000`) for an unversioned plain clip. Emitting `0`

@@ -305,44 +305,28 @@ local VIRTUAL_AUDIO_TRACK_BA_MONO_A1 =
 
 -- MediaTimemapBA — un-retimed timing curve for the clip.
 --
--- Observed REF format from resolve_authored_single_clip.drp (108-frame A005
--- clip at 23.976 native rate) is **41 bytes** (not 9), shape:
---   02 | be(d) | 0×8 | be(d + 1/numerator) | 0×8 | be(d)
--- where d = (duration_frames - 1) / native_rate in seconds, and the
--- middle epsilon `1/numerator` (with native_rate = numerator / 1001)
--- is empirically `1/24000` for 23.976 fps. Format is otherwise opaque —
--- Resolve probably encodes a 3-keyframe curve (start/peak/end) with
--- implicit x-coords, but full decode is deferred. Tracked in
--- todo_drt_media_timemap_ba_format.md.
+-- A Resolve-authored **.drt** (retime-test.drt) encodes a forward clip's
+-- MediaTimemapBA as the **9-byte** 0x02 form:
+--   02 | be(d)        where d = (duration_frames - 1) / native_rate (seconds)
+-- This is rate-general — there is no epsilon and no rate-specific constant,
+-- so it works at any native rate including fractional ones.
 --
--- The 9-byte 0x02 form (just `02 + be(d)`) is documented by drp_binary's
--- decoder as "no speed info" and was the first thing this writer emitted —
--- but the empirical Resolve refusal to render the clip (only TC start
--- shown, no clip body in TL — 2026-05-31) suggests Resolve's parser
--- treats the short form as malformed for visible clips. Emitting the
--- long form unblocks the spike acceptance test.
+-- (The 41-byte `02|be(d)|0×8|be(d+1/24000)|0×8|be(d)` long form is a
+-- **.drp**-only encoding — resolve_authored_single_clip.drp. `.drt` and
+-- `.drp` encode the same clip differently; this writer authors a .drt, so
+-- it must emit the .drt form. An earlier session emitted the 41-byte .drp
+-- form here under a 2026-05-31 claim that the 9-byte form "refused to
+-- render". A live import experiment on 2026-06-14
+-- (test_drt_mtba_short_vs_long_render.lua) disproved that: the 9-byte form
+-- renders identically — record_duration=24, kind=media — to the 41-byte
+-- form. See feedback_drt_drp_follow_fixtures.)
 local function build_media_timemap_ba(duration_frames, media_native_rate)
     assert(type(duration_frames) == "number" and duration_frames > 0,
         "drt_writer.build_media_timemap_ba: positive duration_frames required")
     assert(type(media_native_rate) == "number" and media_native_rate > 0,
         "drt_writer.build_media_timemap_ba: positive media_native_rate required")
-    -- Epsilon constant derives from native_rate's numerator (24000 for
-    -- 23.976 = 24000/1001). For non-23.976 rates this constant must be
-    -- reverse-engineered — fail-fast so a future caller's wrong-rate
-    -- output doesn't silently confuse Resolve.
-    local TWENTYFOURTHOUSAND_INV = 1 / 24000
-    assert(math.abs(media_native_rate - 24000 / 1001) < 1e-6,
-        string.format("drt_writer.build_media_timemap_ba: epsilon constant "
-        .. "1/24000 was empirically derived from 23.976 fps "
-        .. "(24000/1001) only — got native_rate=%.6f. Re-derive from a "
-        .. "Resolve-authored DRP at this rate before extending.",
-        media_native_rate))
     local d_secs = (duration_frames - 1) / media_native_rate
-    local d_plus = d_secs + TWENTYFOURTHOUSAND_INV
-    local zeros = "0000000000000000"
     return "02" .. enc.encode_be_double(d_secs)
-        .. zeros .. enc.encode_be_double(d_plus)
-        .. zeros .. enc.encode_be_double(d_secs)
 end
 
 -- Reverse-clip retiming — the full keyframe-curve MediaTimemapBA plus the
