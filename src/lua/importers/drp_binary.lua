@@ -476,6 +476,7 @@ function M.decode_bt_video_time(hex_str)
         num_frames = num_frames,
         frame_rate = fields["FrameRate"],
         unique_id = fields["UniqueId"],
+        timecode = fields["Timecode"],   -- media source-TC origin string, nil if absent
     }
 end
 

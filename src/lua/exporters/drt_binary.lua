@@ -215,31 +215,46 @@ end
 -- Header: [BE32 version=1][BE32 field_count]; then TLV. field_count ∈ [4,8].
 -- ---------------------------------------------------------------------------
 
---- @param t table: { num_frames=int>0, frame_rate=number, unique_id=string }
+--- @param t table: { num_frames=int>0, frame_rate=number, unique_id=string,
+---                    timecode=string? }  -- timecode = media source-TC origin
+---                    as "HH:MM:SS:FF"; omit/empty for zero-origin media.
 --- @return string: hex-encoded Time blob
 function M.encode_bt_video_time(t)
     assert(type(t.num_frames) == "number" and t.num_frames > 0,
         "encode_bt_video_time: num_frames must be > 0")
     assert(type(t.frame_rate) == "number", "encode_bt_video_time: frame_rate required")
     assert(type(t.unique_id) == "string", "encode_bt_video_time: unique_id required")
+    assert(t.timecode == nil or type(t.timecode) == "string",
+        "encode_bt_video_time: timecode must be a string when present")
 
-    -- Reference shape (live Resolve 20.3 DRT export, dissected
-    -- 2026-06-10): FIVE fields — FrameRate as a 0x000c payload
-    -- (LE double + 8 zero bytes) and a trailing DbType string
-    -- "BtVideoTime". The earlier four-field shape (FrameRate as
-    -- 0x0006 BE double, no DbType) round-tripped through JVE's own
-    -- decoder but Resolve failed to parse the media extents from it:
-    -- linked items came back with a degenerate source range clamped to
-    -- media end (src 108..108 on a 108-frame file). JVE's decoder
-    -- accepts both shapes (0x000c reads the LE double from the first
-    -- 8 payload bytes).
+    -- Reference shape (live Resolve 20.3 DRT export, dissected 2026-06-10
+    -- / 2026-06-14): FrameRate as a 0x000c payload (LE double + 8 zero
+    -- bytes) and a trailing DbType string "BtVideoTime".
+    --
+    -- The `Timecode` string (media's embedded source-TC origin, e.g.
+    -- "01:00:00:00") is REQUIRED for media whose TC origin is non-zero:
+    -- without it Resolve cannot map the timeline item's media-relative
+    -- <In> onto the source media and clamps the imported clip's source
+    -- range to media-end (GetSourceStartFrame == NumFrames, src 108..108
+    -- on a 108-frame file). Live-confirmed 2026-06-14: injecting this one
+    -- entry flips the readback 108 → 29 (the media-relative in-point,
+    -- ±1 per Resolve's GetSourceStartFrame rounding) —
+    -- test_drt_mptime_timecode_clamp. A Resolve-native item omits Timecode
+    -- only when the media's TC origin is zero, so callers pass it only
+    -- then (5-field shape == the zero-origin reference).
     local fields = encode_field("UniqueId", 0x000a, t.unique_id)
+    local field_count = 5
+    if t.timecode and t.timecode ~= "" then
+        fields = fields .. encode_field("Timecode", 0x000a, t.timecode)
+        field_count = 6
+    end
+    fields = fields
         .. encode_field("StartFrame", 0x0002, 0)
         .. encode_field("NumFrames", 0x0002, t.num_frames)
         .. encode_field("FrameRate", 0x000c,
             double_to_le_bytes(t.frame_rate) .. string.rep("\0", 8))
         .. encode_field("DbType", 0x000a, "BtVideoTime")
-    local header = M.write_be32(1) .. M.write_be32(5)
+    local header = M.write_be32(1) .. M.write_be32(field_count)
     return to_hex(header .. fields)
 end
 
