@@ -205,20 +205,19 @@ assert(rev.record_duration == DUR, string.format(
     "reverse record_duration %s != authored %d — the reverse clip imported "
     .. "with the wrong length", tostring(rev.record_duration), DUR))
 
--- SOURCE-RANGE CEILING (observation, not a pass condition).
--- read_timeline's GetSourceStartFrame/GetSourceEndFrame currently collapse to
--- the media frame-count for EVERY JVE-authored DRT clip — forward and reverse
--- alike — regardless of the authored <In>/<Duration>. This is a pre-existing,
--- path-wide limitation (the JVE→Resolve DRT does not yet carry a per-clip
--- source range Resolve honors on import), tracked in
--- todo_023_drt_source_range_readback_degenerate.md and probed by the sibling
--- test_source_in_tc_origin_probe (same degenerate readback on a different
--- fixture). So this test CANNOT assert the source range — only acceptance +
--- the record side. The reverse SOURCE range is proven by the byte-golden MTBA
--- encoder + the offline drt_writer↔drp_importer round-trip
--- (tests/synthetic/integration/test_drt_reverse_clip_roundtrip). When the
--- source-range path is fixed, tighten this to assert fwd.source_in == LO and
--- that the reverse twin covers the identical source region.
+-- D + E. SOURCE RANGE (live, now that the DRT source-range path is fixed).
+-- The clamp that collapsed every clip's GetSourceStartFrame/EndFrame to the
+-- media frame-count is resolved (Sm2MpVideoClip <Time> Timecode entry now
+-- synthesized from the media's source-TC origin — commits 13cff8b8/3db28783,
+-- todo_023_drt_source_range_readback_degenerate). So Resolve maps the authored
+-- file-relative <In> onto the source and we can finally assert it.
+--
+-- Resolve's GetSourceStartFrame reads ~1 below the authored frame (its OWN
+-- in=N clip reads N−1 — test_drt_source_in_resolve_authored / the
+-- test_drt_mptime_timecode_clamp control), so every source bound is compared
+-- with a ±1 tolerance. Values are file-relative (the writer subtracts
+-- media.start_tc_frame): the forward clip's played window is [LO..HI], so its
+-- low source bound is LO.
 local function region(it)
     local a, b = it.source_in, it.source_out
     if a <= b then return a, b else return b, a end
@@ -226,11 +225,35 @@ end
 local fwd_lo, fwd_hi = region(fwd)
 local rev_lo, rev_hi = region(rev)
 print(string.format(
-    "  source-range readback (degenerate, path-wide): fwd=[%d,%d] rev=[%d,%d] "
-    .. "— direction not yet observable live; see offline round-trip.",
-    fwd_lo, fwd_hi, rev_lo, rev_hi))
+    "  source-range readback: fwd=[%d,%d] rev=[%d,%d] (LO=%d HI=%d)",
+    fwd_lo, fwd_hi, rev_lo, rev_hi, LO, HI))
+
+-- D. Forward clip's low source bound is the authored in-point LO (±1).
+assert(math.abs(fwd_lo - LO) <= 1, string.format(
+    "forward source in-point %d != authored LO %d (±1 Resolve rounding) — "
+    .. "the file-relative <In> was not honored on import", fwd_lo, LO))
+
+-- E. The reverse twin plays the SAME source frames as the forward clip, so it
+-- must occupy the IDENTICAL source region {min,max} (±1 per bound). This is a
+-- relative compare — convention-independent: it holds whether or not Resolve
+-- mirrors in/out ordering for a reverse clip (the still-recorded live unknown),
+-- because region() normalizes to {lo,hi} on both.
+assert(math.abs(rev_lo - fwd_lo) <= 1 and math.abs(rev_hi - fwd_hi) <= 1,
+    string.format(
+        "reverse twin source region [%d,%d] != forward [%d,%d] (±1) — the "
+        .. "reverse clip does not play the same source frames as its forward "
+        .. "twin", rev_lo, rev_hi, fwd_lo, fwd_hi))
+
+-- Records (does NOT gate) whether Resolve mirrored in/out for the reverse clip.
+if rev.source_in > rev.source_out then
+    print("  reverse clip reports source_in > source_out — Resolve mirrored "
+        .. "the in/out ordering (live direction confirmation).")
+else
+    print("  reverse clip reports source_in <= source_out — Resolve did NOT "
+        .. "mirror in/out ordering; direction carried only by the MTBA curve.")
+end
 
 print("✅ test_drt_reverse_roundtrip_live.lua passed — live Resolve ACCEPTS a "
-    .. "JVE reverse-clip .drt (clip keyed, not unrelinked) and places it with "
-    .. "the correct timeline duration. Source-range correctness is proven "
-    .. "offline; live source range is gated on the DRT source-range fix.")
+    .. "JVE reverse-clip .drt (keyed, not unrelinked), places it with the "
+    .. "correct timeline duration, honors the forward in-point (LO), and the "
+    .. "reverse twin occupies the same source region as its forward twin.")
