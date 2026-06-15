@@ -2532,6 +2532,25 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
 
         if entry then
+            -- Resolve pools the SAME physical file under several MediaPoolItem
+            -- ids — one per sync relationship (a field recorder WAV synced to N
+            -- camera clips appears as N pool entries, same path, different ids).
+            -- They all name one file ⇒ one media. media_get above collapsed this
+            -- pmc onto the file's existing entry (by shared path); record this
+            -- pmc's id so the file resolves by EVERY one of its pool ids. The
+            -- first id seen is canonical (file_uuid); the rest are aliases —
+            -- mirrors alt_paths for the multi-path case. Without this, a camera
+            -- whose sync source is a non-canonical id loses its synced audio
+            -- (importer warns "synced audio pool_id … not in media_by_uuid").
+            if pmc.id and pmc.id ~= "" then
+                if not entry.file_uuid or entry.file_uuid == "" then
+                    entry.file_uuid = pmc.id
+                elseif pmc.id ~= entry.file_uuid then
+                    entry.alt_uuids = entry.alt_uuids or {}
+                    entry.alt_uuids[pmc.id] = true
+                end
+            end
+
             -- Update canonical path from blob if blob has a decodable path
             if pmc.file_path and pmc.file_path ~= entry.file_path then
                 entry.alt_paths[entry.file_path] = true

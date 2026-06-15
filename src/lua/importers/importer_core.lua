@@ -314,6 +314,13 @@ local function register_media_row(media, media_item, media_by_uuid, media_by_pat
     if media_item.file_uuid then
         media_by_uuid[media_item.file_uuid] = media
     end
+    -- The same physical file may be pooled under several source ids (Resolve
+    -- creates one MediaPoolItem per sync relationship). The parser collapses
+    -- them to one media entry and records the extra ids as alt_uuids; key the
+    -- media under every one so sync linkage resolves by any of the file's ids.
+    for alias in pairs(media_item.alt_uuids or {}) do
+        media_by_uuid[alias] = media
+    end
     media_by_path[media_item.file_path] = media
     for alt in pairs(media_item.alt_paths or {}) do
         media_by_path[alt] = media
