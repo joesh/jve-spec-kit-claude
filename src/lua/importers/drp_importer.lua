@@ -1904,11 +1904,17 @@ local function apply_pmc_metadata(entry, pmc)
 
     -- audio-only: one BtAudioInfo in XML regardless of ch count; TracksBA.NumChannels is authoritative. A/V: one BtAudioInfo per channel, so count is right.
     if pmc.clip_type == "audio" then
-        assert(pmc.audio_duration, string.format(
-            "apply_pmc_metadata: audio clip has no audio_duration (pmc missing TracksBA?)"))
-        local n = pmc.audio_duration.num_channels
-        if n and n > 0 then
-            entry.audio_channels = n
+        -- channel count comes from the decoded TracksBA blob. A pool audio clip
+        -- whose blob did not decode (encrypted / truncated) has no audio_duration;
+        -- per the imported-data-degrades-gracefully rule (1.12) it imports as
+        -- zero-duration (then dropped by try_import_media_item) rather than
+        -- crashing the whole import — so guard rather than assert. (On the
+        -- synced-audio path the blob is always decoded, so this still fills.)
+        if pmc.audio_duration then
+            local n = pmc.audio_duration.num_channels
+            if n and n > 0 then
+                entry.audio_channels = n
+            end
         end
     elseif pmc.own_bt_audio_info_ids and #pmc.own_bt_audio_info_ids > 0 then
         entry.audio_channels = #pmc.own_bt_audio_info_ids
@@ -1916,6 +1922,26 @@ local function apply_pmc_metadata(entry, pmc)
 end
 M._apply_pmc_metadata = apply_pmc_metadata  -- exported for tests
 M._parse_master_clip_element = parse_master_clip_element
+
+-- Build a minimal media_items entry for a pool master clip, anchored on its
+-- decoded file path or — for media-managed projects that stripped the path —
+-- its name (an offline relink-by-basename anchor; no directory => media_status
+-- reports offline). Returns nil when the clip carries neither path nor name;
+-- the caller decides whether that's an error (synced audio) or a skip
+-- (unreferenced pool clip). Does NOT call apply_pmc_metadata — callers apply it
+-- when they need the blob-derived fields.
+local function make_pmc_entry(pmc)
+    local anchor = pmc.file_path
+    if not anchor or anchor == "" then anchor = pmc.name end
+    if not anchor or anchor == "" then return nil end
+    return {
+        file_uuid = pmc.id,
+        name      = pmc.name or anchor,
+        file_path = anchor,
+        duration  = 0,
+        alt_paths = {},
+    }
+end
 
 -- For each video pool item with AudioSource=AUDIO_SOURCE_CUSTOM, resolve
 -- the external audio pool items via the btai_dbid reverse index, ensure they
@@ -1980,22 +2006,14 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
                 -- using the filename as the relink anchor (no directory →
                 -- media_status reports offline; relink matches by basename).
                 -- Online pool clips still carry a full decoded file_path.
-                local anchor = audio_pmc.file_path
-                if not anchor or anchor == "" then anchor = audio_pmc.name end
-                assert(anchor and anchor ~= "", string.format(
+                local entry = make_pmc_entry(audio_pmc)
+                assert(entry, string.format(
                     "drp_importer: synced audio pmc id=%s has neither file_path "
                     .. "nor name — cannot anchor offline media", tostring(audio_pmc.id)))
-                local entry = {
-                    file_uuid = audio_pmc.id,
-                    name      = audio_pmc.name or anchor,
-                    file_path = anchor,
-                    duration  = 0,
-                    alt_paths = {},
-                }
                 apply_pmc_metadata(entry, audio_pmc)
                 media_put(entry)
                 log.event("drp_importer: added synced audio to media_items: '%s' (id=%s, path=%s)",
-                    audio_pmc.name or "?", audio_pmc.id, anchor)
+                    audio_pmc.name or "?", audio_pmc.id, entry.file_path)
             elseif not existing.file_uuid or existing.file_uuid == "" then
                 -- Entry was seeded path-only; upgrade it with the UUID so
                 -- media_by_uuid can find it by pool_id in build_synced_audio_map.
@@ -2499,25 +2517,13 @@ function M.parse_drp_file(drp_path, progress_cb)
         local entry = media_get(pmc.id, pmc.file_path)
 
         if not entry and pmc.id then
-            -- Materialize pool-only clips — filed in a bin but never placed on
-            -- a timeline — so the FULL media pool imports, not just the media
-            -- used in the edit. Anchor on the decoded blob path; fall back to
-            -- the clip name for media-managed projects that stripped the
-            -- source path (offline media, relink by basename — same anchor
-            -- rule as resolve_synced_audio_linkage). A pmc with neither a path
-            -- nor a name carries no usable reference and stays unmaterialized;
-            -- a pmc whose blob yielded no duration is filtered later by
-            -- try_import_media_item (zero-duration).
-            local anchor = pmc.file_path
-            if not anchor or anchor == "" then anchor = pmc.name end
-            if anchor and anchor ~= "" then
-                entry = {
-                    file_uuid = pmc.id,
-                    name      = pmc.name or anchor,
-                    file_path = anchor,
-                    duration  = 0,
-                    alt_paths = {},
-                }
+            -- Materialize pool-only clips — filed in a bin but never placed on a
+            -- timeline — so the FULL media pool imports, not just the media used
+            -- in the edit. (apply_pmc_metadata runs below for every entry; a pmc
+            -- whose blob yielded no duration is filtered later by
+            -- try_import_media_item as zero-duration.)
+            entry = make_pmc_entry(pmc)
+            if entry then
                 media_put(entry)
             else
                 log.detail("pmc %s (id=%s): no file reference — cannot materialize",

@@ -864,6 +864,66 @@ local function reframe_audio_window(in_frame, in_sub, out_frame, out_sub, old_tp
     return nf_in, ns_in, nf_out, ns_out
 end
 
+-- Retarget one clip to `vals.media_id`'s master sequence. Returns true when it
+-- also wrote the clip's source window (the cross-fps audio path), so the caller
+-- skips the generic range update. `stmts` holds the loop-reused prepared
+-- statements; cur_sub_* / old_fps_* are the clip's current sub-frames + master fps.
+local function rebind_clip_to_master(stmts, clip_id, vals, cur_sub_in, cur_sub_out,
+                                     old_fps_num, old_fps_den)
+    local Sequence = require("models.sequence")
+    local Project  = require("models.project")
+
+    -- The clip's project_id is the master's project_id — read it from the clip row.
+    stmts.proj:bind_value(1, clip_id)
+    assert(stmts.proj:exec(), "Clip.batch_update_source: project_id query failed for "
+        .. clip_id .. ": " .. tostring(stmts.proj:last_error()))
+    assert(stmts.proj:next(), "Clip.batch_update_source: clip not found for project_id: " .. clip_id)
+    local project_id = stmts.proj:value(0)
+    stmts.proj:reset()
+
+    local new_master_id = Sequence.ensure_master(vals.media_id, project_id)
+
+    -- New master's fps drives ticks_per_frame for the rebound clip.
+    stmts.new_fps:bind_value(1, new_master_id)
+    assert(stmts.new_fps:exec(), "Clip.batch_update_source: new-master fps query failed for "
+        .. new_master_id .. ": " .. tostring(stmts.new_fps:last_error()))
+    assert(stmts.new_fps:next(), "Clip.batch_update_source: new master row missing for " .. new_master_id)
+    local new_fps_num = stmts.new_fps:value(0)
+    local new_fps_den = stmts.new_fps:value(1)
+    stmts.new_fps:reset()
+
+    local mch     = Project.get_master_clock_hz_for_id(project_id)
+    local old_tpf = subframe_math.ticks_per_frame(mch, old_fps_num, old_fps_den)
+    local new_tpf = subframe_math.ticks_per_frame(mch, new_fps_num, new_fps_den)
+
+    if cur_sub_in ~= nil and old_tpf ~= new_tpf then
+        -- Audio clip crossing a frame-rate boundary: re-express the window so the
+        -- absolute audio position is preserved and the new sub-frames are valid
+        -- under the new fps. Written atomically with the sequence_id swap (so the
+        -- subframe-bound trigger sees the NEW valid sub-frames); window done here.
+        local nf_in, ns_in, nf_out, ns_out = reframe_audio_window(
+            vals.source_in, cur_sub_in, vals.source_out, cur_sub_out, old_tpf, new_tpf)
+        local s = stmts.rebind_audio
+        s:bind_value(1, new_master_id)
+        s:bind_value(2, nf_in);  s:bind_value(3, ns_in)
+        s:bind_value(4, nf_out); s:bind_value(5, ns_out)
+        s:bind_value(6, clip_id)
+        assert(s:exec(), "Clip.batch_update_source: audio-rebind exec failed for "
+            .. clip_id .. ": " .. tostring(s:last_error()))
+        s:reset()
+        return true
+    end
+
+    -- Capture the SQLite error: the rebind UPDATE fires schema triggers (owner-kind,
+    -- audio subframe-bound) that RAISE(ABORT) naming the violated invariant.
+    stmts.rebind:bind_value(1, new_master_id)
+    stmts.rebind:bind_value(2, clip_id)
+    assert(stmts.rebind:exec(), "Clip.batch_update_source: rebind exec failed for "
+        .. clip_id .. ": " .. tostring(stmts.rebind:last_error()))
+    stmts.rebind:reset()
+    return false
+end
+
 --- Batch update source range (and, when changed, retarget the clip's
 --  master sequence so it points at a different media). V13: clips
 --  themselves no longer hold media_id; rebinding to a different media
@@ -880,139 +940,85 @@ function M.batch_update_source(updates)
     local database = require("core.database")
     local db = assert(database.get_connection(), "Clip.batch_update_source: no database connection")
 
-    -- Source-range updates always apply (non-rebind / same-fps path).
-    local range_stmt = assert(db:prepare([[
-        UPDATE clips SET source_in_frame = ?, source_out_frame = ?,
-            modified_at = strftime('%s','now') WHERE id = ?
-    ]]), "Clip.batch_update_source: failed to prepare range update")
+    local stmts = {
+        -- Source-range update (non-rebind / same-fps path).
+        range = assert(db:prepare([[
+            UPDATE clips SET source_in_frame = ?, source_out_frame = ?,
+                modified_at = strftime('%s','now') WHERE id = ?
+        ]]), "Clip.batch_update_source: failed to prepare range update"),
 
-    -- Master swap: only fire when the clip's current master no longer matches
-    -- the desired media. Also read the clip's current sub-frames + the OLD
-    -- master's fps so a cross-fps audio relink can re-express the window.
-    local current_stmt = assert(db:prepare([[
-        SELECT c.sequence_id, mr.media_id,
-               c.source_in_subframe, c.source_out_subframe,
-               s.fps_numerator, s.fps_denominator
-          FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
-          JOIN sequences  s  ON s.id = c.sequence_id
-         WHERE c.id = ?
-    ]]), "Clip.batch_update_source: failed to prepare current-master query")
+        -- Detect the clip's CURRENT bound media + read its sub-frames and master
+        -- fps. A master holds several media_refs (per-channel audio, dual-system
+        -- camera+WAV); the desired media is the PRIMARY one, on a non-sync track —
+        -- so constrain to that and LIMIT 1 for a deterministic answer.
+        current = assert(db:prepare([[
+            SELECT c.sequence_id, mr.media_id,
+                   c.source_in_subframe, c.source_out_subframe,
+                   s.fps_numerator, s.fps_denominator
+              FROM clips c
+              JOIN sequences  s  ON s.id = c.sequence_id
+              JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+              JOIN tracks     t  ON t.id = mr.track_id
+                                AND (t.source_kind IS NULL OR t.source_kind <> 'sync')
+             WHERE c.id = ?
+             LIMIT 1
+        ]]), "Clip.batch_update_source: failed to prepare current-master query"),
 
-    local rebind_stmt = assert(db:prepare([[
-        UPDATE clips SET sequence_id = ?,
-            modified_at = strftime('%s','now') WHERE id = ?
-    ]]), "Clip.batch_update_source: failed to prepare rebind update")
+        rebind = assert(db:prepare([[
+            UPDATE clips SET sequence_id = ?,
+                modified_at = strftime('%s','now') WHERE id = ?
+        ]]), "Clip.batch_update_source: failed to prepare rebind update"),
 
-    -- Cross-fps audio rebind: swap sequence_id AND re-expressed window atomically
-    -- so the subframe-bound trigger validates the NEW (valid) sub-frames.
-    local rebind_audio_stmt = assert(db:prepare([[
-        UPDATE clips SET sequence_id = ?,
-            source_in_frame = ?, source_in_subframe = ?,
-            source_out_frame = ?, source_out_subframe = ?,
-            modified_at = strftime('%s','now') WHERE id = ?
-    ]]), "Clip.batch_update_source: failed to prepare audio-rebind update")
+        -- Cross-fps audio rebind: swap sequence_id AND the re-expressed window
+        -- atomically so the subframe-bound trigger validates the NEW sub-frames.
+        rebind_audio = assert(db:prepare([[
+            UPDATE clips SET sequence_id = ?,
+                source_in_frame = ?, source_in_subframe = ?,
+                source_out_frame = ?, source_out_subframe = ?,
+                modified_at = strftime('%s','now') WHERE id = ?
+        ]]), "Clip.batch_update_source: failed to prepare audio-rebind update"),
 
-    local new_fps_stmt = assert(db:prepare(
-        "SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?"),
-        "Clip.batch_update_source: failed to prepare new-master fps query")
+        new_fps = assert(db:prepare(
+            "SELECT fps_numerator, fps_denominator FROM sequences WHERE id = ?"),
+            "Clip.batch_update_source: failed to prepare new-master fps query"),
 
-    local Sequence = require("models.sequence")
-    local Project  = require("models.project")
+        proj = assert(db:prepare("SELECT project_id FROM clips WHERE id = ?"),
+            "Clip.batch_update_source: failed to prepare project_id query"),
+    }
 
     for clip_id, vals in pairs(updates) do
         assert(vals.media_id, "Clip.batch_update_source: media_id required for " .. clip_id)
         assert(vals.source_in, "Clip.batch_update_source: source_in required for " .. clip_id)
         assert(vals.source_out, "Clip.batch_update_source: source_out required for " .. clip_id)
 
-        -- Read the clip's existing master + leaf media, sub-frames, and old fps.
-        current_stmt:bind_value(1, clip_id)
-        assert(current_stmt:exec(), "Clip.batch_update_source: current-master exec failed for "
-            .. clip_id .. ": " .. tostring(current_stmt:last_error()))
-        assert(current_stmt:next(), "Clip.batch_update_source: clip not found: " .. clip_id)
-        local current_mid = current_stmt:value(1)
-        local cur_sub_in  = current_stmt:value(2)   -- nil for video clips
-        local cur_sub_out = current_stmt:value(3)
-        local old_fps_num = current_stmt:value(4)
-        local old_fps_den = current_stmt:value(5)
-        current_stmt:reset()
+        stmts.current:bind_value(1, clip_id)
+        assert(stmts.current:exec(), "Clip.batch_update_source: current-master exec failed for "
+            .. clip_id .. ": " .. tostring(stmts.current:last_error()))
+        assert(stmts.current:next(), "Clip.batch_update_source: clip not found: " .. clip_id)
+        local current_mid = stmts.current:value(1)
+        local cur_sub_in  = stmts.current:value(2)   -- nil for video clips
+        local cur_sub_out = stmts.current:value(3)
+        local old_fps_num = stmts.current:value(4)
+        local old_fps_den = stmts.current:value(5)
+        stmts.current:reset()
 
+        local window_written = false
         if current_mid ~= vals.media_id then
-            -- Rebind the clip to the new media's master sequence. The
-            -- clip's project_id is whatever the master's project_id is —
-            -- read it back from the existing master's row.
-            local proj_stmt = assert(db:prepare(
-                "SELECT project_id FROM clips WHERE id = ?"),
-                "Clip.batch_update_source: failed to prepare project_id query")
-            proj_stmt:bind_value(1, clip_id)
-            assert(proj_stmt:exec() and proj_stmt:next(),
-                "Clip.batch_update_source: project_id lookup failed for " .. clip_id
-                .. ": " .. tostring(proj_stmt:last_error()))
-            local project_id = proj_stmt:value(0)
-            proj_stmt:finalize()
-            local new_master_id = Sequence.ensure_master(vals.media_id, project_id)
-
-            -- New master's fps drives ticks_per_frame for the rebound clip.
-            new_fps_stmt:bind_value(1, new_master_id)
-            assert(new_fps_stmt:exec(),
-                "Clip.batch_update_source: new-master fps query failed for " .. new_master_id
-                .. ": " .. tostring(new_fps_stmt:last_error()))
-            assert(new_fps_stmt:next(),
-                "Clip.batch_update_source: new master row missing for " .. new_master_id)
-            local new_fps_num = new_fps_stmt:value(0)
-            local new_fps_den = new_fps_stmt:value(1)
-            new_fps_stmt:reset()
-
-            local mch     = Project.get_master_clock_hz_for_id(project_id)
-            local old_tpf = subframe_math.ticks_per_frame(mch, old_fps_num, old_fps_den)
-            local new_tpf = subframe_math.ticks_per_frame(mch, new_fps_num, new_fps_den)
-
-            if cur_sub_in ~= nil and old_tpf ~= new_tpf then
-                -- Audio clip crossing a frame-rate boundary: re-express the
-                -- window so the absolute audio position is preserved and the
-                -- new sub-frames are valid under the new fps. Window written
-                -- here; skip the generic range update below.
-                local nf_in, ns_in, nf_out, ns_out = reframe_audio_window(
-                    vals.source_in, cur_sub_in, vals.source_out, cur_sub_out,
-                    old_tpf, new_tpf)
-                rebind_audio_stmt:bind_value(1, new_master_id)
-                rebind_audio_stmt:bind_value(2, nf_in)
-                rebind_audio_stmt:bind_value(3, ns_in)
-                rebind_audio_stmt:bind_value(4, nf_out)
-                rebind_audio_stmt:bind_value(5, ns_out)
-                rebind_audio_stmt:bind_value(6, clip_id)
-                assert(rebind_audio_stmt:exec(),
-                    "Clip.batch_update_source: audio-rebind exec failed for " .. clip_id
-                    .. ": " .. tostring(rebind_audio_stmt:last_error()))
-                rebind_audio_stmt:reset()
-                goto continue_clip
-            end
-
-            rebind_stmt:bind_value(1, new_master_id)
-            rebind_stmt:bind_value(2, clip_id)
-            -- Capture the SQLite error: the rebind UPDATE fires schema triggers
-            -- (owner-kind, audio subframe-bound) that RAISE(ABORT) with a message
-            -- naming the violated invariant — surfacing it is the difference
-            -- between "rebind failed" and an actionable cause (rule: actionable
-            -- asserts).
-            assert(rebind_stmt:exec(), "Clip.batch_update_source: rebind exec failed for "
-                .. clip_id .. ": " .. tostring(rebind_stmt:last_error()))
-            rebind_stmt:reset()
+            window_written = rebind_clip_to_master(stmts, clip_id, vals,
+                cur_sub_in, cur_sub_out, old_fps_num, old_fps_den)
         end
 
-        range_stmt:bind_value(1, vals.source_in)
-        range_stmt:bind_value(2, vals.source_out)
-        range_stmt:bind_value(3, clip_id)
-        assert(range_stmt:exec(), "Clip.batch_update_source: range exec failed for "
-            .. clip_id .. ": " .. tostring(range_stmt:last_error()))
-        range_stmt:reset()
-        ::continue_clip::
+        if not window_written then
+            stmts.range:bind_value(1, vals.source_in)
+            stmts.range:bind_value(2, vals.source_out)
+            stmts.range:bind_value(3, clip_id)
+            assert(stmts.range:exec(), "Clip.batch_update_source: range exec failed for "
+                .. clip_id .. ": " .. tostring(stmts.range:last_error()))
+            stmts.range:reset()
+        end
     end
-    range_stmt:finalize()
-    current_stmt:finalize()
-    rebind_stmt:finalize()
-    rebind_audio_stmt:finalize()
-    new_fps_stmt:finalize()
+
+    for _, stmt in pairs(stmts) do stmt:finalize() end
 end
 
 -- ===========================================================================

@@ -600,6 +600,30 @@ local function resolve_master_bin(clip_data, media_by_uuid, media_by_path,
     return unorganized_bin_id
 end
 
+-- Create (idempotently) the master sequence for `media_id`, track it once for
+-- undo, and file it into the bin resolved for `bin_clip` (anything carrying
+-- file_uuid + file_path — a clip_data struct or a synthesized {file_uuid,
+-- file_path}; resolve_master_bin reads only those two). `ctx` bundles the
+-- per-import state (created_master_set, result, the media + pool-bin lookups,
+-- unorganized_bin_id, tag_service). ensure_master and add_to_bin are both
+-- idempotent, so calling this for a media that already has a master + bin is a
+-- no-op. Returns the master sequence id. Used by both the eager full-pool pass
+-- and the per-timeline-clip pass.
+local function ensure_master_and_bin(media_id, project_id, synced_audio, bin_clip, ctx)
+    local master_seq_id = Sequence.ensure_master(media_id, project_id,
+        synced_audio and { synced_audio_media_ids = synced_audio } or nil)
+    if not ctx.created_master_set[master_seq_id] then
+        ctx.created_master_set[master_seq_id] = true
+        table.insert(ctx.result.sequence_ids, master_seq_id)
+    end
+    local bin = resolve_master_bin(bin_clip, ctx.media_by_uuid, ctx.media_by_path,
+        ctx.pool_uuid_to_bin, ctx.pool_name_to_bin, ctx.unorganized_bin_id)
+    if bin then
+        ctx.tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
+    end
+    return master_seq_id
+end
+
 -- Build and persist a kind='sequence' sequence row for one parsed timeline.
 -- Asserts the save (rule 2.13). Returns the saved Sequence instance.
 local function create_imported_sequence(project_id, timeline_data, fps_num, fps_den,
@@ -776,14 +800,25 @@ function M.import_into_project(project_id, parse_result, opts)
     local synced_audio_by_media_id =
         build_synced_audio_map(parse_result.media_items, media_by_uuid)
 
+    -- Shared state for ensure_master_and_bin, used by both the eager full-pool
+    -- pass and the per-timeline-clip pass below.
+    local master_ctx = {
+        created_master_set = created_master_set,
+        result             = result,
+        media_by_uuid      = media_by_uuid,
+        media_by_path      = media_by_path,
+        pool_uuid_to_bin   = pool_uuid_to_bin,
+        pool_name_to_bin   = pool_name_to_bin,
+        unorganized_bin_id = unorganized_bin_id,
+        tag_service        = tag_service,
+    }
+
     -- Full-pool import: give EVERY imported media item a master source
     -- sequence, not just the media placed on a timeline. A clip filed in a bin
     -- but never cut into the edit must still be browseable in the media pool
     -- and openable in the source viewer — both require a kind='master'
-    -- sequence. The per-timeline clip loop below also calls ensure_master, but
-    -- it is idempotent (returns the existing master), so those calls become
-    -- no-ops for media handled here. Bin assignment mirrors the per-clip path;
-    -- add_to_bin is INSERT-OR-IGNORE, so a double assignment is harmless.
+    -- sequence. The per-timeline clip loop below calls ensure_master_and_bin
+    -- too, but it is idempotent, so those calls are no-ops for media handled here.
     sub_report(18, "Building source clips…")
     for _, media in ipairs(imported_media) do
         -- A master needs a known TC origin per present stream, and importers
@@ -793,20 +828,9 @@ function M.import_into_project(project_id, parse_result, opts)
         -- probed — "import everything we can" rather than asserting and
         -- aborting the whole import on one TC-less clip.
         if media:has_master_source_tc() then
-            local synced_audio = synced_audio_by_media_id[media.id]
-            local master_seq_id = Sequence.ensure_master(media.id, project_id,
-                synced_audio and { synced_audio_media_ids = synced_audio } or nil)
-            if not created_master_set[master_seq_id] then
-                created_master_set[master_seq_id] = true
-                table.insert(result.sequence_ids, master_seq_id)
-            end
-            local bin = resolve_master_bin(
-                { file_uuid = media.id, file_path = media.file_path },
-                media_by_uuid, media_by_path,
-                pool_uuid_to_bin, pool_name_to_bin, unorganized_bin_id)
-            if bin then
-                tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
-            end
+            ensure_master_and_bin(media.id, project_id,
+                synced_audio_by_media_id[media.id],
+                { file_uuid = media.id, file_path = media.file_path }, master_ctx)
         else
             log.warn("import: pool media '%s' (%s) has no source timecode in the "
                 .. "project file — imported as a relinkable clip; its master "
@@ -900,17 +924,11 @@ function M.import_into_project(project_id, parse_result, opts)
                         goto continue_clip
                     end
 
-                    local synced_audio = synced_audio_by_media_id[media_id]
-                    local master_seq_id = Sequence.ensure_master(media_id, project_id,
-                        synced_audio and { synced_audio_media_ids = synced_audio } or nil)
-                    -- Track the master in result.sequence_ids so the
-                    -- undoer deletes it. Direct capture (rather than a
-                    -- post-loop find_master_for_media JOIN) covers masters
-                    -- whose media_refs haven't been populated yet.
-                    if not created_master_set[master_seq_id] then
-                        created_master_set[master_seq_id] = true
-                        table.insert(result.sequence_ids, master_seq_id)
-                    end
+                    -- Master + bin for this clip's media (idempotent: the eager
+                    -- full-pool pass above already created most of these).
+                    -- clip.sequence_id is this master ref (V13).
+                    local master_seq_id = ensure_master_and_bin(media_id, project_id,
+                        synced_audio_by_media_id[media_id], clip_data, master_ctx)
 
                     local now = os.time()
                     -- 018 (FR-001 / FR-008 / FR-022): clip.source_in_frame /
@@ -1005,14 +1023,6 @@ function M.import_into_project(project_id, parse_result, opts)
                             property_value = clip_data.original_clip,
                             property_type  = "json",
                         }})
-                    end
-
-                    -- Assign the master sequence to its folder bin (V13:
-                    -- clip.sequence_id is the master ref).
-                    local bin = resolve_master_bin(clip_data, media_by_uuid, media_by_path,
-                        pool_uuid_to_bin, pool_name_to_bin, unorganized_bin_id)
-                    if bin then
-                        tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
                     end
 
                     -- V↔A linkage is driven entirely by an explicit pair
