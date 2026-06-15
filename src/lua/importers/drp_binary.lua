@@ -454,11 +454,14 @@ end
 -- High-level blob decoders
 -- ---------------------------------------------------------------------------
 
---- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id}
+--- Decode BtVideoInfo/Time blob → {num_frames, frame_rate, unique_id, timecode}
 -- Header: 8 bytes [BE32 version=1] [BE32 field_count]
 -- Fields: UniqueId, [Timecode], StartFrame, NumFrames, FrameRate, DbType
+-- `timecode` is surfaced for round-trip symmetry with encode_bt_video_time and
+-- for unit tests; the DRP importer does NOT consume it for TC origin (that
+-- flows from BtAudioInfo.TracksBA.StartTime via extract_file_tc_seconds).
 -- @param hex_str string: hex-encoded Time blob
--- @return table|nil: {num_frames=int, frame_rate=number, unique_id=string} or nil
+-- @return table|nil: {num_frames, frame_rate, unique_id, timecode} or nil
 function M.decode_bt_video_time(hex_str)
     local bytes = M.hex_to_bytes(hex_str)
     if not bytes or #bytes < 16 then return nil end

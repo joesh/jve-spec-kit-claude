@@ -130,7 +130,25 @@ do
     check(t_out.num_frames == t_in.num_frames, "bt_video_time num_frames round-trip")
     check(approx(t_out.frame_rate, t_in.frame_rate), "bt_video_time frame_rate round-trip")
     check(t_out.unique_id == t_in.unique_id, "bt_video_time unique_id round-trip")
-    print("  ✓ BtVideoInfo Time blob round-trip")
+    check(t_out.timecode == nil, "bt_video_time omits Timecode for zero-origin media")
+    print("  ✓ BtVideoInfo Time blob round-trip (5-field, zero-origin)")
+end
+
+-- 6b. Non-zero-origin media carries a Timecode field (6-field shape) — the
+--     source-TC origin Resolve needs to map a trimmed clip's <In>.
+do
+    local t_in = {
+        num_frames = 86486,
+        frame_rate = FR_23976,
+        unique_id  = "7f133edb-6645-48c3-97c6-812f5b00a9e8",
+        timecode   = "01:00:00:00",
+    }
+    local hex = enc.encode_bt_video_time(t_in)
+    local t_out = dec.decode_bt_video_time(hex)
+    check(t_out ~= nil, "decode_bt_video_time (6-field) returned nil")
+    check(t_out.num_frames == t_in.num_frames, "6-field num_frames round-trip")
+    check(t_out.timecode == t_in.timecode, "6-field Timecode round-trip")
+    print("  ✓ BtVideoInfo Time blob round-trip (6-field, non-zero origin)")
 end
 
 -- ===========================================================================

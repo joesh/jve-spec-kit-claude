@@ -224,8 +224,13 @@ function M.encode_bt_video_time(t)
         "encode_bt_video_time: num_frames must be > 0")
     assert(type(t.frame_rate) == "number", "encode_bt_video_time: frame_rate required")
     assert(type(t.unique_id) == "string", "encode_bt_video_time: unique_id required")
-    assert(t.timecode == nil or type(t.timecode) == "string",
-        "encode_bt_video_time: timecode must be a string when present")
+    -- Timecode is written verbatim as a TLV string and parsed by Resolve as
+    -- the source-TC origin, so a malformed label would clamp the source range
+    -- silently — assert the HH:MM:SS:FF / HH:MM:SS;FF (drop-frame) shape.
+    assert(t.timecode == nil or (type(t.timecode) == "string"
+            and t.timecode:match("^%d+:%d%d:%d%d[:;]%d%d$")),
+        "encode_bt_video_time: timecode must be HH:MM:SS:FF, got "
+            .. tostring(t.timecode))
 
     -- Reference shape (live Resolve 20.3 DRT export, dissected 2026-06-10
     -- / 2026-06-14): FrameRate as a 0x000c payload (LE double + 8 zero
@@ -242,18 +247,21 @@ function M.encode_bt_video_time(t)
     -- test_drt_mptime_timecode_clamp. A Resolve-native item omits Timecode
     -- only when the media's TC origin is zero, so callers pass it only
     -- then (5-field shape == the zero-origin reference).
-    local fields = encode_field("UniqueId", 0x000a, t.unique_id)
+    -- StartFrame is 0 in every measured Resolve DRT/DRP Time blob (the source
+    -- in-point lives in the timeline item's <In>, not here).
+    local START_FRAME = 0
+    local fields = encode_field("UniqueId", TLV_STRING, t.unique_id)
     local field_count = 5
     if t.timecode and t.timecode ~= "" then
-        fields = fields .. encode_field("Timecode", 0x000a, t.timecode)
+        fields = fields .. encode_field("Timecode", TLV_STRING, t.timecode)
         field_count = 6
     end
     fields = fields
-        .. encode_field("StartFrame", 0x0002, 0)
-        .. encode_field("NumFrames", 0x0002, t.num_frames)
-        .. encode_field("FrameRate", 0x000c,
+        .. encode_field("StartFrame", TLV_INT, START_FRAME)
+        .. encode_field("NumFrames", TLV_INT, t.num_frames)
+        .. encode_field("FrameRate", TLV_PAYLOAD,
             double_to_le_bytes(t.frame_rate) .. string.rep("\0", 8))
-        .. encode_field("DbType", 0x000a, "BtVideoTime")
+        .. encode_field("DbType", TLV_STRING, "BtVideoTime")
     local header = M.write_be32(1) .. M.write_be32(field_count)
     return to_hex(header .. fields)
 end

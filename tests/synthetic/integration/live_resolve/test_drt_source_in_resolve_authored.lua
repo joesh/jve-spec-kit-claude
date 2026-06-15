@@ -67,11 +67,7 @@ print(string.format(
     tostring(it.record_duration)))
 
 -- ── read the exported .drt's wire <In> value(s) ─────────────────────
-local p = assert(io.popen(
-    string.format("unzip -p %q 2>/dev/null", OUT_DRT), "r"),
-    "could not unzip exported .drt: " .. OUT_DRT)
-local xml = p:read("*a"); p:close()
-assert(xml and #xml > 0, "exported .drt produced no content")
+local xml = fixture.unzip_drt_xml(OUT_DRT)
 local ins = {}
 for v in xml:gmatch("<In>(%-?%d+)</In>") do ins[#ins + 1] = tonumber(v) end
 print(string.format("  Resolve .drt wire <In> value(s): %s",

@@ -15,10 +15,8 @@
 -- Before the fix, ~371 distinct synced WAV ids in `anamnesis joe edit.drp`
 -- were unresolvable because the file was registered under only its first id.
 -- Run via: jve --test <abs path>.
-require("test_env")
-
-local drp = require("importers.drp_importer")
 local test_env = require("test_env")
+local drp = require("importers.drp_importer")
 
 print("=== test_drp_synced_audio_resolves.lua ===")
 

@@ -68,7 +68,9 @@ assert(result3.num_frames == 113671, string.format(
     "Expected NumFrames=113671, got %s", tostring(result3.num_frames)))
 assert(math.abs(result3.frame_rate - 25.0) < 0.01, string.format(
     "Expected FrameRate=25.0, got %s", tostring(result3.frame_rate)))
-print("  ✓ 6-field Time blob: NumFrames=113671, FrameRate=25.0")
+assert(result3.timecode == "00:59:50:00", string.format(
+    "Expected Timecode='00:59:50:00', got %s", tostring(result3.timecode)))
+print("  ✓ 6-field Time blob: NumFrames=113671, FrameRate=25.0, Timecode=00:59:50:00")
 
 --------------------------------------------------------------------------------
 -- Test 4: Decode TracksBA blob (embedded audio from A001_07232330_C004.mp4)

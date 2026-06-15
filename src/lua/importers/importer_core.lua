@@ -307,20 +307,33 @@ local function build_media_metadata(media_item, native_rate)
     return json.encode(meta)
 end
 
--- Register the saved media row in the by-uuid and by-path maps and stash
+-- Key `target` under every pool id that names its physical file: the item's
+-- own file_uuid plus every alt_uuid the parser recorded. Resolve pools one
+-- file under several MediaPoolItem ids (one per sync relationship); the parser
+-- collapses them to one media entry and records the extra ids as alt_uuids, so
+-- keying under all of them lets sync linkage resolve by ANY of the file's ids.
+-- Asserts an id never maps to two different media entries — that would mean the
+-- parser failed to collapse same-file pool clips (rule 1.14, fail loud).
+local function register_media_aliases(target, media_item, media_by_uuid)
+    local ids = {}
+    if media_item.file_uuid then ids[media_item.file_uuid] = true end
+    for alias in pairs(media_item.alt_uuids or {}) do ids[alias] = true end
+    for id in pairs(ids) do
+        assert(media_by_uuid[id] == nil or media_by_uuid[id] == target,
+            string.format("register_media_aliases: pool id %s already maps to "
+                .. "a different media (have %s, got %s) — parser failed to "
+                .. "collapse same-file pool clips", id,
+                tostring(media_by_uuid[id] and media_by_uuid[id].id),
+                tostring(target.id)))
+        media_by_uuid[id] = target
+    end
+end
+
+-- Register the saved media entry in the by-uuid and by-path maps and stash
 -- media_start_time so future dedup_match calls can compare TC overrides.
 local function register_media_row(media, media_item, media_by_uuid, media_by_path)
     media._media_start_time = media_item.media_start_time
-    if media_item.file_uuid then
-        media_by_uuid[media_item.file_uuid] = media
-    end
-    -- The same physical file may be pooled under several source ids (Resolve
-    -- creates one MediaPoolItem per sync relationship). The parser collapses
-    -- them to one media entry and records the extra ids as alt_uuids; key the
-    -- media under every one so sync linkage resolves by any of the file's ids.
-    for alias in pairs(media_item.alt_uuids or {}) do
-        media_by_uuid[alias] = media
-    end
+    register_media_aliases(media, media_item, media_by_uuid)
     media_by_path[media_item.file_path] = media
     for alt in pairs(media_item.alt_paths or {}) do
         media_by_path[alt] = media
@@ -685,9 +698,11 @@ local function try_import_media_item(media_item, project_id, project_settings,
 
     local existing = media_item.file_path and find_dedup_match(media_by_path, media_item)
     if existing then
-        if media_item.file_uuid then
-            media_by_uuid[media_item.file_uuid] = existing
-        end
+        -- Dedup onto an already-imported entry: still key this item's pool ids
+        -- (file_uuid + alt_uuids) onto it, exactly as register_media_row would
+        -- for a fresh entry — otherwise a synced WAV that dedups loses the
+        -- aliases its sync linkage resolves by.
+        register_media_aliases(existing, media_item, media_by_uuid)
         return nil
     end
 

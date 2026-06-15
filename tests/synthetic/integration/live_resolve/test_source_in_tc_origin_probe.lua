@@ -106,29 +106,30 @@ print("  ✓ teardown: fixture timeline deleted")
 supervisor.shutdown()
 
 -- ── verdict ─────────────────────────────────────────────────────────
--- BLOCKED (2026-06-14): currently RED for a known OUTBOUND reason, not a
--- position-channel one — the drt_writer FieldsBlob MediaExtents defect
--- clamps the imported clip's source to media-length, so Resolve reports
--- source_in=108 instead of the true media-relative value (see
--- team-checkpoint.md + test_drt_field_diff_jve_vs_resolve; Resolve's own
--- trim reads media-relative, test_drt_source_in_resolve_authored). Once
--- that exporter fix lands, Resolve reports the media-relative source_in
--- and this probe measures the real absolute-vs-relative divergence the
--- position channel must normalize.
+-- ROOT CAUSE (2026-06-15, source-range session): the [108,108] clamp was
+-- NOT the FieldsBlob MediaExtents — it was a missing `Timecode` entry in
+-- the Sm2MpVideoClip `<Time>` blob. Without the media's source-TC origin,
+-- Resolve cannot map the Ti item's media-relative `<In>` and pins
+-- GetSourceStartFrame to NumFrames (108). The fix
+-- (drt_binary.encode_bt_video_time → 6-field shape with Timecode,
+-- drt_writer.build_media_pool_video_item passes the origin) lands the
+-- media-relative source_in. See team-checkpoint.md "RESOLVED" note.
 --
 -- Expectation derived from Resolve API semantics + TC math (NOT by
 -- tracing JVE code): GetSourceStartFrame is media-relative, so it must
--- equal IN_OFFSET, and the delta must equal the embedded TC origin.
-assert(resolve_source_in == IN_OFFSET, string.format(
-    "PROBE: expected media-relative source_in == in_offset %d, got %s. "
-    .. "EXPECTED RED until the outbound drt_writer FieldsBlob MediaExtents "
-    .. "clamp is fixed — Resolve reports media-length instead (see the "
-    .. "BLOCKED note above + team-checkpoint.md). This is the TDD target "
-    .. "that flips green when that exporter fix lands.",
+-- equal IN_OFFSET, and the delta must equal the embedded TC origin —
+-- BOTH within Resolve's ±1 GetSourceStartFrame rounding (Resolve's own
+-- in=30 clip reads back 29, per test_drt_source_in_resolve_authored).
+assert(math.abs(resolve_source_in - IN_OFFSET) <= 1, string.format(
+    "PROBE: expected media-relative source_in ≈ in_offset %d (±1 Resolve "
+    .. "rounding), got %s. RED until the outbound Sm2MpVideoClip `<Time>` "
+    .. "Timecode fix is in the tree — Resolve reports media-length (108) "
+    .. "instead (see team-checkpoint.md RESOLVED note). TDD target that "
+    .. "flips green when that exporter fix lands.",
     IN_OFFSET, tostring(resolve_source_in)))
-assert(delta == TC_ORIGIN, string.format(
+assert(math.abs(delta - TC_ORIGIN) <= 1, string.format(
     "PROBE RESULT: JVE-absolute minus Resolve-relative must equal the "
-    .. "embedded TC origin %d; got %d", TC_ORIGIN, delta))
+    .. "embedded TC origin %d (±1 rounding); got %d", TC_ORIGIN, delta))
 
 print(string.format(
     "✅ PROBE CONFIRMED: Resolve source_in is media-relative; JVE "
