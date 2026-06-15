@@ -7,11 +7,12 @@
 ---
 --- Transport mechanics (start/request/stop loop) live in
 --- `binding._helper_transport` — review item #6 lifted the common
---- code shared with helper_fixture. This file owns only LIVE-side
+--- code shared with helper_fixture. This file owns the LIVE-side
 --- policy: 60s request deadline (live verbs do real Resolve work),
---- "live-" correlation prefix, helper at INFO log level, and the
---- LIVE-side helpers `expect_ok` / `expect_error` /
---- `skip_unless_live` (the resolve_connected check).
+--- "live-" correlation prefix, helper at INFO log level, the LIVE-side
+--- helpers `expect_ok` / `expect_error` / `skip_unless_live` (the
+--- resolve_connected check), plus `unzip_drt_xml` — the shared read util
+--- live tests use to inspect a Resolve- or JVE-authored .drt's inner XML.
 ---
 --- Tests under tests/live/ are run via:
 ---     ./build/bin/jve.app/Contents/MacOS/jve --test \

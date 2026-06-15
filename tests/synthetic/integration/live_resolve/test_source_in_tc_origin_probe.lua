@@ -120,9 +120,11 @@ supervisor.shutdown()
 -- tracing JVE code): GetSourceStartFrame is media-relative, so it must
 -- equal IN_OFFSET, and the delta must equal the embedded TC origin.
 assert(resolve_source_in == IN_OFFSET, string.format(
-    "PROBE RESULT: expected media-relative source_in == in_offset %d, "
-    .. "got %s. If this fired, Resolve's source_in is NOT plain "
-    .. "media-relative — re-examine the transform before coding the fix.",
+    "PROBE: expected media-relative source_in == in_offset %d, got %s. "
+    .. "EXPECTED RED until the outbound drt_writer FieldsBlob MediaExtents "
+    .. "clamp is fixed — Resolve reports media-length instead (see the "
+    .. "BLOCKED note above + team-checkpoint.md). This is the TDD target "
+    .. "that flips green when that exporter fix lands.",
     IN_OFFSET, tostring(resolve_source_in)))
 assert(delta == TC_ORIGIN, string.format(
     "PROBE RESULT: JVE-absolute minus Resolve-relative must equal the "

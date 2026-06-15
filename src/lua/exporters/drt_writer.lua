@@ -27,6 +27,7 @@ local M = {}
 local enc            = require("exporters.drt_binary")
 local identity_marker = require("exporters.drt_identity_marker")
 local rcm            = require("core.retime_curve_math")
+local frame_utils    = require("core.frame_utils")
 
 -- ─── Canonical-template loading ─────────────────────────────────────────────
 --
@@ -511,7 +512,19 @@ local function build_clip_element(clip, media, track_type, state, seq_fps)
             .. "start_tc_frame (%d) — source_in below file TC origin invalid",
             clip.id, clip.source_in, media.start_tc_frame))
         in_element = build_in_element(in_offset)
-        mtba_blob  = build_media_timemap_ba(clip.duration, media.native_rate)
+        -- The forward timing curve spans the whole SOURCE MEDIA (not the
+        -- trimmed clip window) — <In>/<Duration> select the clip's region
+        -- within it. Confirmed against a Resolve-authored trimmed clip:
+        -- for a 24-frame clip trimmed into 108-frame media, Resolve writes
+        -- be(107/rate), i.e. media.duration_frames, NOT clip.duration
+        -- (test_drt_field_diff_jve_vs_resolve). Mirrors the reverse path,
+        -- which also spans the full media (build_reverse_retime).
+        assert(type(media.duration_frames) == "number"
+            and media.duration_frames > 0,
+            "drt_writer.build_clip_element: media.duration_frames required "
+            .. "for the forward MediaTimemapBA (full-media curve span)")
+        mtba_blob = build_media_timemap_ba(
+            media.duration_frames, media.native_rate)
     end
 
     local media_start_seconds = media.start_tc_frame / media.native_rate
@@ -745,10 +758,27 @@ local function build_media_pool_video_item(media, dbids, state)
     -- Rewrite BtVideoInfo/Time blob from payload. Per-media UniqueId is
     -- minted so two media in one DRT can't collide on the Time blob's
     -- own UUID field (decoded back by drp_binary.decode_bt_video_time).
+    --
+    -- Timecode = the media's embedded source-TC origin. Resolve needs it to
+    -- map the timeline item's media-relative <In> onto the source; omitting
+    -- it clamps the imported source range to media-end (live-confirmed —
+    -- todo_023_drt_source_range_readback_degenerate). start_tc_frame is
+    -- nominal-rate frames, so format at the media's rate (NTSC-nominal,
+    -- e.g. 23.976→24). Zero-origin media carries no Timecode entry (matches
+    -- the Resolve-native zero-origin shape), so pass nil then.
+    assert(type(media.start_tc_frame) == "number" and media.start_tc_frame >= 0,
+        "drt_writer.build_media_pool_video_item: media.start_tc_frame "
+        .. "(non-negative number) required for the Time blob Timecode entry")
+    local timecode = nil
+    if media.start_tc_frame > 0 then
+        timecode = frame_utils.format_timecode(
+            media.start_tc_frame, media.native_rate)
+    end
     local new_time_hex = enc.encode_bt_video_time({
         num_frames = media.duration_frames,
         frame_rate = media.native_rate,
         unique_id  = fresh_uuid(0xa1, state),
+        timecode   = timecode,
     })
     local replaced
     tpl, replaced = tpl:gsub(TIME_ELEM_PATTERN,
