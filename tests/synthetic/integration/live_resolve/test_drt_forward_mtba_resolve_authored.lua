@@ -70,13 +70,8 @@ print(string.format(
 
 -- ── read the exported .drt back (this test runs ON the VM) ───────────
 -- Resolve's EXPORT_DRT writes a ZIP archive (PK…), same container JVE's
--- writer uses. Stream all members to stdout, scan the inner XML.
-local p = assert(io.popen(
-    string.format("unzip -p %q 2>/dev/null", OUT_DRT), "r"),
-    "could not run unzip on exported .drt: " .. OUT_DRT)
-local xml = p:read("*a"); p:close()
-assert(xml and #xml > 0,
-    "unzip -p produced no content from exported .drt: " .. OUT_DRT)
+-- writer uses; unzip_drt_xml streams the inner XML.
+local xml = fixture.unzip_drt_xml(OUT_DRT)
 
 -- ── extract every MediaTimemapBA hex blob ───────────────────────────
 local blobs = {}
@@ -121,6 +116,9 @@ for i, hex in ipairs(forward) do
         "forward MTBA[%d] d decode failed or non-positive", i))
     local d_frames = d * NATIVE_RATE             -- = N − 1
     local N = math.floor(d_frames + 0.5) + 1     -- nearest integer N
+    -- 1e-6 sits above float rounding (~2e-14 for N~100) and well below the
+    -- smallest meaningful curve step (the .drp ε 1/24000 ≈ 4e-5); any
+    -- non-integer-frame encoding would push residual past 1e-3.
     local residual = math.abs(d * NATIVE_RATE - (N - 1))
     print(string.format(
         "    forward[%d]: d=%.9f s → (N-1)=%.6f → N=%d  residual=%.3g",

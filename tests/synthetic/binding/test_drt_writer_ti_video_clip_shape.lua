@@ -17,7 +17,7 @@ require("test_env")
 --   • <MediaFrameRate>   = 16 hex chars LE-double(media.native_rate) +
 --                          16 zero hex chars
 --   • <MediaTimemapBA>   = "02" + 16 hex chars BE-double(
---                            (clip.duration - 1) / media.native_rate )
+--                            (media.duration_frames - 1) / media.native_rate )
 --   • BtThumnail @DbId   = freshly minted UUID, NOT a fixed constant
 -- =============================================================================
 
@@ -28,12 +28,14 @@ local function check(cond, msg)
     assert(cond, "Sm2TiVideoClip shape FAILED: " .. tostring(msg))
 end
 
--- Pinned expected bytes from resolve_authored_single_clip.drp's
--- Sm2TiVideoClip for an A005-at-23.976 clip of 108 timeline frames.
--- The fixture builds exactly that payload; if anyone changes
+-- Pinned expected bytes for an A005-at-23.976 clip of 108 timeline
+-- frames. The fixture builds exactly that payload; if anyone changes
 -- fixture.A005_DURATION_FRAMES or .A005_NATIVE_RATE these expectations
 -- become invalid (which is correct — the spec is per-config).
--- Provenance: unzip the .drp → SeqContainer/<dbid>.xml lines 38-39.
+-- MediaFrameRate provenance: unzip resolve_authored_single_clip.drp →
+-- SeqContainer/<dbid>.xml (it is the media's native-rate encoding, the
+-- same in .drp and .drt). MediaTimemapBA provenance is the .drt 9-byte
+-- form — see its block below.
 local PINNED_MEDIA_FRAME_RATE = "872211b5dcf937400000000000000000"
 -- 9-byte 0x02 forward form: type tag + be(d), where d = 107/23.976.
 -- This is the shape a Resolve-authored **.drt** uses for a forward

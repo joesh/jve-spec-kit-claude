@@ -91,15 +91,31 @@ do
 end
 
 -- ─── trim: source_in_frame present, duration missing → bad_request ─
+-- (the both-or-neither pairing gate fires first)
 do
     local r = fixture.request(fix, "author_reference_timeline", {
         media_path   = REAL_MEDIA, timeline_fps = "23.976",
         out_drt_path = OUT, source_in_frame = 30,
     })
     fixture.assert_structured_error(r, "bad_request", "duration missing")
-    assert(r.error.message:find("source_duration_frames", 1, true),
-        "bad_request should name source_duration_frames: " .. r.error.message)
+    assert(r.error.message:find("both", 1, true)
+        and r.error.message:find("source_duration_frames", 1, true),
+        "bad_request should name the pairing requirement: " .. r.error.message)
     print("  ✓ source_in_frame without duration → bad_request")
+end
+
+-- ─── trim: duration present, source_in_frame missing → bad_request ─
+-- (symmetric pairing violation — the other half)
+do
+    local r = fixture.request(fix, "author_reference_timeline", {
+        media_path   = REAL_MEDIA, timeline_fps = "23.976",
+        out_drt_path = OUT, source_duration_frames = 24,
+    })
+    fixture.assert_structured_error(r, "bad_request", "source_in missing")
+    assert(r.error.message:find("both", 1, true)
+        and r.error.message:find("source_in_frame", 1, true),
+        "bad_request should name the pairing requirement: " .. r.error.message)
+    print("  ✓ source_duration_frames without source_in_frame → bad_request")
 end
 
 -- ─── trim: non-positive duration → bad_request ─────────────────────

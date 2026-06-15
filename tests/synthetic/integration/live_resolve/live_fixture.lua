@@ -87,4 +87,16 @@ function M.expect_error(parsed, expected_code, label)
     return parsed.error
 end
 
+--- A .drt (like a .drp) is a ZIP archive; stream every member's bytes to
+--- stdout and return the concatenated inner XML. Used by tests that scan
+--- a Resolve- or JVE-authored .drt for element bytes (MediaTimemapBA, In…).
+function M.unzip_drt_xml(path)
+    local p = assert(io.popen(string.format("unzip -p %q 2>/dev/null", path)),
+        "unzip_drt_xml: could not run unzip on " .. tostring(path))
+    local xml = p:read("*a"); p:close()
+    assert(xml and #xml > 0,
+        "unzip_drt_xml: no content from " .. tostring(path))
+    return xml
+end
+
 return M

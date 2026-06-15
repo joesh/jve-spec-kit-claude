@@ -33,17 +33,13 @@
 --   scripts/run_live_resolve_test.sh test_drt_mtba_short_vs_long_render
 
 local test_env        = require("test_env")
-local database        = require("core.database")
-local Project         = require("models.project")
-local Sequence        = require("models.sequence")
-local Track           = require("models.track")
-local Media           = require("models.media")
-local Clip            = require("models.clip")
 local payload_builder = require("core.resolve_bridge.payload_builder")
 local drt_writer      = require("exporters.drt_writer")
 local enc             = require("exporters.drt_binary")
 local fixture         = require(
     "synthetic.integration.live_resolve.live_fixture")
+local db_fixture      = require(
+    "synthetic.integration.live_resolve.live_db_fixture")
 
 -- 23.976fps A005 fixture with real embedded TC (108 video frames) — the
 -- writer's author_a005_compatible path requires 23.976 media.
@@ -55,66 +51,16 @@ local IN_OFFSET = 30
 local DUR       = 24
 local SEQ_START = 120
 
--- ── DB fixture: one forward clip on a master sequence ───────────────
-local DB_PATH = "/tmp/jve/test_drt_mtba_short_vs_long_render.db"
-os.remove(DB_PATH)
-os.execute("mkdir -p /tmp/jve")
-assert(database.init(DB_PATH), "schema init failed")
-local db = database.get_connection()
-db:exec(require("import_schema"))
-
-Project.create("p", {
-    id = "p1", fps_mismatch_policy = "passthrough",
-    settings = { master_clock_hz = 705600000,
-                 default_fps = { num = FPS_NUM, den = FPS_DEN } },
-}):save()
-Sequence.create("m", "p1",
-    { fps_numerator = FPS_NUM, fps_denominator = FPS_DEN },
-    1920, 1080, { id = "m", kind = "master" }):save()
-Sequence.create("seq", "p1",
-    { fps_numerator = FPS_NUM, fps_denominator = FPS_DEN },
-    1920, 1080, { id = "e1", kind = "sequence", audio_sample_rate = 48000 })
-    :save()
-Track.create_video("V1", "e1", { id = "e1-v1", index = 1 }):save()
-Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
-db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' "
-    .. "WHERE id = 'm'")
-
-local media = Media.create({
-    id = "med-tc01", project_id = "p1",
-    name = "A005_C052_0925BL_001_tc01.mp4",
-    file_path = MEDIA_PATH, duration_frames = MEDIA_FRAMES,
-    fps_numerator = FPS_NUM, fps_denominator = FPS_DEN,
-    audio_channels = 0, metadata = "{}",
+-- ── DB fixture: one forward clip trimmed IN_OFFSET into the media ───
+local ctx = db_fixture.build_a005_trimmed_db({
+    db_path = "/tmp/jve/test_drt_mtba_short_vs_long_render.db",
+    media_path = MEDIA_PATH, fps_num = FPS_NUM, fps_den = FPS_DEN,
+    media_frames = MEDIA_FRAMES, in_offset = IN_OFFSET,
+    dur = DUR, seq_start = SEQ_START,
 })
-media:save()
-db:exec(string.format([[
-    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-        media_id, source_in_frame, source_out_frame,
-        sequence_start_frame, duration_frames, audio_sample_rate,
-        enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('mr-tc01', 'p1', 'm', 'm-v1', 'med-tc01', 0, %d, 0, %d,
-        NULL, 1, 1.0, 0, 0, 0);
-]], MEDIA_FRAMES, MEDIA_FRAMES))
-
-local TC_ORIGIN = media:get_start_tc()
-assert(type(TC_ORIGIN) == "number" and TC_ORIGIN > 0,
-    "fixture: embedded TC origin must extract non-zero")
-local ABS_SOURCE_IN = TC_ORIGIN + IN_OFFSET
-local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
-assert(Clip.create({
-    id = "0b50c0de-7007-4aaa-8aaa-000000000001", project_id = "p1",
-    owner_sequence_id = "e1", track_id = "e1-v1", sequence_id = "m",
-    name = "A005_C052_0925BL_001_tc01.mp4",
-    sequence_start_frame = SEQ_START, duration_frames = DUR,
-    source_in_frame = ABS_SOURCE_IN, source_out_frame = ABS_SOURCE_IN + DUR,
-    source_in_subframe = sub_in, source_out_subframe = sub_out,
-    master_layer_track_id = nil, fps_mismatch_policy = "passthrough",
-    enabled = true, volume = 1.0, playhead_frame = 0,
-}))
 
 -- ── author the writer's .drt (native 9-byte MTBA) ───────────────────
-local payload = payload_builder.build(db, "p1", "e1")
+local payload = payload_builder.build(ctx.db, "p1", "e1")
 local OUT_9  = "/tmp/jve/mtba_short.drt"   -- writer's native output
 local OUT_41 = "/tmp/jve/mtba_long.drt"    -- synthesized .drp-style variant
 os.remove(OUT_41); os.remove(OUT_9)
@@ -133,9 +79,17 @@ end
 -- form (02 | be(d) | 0×8 | be(d+ε) | 0×8 | be(d)), re-zip. ε=1/24000 is
 -- the value measured from resolve_authored_single_clip.drp at 23.976;
 -- legitimate here because this fixture IS 23.976. ────────────────────
+-- The forward MTBA's curve spans the whole MEDIA (drt_writer passes
+-- media.duration_frames), so d = (media_frames - 1) / native_rate — NOT
+-- the clip's trimmed duration. (Resolve's own .drt agrees: the forward
+-- blob decodes to the media frame count — test_drt_forward_mtba_resolve_authored.)
 local native_rate = FPS_NUM / FPS_DEN
-local d_secs = (DUR - 1) / native_rate
-local EPS    = 1 / FPS_NUM                       -- 1/24000 at 23.976
+local d_secs = (MEDIA_FRAMES - 1) / native_rate
+-- ε is the literal value measured from resolve_authored_single_clip.drp
+-- at 23.976 (feedback_drt_drp_follow_fixtures) — NOT a formula. This test
+-- is 23.976-only (author_a005_compatible requires it); a different rate
+-- would need its own fixture-measured ε.
+local EPS    = 1 / 24000
 local be_d   = enc.encode_be_double(d_secs)
 local zeros  = "0000000000000000"
 local SHORT_HEX = "02" .. be_d                   -- writer's 9-byte form

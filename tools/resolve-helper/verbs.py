@@ -997,21 +997,41 @@ def verb_apply_test_grade(args, _resolve, project, envelope_id,
     return _ok(envelope_id, {"applied": True})
 
 
-# ─── Reference-timeline authoring (capture real Resolve MTBA bytes) ───
+# JSON numbers may arrive as float; coerce to a plain int only when the
+# value is integral. Returns None for bools, non-integral floats, or
+# anything else — callers turn that into a bad_request.
+def _json_as_int(v):
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and v.is_integer():
+        return int(v)
+    return None
+
+
+def _created_timeline(result, ref_proj):
+    # Resolve's MediaPool.CreateTimelineFromClips / CreateEmptyTimeline
+    # sometimes return the boolean True (a success flag) instead of the
+    # Timeline object; in that case the new timeline is the project's
+    # current one. A truthy non-bool IS the timeline; falsy = creation
+    # failed (caller asserts non-None).
+    if result and result is not True:
+        return result
+    return ref_proj.GetCurrentTimeline()
+
+
+# ─── Reference-timeline authoring (capture real Resolve MTBA/source bytes) ───
 #
-# State-changing, TEST-ONLY. Drives Resolve to author one forward clip
-# on a fresh timeline at a caller-specified frame rate, then export that
-# timeline to a .drt file. Intent: capture REAL Resolve-authored
-# MediaTimemapBA bytes at rates OTHER than 23.976, to inform generalizing
-# the DRT writer's forward-curve encoding (drt_writer.build_media_timemap_ba,
-# currently hardcoded ε=1/24000 and asserted 23.976-only).
-# UNRESOLVED (2026-06-14): the .drt timeline export observed so far emits
-# the 9-byte short MTBA form (02 + one BE double, NO epsilon); the
-# 41-byte long form with ε came from a .drp PROJECT export. So whether
-# this verb's .drt output is even the right artifact to derive ε from is
-# an open question — do not treat its output as the ε source until that
-# is settled. No production caller — only the live-VM probe reaches it
-# (needs --allow-test-verbs).
+# State-changing, TEST-ONLY. Drives Resolve to author one forward clip on
+# a fresh throwaway project's timeline at a caller-specified frame rate,
+# then export that timeline to a .drt file. Captures REAL Resolve-authored
+# bytes (forward MediaTimemapBA, source <In>) at any rate — the live
+# fixture-grounded check for the DRT writer's forward encodings.
+# SETTLED 2026-06-14 (test_drt_forward_mtba_resolve_authored /
+# _cross_rate): a Resolve .drt's forward MTBA is the 9-byte 02|be(d) form,
+# rate-general, NO epsilon — the 41-byte ε form is a .drp-only encoding.
+# No production caller — only the live-VM tests reach it (--allow-test-verbs).
 @_stateful_verb
 def verb_author_reference_timeline(args, resolve, project, envelope_id,
                                     helper_version):
@@ -1040,30 +1060,24 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
     # into the media rather than the whole clip. Both args present or both
     # absent. Used to learn Resolve's own source-frame convention for a
     # trimmed forward clip (does GetSourceStartFrame / exported <In> equal
-    # the media-relative offset?). JSON numbers may arrive as float.
-    def _as_int(v):
-        if isinstance(v, bool):
-            return None
-        if isinstance(v, int):
-            return v
-        if isinstance(v, float) and v.is_integer():
-            return int(v)
-        return None
+    # the media-relative offset?).
     raw_in = args.get("source_in_frame")
     raw_dur = args.get("source_duration_frames")
-    trimming = raw_in is not None or raw_dur is not None
     source_in_frame = source_duration = None
-    if trimming:
-        source_in_frame = _as_int(raw_in)
-        source_duration = _as_int(raw_dur)
+    if (raw_in is None) != (raw_dur is None):
+        return _error(envelope_id, "bad_request",
+            "source_in_frame and source_duration_frames must both be "
+            "supplied (to trim) or both omitted (whole clip)")
+    if raw_in is not None:
+        source_in_frame = _json_as_int(raw_in)
+        source_duration = _json_as_int(raw_dur)
         if source_in_frame is None or source_in_frame < 0:
             return _error(envelope_id, "bad_request",
-                "source_in_frame must be a non-negative integer when "
-                "trimming (media-relative source frame)")
+                "source_in_frame must be a non-negative integer "
+                "(media-relative source frame)")
         if source_duration is None or source_duration <= 0:
             return _error(envelope_id, "bad_request",
-                "source_duration_frames must be a positive integer when "
-                "trimming")
+                "source_duration_frames must be a positive integer")
 
     # Closed-set args (matches delete_timeline / apply_test_grade) — reject
     # unknown fields rather than silently ignoring (rule 2.13).
@@ -1135,7 +1149,9 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
         return _error(envelope_id, "resolve_api_error",
             f"CreateProject({ref_name!r}) raised: {exc}")
     if not ref_proj:
-        _restore()
+        # No _restore() here: CreateProject failed, so the colorist's
+        # project is still current and untouched — running _restore (which
+        # closes GetCurrentProject()) would close THEIR session.
         return _error(envelope_id, "resolve_api_error",
             f"CreateProject({ref_name!r}) returned falsy (name clash?)")
 
@@ -1165,12 +1181,11 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
         clip = items[0]
 
         tl_name = f"jve_ref_tl_{timeline_fps}"
-        if trimming:
+        if source_in_frame is not None:   # trimming (validated as a pair)
             # Window the clip [source_in_frame, +duration) via AppendToTimeline
             # (endFrame inclusive). CreateTimelineFromClips has no trim hook.
-            timeline = media_pool.CreateEmptyTimeline(tl_name)
-            if not timeline or timeline is True:
-                timeline = ref_proj.GetCurrentTimeline()
+            timeline = _created_timeline(
+                media_pool.CreateEmptyTimeline(tl_name), ref_proj)
             if timeline is None:
                 _restore()
                 return _error(envelope_id, "resolve_api_error",
@@ -1187,9 +1202,8 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
                     f"AppendToTimeline(start={source_in_frame}, "
                     f"end={end_frame}) returned falsy")
         else:
-            timeline = media_pool.CreateTimelineFromClips(tl_name, [clip])
-            if not timeline or timeline is True:
-                timeline = ref_proj.GetCurrentTimeline()
+            timeline = _created_timeline(
+                media_pool.CreateTimelineFromClips(tl_name, [clip]), ref_proj)
         if timeline is None:
             _restore()
             return _error(envelope_id, "resolve_api_error",
@@ -1219,6 +1233,12 @@ def verb_author_reference_timeline(args, resolve, project, envelope_id,
                 "record_duration": item.GetDuration(),
             }
             break
+        if item_info is None:
+            _restore()
+            return _error(envelope_id, "resolve_api_error",
+                "authored timeline has no items — "
+                "CreateTimelineFromClips/AppendToTimeline produced an "
+                "empty timeline")
         fps_applied = ref_proj.GetSetting("timelineFrameRate")
     except Exception as exc:
         _restore()

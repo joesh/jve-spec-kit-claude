@@ -56,9 +56,7 @@ local function validate_case(case)
         out_drt_path = out,
     }), case.name .. ": author_reference_timeline")
 
-    local p = assert(io.popen(string.format("unzip -p %q 2>/dev/null", out)))
-    local xml = p:read("*a"); p:close()
-    assert(xml and #xml > 0, case.name .. ": exported .drt empty")
+    local xml = fixture.unzip_drt_xml(out)
 
     local forward = {}
     for hex in xml:gmatch("<MediaTimemapBA>(%x+)</MediaTimemapBA>") do
