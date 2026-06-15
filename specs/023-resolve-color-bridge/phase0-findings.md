@@ -488,6 +488,12 @@ Two bugs surfaced during the round-trip acceptance test:
   - The `1/24000` hard-code and the `native_rate == 24000/1001` assert have
     been removed from `build_media_timemap_ba`. `todo_drt_media_timemap_ba_format.md`
     (forward case) is resolved.
+  - **Cross-rate confirmed live (2026-06-14):** Resolve writes the same
+    9-byte `02|be(d)` forward form at **25** and **29.97** fps too — no
+    epsilon, no 41-byte variant, `d=(N−1)/native` exact (residual 0). See
+    `tests/synthetic/integration/live_resolve/test_drt_forward_mtba_cross_rate.lua`
+    (synthesized fixtures `tests/fixtures/media/synth_{25,2997}fps_tc.mov`).
+    So the rate-general generalization is proven beyond 23.976.
 
 - **`CurrentSelectorIdx` magic value.** Resolve writes `1083179008`
   (= `0x40903000`) for an unversioned plain clip. Emitting `0`
