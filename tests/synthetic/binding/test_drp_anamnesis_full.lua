@@ -67,7 +67,7 @@ print("\n--- Phase 3: mute flags ---")
 
 -- 3a: Disabled clips exist
 local stmt = assert(db:prepare(
-    "SELECT COUNT(*) FROM clips WHERE enabled = 0 AND clip_kind = 'timeline'"))
+    "SELECT COUNT(*) FROM clips WHERE enabled = 0"))
 assert(stmt:exec() and stmt:next())
 local disabled_count = stmt:value(0)
 stmt:finalize()
@@ -76,7 +76,7 @@ print(string.format("  3a: %d disabled timeline clips", disabled_count))
 
 -- 3b: Enabled clips also present (not ALL disabled)
 local stmt2 = assert(db:prepare(
-    "SELECT COUNT(*) FROM clips WHERE enabled = 1 AND clip_kind = 'timeline'"))
+    "SELECT COUNT(*) FROM clips WHERE enabled = 1"))
 assert(stmt2:exec() and stmt2:next())
 local enabled_count = stmt2:value(0)
 stmt2:finalize()
@@ -93,8 +93,8 @@ local seq_stmt = assert(db:prepare([[
     FROM sequences s
     JOIN tracks t ON t.sequence_id = s.id
     JOIN clips c ON c.track_id = t.id
-    WHERE s.kind = 'timeline' AND t.track_type = 'AUDIO'
-      AND c.clip_kind = 'timeline' AND c.enabled = 0
+    WHERE s.kind = 'sequence' AND t.track_type = 'AUDIO'
+      AND c.enabled = 0
     LIMIT 1
 ]]))
 assert(seq_stmt:exec())
@@ -107,23 +107,28 @@ if seq_stmt:next() then
     assert(seq, "failed to load sequence " .. seq_id)
 
     local dis_stmt = assert(db:prepare([[
-        SELECT c.sequence_start_frame, c.sequence_start_frame + c.duration_frames as clip_end
+        SELECT c.id, c.sequence_start_frame,
+               c.sequence_start_frame + c.duration_frames as clip_end
         FROM clips c JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ? AND t.track_type = 'AUDIO'
-          AND c.clip_kind = 'timeline' AND c.enabled = 0
+          AND c.enabled = 0
         ORDER BY c.sequence_start_frame LIMIT 1
     ]]))
     dis_stmt:bind_value(1, seq_id)
     assert(dis_stmt:exec() and dis_stmt:next())
-    local disabled_start = dis_stmt:value(0)
-    local disabled_end = dis_stmt:value(1)
+    local disabled_clip_id = dis_stmt:value(0)
+    local disabled_start = dis_stmt:value(1)
+    local disabled_end = dis_stmt:value(2)
     dis_stmt:finalize()
 
+    -- V13 resolver entries are flat (no entry.clip nesting) and the resolver
+    -- already drops disabled clips upstream — so the located disabled clip
+    -- must not appear among the entries overlapping its own range.
     local audio_entries = seq:get_audio_in_range(disabled_start, disabled_end)
     for _, entry in ipairs(audio_entries) do
-        assert(entry.clip.enabled ~= 0 and entry.clip.enabled ~= false,
+        assert(entry.clip_id ~= disabled_clip_id,
             string.format("get_audio_in_range returned disabled clip id=%s at tl=%d",
-                entry.clip.id, entry.clip.sequence_start))
+                tostring(entry.clip_id), entry.sequence_start))
     end
     print(string.format("  3c: disabled audio clip at [%d..%d] excluded from %s",
         disabled_start, disabled_end, seq_name))
@@ -138,8 +143,8 @@ local vseq_stmt = assert(db:prepare([[
     FROM sequences s
     JOIN tracks t ON t.sequence_id = s.id
     JOIN clips c ON c.track_id = t.id
-    WHERE s.kind = 'timeline' AND t.track_type = 'VIDEO'
-      AND c.clip_kind = 'timeline' AND c.enabled = 0
+    WHERE s.kind = 'sequence' AND t.track_type = 'VIDEO'
+      AND c.enabled = 0
     LIMIT 1
 ]]))
 assert(vseq_stmt:exec())
@@ -152,23 +157,26 @@ if vseq_stmt:next() then
     assert(seq, "failed to load sequence")
 
     local vdis_stmt = assert(db:prepare([[
-        SELECT c.sequence_start_frame, c.sequence_start_frame + c.duration_frames
+        SELECT c.id, c.sequence_start_frame,
+               c.sequence_start_frame + c.duration_frames
         FROM clips c JOIN tracks t ON c.track_id = t.id
         WHERE t.sequence_id = ? AND t.track_type = 'VIDEO'
-          AND c.clip_kind = 'timeline' AND c.enabled = 0
+          AND c.enabled = 0
         ORDER BY c.sequence_start_frame LIMIT 1
     ]]))
     vdis_stmt:bind_value(1, seq_id)
     assert(vdis_stmt:exec() and vdis_stmt:next())
-    local vd_start = vdis_stmt:value(0)
-    local vd_end = vdis_stmt:value(1)
+    local vdisabled_clip_id = vdis_stmt:value(0)
+    local vd_start = vdis_stmt:value(1)
+    local vd_end = vdis_stmt:value(2)
     vdis_stmt:finalize()
 
+    -- Flat V13 entries; resolver drops disabled clips (see 3c).
     local video_entries = seq:get_video_in_range(vd_start, vd_end)
     for _, entry in ipairs(video_entries) do
-        assert(entry.clip.enabled ~= 0 and entry.clip.enabled ~= false,
+        assert(entry.clip_id ~= vdisabled_clip_id,
             string.format("get_video_in_range returned disabled clip id=%s",
-                entry.clip.id))
+                tostring(entry.clip_id)))
     end
     print(string.format("  3d: disabled video clip at [%d..%d] excluded from %s",
         vd_start, vd_end, seq_name))
@@ -205,10 +213,22 @@ local timeline_id = tl_stmt:value(0)
 tl_stmt:finalize()
 
 local a3_stmt = db:prepare([[
-    SELECT c.source_in_frame, c.fps_numerator, m.metadata
-    FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
+    -- V13: a clip reaches its leaf media through its nested master
+    -- sequence's media_refs (clips no longer carry media_id). The C053 name
+    -- filter selects the clip's own master, not any borrowed sync audio;
+    -- GROUP BY c.id collapses the master's V + per-channel audio refs (all
+    -- the same media_id) to one row per clip.
+    -- V13: a clip's source rate is its nested source sequence's fps
+    -- (clips no longer carry fps_numerator — the source timebase lives on
+    -- c.sequence_id, per the subframe trigger).
+    SELECT c.source_in_frame, src.fps_numerator, m.metadata
+    FROM clips c JOIN tracks t ON c.track_id=t.id
+    JOIN sequences src ON src.id = c.sequence_id
+    JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+    JOIN media m ON m.id = mr.media_id
     WHERE t.sequence_id=? AND t.name='A3' AND c.sequence_start_frame=96607
-      AND m.name LIKE '%C053%' AND c.clip_kind='timeline'
+      AND m.name LIKE '%C053%'
+    GROUP BY c.id
 ]])
 a3_stmt:bind_value(1, timeline_id)
 assert(a3_stmt:exec() and a3_stmt:next(), "A3 clip at 96607 not found")
@@ -231,10 +251,15 @@ assert(math.abs(a3_source_in - expected_a3) <= 1, string.format(
 print("\n  4b: Stereo Mix absolute TC source_in")
 
 local mix_stmt = db:prepare([[
+    -- V13 clip→media via the nested master's media_refs (see 4a). GROUP BY
+    -- c.id collapses the master's multiple refs to one row per clip.
     SELECT c.sequence_start_frame, c.source_in_frame
-    FROM clips c JOIN tracks t ON c.track_id=t.id JOIN media m ON c.media_id=m.id
+    FROM clips c JOIN tracks t ON c.track_id=t.id
+    JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+    JOIN media m ON m.id = mr.media_id
     WHERE t.sequence_id=? AND t.name='A1'
-      AND m.name LIKE '%Stereo Mix - Online%' AND c.clip_kind='timeline'
+      AND m.name LIKE '%Stereo Mix - Online%'
+    GROUP BY c.id
     ORDER BY c.sequence_start_frame
 ]])
 mix_stmt:bind_value(1, timeline_id)

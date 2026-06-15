@@ -124,19 +124,20 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 duration_frames * sample_rate * fps_den / fps_num + 0.5)
         end
 
-        -- TC origins (FR-017 defaults).
-        local video_tc  = has_video and media:get_start_tc()       or nil
-        local audio_tc  = has_audio and media:get_audio_start_tc() or nil
-        if has_video then
-            assert(video_tc ~= nil, string.format(
-                "Sequence.ensure_master: media %s has no video TC origin",
-                tostring(media_id)))
-        end
-        if has_audio then
-            assert(audio_tc ~= nil, string.format(
-                "Sequence.ensure_master: media %s has no audio TC origin",
-                tostring(media_id)))
-        end
+        -- TC origins (FR-017 defaults). A file that carries no embedded source
+        -- timecode starts at 00:00:00:00 — the universal NLE convention
+        -- (Resolve/Premiere/FCP) — so its master sits at origin 0, spanning
+        -- [0..duration] in both video frames and audio samples. Zero is the
+        -- DEFINED origin for genuinely-TC-less media (VFX renders, render
+        -- outputs), not a fallback masking missing data: get_start_tc returns
+        -- nil only when the project file supplied no TC and the file isn't on
+        -- disk to probe, and the relink/probe TC-sync path
+        -- (find_masters_for_media_tc_sync + batch_set_master_start_tc) shifts
+        -- the origin later if a real TC appears. The accessor deliberately
+        -- returns nil rather than 0 (models/media.lua:251) so this domain
+        -- decision is made explicitly here, at the master factory.
+        local video_tc = has_video and (media:get_start_tc()       or 0) or nil
+        local audio_tc = has_audio and (media:get_audio_start_tc() or 0) or nil
         assert(media.name and media.name ~= "", string.format(
             "Sequence.ensure_master: media has no name for media_id=%s",
             tostring(media_id)))
