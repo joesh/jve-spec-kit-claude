@@ -131,6 +131,20 @@ do
     print("  ✓ zero source_duration_frames → bad_request")
 end
 
+-- ─── trim: non-integral float frame count → bad_request ────────────
+-- JSON numbers may arrive as float; only integral values coerce.
+do
+    local r = fixture.request(fix, "author_reference_timeline", {
+        media_path   = REAL_MEDIA, timeline_fps = "23.976",
+        out_drt_path = OUT,
+        source_in_frame = 30, source_duration_frames = 24.5,
+    })
+    fixture.assert_structured_error(r, "bad_request", "fractional duration")
+    assert(r.error.message:find("source_duration_frames", 1, true),
+        "bad_request should name source_duration_frames: " .. r.error.message)
+    print("  ✓ non-integral source_duration_frames → bad_request")
+end
+
 -- ─── unknown args field → bad_request ──────────────────────────────
 do
     local r = fixture.request(fix, "author_reference_timeline", {

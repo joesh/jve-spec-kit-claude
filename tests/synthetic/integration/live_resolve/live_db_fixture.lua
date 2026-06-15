@@ -22,6 +22,7 @@ local M = {}
 
 -- Defaults are the A005-at-23.976 fixture every source-range test shares.
 local DEFAULTS = {
+    media_name    = "A005_C052_0925BL_001_tc01.mp4",
     fps_num       = 24000,
     fps_den       = 1001,           -- 23.976
     media_frames  = 108,            -- A005 ffprobe nb_frames (video)
@@ -47,7 +48,9 @@ function M.build_a005_trimmed_db(opts)
     local cfg = {}
     for k, v in pairs(DEFAULTS) do cfg[k] = v end
     for k, v in pairs(opts) do cfg[k] = v end
-    local media_name = cfg.media_name or "A005_C052_0925BL_001_tc01.mp4"
+    local media_name = cfg.media_name
+    assert(type(media_name) == "string" and media_name ~= "",
+        "build_a005_trimmed_db: media_name must be a non-empty string")
 
     os.remove(cfg.db_path)
     os.execute("mkdir -p /tmp/jve")

@@ -1014,11 +1014,13 @@ def _created_timeline(result, ref_proj):
     # Resolve's MediaPool.CreateTimelineFromClips / CreateEmptyTimeline
     # sometimes return the boolean True (a success flag) instead of the
     # Timeline object; in that case the new timeline is the project's
-    # current one. A truthy non-bool IS the timeline; falsy = creation
-    # failed (caller asserts non-None).
-    if result and result is not True:
-        return result
-    return ref_proj.GetCurrentTimeline()
+    # current one. A truthy non-bool IS the timeline. Falsy = creation
+    # failed → None, so the caller's `if timeline is None` guard fires
+    # regardless of project state (does not rely on the project being
+    # timeline-empty).
+    if result is True:
+        return ref_proj.GetCurrentTimeline()
+    return result or None
 
 
 # ─── Reference-timeline authoring (capture real Resolve MTBA/source bytes) ───
