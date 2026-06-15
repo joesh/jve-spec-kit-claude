@@ -41,22 +41,22 @@ local parsed = drp_importer.parse_drp_file(FIXTURE)
 assert(parsed and parsed.success ~= false,
     "parse_drp_file failed: " .. tostring(parsed and parsed.error))
 
--- The set the user expects to see: every pool clip with a real file reference
--- and a real duration. Derived from Resolve's own pool export, not from JVE's
--- import logic.
-local expected = {}
-for _, p in ipairs(parsed.pool_master_clips or {}) do
-    local has_file = (p.file_path and p.file_path ~= "") or (p.name and p.name ~= "")
-    local has_dur  = (p.num_frames and p.num_frames > 0)
-        or (p.audio_duration and p.audio_duration.samples and p.audio_duration.samples > 0)
-    if has_file and has_dur and p.name and p.name ~= "" then
-        expected[p.name] = true
-    end
-end
+-- The full media pool of resolve_authored_full.drp, read from the DRP's own
+-- MpFolder XML (<Name> elements) — NOT from the parser under test (rule 2.34),
+-- so a parser that silently drops a pool clip is caught instead of shrinking
+-- the expectation to match. Two of these (A002_C018_0922BW_002.mp4 and
+-- test_bars_tone.mp4) sit in the pool but on no timeline; before full-pool
+-- import they never became media + masters.
+local expected = {
+    ["A002_C018_0922BW_002.mp4"]  = true,
+    ["A005_C052_0925BL_001.mp4"]  = true,
+    ["countdown_chirp_30s.mp4"]   = true,
+    ["test_bars_tone.mp4"]        = true,
+    ["test_click_48k_stereo.wav"] = true,
+    ["test_tone_48k_stereo.wav"]  = true,
+}
 local n_expected = 0
 for _ in pairs(expected) do n_expected = n_expected + 1 end
-assert(n_expected >= 6, string.format(
-    "fixture sanity: expected >=6 usable pool clips, got %d", n_expected))
 
 local rate     = drp_importer.pick_majority_audio_sample_rate(parsed)
 local settings = drp_importer.derive_project_settings(parsed, rate)

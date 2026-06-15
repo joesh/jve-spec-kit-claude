@@ -54,8 +54,16 @@ local Signals = require("core.signals")
 local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
 local strip_holder     = require("ui.timeline.state.strip_holder")
 local log = require("core.logger").for_area("ui")
-local tab_strip = TimelineTabStrip.new()
-strip_holder.set(tab_strip)
+
+-- Replace the strip with a fresh, empty one and publish it to the holder.
+-- Used at module init and on every project boundary (pre-swap detach and
+-- post-swap reset) so all three sites share one definition of "blank strip".
+local tab_strip
+local function reset_tab_strip()
+    tab_strip = TimelineTabStrip.new()
+    strip_holder.set(tab_strip)
+end
+reset_tab_strip()
 
 -- Shared Data & Constants
 M.dimensions = data.dimensions
@@ -1058,8 +1066,7 @@ function M.on_project_change()
     -- Each project gets a fresh tab strip. Phase 2b will populate it from
     -- the project's persisted `open_sequence_ids`; until then we reset
     -- (see memory todo_tab_strip_persistence_phase_2b).
-    tab_strip = TimelineTabStrip.new()
-    strip_holder.set(tab_strip)
+    reset_tab_strip()
 end
 
 --- Access the TimelineTabStrip that encapsulates this view's open-tab list.
@@ -1097,8 +1104,7 @@ Signals.connect("project_will_change", function(outgoing_id)
     -- TimelineTab:get_marks asserts. A fresh empty strip renders blank
     -- (get_display_mark_* → nil) until project_changed repopulates it for
     -- the new project. The flush above ran first, so no view-state is lost.
-    tab_strip = TimelineTabStrip.new()
-    strip_holder.set(tab_strip)
+    reset_tab_strip()
 end, 40)
 
 -- Register for project_changed signal

@@ -4,6 +4,7 @@ local uuid = require("uuid")
 local watchers = require("core.watchers")
 local krono_ok, krono = pcall(require, "core.krono")
 local log = require("core.logger").for_area("timeline")
+local subframe_math = require("core.subframe_math")
 
 local M = {}
 
@@ -858,9 +859,8 @@ end
 -- the absolute tick offset (the actual audio sample the clip plays) must not
 -- move when the media is relinked. Returns the re-expressed in/out frame+subframe.
 local function reframe_audio_window(in_frame, in_sub, out_frame, out_sub, old_tpf, new_tpf)
-    local sfm = require("core.subframe_math")
-    local nf_in,  ns_in  = sfm.unpack(sfm.pack(in_frame,  in_sub,  old_tpf), new_tpf)
-    local nf_out, ns_out = sfm.unpack(sfm.pack(out_frame, out_sub, old_tpf), new_tpf)
+    local nf_in,  ns_in  = subframe_math.unpack(subframe_math.pack(in_frame,  in_sub,  old_tpf), new_tpf)
+    local nf_out, ns_out = subframe_math.unpack(subframe_math.pack(out_frame, out_sub, old_tpf), new_tpf)
     return nf_in, ns_in, nf_out, ns_out
 end
 
@@ -919,7 +919,6 @@ function M.batch_update_source(updates)
 
     local Sequence = require("models.sequence")
     local Project  = require("models.project")
-    local sfm      = require("core.subframe_math")
 
     for clip_id, vals in pairs(updates) do
         assert(vals.media_id, "Clip.batch_update_source: media_id required for " .. clip_id)
@@ -955,16 +954,18 @@ function M.batch_update_source(updates)
 
             -- New master's fps drives ticks_per_frame for the rebound clip.
             new_fps_stmt:bind_value(1, new_master_id)
-            assert(new_fps_stmt:exec() and new_fps_stmt:next(),
-                "Clip.batch_update_source: new-master fps lookup failed for " .. new_master_id
+            assert(new_fps_stmt:exec(),
+                "Clip.batch_update_source: new-master fps query failed for " .. new_master_id
                 .. ": " .. tostring(new_fps_stmt:last_error()))
+            assert(new_fps_stmt:next(),
+                "Clip.batch_update_source: new master row missing for " .. new_master_id)
             local new_fps_num = new_fps_stmt:value(0)
             local new_fps_den = new_fps_stmt:value(1)
             new_fps_stmt:reset()
 
             local mch     = Project.get_master_clock_hz_for_id(project_id)
-            local old_tpf = sfm.ticks_per_frame(mch, old_fps_num, old_fps_den)
-            local new_tpf = sfm.ticks_per_frame(mch, new_fps_num, new_fps_den)
+            local old_tpf = subframe_math.ticks_per_frame(mch, old_fps_num, old_fps_den)
+            local new_tpf = subframe_math.ticks_per_frame(mch, new_fps_num, new_fps_den)
 
             if cur_sub_in ~= nil and old_tpf ~= new_tpf then
                 -- Audio clip crossing a frame-rate boundary: re-express the

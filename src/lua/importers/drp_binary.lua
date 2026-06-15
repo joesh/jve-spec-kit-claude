@@ -737,11 +737,13 @@ local function require_string_size(s, min_len, label)
     return true
 end
 
---- Strip the [BE32 version][BE32 size][0x81] wrapper and zstd-decompress.
--- The 9-byte wrapper is shared by Sm2Mp FieldsBlobs and the inner BlobData
--- payload of marker blobs, so both decode paths share this helper.
--- @param bytes string: raw FieldsBlob bytes (9-byte wrapper + zstd frame)
--- @return string|nil: decompressed payload on success
+--- Strip the 9-byte [BE32 version][BE32 size][marker] wrapper and return the
+-- Fields payload: the 0x81 marker variant is zstd-compressed (decompressed
+-- here); the 0x80 variant is already-uncompressed (returned as-is). The 9-byte
+-- wrapper is shared by Sm2Mp FieldsBlobs and the inner BlobData payload of
+-- marker blobs, so both decode paths share this helper.
+-- @param bytes string: raw FieldsBlob bytes (9-byte wrapper + Fields payload)
+-- @return string|nil: the Fields payload on success
 -- @return string|nil: human-readable error on failure
 function M.decode_fields_blob_bytes(bytes)
     local ok, err = require_string_size(bytes, 10, "FieldsBlob bytes")

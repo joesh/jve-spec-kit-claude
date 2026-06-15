@@ -149,22 +149,23 @@ if footage_bin then
     -- those live in different bins — so an arbitrary `LIMIT 1` pick is not
     -- guaranteed to be the Footage one. Assert the real intent directly: at
     -- least one A001 master clip landed in the Footage bin.
+    -- sample_project.drp's pool has A001* clips in the Footage folder, and
+    -- full-pool import (FR-011a) materializes a master for every pool clip — so
+    -- a zero count is a real import regression, not a "skip this check" case.
     local a001_masters = scalar([[
         SELECT COUNT(*) FROM sequences s
         JOIN media m ON s.name = m.name
         WHERE s.kind = 'master' AND m.name LIKE 'A001%'
     ]])
-    if (a001_masters or 0) > 0 then
-        local in_footage = scalar([[
-            SELECT COUNT(*) FROM sequences s
-            JOIN media m ON s.name = m.name
-            JOIN tag_assignments ta ON ta.entity_id = s.id AND ta.entity_type = 'master_clip'
-            WHERE s.kind = 'master' AND m.name LIKE 'A001%' AND ta.tag_id = ?
-        ]], footage_bin.id)
-        check("an A001 masterclip is in Footage bin", (in_footage or 0) > 0)
-    else
-        print("  (no A001 masterclip found, skipping specific check)")
-    end
+    assert(a001_masters and a001_masters > 0, string.format(
+        "full-pool import must create A001 master clips; got %s", tostring(a001_masters)))
+    local in_footage = scalar([[
+        SELECT COUNT(*) FROM sequences s
+        JOIN media m ON s.name = m.name
+        JOIN tag_assignments ta ON ta.entity_id = s.id AND ta.entity_type = 'master_clip'
+        WHERE s.kind = 'master' AND m.name LIKE 'A001%' AND ta.tag_id = ?
+    ]], footage_bin.id)
+    check("an A001 masterclip is in Footage bin", (in_footage or 0) > 0)
 else
     print("  (no Footage bin found, skipping specific check)")
 end

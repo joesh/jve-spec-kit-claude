@@ -100,15 +100,17 @@ static Rate select_nominal_rate(AVStream* stream, bool* is_vfr_out) {
 static int64_t parse_timecode_tag(const char* tc_str, int32_t fps_num, int32_t fps_den) {
     if (!tc_str || fps_num <= 0 || fps_den <= 0) return 0;
     int hh = 0, mm = 0, ss = 0, ff = 0;
-    char sep = ':';
+    char sep = '\0';  // overwritten by sscanf when it returns 5; else unused
     // Capture the frame separator: ':' = non-drop, ';' = drop-frame.
     if (sscanf(tc_str, "%d:%d:%d%c%d", &hh, &mm, &ss, &sep, &ff) != 5) return 0;
     int64_t total_sec = static_cast<int64_t>(hh) * 3600 + mm * 60 + ss;
     if (sep == ';') {
-        // Drop-frame timecode is engineered so its label tracks real wall-clock
-        // time; the frame count is therefore seconds * the TRUE fractional rate
-        // (e.g. 01:00:00;00 @29.97 -> 107892, frame-accurate to the exact
-        // drop-frame arithmetic, which is a separate concern: todo_drop_frame_timecode).
+        // Drop-frame timecode skips 2 frame-numbers per minute (except every
+        // 10th) so its label tracks real wall-clock time. seconds * the TRUE
+        // fractional rate (e.g. 01:00:00;00 @29.97 -> 107892) only APPROXIMATES
+        // the drop-frame frame count — float rounding diverges from the exact
+        // closed form by up to a few frames over a 24h range. Exact drop-frame
+        // arithmetic is a separate concern: todo_drop_frame_timecode.
         double fps = static_cast<double>(fps_num) / fps_den;
         return static_cast<int64_t>(total_sec * fps + ff);
     }
