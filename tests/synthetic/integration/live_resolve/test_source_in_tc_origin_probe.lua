@@ -106,6 +106,16 @@ print("  ✓ teardown: fixture timeline deleted")
 supervisor.shutdown()
 
 -- ── verdict ─────────────────────────────────────────────────────────
+-- BLOCKED (2026-06-14): currently RED for a known OUTBOUND reason, not a
+-- position-channel one — the drt_writer FieldsBlob MediaExtents defect
+-- clamps the imported clip's source to media-length, so Resolve reports
+-- source_in=108 instead of the true media-relative value (see
+-- team-checkpoint.md + test_drt_field_diff_jve_vs_resolve; Resolve's own
+-- trim reads media-relative, test_drt_source_in_resolve_authored). Once
+-- that exporter fix lands, Resolve reports the media-relative source_in
+-- and this probe measures the real absolute-vs-relative divergence the
+-- position channel must normalize.
+--
 -- Expectation derived from Resolve API semantics + TC math (NOT by
 -- tracing JVE code): GetSourceStartFrame is media-relative, so it must
 -- equal IN_OFFSET, and the delta must equal the embedded TC origin.
