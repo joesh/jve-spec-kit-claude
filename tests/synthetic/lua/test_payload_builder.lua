@@ -134,7 +134,12 @@ check("sequence resolution carried (writer media-pool XML needs it)",
 
 check("exactly one media ref", #payload.media_refs == 1)
 local mref = payload.media_refs[1]
-check("media ref keyed by media id", mref and mref.file_uuid == "m1")
+-- The pool item is keyed by the SOURCE-CLIP identity (the master's). This
+-- master is native (import_uuid NULL), so its identity falls back to the
+-- master's own id — NOT media.id (post-dedup media is one row per FILE,
+-- so media.id can't identify a source clip).
+check("media ref keyed by master identity (native ⇒ master id)",
+    mref and mref.file_uuid == "seq_master")
 check("media TC origin is 01:00:00:00 NDF (108000 frames)",
     mref and mref.start_tc_frame == MEDIA_TC_ORIGIN)
 check("media duration in native frames",
@@ -160,7 +165,9 @@ check("clip source_out is absolute TC",
 check("clip timeline position carried",
     c and c.sequence_start == CLIP_SEQ_START)
 check("clip duration carried", c and c.duration == CLIP_DURATION)
-check("clip media link carried", c and c.media_uuid == "m1")
+-- The clip's media link is the source-clip identity (master's), matching
+-- the pool item it points at — not media.id.
+check("clip media link is master identity", c and c.media_uuid == "seq_master")
 
 -- ─── error path: empty sequence refuses loudly ──────────────────────
 assert(db:exec(string.format([[

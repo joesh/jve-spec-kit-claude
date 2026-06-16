@@ -172,17 +172,28 @@ end
 --- Strategy precedence (strongest first):
 ---   1. `direct` — JVE clip.id == Resolve item.jve_guid. Wins over any
 ---      other candidate (FR-011).
----   2. `content_match` — same media file_uuid AND overlapping source
+---   2. `content_match` — same SOURCE-CLIP identity AND overlapping source
 ---      TC range. Used when JVE-originated clips are roundtripped
 ---      through Resolve without an id (FR-011c positional fallback).
 ---   3. `blade_inherit` — the JVE clip is a fragment whose source range
 ---      sits ENTIRELY WITHIN some other JVE clip's range on the same
----      media (file_uuid), AND that parent clip got a direct match.
----      Both parent + fragment(s) inherit the parent's resolve_item_id
----      (bladed both-inherit, data-model.md).
+---      source clip (same identity), AND that parent clip got a direct
+---      match. Both parent + fragment(s) inherit the parent's
+---      resolve_item_id (bladed both-inherit, data-model.md).
 ---   4. unmatched — reported, never silently dropped (FR-007 / FR-011).
 ---
+--- `file_uuid` here is the SOURCE-CLIP identity — the master's import_uuid
+--- (data-model.md §content-match, corrected with the identity move). It is
+--- NOT media.id: post-dedup `media` is one row per FILE, so a synced clip
+--- and its plain counterpart over one .mov share media.id but carry
+--- distinct import_uuids — keying content_match on media.id would wrongly
+--- fuse them. Outbound, the same identity rides the DRT pool item DbId
+--- (payload_builder), so resolve_items[].file_uuid is import_uuid too.
+--- (reconcile is pure data; no live caller populates file_uuid yet —
+--- see todo_023_outbound_import_uuid_export when wiring it in.)
+---
 --- @param jve_clips     array of {id, file_uuid, source_in, source_out}
+---                       file_uuid = master.import_uuid (source-clip id)
 --- @param resolve_items array of {resolve_item_id, jve_guid, file_uuid,
 ---                                source_in, source_out}
 --- @return table { mapped = [{clip_id, resolve_item_id, source}, ...],

@@ -45,7 +45,32 @@ local function fps_number(seq)
     return seq.frame_rate.fps_numerator / seq.frame_rate.fps_denominator
 end
 
-local function load_clips_for_track(db, track_id)
+local function master_identity(master_id, ctx)
+    -- Source-clip identity = the master's import_uuid (the Resolve pool
+    -- item DbId adopted at import) or, for native never-imported masters,
+    -- the master's own id. This is the value that drives the DRT media-pool
+    -- item DbId and the timeline clip's MediaRef — NOT media.id. Post-dedup
+    -- (spec 023 source-clip identity move) `media` is one row per FILE, so
+    -- two source clips over one .mov share media.id; keying the pool by
+    -- media.id would collapse them. Keying by the master's identity keeps
+    -- a synced source clip and its plain counterpart as distinct pool items.
+    local cached = ctx.identity_by_master[master_id]
+    if cached then return cached end
+    local master = Sequence.load(master_id)
+    assert(master, "payload_builder: clip references missing master "
+        .. tostring(master_id))
+    assert(master.kind == "master", string.format(
+        "payload_builder: clip's nested sequence %s is kind=%q, expected "
+        .. "'master' (a timeline clip sent to Resolve must resolve to a "
+        .. "source clip)", tostring(master_id), tostring(master.kind)))
+    local identity = (type(master.import_uuid) == "string"
+                      and master.import_uuid ~= "")
+        and master.import_uuid or master.id
+    ctx.identity_by_master[master_id] = identity
+    return identity
+end
+
+local function load_clips_for_track(db, track_id, ctx)
     -- V13: clips don't carry media_id as a column; the media link is
     -- via the source sequence's media_refs (`models/clip.lua::load`
     -- does the JOIN). Pre-V13 code reading `clips.media_id` would
@@ -65,13 +90,16 @@ local function load_clips_for_track(db, track_id)
         assert(loaded,
             "payload_builder: clip vanished between id-list and load: "
             .. tostring(id))
+        -- Clip.load resolves the media chain (nested master → media_ref →
+        -- media) into clip.resolved_media; nil when the clip references a
+        -- non-master sequence. media_uuid carries the SOURCE-CLIP identity
+        -- (the master's), which is what the DRT MediaRef and pool item key
+        -- on; source_media_id is the physical-file row used only to load
+        -- the file's metadata (path/rate/duration/TC) for the pool item.
         rows[#rows + 1] = {
             id              = loaded.id,
-            -- Clip.load resolves the media chain (nested master →
-            -- media_ref → media) into clip.resolved_media; nil when the
-            -- clip references a non-master sequence. The caller asserts
-            -- a media link exists before authoring a DRT.
-            media_uuid      = loaded.resolved_media
+            media_uuid      = master_identity(loaded.sequence_id, ctx),
+            source_media_id = loaded.resolved_media
                                 and loaded.resolved_media.id,
             source_in       = loaded.source_in,
             source_out      = loaded.source_out,
@@ -98,9 +126,16 @@ local function media_native_rate(media)
         / media.frame_rate.fps_denominator
 end
 
-local function media_to_payload(media, track_type)
+local function media_to_payload(media, track_type, file_uuid)
     -- drt_writer expects a flat media_ref record. We fold in track_type
-    -- so the writer can pick video vs audio media-pool item shape.
+    -- so the writer can pick video vs audio media-pool item shape. The
+    -- pool item's identity (file_uuid) is the SOURCE-CLIP identity passed
+    -- by the caller (the master's import_uuid / id), not media.id — two
+    -- source clips over one file emit two pool items sharing this media's
+    -- file/rate/duration/TC but carrying distinct identities.
+    assert(type(file_uuid) == "string" and file_uuid ~= "",
+        "payload_builder: media_to_payload requires a source-clip identity "
+        .. "(file_uuid) — id=" .. tostring(media.id))
     -- Media.load exposes duration as `duration` (native frames) and the
     -- TC origin via `get_start_tc()` (frames at native rate, from
     -- metadata) — there are no flat duration_frames/start_tc_frame
@@ -116,7 +151,7 @@ local function media_to_payload(media, track_type)
         "payload_builder: media has no TC origin — TC must always be set "
         .. "(rule timecode-is-truth) — id=" .. tostring(media.id))
     return {
-        file_uuid        = media.id,
+        file_uuid        = file_uuid,
         name             = media.name,
         -- drt_writer's media_ref contract (drt_writer.lua §author doc)
         -- names this field file_path; build_clip_element and the
@@ -172,7 +207,10 @@ function M.build(db, project_id, sequence_id)
             tracks = {},
         },
     }
+    -- One pool item per SOURCE CLIP (master identity), deduped across the
+    -- whole sequence; ctx caches the per-master identity lookup.
     local media_seen = {}
+    local ctx = { identity_by_master = {} }
 
     -- schema CHECK(track_type IN ('VIDEO','AUDIO')) so query is uppercase;
     -- drt_writer's wire contract uses lowercase 'video'/'audio', so we
@@ -197,27 +235,34 @@ function M.build(db, project_id, sequence_id)
         local wire_type = (t.track_type == "VIDEO") and "video" or "audio"
         local track_payload = {
             type  = wire_type,
-            clips = load_clips_for_track(db, t.id),
+            clips = load_clips_for_track(db, t.id, ctx),
         }
         payload.sequence.tracks[#payload.sequence.tracks+1] = track_payload
 
         for _, clip_row in ipairs(track_payload.clips) do
-            local media_uuid = clip_row.media_uuid
+            -- media_uuid is the source-clip identity (master's); pool items
+            -- dedupe on it so each source clip emits once. source_media_id
+            -- is the physical file row whose metadata fills the pool item.
+            local identity = clip_row.media_uuid
             -- Rule 2.13: no silent skip of media links. If a clip exists
-            -- on a track, it must point to valid media.
-            assert(media_uuid and media_uuid ~= "", string.format(
-                "payload_builder: clip %s has no media link",
+            -- on a track, it must resolve to a source clip and a file.
+            assert(identity and identity ~= "", string.format(
+                "payload_builder: clip %s has no source-clip identity",
                 tostring(clip_row.id)))
+            assert(clip_row.source_media_id and clip_row.source_media_id ~= "",
+                string.format("payload_builder: clip %s resolves to no media "
+                    .. "file (nested sequence is not a master?)",
+                    tostring(clip_row.id)))
 
-            if not media_seen[media_uuid] then
-                media_seen[media_uuid] = true
-                local m = Media.load(media_uuid)
+            if not media_seen[identity] then
+                media_seen[identity] = true
+                local m = Media.load(clip_row.source_media_id)
                 assert(m, string.format(
                     "payload_builder: clip %s references missing "
                     .. "media %s", tostring(clip_row.id),
-                    tostring(media_uuid)))
+                    tostring(clip_row.source_media_id)))
                 payload.media_refs[#payload.media_refs+1] =
-                    media_to_payload(m, wire_type)
+                    media_to_payload(m, wire_type, identity)
             end
         end
     end
