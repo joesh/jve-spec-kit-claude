@@ -48,6 +48,12 @@ else
 # checkout benefit too: whichever one finishes `make -j4` first
 # refreshes the marker, and the others' pre-commit gates pass without
 # re-running anything.
+#
+# The fast-path re-touches the marker before exiting: it means "last
+# time the tree was confirmed clean", not "last time we built". Without
+# the touch, a commit of only non-source files (docs, .claude/) would
+# stay blocked forever — those files never move the marker themselves,
+# yet the pre-commit gate compares every staged file against it.
 all: configure
 	@if { find src -type f \( -name '*.cpp' -o -name '*.mm' -o -name '*.h' -o -name '*.hpp' -o -name '*.lua' \) -print0; \
 	      find tests -type f -name '*.lua' -not -path '*/autogen/*' -print0; \
@@ -57,6 +63,7 @@ all: configure
 	      printf 'Makefile\0'; \
 	    } | scripts/check_clean_make.sh 2>/dev/null; then \
 		echo "make: .last-clean-make newer than every source — nothing to do."; \
+		touch .last-clean-make; \
 		exit 0; \
 	fi
 	@luacheck src tests > .luacheck.log 2>&1 & \
