@@ -11,6 +11,21 @@ local log = require("core.logger").for_area("database")
 -- at the current version. No ALTER TABLE migration path.
 M.SCHEMA_VERSION = 14
 
+-- Master sequences hold no `clips` rows; their playable spans are synthesized
+-- from media_refs as virtual clips carrying id = MASTER_VIRTUAL_CLIP_PREFIX ..
+-- media_ref_id (see load_master_virtual_clips). Exported so consumers can
+-- recognize and parse these synthetic ids without re-hardcoding the literal.
+M.MASTER_VIRTUAL_CLIP_PREFIX = "mref:"
+
+--- Build "?,?,...,?" — n positional placeholders for an SQL IN(...) or
+--- VALUES(...) clause. Fail-fast on n < 1: an empty placeholder list means the
+--- caller failed to guard an empty id set, and `IN ()` is a query bug.
+function M.in_placeholders(n)
+    assert(type(n) == "number" and n >= 1, string.format(
+        "in_placeholders: n must be a positive integer, got %s", tostring(n)))
+    return string.rep("?,", n - 1) .. "?"
+end
+
 M.SCHEMA_INCOMPATIBLE_MSG =
     "Project schema V%d is incompatible with this version of JVE (requires V%d).\n\n" ..
     "Re-import from the original source (.drp) to create a compatible project."
@@ -1262,7 +1277,7 @@ function M.load_master_virtual_clips(master_seq_id)
             -- (TSO 2026-05-16: src tab on V+A master showed empty A1/A2).
 
             local clip = {
-                id = "mref:" .. mref_id,
+                id = M.MASTER_VIRTUAL_CLIP_PREFIX .. mref_id,
                 project_id = proj_id,
                 name = media_name or "",
                 track_id = track_id,

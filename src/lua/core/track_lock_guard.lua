@@ -30,7 +30,7 @@ end
 --- @return array<{id, name}> empty if none locked
 local function locked_rows(db, track_ids)
     if #track_ids == 0 then return {} end
-    local placeholders = string.rep("?,", #track_ids - 1) .. "?"
+    local placeholders = require("core.database").in_placeholders(#track_ids)
     local stmt = db:prepare(string.format(
         "SELECT id, name FROM tracks WHERE id IN (%s) AND locked = 1",
         placeholders))
@@ -82,7 +82,7 @@ end
 function M.assert_clips_writable(db, clip_ids)
     if in_undo_redo() then return end
     if not clip_ids or #clip_ids == 0 then return end
-    local placeholders = string.rep("?,", #clip_ids - 1) .. "?"
+    local placeholders = require("core.database").in_placeholders(#clip_ids)
     local stmt = db:prepare(string.format(
         "SELECT DISTINCT track_id FROM clips WHERE id IN (%s)", placeholders))
     assert(stmt, "track_lock_guard.assert_clips_writable: prepare failed: "

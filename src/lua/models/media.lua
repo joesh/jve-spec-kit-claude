@@ -664,11 +664,9 @@ function M.load_many(media_ids)
         local chunk_end = math.min(chunk_start + CHUNK - 1, #media_ids)
         local n = chunk_end - chunk_start + 1
 
-        local phs = {}
-        for i = 1, n do phs[i] = "?" end
         local sql = string.format(
             "SELECT %s FROM media WHERE id IN (%s)",
-            MEDIA_SELECT_COLUMNS, table.concat(phs, ","))
+            MEDIA_SELECT_COLUMNS, database.in_placeholders(n))
 
         local stmt = assert(db:prepare(sql), "Media.load_many: failed to prepare query")
         for i = 1, n do
@@ -807,16 +805,15 @@ end
 --- Chunked SELECT of the {file_path, metadata} for each id, returned as
 --- {[media_id] = {file_path, metadata}}. Asserts every requested id exists.
 local function capture_existing_file_state(db, ids)
+    local database = require("core.database")
     local CHUNK = 500
     local out = {}
     for chunk_start = 1, #ids, CHUNK do
         local chunk_end = math.min(chunk_start + CHUNK - 1, #ids)
         local n = chunk_end - chunk_start + 1
-        local phs = {}
-        for i = 1, n do phs[i] = "?" end
         local stmt = assert(db:prepare(string.format(
             "SELECT id, file_path, metadata FROM media WHERE id IN (%s)",
-            table.concat(phs, ","))),
+            database.in_placeholders(n))),
             "Media.batch_set_file_paths: failed to prepare read query")
         for i = 1, n do stmt:bind_value(i, ids[chunk_start + i - 1]) end
         assert(stmt:exec(),
@@ -1519,9 +1516,8 @@ end
 -- nested audio_sample_rate drives audio clip rate. Track type decides
 -- which bucket the row contributes to.
 local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rates, result)
+    local database = require("core.database")
     local n = chunk_end - chunk_start + 1
-    local phs = {}
-    for i = 1, n do phs[i] = "?" end
     local sql = string.format([[
         SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator,
@@ -1531,7 +1527,7 @@ local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rat
         JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
         JOIN tracks t ON t.id = c.track_id
         WHERE mr.media_id IN (%s)
-    ]], table.concat(phs, ","))
+    ]], database.in_placeholders(n))
     local stmt = assert(db:prepare(sql),
         "Media.batch_get_source_extents: failed to prepare query")
     for i = 1, n do

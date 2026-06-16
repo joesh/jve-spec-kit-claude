@@ -84,11 +84,9 @@ local function build_upsert_sql()
     local cols = { "clip_id" }
     for _, ch in ipairs(CDL_CHANNELS)     do cols[#cols + 1] = ch end
     for _, ch in ipairs(TRAILING_COLUMNS) do cols[#cols + 1] = ch end
-    local placeholders = {}
-    for i = 1, #cols do placeholders[i] = "?" end
     return string.format(
         "INSERT OR REPLACE INTO clip_grade (%s) VALUES (%s)",
-        table.concat(cols, ", "), table.concat(placeholders, ", "))
+        table.concat(cols, ", "), database.in_placeholders(#cols))
 end
 
 local UPSERT_SQL = build_upsert_sql()

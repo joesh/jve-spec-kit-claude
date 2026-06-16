@@ -530,54 +530,91 @@ function M.find_project_media(db, project_id)
     return results
 end
 
+--- Run a prepared IN(...) query and feed each (col0, col1) result pair to consume.
+local function for_each_in_query(db, sql, bind_values, what, consume)
+    local stmt = assert(db:prepare(sql),
+        string.format("find_media_for_clips: failed to prepare %s query", what))
+    for i, v in ipairs(bind_values) do stmt:bind_value(i, v) end
+    assert(stmt:exec(),
+        string.format("find_media_for_clips: %s query exec failed", what))
+    while stmt:next() do
+        consume(stmt:value(0), stmt:value(1))
+    end
+    stmt:finalize()
+end
+
 --- Find unique media records for a set of clip IDs (excludes proxy).
 -- Deduplicates: multiple clips sharing the same media → one media record.
--- Two SQL round-trips total: one SELECT DISTINCT media_id over the clip ids,
--- one chunked SELECT hydrating those media rows. Old code did 2×N queries.
--- @param db table Database connection (used for the clips→media_id query)
--- @param clip_ids table Array of clip ID strings
+--
+-- Two id kinds are accepted, because a selection may hold either:
+--   * real clips — rows in `clips`; resolve media via the clips→media_refs JOIN.
+--   * master virtual clips — synthesized by database.load_master_virtual_clips,
+--     id = MASTER_VIRTUAL_CLIP_PREFIX .. media_ref_id, NOT rows in `clips`;
+--     resolve media directly from media_refs by id (e.g. relinking from a
+--     master shown in the Source viewer).
+-- @param db table Database connection
+-- @param clip_ids table Array of clip ID strings (real and/or virtual)
 -- @return table Array of unique Media instances
 function M.find_media_for_clips(db, clip_ids)
     assert(db, "find_media_for_clips: db required")
     assert(type(clip_ids) == "table" and #clip_ids > 0,
         "find_media_for_clips: clip_ids must be non-empty array")
 
-    -- V13: clips reference master sequences via sequence_id; the
-    -- master holds media_refs that point at media. JOIN through both.
-    local phs = {}
-    for i = 1, #clip_ids do phs[i] = "?" end
-    local sql = string.format([[
-        SELECT c.id, mr.media_id
-          FROM clips c
-          JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
-         WHERE c.id IN (%s)
-    ]], table.concat(phs, ","))
+    local database = require("core.database")
+    local prefix = database.MASTER_VIRTUAL_CLIP_PREFIX
 
-    local stmt = assert(db:prepare(sql),
-        "find_media_for_clips: failed to prepare clips query")
-    for i, clip_id in ipairs(clip_ids) do
-        stmt:bind_value(i, clip_id)
-    end
-    assert(stmt:exec(), "find_media_for_clips: clips query exec failed")
-
-    local seen = {}
-    local distinct_ids = {}
-    local found_clip_ids = {}
-    while stmt:next() do
-        local cid = stmt:value(0)
-        local mid = stmt:value(1)
-        assert(mid, string.format("find_media_for_clips: clip %s has no media_id", cid))
-        found_clip_ids[cid] = true
-        if not seen[mid] then
-            seen[mid] = true
-            distinct_ids[#distinct_ids + 1] = mid
+    -- Partition the request by id kind.
+    local real_clip_ids = {}
+    local mref_ids = {}            -- bare media_ref ids (prefix stripped)
+    for _, id in ipairs(clip_ids) do
+        if id:sub(1, #prefix) == prefix then
+            mref_ids[#mref_ids + 1] = id:sub(#prefix + 1)
+        else
+            real_clip_ids[#real_clip_ids + 1] = id
         end
     end
-    stmt:finalize()
 
-    -- Preserve fail-fast: every requested clip_id must have returned a row.
+    -- Accumulate distinct media ids; mark which requested ids resolved.
+    local seen = {}
+    local distinct_ids = {}
+    local found = {}
+    local function record_media(requested_id, media_id)
+        assert(media_id, string.format(
+            "find_media_for_clips: %s has no media_id", requested_id))
+        found[requested_id] = true
+        if not seen[media_id] then
+            seen[media_id] = true
+            distinct_ids[#distinct_ids + 1] = media_id
+        end
+    end
+
+    if #real_clip_ids > 0 then
+        -- V13: clips reference master sequences via sequence_id; the master
+        -- holds media_refs that point at media. JOIN through both.
+        local sql = string.format([[
+            SELECT c.id, mr.media_id
+              FROM clips c
+              JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
+             WHERE c.id IN (%s)
+        ]], database.in_placeholders(#real_clip_ids))
+        for_each_in_query(db, sql, real_clip_ids, "clips", record_media)
+    end
+
+    if #mref_ids > 0 then
+        -- Master virtual clips map one-to-one to a media_ref.
+        local sql = string.format([[
+            SELECT mr.id, mr.media_id
+              FROM media_refs mr
+             WHERE mr.id IN (%s)
+        ]], database.in_placeholders(#mref_ids))
+        for_each_in_query(db, sql, mref_ids, "media_refs", function(ref_id, media_id)
+            record_media(prefix .. ref_id, media_id)
+        end)
+    end
+
+    -- Preserve fail-fast: every requested clip id must have resolved to media.
     for _, clip_id in ipairs(clip_ids) do
-        assert(found_clip_ids[clip_id],
+        assert(found[clip_id],
             string.format("find_media_for_clips: clip not found: %s", clip_id))
     end
 
