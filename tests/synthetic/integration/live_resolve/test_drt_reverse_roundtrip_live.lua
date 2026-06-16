@@ -32,23 +32,19 @@
 --   scripts/run_live_resolve_test.sh test_drt_reverse_roundtrip_live
 
 local test_env        = require("test_env")
-local database        = require("core.database")
-local Project         = require("models.project")
-local Sequence        = require("models.sequence")
-local Track           = require("models.track")
-local Media           = require("models.media")
 local Clip            = require("models.clip")
 local payload_builder = require("core.resolve_bridge.payload_builder")
 local drt_writer      = require("exporters.drt_writer")
 local fixture         = require(
     "synthetic.integration.live_resolve.live_fixture")
+local db_fixture      = require(
+    "synthetic.integration.live_resolve.live_db_fixture")
 
 -- 23.976fps A005 fixture with real embedded TC (108 video frames) — the
--- writer's author_a005_compatible path requires 23.976 media.
+-- writer's author_a005_compatible path requires 23.976 media. Frame rate and
+-- media frame-count are the build_a005_trimmed_db defaults.
 local MEDIA_PATH = test_env.resolve_repo_path(
     "tests/fixtures/media/A005_C052_0925BL_001_tc01.mp4")
-local FPS_NUM, FPS_DEN = 24000, 1001
-local MEDIA_FRAMES = 108
 
 -- The shared played source window (file-relative frames) and its length.
 local LO  = 20                 -- lowest played source frame
@@ -57,66 +53,21 @@ local HI  = LO + DUR - 1
 local FWD_START = 120          -- forward clip's timeline position
 local REV_START = 300          -- reverse twin's timeline position (separated)
 
--- ── DB fixture: a forward clip and its reverse twin on a master sequence ──
-local DB_PATH = "/tmp/jve/test_drt_reverse_roundtrip_live.db"
-os.remove(DB_PATH)
-os.execute("mkdir -p /tmp/jve")
-assert(database.init(DB_PATH), "schema init failed")
-local db = database.get_connection()
-db:exec(require("import_schema"))
-
-Project.create("p", {
-    id = "p1", fps_mismatch_policy = "passthrough",
-    settings = { master_clock_hz = 705600000,
-                 default_fps = { num = FPS_NUM, den = FPS_DEN } },
-}):save()
-Sequence.create("m", "p1",
-    { fps_numerator = FPS_NUM, fps_denominator = FPS_DEN },
-    1920, 1080, { id = "m", kind = "master" }):save()
-Sequence.create("seq", "p1",
-    { fps_numerator = FPS_NUM, fps_denominator = FPS_DEN },
-    1920, 1080, { id = "e1", kind = "sequence", audio_sample_rate = 48000 })
-    :save()
-Track.create_video("V1", "e1", { id = "e1-v1", index = 1 }):save()
-Track.create_video("V1", "m", { id = "m-v1", index = 1 }):save()
-db:exec("UPDATE sequences SET default_video_layer_track_id = 'm-v1' "
-    .. "WHERE id = 'm'")
-
-local media = Media.create({
-    id = "med-tc01", project_id = "p1",
-    name = "A005_C052_0925BL_001_tc01.mp4",
-    file_path = MEDIA_PATH, duration_frames = MEDIA_FRAMES,
-    fps_numerator = FPS_NUM, fps_denominator = FPS_DEN,
-    audio_channels = 0, metadata = "{}",
+-- ── DB fixture ──────────────────────────────────────────────────────────
+-- The shared scaffold (project / master+editing sequence / track / A005 media
+-- / media_refs) AND the forward clip come from build_a005_trimmed_db — the
+-- forward clip's played window IS [LO..HI], exactly the fixture's trimmed
+-- clip. We then add ONLY the reverse twin on the same media.
+local ctx = db_fixture.build_a005_trimmed_db({
+    db_path = "/tmp/jve/test_drt_reverse_roundtrip_live.db",
+    media_path = MEDIA_PATH, in_offset = LO, dur = DUR, seq_start = FWD_START,
 })
-media:save()
-db:exec(string.format([[
-    INSERT INTO media_refs (id, project_id, owner_sequence_id, track_id,
-        media_id, source_in_frame, source_out_frame,
-        sequence_start_frame, duration_frames, audio_sample_rate,
-        enabled, volume, playhead_frame, created_at, modified_at)
-    VALUES ('mr-tc01', 'p1', 'm', 'm-v1', 'med-tc01', 0, %d, 0, %d,
-        NULL, 1, 1.0, 0, 0, 0);
-]], MEDIA_FRAMES, MEDIA_FRAMES))
-
-local TC_ORIGIN = media:get_start_tc()
-assert(type(TC_ORIGIN) == "number" and TC_ORIGIN > 0,
-    "fixture: embedded TC origin must extract non-zero")
-local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
-
--- FORWARD: source_in = first played (absolute TC), source_out = one-past-last.
-assert(Clip.create({
-    id = "0b50c0de-7007-4aaa-8aaa-0000000000f1", project_id = "p1",
-    owner_sequence_id = "e1", track_id = "e1-v1", sequence_id = "m",
-    name = "A005 fwd", sequence_start_frame = FWD_START, duration_frames = DUR,
-    source_in_frame = TC_ORIGIN + LO, source_out_frame = TC_ORIGIN + LO + DUR,
-    source_in_subframe = sub_in, source_out_subframe = sub_out,
-    master_layer_track_id = nil, fps_mismatch_policy = "passthrough",
-    enabled = true, volume = 1.0, playhead_frame = 0,
-}))
+local db = ctx.db
+local TC_ORIGIN = ctx.tc_origin
 
 -- REVERSE twin: same source frames played backward. source_in = highest played
 -- (inclusive), source_out = lowest played minus one (exclusive).
+local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
 assert(Clip.create({
     id = "0b50c0de-7007-4aaa-8aaa-00000000re00", project_id = "p1",
     owner_sequence_id = "e1", track_id = "e1-v1", sequence_id = "m",

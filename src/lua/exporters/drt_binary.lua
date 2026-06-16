@@ -151,6 +151,10 @@ local TLV_DOUBLE  = 0x0006
 local TLV_STRING  = 0x000a
 local TLV_PAYLOAD = 0x000c
 
+-- StartFrame is 0 in every measured Resolve DRT/DRP Time blob — the source
+-- in-point lives in the timeline item's <In>, not here.
+local TIME_BLOB_START_FRAME = 0
+
 -- Encode one field's value bytes for the given type tag.
 local function encode_value(type_tag, value)
     if type_tag == TLV_INT then
@@ -217,7 +221,8 @@ end
 
 --- @param t table: { num_frames=int>0, frame_rate=number, unique_id=string,
 ---                    timecode=string? }  -- timecode = media source-TC origin
----                    as "HH:MM:SS:FF"; omit/empty for zero-origin media.
+---                    as "HH:MM:SS:FF" (e.g. "01:00:00:00"); nil for
+---                    zero-origin media.
 --- @return string: hex-encoded Time blob
 function M.encode_bt_video_time(t)
     assert(type(t.num_frames) == "number" and t.num_frames > 0,
@@ -247,17 +252,14 @@ function M.encode_bt_video_time(t)
     -- test_drt_mptime_timecode_clamp. A Resolve-native item omits Timecode
     -- only when the media's TC origin is zero, so callers pass it only
     -- then (5-field shape == the zero-origin reference).
-    -- StartFrame is 0 in every measured Resolve DRT/DRP Time blob (the source
-    -- in-point lives in the timeline item's <In>, not here).
-    local START_FRAME = 0
     local fields = encode_field("UniqueId", TLV_STRING, t.unique_id)
     local field_count = 5
-    if t.timecode and t.timecode ~= "" then
+    if t.timecode then  -- nil = zero-origin; non-nil was validated by the assert above
         fields = fields .. encode_field("Timecode", TLV_STRING, t.timecode)
         field_count = 6
     end
     fields = fields
-        .. encode_field("StartFrame", TLV_INT, START_FRAME)
+        .. encode_field("StartFrame", TLV_INT, TIME_BLOB_START_FRAME)
         .. encode_field("NumFrames", TLV_INT, t.num_frames)
         .. encode_field("FrameRate", TLV_PAYLOAD,
             double_to_le_bytes(t.frame_rate) .. string.rep("\0", 8))
