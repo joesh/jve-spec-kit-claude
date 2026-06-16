@@ -69,9 +69,19 @@ function M.create(widget, state_module)
         -- Clear previous drawing commands
         timeline.clear_commands(ruler.widget)
 
-        -- Get viewport state (integer frames)
-        local viewport_start_frames = assert(state_module.get_viewport_start_time(), "timeline_ruler: viewport_start_time is nil")
-        local viewport_duration_frames = assert(state_module.get_viewport_duration(), "timeline_ruler: viewport_duration is nil")
+        -- Get viewport state (integer frames). Both getters return nil for a
+        -- blanked body (no displayed tab) — paint the empty ruler chrome and
+        -- stop rather than asserting. Asserting here turned every repaint
+        -- after the body was blanked (e.g. ` toggle with no source loaded)
+        -- into a LUA CALLBACK ERROR cascade (TSO 2026-06-15).
+        local viewport_start_frames = state_module.get_viewport_start_time()
+        local viewport_duration_frames = state_module.get_viewport_duration()
+        if viewport_start_frames == nil or viewport_duration_frames == nil then
+            timeline.add_rect(ruler.widget, 0, 0, width, M.RULER_HEIGHT, BACKGROUND_COLOR)
+            timeline.add_rect(ruler.widget, 0, M.RULER_HEIGHT - BASELINE_HEIGHT, width, BASELINE_HEIGHT, BASELINE_COLOR)
+            timeline.update(ruler.widget)
+            return
+        end
         local viewport_end_frames = viewport_start_frames + viewport_duration_frames
         local playhead_frame = state_module.get_playhead_position()
 

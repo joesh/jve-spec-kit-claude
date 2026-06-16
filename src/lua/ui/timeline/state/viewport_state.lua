@@ -116,7 +116,10 @@ local function ensure_playhead_visible()
     -- is_playing is transport-global, not per-sequence. Stays on data.state.
     -- Only auto-scroll during playback; when parked, user must be free to scroll.
     if not data.state.is_playing then return false end
-    local cache = cache_strict("viewport_state.ensure_playhead_visible")
+    -- Blank body (no displayed tab): nothing to surface. View-layer entry,
+    -- so no-op rather than assert (see surface_playhead).
+    local cache = strip_holder.displayed_cache()
+    if not cache then return false end
 
     local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
@@ -164,7 +167,10 @@ function M.surface_range(start_frame, end_frame, persist_callback)
         "viewport_state.surface_range: end_frame must be >= start_frame")
 
     if viewport_guard_count > 0 then return false end
-    local cache = cache_strict("viewport_state.surface_range")
+    -- Blank body (no displayed tab): nothing to surface. View-layer entry,
+    -- so no-op rather than assert (see surface_playhead).
+    local cache = strip_holder.displayed_cache()
+    if not cache then return false end
     local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
 
@@ -199,7 +205,14 @@ end
 -- Unlike ensure_playhead_visible (playback-only auto-scroll),
 -- this works when parked. Used by Find navigate_to_clip.
 function M.surface_playhead(persist_callback)
-    local cache = cache_strict("viewport_state.surface_playhead")
+    -- View-layer surfacing entry. The post-command viewport policy calls
+    -- this after every interactive action, including the ` toggle that
+    -- blanks the body (no displayed tab). A blank body has nothing to
+    -- surface, so no-op rather than assert — asserting turned the toggle
+    -- into a crash and every later repaint into a cascade (TSO 2026-06-15).
+    -- Internal arithmetic mutators keep cache_strict; this is a view entry.
+    local cache = strip_holder.displayed_cache()
+    if not cache then return false end
     local duration = cache.viewport_duration
     if type(duration) ~= "number" or duration <= 0 then return false end
 

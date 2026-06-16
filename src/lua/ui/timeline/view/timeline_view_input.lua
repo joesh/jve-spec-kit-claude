@@ -451,6 +451,16 @@ end
 
 function M.handle_mouse(view, event_type, x, y, button, modifiers)
     local state = view.state
+
+    -- Blank body (no displayed tab): there is no content to hit-test, no
+    -- playhead to grab, no marks to set. The coordinate conversions and
+    -- playhead reads below are arithmetic helpers that assert on a nil
+    -- displayed cache, so a click on the blanked timeline (e.g. after the
+    -- ` toggle with no source loaded) would crash (TSO 2026-06-15:
+    -- "time_to_pixel: no displayed tab" via mouse_press). Querying the
+    -- model first and bailing on "blank" is the MVC-correct posture.
+    if state.get_viewport_start_time() == nil then return end
+
     local width, height = timeline.get_dimensions(view.widget)
 
     -- 019 FR-026: Qt mouseDoubleClickEvent dispatch lands here with
