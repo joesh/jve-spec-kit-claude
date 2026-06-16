@@ -127,6 +127,7 @@ public:
     AVFrame* m_audio_frame = nullptr;
     bool audio_initialized = false;
     int current_audio_out_rate = 0;  // Track resampler target rate
+    int current_source_channel = -1; // Track resampler channel routing (-1 = composite)
 
     // Audio decoder state
     bool have_audio_pts = false;
@@ -888,8 +889,9 @@ Result<std::shared_ptr<Frame>> Reader::DecodeAtUS(TimeUS t_us) {
 }
 
 Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRange(FrameTime t0, FrameTime t1,
-                                                            const AudioFormat& out) {
-    return DecodeAudioRangeUS(t0.to_us(), t1.to_us(), out);
+                                                            const AudioFormat& out,
+                                                            int source_channel) {
+    return DecodeAudioRangeUS(t0.to_us(), t1.to_us(), out, source_channel);
 }
 
 // BRAW audio: read synchronously from the SDK at native rate/channels.
@@ -929,9 +931,12 @@ Result<std::shared_ptr<PcmChunk>> Reader::decode_braw_audio_range(
 }
 
 Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
-                                                              const AudioFormat& out) {
-    // Resampler ALWAYS outputs stereo (2 channels) regardless of source format
-    // See ffmpeg_resample.h: "Converts any input format to float32 stereo"
+                                                              const AudioFormat& out,
+                                                              int source_channel) {
+    // Resampler ALWAYS outputs stereo (2 channels) regardless of source format.
+    // source_channel selects which source channel feeds that stereo output
+    // (-1 = composite downmix; >=0 = extract one channel, dual-mono).
+    // See ffmpeg_resample.h.
     constexpr int RESAMPLER_OUTPUT_CHANNELS = 2;
 
     // Validate
@@ -947,7 +952,13 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
 
     // BRAW bypasses the FFmpeg decode + resample path — read synchronously
     // from the SDK at native rate/channels. See decode_braw_audio_range.
+    // Per-channel extraction is not wired through the BRAW path yet; fail fast
+    // rather than silently returning the wrong (composite native) audio.
     if (m_impl->braw && m_impl->braw->has_audio()) {
+        if (source_channel >= 0) {
+            return Error::unsupported(
+                "DecodeAudioRangeUS: per-channel extraction not supported for BRAW audio");
+        }
         return decode_braw_audio_range(t0_us, t1_us, out);
     }
 
@@ -970,7 +981,7 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
                 t0_us, m_impl->audio_pts_us, out.sample_rate, out.fmt);
             if (prefix) {
                 auto suffix_result = DecodeAudioRangeUS(
-                    m_impl->audio_pts_us, t1_us, out);
+                    m_impl->audio_pts_us, t1_us, out, source_channel);
                 if (suffix_result.is_error() || !suffix_result.value()
                         || suffix_result.value()->frames() == 0) {
                     return prefix;
@@ -1001,18 +1012,23 @@ Result<std::shared_ptr<PcmChunk>> Reader::DecodeAudioRangeUS(TimeUS t0_us, TimeU
     int audio_stream_idx = asset_impl->fmt_ctx.audio_stream_index();
     AVCodecContext* audio_codec = m_impl->audio_codec_ctx.get();
 
-    // Initialize or reinitialize resampler if output rate changed
-    if (m_impl->current_audio_out_rate != out.sample_rate) {
+    // Initialize or reinitialize resampler if output rate or channel routing
+    // changed. (A per-clip Reader has one fixed source_channel, so the channel
+    // condition is defensive — it won't fire in the common case.)
+    if (m_impl->current_audio_out_rate != out.sample_rate
+            || m_impl->current_source_channel != source_channel) {
         auto resample_result = m_impl->resample_ctx.init(
             audio_codec->sample_rate,
             &audio_codec->ch_layout,
             audio_codec->sample_fmt,
-            out.sample_rate
+            out.sample_rate,
+            source_channel
         );
         if (resample_result.is_error()) {
             return resample_result.error();
         }
         m_impl->current_audio_out_rate = out.sample_rate;
+        m_impl->current_source_channel = source_channel;
     }
 
     // Calculate expected output samples

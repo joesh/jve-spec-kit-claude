@@ -74,6 +74,10 @@ struct ClipInfo {
     float speed_ratio;            // conform: seq_fps / media_fps (1.0 = none)
     bool offline = false;         // true = media file not found, generate beep
     float volume = 1.0f;         // clip gain (linear): applied before track fader
+    int32_t source_channel = -1; // audio: which file channel this clip decodes,
+                                 // 0-based. -1 = composite (downmix all channels,
+                                 // the "Adaptive" default). >=0 = extract that one
+                                 // channel, duplicated to both stereo outputs.
 
     int64_t sequence_end() const { return sequence_start + duration; }
     Rate rate() const {
@@ -101,7 +105,8 @@ struct ClipInfo {
             && rate_den      == other.rate_den
             && speed_ratio   == other.speed_ratio
             && offline       == other.offline
-            && volume        == other.volume;
+            && volume        == other.volume
+            && source_channel == other.source_channel;
     }
 };
 

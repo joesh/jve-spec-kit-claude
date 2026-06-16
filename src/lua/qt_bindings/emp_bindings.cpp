@@ -540,7 +540,7 @@ static int lua_emp_reader_decode_audio_range(lua_State* L) {
     out_fmt.sample_rate = out_sample_rate;
     out_fmt.channels = out_channels;
 
-    auto result = it->second->DecodeAudioRange(t0, t1, out_fmt);
+    auto result = it->second->DecodeAudioRange(t0, t1, out_fmt, /*source_channel=*/-1);
     if (result.is_error()) {
         push_emp_error(L, result.error());
         return 2;
@@ -846,6 +846,12 @@ static int lua_emp_tmb_set_track_clips(lua_State* L) {
         ci.volume = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f;
         lua_pop(L, 1);
 
+        // 023 per-channel audio: which source channel this audio clip decodes.
+        // Absent (video / composite "Adaptive" clips) => -1 = downmix all channels.
+        lua_getfield(L, -1, "source_channel");
+        ci.source_channel = lua_isnumber(L, -1) ? static_cast<int32_t>(lua_tointeger(L, -1)) : -1;
+        lua_pop(L, 1);
+
         lua_pop(L, 1); // pop clip table
 
         if (ci.rate_den <= 0) {
@@ -945,6 +951,12 @@ static int lua_emp_tmb_add_clips(lua_State* L) {
 
         lua_getfield(L, -1, "volume");
         ci.volume = lua_isnumber(L, -1) ? static_cast<float>(lua_tonumber(L, -1)) : 1.0f;
+        lua_pop(L, 1);
+
+        // 023 per-channel audio: which source channel this audio clip decodes.
+        // Absent (video / composite "Adaptive" clips) => -1 = downmix all channels.
+        lua_getfield(L, -1, "source_channel");
+        ci.source_channel = lua_isnumber(L, -1) ? static_cast<int32_t>(lua_tointeger(L, -1)) : -1;
         lua_pop(L, 1);
 
         lua_pop(L, 1); // pop clip table

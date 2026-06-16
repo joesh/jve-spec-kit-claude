@@ -1147,6 +1147,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
     float clip_volume = clip->volume;
     assert(clip_volume >= 0.0f && "GetTrackAudio: clip_volume must be non-negative");
     int64_t source_in = clip->source_in;
+    int32_t source_channel = clip->source_channel;
     Rate clip_rate = clip->rate();
     TimeUS first_clip_end_us = clip_end_us;
     tracks_lock.unlock();
@@ -1204,7 +1205,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         reversed = (source_t0 > source_t1);
         if (reversed) std::swap(source_t0, source_t1);
 
-        auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt);
+        auto decode_result = reader->DecodeAudioRangeUS(source_t0, source_t1, fmt, source_channel);
         if (decode_result.is_error()) {
             EMP_LOG_WARN("GetTrackAudio: clip %s decode error at [%lld,%lld]us — silent",
                 clip_id.c_str(), (long long)source_t0, (long long)source_t1);
@@ -1308,6 +1309,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
 
         // Copy clip fields before releasing lock
         int64_t next_source_in = next->source_in;
+        int32_t next_source_channel = next->source_channel;
         Rate next_clip_rate = next->rate();
         std::string next_path = next->media_path;
         float next_speed = next->speed_ratio;
@@ -1348,7 +1350,7 @@ std::shared_ptr<PcmChunk> TimelineMediaBuffer::GetTrackAudio(
         bool next_reversed = (next_src_t0 > next_src_t1);
         if (next_reversed) std::swap(next_src_t0, next_src_t1);
 
-        auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt);
+        auto next_decoded = next_reader->DecodeAudioRangeUS(next_src_t0, next_src_t1, fmt, next_source_channel);
         if (next_decoded.is_ok() && next_decoded.value() && next_decoded.value()->frames() > 0) {
             auto seg = build_audio_output(next_decoded.value(), next_src_t0, next_src_t1,
                                           seg_t0, seg_t1, std::abs(next_speed), fmt);
@@ -2930,7 +2932,7 @@ void TimelineMediaBuffer::decode_audio_into_cache(
     bool chunk_reversed = (src_t0 > src_t1);
     if (chunk_reversed) std::swap(src_t0, src_t1);
 
-    auto decode_result = reader->DecodeAudioRangeUS(src_t0, src_t1, m_audio_fmt);
+    auto decode_result = reader->DecodeAudioRangeUS(src_t0, src_t1, m_audio_fmt, clip->source_channel);
     if (decode_result.is_error() || !decode_result.value() || decode_result.value()->frames() == 0) {
         if (decode_result.is_error()) {
             char tbuf[8]; track_str(track, tbuf, sizeof(tbuf));

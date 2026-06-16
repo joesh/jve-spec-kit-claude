@@ -30,10 +30,18 @@ public:
     FFmpegResampleContext(FFmpegResampleContext&& other) noexcept;
     FFmpegResampleContext& operator=(FFmpegResampleContext&& other) noexcept;
 
-    // Initialize for conversion from source format to output format
-    // Output is always float32 interleaved stereo
+    // Initialize for conversion from source format to output format.
+    // Output is always float32 interleaved stereo.
+    //
+    // source_channel selects which source channel reaches the output:
+    //   -1  => composite: swr's default downmix of all channels to stereo
+    //          (a stereo source maps L→L, R→R; surround downmixes properly).
+    //   >=0 => extract that one source channel, duplicated to both stereo
+    //          outputs (dual-mono monitoring of a single stream). Must be
+    //          < src channel count or init fails.
     Result<void> init(int src_sample_rate, const AVChannelLayout* src_ch_layout,
-                      AVSampleFormat src_sample_fmt, int dst_sample_rate);
+                      AVSampleFormat src_sample_fmt, int dst_sample_rate,
+                      int source_channel);
 
     // Resample audio data
     // Returns number of output samples per channel

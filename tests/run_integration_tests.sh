@@ -152,6 +152,20 @@ else
   SKIP=$((SKIP+1))
 fi
 
+# Ensure synthetic per-channel-audio fixtures exist (gitignored, regenerable).
+# The audio-decode battery (test_audio_*) needs distinct per-channel tone WAVs.
+# Regenerate from the tracked source script if missing + ffmpeg present; otherwise
+# the per-file guards below skip those three tests and we log the loss of coverage.
+if [[ ! -f "$ROOT_DIR/tests/fixtures/media/synthetic_8ch_tones_48k.wav" ]]; then
+  if command -v ffmpeg >/dev/null 2>&1; then
+    echo "[integration] generating synthetic audio fixtures (gen_synthetic_tone_wavs.sh)..."
+    "$ROOT_DIR/tests/fixtures/gen_synthetic_tone_wavs.sh" >/dev/null 2>&1 \
+      || echo "[integration] WARN: synthetic audio fixture generation failed"
+  else
+    echo "[integration] WARN: ffmpeg absent — skipping audio-decode battery (test_audio_*)"
+  fi
+fi
+
 # UI tests — each is its own process, fine to run alongside non-perf batches.
 for t in \
   test_zstd_bindings.lua \
@@ -173,6 +187,9 @@ for t in \
   test_tmb_invalidate_on_offline_flip.lua \
   test_monitor_refresh_ordering.lua \
   test_tmb_audio_unbeeps_on_reconnect.lua \
+  test_audio_decode_continuity.lua \
+  test_audio_decode_channel_mixing.lua \
+  test_audio_per_channel_extraction.lua \
   test_inspector_set_value_undo.lua \
   test_inspector_focus_scroll.lua \
   test_peak_gen_admission.lua \

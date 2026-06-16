@@ -60,12 +60,16 @@ public:
     // Decodes audio from [t0, t1) using the given CFR grid rate
     // Output is resampled to the specified AudioFormat (float32 stereo @ device rate)
     // Returns empty chunk (frames=0) at EOF, error only on decode failure
+    // source_channel: -1 = composite (downmix all channels to stereo);
+    // >=0 = extract that one source channel, dual-mono. See FFmpegResampleContext::init.
     Result<std::shared_ptr<PcmChunk>> DecodeAudioRange(FrameTime t0, FrameTime t1,
-                                                        const AudioFormat& out);
+                                                        const AudioFormat& out,
+                                                        int source_channel);
 
     // Debug/tooling: decode audio by microseconds directly
     Result<std::shared_ptr<PcmChunk>> DecodeAudioRangeUS(TimeUS t0_us, TimeUS t1_us,
-                                                          const AudioFormat& out);
+                                                          const AudioFormat& out,
+                                                          int source_channel);
 
     // True if video decoder is using hardware acceleration (VideoToolbox)
     bool IsHwAccelerated() const;

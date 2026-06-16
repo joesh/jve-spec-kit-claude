@@ -34,7 +34,21 @@ FFmpegResampleContext& FFmpegResampleContext::operator=(FFmpegResampleContext&& 
 }
 
 Result<void> FFmpegResampleContext::init(int src_sample_rate, const AVChannelLayout* src_ch_layout,
-                                          AVSampleFormat src_sample_fmt, int dst_sample_rate) {
+                                          AVSampleFormat src_sample_fmt, int dst_sample_rate,
+                                          int source_channel) {
+    // Free any prior context so re-init (output rate or source channel change)
+    // does not leak the previous SwrContext.
+    if (m_swr_ctx) {
+        swr_free(&m_swr_ctx);
+    }
+
+    const int src_channels = src_ch_layout->nb_channels;
+    if (source_channel >= src_channels) {
+        return Error::invalid_arg(
+            "FFmpegResampleContext::init: source_channel " + std::to_string(source_channel) +
+            " out of range for " + std::to_string(src_channels) + "-channel source");
+    }
+
     m_dst_sample_rate = dst_sample_rate;
     m_dst_channels = 2;  // Always stereo
 
@@ -52,6 +66,23 @@ Result<void> FFmpegResampleContext::init(int src_sample_rate, const AVChannelLay
 
     if (ret < 0) {
         return ffmpeg_error(ret, "swr_alloc_set_opts2");
+    }
+
+    // Per-channel extraction: replace swr's default downmix with a matrix
+    // that routes exactly one source channel to BOTH stereo outputs
+    // (dual-mono). Composite (source_channel < 0) leaves the default
+    // downmix matrix in place. Must run after set_opts2, before swr_init.
+    if (source_channel >= 0) {
+        const int stride = src_channels;
+        std::vector<double> matrix(static_cast<size_t>(stride) * 2, 0.0);
+        // matrix[in + stride*out] = weight of input `in` in output `out`.
+        matrix[source_channel + stride * 0] = 1.0;  // -> out L
+        matrix[source_channel + stride * 1] = 1.0;  // -> out R
+        ret = swr_set_matrix(m_swr_ctx, matrix.data(), stride);
+        if (ret < 0) {
+            swr_free(&m_swr_ctx);
+            return ffmpeg_error(ret, "swr_set_matrix");
+        }
     }
 
     ret = swr_init(m_swr_ctx);

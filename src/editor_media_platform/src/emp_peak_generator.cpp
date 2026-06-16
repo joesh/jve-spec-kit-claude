@@ -497,7 +497,9 @@ bool PeakGenerator::ProcessOneChunk(ChunkedJob& job)
     FrameTime t0 = FrameTime::from_frame(job.decode_position, job.sample_rate);
     FrameTime t1 = FrameTime::from_frame(job.decode_position + this_chunk, job.sample_rate);
 
-    auto pcm_result = job.reader->DecodeAudioRange(t0, t1, job.out_fmt);
+    // Peaks are generated from the composite downmix; per-channel waveforms
+    // (one envelope per source channel) are a later phase. -1 = composite.
+    auto pcm_result = job.reader->DecodeAudioRange(t0, t1, job.out_fmt, /*source_channel=*/-1);
     if (pcm_result.is_error()) {
         JVE_LOG_WARN(Media, "PeakGenerator: decode failed at sample %lld for %s",
             (long long)job.decode_position, job.media_id.c_str());
