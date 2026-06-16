@@ -117,7 +117,7 @@ print("  ✓ source tab activated: body shows master virtual clip")
 -- Close the source tab. The strip's displayed pointer falls back to the
 -- active record (rec). The body MUST re-pull rec's clips — otherwise the
 -- user sees stale master content under a rec-labelled tab.
-timeline_state.close_displayed_tab("master_a038")
+timeline_state.close_displayed_tab(timeline_state.get_tab_strip():get_source_tab())
 
 assert(timeline_state.get_displayed_tab_id() == "rec", string.format(
     "after close: displayed must fall back to rec, got %s",

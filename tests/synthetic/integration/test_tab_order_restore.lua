@@ -1,11 +1,16 @@
---- Integration test: tab order must be preserved across restore.
+--- Integration test: the panel's visual tab order mirrors the strip.
 --
--- Exercises the real timeline_panel.restore_tab_order() and
--- timeline_panel.get_open_tab_ids() with actual Qt widgets.
+-- Post-B1 the TimelineTabStrip is the single source of truth for which tabs
+-- are open and their order; the panel's open_tabs/tab_order is a view-layer
+-- mirror keyed by stable TimelineTab.id. timeline_panel.restore_tabs_from_strip()
+-- re-materializes the panel tabs in strip order (source first, FR-001), and
+-- the whole strip persists as the timeline_tab_strip blob.
 --
 -- Scenarios:
---   1. Saved tab order [A, B, C] with B active → restore preserves [A, B, C]
---   2. DeleteSequence closes tab and persists updated list
+--   1. Open tabs for all sequences → strip + panel agree on count
+--   2. restore_tabs_from_strip → panel tab order == strip tab order
+--   3. Persisted blob reflects the open record tabs
+--   4. Restore does not change the active sequence
 --
 -- Run: ./build/bin/jve --test tests/synthetic/integration/test_tab_order_restore.lua
 
@@ -13,9 +18,6 @@ local ui = require("synthetic.integration.ui_test_env")
 
 print("=== test_tab_order_restore ===")
 
--- =========================================================================
--- Set up: 3-sequence project with tabs saved as [A, B, C], B active
--- =========================================================================
 local _, info = ui.launch({
     project_name = "Tab Order Restore",
     num_sequences = 3,
@@ -23,93 +25,91 @@ local _, info = ui.launch({
     active_sequence = 2,  -- Bravo is the active tab
 })
 
-local database = require("core.database")
+local database       = require("core.database")
 local timeline_panel = require("ui.timeline.timeline_panel")
-local state = require("ui.timeline.state.timeline_core_state")
+local timeline_state = require("ui.timeline.timeline_state")
+local core_state     = require("ui.timeline.state.timeline_core_state")
 
 local seqs = info.sequences
 local project_id = info.project.id
 
--- Save the tab order we want to restore: [Alpha, Bravo, Charlie]
-local desired_order = { seqs[1].id, seqs[2].id, seqs[3].id }
-database.set_project_setting(project_id, "open_sequence_ids", desired_order)
-
 -- =========================================================================
--- Test 1: After launch, open tabs for all 3 sequences
+-- Test 1: open tabs for all sequences
 -- =========================================================================
 print("Test 1: open tabs for all sequences")
-
--- layout.lua opens the active sequence; open the rest
 for _, seq in ipairs(seqs) do
     timeline_panel.open_tab(seq.id)
 end
 ui.pump(100)
 
+local strip = timeline_state.get_tab_strip()
+assert(#strip.tabs == 3,
+    string.format("Expected 3 strip tabs, got %d", #strip.tabs))
 local ids_before = timeline_panel.get_open_tab_ids()
 assert(#ids_before == 3,
-    string.format("Expected 3 open tabs, got %d", #ids_before))
-print("  ok: 3 tabs open")
+    string.format("Expected 3 panel tabs, got %d", #ids_before))
+print("  ok: 3 tabs open in both strip and panel")
 
 -- =========================================================================
--- Test 2: restore_tab_order reorders to match saved order
+-- Test 2: restore_tabs_from_strip makes the panel mirror the strip order
 -- =========================================================================
-print("Test 2: restore_tab_order reorders to [Alpha, Bravo, Charlie]")
-
-timeline_panel.restore_tab_order(desired_order)
+print("Test 2: panel tab order mirrors strip order")
+timeline_panel.restore_tabs_from_strip()
 ui.pump(50)
 
 local ids_after = timeline_panel.get_open_tab_ids()
-assert(#ids_after == 3, string.format("Expected 3 tabs, got %d", #ids_after))
-for i = 1, 3 do
-    assert(ids_after[i] == desired_order[i],
-        string.format("Tab[%d]: expected %s (%s), got %s",
-            i, desired_order[i], seqs[i].name,
-            tostring(ids_after[i])))
+assert(#ids_after == #strip.tabs,
+    string.format("Expected %d tabs, got %d", #strip.tabs, #ids_after))
+for i, strip_tab in ipairs(strip.tabs) do
+    assert(ids_after[i] == strip_tab.id, string.format(
+        "Tab[%d]: panel id %s != strip tab id %s (seq %s)",
+        i, tostring(ids_after[i]), tostring(strip_tab.id),
+        tostring(strip_tab.sequence_id)))
 end
-print("  ok: order matches [Alpha, Bravo, Charlie]")
+print("  ok: panel order matches strip order")
 
--- =========================================================================
--- Test 3: restore_tab_order asserts on stale ID (no silent cleanup)
--- =========================================================================
-print("Test 3: restore_tab_order asserts on stale ID")
-
-local stale_order = { seqs[1].id, "nonexistent_seq_id", seqs[3].id }
-local ok, err = pcall(function()
-    timeline_panel.restore_tab_order(stale_order)
-end)
-assert(not ok, "Should have asserted on stale ID")
-assert(err:find("no open tab"), "Error should mention 'no open tab', got: " .. tostring(err))
-print("  ok: assert fired for stale ID")
-
--- =========================================================================
--- Test 4: Verify persisted open_sequence_ids matches current tab state
--- =========================================================================
-print("Test 4: persisted state matches tab state")
-
-local persisted = database.get_project_setting(project_id, "open_sequence_ids")
-local current_tabs = timeline_panel.get_open_tab_ids()
-assert(#persisted == #current_tabs,
-    string.format("Persisted %d tabs vs %d open", #persisted, #current_tabs))
-for i = 1, #current_tabs do
-    assert(persisted[i] == current_tabs[i],
-        string.format("Persisted[%d] %s != open[%d] %s",
-            i, tostring(persisted[i]), i, tostring(current_tabs[i])))
+-- Every record sequence is represented exactly once across the open tabs.
+local seen = {}
+for _, strip_tab in ipairs(strip.tabs) do
+    assert(strip_tab.kind == "record",
+        "this fixture opens only record tabs; got kind=" .. tostring(strip_tab.kind))
+    assert(strip_tab.sequence_id and not seen[strip_tab.sequence_id],
+        "each sequence must appear exactly once in the strip")
+    seen[strip_tab.sequence_id] = true
 end
-print("  ok: DB matches open tabs")
+for _, seq in ipairs(seqs) do
+    assert(seen[seq.id],
+        string.format("sequence %s (%s) missing from the strip", seq.id, seq.name))
+end
+print("  ok: all 3 record sequences present, no duplicates")
 
 -- =========================================================================
--- Test 5: Active sequence unchanged by restore_tab_order
+-- Test 3: persisted strip blob reflects the open tabs
 -- =========================================================================
-print("Test 5: active sequence unchanged after restore")
+print("Test 3: persisted blob reflects open tabs")
+local blob = database.get_project_setting(project_id, "timeline_tab_strip")
+assert(type(blob) == "table" and type(blob.tabs) == "table",
+    "timeline_tab_strip blob must persist as a table with a tabs list")
+assert(#blob.tabs == #ids_after, string.format(
+    "Persisted %d tabs vs %d open", #blob.tabs, #ids_after))
+for i, t in ipairs(blob.tabs) do
+    assert(t.id == ids_after[i], string.format(
+        "blob tab[%d] id %s != open tab id %s",
+        i, tostring(t.id), tostring(ids_after[i])))
+end
+print("  ok: blob matches open tabs")
 
-local active_before = state.get_sequence_id and state.get_sequence_id()
--- Restore with a different order (Charlie first)
-local reversed = { seqs[3].id, seqs[1].id, seqs[2].id }
-timeline_panel.restore_tab_order(reversed)
+-- =========================================================================
+-- Test 4: active sequence unchanged by the restore
+-- =========================================================================
+print("Test 4: active sequence unchanged after restore")
+local active_before = core_state.get_sequence_id and core_state.get_sequence_id()
+timeline_panel.restore_tabs_from_strip()
 ui.pump(50)
-local active_after = state.get_sequence_id and state.get_sequence_id()
+local active_after = core_state.get_sequence_id and core_state.get_sequence_id()
 assert(active_before == active_after,
-    string.format("Active changed: %s -> %s", tostring(active_before), tostring(active_after)))
+    string.format("Active changed: %s -> %s",
+        tostring(active_before), tostring(active_after)))
 print("  ok: active sequence preserved")
 
 print("✅ test_tab_order_restore.lua passed")

@@ -587,12 +587,45 @@ end
 -- editor opens in the no-active-sequence state (feature 010, FR-004).
 local initial_sequence_id = find_sequence_id(last_sequence_id, sequences)
 
--- Tabs for the remaining open sequences. The initial tab was created by
--- timeline_panel.create(); open_tab skips it. After all tabs exist, reorder
--- to match the saved order so the first paint shows the right layout.
-local open_ids = db_module.get_project_setting(project_id, "open_sequence_ids")
-if open_ids and #open_ids > 0 then
-    for _, seq_id in ipairs(open_ids) do
+-- Restore the timeline tab strip from its serialized blob — the single
+-- source of truth for which tabs are open, their order, the source tab
+-- (loaded master or empty), and which side (record/source) was displayed.
+-- Supersedes the former open_sequence_ids / source_tab_sequence_id /
+-- displayed_tab_kind trio. The initial record tab + active pointer are
+-- already established by timeline_state.init (via command_manager.init);
+-- this replays the rest incrementally so open_tabs stays consistent with
+-- the bootstrap-created tab.
+local timeline_state = require("ui.timeline.timeline_state")
+local strip_blob = timeline_state.get_persisted_tab_strip_blob()
+if strip_blob and type(strip_blob.tabs) == "table" then
+    -- Decode: record sequences to open (in saved order), the source tab
+    -- (loaded master vs empty), and which tab was displayed.
+    local record_ids, source_seq, source_is_empty = {}, nil, false
+    local displayed_kind, displayed_seq = nil, nil
+    for _, t in ipairs(strip_blob.tabs) do
+        if t.kind == "source" then
+            if t.sequence_id and t.sequence_id ~= "" then
+                source_seq = t.sequence_id
+            else
+                source_is_empty = true
+            end
+        elseif t.kind == "record" and t.sequence_id and t.sequence_id ~= "" then
+            record_ids[#record_ids + 1] = t.sequence_id
+        end
+        if strip_blob.displayed_tab_id and t.id == strip_blob.displayed_tab_id then
+            displayed_kind = t.kind
+            displayed_seq = t.sequence_id
+        end
+    end
+
+    -- Empty source tab: open it in the strip (no display yet) so it
+    -- materializes as a closable tab below.
+    if source_is_empty then
+        timeline_state.get_tab_strip():open_empty_source_tab()
+    end
+
+    -- Open each saved record tab (the initial one already exists).
+    for _, seq_id in ipairs(record_ids) do
         if seq_id ~= initial_sequence_id then
             local tab_ok, tab_err = pcall(timeline_panel_mod.open_tab, seq_id)
             if not tab_ok then
@@ -601,21 +634,31 @@ if open_ids and #open_ids > 0 then
             end
         end
     end
-    timeline_panel_mod.restore_tab_order(open_ids)
-    log.event("Restored %d tabs in saved order", #open_ids)
-end
 
--- Restore the source monitor's loaded master. The tab strip recognizes the
--- persisted source-tab seq_id and renders the tab as "source", but the
--- source_monitor has nothing loaded until source_viewer.load_master_clip
--- runs — so transport (TogglePlay) and source-tab display would fall back
--- to a placeholder. Reload here so the source view comes back from a quit.
-local source_tab_seq_id =
-    db_module.get_project_setting(project_id, "source_tab_sequence_id")
-if type(source_tab_seq_id) == "string" and source_tab_seq_id ~= "" then
-    local source_viewer = require("ui.source_viewer")
-    source_viewer.load_master_clip(source_tab_seq_id)
-    log.event("Restored source monitor master: %s", source_tab_seq_id)
+    -- Reload the source monitor's master so transport + the source view come
+    -- back from a quit (the strip tab's cache is hydrated, but the source
+    -- MONITOR is owned by source_viewer). FR-001b auto-switch makes this the
+    -- displayed side when a master was persisted.
+    if source_seq then
+        require("ui.source_viewer").load_master_clip(source_seq)
+        log.event("Restored source monitor master: %s", source_seq)
+    end
+
+    -- Match the panel's visual tab order to the strip (source first, then
+    -- saved record order).
+    timeline_panel_mod.restore_tabs_from_strip()
+
+    -- Restore the displayed side. Record-displayed is already shown by init;
+    -- flip to the source side only when the user left off there.
+    if displayed_kind == "source" then
+        if displayed_seq and displayed_seq ~= "" then
+            timeline_state.switch_to_source_tab(displayed_seq)
+            log.event("Restored displayed tab kind=source seq=%s", displayed_seq)
+        elseif source_is_empty then
+            timeline_state.show_empty_source_tab()
+            log.event("Restored displayed empty source tab")
+        end
+    end
 end
 
 if initial_sequence_id and project_browser_mod.focus_sequence then
@@ -623,20 +666,6 @@ if initial_sequence_id and project_browser_mod.focus_sequence then
     if focus_manager and focus_manager.focus_panel then
         focus_manager.focus_panel("timeline")
     end
-end
-
--- Restore the saved displayed-tab side (source vs record). The initial
--- record tab is already shown by the timeline_state.init above; we
--- only need to flip TO the source tab when the user left off there.
--- 017 plan revision: transport.get_target() is derived from this on
--- the next launch (no separately stored transport_target).
-local saved_displayed_kind =
-    db_module.get_project_setting(project_id, "displayed_tab_kind")
-if saved_displayed_kind == "source"
-   and type(source_tab_seq_id) == "string" and source_tab_seq_id ~= "" then
-    local timeline_state = require("ui.timeline.timeline_state")
-    timeline_state.switch_to_source_tab(source_tab_seq_id)
-    log.event("Restored displayed tab kind=source seq=%s", source_tab_seq_id)
 end
 
 -- Override the bootstrap default focus with the per-project saved one.

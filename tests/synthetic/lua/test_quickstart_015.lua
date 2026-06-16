@@ -76,12 +76,13 @@ command_manager.init("rec", "proj")
 
 -- ── Step 4: SourceTab not present by default (FR-001a) ───────────────────────
 print("-- Step 4: SourceTab absent by default --")
--- Query project_settings for open_sequence_ids. SourceTab must NOT be in it at cold start.
+-- Query project_settings for the timeline_tab_strip blob. No source-kind tab
+-- must be persisted at cold start (the strip carries each tab's kind).
 local settings_s = db:prepare("SELECT settings FROM projects WHERE id='proj'")
 assert(settings_s); settings_s:exec(); settings_s:next()
 local settings_json = settings_s:value(0); settings_s:finalize()
 -- settings_json may be NULL at DB init; that is acceptable (no SourceTab stored).
-local has_source_tab = settings_json and settings_json:find('"source_tab"') ~= nil
+local has_source_tab = settings_json and settings_json:find('"kind":"source"') ~= nil
 assert(not has_source_tab,
     "FAIL Step 4: SourceTab must not be present in project_settings at cold start (FR-001a)")
 print("  Step 4: SourceTab absent by default — OK")

@@ -78,14 +78,20 @@ class TestEmptySourceTabBlanksBody(JVESmokeCase):
         self.focus_panel("timeline")
         self.key("Grave")
 
-        # ---- Post: body blanked, displayed tab nil, source still empty ----
+        # ---- Post: empty Source tab displayed (blank body), source empty ----
+        # The empty source tab is a first-class tab (kind="source",
+        # sequence_id=nil) — pressing Grave from a record tab with no source
+        # loaded shows it instead of blanking the record timeline (which
+        # looks like the record sequence lost its content). The body is still
+        # blank and no master is auto-seeded.
         displayed_kind = self.eval(
             'return tostring(require("core.debug_helpers")'
             '.displayed_tab_kind())')
         self.assertEqual(
-            displayed_kind.strip('"'), "nil",
-            "ToggleSourceRecordTab on empty source: displayed_tab_kind "
-            "must be nil (no tab shown), got " + displayed_kind)
+            displayed_kind.strip('"'), "source",
+            "ToggleSourceRecordTab on empty source: the empty Source tab "
+            "must be displayed (displayed_tab_kind='source'), got "
+            + displayed_kind)
 
         clips_after = self.eval_int(
             'return require("core.debug_helpers").displayed_clips_count()')

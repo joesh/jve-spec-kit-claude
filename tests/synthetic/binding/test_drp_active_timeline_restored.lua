@@ -42,7 +42,17 @@ local function assert_post_import_invariants(drp_fixture, jvp_path)
     for _, s in ipairs(sequences) do seq_ids[s.id] = s end
 
     local active_id = database.get_project_setting(pid, "last_open_sequence_id")
-    local open_ids  = database.get_project_setting(pid, "open_sequence_ids")
+    -- Open tabs live in the timeline_tab_strip blob (single source of truth);
+    -- derive the open record sequence_ids from it.
+    local blob = database.get_project_setting(pid, "timeline_tab_strip")
+    assert(type(blob) == "table" and type(blob.tabs) == "table",
+        "timeline_tab_strip blob missing — tab list can't be restored")
+    local open_ids = {}
+    for _, t in ipairs(blob.tabs) do
+        if t.kind == "record" and t.sequence_id then
+            open_ids[#open_ids + 1] = t.sequence_id
+        end
+    end
 
     -- Invariant 1: active is set and real
     assert(active_id and active_id ~= "",
@@ -51,14 +61,12 @@ local function assert_post_import_invariants(drp_fixture, jvp_path)
         string.format("last_open_sequence_id=%s is not among the %d created sequences",
             active_id, #sequences))
 
-    -- Invariant 2: open_ids is a real, non-empty list
-    assert(type(open_ids) == "table",
-        "open_sequence_ids missing or not a table — tab list can't be restored")
+    -- Invariant 2: the blob lists a real, non-empty set of record tabs
     assert(#open_ids > 0,
-        "open_sequence_ids is empty — no tabs will be shown on open")
+        "timeline_tab_strip has no record tabs — no tabs will be shown on open")
     for i, id in ipairs(open_ids) do
         assert(seq_ids[id],
-            string.format("open_sequence_ids[%d]=%s is not a real sequence", i, id))
+            string.format("open record tab[%d]=%s is not a real sequence", i, id))
     end
 
     -- Invariant 3: active is in the open list
@@ -67,7 +75,7 @@ local function assert_post_import_invariants(drp_fixture, jvp_path)
         if id == active_id then active_in_open = true; break end
     end
     assert(active_in_open,
-        string.format("last_open_sequence_id=%s not found in open_sequence_ids %s",
+        string.format("last_open_sequence_id=%s not found among open record tabs %s",
             active_id, table.concat(open_ids, ",")))
 
     print(string.format("  OK: active=%s (%q), open_count=%d",

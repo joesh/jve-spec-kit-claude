@@ -4,10 +4,12 @@
 --- Behavior:
 ---   displayed = source tab   → switch_to_record_tab(active_sequence_id)
 ---   displayed = record tab   → switch_to_source_tab(<last-loaded source>)
----     or, when source has no master loaded → blank the body (same state
----     as closing the last tab). Picking masters[1] as a fallback would
----     fabricate user intent; silent no-op leaves the user confused
----     (TSO 2026-05-17). Blanking is consistent with ShowSourceTab.
+---     or, when source has no master loaded → show the EMPTY source tab
+---     (kind=source, sequence_id=nil, blank body). This is a real source-
+---     side tab the user can flip back from — NOT a blanked record timeline
+---     that looks like it lost its content. Picking masters[1] as a fallback
+---     would fabricate user intent; a blank record body confused users
+---     (TSO 2026-05-17). The empty source tab persists across restart.
 ---
 --- @file toggle_source_record_tab.lua
 local M = {}
@@ -64,13 +66,13 @@ function M.register(executors, undoers, db)
         -- no-master branch below.
         local transport = require("core.playback.transport")
         if not transport.is_bootstrapped() then
-            timeline_state.clear()
+            timeline_state.show_empty_source_tab()
             move_focus_to_timeline()
             return true
         end
         local src_seq = transport.engine_for_role("source").loaded_sequence_id
         if src_seq == nil or src_seq == "" then
-            timeline_state.clear()
+            timeline_state.show_empty_source_tab()
             move_focus_to_timeline()
             return true
         end

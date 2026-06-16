@@ -12,7 +12,7 @@
 
 The timeline panel hosts a strip of **TimelineTabs**. Each TimelineTab is a **thin handle**: `{id, kind, sequence_id}` plus listener pub/sub. All displayed state (marks, viewport, playhead, scroll) lives on the **sequence row** — tab getters pull lazily so model mutations propagate without explicit cache sync (MVC pull, rule 3.0). Selection and drag are **global** on timeline_state (selection is one-at-a-time across the app; drag is global so cross-timeline drag works).
 
-The strip is a subpart of TimelineView. It is reinitialized whenever TimelineView is reinitialized (i.e., on `project_changed`). The codebase already persists the open-tab list as `open_sequence_ids` on `project_settings`; the strip encapsulates that existing state rather than inventing a parallel one.
+The strip is a subpart of TimelineView. It is reinitialized whenever TimelineView is reinitialized (i.e., on `project_changed`). The **whole strip** — the ordered tab list, each tab's kind, the DisplayedTab pointer, and the ActiveRecordTab pointer — persists as a single serialized blob under `project_settings.timeline_tab_strip`, the single source of truth for tab restore (`TimelineTabStrip:serialize`/`deserialize`). This blob **supersedes** the former trio of must-agree settings (`open_sequence_ids`, `source_tab_sequence_id`, `displayed_tab_kind`), which are retired. `last_open_sequence_id` remains a separate setting (secondary consumers — codec-probe priority, initial-sequence resolution — read it without the strip). Panel-side, the Qt tab widgets mirror the strip keyed by the **stable `TimelineTab.id`** (not the mutable `sequence_id`), so the SourceTab singleton's master swaps and the empty source tab (no `sequence_id`) need no rekey machinery.
 
 Two pointers select tabs:
 
@@ -23,7 +23,7 @@ Switching the displayed tab is a pointer rebind on the holder; consumers (render
 
 TimelineTabs come in two kinds:
 - **RecordTab** — one per open sequence (existing behavior, encapsulated).
-- **SourceTab** — singleton; its sequence_id = the sequence (not necessarily a master) currently loaded in the source monitor. On a brand-new project (no persisted tab state), the SourceTab defaults to **open** and renders the empty placeholder until a source is loaded.
+- **SourceTab** — singleton; its sequence_id = the sequence (not necessarily a master) currently loaded in the source monitor. When the source monitor holds nothing, the SourceTab is the **empty source tab**: a first-class TimelineTab with `kind="source"` and `sequence_id=nil`, rendering a blank body. Pressing the source/record toggle from a Record tab with no source loaded shows this empty source tab rather than blanking the record timeline (which looks like the record sequence lost its content). Loading a master upgrades the empty source tab in place (`reload`). The empty source tab persists across quit/restart like any tab — its absent `sequence_id` round-trips through the strip blob as an absent key (no sentinel sequence). On a brand-new project (no persisted tab state), the SourceTab defaults to **open** as the empty source tab.
 
 Visual indicators on the strip: an **underline** marks the DisplayedTab. **Red text** marks the ActiveRecordTab. Source tab styled with blue accent; Record tabs red.
 

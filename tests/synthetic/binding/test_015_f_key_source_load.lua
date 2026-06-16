@@ -38,7 +38,7 @@ local TC_ORIGIN_24FPS = 1324752  -- 15:19:58:00 @ 24fps — camera-original
 db:exec(string.format([[
     INSERT INTO projects (id, name, fps_mismatch_policy, created_at, modified_at, settings)
     VALUES ('proj', 'F Key Test', 'resample', %d, %d,
-            '{"last_open_sequence_id":"rec","open_sequence_ids":["rec"],"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
+            '{"last_open_sequence_id":"rec","master_clock_hz":192000,"default_fps":{"num":24,"den":1}}');
 
     INSERT INTO sequences (id, project_id, name, kind,
         fps_numerator, fps_denominator, audio_sample_rate,
@@ -116,9 +116,23 @@ check("displayed is record",
     timeline_state.get_displayed_tab_id() == "rec",
     "got " .. tostring(timeline_state.get_displayed_tab_id()))
 
+-- open_tabs are keyed by stable TimelineTab.id now; map the open tab ids to
+-- their sequence_ids via the strip to assert membership by sequence.
+local function open_seq_set()
+    local by_id = {}
+    for _, t in ipairs(timeline_state.get_tab_strip().tabs) do
+        by_id[t.id] = t.sequence_id
+    end
+    local s = {}
+    for _, id in ipairs(timeline_panel.get_open_tab_ids()) do
+        if by_id[id] then s[by_id[id]] = true end
+    end
+    return s
+end
+
 local pre_tabs = timeline_panel.get_open_tab_ids()
 check("strip has exactly one tab (record)",
-    #pre_tabs == 1 and pre_tabs[1] == "rec",
+    #pre_tabs == 1 and open_seq_set()["rec"] == true,
     "got tabs=[" .. table.concat(pre_tabs, ",") .. "]")
 
 local tl_monitor = panel_manager.get_sequence_monitor("timeline_monitor")
@@ -145,13 +159,9 @@ check("strip has exactly two tabs: record + source",
     #post_tabs == 2,
     "got " .. #post_tabs .. " tabs: [" .. table.concat(post_tabs, ",") .. "]")
 
-local has_record_tab, has_master_tab = false, false
-for _, id in ipairs(post_tabs) do
-    if id == "rec" then has_record_tab = true end
-    if id == "msa" then has_master_tab = true end
-end
-check("strip contains the record tab", has_record_tab, "")
-check("strip contains the master/source tab", has_master_tab, "")
+local post_seqs = open_seq_set()
+check("strip contains the record tab", post_seqs["rec"] == true, "")
+check("strip contains the master/source tab", post_seqs["msa"] == true, "")
 
 -- The timeline view must show master content — virtual clips synthesized from media_refs.
 local view_clips = timeline_state.get_tab_strip():displayed_clips()
@@ -210,11 +220,8 @@ check("loading a second master does not crash (no FK constraint failure)",
 
 -- After the swap, only ONE source tab should be in the strip (FR-001).
 local post2_tabs = timeline_panel.get_open_tab_ids()
-local has_msa, has_msb = false, false
-for _, id in ipairs(post2_tabs) do
-    if id == "msa" then has_msa = true end
-    if id == "msb" then has_msb = true end
-end
+local post2_seqs = open_seq_set()
+local has_msa, has_msb = post2_seqs["msa"] == true, post2_seqs["msb"] == true
 check("after second F, only the new master tab exists (FR-001 singleton)",
     has_msb and not has_msa,
     string.format("tabs=[%s] (has_msa=%s has_msb=%s)",

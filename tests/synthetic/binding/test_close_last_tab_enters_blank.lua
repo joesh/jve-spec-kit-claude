@@ -35,10 +35,15 @@ local project_id = info.project.id
 local seq_id = info.sequences[1].id
 
 -- Pre-conditions: exactly one open tab, it is the active sequence.
+-- open_tabs are keyed by stable TimelineTab.id now, so resolve the single
+-- open tab to its sequence_id via the strip to assert identity.
 local open_before = timeline_panel.get_open_tab_ids()
-assert(#open_before == 1 and open_before[1] == seq_id,
+assert(#open_before == 1, "pre-condition: expected exactly one open tab; got "
+    .. #open_before)
+local strip = timeline_state.get_tab_strip()
+assert(#strip.tabs == 1 and strip.tabs[1].sequence_id == seq_id,
     "pre-condition: expected single tab for seq " .. seq_id
-    .. "; got " .. table.concat(open_before, ","))
+    .. "; got " .. tostring(strip.tabs[1] and strip.tabs[1].sequence_id))
 assert(timeline_state.get_tab_strip():active_sequence_id() == seq_id,
     "pre-condition: active sequence should be " .. seq_id
     .. "; got " .. tostring(timeline_state.get_tab_strip():active_sequence_id()))
@@ -64,15 +69,17 @@ assert(persisted_active == nil or persisted_active == "",
     "after closing the last tab, last_open_sequence_id must be empty or absent; "
     .. "got " .. tostring(persisted_active))
 
-local persisted_open = database.get_project_setting(project_id, "open_sequence_ids")
--- Accept nil or empty table — both mean "no tabs were open at save time".
--- Reject anything that contains the just-closed seq_id.
-if persisted_open ~= nil then
-    assert(type(persisted_open) == "table",
-        "open_sequence_ids must be a JSON array (table); got " .. type(persisted_open))
-    assert(#persisted_open == 0,
-        "after closing the last tab, open_sequence_ids must be empty; got "
-        .. #persisted_open .. " (" .. table.concat(persisted_open, ",") .. ")")
+-- The tab strip blob is the single source of truth for restore; after
+-- closing the last tab it must list no tabs (so next open shows none).
+local blob = database.get_project_setting(project_id, "timeline_tab_strip")
+if blob ~= nil then
+    assert(type(blob) == "table" and type(blob.tabs) == "table",
+        "timeline_tab_strip must be a table with a tabs list; got " .. type(blob))
+    assert(#blob.tabs == 0,
+        "after closing the last tab, the strip blob must have no tabs; got "
+        .. #blob.tabs)
+    assert(blob.displayed_tab_id == nil,
+        "after closing the last tab, the strip blob must have no displayed tab")
 end
 
 -- Post-condition 4: the project itself is still open (its row still reachable).

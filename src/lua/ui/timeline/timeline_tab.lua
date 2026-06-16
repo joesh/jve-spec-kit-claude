@@ -108,6 +108,19 @@ function TimelineTab:is_empty_source()
     return self.kind == "source" and self.sequence_id == nil
 end
 
+--- Reset this source tab to the EMPTY state (no master loaded, blank body).
+--- Used when the source monitor has cleared but the strip's source-tab
+--- singleton still carries a stale loaded sequence — reconciles it back to
+--- the blank body. Preserves tab id + listener subscriptions (singleton
+--- continuity). Source tabs only.
+function TimelineTab:make_empty()
+    assert(self.kind == "source",
+        "TimelineTab:make_empty: only the source tab can become empty")
+    self.sequence_id = nil
+    self.cache = fresh_cache()
+    self:_notify()
+end
+
 --- Marks pulled lazily from the sequence row.
 --- Source tab in live-bound mode (spec 019 FR-016d): the visible marks
 --- come from the loaded CLIP's source_in/source_out via

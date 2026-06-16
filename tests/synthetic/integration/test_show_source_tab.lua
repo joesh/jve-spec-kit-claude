@@ -89,30 +89,29 @@ assert(#vis_log >= 1 and vis_log[#vis_log] == true,
     "source_tab_visibility_changed(true) must fire after the source tab is shown")
 print("  strip displayed = source(src_master), visibility(true) fired")
 
--- ── (b) no source loaded → blank displayed, no auto-seed, no signal ────
--- The contract here is "the editor shows nothing because the user chose
--- nothing." Observable: strip's displayed pointer goes nil, no new
--- visibility signal, and the source monitor was NOT auto-seeded with a
--- random master from the DB (TSO 2026-05-17 retired that path).
--- timeline_state.clear() does NOT destroy the strip's source-tab
--- singleton — that survives the displayed-pointer reset by design — so
--- we don't assert against get_source_tab() here.
-print("-- (b) no source loaded → blank displayed, no auto-seed --")
+-- ── (b) no source loaded → empty source tab displayed, no auto-seed ────
+-- The contract here is "show the empty source tab (blank body), don't
+-- fabricate a master." Observable: the strip's displayed tab is the empty
+-- source tab (kind=source, sequence_id=nil), the source side is now visible
+-- (visibility(true) fires), and the source monitor was NOT auto-seeded with
+-- a random master from the DB (TSO 2026-05-17 retired that path).
+print("-- (b) no source loaded → empty source tab displayed, no auto-seed --")
 source_mon.sequence_id = nil
 local vis_before = #vis_log
 
 local r2 = command_manager.execute("ShowSourceTab", {})
 assert(r2 and r2.success, "ShowSourceTab must succeed even with no master")
-assert(strip:get_displayed() == nil, string.format(
-    "no-master ShowSourceTab must blank the strip's displayed pointer; "
-    .. "got %s", tostring(strip:get_displayed())))
-assert(#vis_log == vis_before, string.format(
-    "no-master ShowSourceTab must NOT emit visibility(true) — nothing became "
-    .. "visible. vis_log grew from %d to %d", vis_before, #vis_log))
+local displayed_b = strip:get_displayed()
+assert(displayed_b and displayed_b:is_empty_source(), string.format(
+    "no-master ShowSourceTab must display the empty source tab "
+    .. "(kind=source, sequence_id=nil); got %s", tostring(displayed_b)))
+assert(#vis_log == vis_before + 1 and vis_log[#vis_log] == true, string.format(
+    "no-master ShowSourceTab must emit visibility(true) — the empty source "
+    .. "tab is now visible. vis_log grew from %d to %d", vis_before, #vis_log))
 -- source_mon.sequence_id stayed nil — i.e. no auto-seed happened.
 assert(source_mon.sequence_id == nil,
     "no-master ShowSourceTab must NOT auto-load a master into the source monitor")
-print("  displayed blanked, no auto-seed, no spurious visibility signal")
+print("  empty source tab displayed, no auto-seed")
 
 -- ── (c) idempotent re-open ─────────────────────────────────────────────
 print("-- (c) re-open is idempotent --")

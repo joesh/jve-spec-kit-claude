@@ -782,27 +782,31 @@ local function command_flag(command, property, param_key)
 end
 
 --- Capture playhead value + rate from the displayed timeline tab.
--- Returns (value, rate). Both nil iff no tab is displayed at capture time;
--- both non-nil iff a tab is displayed. The bidirectional invariant
--- (value-nil ⇔ rate-nil ⇔ no-displayed-tab) is asserted at this site so
--- a bug that lets one diverge from the others (silent fabrication, missing
--- cache field, race during tab transitions) crashes at the capture point
--- with explicit context — not later at Command.save when the original
+-- Returns (value, rate). Playhead and rate are per-SEQUENCE properties, so
+-- they are both nil iff the displayed tab has no sequence at capture time —
+-- which covers both "no tab displayed" AND "the empty source tab is displayed"
+-- (a real source-side tab with sequence_id=nil and a blank body). Both
+-- non-nil iff a displayed tab references a loaded sequence. The bidirectional
+-- invariant (value-nil ⇔ rate-nil ⇔ no-displayed-sequence) is asserted at this
+-- site so a bug that lets one diverge from the others (silent fabrication,
+-- missing cache field, race during tab transitions) crashes at the capture
+-- point with explicit context — not later at Command.save when the original
 -- displayed-tab state has been lost. H1 follow-up to the audit's HIGH finding.
 local function capture_displayed_playhead(label)
     local ts = require('ui.timeline.timeline_state')
-    local strip_holder = require('ui.timeline.state.strip_holder')
-    local had_tab = strip_holder.displayed_cache() ~= nil
+    -- get_displayed_tab_id is the displayed tab's sequence_id: nil for no tab
+    -- AND for the empty source tab (no sequence → no per-sequence playhead).
+    local had_displayed_sequence = ts.get_displayed_tab_id() ~= nil
     local ph_value = ts.get_playhead_position()
     local ph_rate = ts.get_sequence_frame_rate()
-    assert((ph_value ~= nil) == had_tab, string.format(
-        "%s: playhead_value/displayed-tab invariant violated " ..
-        "(had_displayed_tab=%s, playhead_value=%s)",
-        label, tostring(had_tab), tostring(ph_value)))
-    assert((ph_rate ~= nil) == had_tab, string.format(
-        "%s: playhead_rate/displayed-tab invariant violated " ..
-        "(had_displayed_tab=%s, playhead_rate=%s)",
-        label, tostring(had_tab), tostring(ph_rate)))
+    assert((ph_value ~= nil) == had_displayed_sequence, string.format(
+        "%s: playhead_value/displayed-sequence invariant violated " ..
+        "(had_displayed_sequence=%s, playhead_value=%s)",
+        label, tostring(had_displayed_sequence), tostring(ph_value)))
+    assert((ph_rate ~= nil) == had_displayed_sequence, string.format(
+        "%s: playhead_rate/displayed-sequence invariant violated " ..
+        "(had_displayed_sequence=%s, playhead_rate=%s)",
+        label, tostring(had_displayed_sequence), tostring(ph_rate)))
     return ph_value, ph_rate
 end
 

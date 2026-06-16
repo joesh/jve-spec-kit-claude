@@ -3,13 +3,14 @@
 ---
 --- Domain contract: if the user quits with the Source tab visible, the
 --- next launch of the same project opens with the Source tab visible —
---- not the record tab. The seq_ids themselves are already persisted
---- (last_open_sequence_id, source_tab_sequence_id, open_sequence_ids);
---- only the "which side is on top" bit was missing.
+--- not the record tab. The whole tab strip (tab list + which side is
+--- displayed) persists as ONE serialized blob (timeline_tab_strip), the
+--- single source of truth for restore. The displayed side is read back as
+--- the kind of the tab the blob's displayed pointer names.
 ---
 --- This test exercises the WRITE side end-to-end against a real DB:
----   1. switch_to_source_tab(...) writes displayed_tab_kind="source"
----   2. switch_to_record_tab(...) overwrites to "record"
+---   1. switch_to_source_tab(...) → blob's displayed tab kind == "source"
+---   2. switch_to_record_tab(...) → blob's displayed tab kind == "record"
 
 require("test_env")
 
@@ -57,20 +58,32 @@ end
 timeline_state.reset()
 timeline_state.init("rec", "p")
 
--- ── Case 1: switching to source tab persists kind="source" ──
-timeline_state.switch_to_source_tab("mst")
-local saved = database.get_project_setting("p", "displayed_tab_kind")
-assert(saved == "source", string.format(
-    "switch_to_source_tab must persist displayed_tab_kind='source'; "
-    .. "got %s", tostring(saved)))
-print("  ✓ switch_to_source_tab writes displayed_tab_kind=source")
+-- Read the displayed side back from the persisted strip blob: the kind of
+-- the tab the blob's displayed pointer names.
+local function persisted_displayed_kind()
+    local blob = database.get_project_setting("p", "timeline_tab_strip")
+    assert(type(blob) == "table",
+        "timeline_tab_strip blob must persist after a tab switch")
+    assert(blob.displayed_tab_id,
+        "blob must record which tab is displayed")
+    for _, t in ipairs(blob.tabs) do
+        if t.id == blob.displayed_tab_id then return t.kind end
+    end
+    error("blob displayed_tab_id matches no tab in the strip")
+end
 
--- ── Case 2: switching back to record overwrites to "record" ──
+-- ── Case 1: switching to source tab persists displayed side = source ──
+timeline_state.switch_to_source_tab("mst")
+assert(persisted_displayed_kind() == "source", string.format(
+    "switch_to_source_tab must persist the displayed side as source; got %s",
+    tostring(persisted_displayed_kind())))
+print("  ✓ switch_to_source_tab persists displayed side = source")
+
+-- ── Case 2: switching back to record overwrites to record ──
 timeline_state.switch_to_record_tab("rec")
-saved = database.get_project_setting("p", "displayed_tab_kind")
-assert(saved == "record", string.format(
-    "switch_to_record_tab must overwrite displayed_tab_kind='record'; "
-    .. "got %s", tostring(saved)))
-print("  ✓ switch_to_record_tab overwrites to displayed_tab_kind=record")
+assert(persisted_displayed_kind() == "record", string.format(
+    "switch_to_record_tab must persist the displayed side as record; got %s",
+    tostring(persisted_displayed_kind())))
+print("  ✓ switch_to_record_tab persists displayed side = record")
 
 print("\n✅ test_displayed_tab_kind_persists.lua passed")

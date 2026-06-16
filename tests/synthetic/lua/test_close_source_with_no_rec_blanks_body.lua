@@ -94,7 +94,7 @@ print("  ✓ fixture: source-only tab strip showing master virtual clip")
 -- Close the source tab. With NO rec tab to fall back to the strip ends
 -- up empty. The body MUST blank — under an empty strip we should NOT
 -- still be rendering the closed master's clips.
-timeline_state.close_displayed_tab("master_a039")
+timeline_state.close_displayed_tab(timeline_state.get_tab_strip():get_source_tab())
 
 assert(timeline_state.get_displayed_tab_id() == nil, string.format(
     "after close: displayed must be nil (strip is empty), got %s",

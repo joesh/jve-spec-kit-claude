@@ -106,19 +106,25 @@ local function reset_to_rec_displayed()
         "fixture: rec must show 1 real clip pre-command, got %d", real))
 end
 
-local function assert_blank_after(label)
+local function assert_empty_source_after(label)
     -- Auto-seed regression: source monitor must still be empty.
     assert(source_mon.sequence_id == nil, string.format(
         "%s: must NOT auto-seed a random master into source_monitor; "
         .. "got sequence_id=%s", label, tostring(source_mon.sequence_id)))
-    -- Timeline body blanked (same state as close-last-tab).
+    -- The empty source tab is displayed: a source-kind tab with a blank
+    -- body — NOT a blanked record timeline.
+    assert(timeline_state.get_displayed_tab_kind() == "source", string.format(
+        "%s: the empty source tab must be displayed (kind=source); got %s",
+        label, tostring(timeline_state.get_displayed_tab_kind())))
+    -- It has no sequence, so the displayed sequence id is nil and the body
+    -- is blank.
+    assert(timeline_state.get_displayed_tab_id() == nil, string.format(
+        "%s: the empty source tab has no sequence, so displayed_tab_id is "
+        .. "nil; got %s", label, tostring(timeline_state.get_displayed_tab_id())))
     local clips = timeline_state.get_tab_strip():displayed_clips()
     assert(#clips == 0, string.format(
-        "%s: timeline must be blank after empty-source command; got %d clips",
+        "%s: the empty source tab body must be blank; got %d clips",
         label, #clips))
-    assert(timeline_state.get_displayed_tab_id() == nil, string.format(
-        "%s: displayed_tab_id must be nil; got %s",
-        label, tostring(timeline_state.get_displayed_tab_id())))
 end
 
 -- ── ShowSourceTab with empty source ────────────────────────────────────
@@ -127,8 +133,8 @@ reset_to_rec_displayed()
 local r1 = command_manager.execute("ShowSourceTab", {})
 assert(r1 and r1.success,
     "ShowSourceTab should succeed: " .. tostring(r1 and r1.error_message))
-assert_blank_after("ShowSourceTab")
-print("  PASS body blanked, no random master seeded")
+assert_empty_source_after("ShowSourceTab")
+print("  PASS empty source tab shown, no random master seeded")
 
 -- ── ToggleSourceRecordTab with empty source ────────────────────────────
 print("-- ToggleSourceRecordTab with empty source --")
@@ -136,7 +142,7 @@ reset_to_rec_displayed()
 local r2 = command_manager.execute("ToggleSourceRecordTab", {})
 assert(r2 and r2.success,
     "ToggleSourceRecordTab should succeed: " .. tostring(r2 and r2.error_message))
-assert_blank_after("ToggleSourceRecordTab")
-print("  PASS body blanked, consistent with ShowSourceTab")
+assert_empty_source_after("ToggleSourceRecordTab")
+print("  PASS empty source tab shown, consistent with ShowSourceTab")
 
 print("\nPASS test_show_source_tab_empty_blanks_body.lua")

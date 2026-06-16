@@ -393,14 +393,23 @@ do
     for _, s in ipairs(sequences) do seq_ids[s.id] = s end
 
     local active_id = database.get_project_setting(pid, "last_open_sequence_id")
-    local open_ids  = database.get_project_setting(pid, "open_sequence_ids")
+    -- Open tabs live in the timeline_tab_strip blob (single source of truth).
+    local blob = database.get_project_setting(pid, "timeline_tab_strip")
+    assert(type(blob) == "table" and type(blob.tabs) == "table",
+        "timeline_tab_strip blob missing — no tabs would restore")
+    local open_ids = {}
+    for _, t in ipairs(blob.tabs) do
+        if t.kind == "record" and t.sequence_id then
+            open_ids[#open_ids + 1] = t.sequence_id
+        end
+    end
     assert(active_id and active_id ~= "" and seq_ids[active_id],
         "last_open_sequence_id missing or not a real sequence")
-    assert(type(open_ids) == "table" and #open_ids > 0,
-        "open_sequence_ids missing or empty — no tabs would restore")
+    assert(#open_ids > 0,
+        "timeline_tab_strip has no record tabs — no tabs would restore")
     local active_in_open = false
     for _, id in ipairs(open_ids) do
-        assert(seq_ids[id], "open_sequence_ids contains a non-real sequence id")
+        assert(seq_ids[id], "timeline_tab_strip contains a non-real record sequence id")
         if id == active_id then active_in_open = true end
     end
     assert(active_in_open, "active sequence is not among the open tabs")

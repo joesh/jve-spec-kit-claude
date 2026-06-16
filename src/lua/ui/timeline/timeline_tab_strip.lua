@@ -134,6 +134,14 @@ end
 -- @return TimelineTab the source tab (empty)
 function TimelineTabStrip:open_empty_source_tab()
     if self.source_tab then
+        -- The caller is asserting the source side is empty (the source
+        -- monitor holds nothing). Reconcile a stale loaded source tab back
+        -- to the blank body so "show the empty source tab" always yields an
+        -- empty one. No-op when it is already empty.
+        if not self.source_tab:is_empty_source() then
+            self.source_tab:make_empty()
+            self:_notify()
+        end
         return self.source_tab
     end
     local tab = TimelineTab.new_empty_source()
@@ -340,6 +348,32 @@ end
 
 function TimelineTabStrip:_notify()
     for _, fn in pairs(self._listeners) do fn(self) end
+end
+
+--- Build a serialized strip blob from a list of record sequence ids + the
+--- active one — the import/restore seam. Importers know only "these
+--- sequences are open, this one is active"; this turns that into the strip's
+--- canonical serialize() blob (record tabs only — imports never carry a
+--- source tab; the active sequence is both displayed and active). Pure data,
+--- no DB or Qt, so command/importer layers can call it headless.
+function TimelineTabStrip.build_record_only_blob(open_ids, active_id)
+    assert(type(open_ids) == "table",
+        "TimelineTabStrip.build_record_only_blob: open_ids list required")
+    local uuid = require("uuid")
+    local tabs = {}
+    local active_tab_id = nil
+    for _, seq_id in ipairs(open_ids) do
+        assert(type(seq_id) == "string" and seq_id ~= "",
+            "TimelineTabStrip.build_record_only_blob: open_ids entries must be non-empty strings")
+        local tab_id = uuid.generate()
+        tabs[#tabs + 1] = { id = tab_id, kind = "record", sequence_id = seq_id }
+        if active_id and seq_id == active_id then active_tab_id = tab_id end
+    end
+    return {
+        tabs = tabs,
+        displayed_tab_id = active_tab_id,
+        active_record_tab_id = active_tab_id,
+    }
 end
 
 --- Serialize to a plain table for project-DB persistence (Phase 2 wires).

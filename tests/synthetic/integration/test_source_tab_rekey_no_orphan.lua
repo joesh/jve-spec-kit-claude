@@ -70,30 +70,42 @@ local source_monitor = mons.source
 -- record. No main window — the panel widgets just live free-standing.
 -- ----------------------------------------------------------------------
 local timeline_panel_mod = require("ui.timeline.timeline_panel")
+local timeline_state = require("ui.timeline.timeline_state")
 local panel_widget = timeline_panel_mod.create({ project_id = "p", sequence_id = "R" })
 assert(panel_widget, "timeline_panel.create returned nil")
 
 -- ----------------------------------------------------------------------
--- Open the source tab for MA programmatically — simulates the
--- project-restore path where the panel reconstructs persisted tabs
--- from the project DB without routing through source_loaded_changed.
--- The pre-fix bug surfaced specifically in this path because the
--- auto_source_tab_id close-on-prev heuristic only tracked tabs that
--- the source_loaded_changed listener auto-opened; persisted-restored
--- source tabs left auto_source_tab_id == nil, so the subsequent
--- F-press swap's eviction check was skipped and the orphan persisted.
+-- No-orphan guarantee on a source master swap (MA → MB). With open_tabs
+-- keyed by the stable TimelineTab.id, the source-tab singleton reloads in
+-- place — its panel entry's id never changes, so a swap can never leave an
+-- orphaned MA tab behind. The former rekey machinery (open_tabs[MA] →
+-- open_tabs[MB]) that made this true by hand is gone; the property is now
+-- structural. This test pins it end-to-end through the panel.
 -- ----------------------------------------------------------------------
+-- Open the source tab the real way: switch_to_source_tab makes the strip's
+-- source-tab singleton point at MA and the panel materializes it. (open_tab
+-- is record-only now — the strip is the source of truth for tab kind.)
 source_monitor.sequence_id = "MA"
-timeline_panel_mod.open_tab("MA")
+timeline_state.switch_to_source_tab("MA")
 
 local source_seq = timeline_panel_mod._test_get_source_tab_seq_id()
 assert(source_seq == "MA", string.format(
     "after loading MA, source tab should be MA; got %s", tostring(source_seq)))
 
+-- open_tabs are keyed by stable TimelineTab.id now (not sequence_id), so map
+-- the open tab ids back to their sequence_ids via the strip to assert tab
+-- membership by sequence.
 local tabs = timeline_panel_mod.get_open_tab_ids()
 local function tabs_set(list)
+    local by_id = {}
+    for _, t in ipairs(timeline_state.get_tab_strip().tabs) do
+        by_id[t.id] = t.sequence_id
+    end
     local s = {}
-    for _, id in ipairs(list) do s[id] = true end
+    for _, id in ipairs(list) do
+        local seq = by_id[id]
+        if seq then s[seq] = true end
+    end
     return s
 end
 local s1 = tabs_set(tabs)

@@ -101,7 +101,7 @@ assert(loaded[1] == seq_ids[1] and loaded[2] == seq_ids[1] and loaded[3] == seq_
 print("  ok")
 
 -- =========================================================================
--- Test 6: get_open_tab_ids / restore_tab_order API surface exists
+-- Test 6: get_open_tab_ids / restore_tabs_from_strip API surface exists
 -- =========================================================================
 print("Test 6: timeline_panel API surface")
 package.loaded["ui.panel_manager"] = {
@@ -116,7 +116,7 @@ package.loaded["ui.focus_manager"] = {
 local tp_ok, tp = pcall(require, "ui.timeline.timeline_panel")
 if tp_ok then
     assert(type(tp.get_open_tab_ids) == "function", "get_open_tab_ids must be a function")
-    assert(type(tp.restore_tab_order) == "function", "restore_tab_order must be a function")
+    assert(type(tp.restore_tabs_from_strip) == "function", "restore_tabs_from_strip must be a function")
     assert(type(tp.open_tab) == "function", "open_tab must be a function")
     print("  ok")
 else

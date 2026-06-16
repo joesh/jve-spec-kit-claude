@@ -216,54 +216,61 @@ end
 ---
 --- Does NOT touch the active pointer or open_tabs/Qt state — those are
 --- panel-layer concerns. Panel-level close_tab wraps this call.
-function M.close_displayed_tab(seq_id)
-    assert(type(seq_id) == "string" and seq_id ~= "",
-        "timeline_state.close_displayed_tab: seq_id required")
-    local prev_seq_id = strip_holder.displayed_sequence_id()
-    local was_displayed = prev_seq_id == seq_id
+---
+--- Takes the strip TimelineTab object (not a sequence_id) so the empty
+--- source tab — which has no sequence_id — closes through the same path.
+function M.close_displayed_tab(strip_tab)
+    assert(type(strip_tab) == "table" and strip_tab.id,
+        "timeline_state.close_displayed_tab: a strip tab with an id is required")
+    local prev_displayed = tab_strip:get_displayed()
+    local was_displayed = (prev_displayed == strip_tab)
+    -- The outgoing displayed sequence_id (nil if the displayed tab was the
+    -- empty source tab) — used to flush/announce the right row.
+    local prev_seq_id = prev_displayed and prev_displayed.sequence_id or nil
 
-    -- Flush any pending per-sequence view-state to the OUTGOING row
-    -- before the strip mutation below changes which row persist resolves
-    -- to. Without this the dirty viewport/playhead written during the
-    -- final pre-close interactions leaks into the incoming displayed
-    -- sequence's row (or is silently dropped when the strip empties).
-    if was_displayed then
+    -- Flush any pending per-sequence view-state to the OUTGOING row before
+    -- the strip mutation below changes which row persist resolves to. Only
+    -- meaningful when the closing tab is displayed AND has a sequence row
+    -- (the empty source tab has none).
+    if was_displayed and prev_seq_id then
         core.persist_state_to_db(true)
     end
 
-    -- Close in the strip. Source-vs-record dispatch comes from the
-    -- strip's own tab kind, not from the caller's claim — keeps the
-    -- panel layer from having to know which singleton the seq_id maps to.
-    local source_tab = tab_strip:get_source_tab()
-    if source_tab and source_tab.sequence_id == seq_id then
+    -- Close in the strip by kind — the strip tab carries its own kind, so
+    -- the caller never has to know which singleton a sequence_id maps to.
+    if strip_tab.kind == "source" then
         tab_strip:close_source_tab()
     else
-        local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
-        if rec_tab then
-            tab_strip:close_record_tab(rec_tab)
-        end
+        tab_strip:close_record_tab(strip_tab)
     end
 
     if was_displayed then
         local new_displayed = tab_strip:get_displayed()
         if new_displayed then
-            -- Call core.activate_displayed directly with the pre-close
-            -- prev_seq_id. The public M.activate_displayed re-reads the
-            -- strip for prev, which by now matches new_displayed (the
-            -- strip already swapped), and core short-circuits on equal
-            -- prev/new — the timeline view never reloads.
-            return core.activate_displayed(new_displayed.sequence_id, prev_seq_id)
+            if new_displayed.sequence_id then
+                -- Call core.activate_displayed directly with the pre-close
+                -- prev_seq_id. The public M.activate_displayed re-reads the
+                -- strip for prev, which by now matches new_displayed (the
+                -- strip already swapped), and core short-circuits on equal
+                -- prev/new — the timeline view never reloads.
+                return core.activate_displayed(new_displayed.sequence_id, prev_seq_id)
+            end
+            -- The fallback displayed tab is the empty source tab (no
+            -- sequence to load) — emit the rebuild signal directly so the
+            -- panel re-pulls the blank body.
+            Signals.emit("displayed_tab_changed", nil, prev_seq_id)
+            data.notify_listeners()
+            return
         end
-        -- Strip is empty after close (source-only configuration where the
-        -- user closes the lone source tab). Clear so MVC pull yields no
-        -- clips and the timeline view renders blank (TSO 2026-05-17:
-        -- without this, closed sequence's clips stayed on screen under
-        -- an empty strip).
+        -- Strip is empty after close (the user closed the lone tab). Clear so
+        -- MVC pull yields no clips and the timeline view renders blank (TSO
+        -- 2026-05-17: without this, closed sequence's clips stayed on screen
+        -- under an empty strip).
         --
-        -- prev_seq_id is the sequence that JUST closed — pass it through so
-        -- core.clear emits displayed_tab_cleared(prev_seq_id) and the
-        -- playback engine (or any other transport subscriber) can stop the
-        -- engine that had been driving the closed sequence.
+        -- prev_seq_id is the sequence that JUST closed (nil if it was the
+        -- empty source tab) — pass it through so core.clear emits
+        -- displayed_tab_cleared(prev_seq_id) and transport subscribers can
+        -- stop the engine that had been driving the closed sequence.
         core.clear(prev_seq_id)
     end
 end
@@ -684,7 +691,7 @@ function M.switch_to_source_tab(source_seq_id)
     -- Space/J/K/L have a sequence to act on. bind_role_to_sequence is
     -- a no-op pre-bootstrap (headless tests).
     require("core.playback.transport").bind_role_to_sequence("source", source_seq_id)
-    M.persist_displayed_tab_kind()
+    M.persist_tab_strip()
 end
 
 -- Switch to a Record tab. Both displayed_tab_id and active_sequence_id are
@@ -721,21 +728,70 @@ function M.switch_to_record_tab(seq_id)
         require("core.playback.transport").bind_role_to_sequence("record", seq_id)
         Signals.emit("active_sequence_changed", seq_id, prev_active)
     end
-    M.persist_displayed_tab_kind()
+    M.persist_tab_strip()
 end
 
---- Write `displayed_tab_kind` ("source" or "record") to project settings
---- so the next project open lands on the same side. 017 plan revision:
---- transport target is NOT persisted directly; it's derived from this
---- (+ persisted focus) at the next launch. No-op when no project is
---- open (pre-init headless tests) or when the strip is blank.
-function M.persist_displayed_tab_kind()
+-- Project setting holding the serialized TimelineTabStrip — the SINGLE
+-- source of truth for tab restore. It supersedes the former trio of
+-- must-agree settings (open_sequence_ids / source_tab_sequence_id /
+-- displayed_tab_kind): the blob carries the tab list, the displayed/active
+-- pointers, AND each tab's kind, so the displayed side and the source tab
+-- identity fall out of one round-trip. last_open_sequence_id stays separate
+-- — it has secondary consumers (codec-probe priority, initial-sequence
+-- resolution) that read it without the strip.
+local TAB_STRIP_SETTING = "timeline_tab_strip"
+
+--- Persist the whole TimelineTabStrip (tabs + displayed/active pointers) so
+--- the next project open restores every tab — including the empty source
+--- tab, whose absent sequence_id round-trips naturally. No-op pre-project
+--- (headless tests). Called at every strip mutation the facade owns
+--- (switch_to_*_tab, show_empty_source_tab) and by the panel after it
+--- opens/closes a tab (persist_open_tabs).
+function M.persist_tab_strip()
     local project_id = data.state.project_id
     if not project_id or project_id == "" then return end
-    local displayed = tab_strip:get_displayed()
-    if not displayed then return end
     local database = require("core.database")
-    database.set_project_setting(project_id, "displayed_tab_kind", displayed.kind)
+    database.set_project_setting(project_id, TAB_STRIP_SETTING, tab_strip:serialize())
+end
+
+--- Read the persisted strip blob, or nil when none was saved (fresh project,
+--- pre-015 .jvp, or a project that never opened a tab). Used by layout
+--- restore to decide whether to rebuild from the blob.
+function M.get_persisted_tab_strip_blob()
+    local project_id = data.state.project_id
+    if not project_id or project_id == "" then return nil end
+    local database = require("core.database")
+    local blob = database.get_project_setting(project_id, TAB_STRIP_SETTING)
+    if type(blob) ~= "table" then return nil end
+    return blob
+end
+
+--- Show the empty source tab — the source side displayed while the source
+--- monitor holds nothing (sequence_id=nil, blank body). Opens the singleton
+--- empty source tab in the strip and makes it the displayed tab; ONLY the
+--- displayed pointer moves (FR-005 — the active record edit target is
+--- untouched). There is no sequence to load, so this emits
+--- displayed_tab_changed directly (the empty tab's cache is already the
+--- blank-body state the timeline view tolerates) rather than routing through
+--- core.activate_displayed, which requires a real sequence. Persists so
+--- quit/restart restores the empty source tab like any other.
+function M.show_empty_source_tab()
+    local prev_tab = tab_strip:get_displayed()
+    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+    -- Flush outgoing per-sequence view-state BEFORE the displayed pointer
+    -- moves (persist resolves the row via the strip's displayed pointer).
+    -- Same ordering rationale as switch_to_source_tab.
+    if prev_seq_id then
+        M.persist_scroll_offsets()
+        core.persist_state_to_db(true)
+    end
+    local source_tab = tab_strip:open_empty_source_tab()
+    tab_strip:switch_displayed(source_tab)
+    -- displayed_tab_changed subscribers (panel rebuild, transport) ignore the
+    -- payload; new=nil because the empty source tab has no sequence_id.
+    Signals.emit("displayed_tab_changed", nil, prev_seq_id)
+    data.notify_listeners()
+    M.persist_tab_strip()
 end
 -- Per-sequence view-state getters/setters route through the displayed
 -- tab's cache (audit H1). Singleton mirror (data.state.*) is gone — every
@@ -1135,7 +1191,10 @@ Signals.connect("sequence_list_changed", function(project_id)
     -- strip.tabs in place, so iterating while closing would skip entries.
     local dead = {}
     for _, tab in ipairs(strip.tabs) do
-        if not Sequence.load(tab.sequence_id) then
+        -- The empty source tab references no sequence, so a sequence
+        -- deletion can never orphan it — skip it (Sequence.load(nil) would
+        -- assert).
+        if not tab:is_empty_source() and not Sequence.load(tab.sequence_id) then
             table.insert(dead, tab)
         end
     end

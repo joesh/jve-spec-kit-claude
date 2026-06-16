@@ -111,8 +111,15 @@ end
 
 local function persist_tab_state(project_id, tabs)
     local database = require("core.database")
-    database.set_project_setting(project_id, "open_sequence_ids",     tabs.open_sequence_ids)
+    -- last_open_sequence_id stays its own setting (secondary consumers:
+    -- codec-probe priority, initial-sequence resolution read it without the
+    -- strip). The open-tab list lives in the timeline_tab_strip blob — the
+    -- single source of truth restore reads (supersedes open_sequence_ids).
     database.set_project_setting(project_id, "last_open_sequence_id", tabs.active_sequence_id)
+    local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
+    local blob = TimelineTabStrip.build_record_only_blob(
+        tabs.open_sequence_ids, tabs.active_sequence_id)
+    database.set_project_setting(project_id, "timeline_tab_strip", blob)
 end
 
 -- Synthetic command in history records the project's origin (chain of

@@ -1,8 +1,9 @@
 --- ShowSourceTab — open (or make visible) the SourceTab in the timeline tab strip.
 --
 -- Reads the source monitor's loaded master sequence and opens a tab for it.
--- If no master is currently loaded, blanks the timeline body (same blank
--- state as closing the last tab) — picking masters[1] from the DB is
+-- If no master is currently loaded, shows the EMPTY source tab (kind=source,
+-- sequence_id=nil, blank body) — a first-class tab the user can flip back
+-- from, not a blanked record timeline. Picking masters[1] from the DB is
 -- fabrication (TSO 2026-05-17: "opens the tab with a random clip loaded").
 --
 -- Non-undoable: tab visibility is a UI preference, not a content mutation.
@@ -54,12 +55,13 @@ function M.register(command_executors, command_undoers, _db, _set_last_error)
             return true
         end
 
-        -- No master loaded → blank the timeline body, matching the
-        -- close-last-tab state (TSO 2026-05-17, user request). Auto-
-        -- seeding masters[1] was fabrication; the user chose nothing,
-        -- so the editor shows nothing.
-        require("ui.timeline.timeline_state").clear()
-        log.event("ShowSourceTab: no master loaded — body blanked")
+        -- No master loaded → show the empty source tab (blank body, but a
+        -- real source-side tab the user can flip back from). Auto-seeding
+        -- masters[1] was fabrication; the user chose nothing, so the source
+        -- side shows nothing.
+        require("ui.timeline.timeline_state").show_empty_source_tab()
+        Signals.emit("source_tab_visibility_changed", true)
+        log.event("ShowSourceTab: no master loaded — empty source tab shown")
         return true
     end
 
