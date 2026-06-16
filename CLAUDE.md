@@ -84,15 +84,17 @@ open build/bin/jve.app
 
 ## Dev Cycle — what to run after a change
 
-Pick the single command that matches what you touched. The "final check" rows are mutually exclusive: running both in sequence is pure redundancy because `make -j4` already runs the full Lua suite.
+Pick the iteration command that matches what you touched. **`make -j4` is the one and only final gate** for every change class.
 
 | What you touched | Iteration loop                                              | Final check                |
 |------------------|-------------------------------------------------------------|----------------------------|
-| Lua only         | `cd tests && luajit test_harness.lua synthetic/lua/test_thing.lua`        | `./tests/run_lua_tests_all.sh` |
+| Lua only         | `cd tests && luajit test_harness.lua synthetic/lua/test_thing.lua`        | `make -j4`                 |
 | C++ only         | `cd build && make jve -j4` (rebuilds binary, no tests) | `make -j4`                 |
 | Lua + C++        | one of the above per iteration                              | `make -j4`                 |
 
-`make -j4` runs everything (C++ compile, luacheck, full Lua suite, C++ tests, binding tests, integration tests). It is **never** correct to run `./tests/run_lua_tests_all.sh` *and* `make -j4` for the same change — `make -j4` already runs that script. Pick the one for your change class.
+`make -j4` runs everything (C++ compile, luacheck, full Lua suite, C++ tests, binding tests, integration tests) and is what the pre-commit freshness gate checks against. **Do NOT use `./tests/run_lua_tests_all.sh`** — it sweeps a different set (known-RED hygiene tests + sibling tests not wired into the build) and reports misleading failures. Iterate with one targeted test; gate with `make -j4` and read its output.
+
+When `make -j4` is red, **read the build output and find whose bug breaks it** — don't assume it's your change and don't bucket it as "pre-existing". A green-Lua / red-integration split almost always means a sibling session's uncommitted work broke an integration test. See `team-checkpoint.md` for who owns what.
 
 `make jve -j4` is the one exception that skips tests — use it during rapid UI iteration where you'll exercise the editor manually. Final validation still goes through the right row above.
 
