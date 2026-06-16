@@ -210,6 +210,31 @@ local function find_track_clips(track_elem, clip_tag)
     return results
 end
 
+--- Filename component of a media path (last segment after / or \).
+-- Used as the relink anchor when a clip's <MediaRef> UUID link is severed and
+-- the only join back to its pool master is the file itself.
+-- @param path string|nil
+-- @return string|nil: basename, or nil for nil/empty input
+local function path_basename(path)
+    if not path or path == "" then return nil end
+    return path:match("([^/\\]+)$")
+end
+
+--- Most-common positive value across a flat map's values (plurality vote).
+-- @param map table: key → number
+-- @return number|nil: the value carried by the most keys, nil if none positive
+local function majority_value(map)
+    local votes = {}
+    for _, v in pairs(map or {}) do
+        if v and v > 0 then votes[v] = (votes[v] or 0) + 1 end
+    end
+    local picked, best = nil, 0
+    for v, c in pairs(votes) do
+        if c > best then picked, best = v, c end
+    end
+    return picked
+end
+
 --- Get text content from XML element
 -- @param elem table: XML element
 -- @return string: Trimmed text content
@@ -1239,6 +1264,11 @@ local function parse_resolve_tracks(seq_elem, opts)
     local media_ref_path_map = opts.media_ref_path_map
     local media_ref_name_map = opts.media_ref_name_map
     local media_ref_sample_rate_map = opts.media_ref_sample_rate_map
+    local media_name_to_pool_id = opts.media_name_to_pool_id
+    -- Provisional audio rate for OFFLINE clips whose pool master was deleted
+    -- (severed link, file absent from the pool). Required so the clip places and
+    -- a relinkable master can be regenerated; relink replaces it later.
+    local offline_audio_sample_rate = opts.offline_audio_sample_rate
 
     -- NSF: frame_rate is required, no fallbacks
     assert(type(frame_rate) == "number" and frame_rate > 0, string.format(
@@ -1281,10 +1311,24 @@ local function parse_resolve_tracks(seq_elem, opts)
             -- fallback only: blob filenames can be garbled (protobuf field data leaking
             -- into filename bytes).
             if (not file_path or file_path == "") and media_ref_path_map then
-                local media_ref = get_text(find_element(clip_elem, "MediaRef"))
-                if media_ref ~= "" and media_ref_path_map[media_ref] then
-                    file_path = media_ref_path_map[media_ref]
+                local mr = get_text(find_element(clip_elem, "MediaRef"))
+                if mr ~= "" and media_ref_path_map[mr] then
+                    file_path = media_ref_path_map[mr]
                 end
+            end
+
+            -- Resolve the clip's media identity once. Resolve clears <MediaRef>
+            -- on clips whose pool master was reorganized/relinked, keeping only
+            -- the inline <MediaFilePath>. Restore the severed UUID by matching the
+            -- file to its pool master by filename (JVE's relink anchor) so the
+            -- clip binds to the existing pool media — native rate, channels, and
+            -- cross-volume dedup all flow through the normal UUID path instead of
+            -- forking a rate-less duplicate keyed by path. Ambiguous basenames are
+            -- poisoned upstream (yield nil) and left offline for user reconnect.
+            local media_ref = get_text(find_element(clip_elem, "MediaRef"))
+            if media_ref == "" and file_path and file_path ~= "" then
+                media_ref = (media_name_to_pool_id
+                    and media_name_to_pool_id[path_basename(file_path)]) or ""
             end
 
             local clip_name = get_text(find_element(clip_elem, "Name")) or file_path or "unnamed"
@@ -1415,26 +1459,35 @@ local function parse_resolve_tracks(seq_elem, opts)
             -- Video: use <MediaFrameRate> (media's fps), fall back to sequence fps.
             -- Audio: use pool master clip's sample_rate (no fallback).
             local native_rate
+            local audio_offline = false  -- true = pool master gone, regenerating
             if track_type == "AUDIO" then
-                local media_ref = get_text(find_element(clip_elem, "MediaRef"))
-                native_rate = media_ref_sample_rate_map and media_ref ~= ""
-                    and media_ref_sample_rate_map[media_ref]
+                -- media_ref is the resolved pool identity (severed links already
+                -- restored by filename above). The pool master supplies the audio
+                -- sample rate — the native unit for audio source coordinates.
+                native_rate = media_ref ~= "" and media_ref_sample_rate_map[media_ref]
                 if not native_rate then
-                    local is_media = media_ref_path_map and media_ref ~= ""
-                        and media_ref_path_map[media_ref]
-                    if not is_media then
-                        -- Not in path map → nested sequence (compound/synced/multicam
-                        -- clip), not a media file — skip it.
+                    if file_path and file_path ~= "" then
+                        -- Media file named, but no pool sample rate: the master is
+                        -- absent from the pool (deleted/offline) or its filename was
+                        -- ambiguous. "Import everything in the DRP": place the clip
+                        -- anyway and regenerate a relinkable offline master, using
+                        -- the project's provisional audio rate (the clip's own bytes
+                        -- carry none once the master is deleted). Relink probes the
+                        -- real file and replaces the rate, rescaling coordinates.
+                        assert(offline_audio_sample_rate and offline_audio_sample_rate > 0,
+                            string.format("parse_resolve_tracks: clip '%s' is offline but no "
+                                .. "provisional audio sample rate was supplied", clip_name))
+                        native_rate = offline_audio_sample_rate
+                        audio_offline = true
+                        log.detail("regenerating offline audio master for '%s' at %d Hz (MediaRef=%s)",
+                            clip_name, native_rate, media_ref)
+                    else
+                        -- No media file at all → genuine nested sequence
+                        -- (compound/synced/multicam clip), correctly skipped.
                         log.detail("skipping nested sequence audio clip '%s' (MediaRef=%s)",
                             clip_name, media_ref)
                         goto continue_clip
                     end
-                    -- In path map but no sample rate → video-only media with
-                    -- linked audio track (silent companion clip). No audio
-                    -- coordinates to compute — skip.
-                    log.detail("skipping audio clip '%s' for video-only media (MediaRef=%s, no sample rate)",
-                        clip_name, media_ref)
-                    goto continue_clip
                 end
             else
                 assert(media_frame_rate, string.format(
@@ -1620,8 +1673,8 @@ local function parse_resolve_tracks(seq_elem, opts)
                     and (tonumber(get_text(find_element(clip_elem, "Flags"))) or 0) % 4 < 2,  -- bit 1 = muted
                 volume = volume_linear,            -- linear gain from EffectFiltersBA (1.0 = 0dB)
                 file_path = file_path,
-                file_uuid = get_text(find_element(clip_elem, "MediaRef")),
-                file_id = get_text(find_element(clip_elem, "MediaRef")),
+                file_uuid = media_ref,   -- resolved pool identity (severed links restored)
+                file_id = media_ref,
                 frame_rate = frame_rate,              -- sequence rate (for timeline position)
                 native_rate = native_rate,            -- media's native rate (source coords are in this rate)
                 media_start_time = media_start_time,  -- seconds since midnight (file TC origin)
@@ -1644,12 +1697,21 @@ local function parse_resolve_tracks(seq_elem, opts)
                         -- Use master clip name (original filename) for media name,
                         -- not timeline clip name (user's custom label)
                         local mc_name = media_ref_name_map and media_ref_name_map[clip.file_id]
+                        -- An offline audio clip has no pool master, so no later
+                        -- apply_pmc_metadata pass fills its rate/name. Form the
+                        -- entry as a complete audio stub now: an audio media's
+                        -- native timebase IS its sample rate (frame_rate), and the
+                        -- name is the file's basename (online clips show the pool
+                        -- master's filename, not the user's clip label).
                         entry = {
                             file_uuid = (clip.file_id and clip.file_id ~= "") and clip.file_id or nil,
-                            name = mc_name or clip.name or file_path,
+                            name = mc_name or (audio_offline and path_basename(file_path))
+                                or clip.name or file_path,
                             file_path = file_path,
                             duration = source_extent_frames,
-                            frame_rate = media_frame_rate,  -- from <MediaFrameRate>; blob propagation may override
+                            -- audio stub: sample rate; else <MediaFrameRate> (blob propagation may override)
+                            frame_rate = audio_offline and native_rate or media_frame_rate,
+                            audio_sample_rate = audio_offline and native_rate or nil,
                             audio_channels = track_type == "AUDIO" and 2 or 0,
                             has_video = track_type == "VIDEO",
                             media_start_time = media_start_time,
@@ -1666,6 +1728,11 @@ local function parse_resolve_tracks(seq_elem, opts)
                         end
                         if track_type == "AUDIO" and entry.audio_channels < 2 then
                             entry.audio_channels = 2
+                        end
+                        if audio_offline and not entry.audio_sample_rate then
+                            -- Entry created by a video placement first; stamp the
+                            -- offline audio rate so the regenerated master is valid.
+                            entry.audio_sample_rate = native_rate
                         end
                         if track_type == "VIDEO" then
                             entry.has_video = true
@@ -2053,6 +2120,15 @@ M._resolve_synced_audio_linkage = resolve_synced_audio_linkage  -- exported for 
 -- parse_resolve_tracks (silent companion clips).
 local function build_media_ref_maps(media_pool_hierarchy)
     local path_map, name_map, sample_rate_map = {}, {}, {}
+    -- Filename → pool master id. Restores the media identity of timeline clips
+    -- whose <MediaRef> UUID link Resolve severed (empty MediaRef) — the pool
+    -- master still describes the same file, joined by filename (JVE's relink
+    -- anchor). A basename shared by two DIFFERENT pool masters is ambiguous, so
+    -- it is poisoned out of the index: the lookup yields nil and the clip is
+    -- left offline for the user to reconnect (Resolve-style red !), never
+    -- silently bound to the wrong source.
+    local name_to_pool_id = {}
+    local name_id_conflict = {}
     for _, pmc in ipairs(media_pool_hierarchy.master_clips) do
         if pmc.id then
             if pmc.file_path then path_map[pmc.id] = pmc.file_path end
@@ -2060,9 +2136,22 @@ local function build_media_ref_maps(media_pool_hierarchy)
             if pmc.audio_duration and pmc.audio_duration.sample_rate then
                 sample_rate_map[pmc.id] = pmc.audio_duration.sample_rate
             end
+            local key = (pmc.file_path and path_basename(pmc.file_path)) or pmc.name
+            if key and not name_id_conflict[key] then
+                local prior = name_to_pool_id[key]
+                if prior == nil then
+                    name_to_pool_id[key] = pmc.id
+                elseif prior ~= pmc.id then
+                    name_to_pool_id[key] = nil
+                    name_id_conflict[key] = true
+                    log.warn("build_media_ref_maps: filename '%s' maps to multiple "
+                        .. "pool masters; severed-link clips left offline for user "
+                        .. "reconnect", key)
+                end
+            end
         end
     end
-    return path_map, name_map, sample_rate_map
+    return path_map, name_map, sample_rate_map, name_to_pool_id
 end
 
 -- Locate the root <Project>/<SM_Project> element in a parsed project.xml.
@@ -2167,6 +2256,59 @@ local function parse_resolve_markers(project_xml)
     return by_owner
 end
 
+-- Single linear pass over ONE DRP sequence XML, extracting the media links that
+-- three separate full-file `.-` regex scans used to produce (Pass-4 orphan-path
+-- grep + MediaRef→MediaFilePath UUID enrichment + MediaFilePath→MediaFrameRate
+-- enrichment). Those `.-` patterns each re-scanned the whole document and cost
+-- ~35% of DRP parse CPU on large projects; one anchored `<tag>v</tag>` walk
+-- replaces all three with no whitespace-collapse gsub.
+--
+-- Replicates the originals' non-overlapping "pair with the NEXT tag" semantics
+-- with a keep-FIRST state machine: a <MediaRef> pairs with the next
+-- <MediaFilePath>; a <MediaFilePath> pairs with the next <MediaFrameRate>; every
+-- <MediaFilePath> is an orphan candidate. When several refs precede one path the
+-- original `.-` consumed the first ref + the path (dropping the inner refs), so
+-- pending slots are set only when empty. Pure (no I/O, no DB); the caller passes
+-- OriginalClip-stripped content and applies these against the media maps.
+local SEQ_XML_MEDIA_TAGS = {
+    MediaRef = true, MediaFilePath = true, MediaFrameRate = true,
+}
+local function extract_seq_xml_media_links(content)
+    local orphan_paths   = {}
+    local ref_path_pairs = {}
+    local path_fr_pairs  = {}
+    local pending_ref = nil   -- a <MediaRef> awaiting its next <MediaFilePath>
+    local pending_mfp = nil   -- a <MediaFilePath> awaiting its next <MediaFrameRate>
+    for tag, val in content:gmatch("<(%w+)>([^<]*)</%1>") do
+        if SEQ_XML_MEDIA_TAGS[tag] then
+            val = val:match("^%s*(.-)%s*$")
+            if tag == "MediaRef" then
+                if val ~= "" and pending_ref == nil then pending_ref = val end
+            elseif tag == "MediaFilePath" then
+                if val ~= "" then
+                    orphan_paths[#orphan_paths + 1] = val
+                    if pending_ref ~= nil then
+                        ref_path_pairs[#ref_path_pairs + 1] = { pending_ref, val }
+                        pending_ref = nil
+                    end
+                    if pending_mfp == nil then pending_mfp = val end
+                end
+            elseif tag == "MediaFrameRate" then
+                if val ~= "" and pending_mfp ~= nil then
+                    path_fr_pairs[#path_fr_pairs + 1] = { pending_mfp, val }
+                    pending_mfp = nil
+                end
+            end
+        end
+    end
+    return {
+        orphan_paths   = orphan_paths,
+        ref_path_pairs = ref_path_pairs,
+        path_fr_pairs  = path_fr_pairs,
+    }
+end
+M._extract_seq_xml_media_links = extract_seq_xml_media_links
+
 function M.parse_drp_file(drp_path, progress_cb)
     local pump = progress_cb or function() end
 
@@ -2230,8 +2372,23 @@ function M.parse_drp_file(drp_path, progress_cb)
         pump(25 + math.floor(sub_pct * 0.45), "Decoding media pool clips…")
     end)
 
-    local media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map =
-        build_media_ref_maps(media_pool_hierarchy)
+    local media_ref_path_map, media_ref_name_map, media_ref_sample_rate_map,
+          media_name_to_pool_id = build_media_ref_maps(media_pool_hierarchy)
+
+    -- Provisional audio rate for OFFLINE timeline clips (pool master deleted, file
+    -- absent from the pool): the clip's own bytes carry no sample rate, yet audio
+    -- source coordinates are sample-domain. Use the project's dominant pool audio
+    -- rate — the same value pick_majority_audio_sample_rate derives for the project
+    -- default (both vote over the pool blobs), so a regenerated master's own rate
+    -- matches the project default by construction. Relink replaces it per file.
+    local offline_audio_sample_rate = majority_value(media_ref_sample_rate_map)
+    if not offline_audio_sample_rate then
+        -- No pool audio decoded; mirror pick_majority_audio_sample_rate's
+        -- documented Resolve default so offline clips still place.
+        offline_audio_sample_rate = 48000
+        log.warn("no pool audio rate decoded; offline timeline clips use 48000 Hz provisional "
+            .. "(Resolve documented default; relink probes the real rate)")
+    end
 
     pump(70, "Parsing sequences…")
 
@@ -2268,6 +2425,8 @@ function M.parse_drp_file(drp_path, progress_cb)
                         media_ref_path_map = media_ref_path_map,
                         media_ref_name_map = media_ref_name_map,
                         media_ref_sample_rate_map = media_ref_sample_rate_map,
+                        media_name_to_pool_id = media_name_to_pool_id,
+                        offline_audio_sample_rate = offline_audio_sample_rate,
                     })
                     apply_timeline_metadata(timeline, metadata, fps_for_parsing,
                         project.settings, seq_ref_id)
@@ -2393,20 +2552,47 @@ function M.parse_drp_file(drp_path, progress_cb)
         end
     end
 
-    -- Pass 4: raw XML grep for orphaned paths not found in structured parse.
-    -- Strip <OriginalClip> blocks first — those record a clip's pre-replace
-    -- state (e.g., a Windows path before the user relinked to Mac) and aren't
-    -- referenced by any active timeline clip. Harvesting them creates phantom
-    -- zero-duration media items.
+    -- Read + tokenize each sequence XML ONCE, then run the orphan-harvest and
+    -- UUID / frame-rate enrichment passes off the cached links. This replaces
+    -- two file reads, two whole-string gsub passes, and three full-file `.-`
+    -- regex scans PER FILE (~35% of parse CPU on large DRPs) with a single
+    -- anchored `<tag>v</tag>` walk each (see extract_seq_xml_media_links).
+    --
+    -- Pass-4 orphan harvest uses OriginalClip-STRIPPED content — those blocks
+    -- record a clip's pre-replace state (e.g. a Windows path before the user
+    -- relinked to Mac), aren't referenced by any active timeline clip, and would
+    -- otherwise create phantom zero-duration media. UUID / frame-rate enrichment
+    -- uses the RAW content, matching the original passes' inputs exactly.
+    local seq_links = {}
     for _, seq_file in ipairs(sequence_file_list) do
         local handle = assert(io.open(seq_file, "r"),
             string.format("parse_drp_file: failed to open %s", seq_file))
         local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
         handle:close()
-        content = content:gsub("<OriginalClip>.-</OriginalClip>", "")
-        for raw_path in content:gmatch("<MediaFilePath>(.-)</MediaFilePath>") do
-            local cleaned = raw_path:match("^%s*(.-)%s*$")
-            if cleaned ~= "" and not media_get(nil, cleaned) then
+        local raw = extract_seq_xml_media_links(content)
+        -- Orphan harvest excludes <OriginalClip> blocks (a clip's pre-relink
+        -- phantom paths). Only the few files that actually contain one pay the
+        -- strip gsub + a second tokenize; the rest (the vast majority) reuse the
+        -- raw orphan list as-is — with no OriginalClip, stripped == content, so
+        -- the extraction is byte-identical.
+        local orphans
+        if content:find("<OriginalClip>", 1, true) then
+            local stripped = content:gsub("<OriginalClip>.-</OriginalClip>", "")
+            orphans = extract_seq_xml_media_links(stripped).orphan_paths
+        else
+            orphans = raw.orphan_paths
+        end
+        seq_links[seq_file] = {
+            orphans        = orphans,
+            ref_path_pairs = raw.ref_path_pairs,
+            path_fr_pairs  = raw.path_fr_pairs,
+        }
+    end
+
+    -- Pass 4: register orphaned paths not found in the structured parse.
+    for _, seq_file in ipairs(sequence_file_list) do
+        for _, cleaned in ipairs(seq_links[seq_file].orphans) do
+            if not media_get(nil, cleaned) then
                 media_put({
                     name = cleaned:match("([^/\\]+)$") or cleaned,
                     file_path = cleaned,
@@ -2431,73 +2617,65 @@ function M.parse_drp_file(drp_path, progress_cb)
     pump(96, "Enriching media UUIDs…")
     local enriched_count = 0
     for seq_idx, seq_file in ipairs(sequence_file_list) do
-        local handle = assert(io.open(seq_file, "r"),
-            string.format("parse_drp_file: failed to open %s for UUID enrichment", seq_file))
-        local content = file_read_all(handle, "drp_importer:seq_xml:" .. seq_file)
-        handle:close()
-        do
-            -- Collapse whitespace so patterns can span XML elements on separate lines.
-            -- Lua's . doesn't match \n, so multi-line XML breaks .- patterns.
-            content = content:gsub("%s+", " ")
-            -- Extract <MediaRef>+<MediaFilePath> pairs (UUID enrichment)
-            for ref_id, mfp in content:gmatch("<MediaRef>([^<]+)</MediaRef>.-<MediaFilePath>([^<]+)</MediaFilePath>") do
-                ref_id = ref_id:match("^%s*(.-)%s*$")
-                mfp = mfp:match("^%s*(.-)%s*$")
-                if ref_id ~= "" and mfp ~= "" then
-                    local path_entry = media_get(nil, mfp)
-                    local uuid_entry = media_get(ref_id, nil)
+        local links = seq_links[seq_file]
 
-                    if path_entry and uuid_entry and path_entry ~= uuid_entry then
-                        -- Merge path_entry into uuid_entry
-                        if mfp ~= uuid_entry.file_path then
-                            uuid_entry.alt_paths[mfp] = true
-                        end
-                        if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
-                            uuid_entry.duration = path_entry.duration
-                        end
-                        if path_entry.media_start_time and not uuid_entry.media_start_time then
-                            uuid_entry.media_start_time = path_entry.media_start_time
-                        end
-                        media_items[path_entry.file_path] = nil
-                        path_to_key[mfp] = ref_id
-                        enriched_count = enriched_count + 1
-                    elseif path_entry and not path_entry.file_uuid then
-                        media_items[path_entry.file_path] = nil
-                        path_entry.file_uuid = ref_id
-                        media_put(path_entry)
-                        enriched_count = enriched_count + 1
-                    elseif not path_entry and uuid_entry then
-                        uuid_entry.alt_paths[mfp] = true
-                        path_to_key[mfp] = ref_id
-                    elseif not path_entry and not uuid_entry then
-                        media_put({
-                            file_uuid = ref_id,
-                            name = mfp:match("([^/\\]+)$") or mfp,
-                            file_path = mfp,
-                            duration = 0,
-                            alt_paths = {},
-                        })
-                        enriched_count = enriched_count + 1
-                    end
+        -- <MediaRef>→<MediaFilePath> pairs (UUID enrichment). ref_id/mfp are
+        -- already whitespace-trimmed and non-empty (see the tokenizer).
+        for _, ref_pair in ipairs(links.ref_path_pairs) do
+            local ref_id, mfp = ref_pair[1], ref_pair[2]
+            local path_entry = media_get(nil, mfp)
+            local uuid_entry = media_get(ref_id, nil)
+
+            if path_entry and uuid_entry and path_entry ~= uuid_entry then
+                -- Merge path_entry into uuid_entry
+                if mfp ~= uuid_entry.file_path then
+                    uuid_entry.alt_paths[mfp] = true
                 end
+                if (path_entry.duration or 0) > (uuid_entry.duration or 0) then
+                    uuid_entry.duration = path_entry.duration
+                end
+                if path_entry.media_start_time and not uuid_entry.media_start_time then
+                    uuid_entry.media_start_time = path_entry.media_start_time
+                end
+                media_items[path_entry.file_path] = nil
+                path_to_key[mfp] = ref_id
+                enriched_count = enriched_count + 1
+            elseif path_entry and not path_entry.file_uuid then
+                media_items[path_entry.file_path] = nil
+                path_entry.file_uuid = ref_id
+                media_put(path_entry)
+                enriched_count = enriched_count + 1
+            elseif not path_entry and uuid_entry then
+                uuid_entry.alt_paths[mfp] = true
+                path_to_key[mfp] = ref_id
+            elseif not path_entry and not uuid_entry then
+                media_put({
+                    file_uuid = ref_id,
+                    name = mfp:match("([^/\\]+)$") or mfp,
+                    file_path = mfp,
+                    duration = 0,
+                    alt_paths = {},
+                })
+                enriched_count = enriched_count + 1
             end
+        end
 
-            -- Extract <MediaFilePath>+<MediaFrameRate> for entries missing frame_rate.
-            -- Catches clips in skipped sequences (no MediaRef, no blob propagation).
-            for mfp, mfr_hex in content:gmatch("<MediaFilePath>([^<]+)</MediaFilePath>.-<MediaFrameRate>([^<]+)</MediaFrameRate>") do
-                mfp = mfp:match("^%s*(.-)%s*$")
-                if mfp ~= "" and #mfr_hex >= 16 then
-                    local entry = media_get(nil, mfp)
-                    if entry and not entry.frame_rate then
-                        local fps = decode_hex_double_at(mfr_hex, 0)
-                        if fps and fps > 0 and fps < 1000 then
-                            entry.frame_rate = fps
-                            enriched_count = enriched_count + 1
-                        end
+        -- <MediaFilePath>→<MediaFrameRate> pairs for entries missing frame_rate.
+        -- Catches clips in skipped sequences (no MediaRef, no blob propagation).
+        for _, fr_pair in ipairs(links.path_fr_pairs) do
+            local mfp, mfr_hex = fr_pair[1], fr_pair[2]
+            if #mfr_hex >= 16 then
+                local entry = media_get(nil, mfp)
+                if entry and not entry.frame_rate then
+                    local fps = decode_hex_double_at(mfr_hex, 0)
+                    if fps and fps > 0 and fps < 1000 then
+                        entry.frame_rate = fps
+                        enriched_count = enriched_count + 1
                     end
                 end
             end
         end
+
         if seq_idx % 10 == 0 then
             pump(96 + math.floor(seq_idx / #sequence_file_list * 2))
         end

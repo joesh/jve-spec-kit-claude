@@ -630,8 +630,18 @@ end
 -- no-op. Returns the master sequence id. Used by both the eager full-pool pass
 -- and the per-timeline-clip pass.
 local function ensure_master_and_bin(media_id, project_id, synced_audio, bin_clip, ctx)
-    local master_seq_id = Sequence.ensure_master(media_id, project_id,
-        synced_audio and { synced_audio_media_ids = synced_audio } or nil)
+    -- One master per media_id. Sequence.ensure_master is idempotent but its
+    -- existence check is a 3-table JOIN; the per-clip pass would re-run it for
+    -- every clip of an already-built master (the eager full-pool pass builds
+    -- most masters up front), an O(clips) redundancy that dominated import CPU.
+    -- Cache the media_id → master_seq_id resolution for this import.
+    local master_seq_id = ctx.master_by_media_id[media_id]
+    if not master_seq_id then
+        local master_opts = { sample_rate = ctx.default_audio_sample_rate }
+        if synced_audio then master_opts.synced_audio_media_ids = synced_audio end
+        master_seq_id = Sequence.ensure_master(media_id, project_id, master_opts)
+        ctx.master_by_media_id[media_id] = master_seq_id
+    end
     if not ctx.created_master_set[master_seq_id] then
         ctx.created_master_set[master_seq_id] = true
         table.insert(ctx.result.sequence_ids, master_seq_id)
@@ -826,6 +836,14 @@ function M.import_into_project(project_id, parse_result, opts)
     -- pass and the per-timeline-clip pass below.
     local master_ctx = {
         created_master_set = created_master_set,
+        master_by_media_id = {},
+        master_seq_by_id   = {},
+        -- Project default audio rate: the fallback ensure_master uses for
+        -- OFFLINE media whose project file gave audio_channels but no rate of
+        -- its own (the file isn't probed — importers must not probe). A media's
+        -- own recorded rate always wins; this only fills the gap. nil is fine —
+        -- the factory asserts loud if an audio media has neither.
+        default_audio_sample_rate = project_settings.audio_sample_rate,
         result             = result,
         media_by_uuid      = media_by_uuid,
         media_by_path      = media_by_path,
@@ -964,10 +982,17 @@ function M.import_into_project(project_id, parse_result, opts)
                     local src_in_frame, sub_in
                     local src_out_frame, sub_out
                     if track.track_type == "AUDIO" then
-                        local master_seq = Sequence.find(master_seq_id)
-                        assert(master_seq, string.format(
-                            "importer_core: master %s not loadable after ensure_master",
-                            tostring(master_seq_id)))
+                        -- The audio path reads only the master's fps timebase;
+                        -- masters are few but audio clips are many, so cache the
+                        -- loaded master per id rather than re-loading per clip.
+                        local master_seq = master_ctx.master_seq_by_id[master_seq_id]
+                        if not master_seq then
+                            master_seq = Sequence.find(master_seq_id)
+                            assert(master_seq, string.format(
+                                "importer_core: master %s not loadable after ensure_master",
+                                tostring(master_seq_id)))
+                            master_ctx.master_seq_by_id[master_seq_id] = master_seq
+                        end
                         src_in_frame, sub_in = M.compute_audio_clip_source(
                             source_in_final, clip_data.native_rate,
                             master_seq.fps_numerator, master_seq.fps_denominator,

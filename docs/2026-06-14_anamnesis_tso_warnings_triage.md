@@ -47,8 +47,21 @@ evidence (probe output / file:line), then classified **FIXED**, **NEEDS-JOE**, o
 
 ## NEEDS-JOE — domain/product decision or your project to reproduce
 
-### E2 — RelinkClips crash: `clip.lua:914 batch_update_source: rebind exec failed`  ⚠️ NEEDS-JOE
+### E2 — RelinkClips crash: `batch_update_source: rebind exec failed`  ✅ FIXED (commit 32bcd84e)
 Failing clip `b6bfc1bb-e17e-4c08-9c6c-ecd22cc4d263` during a relink on the anamnesis project.
+
+**Resolution**: confirmed via a synthetic repro (24→25 fps audio relink) that the actionable
+assert surfaces `source_in_subframe >= ticks_per_frame` — the `trg_clips_subframe_bound_update`
+trigger on the `sequence_id` rebind. Fix: (1) the exec asserts now capture `stmt:last_error()`;
+(2) a cross-fps AUDIO rebind re-expresses the source window under the new master's fps in the
+same UPDATE, preserving the absolute audio position (master-clock ticks) so the clip keeps
+playing the same audio. Test `test_relink_cross_fps_audio_subframe`. Caveats: the synthetic
+repro confirms the CLASS, not the exact b6bfc1bb instance — if your relink was a different
+trigger (e.g. owner-kind), the now-actionable assert will name it on the next attempt. A
+trim+cross-fps relink keeps the existing sub-frame (paired with the new frame); pure relinks
+are exact.
+
+<details><summary>Original analysis (for reference)</summary>
 
 - **Two problems, separable**:
   1. **The assert swallows the real SQLite error.** Every `assert(stmt:exec(), "…")` in
@@ -71,8 +84,9 @@ Failing clip `b6bfc1bb-e17e-4c08-9c6c-ecd22cc4d263` during a relink on the anamn
 - **To reproduce**: I need the exact relink you performed (which clip → which target
   file). With the actionable-assert in place, the next attempt will print the real
   constraint. Tell me and I'll write a failing test + implement your chosen semantics.
+</details>
 
-### W3 — "CUSTOM-audio pmc '<X>.mov' not in media_items — synced_audio_pool_ids not stamped" (331×)  ⚠️ NEEDS-JOE
+### W3 — "CUSTOM-audio pmc '<X>.mov' not in media_items — synced_audio_pool_ids not stamped" (331×) ✅ RESOLVED (full-pool import)
 - **Root cause (CONFIRMED by probe, refutes the earlier UUID-mismatch theory)**: all 331
   warned video pmcs are **genuinely absent** from `media_items` — 0 match by id, 0 by
   `file_uuid`, 0 by path-contains-name. They are CUSTOM-audio (dual-system synced) camera
@@ -116,10 +130,30 @@ I did not change importer scope or warning levels here — that's your call.
 
 ## BENIGN / NOISE — low priority (W6 bucket)
 
-- **"Skipping zero-duration media: <X>" (~24×)** — Pass-4 phantom entries from the raw
-  `<MediaFilePath>` grep that get filtered when they resolve to zero duration
-  (`importer_core.lua:634`). Expected filtering of non-media/placeholder paths. Could be
-  summarized to one line. **No action needed** unless you want quieter logs.
+- **"Skipping zero-duration media: <X>" (25×)** — RECLASSIFIED 2026-06-15: NOT all benign.
+  Re-investigated against the live anamnesis parse (`try_import_media_item`,
+  `importer_core.lua:664`). All 25 are uuid=nil stubs synthesized from the Pass-4 raw
+  `<MediaFilePath>` grep (no MediaPoolItem to source a duration from → duration 0 → filtered).
+  Split:
+    - **14 are benign duplicates** — the same basename also exists as a real decoded pool
+      item (with uuid + duration); dropping the stub loses nothing.
+    - **11 have NO decoded pool counterpart** and are REAL placed timeline clips referencing
+      **offline / timeline-only media** (no MediaPool backing). Confirmed on one:
+      "Phone slide sfx.m4a" (clip name "Joe quickie phone slide sfx.m4a", `<Duration>33`) is a
+      placed `Sm2TiAudioClip` on timeline "composer scene 43 joe edit 2" — its element carries
+      **no `<MediaPoolItem>`/pool DbId at all**, only inline `<MediaFilePath>` +
+      `<MediaFrameRate>` + `<MediaStartTime>`. Resolve stores offline/timeline-only clips this
+      way. JVE currently DROPS them: the phantom media is filtered, so the clip never lands on
+      the imported timeline (that audio track imports 1 clip instead of 2).
+  ⚠️ **NEEDS-JOE (product decision)**: should JVE import offline timeline-only clips as
+  relinkable/offline clips — synthesizing a media stub from inline MediaFilePath +
+  MediaFrameRate + clip Duration (media total length unknown; mark relinkable)? Mirrors the
+  no-TC origin-0 decision (`todo_offline_timeline_clip_no_tc_import_crash`) and its offline
+  residual. NOT solo-fixable. Scope not yet quantified across the imported timelines.
+  Correction: an earlier "776 offline paths" estimate here was a measurement artifact —
+  MediaPool stores paths inside compressed `<FieldsBlob>`, invisible to a plaintext grep, so
+  raw `<MediaFilePath>`-grep set differences are meaningless. The importer's own decode is the
+  only trustworthy in-pool oracle; the 14/11 split above is decode-based.
 - **"Skipping sequence '…' - no fps in MediaPool metadata" (1×)** — one orphan/compound
   sequence with no fps in the pool metadata is skipped (`drp_importer.lua:2247`). Expected
   for compound clips / deleted timelines. **Benign.**

@@ -1,11 +1,9 @@
--- SLOW_TEST
 -- Regression: after importing a DRP, the resulting project must know which
 -- timeline to open and which tabs to restore — even when the DRP was saved
 -- without a SequenceTabsData binary blob (e.g. anamnesis-gold-timeline.drp).
 --
--- ~60s wall clock (full Anamnesis DRP import + media probe). Invoke with
--- RUN_SLOW_TESTS=1 when touching DRP importer, active-tab restore, or
--- anything in the initial-sequence-selection path.
+-- Fast (the gold-timeline fixture is 4.6MB, ~4s) — the 41MB anamnesis
+-- WITH-SequenceTabsData case lives in test_drp_anamnesis_full Phase 7.
 --
 -- Domain behavior under test:
 --   1. The project's "active sequence" (last_open_sequence_id) MUST be set
@@ -78,17 +76,13 @@ end
 
 print("=== test_drp_active_timeline_restored.lua ===")
 
--- Case 1: newest fixture — DRP saved WITHOUT SequenceTabsData.
--- project.xml has <TimelineVec/> empty, TimelineHandleVec populated,
--- CurrentTimelineIndex=0. Active timeline must still be resolvable.
+-- The fixture saved WITHOUT SequenceTabsData (the fallback path this test
+-- exists for): project.xml has <TimelineVec/> empty, TimelineHandleVec
+-- populated, CurrentTimelineIndex=0. The active timeline must still resolve.
+-- The WITH-SequenceTabsData case (anamnesis joe edit.drp) is covered by
+-- test_drp_anamnesis_full Phase 7, which parses that 41MB fixture once.
 assert_post_import_invariants(
     test_env.require_fixture("tests/fixtures/resolve/anamnesis-gold-timeline.drp"),
     "/tmp/jve/test_drp_active_timeline_gold.jvp")
-
--- Case 2: older fixture — DRP saved WITH SequenceTabsData (3 tabs, 1 active).
--- Must still pass after the refactor (no regression against the working path).
-assert_post_import_invariants(
-    test_env.require_fixture("tests/fixtures/resolve/anamnesis joe edit.drp"),
-    "/tmp/jve/test_drp_active_timeline_joe.jvp")
 
 print("✅ test_drp_active_timeline_restored.lua passed")

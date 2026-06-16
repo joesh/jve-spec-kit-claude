@@ -63,8 +63,13 @@ function M.install(Sequence)
 ---   opts:
 ---     id                  — optional sequence id (deterministic for replay).
 ---     bin_id              — optional bin to add the master to.
----     sample_rate         — required when media.audio_sample_rate is missing
----                           AND the media has audio (rule 2.13: no fallback).
+---     sample_rate         — the PROJECT DEFAULT audio rate. Used only as a
+---                           fallback when the media has audio but no recorded
+---                           rate of its own (offline media the importer can't
+---                           probe). A known media.audio_sample_rate always
+---                           wins. Required when the media has audio and no own
+---                           rate; the factory asserts loud if neither is
+---                           available (rule 1.14 — no silent default).
 ---     video_track_id      — optional pre-chosen V track id.
 ---     video_media_ref_id  — optional pre-chosen V media_ref id (replay).
 ---     audio_track_ids     — optional list, indexed by channel (1-based).
@@ -110,10 +115,20 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 tostring(media_id), tostring(media.name))
         end
 
-        local sample_rate = opts.sample_rate
-            or (has_audio and media.audio_sample_rate or nil)
+        -- Sample-rate precedence: the media's OWN recorded rate wins when
+        -- known (>0) — a 96kHz field recording must never be re-clocked to
+        -- the project default. opts.sample_rate (the project's default audio
+        -- rate) is the fallback for OFFLINE media whose project file gave
+        -- audio_channels but no rate: the importer can't probe (importers must
+        -- not probe), so the project default stands in until relink probes the
+        -- real file and replaces it. The assert still fires loud when NEITHER
+        -- a media rate nor a project default is available (rule 1.14).
+        local media_rate = has_audio and media.audio_sample_rate or nil
+        local sample_rate = (media_rate and media_rate > 0 and media_rate)
+            or opts.sample_rate
         assert(not has_audio or (sample_rate and sample_rate > 0), string.format(
-            "Sequence.ensure_master: media %s has audio but no sample_rate "
+            "Sequence.ensure_master: media %s has audio but no sample_rate and "
+            .. "no project default supplied "
             .. "(audio_channels=%s, audio_sample_rate=%s)",
             tostring(media_id), tostring(media.audio_channels),
             tostring(media.audio_sample_rate)))
