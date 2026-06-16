@@ -957,6 +957,9 @@ end
 M.get_source_sequence_fps = function()
     local source_tab = tab_strip:get_source_tab()
     if not source_tab then return nil end
+    -- Empty source tab: nothing loaded ⇒ no source row, no frame-rate.
+    -- Same blank-state contract as TimelineTab:get_marks().
+    if source_tab:is_empty_source() then return nil end
     local Sequence = require("models.sequence")
     local seq = Sequence.load(source_tab.sequence_id)
     return seq and seq.frame_rate
@@ -991,6 +994,9 @@ local function load_ghost_seq_pair()
     local source_tab = tab_strip:get_source_tab()
     local record_tab = tab_strip:get_active_record()
     if not source_tab or not record_tab then return nil end
+    -- Empty source tab: nothing loaded ⇒ no source row to anchor ghost
+    -- math. Same blank-state contract as TimelineTab:get_marks().
+    if source_tab:is_empty_source() then return nil end
     local Sequence = require("models.sequence")
     local src_seq = Sequence.load(source_tab.sequence_id)
     local rec_seq = Sequence.load(record_tab.sequence_id)
