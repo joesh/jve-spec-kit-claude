@@ -1262,6 +1262,19 @@ end
 
 function M.render(view)
     if not view.widget then return end
+
+    -- Blank body (no displayed tab): clear to the empty background and stop.
+    -- build_render_ctx asserts on the nil viewport (the getters return nil
+    -- for "blank panel"), so a repaint after the body is blanked (e.g. the
+    -- ` toggle with no source loaded) would crash every single_shot_timer
+    -- tick (TSO 2026-06-15). Mirrors the ruler's blank-body guard. Clearing
+    -- first ensures stale clips don't linger on the blanked timeline.
+    if view.state.get_viewport_start_time() == nil then
+        timeline.clear_commands(view.widget)
+        timeline.update(view.widget)
+        return
+    end
+
     local ctx = build_render_ctx(view)
     if not ctx then return end
 

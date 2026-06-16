@@ -167,4 +167,24 @@ assert(ok_press, string.format(
     tostring(press_err)))
 print("  \u{2713} mouse press on blank body is an inert no-op")
 
+-- -------------------------------------------------------------------------
+-- Path 4: the timeline clip-area renderer must repaint a blank body without
+-- asserting. Its build_render_ctx asserts on the nil viewport
+-- (timeline_view_renderer.lua: "viewport_start_time is nil"). This was
+-- masked while the ruler asserted first; once the ruler bails cleanly the
+-- view renderer's single_shot_timer repaint surfaces the same crash
+-- (TSO 2026-06-15, second pass). Reuses the Path-2 `timeline` binding stub.
+-- -------------------------------------------------------------------------
+local view_renderer = require("ui.timeline.view.timeline_view_renderer")
+local view2 = {
+    widget   = {_widget = true},
+    state    = timeline_state,
+    debug_id = "test_blank_view",  -- non-nil so the crash is the real one (nil viewport)
+}
+local ok_view, view_err = pcall(view_renderer.render, view2)
+assert(ok_view, string.format(
+    "timeline_view_renderer.render must repaint a blank body without asserting: %s",
+    tostring(view_err)))
+print("  \u{2713} clip-area view renderer repaints blank body without asserting")
+
 print("\n\u{2705} test_blank_body_tolerates_surface_and_ruler.lua passed")
