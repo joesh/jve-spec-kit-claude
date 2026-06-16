@@ -350,6 +350,7 @@ function M.post_open_init(project, sequence, project_path)
     local timeline_panel = ui_state.get_timeline_panel()
     local database = require("core.database")
     local panel_manager = require("ui.panel_manager")
+    local ui_constants = require("core.ui_constants")
 
     -- Snapshot outgoing project's full layout before switching
     local layout_snapshot = nil
@@ -361,7 +362,7 @@ function M.post_open_init(project, sequence, project_path)
     local outgoing_geometry = nil
     if main_window and qt_constants.PROPERTIES.GET_GEOMETRY then
         local x, y, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(main_window)
-        if w > 100 and h > 100 then
+        if w > ui_constants.WINDOW.MIN_VALID_DIMENSION and h > ui_constants.WINDOW.MIN_VALID_DIMENSION then
             outgoing_geometry = { x = x, y = y, width = w, height = h }
         end
     end
@@ -383,21 +384,26 @@ function M.post_open_init(project, sequence, project_path)
     -- Get UI references
     local project_browser = ui_state.get_project_browser()
 
-    -- Restore layout: use new project's saved state, or inherit from outgoing
+    -- Restore layout: use new project's saved state, or inherit from outgoing.
+    -- restore_or_default validates against the panel topology and falls back to
+    -- defaults for missing/degenerate records — the single restore contract
+    -- shared with startup (ui/layout.lua). Persist whatever was applied so the
+    -- new project owns its layout (inherited, or defaults when none existed).
     local new_project_id = project_id
-    local saved_splitters = database.get_project_setting(new_project_id, "splitter_sizes")
+    local saved_splitters = database.get_project_setting(new_project_id, ui_constants.WINDOW.SPLITTER_SIZES_SETTING_KEY)
     if not saved_splitters and outgoing_splitter_sizes then
-        -- New project has no layout → inherit from outgoing and persist
-        database.set_project_setting(new_project_id, "splitter_sizes", outgoing_splitter_sizes)
-        saved_splitters = outgoing_splitter_sizes
+        saved_splitters = outgoing_splitter_sizes  -- new project inherits the outgoing layout
     end
-    if saved_splitters then
-        panel_manager.restore_sizes(saved_splitters)
+    -- nil when the UI isn't bootstrapped (out-of-band socket open / headless
+    -- --test): nothing applied, nothing to persist.
+    local applied_splitters = panel_manager.restore_or_default(saved_splitters)
+    if applied_splitters then
+        database.set_project_setting(new_project_id, ui_constants.WINDOW.SPLITTER_SIZES_SETTING_KEY, applied_splitters)
     end
 
-    local saved_geo = database.get_project_setting(new_project_id, "window_geometry")
+    local saved_geo = database.get_project_setting(new_project_id, ui_constants.WINDOW.GEOMETRY_SETTING_KEY)
     if not saved_geo and outgoing_geometry then
-        database.set_project_setting(new_project_id, "window_geometry", outgoing_geometry)
+        database.set_project_setting(new_project_id, ui_constants.WINDOW.GEOMETRY_SETTING_KEY, outgoing_geometry)
     end
 
     -- Load timeline only when a sequence is active. With no sequence, the

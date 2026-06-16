@@ -207,10 +207,12 @@ end
 
 local TRACK_HEIGHT_TEMPLATE_KEY = "track_height_template"
 
+local MIN_TRACK_HEIGHT = ui_constants.TIMELINE.MIN_TRACK_HEIGHT
+
 local function clamp_track_height(height)
     if type(height) ~= "number" then return nil end
     local clamped = math.floor(height)
-    if clamped < 24 then clamped = 24 end
+    if clamped < MIN_TRACK_HEIGHT then clamped = MIN_TRACK_HEIGHT end
     return clamped
 end
 

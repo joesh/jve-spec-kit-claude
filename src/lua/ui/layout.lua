@@ -12,9 +12,11 @@ local project_open = require("core.project_open")
 local dkjson = require("dkjson")
 local Signals = require("core.signals")
 
--- Project settings keys for window state persistence
-local WINDOW_GEOMETRY_KEY = "window_geometry"
-local SPLITTER_SIZES_KEY = "splitter_sizes"
+-- Project settings keys for window state persistence (single source of
+-- truth in ui_constants; open_project.lua reads the same keys).
+local WINDOW_GEOMETRY_KEY = ui_constants.WINDOW.GEOMETRY_SETTING_KEY
+local SPLITTER_SIZES_KEY = ui_constants.WINDOW.SPLITTER_SIZES_SETTING_KEY
+local panel_layout = require("ui.panel_layout")
 
 -- Enable strict nil error handling - calling nil will raise an error with proper stack trace
 debug.setmetatable(nil, {
@@ -365,8 +367,10 @@ end
 
 -- Window geometry: restore saved or use defaults
 -- Note: Don't persist on first launch - geometry isn't valid until after show()
+local MIN_VALID_DIMENSION = ui_constants.WINDOW.MIN_VALID_DIMENSION
 local saved_geo = db_module.get_project_setting(active_project_id, WINDOW_GEOMETRY_KEY)
-if saved_geo and saved_geo.width and saved_geo.width > 100 and saved_geo.height and saved_geo.height > 100 then
+if saved_geo and saved_geo.width and saved_geo.width > MIN_VALID_DIMENSION
+    and saved_geo.height and saved_geo.height > MIN_VALID_DIMENSION then
     -- Restore saved geometry (with sanity check on dimensions)
     qt_constants.PROPERTIES.SET_GEOMETRY(main_window,
         saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
@@ -374,8 +378,10 @@ if saved_geo and saved_geo.width and saved_geo.width > 100 and saved_geo.height 
         saved_geo.x, saved_geo.y, saved_geo.width, saved_geo.height)
 else
     -- First launch or corrupt data: just set size, let OS position window
-    qt_constants.PROPERTIES.SET_SIZE(main_window, 1600, 900)
-    log.event("Window geometry set to default size 1600x900")
+    qt_constants.PROPERTIES.SET_SIZE(main_window,
+        ui_constants.WINDOW.DEFAULT_WIDTH, ui_constants.WINDOW.DEFAULT_HEIGHT)
+    log.event("Window geometry set to default size %dx%d",
+        ui_constants.WINDOW.DEFAULT_WIDTH, ui_constants.WINDOW.DEFAULT_HEIGHT)
 end
 
 -- Flag to prevent saving during initial layout (before window is fully shown)
@@ -532,11 +538,22 @@ focus_manager.register_panel("timeline", timeline_panel, nil, "Timeline", {
 -- Initialize all panels to unfocused state
 focus_manager.initialize_all_panels()
 
--- Add four panels to top splitter
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, project_browser)
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, source_monitor:get_widget())
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, timeline_monitor:get_widget())
-qt_constants.LAYOUT.ADD_WIDGET(top_splitter, inspector_panel)
+-- Add the top panels in panel_layout's declared order. The widget-to-id map
+-- and panel_layout.TOP_PANELS are the two halves of one contract: the splitter
+-- child order MUST match the topology panel_manager indexes against. Driving
+-- the add loop from panel_layout (rather than a hand-ordered call list) keeps
+-- them from silently desyncing.
+local top_widgets_by_id = {
+    project_browser  = project_browser,
+    source_monitor   = source_monitor:get_widget(),
+    timeline_monitor = timeline_monitor:get_widget(),
+    inspector        = inspector_panel,
+}
+for _, panel in ipairs(panel_layout.TOP_PANELS) do
+    local widget = assert(top_widgets_by_id[panel.id],
+        "layout: no widget for declared top panel '" .. panel.id .. "'")
+    qt_constants.LAYOUT.ADD_WIDGET(top_splitter, widget)
+end
 
 -- Add top row and timeline to main splitter
 qt_constants.LAYOUT.ADD_WIDGET(main_splitter, top_splitter)
@@ -687,7 +704,7 @@ local function save_window_state()
 
     local x, y, w, h = qt_constants.PROPERTIES.GET_GEOMETRY(main_window)
     -- Sanity check: don't save invalid geometry
-    if w < 100 or h < 100 then return end
+    if w < MIN_VALID_DIMENSION or h < MIN_VALID_DIMENSION then return end
 
     db_module.set_project_setting(active_project_id, WINDOW_GEOMETRY_KEY, {
         x = x, y = y, width = w, height = h
@@ -725,61 +742,23 @@ if ws_handle then
     log.event("Welcome screen destroyed (main window visible)")
 end
 
--- Restore splitter sizes AFTER window is shown (Qt needs layout to be computed first)
--- Use a short timer to let the layout settle before applying saved sizes
+-- Restore splitter sizes AFTER window is shown (Qt needs layout computed
+-- first). Deferred by a short timer so Qt has settled the initial layout
+-- before we apply saved sizes. restore_or_default validates the saved record
+-- against the panel topology and falls back to defaults for missing/corrupt/
+-- degenerate data — the single restore contract shared with project switch
+-- (core/commands/open_project.lua). No 3→4 migration: a stale record from an
+-- earlier panel count fails validation and resets to defaults (rule 2.15).
 local saved_splitters = db_module.get_project_setting(active_project_id, SPLITTER_SIZES_KEY)
-qt_create_single_shot_timer(50, function()
-    -- Migrate saved 3-panel top splitter to 4-panel
-    if saved_splitters and saved_splitters.top and #saved_splitters.top == 3 then
-        local old = saved_splitters.top
-        -- Split old viewer (index 2) evenly into source_monitor + timeline_monitor
-        local half = math.floor(old[2] / 2)
-        saved_splitters.top = {old[1], half, old[2] - half, old[3]}
-        log.event("Migrated 3-panel splitter to 4-panel")
-    end
-
-    -- Validate saved sizes: discard if structure wrong or any panel collapsed below minimum
-    local MIN_PANEL_PX = 50
-    local usable = saved_splitters
-    if usable then
-        if not usable.top or #usable.top ~= 4 or not usable.main or #usable.main ~= 2 then
-            log.warn("Discarding corrupt splitter sizes: %s", dkjson.encode(usable))
-            usable = nil
-        else
-            for _, sz in ipairs(usable.top) do
-                if sz < MIN_PANEL_PX then
-                    log.warn("Discarding degenerate splitter sizes (top panel < %dpx): %s",
-                        MIN_PANEL_PX, dkjson.encode(usable.top))
-                    usable = nil
-                    break
-                end
-            end
+qt_create_single_shot_timer(ui_constants.WINDOW.SPLITTER_RESTORE_DELAY_MS, function()
+    local applied, defaulted = panel_manager.restore_or_default(saved_splitters)
+    if applied then
+        if defaulted then
+            db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, applied)
         end
-        if usable then
-            for _, sz in ipairs(usable.main) do
-                if sz < MIN_PANEL_PX then
-                    log.warn("Discarding degenerate splitter sizes (main panel < %dpx): %s",
-                        MIN_PANEL_PX, dkjson.encode(usable.main))
-                    usable = nil
-                    break
-                end
-            end
-        end
-    end
-
-    if usable then
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, usable.top)
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, usable.main)
-        log.event("Splitter sizes restored: top=%s, main=%s",
-            dkjson.encode(usable.top), dkjson.encode(usable.main))
-    else
-        -- First launch or corrupt/degenerate data: apply defaults and persist
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(top_splitter, {350, 350, 350, 350})
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(main_splitter, {450, 450})
-        db_module.set_project_setting(active_project_id, SPLITTER_SIZES_KEY, {
-            top = {350, 350, 350, 350}, main = {450, 450}
-        })
-        log.event("Splitter sizes initialized to defaults")
+        log.event("Splitter sizes %s: top=%s main=%s",
+            defaulted and "defaulted" or "restored",
+            dkjson.encode(applied.top), dkjson.encode(applied.main))
     end
 
     -- Tab restoration now happens synchronously before window SHOW — see

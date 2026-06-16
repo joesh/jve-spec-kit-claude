@@ -21,7 +21,8 @@ local SPEC = {
 }
 
 function M.register(command_executors, command_undoers, db, set_last_error)
-    local MIN_TRACK_HEIGHT = 24
+    local MIN_TRACK_HEIGHT = assert(ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.MIN_TRACK_HEIGHT,
+        "CreateSequence: ui_constants.TIMELINE.MIN_TRACK_HEIGHT not defined")
     local DEFAULT_TRACK_HEIGHT = assert(ui_constants and ui_constants.TIMELINE and ui_constants.TIMELINE.TRACK_HEIGHT,
         "CreateSequence: ui_constants.TIMELINE.TRACK_HEIGHT not defined")
     local TRACK_TEMPLATE_KEY = "track_height_template"
@@ -44,8 +45,20 @@ function M.register(command_executors, command_undoers, db, set_last_error)
         assert(type(database.get_project_setting) == "function",
             "CreateSequence: database.get_project_setting missing — required API")
         local template = database.get_project_setting(project_id, TRACK_TEMPLATE_KEY)
-        local template_video = type(template) == "table" and template.video or {}
-        local template_audio = type(template) == "table" and template.audio or {}
+        -- nil = no template yet (first sequence in a fresh project) → all defaults.
+        -- A present template MUST carry both arrays (the writer always emits
+        -- { video = {...}, audio = {...} }); a non-nil table missing them is
+        -- corruption — assert rather than silently degrade to all-default heights.
+        local template_video, template_audio
+        if template == nil then
+            template_video, template_audio = {}, {}
+        else
+            assert(type(template) == "table"
+                and type(template.video) == "table"
+                and type(template.audio) == "table",
+                "CreateSequence: malformed track_height_template — expected { video = {...}, audio = {...} }")
+            template_video, template_audio = template.video, template.audio
+        end
 
         local definitions = {
             {builder = Track.create_video, label = "V1", index = 1, kind = "video"},

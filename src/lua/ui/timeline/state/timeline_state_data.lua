@@ -76,7 +76,6 @@ M.state = fresh_state()
 -- Dimensions (shared)
 M.dimensions = {
     default_track_height = ui_constants.TIMELINE.TRACK_HEIGHT or 50,
-    track_height = ui_constants.TIMELINE.TRACK_HEIGHT or 50,
     track_header_width = ui_constants.TIMELINE.TRACK_HEADER_WIDTH or 240,
     ruler_height = ui_constants.TIMELINE.RULER_HEIGHT or 32,
 }

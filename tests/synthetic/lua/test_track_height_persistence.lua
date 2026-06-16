@@ -88,14 +88,16 @@ local seq_a_a2 = track_id("seq_a", "AUDIO", 2)
 timeline_state.set_track_height(seq_a_v1, 96)
 timeline_state.set_track_height(seq_a_v2, 64)
 timeline_state.set_track_height(seq_a_a1, 40)
-timeline_state.set_track_height(seq_a_a2, 28)
+-- 30 == the unified floor (ui_constants.TIMELINE.MIN_TRACK_HEIGHT): a value
+-- exactly at the minimum must persist verbatim, NOT be bumped by the clamp.
+timeline_state.set_track_height(seq_a_a2, 30)
 timeline_state.persist_state_to_db(true)
 
 timeline_state.init("seq_a")
 assert_equal(timeline_state.get_track_height(seq_a_v1), 96, "persisted V1 height")
 assert_equal(timeline_state.get_track_height(seq_a_v2), 64, "persisted V2 height")
 assert_equal(timeline_state.get_track_height(seq_a_a1), 40, "persisted A1 height")
-assert_equal(timeline_state.get_track_height(seq_a_a2), 28, "persisted A2 height")
+assert_equal(timeline_state.get_track_height(seq_a_a2), 30, "persisted A2 height")
 
 -- Create Sequence B after customizing template
 local create_cmd = Command.create("CreateSequence", "default_project")
@@ -120,7 +122,7 @@ local seq_b_a2 = track_id(seq_b, "AUDIO", 2)
 assert_equal(timeline_state.get_track_height(seq_b_v1), 96, "template V1")
 assert_equal(timeline_state.get_track_height(seq_b_v2), 64, "template V2")
 assert_equal(timeline_state.get_track_height(seq_b_a1), 40, "template A1")
-assert_equal(timeline_state.get_track_height(seq_b_a2), 28, "template A2")
+assert_equal(timeline_state.get_track_height(seq_b_a2), 30, "template A2")
 
 -- Sequence B persistence should now be independent
 timeline_state.set_track_height(seq_b_v1, 82)

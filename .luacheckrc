@@ -90,6 +90,7 @@ globals = {
     "qt_set_focus_handler",
     "qt_set_focus_policy",
     "qt_set_splitter_moved_handler",
+    "qt_set_splitter_drag_handler",
     "qt_set_scroll_area_v_scroll_handler",
     "qt_hide_splitter_handle",
     "qt_set_scroll_area_anchor_bottom",

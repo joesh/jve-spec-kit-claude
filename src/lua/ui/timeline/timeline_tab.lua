@@ -262,7 +262,8 @@ local function apply_persisted_track_heights(tracks, sequence_id)
                 "TimelineTab:load_from_database: track %s height must be a number",
                 tostring(t.id)))
             local clamped = math.floor(h)
-            if clamped < 24 then clamped = 24 end
+            local min_h = require("core.ui_constants").TIMELINE.MIN_TRACK_HEIGHT
+            if clamped < min_h then clamped = min_h end
             t.height = clamped
         else
             t.height = default_h

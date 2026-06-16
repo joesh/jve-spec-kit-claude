@@ -1208,6 +1208,54 @@ int lua_set_splitter_moved_handler(lua_State* L) {
     return 0;
 }
 
+// User-intent filter for a splitter handle: fires the Lua handler only on a
+// genuine left-button release ON THE HANDLE (the end of a user drag/click).
+// Qt's splitterMoved signal also fires during programmatic setSizes and parent
+// relayout, so it cannot distinguish a user adjusting the boundary from the
+// layout settling — persisting model state from it corrupts the value. A
+// handle mouse-release is real user intent, the same reasoning behind using a
+// scrollbar's actionTriggered instead of valueChanged for scroll persistence.
+class SplitterDragEndFilter : public QObject {
+public:
+    SplitterDragEndFilter(const std::string& handler, lua_State* L_ptr, QObject* parent = nullptr)
+        : QObject(parent), handler_name(handler), lua_state(L_ptr) {}
+
+protected:
+    bool eventFilter(QObject* obj, QEvent* event) override {
+        if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent* me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                LuaHandlerCaller cb(lua_state, handler_name.c_str(), "signal.splitter_drag_end");
+                if (cb.ready()) cb.invoke(0);
+            }
+        }
+        return QObject::eventFilter(obj, event);
+    }
+
+private:
+    std::string handler_name;
+    lua_State* lua_state;
+};
+
+// Install a user-drag-end handler on every handle of a splitter. The Lua
+// handler is called (no args) when the user finishes dragging the boundary;
+// it reads the current sizes and writes the model. Mirrors the user-intent
+// capture the timeline's video/audio split needs (vs the layout-polluted
+// splitterMoved). Handles are created when child widgets are added, so call
+// this AFTER both panes are in the splitter.
+int lua_set_splitter_drag_handler(lua_State* L) {
+    QSplitter* splitter = get_widget<QSplitter>(L, 1);
+    const char* handler_name = lua_tostring(L, 2);
+    if (!splitter || !handler_name) return 0;
+
+    SplitterDragEndFilter* filter = new SplitterDragEndFilter(handler_name, L, splitter);
+    for (int i = 1; i < splitter->count(); ++i) {
+        QSplitterHandle* handle = splitter->handle(i);
+        if (handle) handle->installEventFilter(filter);
+    }
+    return 0;
+}
+
 // Scroll area vertical USER-scroll handler. Connects actionTriggered,
 // which Qt emits ONLY for user interaction with the scrollbar (drags,
 // page clicks, arrow steps) — never for programmatic setValue or layout

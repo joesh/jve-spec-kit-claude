@@ -7,11 +7,14 @@
 ---
 --- No Qt deps. No state. Pure functions over the row-sizing constants.
 
+local ui_constants = require("core.ui_constants")
+
 local M = {}
 
 -- Minimum height for any track row. Drag handler enforces this at the
--- input boundary; helpers below assert it as a precondition.
-M.MIN_TRACK_HEIGHT = 30
+-- input boundary; helpers below assert it as a precondition. Single source
+-- of truth lives in ui_constants (shared with the load/persist path).
+M.MIN_TRACK_HEIGHT = ui_constants.TIMELINE.MIN_TRACK_HEIGHT
 
 -- Header column layout: each track header is
 --   [ header widget ][ RESIZE_EDGE_PX-tall drag edge widget ]

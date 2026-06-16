@@ -195,6 +195,8 @@ for t in \
   test_timeline_edit_navigation.lua \
   test_go_to_edit_surfaces_playhead.lua \
   test_panel_maximize.lua \
+  test_video_audio_split_projection.lua \
+  test_track_header_lane_alignment.lua \
   test_focus_manager.lua \
   test_media_status_bg_probe.lua \
   test_media_status_codec_error_persistence.lua \

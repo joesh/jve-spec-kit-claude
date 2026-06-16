@@ -2,6 +2,8 @@
 --
 -- @file panel_manager.lua
 local qt_constants = require("core.qt_constants")
+local ui_constants = require("core.ui_constants")
+local panel_layout = require("ui.panel_layout")
 local log = require("core.logger").for_area("ui")
 
 local M = {}
@@ -16,13 +18,6 @@ local state = {
 -- SequenceMonitor registry: { [view_id] = SequenceMonitor instance }
 local sequence_monitors = {}
 
-local PANEL_INDEX = {
-    project_browser = 1,
-    source_monitor = 2,
-    timeline_monitor = 3,
-    inspector = 4,
-}
-
 local function get_splitter_sizes(splitter)
     if not splitter or not qt_constants.LAYOUT or not qt_constants.LAYOUT.GET_SPLITTER_SIZES then
         return nil
@@ -33,9 +28,12 @@ local function get_splitter_sizes(splitter)
 end
 
 local function set_splitter_sizes(splitter, sizes)
-    if splitter and sizes then
-        qt_constants.LAYOUT.SET_SPLITTER_SIZES(splitter, sizes)
-    end
+    -- Both are required: every caller (maximize/restore) computes a concrete
+    -- splitter handle + size vector. A nil here is a bootstrap-order bug, not
+    -- an optional-arg case — surface it instead of silently skipping the apply.
+    assert(splitter, "panel_manager.set_splitter_sizes: splitter required")
+    assert(sizes, "panel_manager.set_splitter_sizes: sizes required")
+    qt_constants.LAYOUT.SET_SPLITTER_SIZES(splitter, sizes)
 end
 
 local function focused_panel(panel_id)
@@ -60,7 +58,7 @@ local function maximize_top_panel(panel_id)
         return false, "Splitters not initialized"
     end
 
-    local panel_index = PANEL_INDEX[panel_id]
+    local panel_index = panel_layout.top_index(panel_id)
     if not panel_index then
         return false, string.format("Unknown panel '%s'", tostring(panel_id))
     end
@@ -117,12 +115,10 @@ end
 local function restore_layout()
     if not state.maximized then return false end
 
-    if state.maximized.main_sizes then
-        set_splitter_sizes(state.main_splitter, state.maximized.main_sizes)
-    end
-    if state.maximized.top_sizes then
-        set_splitter_sizes(state.top_splitter, state.maximized.top_sizes)
-    end
+    -- maximize_top_panel / maximize_timeline always snapshot BOTH vectors, so
+    -- both are present here by construction; set_splitter_sizes asserts if not.
+    set_splitter_sizes(state.main_splitter, state.maximized.main_sizes)
+    set_splitter_sizes(state.top_splitter, state.maximized.top_sizes)
 
     state.maximized = nil
     return true
@@ -139,8 +135,9 @@ end
 -- post_open_init already gate on this returning nil. Matches the
 -- `if timeline_panel and ...` pattern used elsewhere in this snapshot
 -- phase; a query for non-existent state should return nil, not assert.
--- `restore_sizes` keeps its assert: that one is a precondition-bearing
--- command (caller passes data to apply), not a snapshot query.
+-- `restore_or_default` follows the same rule: it also no-ops (returns nil)
+-- when the UI isn't bootstrapped, since OpenProject can run before the
+-- splitters are wired (out-of-band socket open / headless --test).
 function M.get_persistable_sizes()
     if not state.main_splitter then return nil end
     if state.maximized then
@@ -155,15 +152,38 @@ function M.get_persistable_sizes()
     }
 end
 
---- Restore splitter sizes from saved state.
-function M.restore_sizes(sizes)
-    assert(state.main_splitter, "panel_manager.restore_sizes: not initialized")
-    if sizes.top and #sizes.top >= 2 then
-        set_splitter_sizes(state.top_splitter, sizes.top)
+--- Apply saved splitter sizes if they validate against the panel topology
+-- and are non-degenerate; otherwise apply the topology defaults. This is the
+-- single restore contract for BOTH startup (ui/layout.lua) and project switch
+-- (core/commands/open_project.lua) — the two previously had divergent
+-- validation (one checked counts + minimum width, the other accepted any
+-- vector of length >= 2, letting degenerate sizes collapse panels on switch).
+-- Returns nil when the UI isn't bootstrapped yet (an out-of-band OpenProject
+-- via the debug-terminal socket, or a headless --test that opens a project
+-- without wiring the splitters). That's a no-op, not an error — same contract
+-- as get_persistable_sizes returning nil; the caller skips persistence.
+-- @return applied table|nil  the sizes actually applied (saved or defaults), or nil if not bootstrapped
+-- @return defaulted boolean  true when saved was rejected and defaults used
+function M.restore_or_default(saved_sizes)
+    if not state.main_splitter then return nil end
+
+    local ok, why = panel_layout.validate_sizes(saved_sizes, ui_constants.WINDOW.MIN_PANEL_PX)
+    if ok then
+        set_splitter_sizes(state.top_splitter, saved_sizes.top)
+        set_splitter_sizes(state.main_splitter, saved_sizes.main)
+        return saved_sizes, false
     end
-    if sizes.main and #sizes.main >= 2 then
-        set_splitter_sizes(state.main_splitter, sizes.main)
+
+    if saved_sizes ~= nil then
+        log.warn("Discarding invalid splitter sizes (%s); applying defaults", tostring(why))
     end
+    local defaults = {
+        top = panel_layout.default_top_sizes(),
+        main = panel_layout.default_main_sizes(),
+    }
+    set_splitter_sizes(state.top_splitter, defaults.top)
+    set_splitter_sizes(state.main_splitter, defaults.main)
+    return defaults, true
 end
 
 function M.toggle_maximize(panel_id)
@@ -188,10 +208,6 @@ function M.toggle_maximize(panel_id)
     else
         return maximize_top_panel(target_panel)
     end
-end
-
-function M.toggle_active_panel()
-    return M.toggle_maximize(nil)
 end
 
 --------------------------------------------------------------------------------

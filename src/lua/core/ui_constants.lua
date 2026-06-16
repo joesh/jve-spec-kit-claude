@@ -154,6 +154,20 @@ ui_constants.LAYOUT = {
     HEADER_ELEMENT_SPACING = 4  -- Horizontal spacing between dot, triangle, and text
 }
 
+-- Main window geometry + panel-splitter persistence. Per-panel default
+-- sizes live in ui/panel_layout.lua (derived from the panel topology); the
+-- constants here are window-level and the project-setting key names used by
+-- ui/layout.lua and core/commands/open_project.lua.
+ui_constants.WINDOW = {
+    DEFAULT_WIDTH = 1600,           -- first-launch window width in pixels
+    DEFAULT_HEIGHT = 900,           -- first-launch window height in pixels
+    MIN_VALID_DIMENSION = 100,      -- geometry with width/height below this (px) is treated as invalid and ignored
+    MIN_PANEL_PX = 50,              -- a persisted panel narrower than this is degenerate → fall back to defaults
+    SPLITTER_RESTORE_DELAY_MS = 50, -- let Qt compute the initial layout before applying saved splitter sizes
+    GEOMETRY_SETTING_KEY = "window_geometry",
+    SPLITTER_SIZES_SETTING_KEY = "splitter_sizes",
+}
+
 -- =============================================================================
 -- QT STYLE STRINGS
 -- =============================================================================
@@ -300,6 +314,12 @@ ui_constants.TIMELINE = {
     ZOOM_TO_FIT_PADDING = 0.05,  -- 5% padding for zoom to fit operations
     RULER_HEIGHT = 30,           -- Height reserved for timeline ruler in pixels
     TRACK_HEIGHT = 50,           -- Default height for new tracks in pixels
+    -- Single floor for any track row, enforced everywhere: the interactive
+    -- drag handler (chosen for grab-handle ergonomics) AND the load/persist
+    -- path treat this as the minimum legal height. Heights below it (stale or
+    -- corrupt records) are normalized up. timeline_panel_metrics re-exports
+    -- this as M.MIN_TRACK_HEIGHT — one source of truth.
+    MIN_TRACK_HEIGHT = 30,
     TRACK_HEADER_WIDTH = 220,    -- Default width of track header labels in pixels
     TRACK_HEADER_MIN_DRAG_WIDTH = 80, -- Narrowest the header column can be dragged
     DRAG_THRESHOLD = 5,          -- Pixels of movement before starting drag operation

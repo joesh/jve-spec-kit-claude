@@ -1622,6 +1622,15 @@ end
 --                  label_text, header_widget, base_header_color } }
 local track_button_refs = {}
 
+--- The Qt header-row widget for a track, or nil if no header is built for
+-- it (blank panel / track not in the displayed tab). Exposed so geometry
+-- tests can compare a track header's on-screen position against its clip
+-- lane — the two must coincide at the video/audio midline.
+function M.track_header_widget(track_id)
+    local refs = track_button_refs[track_id]
+    return refs and refs.header_widget or nil
+end
+
 local function refresh_track_button_styles()
     for track_id, refs in pairs(track_button_refs) do
         local t = Track.load(track_id)
@@ -2252,6 +2261,21 @@ local function create_headers_column()
     -- Add splitter to wrapper layout
     qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, headers_main_splitter)
     qt_set_layout_stretch_factor(headers_wrapper_layout, headers_main_splitter, 1)
+
+    -- Reserve the same bottom height the lanes column gives the horizontal
+    -- zoom scroller (h_scroll_row). The headers column has no scroller, so
+    -- without this spacer its splitter region would be taller than the lanes
+    -- splitter region by SCROLLER_HEIGHT. Both splitters start at the same Y
+    -- (tc_header / ruler are both RULER_HEIGHT); giving them the same total
+    -- height makes the two columns share one vertical coordinate space, so an
+    -- equal video/audio ratio lands the midline at the SAME screen Y in both —
+    -- the V1 header bottom aligns with the V1 clip lane. (Mirrors the
+    -- ruler_gutter spacer that reconciles the columns horizontally.)
+    local bottom_gutter = qt_constants.WIDGET.CREATE()
+    qt_constants.CONTROL.SET_WIDGET_SIZE_POLICY(bottom_gutter, "Expanding", "Fixed")
+    qt_constants.PROPERTIES.SET_MIN_HEIGHT(bottom_gutter, timeline_zoom_scroller.SCROLLER_HEIGHT)
+    qt_constants.PROPERTIES.SET_MAX_HEIGHT(bottom_gutter, timeline_zoom_scroller.SCROLLER_HEIGHT)
+    qt_constants.LAYOUT.ADD_WIDGET(headers_wrapper_layout, bottom_gutter)
 
     -- Set layout on wrapper
     qt_constants.LAYOUT.SET_ON_WIDGET(headers_wrapper, headers_wrapper_layout)
@@ -2933,42 +2957,48 @@ function M.create(opts)
     -- it pins headers_column AND tc_header min==max width directly, so
     -- there's no need for a separate splitter-moved cascade.)
 
-    -- Synchronize the headers splitter with the timeline splitter
-    -- When headers video/audio boundary moves, update timeline
-    local syncing = false  -- Prevent infinite loop
-    _G["headers_splitter_moved"] = function(pos, index)
-        log.event("headers_splitter_moved fired: pos=%d, index=%d", pos, index)
-        if not syncing then
-            syncing = true
-            local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(headers_main_splitter)
-            log.event("  Syncing to timeline: sizes = {%d, %d}", sizes[1], sizes[2])
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(vertical_splitter, sizes)
-            syncing = false
-        end
+    -- The lanes splitter and the headers splitter both show the SAME video/
+    -- audio boundary, so they must move as one. Two concerns, deliberately
+    -- split between two Qt signals:
+    --
+    --   • LIVE view↔view sync (splitterMoved): on every handle move — each
+    --     drag frame AND any relayout that nudges one splitter — mirror the
+    --     mover onto the other so the two columns track in lock-step and never
+    --     drift apart. Pure widget→widget; it does NOT write the model. The
+    --     `syncing` guard swallows the mirror's own echo.
+    --
+    --   • PERSISTENCE (qt_set_splitter_drag_handler → handle mouse-release):
+    --     write the model ONLY on a genuine user drag-release. splitterMoved
+    --     can't be the persist trigger — Qt fires it on programmatic setSizes
+    --     and layout settling too, so persisting there recorded bootstrap
+    --     transients and collapsed the source-tab ratio. A handle release is
+    --     real intent (same reason scroll persists from actionTriggered, not
+    --     valueChanged). The model is then re-projected by apply_video_audio_split
+    --     on rebuild/restore.
+    local syncing = false
+    local function mirror_split(source, other)
+        if syncing then return end
+        syncing = true
+        local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(source)
+        if sizes then qt_constants.LAYOUT.SET_SPLITTER_SIZES(other, sizes) end
+        syncing = false
     end
-    log.event("Registering headers_splitter_moved handler...")
-    qt_set_splitter_moved_handler(headers_main_splitter, "headers_splitter_moved")
-    log.event("  Handler registered")
+    _G["__timeline_headers_split_moved"] = function() mirror_split(headers_main_splitter, vertical_splitter) end
+    _G["__timeline_lanes_split_moved"]   = function() mirror_split(vertical_splitter, headers_main_splitter) end
+    qt_set_splitter_moved_handler(headers_main_splitter, "__timeline_headers_split_moved")
+    qt_set_splitter_moved_handler(vertical_splitter, "__timeline_lanes_split_moved")
 
-    -- When timeline video/audio boundary moves, update headers + persist ratio
-    _G["timeline_splitter_moved"] = function(pos, index)
-        log.event("timeline_splitter_moved fired: pos=%d, index=%d", pos, index)
-        if not syncing then
-            syncing = true
-            local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(vertical_splitter)
-            log.event("  Syncing to headers: sizes = {%d, %d}", sizes[1], sizes[2])
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(headers_main_splitter, sizes)
-            -- Persist split ratio
-            local total = sizes[1] + sizes[2]
-            if total > 0 then
-                state.set_video_audio_split_ratio(sizes[1] / total)
-            end
-            syncing = false
-        end
+    local function persist_split_from(dragged_splitter)
+        local sizes = qt_constants.LAYOUT.GET_SPLITTER_SIZES(dragged_splitter)
+        if not sizes then return end
+        local total = sizes[1] + sizes[2]
+        if total <= 0 then return end
+        state.set_video_audio_split_ratio(sizes[1] / total)
     end
-    log.event("Registering timeline_splitter_moved handler...")
-    qt_set_splitter_moved_handler(vertical_splitter, "timeline_splitter_moved")
-    log.event("  Handler registered")
+    _G["__timeline_headers_split_drag"] = function() persist_split_from(headers_main_splitter) end
+    _G["__timeline_lanes_split_drag"]   = function() persist_split_from(vertical_splitter) end
+    qt_set_splitter_drag_handler(headers_main_splitter, "__timeline_headers_split_drag")
+    qt_set_splitter_drag_handler(vertical_splitter, "__timeline_lanes_split_drag")
 
     -- Synchronize vertical scrolling in pairs (video ↔ video, audio ↔ audio)
     local video_scroll_syncing = false  -- Prevent infinite loop
@@ -3433,9 +3463,10 @@ local function rebuild_for_displayed_tab()
         local new_audio_container = select(1, create_audio_headers())
         qt_constants.CONTROL.SET_SCROLL_AREA_WIDGET(M.header_audio_scroll, new_audio_container)
 
-        if M.headers_main_splitter then
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {1, 1})
-        end
+        -- Re-project the displayed sequence's split ratio onto both splitters.
+        -- (Was a hard {1,1} reset of only the headers splitter — that desynced
+        -- the header rows from the clip lanes whenever the ratio wasn't 0.5.)
+        M.apply_video_audio_split(state.get_video_audio_split_ratio())
 
         -- Both builders have registered every src-btn into src_btn_by_rec.
         -- Run a single render-projection pass to fill labels for whichever
@@ -3568,28 +3599,33 @@ function M.load_sequence(sequence_id)
     rebuild_for_displayed_tab()
 end
 
+--- Project the model's video/audio split ratio onto BOTH splitters.
+-- The per-sequence ratio (sequence.video_audio_split_ratio) is the single
+-- source of truth; the lanes splitter and the headers splitter are views of
+-- it. The same {video_h, audio_h} vector goes to both: Qt scales setSizes to
+-- each splitter's own height, so the RATIO is preserved even if the two
+-- columns differ in total height. No-op until both splitters exist, a ratio
+-- is set (nil when no displayed tab — H1), and Qt has given a height.
+function M.apply_video_audio_split(ratio)
+    if not (ratio and M.vertical_splitter and M.headers_main_splitter) then return end
+    local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
+    if not total then return end
+    local total_height = total[1] + total[2]
+    if total_height <= 0 then return end
+    local video_h = math.floor(total_height * ratio + 0.5)
+    local audio_h = total_height - video_h
+    qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
+    qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
+end
+
 --- Restore scroll offsets and splitter ratio from persisted state.
 -- Called after sequence load and after initial panel creation. Scroll
--- is a pure projection of the model (apply_pane_scroll); the splitter
--- ratio read is per-sequence (H1): nil when no displayed tab — skip
--- rather than write fabricated values to the Qt widget.
+-- is a pure projection of the model (apply_pane_scroll); the split ratio is
+-- likewise projected via apply_video_audio_split.
 function M.restore_scroll_and_splitter()
     M.apply_pane_scroll("video")
     M.apply_pane_scroll("audio")
-    if M.vertical_splitter and M.headers_main_splitter then
-        local ratio = state.get_video_audio_split_ratio()
-        if ratio then
-            log.event("Restoring split ratio: %.3f", ratio)
-            local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
-            local total_height = total[1] + total[2]
-            if total_height > 0 then
-                local video_h = math.floor(total_height * ratio + 0.5)
-                local audio_h = total_height - video_h
-                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
-                qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
-            end
-        end
-    end
+    M.apply_video_audio_split(state.get_video_audio_split_ratio())
 end
 
 --- Snapshot current layout state for inheritance by new projects.
@@ -3617,17 +3653,10 @@ end
 function M.apply_layout_if_default(snapshot)
     if not snapshot then return end
 
-    -- Apply splitter ratio
-    if snapshot.split_ratio and M.vertical_splitter and M.headers_main_splitter then
-        local total = qt_constants.LAYOUT.GET_SPLITTER_SIZES(M.vertical_splitter)
-        local total_height = total[1] + total[2]
-        if total_height > 0 then
-            local video_h = math.floor(total_height * snapshot.split_ratio + 0.5)
-            local audio_h = total_height - video_h
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.vertical_splitter, {video_h, audio_h})
-            qt_constants.LAYOUT.SET_SPLITTER_SIZES(M.headers_main_splitter, {video_h, audio_h})
-            state.set_video_audio_split_ratio(snapshot.split_ratio)
-        end
+    -- Apply splitter ratio: write the model, then project onto both splitters.
+    if snapshot.split_ratio then
+        state.set_video_audio_split_ratio(snapshot.split_ratio)
+        M.apply_video_audio_split(state.get_video_audio_split_ratio())
     end
 
     -- Apply scroll offsets (model write + projection)

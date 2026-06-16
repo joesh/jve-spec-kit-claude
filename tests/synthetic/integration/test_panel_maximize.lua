@@ -162,4 +162,35 @@ for i = 1, 2 do
 end
 print("  PASS live sizes returned")
 
+-- ── (6) restore_or_default: validates saved sizes, falls back to defaults ──
+-- This is the single restore contract shared by startup and project switch.
+-- The regression it guards: a degenerate/stale saved record must NOT be
+-- applied verbatim (that collapses panels), it must reset to defaults.
+print("-- (6) restore_or_default validation --")
+
+-- Well-formed record → applied, not defaulted.
+local applied, defaulted = panel_manager.restore_or_default(
+    { top = {300, 300, 300, 300}, main = {450, 450} })
+assert(not defaulted, "valid sizes should not default")
+assert(#applied.top == 4 and #applied.main == 2, "applied keeps topology shape")
+
+-- Degenerate record (a collapsed panel) → defaults, defaulted=true.
+applied, defaulted = panel_manager.restore_or_default(
+    { top = {880, 0, 0, 0}, main = {450, 450} })
+assert(defaulted, "collapsed-panel record must fall back to defaults")
+for i = 1, 4 do
+    assert(applied.top[i] >= 50, "defaulted top panel is visible; got " .. applied.top[i])
+end
+
+-- Stale 3-panel record (pre-fourth-panel) → defaults (no migration).
+local _, stale_defaulted = panel_manager.restore_or_default(
+    { top = {400, 400, 400}, main = {450, 450} })
+assert(stale_defaulted, "stale 3-panel record must fall back to defaults, not migrate")
+
+-- No saved record at all → defaults.
+applied, defaulted = panel_manager.restore_or_default(nil)
+assert(defaulted, "missing record must fall back to defaults")
+assert(#applied.top == 4 and #applied.main == 2, "default shape matches topology")
+print("  PASS restore_or_default validation")
+
 print("\nPASS test_panel_maximize.lua")

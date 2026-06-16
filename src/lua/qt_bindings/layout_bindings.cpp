@@ -10,29 +10,51 @@ LUA_BIND_WIDGET_CREATOR(lua_create_hbox_layout, QHBoxLayout)
 LUA_BIND_WIDGET_CREATOR(lua_create_vbox_layout, QVBoxLayout)
 
 int lua_create_splitter(lua_State* L) {
-    const char* direction = lua_tostring(L, 1);
-    Qt::Orientation orientation = (direction && strcmp(direction, "vertical") == 0) ? Qt::Vertical : Qt::Horizontal;
+    // Direction is required and closed-set: silently defaulting an unknown
+    // string to Horizontal hid caller typos as "the splitter is sideways".
+    const char* direction = luaL_checkstring(L, 1);
+    Qt::Orientation orientation;
+    if (strcmp(direction, "vertical") == 0) {
+        orientation = Qt::Vertical;
+    } else if (strcmp(direction, "horizontal") == 0) {
+        orientation = Qt::Horizontal;
+    } else {
+        return luaL_error(L,
+            "create_splitter: direction must be 'vertical' or 'horizontal', got '%s'", direction);
+    }
     QSplitter* splitter = new QSplitter(orientation);
     lua_push_widget(L, splitter);
     return 1;
 }
 
+// Set a layout on a widget. Registered under both SET_ON_WIDGET and
+// SET_WIDGET_LAYOUT (group boxes etc.) — one implementation, one contract.
+//
+// Error policy matches set_splitter_sizes / set_contents_margins: a null
+// userdata (QPointer auto-nulled during teardown) is a silent no-op; a
+// non-null arg of the wrong type is binding misuse and raises.
+//
+// QLayout and QWidget both inherit QObject (single inheritance), so the void*
+// from lua_to_widget reinterprets as QObject* without offset adjustment;
+// qobject_cast (via widget_cast) then verifies the runtime type, guarding
+// against a swapped widget/layout pair corrupting setLayout.
 int lua_set_layout(lua_State* L) {
-    // QLayout and QWidget both inherit QObject (single inheritance), so the
-    // void* returned by lua_to_widget can be reinterpreted as QObject* without
-    // offset adjustment. qobject_cast then uses Qt's metaobject system to
-    // verify the actual runtime type — guards against a QWidget userdata
-    // being passed where a QLayout is expected (which previously corrupted
-    // setLayout via an unchecked static_cast).
-    QWidget* widget = widget_cast<QWidget>(lua_to_widget(L, 1));
-    QLayout* layout = widget_cast<QLayout>(lua_to_widget(L, 2));
-
-    if (widget && layout) {
-        widget->setLayout(layout);
-        lua_pushboolean(L, 1);
-    } else {
+    void* widget_ptr = lua_to_widget(L, 1);
+    void* layout_ptr = lua_to_widget(L, 2);
+    if (!widget_ptr || !layout_ptr) {
         lua_pushboolean(L, 0);
+        return 1;
     }
+
+    QWidget* widget = widget_cast<QWidget>(widget_ptr);
+    QLayout* layout = widget_cast<QLayout>(layout_ptr);
+    if (!widget || !layout) {
+        return luaL_error(L,
+            "set_layout: arg 1 must be a QWidget and arg 2 a QLayout");
+    }
+
+    widget->setLayout(layout);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -72,9 +94,12 @@ int lua_add_widget_to_layout(lua_State* L) {
         lua_pushboolean(L, 1);
         return 1;
     }
-    
-    lua_pushboolean(L, 0);
-    return 1;
+
+    // Non-null container that is neither a QSplitter nor a QLayout is binding
+    // misuse, not teardown (the null path returned above) — raise instead of
+    // silently dropping the widget on the floor.
+    return luaL_error(L,
+        "add_widget_to_layout: container is neither a QSplitter nor a QLayout");
 }
 
 int lua_insert_widget_in_layout(lua_State* L) {
@@ -92,34 +117,48 @@ int lua_insert_widget_in_layout(lua_State* L) {
 
 int lua_add_stretch_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
-    int stretch = lua_tointeger(L, 2);
-    
-    if (QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr)) {
-        box->addStretch(stretch);
-        lua_pushboolean(L, 1);
-    } else {
+    // Stretch factor is optional; Qt's QBoxLayout::addStretch defaults to 0.
+    int stretch = luaL_optinteger(L, 2, 0);
+
+    if (!container_ptr) {
         lua_pushboolean(L, 0);
+        return 1;
     }
+    QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr);
+    if (!box) {
+        return luaL_error(L, "add_stretch_to_layout: container is not a QBoxLayout");
+    }
+    box->addStretch(stretch);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
 int lua_set_splitter_sizes(lua_State* L) {
-    QSplitter* splitter = get_widget<QSplitter>(L, 1);
-    if (splitter && lua_istable(L, 2)) {
-        QList<int> sizes;
-        int len = lua_objlen(L, 2);
-        for (int i = 1; i <= len; i++) {
-            lua_rawgeti(L, 2, i);
-            if (lua_isnumber(L, -1)) {
-                sizes.append(lua_tointeger(L, -1));
-            }
-            lua_pop(L, 1);
-        }
-        splitter->setSizes(sizes);
-        lua_pushboolean(L, 1);
-    } else {
+    // Same error policy as set_contents_margins/set_layout_spacing: null
+    // userdata (QPointer auto-nulled during teardown) is a silent no-op;
+    // a non-null wrong-type arg is binding misuse and raises.
+    void* userdata = lua_to_widget(L, 1);
+    if (!userdata) {
         lua_pushboolean(L, 0);
+        return 1;
     }
+    QSplitter* splitter = widget_cast<QSplitter>(userdata);
+    if (!splitter) {
+        return luaL_error(L, "set_splitter_sizes: arg 1 is not a QSplitter");
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    QList<int> sizes;
+    int len = lua_objlen(L, 2);
+    for (int i = 1; i <= len; i++) {
+        lua_rawgeti(L, 2, i);
+        if (lua_isnumber(L, -1)) {
+            sizes.append(lua_tointeger(L, -1));
+        }
+        lua_pop(L, 1);
+    }
+    splitter->setSizes(sizes);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -190,17 +229,24 @@ int lua_set_layout_spacing(lua_State* L) {
 }
 
 int lua_get_splitter_sizes(lua_State* L) {
-    QSplitter* splitter = get_widget<QSplitter>(L, 1);
-    if (splitter) {
-        QList<int> sizes = splitter->sizes();
-        lua_newtable(L);
-        for (int i = 0; i < sizes.size(); ++i) {
-            lua_pushinteger(L, sizes[i]);
-            lua_rawseti(L, -2, i + 1);
-        }
+    // Null userdata (destroyed/teardown) returns nil — panel_manager's
+    // snapshot query intentionally treats nil as "not bootstrapped". A
+    // non-null wrong-type arg is binding misuse and raises.
+    void* userdata = lua_to_widget(L, 1);
+    if (!userdata) {
+        lua_pushnil(L);
         return 1;
     }
-    lua_pushnil(L);
+    QSplitter* splitter = widget_cast<QSplitter>(userdata);
+    if (!splitter) {
+        return luaL_error(L, "get_splitter_sizes: arg 1 is not a QSplitter");
+    }
+    QList<int> sizes = splitter->sizes();
+    lua_newtable(L);
+    for (int i = 0; i < sizes.size(); ++i) {
+        lua_pushinteger(L, sizes[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
     return 1;
 }
 
@@ -209,12 +255,16 @@ int lua_add_spacing_to_layout(lua_State* L) {
     void* container_ptr = lua_to_widget(L, 1);
     int spacing = luaL_checkinteger(L, 2);
 
-    if (QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr)) {
-        box->addSpacing(spacing);
-        lua_pushboolean(L, 1);
-    } else {
+    if (!container_ptr) {
         lua_pushboolean(L, 0);
+        return 1;
     }
+    QBoxLayout* box = widget_cast<QBoxLayout>(container_ptr);
+    if (!box) {
+        return luaL_error(L, "add_spacing_to_layout: container is not a QBoxLayout");
+    }
+    box->addSpacing(spacing);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -223,6 +273,7 @@ int lua_add_layout_to_layout(lua_State* L) {
     void* parent_ptr = lua_to_widget(L, 1);
     void* child_ptr = lua_to_widget(L, 2);
 
+    // Null userdata (QPointer auto-nulled during teardown) is a silent no-op.
     if (!parent_ptr || !child_ptr) {
         lua_pushboolean(L, 0);
         return 1;
@@ -230,29 +281,15 @@ int lua_add_layout_to_layout(lua_State* L) {
 
     QBoxLayout* parent_box = widget_cast<QBoxLayout>(parent_ptr);
     QLayout* child_layout = widget_cast<QLayout>(child_ptr);
-
-    if (parent_box && child_layout) {
-        parent_box->addLayout(child_layout);
-        lua_pushboolean(L, 1);
-    } else {
-        lua_pushboolean(L, 0);
+    if (!parent_box || !child_layout) {
+        return luaL_error(L,
+            "add_layout_to_layout: parent must be a QBoxLayout and child a QLayout");
     }
+
+    parent_box->addLayout(child_layout);
+    lua_pushboolean(L, 1);
     return 1;
 }
 
-// Set layout on a widget (for group boxes, etc.)
-// Same defense-in-depth as lua_set_layout (pass 11): qobject_cast both sides
-// so a swapped widget/layout userdata or a stale destroyed QObject is caught
-// at the metaobject layer instead of corrupting setLayout via a bad pointer.
-int lua_set_widget_layout(lua_State* L) {
-    QWidget* widget = widget_cast<QWidget>(lua_to_widget(L, 1));
-    QLayout* layout = widget_cast<QLayout>(lua_to_widget(L, 2));
-
-    if (widget && layout) {
-        widget->setLayout(layout);
-        lua_pushboolean(L, 1);
-    } else {
-        lua_pushboolean(L, 0);
-    }
-    return 1;
-}
+// (lua_set_widget_layout removed — it was a byte-for-byte duplicate of
+// lua_set_layout. SET_WIDGET_LAYOUT now registers the same function.)

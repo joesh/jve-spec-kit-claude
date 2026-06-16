@@ -41,11 +41,6 @@ function M.set_timeline_panel(panel)
     timeline_panel = panel
 end
 
---- Set project browser reference
-function M.set_project_browser(browser)
-    project_browser = browser
-end
-
 --- Get main window for dialog parenting
 -- @return userdata: QMainWindow instance or nil if not initialized
 function M.get_main_window()
