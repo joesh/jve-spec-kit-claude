@@ -100,4 +100,18 @@ function M.unzip_drt_xml(path)
     return xml
 end
 
+-- The import_timeline verb wants the distinct media files behind a payload's
+-- clips (one entry per file, original order). Every live source-range test
+-- derives this the same way right before the import request.
+function M.unique_media_paths(payload)
+    local paths, seen = {}, {}
+    for _, ref in ipairs(payload.media_refs) do
+        if not seen[ref.file_path] then
+            seen[ref.file_path] = true
+            paths[#paths + 1] = ref.file_path
+        end
+    end
+    return paths
+end
+
 return M

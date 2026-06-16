@@ -40,13 +40,7 @@ os.remove(DRT)
 local payload = payload_builder.build(ctx.db, "p1", "e1")
 local authored = drt_writer.author_a005_compatible(DRT, payload)
 
-local media_paths, seen = {}, {}
-for _, ref in ipairs(payload.media_refs) do
-    if not seen[ref.file_path] then
-        seen[ref.file_path] = true
-        media_paths[#media_paths + 1] = ref.file_path
-    end
-end
+local media_paths = fixture.unique_media_paths(payload)
 
 -- ── import + read source ────────────────────────────────────────────
 local fix = fixture.start("/tmp/jve-live-mptime.sock")

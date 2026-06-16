@@ -467,6 +467,10 @@ function M.decode_bt_video_time(hex_str)
     if not bytes or #bytes < 16 then return nil end
 
     local field_count = M.read_be32(bytes, 5)  -- offset 4 (0-indexed) = pos 5 (1-indexed)
+    -- Two shapes are observed from Resolve: 5 fields for zero-origin media
+    -- (UniqueId StartFrame NumFrames FrameRate DbType) and 6 with a leading
+    -- Timecode for non-zero origin. The [4,8] bound stays deliberately wider
+    -- than [5,6] to tolerate undissected variants rather than reject them.
     if not field_count or field_count < 4 or field_count > 8 then return nil end
 
     local fields = M.decode_tlv_fields(bytes, 8, field_count)

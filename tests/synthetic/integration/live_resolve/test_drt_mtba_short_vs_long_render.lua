@@ -66,13 +66,7 @@ local OUT_41 = "/tmp/jve/mtba_long.drt"    -- synthesized .drp-style variant
 os.remove(OUT_41); os.remove(OUT_9)
 local authored = drt_writer.author_a005_compatible(OUT_9, payload)
 
-local media_paths, seen = {}, {}
-for _, ref in ipairs(payload.media_refs) do
-    if not seen[ref.file_path] then
-        seen[ref.file_path] = true
-        media_paths[#media_paths + 1] = ref.file_path
-    end
-end
+local media_paths = fixture.unique_media_paths(payload)
 
 -- ── synthesize the 41-byte LONG variant: unzip the native .drt, replace
 -- ONLY the 18-hex 9-byte forward MTBA (02 + be(d)) with the 41-byte .drp

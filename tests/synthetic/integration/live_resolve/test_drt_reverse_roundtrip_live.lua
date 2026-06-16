@@ -69,7 +69,7 @@ local TC_ORIGIN = ctx.tc_origin
 -- (inclusive), source_out = lowest played minus one (exclusive).
 local sub_in, sub_out = Clip.subframe_defaults_for_track_type("VIDEO")
 assert(Clip.create({
-    id = "0b50c0de-7007-4aaa-8aaa-00000000re00", project_id = "p1",
+    id = "0b50c0de-7007-4aaa-8aaa-000000000002", project_id = "p1",
     owner_sequence_id = "e1", track_id = "e1-v1", sequence_id = "m",
     name = "A005 rev", sequence_start_frame = REV_START, duration_frames = DUR,
     source_in_frame = TC_ORIGIN + HI, source_out_frame = TC_ORIGIN + LO - 1,
@@ -84,13 +84,7 @@ local OUT = "/tmp/jve/reverse_roundtrip_live.drt"
 os.remove(OUT)
 local authored = drt_writer.author_a005_compatible(OUT, payload)
 
-local media_paths, seen = {}, {}
-for _, ref in ipairs(payload.media_refs) do
-    if not seen[ref.file_path] then
-        seen[ref.file_path] = true
-        media_paths[#media_paths + 1] = ref.file_path
-    end
-end
+local media_paths = fixture.unique_media_paths(payload)
 
 -- ── import into live Resolve and read back ──────────────────────────────
 local SOCK = "/tmp/jve-live-reverse-roundtrip.sock"
@@ -167,8 +161,10 @@ assert(rev.record_duration == DUR, string.format(
 -- in=N clip reads N−1 — test_drt_source_in_resolve_authored / the
 -- test_drt_mptime_timecode_clamp control), so every source bound is compared
 -- with a ±1 tolerance. Values are file-relative (the writer subtracts
--- media.start_tc_frame): the forward clip's played window is [LO..HI], so its
--- low source bound is LO.
+-- media.start_tc_frame): both clips play [LO..HI], so each must read back that
+-- region. Both bounds of both clips are checked against the DOMAIN constants
+-- (LO/HI) independently — not relative to each other — so a shared truncation
+-- (e.g. both clips clamped to a wrong high bound) cannot hide.
 local function region(it)
     local a, b = it.source_in, it.source_out
     if a <= b then return a, b else return b, a end
@@ -179,21 +175,22 @@ print(string.format(
     "  source-range readback: fwd=[%d,%d] rev=[%d,%d] (LO=%d HI=%d)",
     fwd_lo, fwd_hi, rev_lo, rev_hi, LO, HI))
 
--- D. Forward clip's low source bound is the authored in-point LO (±1).
-assert(math.abs(fwd_lo - LO) <= 1, string.format(
-    "forward source in-point %d != authored LO %d (±1 Resolve rounding) — "
-    .. "the file-relative <In> was not honored on import", fwd_lo, LO))
+local function assert_region(label, lo, hi)
+    assert(math.abs(lo - LO) <= 1 and math.abs(hi - HI) <= 1, string.format(
+        "%s source region [%d,%d] != authored [%d,%d] (±1 Resolve rounding) — "
+        .. "the file-relative <In>/<Out> was not honored on import",
+        label, lo, hi, LO, HI))
+end
 
--- E. The reverse twin plays the SAME source frames as the forward clip, so it
--- must occupy the IDENTICAL source region {min,max} (±1 per bound). This is a
--- relative compare — convention-independent: it holds whether or not Resolve
--- mirrors in/out ordering for a reverse clip (the still-recorded live unknown),
--- because region() normalizes to {lo,hi} on both.
+-- D. Forward clip occupies the authored played window [LO..HI].
+assert_region("forward", fwd_lo, fwd_hi)
+-- E. Reverse twin plays the SAME source frames, so it occupies [LO..HI] too.
+assert_region("reverse twin", rev_lo, rev_hi)
+-- Cross-check (already implied by D+E, kept as a direct equality signal): the
+-- two twins land on the same region.
 assert(math.abs(rev_lo - fwd_lo) <= 1 and math.abs(rev_hi - fwd_hi) <= 1,
-    string.format(
-        "reverse twin source region [%d,%d] != forward [%d,%d] (±1) — the "
-        .. "reverse clip does not play the same source frames as its forward "
-        .. "twin", rev_lo, rev_hi, fwd_lo, fwd_hi))
+    string.format("reverse region [%d,%d] != forward [%d,%d]",
+        rev_lo, rev_hi, fwd_lo, fwd_hi))
 
 -- Records (does NOT gate) whether Resolve mirrored in/out for the reverse clip.
 if rev.source_in > rev.source_out then
