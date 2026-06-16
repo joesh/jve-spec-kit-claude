@@ -125,6 +125,24 @@ function TimelineTabStrip:open_source_tab(sequence_id)
     return tab
 end
 
+--- Open the EMPTY source tab — the source side with no master loaded
+--- (sequence_id=nil). Singleton like open_source_tab: if a source tab is
+--- already open this is a no-op returning it (it may already hold a master;
+--- callers only reach here when the source monitor is empty). Inserted first
+--- per spec F1. Does NOT touch the displayed/active pointers — the caller
+--- (timeline_state.show_empty_source_tab) drives switch_displayed.
+-- @return TimelineTab the source tab (empty)
+function TimelineTabStrip:open_empty_source_tab()
+    if self.source_tab then
+        return self.source_tab
+    end
+    local tab = TimelineTab.new_empty_source()
+    table.insert(self.tabs, 1, tab)  -- always first per spec F1
+    self.source_tab = tab
+    self:_notify()
+    return tab
+end
+
 --- Close the SourceTab. Underlying source-monitor state is unaffected
 --- (managed elsewhere). If the closed tab was displayed, displayed pointer
 --- moves to the active record tab.
@@ -349,8 +367,11 @@ function TimelineTabStrip.deserialize(t)
         -- Match the open_*_tab path: constructor builds empty containers,
         -- caller hydrates the cache from the DB. Without this the tab
         -- arrives with nil per-sequence fields and the first reader (ruler,
-        -- viewport, renderer) asserts.
-        tab:load_from_database()
+        -- viewport, renderer) asserts. The empty source tab has no sequence
+        -- to load — it stays the fresh empty containers (blank body).
+        if not tab:is_empty_source() then
+            tab:load_from_database()
+        end
         table.insert(strip.tabs, tab)
         if tab.kind == "source" then
             assert(strip.source_tab == nil,

@@ -77,6 +77,37 @@ function TimelineTab.new(kind, sequence_id)
     return setmetatable(tab, TimelineTab)
 end
 
+--- Build the empty source tab with an explicit id. Used by deserialize so
+--- the strip's displayed/active pointers (resolved by id) survive a restart.
+function TimelineTab.new_empty_source_with_id(id)
+    assert(type(id) == "string" and #id > 0,
+        "TimelineTab.new_empty_source_with_id: id required (non-empty string)")
+    local tab = {
+        id = id,
+        kind = "source",
+        sequence_id = nil,
+        cache = fresh_cache(),
+        _listeners = {},
+        _next_listener_id = 1,
+    }
+    return setmetatable(tab, TimelineTab)
+end
+
+--- Construct the EMPTY source tab — the source side displayed while the
+--- source monitor holds nothing loaded (sequence_id=nil). It is the same
+--- singleton slot as a loaded source tab; loading a master upgrades it in
+--- place via TimelineTab:reload (see TimelineTabStrip:open_source_tab).
+--- The cache stays the fresh empty containers (no load_from_database) —
+--- exactly the blank-panel state the timeline view layer tolerates.
+function TimelineTab.new_empty_source()
+    return TimelineTab.new_empty_source_with_id(uuid.generate())
+end
+
+--- True when this is the source tab with no master loaded (blank body).
+function TimelineTab:is_empty_source()
+    return self.kind == "source" and self.sequence_id == nil
+end
+
 --- Marks pulled lazily from the sequence row.
 --- Source tab in live-bound mode (spec 019 FR-016d): the visible marks
 --- come from the loaded CLIP's source_in/source_out via
@@ -86,6 +117,10 @@ end
 --- Record tabs and staged-mode source tab fall through to the sequence
 --- row's persisted marks.
 function TimelineTab:get_marks()
+    -- Empty source tab: no sequence row, so no marks. Blank body, blank marks.
+    if self:is_empty_source() then
+        return { in_frame = nil, out_frame = nil }
+    end
     local seq = load_seq_strict(self, "TimelineTab:get_marks")
     if self.kind == "source" then
         local in_frame, out_frame = require("core.effective_source")
@@ -151,6 +186,14 @@ function TimelineTab.deserialize(t)
     assert(VALID_KINDS[t.kind],
         string.format("TimelineTab.deserialize: kind must be 'record' or 'source' (got %s)",
             tostring(t.kind)))
+
+    -- Empty source tab: kind=source with no sequence_id (the source monitor
+    -- was empty at save time). Reconstruct it sequence-less — there is no
+    -- sequence row to validate or load.
+    if t.kind == "source" and (t.sequence_id == nil or t.sequence_id == "") then
+        return TimelineTab.new_empty_source_with_id(t.id)
+    end
+
     assert(type(t.sequence_id) == "string" and #t.sequence_id > 0,
         "TimelineTab.deserialize: sequence_id required (non-empty string)")
     local seq = Sequence.load(t.sequence_id)
