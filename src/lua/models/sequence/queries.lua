@@ -52,7 +52,7 @@ function Sequence.find(id)
                default_video_layer_track_id, video_start_tc_frame,
                audio_start_tc_samples, fps_mismatch_policy,
                start_timecode_frame, mark_in_frame, mark_out_frame,
-               playhead_frame
+               playhead_frame, import_uuid
         FROM sequences WHERE id = ?
     ]])
     assert(stmt, "Sequence.find: prepare failed")
@@ -78,6 +78,7 @@ function Sequence.find(id)
             mark_in = stmt:value(14),
             mark_out = stmt:value(15),
             playhead_position = stmt:value(16),
+            import_uuid = stmt:value(17),
         }
     end
     stmt:finalize()
@@ -403,9 +404,14 @@ end
 function Sequence.count_master_audio_channels(master_id)
     assert(master_id and master_id ~= "",
         "Sequence.count_master_audio_channels: master_id required")
+    -- 023: a per-channel AUDIO ref (source_channel set) IS one channel; a
+    -- composite ref (source_channel NULL, 018 model) carries its file's whole
+    -- channel set. Count accordingly — the old SUM(media.audio_channels)
+    -- over-counted once a file was split into N per-channel refs (N×N).
     local conn = resolve_db()
     local stmt = conn:prepare([[
-        SELECT COALESCE(SUM(m.audio_channels), 0)
+        SELECT COALESCE(SUM(
+            CASE WHEN mr.source_channel IS NULL THEN m.audio_channels ELSE 1 END), 0)
         FROM media_refs mr
         JOIN tracks t ON t.id = mr.track_id
         JOIN media m  ON m.id = mr.media_id

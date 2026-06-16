@@ -245,6 +245,46 @@ local function find_dedup_match(media_by_path, media_item)
     return same_tc and existing or nil
 end
 
+local function path_basename(p) return p and p:match("([^/\\]+)$") or p end
+
+-- One physical file = one media row. Resolve pools one file under several pool
+-- ids (one per sync relationship); each arrives as its own media_item keyed by
+-- pool id, and only the online one carries the resolved absolute path — the
+-- others hold just a bare filename (an offline / severed reference). Rewrite
+-- each bare-name item's file_path to its same-named online sibling's absolute
+-- path so the path-based dedup below collapses them onto ONE media (the online
+-- one wins). Filename is JVE's relink anchor, so a bare name identifies its
+-- sibling UNLESS two DIFFERENT absolute paths share that basename (genuinely
+-- distinct files) — that case is left unresolved (each stays its own media)
+-- rather than guessed (rule 2.13: no silent wrong-binding). Items that are bare
+-- on BOTH sides (no online sibling at all) already share an identical path
+-- string and dedup unchanged.
+local function resolve_offline_paths_to_siblings(media_items)
+    local abs_by_basename = {}
+    for _, mi in pairs(media_items) do
+        local p = mi.file_path
+        if p and p:find("/", 1, true) then
+            local base = path_basename(p)
+            if abs_by_basename[base] == nil then
+                abs_by_basename[base] = p
+            elseif abs_by_basename[base] ~= p then
+                abs_by_basename[base] = false  -- ambiguous: distinct files, same name
+            end
+        end
+    end
+    for _, mi in pairs(media_items) do
+        local p = mi.file_path
+        if p and not p:find("/", 1, true) then
+            local abs = abs_by_basename[p]
+            if abs then
+                mi.alt_paths = mi.alt_paths or {}
+                mi.alt_paths[p] = true
+                mi.file_path = abs
+            end
+        end
+    end
+end
+
 -- Build the metadata JSON for a media row. When media_start_time is
 -- present the metadata carries video TC + (when audio is present) audio
 -- TC. FR-001: when the file's container TC differs from the displayed
@@ -559,7 +599,39 @@ function M.compute_audio_clip_source(samples, file_rate,
     return subframe_math.unpack(total_ticks, tpf)
 end
 
--- Resolve AUDIO_SOURCE_CUSTOM pool IDs → DB media IDs; returns video_media_id → [audio_media_id, ...].
+-- Resolve a source clip's synced-audio pool ids → the synced AUDIO STREAMS:
+-- one per distinct external WAV, each { media_id, sample_offsets = {per-channel
+-- WAV samples} }. Per SOURCE CLIP (pool id), not per media: a synced clip and
+-- its plain-camera counterpart share one .mov media but only the synced one
+-- carries synced_audio_pool_ids, so a media-keyed view can't tell them apart.
+-- Distinct media ids only; warns (does not silently drop) on a pool id with no
+-- media row. The per-channel SampleOffsets are required (rule 1.14 — a synced
+-- external stream without them is a parse drift, not a recoverable case).
+-- Returns nil when there is no synced audio.
+local function resolve_synced_audio_streams(pool_ids, offsets_by_pool_id, media_by_uuid)
+    if not (pool_ids and #pool_ids > 0) then return nil end
+    local out, seen = {}, {}
+    for _, pid in ipairs(pool_ids) do
+        local m = media_by_uuid[pid]
+        if not m then
+            log.warn("importer_core: synced audio pool_id %s has no media row",
+                tostring(pid))
+        elseif not seen[m.id] then
+            seen[m.id] = true
+            local offsets = offsets_by_pool_id and offsets_by_pool_id[pid]
+            assert(offsets and #offsets > 0, string.format(
+                "importer_core: synced audio pool_id %s (media %s) has no "
+                .. "per-channel SampleOffsets", tostring(pid), tostring(m.id)))
+            out[#out + 1] = { media_id = m.id, sample_offsets = offsets }
+        end
+    end
+    return #out > 0 and out or nil
+end
+
+-- Synced-audio streams keyed by VIDEO media id (the no-media-pool path: an
+-- importer that stamps synced_audio_pool_ids + offsets directly on a media item
+-- rather than carrying pool master clips). Delegates per-item resolution to
+-- resolve_synced_audio_streams so the stream shape stays single-sourced.
 local function build_synced_audio_map(media_items, media_by_uuid)
     local map = {}
     for _, media_item in pairs(media_items) do
@@ -571,19 +643,11 @@ local function build_synced_audio_map(media_items, media_by_uuid)
             and media_by_uuid[media_item.file_uuid]
         if not video_media then goto continue_item end
 
-        local audio_ids = {}
-        for _, pool_id in ipairs(media_item.synced_audio_pool_ids) do
-            local audio_media = media_by_uuid[pool_id]
-            if audio_media then
-                audio_ids[#audio_ids + 1] = audio_media.id
-            else
-                log.warn("importer_core: synced audio pool_id %s not in "
-                    .. "media_by_uuid (video media_id=%s)",
-                    tostring(pool_id), video_media.id)
-            end
-        end
-        if #audio_ids > 0 then
-            map[video_media.id] = audio_ids
+        local streams = resolve_synced_audio_streams(
+            media_item.synced_audio_pool_ids,
+            media_item.synced_audio_offsets_by_pool_id, media_by_uuid)
+        if streams then
+            map[video_media.id] = streams
         end
         ::continue_item::
     end
@@ -629,18 +693,26 @@ end
 -- idempotent, so calling this for a media that already has a master + bin is a
 -- no-op. Returns the master sequence id. Used by both the eager full-pool pass
 -- and the per-timeline-clip pass.
-local function ensure_master_and_bin(media_id, project_id, synced_audio, bin_clip, ctx)
-    -- One master per media_id. Sequence.ensure_master is idempotent but its
-    -- existence check is a 3-table JOIN; the per-clip pass would re-run it for
-    -- every clip of an already-built master (the eager full-pool pass builds
-    -- most masters up front), an O(clips) redundancy that dominated import CPU.
-    -- Cache the media_id → master_seq_id resolution for this import.
-    local master_seq_id = ctx.master_by_media_id[media_id]
+-- Ensure the master sequence for ONE source clip exists, track it for undo,
+-- and file it into its bin. A master IS a source clip: its identity is
+-- `import_uuid` (the imported project's pool DbId) when present, else the lone
+-- per-media identity (native / prproj — import_uuid nil). Idempotency keys on
+-- that identity, NOT on media_id: one physical file can back several source
+-- clips (synced + plain camera over one .mov). Sequence.ensure_master is itself
+-- idempotent but its existence check is a 3-table JOIN, so the per-clip pass
+-- would re-run it for every clip of an already-built master — cache the
+-- identity → master_seq_id resolution for this import.
+local function ensure_master_and_bin(import_uuid, media_id, project_id, synced_audio, bin_clip, ctx)
+    local cache_key = import_uuid or media_id
+    local master_seq_id = ctx.master_by_source[cache_key]
     if not master_seq_id then
-        local master_opts = { sample_rate = ctx.default_audio_sample_rate }
-        if synced_audio then master_opts.synced_audio_media_ids = synced_audio end
+        local master_opts = {
+            sample_rate = ctx.default_audio_sample_rate,
+            import_uuid = import_uuid,
+        }
+        if synced_audio then master_opts.synced_audio_streams = synced_audio end
         master_seq_id = Sequence.ensure_master(media_id, project_id, master_opts)
-        ctx.master_by_media_id[media_id] = master_seq_id
+        ctx.master_by_source[cache_key] = master_seq_id
     end
     if not ctx.created_master_set[master_seq_id] then
         ctx.created_master_set[master_seq_id] = true
@@ -652,6 +724,67 @@ local function ensure_master_and_bin(media_id, project_id, synced_audio, bin_cli
         ctx.tag_service.add_to_bin(project_id, {master_seq_id}, bin, "master_clip")
     end
     return master_seq_id
+end
+
+-- Build the list of SOURCE CLIPS the import will materialize as masters.
+-- DRP carries explicit source clips (pool_master_clips); a single physical file
+-- may appear as several (a synced clip + its plain-camera counterpart over one
+-- .mov), each with a distinct pool DbId → distinct master. Importers without a
+-- media pool (prproj) carry none — there each imported media IS its own lone
+-- source clip (import_uuid nil → native export uses master.id).
+-- Each entry: { import_uuid, media, synced_audio_streams, bin_clip }.
+local function build_source_clips(parse_result, imported_media,
+                                  media_by_uuid, synced_audio_by_media_id)
+    local pmc_list = parse_result.pool_master_clips or {}
+    local out = {}
+    if #pmc_list == 0 then
+        for _, media in ipairs(imported_media) do
+            out[#out + 1] = {
+                import_uuid = nil,
+                media       = media,
+                synced_audio_streams = synced_audio_by_media_id[media.id],
+                bin_clip    = { file_uuid = media.id, file_path = media.file_path },
+            }
+        end
+        return out
+    end
+    for _, pmc in ipairs(pmc_list) do
+        local media = media_by_uuid[pmc.id]
+        if not media then
+            log.warn("import: pool clip %s ('%s') has no media row — no master built",
+                tostring(pmc.id), tostring(pmc.name))
+        else
+            local mi = parse_result.media_items[pmc.id]
+            out[#out + 1] = {
+                import_uuid = pmc.id,
+                media       = media,
+                synced_audio_streams = resolve_synced_audio_streams(
+                    mi and mi.synced_audio_pool_ids,
+                    mi and mi.synced_audio_offsets_by_pool_id, media_by_uuid),
+                bin_clip    = { file_uuid = pmc.id, file_path = media.file_path },
+            }
+        end
+    end
+    return out
+end
+
+-- Resolve the master a timeline clip references — its OWN source clip. The clip
+-- carries the pool DbId of the source clip it instantiates (clip_data.file_uuid),
+-- which the eager pass already turned into a master (idempotent here). A clip
+-- whose link Resolve severed carries no pool id; it can only be bound to the
+-- file's media, so it lands on whatever master that media's primary tracks
+-- belong to (best-effort — the source clip is genuinely unknown), warned once.
+local function resolve_clip_master(clip_data, media_id, project_id, ctx)
+    local pool_id = clip_data.file_uuid
+    if pool_id and pool_id ~= "" then
+        return ensure_master_and_bin(pool_id, media_id, project_id,
+            ctx.synced_audio_by_pool_id[pool_id], clip_data, ctx)
+    end
+    local existing = Sequence.find_master_for_media(media_id)
+    if existing then return existing end
+    log.warn("import: clip '%s' has no source-clip id and media %s has no master "
+        .. "yet; building a plain master", tostring(clip_data.name), tostring(media_id))
+    return ensure_master_and_bin(nil, media_id, project_id, nil, clip_data, ctx)
 end
 
 -- Build and persist a kind='sequence' sequence row for one parsed timeline.
@@ -814,9 +947,17 @@ function M.import_into_project(project_id, parse_result, opts)
         parse_result.pool_master_clips or {}, folder_to_bin)
     local unorganized_bin_id = ensure_unorganized_bin(project_id, tag_service, uuid)
 
-    -- Import media items. Each row is keyed by file_uuid (when supplied)
-    -- and by file_path (incl. alt paths). See try_import_media_item /
-    -- find_dedup_match for the (path, media_start_time) dedup contract.
+    -- One physical file = one media row: resolve bare offline references to
+    -- their online same-named sibling so the path-based dedup below collapses
+    -- the several pool ids Resolve assigns one file (one per sync relationship)
+    -- onto a single media. Source-clip distinctness is preserved separately, as
+    -- per-pool-id masters (see build_source_clips).
+    resolve_offline_paths_to_siblings(parse_result.media_items)
+
+    -- Import media items. Each row is keyed by every pool id that names it
+    -- (file_uuid + alt_uuids) and by file_path (incl. alt paths). See
+    -- try_import_media_item / find_dedup_match for the (path, media_start_time)
+    -- dedup contract.
     local media_by_uuid = {}
     local media_by_path = {}
     local imported_media = {}
@@ -829,14 +970,25 @@ function M.import_into_project(project_id, parse_result, opts)
         end
     end
 
+    -- prproj path: synced audio keyed by media (no media-pool source clips).
     local synced_audio_by_media_id =
         build_synced_audio_map(parse_result.media_items, media_by_uuid)
+    -- DRP path: synced audio keyed by SOURCE CLIP (pool id) — a synced clip and
+    -- its plain-camera counterpart share one media but only one carries sync.
+    local synced_audio_by_pool_id = {}
+    for pool_id, mi in pairs(parse_result.media_items) do
+        local streams = resolve_synced_audio_streams(mi.synced_audio_pool_ids,
+            mi.synced_audio_offsets_by_pool_id, media_by_uuid)
+        if streams then synced_audio_by_pool_id[pool_id] = streams end
+    end
 
     -- Shared state for ensure_master_and_bin, used by both the eager full-pool
     -- pass and the per-timeline-clip pass below.
     local master_ctx = {
         created_master_set = created_master_set,
-        master_by_media_id = {},
+        -- identity (import_uuid, else media_id) → master_seq_id, for this import.
+        master_by_source   = {},
+        synced_audio_by_pool_id = synced_audio_by_pool_id,
         master_seq_by_id   = {},
         -- Project default audio rate: the fallback ensure_master uses for
         -- OFFLINE media whose project file gave audio_channels but no rate of
@@ -853,28 +1005,31 @@ function M.import_into_project(project_id, parse_result, opts)
         tag_service        = tag_service,
     }
 
-    -- Full-pool import: give EVERY imported media item a master source
-    -- sequence, not just the media placed on a timeline. A clip filed in a bin
-    -- but never cut into the edit must still be browseable in the media pool
-    -- and openable in the source viewer — both require a kind='master'
-    -- sequence. The per-timeline clip loop below calls ensure_master_and_bin
-    -- too, but it is idempotent, so those calls are no-ops for media handled here.
+    -- Full-pool import: give EVERY source clip a master sequence, not just the
+    -- ones placed on a timeline. A clip filed in a bin but never cut into the
+    -- edit must still be browseable in the media pool and openable in the source
+    -- viewer — both require a kind='master' sequence. One source clip → one
+    -- master (synced + plain camera over the same file are distinct source
+    -- clips → two masters). The per-timeline clip loop below resolves the same
+    -- masters idempotently.
     sub_report(18, "Building source clips…")
-    for _, media in ipairs(imported_media) do
+    local source_clips = build_source_clips(parse_result, imported_media,
+        media_by_uuid, synced_audio_by_media_id)
+    for _, sc in ipairs(source_clips) do
         -- A master needs a known TC origin per present stream, and importers
-        -- must not probe the file to get one. Pool clips whose project file
+        -- must not probe the file to get one. Source clips whose project file
         -- carried no TC (encrypted / undecodable blob) import as relinkable
         -- media rows now and gain a master when the media is relinked or
         -- probed — "import everything we can" rather than asserting and
         -- aborting the whole import on one TC-less clip.
-        if media:has_master_source_tc() then
-            ensure_master_and_bin(media.id, project_id,
-                synced_audio_by_media_id[media.id],
-                { file_uuid = media.id, file_path = media.file_path }, master_ctx)
+        if sc.media:has_master_source_tc() then
+            ensure_master_and_bin(sc.import_uuid, sc.media.id, project_id,
+                sc.synced_audio_streams, sc.bin_clip, master_ctx)
         else
-            log.warn("import: pool media '%s' (%s) has no source timecode in the "
+            log.warn("import: source clip '%s' (%s) has no source timecode in the "
                 .. "project file — imported as a relinkable clip; its master "
-                .. "source sequence builds on relink/probe", media.name, media.id)
+                .. "source sequence builds on relink/probe",
+                sc.media.name, tostring(sc.import_uuid or sc.media.id))
         end
     end
 
@@ -964,11 +1119,12 @@ function M.import_into_project(project_id, parse_result, opts)
                         goto continue_clip
                     end
 
-                    -- Master + bin for this clip's media (idempotent: the eager
-                    -- full-pool pass above already created most of these).
-                    -- clip.sequence_id is this master ref (V13).
-                    local master_seq_id = ensure_master_and_bin(media_id, project_id,
-                        synced_audio_by_media_id[media_id], clip_data, master_ctx)
+                    -- The master (source clip) this timeline clip instantiates,
+                    -- resolved by the clip's own pool id (idempotent: the eager
+                    -- full-pool pass above already created it). clip.sequence_id
+                    -- is this master ref (V13).
+                    local master_seq_id = resolve_clip_master(clip_data, media_id,
+                        project_id, master_ctx)
 
                     local now = os.time()
                     -- 018 (FR-001 / FR-008 / FR-022): clip.source_in_frame /

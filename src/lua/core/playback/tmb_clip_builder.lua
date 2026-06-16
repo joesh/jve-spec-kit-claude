@@ -75,6 +75,9 @@ function M.build_clip(entry, speed_ratio)
         speed_ratio    = speed_ratio,
         offline        = is_offline,
         volume         = entry.volume,
+        -- 023: which file channel this audio clip decodes (one clip per stream).
+        -- nil for video entries; the C++ binding defaults absent to -1 (all).
+        source_channel = entry.source_channel,
     }
 end
 

@@ -134,6 +134,10 @@ function Sequence.create(name, project_id, frame_rate, width, height, opts)
         audio_start_tc_samples = opts.audio_start_tc_samples,                -- nullable
         fps_mismatch_policy = opts.fps_mismatch_policy,                      -- nullable (inherit project)
 
+        -- 023: source-clip identity from the imported project (Resolve pool
+        -- DbId for DRP). Masters only; nullable for native masters.
+        import_uuid = opts.import_uuid,                                      -- nullable
+
         -- Timeline start timecode (display offset only)
         start_timecode_frame = start_tc,
 
@@ -183,7 +187,8 @@ function Sequence.load(id)
                        view_duration_frames, mark_in_frame, mark_out_frame, audio_sample_rate,
                        selected_clip_ids, selected_edge_infos, start_timecode_frame,
                        video_scroll_offset, audio_scroll_offset, video_audio_split_ratio,
-                       selected_gap_infos, created_at, modified_at, mutation_generation
+                       selected_gap_infos, created_at, modified_at, mutation_generation,
+                       import_uuid
                 FROM sequences WHERE id = ?
             ]])
     
@@ -255,6 +260,10 @@ function Sequence.load(id)
 
             -- Optional gap selection (JSON string or nil)
             sequence.selected_gap_infos_json = stmt:value(20)
+
+            -- 023: source-clip identity (Resolve pool DbId for DRP masters);
+            -- nil for native / non-imported masters and all edit sequences.
+            sequence.import_uuid = stmt:value(24)
     stmt:finalize()
 
     return setmetatable(sequence, Sequence)
@@ -327,9 +336,9 @@ local function prepare_save_stmt(conn)
          mark_in_frame, mark_out_frame, audio_sample_rate,
          selected_clip_ids, selected_edge_infos, selected_gap_infos,
          default_video_layer_track_id, video_start_tc_frame,
-         audio_start_tc_samples, fps_mismatch_policy,
+         audio_start_tc_samples, fps_mismatch_policy, import_uuid,
          created_at, modified_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             project_id = excluded.project_id,
             name = excluded.name,
@@ -355,6 +364,7 @@ local function prepare_save_stmt(conn)
             video_start_tc_frame = excluded.video_start_tc_frame,
             audio_start_tc_samples = excluded.audio_start_tc_samples,
             fps_mismatch_policy = excluded.fps_mismatch_policy,
+            import_uuid = excluded.import_uuid,
             modified_at = excluded.modified_at
     ]])
     if not stmt then
@@ -392,8 +402,9 @@ local function bind_save_params(stmt, self)
     bind_nullable(stmt, 23, self.video_start_tc_frame)
     bind_nullable(stmt, 24, self.audio_start_tc_samples)
     bind_nullable(stmt, 25, self.fps_mismatch_policy)
-    stmt:bind_value(26, self.created_at)
-    stmt:bind_value(27, self.modified_at)
+    bind_nullable(stmt, 26, self.import_uuid)
+    stmt:bind_value(27, self.created_at)
+    stmt:bind_value(28, self.modified_at)
 end
 
 function Sequence:save()

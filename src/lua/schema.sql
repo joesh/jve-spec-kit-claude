@@ -184,6 +184,16 @@ CREATE TABLE IF NOT EXISTS sequences (
     fps_mismatch_policy TEXT
         CHECK(fps_mismatch_policy IS NULL OR fps_mismatch_policy IN ('resample','passthrough')),
 
+    -- 023: a kind='master' sequence IS a source clip (a media-pool / bin item).
+    -- import_uuid is that source clip's stable identity carried by the imported
+    -- project file (the Resolve MediaRef DbId for DRP). It lives HERE — on the
+    -- source clip — not on `media`, because a single physical file can back
+    -- several source clips (a synced clip and its plain-camera counterpart both
+    -- wrap one .mov under distinct identities). media = file (one per file);
+    -- master = source clip (one per identity). NULL for non-imported / native
+    -- masters, whose `id` serves as the identity on export.
+    import_uuid TEXT,
+
     created_at INTEGER NOT NULL,
     modified_at INTEGER NOT NULL
 );
@@ -251,6 +261,14 @@ CREATE TABLE IF NOT EXISTS media_refs (
     -- NULL allowed for video-only media_refs. Read by resolver (FR-008) per-emit; denorm
     -- avoids a media join in the hot path.
     audio_sample_rate INTEGER CHECK(audio_sample_rate IS NULL OR audio_sample_rate > 0),
+
+    -- 023: which channel of the referenced FILE this audio media_ref reads
+    -- (0-based, file-relative). JVE models one clip per stream, so each audio
+    -- channel is its own track/media_ref inside the master; this is the channel
+    -- selector the decoder + peak pipeline extract. NULL for video-only refs;
+    -- required (>= 0) for AUDIO refs (enforced at MediaRef.create, rule 2.13).
+    -- A 1-channel file's ref has source_channel 0.
+    source_channel INTEGER CHECK(source_channel IS NULL OR source_channel >= 0),
 
     -- Source timebase is the referenced media's (media.fps_numerator/denominator);
     -- not carried on this row to avoid denormalization.

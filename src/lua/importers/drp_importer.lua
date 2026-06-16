@@ -846,6 +846,11 @@ local function parse_master_clip_element(clip_elem, folder_id)
             local decoded, fb_err = drp_binary.decode_fields_blob(fb_hex)
             if decoded then
                 master_clip.audio_refs = drp_binary.extract_media_refs(decoded)
+                -- Per-channel external-audio alignment, index-aligned with
+                -- audio_refs. Each entry is the WAV sample that plays under the
+                -- video's first frame for that channel (nil = camera scratch).
+                master_clip.audio_ref_sample_offsets =
+                    drp_binary.extract_media_ref_sample_offsets(decoded)
             else
                 -- Missing zstd binding or malformed blob: surface via log,
                 -- continue without audio_refs so the importer can still
@@ -2043,10 +2048,15 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
             own_btai[id] = true
         end
 
-        -- Walk audio_refs in wire order; collect distinct external pmc ids
+        -- Walk audio_refs in wire order; collect distinct external pmc ids and,
+        -- per external pmc, the PER-CHANNEL SampleOffset list in channel order.
+        -- Each external ref is one channel of one WAV; offsets are never assumed
+        -- uniform across channels (they merely happen to be equal in some
+        -- fixtures), so every external channel contributes its own value.
         local synced_pool_ids = {}
         local seen_pool_ids   = {}
-        for _, ref_id in ipairs(pmc.audio_refs) do
+        local offsets_by_pool = {}
+        for ref_idx, ref_id in ipairs(pmc.audio_refs) do
             if own_btai[ref_id] then goto next_ref end
             local audio_pmc = btai_to_pmc[ref_id]
             if not audio_pmc then
@@ -2055,6 +2065,23 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
                 goto next_ref
             end
             if not audio_pmc.id then goto next_ref end
+            -- This external channel's SampleOffset (index-aligned with audio_refs).
+            -- Resolve OMITS the SampleOffset field when the offset is zero (the
+            -- channel is jam-synced / aligned at its own origin — no slip), so an
+            -- absent value means 0, not a parse error: the SampleOffset name-scan
+            -- is deterministic and index-aligned with the MediaRef scan, so a
+            -- present-but-unparsed offset is impossible — nil unambiguously means
+            -- Resolve wrote none. (Boundary normalization, like marker custom_data;
+            -- NOT a fallback masking missing data.)
+            local channel_offset = pmc.audio_ref_sample_offsets
+                and pmc.audio_ref_sample_offsets[ref_idx]
+            if channel_offset == nil then channel_offset = 0 end
+            local pool_offsets = offsets_by_pool[audio_pmc.id]
+            if not pool_offsets then
+                pool_offsets = {}
+                offsets_by_pool[audio_pmc.id] = pool_offsets
+            end
+            pool_offsets[#pool_offsets + 1] = channel_offset
             if seen_pool_ids[audio_pmc.id] then goto next_ref end
             seen_pool_ids[audio_pmc.id] = true
             synced_pool_ids[#synced_pool_ids + 1] = audio_pmc.id
@@ -2094,6 +2121,10 @@ local function resolve_synced_audio_linkage(master_clips, media_get, media_put)
             local video_entry = media_get(pmc.id, pmc.file_path)
             if video_entry then
                 video_entry.synced_audio_pool_ids = synced_pool_ids
+                -- Per-pool, per-channel SampleOffsets (channel order), so
+                -- importer_core can forward each channel's alignment to its
+                -- sync track in master_builder.
+                video_entry.synced_audio_offsets_by_pool_id = offsets_by_pool
                 log.event("drp_importer: '%s' has %d synced audio file(s)",
                     pmc.name or "?", #synced_pool_ids)
             else

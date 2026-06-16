@@ -89,6 +89,16 @@ local function assert_audio_rate_for_kind(db, fields, id)
             "MediaRef.create: AUDIO media_ref %s missing audio_sample_rate "
             .. "(track_id=%s; rule 2.13 — no silent default; FR-008 requires it)",
             tostring(id), tostring(fields.track_id)))
+        -- 023: each audio track IS one file channel (one clip per stream); the
+        -- ref must name which file channel it reads. No silent default (2.13).
+        assert(type(fields.source_channel) == "number"
+            and fields.source_channel >= 0
+            and fields.source_channel == math.floor(fields.source_channel),
+            string.format(
+            "MediaRef.create: AUDIO media_ref %s missing source_channel "
+            .. "(track_id=%s; rule 2.13 — each audio ref reads one file channel, "
+            .. "0-based); got %s", tostring(id), tostring(fields.track_id),
+            tostring(fields.source_channel)))
     end
 end
 
@@ -116,10 +126,10 @@ function M.create(fields)
         INSERT INTO media_refs (
             id, project_id, owner_sequence_id, track_id, media_id,
             source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-            audio_sample_rate,
+            audio_sample_rate, source_channel,
             enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
             created_at, modified_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ]])
     assert(stmt, "MediaRef.create: failed to prepare INSERT")
     stmt:bind_value(1, id)
@@ -132,13 +142,14 @@ function M.create(fields)
     stmt:bind_value(8, fields.sequence_start_frame)
     stmt:bind_value(9, fields.duration_frames)
     stmt:bind_value(10, fields.audio_sample_rate)  -- nullable per V11
-    stmt:bind_value(11, to_int_bool(fields.enabled))
-    stmt:bind_value(12, fields.volume)
-    stmt:bind_value(13, fields.mark_in_frame)   -- nullable
-    stmt:bind_value(14, fields.mark_out_frame)  -- nullable
-    stmt:bind_value(15, fields.playhead_frame)
-    stmt:bind_value(16, now)
-    stmt:bind_value(17, fields.modified_at or now)
+    stmt:bind_value(11, fields.source_channel)     -- nullable; required for AUDIO (023)
+    stmt:bind_value(12, to_int_bool(fields.enabled))
+    stmt:bind_value(13, fields.volume)
+    stmt:bind_value(14, fields.mark_in_frame)   -- nullable
+    stmt:bind_value(15, fields.mark_out_frame)  -- nullable
+    stmt:bind_value(16, fields.playhead_frame)
+    stmt:bind_value(17, now)
+    stmt:bind_value(18, fields.modified_at or now)
 
     local ok = stmt:exec()
     stmt:finalize()
@@ -154,7 +165,7 @@ function M.find(id)
     local stmt = db:prepare([[
         SELECT id, project_id, owner_sequence_id, track_id, media_id,
                source_in_frame, source_out_frame, sequence_start_frame, duration_frames,
-               audio_sample_rate,
+               audio_sample_rate, source_channel,
                enabled, volume, mark_in_frame, mark_out_frame, playhead_frame,
                created_at, modified_at
         FROM media_refs WHERE id = ?
@@ -175,13 +186,14 @@ function M.find(id)
             sequence_start_frame = stmt:value(7),
             duration_frames = stmt:value(8),
             audio_sample_rate = stmt:value(9),
-            enabled = stmt:value(10) == 1,
-            volume = stmt:value(11),
-            mark_in_frame = stmt:value(12),
-            mark_out_frame = stmt:value(13),
-            playhead_frame = stmt:value(14),
-            created_at = stmt:value(15),
-            modified_at = stmt:value(16),
+            source_channel = stmt:value(10),
+            enabled = stmt:value(11) == 1,
+            volume = stmt:value(12),
+            mark_in_frame = stmt:value(13),
+            mark_out_frame = stmt:value(14),
+            playhead_frame = stmt:value(15),
+            created_at = stmt:value(16),
+            modified_at = stmt:value(17),
         }
     end
     stmt:finalize()

@@ -167,6 +167,8 @@ function M.register(command_executors, command_undoers, db, set_last_error)
                     source_out_frame     = a_tc + duration_samples,
                     sequence_start_frame = a_placement_start,
                     duration_frames      = a_placement_dur,
+                    -- One clip per stream: this track reads file channel ch-1.
+                    source_channel       = ch - 1,
                     audio_sample_rate    = media.audio_sample_rate,
                     enabled              = true,
                     volume               = 1.0,

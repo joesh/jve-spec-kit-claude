@@ -721,10 +721,25 @@ function M.get_audio_for_project(project_id)
     return result
 end
 
+-- Map a clip's master-frame source coordinate to file units THROUGH its master
+-- media_ref, mirroring what C++ decode does (file_pos = mr.source_in +
+-- (master_frame - mr.sequence_start) * rate_ratio). `scale` = target/clip_rate
+-- = the target unit per master frame (1 for video at native fps; samples per
+-- frame for audio). The δ term (mr_source_in - scaled(mr_seq_start)) carries the
+-- per-stream sync mapping: it is exactly 0 for TC-aligned camera streams (where
+-- mr.source_in == mr.sequence_start scaled) and exactly the SampleOffset for
+-- free-run synced external audio — so a naive frame×rate scale (δ omitted) only
+-- happened to work for camera audio and overshot to the video's TC for synced.
+local function map_source_through_mr(src, target, clip_rate, mr_source_in, mr_seq_start)
+    local scale = target / clip_rate
+    local delta = mr_source_in - math.floor(mr_seq_start * scale + 0.5)
+    return math.floor(src * scale + 0.5) + delta
+end
+
 --- Get the source extent (min source_in, max source_out) across all clips on this media,
---- normalized to a common rate. Each clip's source_in/source_out is in its own native
---- units (video frames at clip fps, audio samples at sample rate). This function converts
---- every clip to target_rate before computing min/max.
+--- normalized to a common rate. Each clip's source_in/source_out is in master frames;
+--- this function maps every clip through its master media_ref to file units at
+--- target_rate before computing min/max.
 --- NOTE: 018 subframe precision (clip.source_*_subframe) is DISCARDED — extent is
 --- frame-aligned at target_rate. Callers needing sample-exact extents must read
 --- subframes separately. Tracked: memory/todo_subframe_precision_in_media_selects.md.
@@ -737,17 +752,20 @@ function M:get_source_extent(target_rate)
     local database = require("core.database")
     local db = assert(database.get_connection(),
         string.format("Media:get_source_extent: no database connection (media_id=%s)", tostring(self.id)))
-    -- V13: clip.source_in/out are in the source sequence's timebase. Walk
-    -- clips → nested → master.media_refs to find clips referencing this
-    -- media. fps_numerator/denominator come from the nested sequence (the
-    -- clip's source-side timebase).
+    -- V13: clip.source_in/out are in the source sequence's (master's) timebase.
+    -- Walk clips → nested(master) → the master media_ref of the SAME track type,
+    -- and map each clip coordinate to file units through that media_ref (honors
+    -- the per-stream sync offset). fps comes from the nested (master) sequence.
     local stmt = assert(db:prepare([[
         SELECT c.source_in_frame, c.source_out_frame,
-               nested.fps_numerator, nested.fps_denominator
+               nested.fps_numerator, nested.fps_denominator,
+               mr.source_in_frame, mr.sequence_start_frame
         FROM clips c
         JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN tracks ct ON ct.id = c.track_id
         JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
-        WHERE mr.media_id = ?
+        JOIN tracks mt ON mt.id = mr.track_id
+        WHERE mr.media_id = ? AND mt.track_type = ct.track_type
     ]]), "Media:get_source_extent: failed to prepare query")
     stmt:bind_value(1, self.id)
     assert(stmt:exec(), string.format(
@@ -759,7 +777,9 @@ function M:get_source_extent(target_rate)
         local src_out = stmt:value(1)
         local fps_num = stmt:value(2)
         local fps_den = stmt:value(3)
-        -- All four columns are NOT NULL with CHECK constraints in schema.sql
+        local mr_source_in = stmt:value(4)
+        local mr_seq_start = stmt:value(5)
+        -- All columns are NOT NULL with CHECK constraints in schema.sql
         -- (source_in_frame/out_frame NOT NULL; fps_num/den NOT NULL CHECK > 0).
         -- Nil/zero here means data corruption that bypassed the schema —
         -- assert with media context so the bad row is identifiable.
@@ -773,13 +793,14 @@ function M:get_source_extent(target_rate)
         assert(fps_den and fps_den > 0, string.format(
             "Media:get_source_extent: clip on media %s has invalid fps_denominator=%s",
             tostring(self.id), tostring(fps_den)))
+        assert(mr_source_in, string.format(
+            "Media:get_source_extent: master media_ref on media %s has NULL source_in_frame", tostring(self.id)))
+        assert(mr_seq_start, string.format(
+            "Media:get_source_extent: master media_ref on media %s has NULL sequence_start_frame", tostring(self.id)))
 
         local clip_rate = fps_num / fps_den
-        -- Normalize to target_rate
-        if math.abs(clip_rate - target_rate) > 0.01 then
-            src_in = math.floor(src_in * target_rate / clip_rate + 0.5)
-            src_out = math.floor(src_out * target_rate / clip_rate + 0.5)
-        end
+        src_in  = map_source_through_mr(src_in,  target_rate, clip_rate, mr_source_in, mr_seq_start)
+        src_out = map_source_through_mr(src_out, target_rate, clip_rate, mr_source_in, mr_seq_start)
         if not min_in or src_in < min_in then min_in = src_in end
         if not max_out or src_out > max_out then max_out = src_out end
     end
@@ -1083,7 +1104,7 @@ local function snapshot_pre_update_state(db, duration_changes)
         db:prepare([[
             SELECT mr.id, t.track_type, mr.duration_frames,
                    mr.sequence_start_frame, mr.source_in_frame,
-                   mr.source_out_frame
+                   mr.source_out_frame, t.source_kind
               FROM media_refs mr
               JOIN tracks t ON t.id = mr.track_id
              WHERE mr.media_id = ?
@@ -1098,7 +1119,7 @@ local function snapshot_pre_update_state(db, duration_changes)
         assert(read_media:next(), string.format(
             "Media.batch_set_durations: media %s not found", tostring(mid)))
         local rec = { media_duration_frames = read_media:value(0),
-                       media_refs = {}, mref_types = {} }
+                       media_refs = {}, mref_types = {}, mref_kinds = {} }
         read_media:reset()
 
         read_mrefs:bind_value(1, mid)
@@ -1107,6 +1128,7 @@ local function snapshot_pre_update_state(db, duration_changes)
         while read_mrefs:next() do
             local mref_id = read_mrefs:value(0)
             rec.mref_types[mref_id] = read_mrefs:value(1)
+            rec.mref_kinds[mref_id] = read_mrefs:value(6)
             rec.media_refs[mref_id] = {
                 duration_frames      = read_mrefs:value(2),
                 sequence_start_frame = read_mrefs:value(3),
@@ -1216,6 +1238,16 @@ local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
 
     for mref_id, track_type in pairs(rec.mref_types) do
         local old_mref = rec.media_refs[mref_id]
+        -- Synced placements are video-derived, not file-length-derived: the
+        -- media_ref sits at the video's TC for the video take, referencing a
+        -- sub-range of the file ([audio_tc + per-channel SampleOffset, +take]).
+        -- The file's total duration (which relink re-probes and syncs here)
+        -- has no bearing on where the audio sits under the picture, so rebasing
+        -- it to [file_tc_origin, +full_file] would fling it to the file's
+        -- absolute timecode (spec 023 synced-alignment). Leave it untouched.
+        if rec.mref_kinds[mref_id] == "sync" then
+            goto continue_mref
+        end
         local new_seq_start, new_dur, new_source_in, new_source_out
         if track_type == "VIDEO" then
             new_seq_start, new_dur, new_source_in, new_source_out =
@@ -1239,6 +1271,7 @@ local function apply_one_media(upd_media, upd_mref, mid, entry, tc_entry, rec)
                 tostring(mref_id)))
             upd_mref:reset()
         end
+        ::continue_mref::
     end
 end
 
@@ -1471,6 +1504,8 @@ local function include_extent_row(stmt, media_rates, result)
     local fps_num          = stmt:value(3)
     local fps_den          = stmt:value(4)
     local track_type       = stmt:value(5)
+    local mr_source_in     = stmt:value(6)
+    local mr_seq_start     = stmt:value(7)
     assert(src_in, string.format(
         "batch_get_source_extents: clip on media %s has NULL source_in_frame",
         tostring(mid)))
@@ -1483,31 +1518,34 @@ local function include_extent_row(stmt, media_rates, result)
     assert(fps_den and fps_den > 0, string.format(
         "batch_get_source_extents: clip on media %s has invalid fps_denominator=%s",
         tostring(mid), tostring(fps_den)))
+    assert(mr_source_in, string.format(
+        "batch_get_source_extents: master media_ref on media %s has NULL source_in_frame",
+        tostring(mid)))
+    assert(mr_seq_start, string.format(
+        "batch_get_source_extents: master media_ref on media %s has NULL sequence_start_frame",
+        tostring(mid)))
 
+    -- clip.source_*_frame is in master.fps frames for BOTH video and audio (018);
+    -- map each through the master media_ref to file units (video frames / audio
+    -- samples) so the sync offset is honored. rates.{video_rate,audio_sample_rate}
+    -- carry the file-native target rate (the master row's audio_sample_rate is
+    -- NULL under FR-004).
+    local clip_rate = fps_num / fps_den
     local rates = media_rates[mid]
+    local target
+    local bucket_key
     if track_type == "VIDEO" and rates.video_rate then
-        local clip_rate = fps_num / fps_den
-        local target    = rates.video_rate
-        if math.abs(clip_rate - target) > 0.01 then
-            src_in  = math.floor(src_in  * target / clip_rate + 0.5)
-            src_out = math.floor(src_out * target / clip_rate + 0.5)
-        end
-        local bucket = result[mid].video or { rate = target }
-        result[mid].video = bucket
-        include_in_extent(bucket, src_in, src_out)
+        target, bucket_key = rates.video_rate, "video"
     elseif track_type == "AUDIO" and rates.audio_sample_rate then
-        -- 018: clip.source_*_frame is in master.fps frames for AUDIO too.
-        -- Convert (frame) → samples using the file's audio rate. Under
-        -- FR-004: the master row's audio_sample_rate is NULL — rates.audio_sample_rate
-        -- carries the file-native rate provided by the caller.
-        local target = rates.audio_sample_rate
-        local samples_per_frame = target * fps_den / fps_num
-        local src_in_samples  = math.floor(src_in  * samples_per_frame + 0.5)
-        local src_out_samples = math.floor(src_out * samples_per_frame + 0.5)
-        local bucket = result[mid].audio or { rate = target }
-        result[mid].audio = bucket
-        include_in_extent(bucket, src_in_samples, src_out_samples)
+        target, bucket_key = rates.audio_sample_rate, "audio"
+    else
+        return
     end
+    local bucket = result[mid][bucket_key] or { rate = target }
+    result[mid][bucket_key] = bucket
+    include_in_extent(bucket,
+        map_source_through_mr(src_in,  target, clip_rate, mr_source_in, mr_seq_start),
+        map_source_through_mr(src_out, target, clip_rate, mr_source_in, mr_seq_start))
 end
 
 -- Run the IN-list extent query over one chunk of media ids.
@@ -1518,15 +1556,23 @@ end
 local function run_extent_chunk_query(db, ids, chunk_start, chunk_end, media_rates, result)
     local database = require("core.database")
     local n = chunk_end - chunk_start + 1
+    -- Pair each clip with the MASTER media_ref of the SAME track type (mt) so a
+    -- video clip maps through the video MR and an audio clip through the audio
+    -- MR(s) — never a video clip through an audio MR. The MR's
+    -- source_in_frame / sequence_start_frame carry the per-stream sync mapping
+    -- (camera audio is TC-aligned; synced external audio is offset), which
+    -- include_extent_row applies so the file extent reflects the real source
+    -- mapping, not a naive frame×rate scale.
     local sql = string.format([[
         SELECT mr.media_id, c.source_in_frame, c.source_out_frame,
                nested.fps_numerator, nested.fps_denominator,
-               t.track_type
+               ct.track_type, mr.source_in_frame, mr.sequence_start_frame
         FROM clips c
         JOIN sequences nested ON nested.id = c.sequence_id
+        JOIN tracks ct ON ct.id = c.track_id
         JOIN media_refs mr ON mr.owner_sequence_id = c.sequence_id
-        JOIN tracks t ON t.id = c.track_id
-        WHERE mr.media_id IN (%s)
+        JOIN tracks mt ON mt.id = mr.track_id
+        WHERE mr.media_id IN (%s) AND mt.track_type = ct.track_type
     ]], database.in_placeholders(n))
     local stmt = assert(db:prepare(sql),
         "Media.batch_get_source_extents: failed to prepare query")

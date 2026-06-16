@@ -157,6 +157,10 @@ local function add_master_audio_stream(master, media_id, media, sample_rate, opt
         source_out_frame     = duration_samples,        -- file-natural samples
         sequence_start_frame = 0,                       -- master.fps frames
         duration_frames      = duration_master_frames,  -- master.fps frames
+        -- Grow adds ONE audio track for the medium; channel 0. Multichannel
+        -- grow (one track per channel) is not yet handled — see
+        -- todo_023_per_channel_audio_streams.
+        source_channel       = 0,
         audio_sample_rate    = sample_rate,
         enabled              = true,
         volume               = 1.0,

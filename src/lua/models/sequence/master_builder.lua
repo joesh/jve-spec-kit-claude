@@ -83,8 +83,18 @@ function Sequence.ensure_master(media_id, project_id, opts)
         "Sequence.ensure_master: project_id is required")
     opts = opts or {}
 
-    -- LOOKUP: existing master that already references this media_id.
-    local existing_id = Sequence.find_master_for_media(media_id)
+    -- LOOKUP (idempotency). A master IS a source clip. When the caller carries
+    -- a source-clip identity (import_uuid — the Resolve pool DbId), idempotency
+    -- keys on THAT, because one physical file (one media_id) can back several
+    -- source clips (a synced clip and its plain-camera counterpart). Keying on
+    -- media_id there would collapse them into one master. Native / non-imported
+    -- callers pass no import_uuid and stay 1 master : 1 media (find_master_for_media).
+    local existing_id
+    if opts.import_uuid and opts.import_uuid ~= "" then
+        existing_id = Sequence.find_master_by_import_uuid(opts.import_uuid)
+    else
+        existing_id = Sequence.find_master_for_media(media_id)
+    end
     if existing_id then
         if opts.bin_id then
             local tag_service = require("core.tag_service")
@@ -178,15 +188,27 @@ function Sequence.ensure_master(media_id, project_id, opts)
     end
 
     local function create_master_row(dims)
+        -- start_timecode_frame is the ruler/view anchor; it MUST equal where
+        -- the master's content actually sits (each media_ref sits at its TC
+        -- origin — see add_video_stream / add_audio_streams). For a master
+        -- with video that's video_tc; for an audio-only master video_tc is
+        -- nil, so the content origin is audio_tc. Anchoring at 0 while the
+        -- audio sits at its sample timecode (~hours in) blows the view out to
+        -- hours of empty space (spec 023 master-timebase). has_video/has_audio
+        -- is guaranteed non-empty by load_media_dims, so this is exhaustive.
+        local content_origin
+        if dims.has_video then content_origin = dims.video_tc
+        else content_origin = dims.audio_tc end
         local seq = Sequence.create(dims.media.name, project_id,
             { fps_numerator = dims.fps_num, fps_denominator = dims.fps_den },
             dims.width, dims.height, {
                 id                       = opts.id,
                 kind                     = "master",
                 audio_sample_rate               = dims.seq_audio_rate,
-                start_timecode_frame     = dims.video_tc,
+                start_timecode_frame     = content_origin,
                 video_start_tc_frame     = dims.video_tc,
                 audio_start_tc_samples   = dims.audio_tc,
+                import_uuid              = opts.import_uuid,
             })
         assert(seq:save(), string.format(
             "Sequence.ensure_master: failed to save master sequence for media_id=%s",
@@ -226,12 +248,19 @@ function Sequence.ensure_master(media_id, project_id, opts)
 
     -- Create synced (external) audio tracks after the camera scratch tracks.
     -- Each external audio file gets one AUDIO track per channel, not muted.
-    -- sequence_start_frame is the video-fps frame that corresponds to the
-    -- external WAV's TC origin (TC-based sync: matching TC = same position).
-    local function add_synced_audio_streams(seq, dims, now, synced_audio_media_ids)
+    --
+    -- Resolve stores the sync alignment as a per-channel SampleOffset (the WAV
+    -- sample that plays under the video's first frame), NOT as a timecode
+    -- relationship — a free-run field recorder is never jam-synced to the
+    -- camera, so the two clips' timecodes do not coincide. The synced audio is
+    -- therefore CO-LOCATED with the video (same record start and take length);
+    -- the offset lives entirely in the source mapping. Each channel carries its
+    -- own SampleOffset (never assume one value across channels).
+    local function add_synced_audio_streams(seq, dims, now, synced_audio_streams)
         local base_index = dims.has_audio and dims.media.audio_channels or 0 -- lint-allow: R010 ternary: has_audio=false → 0 is correct; has_audio=true → audio_channels > 0 is invariant from load_media_dims
         local synced_track_offset = 0  -- cumulative; each file starts after the last channel of the previous
-        for _, audio_media_id in ipairs(synced_audio_media_ids) do
+        for _, stream in ipairs(synced_audio_streams) do
+            local audio_media_id = stream.media_id
             local audio_media = Media.load(audio_media_id)
             assert(audio_media, string.format(
                 "Sequence.ensure_master: synced audio media not found: %s",
@@ -247,18 +276,44 @@ function Sequence.ensure_master(media_id, project_id, opts)
             assert(audio_tc ~= nil, string.format(
                 "Sequence.ensure_master: synced audio media %s has no audio TC origin",
                 tostring(audio_media_id)))
-            -- Convert audio TC origin to video-fps frame position for sequence placement.
-            -- TC-based sync: the audio and video share the same wall-clock origin, so
-            -- the audio's TC in samples converts cleanly to the video's TC in frames.
-            local seq_start = math.floor(
-                audio_tc * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
-            local duration_samples = audio_media.duration
-            assert(type(duration_samples) == "number" and duration_samples > 0, string.format(
-                "Sequence.ensure_master: synced audio media %s has no duration",
-                tostring(audio_media_id)))
-            local audio_duration_frames = math.floor(
-                duration_samples * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
+            -- One SampleOffset per channel, in channel order.
+            local offsets = stream.sample_offsets
+            assert(offsets and #offsets == audio_media.audio_channels, string.format(
+                "Sequence.ensure_master: synced audio media %s has %d channels but "
+                .. "%d SampleOffsets", tostring(audio_media_id),
+                audio_media.audio_channels, offsets and #offsets or 0))
+
+            -- Placement. WITH video: co-locate against the video take and put the
+            -- per-channel SampleOffset in the source mapping (Resolve's model).
+            -- WITHOUT video (offline/undecoded video — nothing to co-locate
+            -- against): anchor at the audio's own TC spanning the whole file, the
+            -- only well-defined placement; the SampleOffset has no video frame-0
+            -- reference, so it is not applied until the video is present.
+            local seq_start, take_frames, take_samples, apply_offset
+            if dims.has_video then
+                seq_start    = dims.video_tc
+                take_frames  = dims.duration_frames
+                take_samples = math.floor(
+                    take_frames * dims.fps_den * sample_rate / dims.fps_num + 0.5)
+                apply_offset = true
+            else
+                seq_start    = math.floor(
+                    audio_tc * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
+                take_samples = audio_media.duration
+                take_frames  = math.floor(
+                    take_samples * dims.fps_num / (dims.fps_den * sample_rate) + 0.5)
+                apply_offset = false
+            end
             for ch = 1, audio_media.audio_channels do
+                local sample_offset = offsets[ch]
+                assert(sample_offset ~= nil, string.format(
+                    "Sequence.ensure_master: synced audio media %s channel %d has "
+                    .. "no SampleOffset", tostring(audio_media_id), ch))
+                -- file position of the take's first sample = TC origin (+ offset
+                -- when there's a video frame 0 to reference it against).
+                local file_offset = 0
+                if apply_offset then file_offset = sample_offset end
+                local source_in = audio_tc + file_offset
                 local track_index = base_index + synced_track_offset + ch
                 local atrack = Track.create_audio(
                     string.format("Sync %d", track_index), seq.id, {
@@ -274,10 +329,12 @@ function Sequence.ensure_master(media_id, project_id, opts)
                     owner_sequence_id    = seq.id,
                     track_id             = atrack.id,
                     media_id             = audio_media_id,
-                    source_in_frame      = audio_tc,
-                    source_out_frame     = audio_tc + duration_samples,
+                    source_in_frame      = source_in,
+                    source_out_frame     = source_in + take_samples,
                     sequence_start_frame = seq_start,
-                    duration_frames      = audio_duration_frames,
+                    duration_frames      = take_frames,
+                    -- One clip per stream: this sync track reads WAV channel ch-1.
+                    source_channel       = ch - 1,
                     audio_sample_rate    = sample_rate,
                     enabled              = true,
                     volume               = 1.0,
@@ -292,8 +349,8 @@ function Sequence.ensure_master(media_id, project_id, opts)
 
     local function add_audio_streams(seq, dims, now)
         if not dims.has_audio then return end
-        local camera_muted = opts.synced_audio_media_ids ~= nil
-            and #opts.synced_audio_media_ids > 0
+        local camera_muted = opts.synced_audio_streams ~= nil
+            and #opts.synced_audio_streams > 0
         local replay_audio_track_ids     = opts.audio_track_ids     or {}
         local replay_audio_media_ref_ids = opts.audio_media_ref_ids or {}
         -- Audio MR placement (sequence_start_frame, duration_frames) is in
@@ -346,6 +403,8 @@ function Sequence.ensure_master(media_id, project_id, opts)
                 source_out_frame     = dims.audio_tc + dims.duration_samples,
                 sequence_start_frame = seq_start,
                 duration_frames      = seq_dur,
+                -- One clip per stream: this track reads file channel ch-1.
+                source_channel       = ch - 1,
                 -- 018 V11 / FR-004: AUDIO media_refs carry their own
                 -- audio_sample_rate (denormalized from media so the
                 -- resolver hot path doesn't join through media at decode).
@@ -364,8 +423,8 @@ function Sequence.ensure_master(media_id, project_id, opts)
     local now  = os.time()
     add_video_stream(seq, dims, now)
     add_audio_streams(seq, dims, now)
-    if opts.synced_audio_media_ids and #opts.synced_audio_media_ids > 0 then
-        add_synced_audio_streams(seq, dims, now, opts.synced_audio_media_ids)
+    if opts.synced_audio_streams and #opts.synced_audio_streams > 0 then
+        add_synced_audio_streams(seq, dims, now, opts.synced_audio_streams)
     end
 
     if opts.bin_id then
@@ -374,6 +433,30 @@ function Sequence.ensure_master(media_id, project_id, opts)
     end
 
     return seq.id
+end
+
+--- Find the master sequence (kind='master') for a source-clip identity
+--- (import_uuid — the Resolve pool DbId carried by the imported project).
+--- This is the idempotency anchor for imported masters: distinct source clips
+--- over one physical file have distinct import_uuids, so this returns exactly
+--- the one master for THIS source clip. Returns the sequence id, or nil.
+function Sequence.find_master_by_import_uuid(import_uuid)
+    assert(import_uuid and import_uuid ~= "",
+        "Sequence.find_master_by_import_uuid: import_uuid is required")
+    local conn = resolve_db()
+    local stmt = conn:prepare([[
+        SELECT id FROM sequences
+        WHERE kind = 'master' AND import_uuid = ?
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1
+    ]])
+    assert(stmt, "Sequence.find_master_by_import_uuid: prepare failed")
+    stmt:bind_value(1, import_uuid)
+    assert(stmt:exec(), "Sequence.find_master_by_import_uuid: exec failed")
+    local id
+    if stmt:next() then id = stmt:value(0) end
+    stmt:finalize()
+    return id
 end
 
 --- Find the master sequence (kind='master') whose tracks include a

@@ -139,7 +139,7 @@ local function list_media_refs(db, master_seq_id, only_track_id)
                mr.enabled, mr.volume,
                t.track_type, t.track_index,
                m.file_path, m.audio_channels,
-               mr.audio_sample_rate
+               mr.audio_sample_rate, mr.source_channel
         FROM media_refs mr
         JOIN tracks t ON mr.track_id = t.id
         JOIN media m ON mr.media_id = m.id
@@ -169,6 +169,7 @@ local function list_media_refs(db, master_seq_id, only_track_id)
             file_path = stmt:value(11),
             audio_channels = stmt:value(12) or 0,
             audio_sample_rate = stmt:value(13),
+            source_channel = stmt:value(14),
         }
     end
     stmt:finalize()
@@ -412,24 +413,45 @@ end
 -- One audio entry per channel. Channel-state stays separate from volume
 -- until the final composition pass — any clip in the chain may replace it
 -- via clip_channel_override without needing to divide out a stale factor.
-local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, outer_chain)
+-- Emit ONE audio entry for ONE media_ref. JVE models one clip per stream, so
+-- each audio media_ref IS a single file channel on its own master track (the
+-- importer split the file's channels into separate tracks at import). This does
+-- NOT fan across the file's channel count — the pre-023 fan re-expanded every
+-- single-channel ref into all of the file's channels, so every per-channel track
+-- played the whole file (N² entries, all identical waveforms/audio).
+--
+-- Two distinct channel numbers are in play:
+--   * source_channel — which channel of the underlying FILE to decode
+--     (file-relative; carried on the media_ref). Goes downstream to the decoder.
+--   * channel_index  — the master's own channel SLOT, used to key per-channel
+--     mix state (media_refs_channel_state / clip_channel_override). It is the
+--     audio track's ordinal (track_index - 1), unique within the master. For a
+--     single-file master the two coincide; for a synced master (camera track +
+--     external-WAV tracks) the WAV tracks' slots continue past the camera's.
+local function emit_audio_channel_entry(entries, r, base, db, master_seq_id, outer_chain)
     -- Resolver invariant: AUDIO mrefs MUST carry audio_sample_rate (FR-004 /
     -- schema trigger). Surface at the resolver — downstream consumers (TMB
     -- feeder, audio_playback) need it and shouldn't have to re-assert.
     assert(type(r.audio_sample_rate) == "number" and r.audio_sample_rate > 0,
-        string.format("emit_audio_channel_entries: mref %s missing audio_sample_rate "
+        string.format("emit_audio_channel_entry: mref %s missing audio_sample_rate "
             .. "(track=%s; AUDIO media_refs require it per FR-004)",
             tostring(r.id), tostring(r.track_id)))
-    -- Audio media_refs MUST carry channel count (FR-004 / schema trigger).
-    -- A 0 / nil here means the importer didn't populate it — fail loud.
     assert(type(r.audio_channels) == "number" and r.audio_channels > 0,
-        string.format("emit_audio_channel_entries: mref %s has audio_channels=%s "
+        string.format("emit_audio_channel_entry: mref %s has audio_channels=%s "
             .. "(track=%s; AUDIO media_refs require a positive channel count per FR-004)",
             tostring(r.id), tostring(r.audio_channels), tostring(r.track_id)))
-    local n_ch = r.audio_channels
-    for ch = 0, n_ch - 1 do
+
+    -- A ref's source_channel discriminates its representation:
+    --   * set (>= 0) → ONE file channel on its own track (023 one clip per
+    --     stream; the importer splits a file's channels into separate tracks).
+    --   * NULL → a COMPOSITE ref carrying the file's whole channel set (the
+    --     018 expand/collapse model); fan it into one entry per file channel.
+    -- The per-channel form is preferred; the composite form is kept so existing
+    -- composite masters / collapsed clips still resolve. channel_index is the
+    -- master mix-state slot; source_channel is the decoder's file selector.
+    local function add_entry(slot, source_channel)
         local ms_enabled, ms_gain_db =
-            fetch_master_channel_state(db, master_seq_id, ch)
+            fetch_master_channel_state(db, master_seq_id, slot)
         entries[#entries + 1] = {
             media_path     = base.media_path,
             media_id       = base.media_id,
@@ -439,7 +461,8 @@ local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, o
             sequence_start = base.sequence_start,
             duration       = base.duration,
             track_role     = "audio",
-            channel_index  = ch,
+            channel_index  = slot,           -- master slot (mix-state key)
+            source_channel = source_channel, -- file channel (decoder selector)
             volume         = base.volume,
             enabled        = base.enabled,
             effects        = {},
@@ -454,6 +477,24 @@ local function emit_audio_channel_entries(entries, r, base, db, master_seq_id, o
             -- decoder seeks using video fps and lands far past EOF — F10 silent.
             audio_sample_rate = r.audio_sample_rate,
         }
+    end
+
+    if r.source_channel ~= nil then
+        assert(type(r.source_channel) == "number" and r.source_channel >= 0
+            and r.source_channel < r.audio_channels,
+            string.format("emit_audio_channel_entry: mref %s source_channel=%s out "
+                .. "of range for a %d-channel file (track=%s; 023 one-clip-per-stream)",
+                tostring(r.id), tostring(r.source_channel), r.audio_channels,
+                tostring(r.track_id)))
+        assert(type(r.track_index) == "number" and r.track_index >= 1,
+            string.format("emit_audio_channel_entry: mref %s track_index=%s invalid",
+                tostring(r.id), tostring(r.track_index)))
+        add_entry(r.track_index - 1, r.source_channel)
+    else
+        -- Composite ref: fan the whole file into per-channel entries.
+        for ch = 0, r.audio_channels - 1 do
+            add_entry(ch, ch)
+        end
     end
 end
 
@@ -549,7 +590,7 @@ local function pick_master_leaf(db, seq_id, lo_f, lo_s, hi_f, hi_s,
             if r.track_type == "VIDEO" then
                 emit_video_entry(entries, r, base)
             else
-                emit_audio_channel_entries(entries, r, base, db, seq_id, outer_chain)
+                emit_audio_channel_entry(entries, r, base, db, seq_id, outer_chain)
             end
         end
     end

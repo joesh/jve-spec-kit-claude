@@ -813,6 +813,24 @@ local UUID_VALUE_LEN_BE32   = string.char(0, 0, 0, 72)  -- 72-byte UTF-16BE UUID
 -- length marker belonging to a later field. Observed = 12 across the DRP corpus.
 local MEDIAREF_NAME_TO_VALUE_MAX_GAP = 12
 
+-- A synced clip's per-channel external-audio alignment is a `SampleOffset`
+-- field that immediately precedes the channel's `MediaRef` in the Fusion Fields
+-- container: the WAV file position (in audio samples) that plays under the
+-- video's first frame. It is PER CHANNEL — never assume one value broadcast to
+-- every channel; the importer threads each channel's own offset to its sync
+-- track. Camera-embedded scratch refs carry no SampleOffset.
+--
+-- Measured stride name→name in Resolve-authored fixtures = 41 bytes:
+--   24B (UTF-16LE "SampleOffset") + 4B (2B sep + 2B type) + 8B (BE64 value)
+--   + 5B framing before the MediaRef name. The window below bounds the
+-- back-search so a channel never adopts a far-removed unrelated offset
+-- (camera refs' nearest preceding SampleOffset is hundreds of bytes back).
+local SAMPLEOFFSET_NAME_UTF16LE = ("SampleOffset"):gsub(".", "%0\0")
+local SAMPLEOFFSET_TO_MEDIAREF_MAX_GAP = 48
+-- The SampleOffset BE64 value sits at name_end + 4 (2B separator + 2B type tag),
+-- mirroring the mixed-endianness Fusion quirk (LE names, BE values) noted above.
+local SAMPLEOFFSET_NAME_TO_VALUE_GAP = 4
+
 -- Read a 72-byte UTF-16BE canonical dashed UUID at `pos`; nil if the bytes
 -- there are not a well-formed UUID (high byte of each wide char must be 0x00).
 local function read_utf16be_uuid(bytes, pos)
@@ -841,15 +859,39 @@ end
 -- positives for UUIDs that were never audio. Anchoring on `MediaRef` yields
 -- exactly the audio references and nothing else.
 --
--- Returns UUIDs in on-wire order, duplicates preserved: a synced clip repeats
--- its primary external audio ref once per channel, so callers can use the
--- order and repetition count for channel ↔ source mapping.
--- @param bytes string: decompressed FieldsBlob payload
--- @return table: array of lowercase dashed UUID strings
-function M.extract_media_refs(bytes)
-    assert(type(bytes) == "string",
-        "extract_media_refs: bytes string required")
-    local out = {}
+-- Read the BE64 SampleOffset value belonging to the SampleOffset field whose
+-- name starts at `name_pos`; nil if the value bytes run past the blob.
+local function read_sample_offset_value(bytes, name_pos)
+    local value_pos = name_pos + #SAMPLEOFFSET_NAME_UTF16LE
+        + SAMPLEOFFSET_NAME_TO_VALUE_GAP
+    return M.read_be64(bytes, value_pos)
+end
+
+-- The SampleOffset (samples) that aligns the channel whose MediaRef name starts
+-- at `mr_name_pos`: the nearest SampleOffset field within the back-search window
+-- that precedes it. nil when the channel carries none (camera-embedded refs).
+local function sample_offset_for_media_ref(bytes, mr_name_pos)
+    local offset = nil
+    local search = math.max(1, mr_name_pos - SAMPLEOFFSET_TO_MEDIAREF_MAX_GAP)
+    while true do
+        local so_pos = bytes:find(SAMPLEOFFSET_NAME_UTF16LE, search, true)
+        if not so_pos or so_pos >= mr_name_pos then break end
+        offset = read_sample_offset_value(bytes, so_pos)  -- keep the closest
+        search = so_pos + 1
+    end
+    return offset
+end
+
+-- Single scan of a FieldsBlob payload → ordered MediaRef records, each
+-- { uuid = <BtAudioInfo DbId>, sample_offset = <samples|nil> }, in on-wire
+-- order with duplicates preserved: a synced clip repeats its primary external
+-- audio ref once per channel, so callers use order and repetition for channel ↔
+-- source mapping, and read each channel's own sample_offset. Both public
+-- extractors below derive from this one walk so the uuid list and the offset
+-- list can never drift out of index alignment.
+local function scan_media_refs(bytes)
+    assert(type(bytes) == "string", "scan_media_refs: bytes string required")
+    local refs = {}
     local search = 1
     while true do
         local name_pos = bytes:find(MEDIAREF_NAME_UTF16LE, search, true)
@@ -860,9 +902,38 @@ function M.extract_media_refs(bytes)
         local len_pos = bytes:find(UUID_VALUE_LEN_BE32, value_pos, true)
         if len_pos and len_pos <= value_pos + MEDIAREF_NAME_TO_VALUE_MAX_GAP then
             local uuid = read_utf16be_uuid(bytes, len_pos + 4)
-            if uuid then out[#out + 1] = uuid end
+            if uuid then
+                refs[#refs + 1] = {
+                    uuid          = uuid,
+                    sample_offset = sample_offset_for_media_ref(bytes, name_pos),
+                }
+            end
         end
         search = value_pos
+    end
+    return refs
+end
+
+-- Extract the ordered UUID list (see scan_media_refs for ordering/duplication).
+-- @param bytes string: decompressed FieldsBlob payload
+-- @return table: array of lowercase dashed UUID strings
+function M.extract_media_refs(bytes)
+    local out = {}
+    for _, ref in ipairs(scan_media_refs(bytes)) do
+        out[#out + 1] = ref.uuid
+    end
+    return out
+end
+
+-- Extract the per-channel SampleOffset list, INDEX-ALIGNED with the UUID list
+-- from extract_media_refs (same scan). Entry is the channel's offset in audio
+-- samples, or nil for a channel that carries none (camera-embedded scratch).
+-- @param bytes string: decompressed FieldsBlob payload
+-- @return table: array of sample-offset numbers (sparse: nil where absent)
+function M.extract_media_ref_sample_offsets(bytes)
+    local out = {}
+    for i, ref in ipairs(scan_media_refs(bytes)) do
+        out[i] = ref.sample_offset
     end
     return out
 end
