@@ -598,34 +598,21 @@ local initial_sequence_id = find_sequence_id(last_sequence_id, sequences)
 local timeline_state = require("ui.timeline.timeline_state")
 local strip_blob = timeline_state.get_persisted_tab_strip_blob()
 if strip_blob and type(strip_blob.tabs) == "table" then
-    -- Decode: record sequences to open (in saved order), the source tab
-    -- (loaded master vs empty), and which tab was displayed.
-    local record_ids, source_seq, source_is_empty = {}, nil, false
-    local displayed_kind, displayed_seq = nil, nil
-    for _, t in ipairs(strip_blob.tabs) do
-        if t.kind == "source" then
-            if t.sequence_id and t.sequence_id ~= "" then
-                source_seq = t.sequence_id
-            else
-                source_is_empty = true
-            end
-        elseif t.kind == "record" and t.sequence_id and t.sequence_id ~= "" then
-            record_ids[#record_ids + 1] = t.sequence_id
-        end
-        if strip_blob.displayed_tab_id and t.id == strip_blob.displayed_tab_id then
-            displayed_kind = t.kind
-            displayed_seq = t.sequence_id
-        end
-    end
+    -- Decode the blob into restore intent (record ids, the source tab, the
+    -- displayed side). Strip-format knowledge lives in the strip module; the
+    -- cross-layer replay below — which spans state/panel/source_viewer — is
+    -- the composition root's job.
+    local TimelineTabStrip = require("ui.timeline.timeline_tab_strip")
+    local plan = TimelineTabStrip.decode_blob(strip_blob)
 
     -- Empty source tab: open it in the strip (no display yet) so it
     -- materializes as a closable tab below.
-    if source_is_empty then
+    if plan.source_is_empty then
         timeline_state.get_tab_strip():open_empty_source_tab()
     end
 
     -- Open each saved record tab (the initial one already exists).
-    for _, seq_id in ipairs(record_ids) do
+    for _, seq_id in ipairs(plan.record_ids) do
         if seq_id ~= initial_sequence_id then
             local tab_ok, tab_err = pcall(timeline_panel_mod.open_tab, seq_id)
             if not tab_ok then
@@ -639,9 +626,9 @@ if strip_blob and type(strip_blob.tabs) == "table" then
     -- back from a quit (the strip tab's cache is hydrated, but the source
     -- MONITOR is owned by source_viewer). FR-001b auto-switch makes this the
     -- displayed side when a master was persisted.
-    if source_seq then
-        require("ui.source_viewer").load_master_clip(source_seq)
-        log.event("Restored source monitor master: %s", source_seq)
+    if plan.source_seq then
+        require("ui.source_viewer").load_master_clip(plan.source_seq)
+        log.event("Restored source monitor master: %s", plan.source_seq)
     end
 
     -- Match the panel's visual tab order to the strip (source first, then
@@ -650,11 +637,11 @@ if strip_blob and type(strip_blob.tabs) == "table" then
 
     -- Restore the displayed side. Record-displayed is already shown by init;
     -- flip to the source side only when the user left off there.
-    if displayed_kind == "source" then
-        if displayed_seq and displayed_seq ~= "" then
-            timeline_state.switch_to_source_tab(displayed_seq)
-            log.event("Restored displayed tab kind=source seq=%s", displayed_seq)
-        elseif source_is_empty then
+    if plan.displayed_kind == "source" then
+        if plan.displayed_seq and plan.displayed_seq ~= "" then
+            timeline_state.switch_to_source_tab(plan.displayed_seq)
+            log.event("Restored displayed tab kind=source seq=%s", plan.displayed_seq)
+        elseif plan.source_is_empty then
             timeline_state.show_empty_source_tab()
             log.event("Restored displayed empty source tab")
         end

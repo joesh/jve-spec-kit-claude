@@ -658,6 +658,24 @@ M.get_movement_target_sequence_id = function()
     return displayed and displayed.sequence_id or nil
 end
 
+-- Flush the OUTGOING displayed tab's per-sequence view-state (scroll offsets
+-- included) to its DB row BEFORE the displayed pointer moves to next_seq_id.
+-- persist resolves the target row via the strip's displayed pointer; after the
+-- swap it would write the outgoing values into the incoming row. Returns the
+-- outgoing displayed sequence_id (nil if the displayed tab had none — e.g. the
+-- empty source tab), which callers thread into activate_displayed / signal
+-- payloads. next_seq_id may be nil (switching TO the empty source tab, which
+-- has no sequence) — then any displayed sequence is "outgoing" and is flushed.
+local function flush_outgoing_displayed_view_state(next_seq_id)
+    local prev_tab = tab_strip:get_displayed()
+    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
+    if prev_seq_id and prev_seq_id ~= next_seq_id then
+        M.persist_scroll_offsets()
+        core.persist_state_to_db(true)
+    end
+    return prev_seq_id
+end
+
 -- Switch to the Source tab. Only displayed_tab_id changes; active_sequence_id
 -- is untouched (FR-005). Delegates to core.activate_displayed which persists
 -- outgoing displayed view-state, loads incoming, and emits displayed_tab_changed.
@@ -665,18 +683,9 @@ end
 function M.switch_to_source_tab(source_seq_id)
     assert(source_seq_id and source_seq_id ~= "",
         "timeline_state.switch_to_source_tab: source_seq_id required")
-    -- Capture prev from the strip BEFORE the swap so core knows where to
-    -- flush outgoing view-state.
-    local prev_tab = tab_strip:get_displayed()
-    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
-    -- Flush per-sequence view-state (scroll offsets included) to the
-    -- OUTGOING row BEFORE the strip pointer moves. persist resolves the
-    -- target row via the strip's displayed pointer; after the swap it
-    -- would write outgoing values to the incoming row.
-    if prev_seq_id and prev_seq_id ~= source_seq_id then
-        M.persist_scroll_offsets()
-        core.persist_state_to_db(true)
-    end
+    -- Capture + flush the outgoing displayed view-state before the swap so
+    -- core knows where to flush and the row is written to the right sequence.
+    local prev_seq_id = flush_outgoing_displayed_view_state(source_seq_id)
     -- Ensure the strip has a source tab pointing at this seq, then make it
     -- the displayed pointer. open_source_tab is idempotent (reloads in
     -- place if a source tab is already open).
@@ -703,15 +712,8 @@ function M.switch_to_record_tab(seq_id)
     assert(seq_id and seq_id ~= "",
         "timeline_state.switch_to_record_tab: seq_id required")
     local prev_active = data.state.sequence_id
-    local prev_tab = tab_strip:get_displayed()
-    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
-    -- Flush per-sequence view-state (scroll offsets included) to the
-    -- OUTGOING row BEFORE the strip pointer moves. Same rationale as
-    -- switch_to_source_tab — persist resolves via the strip's pointer.
-    if prev_seq_id and prev_seq_id ~= seq_id then
-        M.persist_scroll_offsets()
-        core.persist_state_to_db(true)
-    end
+    -- Flush the outgoing displayed view-state before the strip pointer moves.
+    local prev_seq_id = flush_outgoing_displayed_view_state(seq_id)
     -- Ensure the strip has a record tab for this seq, then make it both
     -- active and displayed (FR-004). open_record_tab is idempotent.
     local rec_tab = tab_strip:find_record_tab_by_sequence_id(seq_id)
@@ -776,15 +778,10 @@ end
 --- core.activate_displayed, which requires a real sequence. Persists so
 --- quit/restart restores the empty source tab like any other.
 function M.show_empty_source_tab()
-    local prev_tab = tab_strip:get_displayed()
-    local prev_seq_id = prev_tab and prev_tab.sequence_id or nil
-    -- Flush outgoing per-sequence view-state BEFORE the displayed pointer
-    -- moves (persist resolves the row via the strip's displayed pointer).
-    -- Same ordering rationale as switch_to_source_tab.
-    if prev_seq_id then
-        M.persist_scroll_offsets()
-        core.persist_state_to_db(true)
-    end
+    -- Flush the outgoing displayed view-state before the displayed pointer
+    -- moves. next_seq_id is nil — the empty source tab has no sequence — so
+    -- any displayed sequence counts as outgoing and is flushed.
+    local prev_seq_id = flush_outgoing_displayed_view_state(nil)
     local source_tab = tab_strip:open_empty_source_tab()
     tab_strip:switch_displayed(source_tab)
     -- displayed_tab_changed subscribers (panel rebuild, transport) ignore the

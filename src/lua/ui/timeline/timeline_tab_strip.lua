@@ -376,6 +376,42 @@ function TimelineTabStrip.build_record_only_blob(open_ids, active_id)
     }
 end
 
+--- Decode a serialized strip blob into the fields restore needs to replay it,
+--- keeping strip-format knowledge (tab kinds, the empty-source convention of an
+--- absent sequence_id) inside this module rather than leaking it into the
+--- layout composition root. Pure data, no DB or Qt. Returns:
+---   record_ids     — record sequence ids in saved order
+---   source_seq     — the loaded source master id, or nil
+---   source_is_empty — true when the blob carried the empty source tab
+---   displayed_kind — "source"/"record" of the displayed tab, or nil
+---   displayed_seq  — the displayed tab's sequence_id (nil for the empty source)
+--- The caller owns the cross-layer replay (it spans state/panel/source_viewer);
+--- this only turns bytes into intent.
+function TimelineTabStrip.decode_blob(blob)
+    assert(type(blob) == "table" and type(blob.tabs) == "table",
+        "TimelineTabStrip.decode_blob: blob with a tabs list required")
+    local decoded = {
+        record_ids = {}, source_seq = nil, source_is_empty = false,
+        displayed_kind = nil, displayed_seq = nil,
+    }
+    for _, t in ipairs(blob.tabs) do
+        if t.kind == "source" then
+            if t.sequence_id and t.sequence_id ~= "" then
+                decoded.source_seq = t.sequence_id
+            else
+                decoded.source_is_empty = true
+            end
+        elseif t.kind == "record" and t.sequence_id and t.sequence_id ~= "" then
+            decoded.record_ids[#decoded.record_ids + 1] = t.sequence_id
+        end
+        if blob.displayed_tab_id and t.id == blob.displayed_tab_id then
+            decoded.displayed_kind = t.kind
+            decoded.displayed_seq = t.sequence_id
+        end
+    end
+    return decoded
+end
+
 --- Serialize to a plain table for project-DB persistence (Phase 2 wires).
 function TimelineTabStrip:serialize()
     local serialized_tabs = {}

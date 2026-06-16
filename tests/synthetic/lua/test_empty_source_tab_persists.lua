@@ -83,6 +83,23 @@ assert(has_record, "the record tab must remain in the strip when the empty "
     .. "source tab is displayed (active record is untouched)")
 print("  ✓ the active record tab is preserved alongside the empty source tab")
 
+-- ── Step 1b: decode_blob turns the persisted blob into restore intent ──
+-- Layout restore reads the blob through TimelineTabStrip.decode_blob; feed it
+-- the real persisted blob and assert it recovers what the user left off with:
+-- an empty source tab displayed, one record tab open, no loaded source master.
+local plan = TimelineTabStrip.decode_blob(blob)
+assert(plan.source_is_empty == true,
+    "decode_blob must report the empty source tab present")
+assert(plan.source_seq == nil,
+    "no master was loaded, so decode_blob must report no source sequence")
+assert(plan.displayed_kind == "source",
+    "the user left off on the source side; decode_blob must report it")
+assert(plan.displayed_seq == nil or plan.displayed_seq == "",
+    "the displayed empty source tab has no sequence")
+assert(#plan.record_ids == 1 and plan.record_ids[1] == "rec",
+    "decode_blob must recover the single open record tab 'rec'")
+print("  ✓ decode_blob recovers empty-source-displayed + the 'rec' record tab")
+
 -- ── Step 2: the blob round-trips back into the strip on restore ──
 local strip = TimelineTabStrip.deserialize(blob)
 local restored = strip:get_displayed()
