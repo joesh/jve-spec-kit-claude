@@ -66,10 +66,10 @@ assert(round.kind == "source" and round.sequence_id == nil,
     "deserialize reconstructs the empty source tab (no Sequence.load)")
 print("✓ empty source tab round-trips through tab serialize/deserialize")
 
--- ── 3. strip:open_empty_source_tab — singleton, first, displayed-only ──────
+-- ── 3. strip:ensure_empty_source_tab — singleton, first, displayed-only ──────
 local strip = TimelineTabStrip.new()
 local rec = strip:open_record_tab("rec1")     -- auto active+displayed
-local es = strip:open_empty_source_tab()
+local es = strip:ensure_empty_source_tab()
 assert(strip:get_source_tab() == es, "empty source tab IS the source singleton")
 assert(strip.tabs[1] == es, "source tab is first (F1 singleton placement)")
 assert(es.sequence_id == nil, "still sequence-less in the strip")
@@ -79,7 +79,7 @@ assert(strip:get_active_record() == rec, "active record unchanged by opening sou
 strip:switch_displayed(es)
 assert(strip:get_displayed() == es, "empty source can be displayed")
 assert(strip:get_active_record() == rec, "active record still the record tab")
-print("✓ strip:open_empty_source_tab singleton + displayed-only switch")
+print("✓ strip:ensure_empty_source_tab singleton + displayed-only switch")
 
 -- ── 4. opening a real master upgrades the empty source tab IN PLACE ────────
 -- (loading the source monitor while the empty tab is shown — same singleton).
@@ -92,7 +92,7 @@ print("✓ loading a master upgrades the empty source tab in place")
 -- ── 5. strip round-trip with the empty source tab DISPLAYED ────────────────
 strip = TimelineTabStrip.new()
 local rec_b = strip:open_record_tab("rec1")
-local es2 = strip:open_empty_source_tab()
+local es2 = strip:ensure_empty_source_tab()
 strip:switch_active_record(rec_b)   -- active+displayed = rec_b
 strip:switch_displayed(es2)         -- displayed = empty source, active = rec_b
 

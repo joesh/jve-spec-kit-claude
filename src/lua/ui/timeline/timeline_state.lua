@@ -231,7 +231,10 @@ function M.close_displayed_tab(strip_tab)
     -- Flush any pending per-sequence view-state to the OUTGOING row before
     -- the strip mutation below changes which row persist resolves to. Only
     -- meaningful when the closing tab is displayed AND has a sequence row
-    -- (the empty source tab has none).
+    -- (the empty source tab has none). Unlike the switch paths
+    -- (flush_outgoing_displayed_view_state) this deliberately skips
+    -- persist_scroll_offsets — the tab is being closed, so its scroll position
+    -- is discarded, not preserved.
     if was_displayed and prev_seq_id then
         core.persist_state_to_db(true)
     end
@@ -782,7 +785,7 @@ function M.show_empty_source_tab()
     -- moves. next_seq_id is nil — the empty source tab has no sequence — so
     -- any displayed sequence counts as outgoing and is flushed.
     local prev_seq_id = flush_outgoing_displayed_view_state(nil)
-    local source_tab = tab_strip:open_empty_source_tab()
+    local source_tab = tab_strip:ensure_empty_source_tab()
     tab_strip:switch_displayed(source_tab)
     -- displayed_tab_changed subscribers (panel rebuild, transport) ignore the
     -- payload; new=nil because the empty source tab has no sequence_id.

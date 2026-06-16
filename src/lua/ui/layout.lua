@@ -608,7 +608,7 @@ if strip_blob and type(strip_blob.tabs) == "table" then
     -- Empty source tab: open it in the strip (no display yet) so it
     -- materializes as a closable tab below.
     if plan.source_is_empty then
-        timeline_state.get_tab_strip():open_empty_source_tab()
+        timeline_state.get_tab_strip():ensure_empty_source_tab()
     end
 
     -- Open each saved record tab (the initial one already exists).

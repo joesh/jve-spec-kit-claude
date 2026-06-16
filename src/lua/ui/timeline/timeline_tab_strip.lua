@@ -125,14 +125,16 @@ function TimelineTabStrip:open_source_tab(sequence_id)
     return tab
 end
 
---- Open the EMPTY source tab — the source side with no master loaded
---- (sequence_id=nil). Singleton like open_source_tab: if a source tab is
---- already open this is a no-op returning it (it may already hold a master;
---- callers only reach here when the source monitor is empty). Inserted first
---- per spec F1. Does NOT touch the displayed/active pointers — the caller
---- (timeline_state.show_empty_source_tab) drives switch_displayed.
+--- Ensure the source tab exists and is EMPTY (no master loaded,
+--- sequence_id=nil) — the source side the user sees when the source monitor
+--- holds nothing. Singleton like open_source_tab, but this both opens AND
+--- reconciles: if a stale source tab still carries a loaded master it is reset
+--- to the blank body, because callers only reach here when the source side is
+--- known empty. Inserted first per spec F1. Does NOT touch the displayed/active
+--- pointers — the caller (timeline_state.show_empty_source_tab) drives
+--- switch_displayed.
 -- @return TimelineTab the source tab (empty)
-function TimelineTabStrip:open_empty_source_tab()
+function TimelineTabStrip:ensure_empty_source_tab()
     if self.source_tab then
         -- The caller is asserting the source side is empty (the source
         -- monitor holds nothing). Reconcile a stale loaded source tab back
