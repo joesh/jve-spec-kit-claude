@@ -119,7 +119,7 @@ local peak_cache = require("core.media.peak_cache")
 -- peak_cache hasn't been initialized (no init_for_project call),
 -- so media_tc_origins is empty. Must return nil, not crash.
 local peaks, count, actual_start, actual_end =
-    peak_cache.get_visible_peaks("nonexistent-media-id", 0, 48000, 100)
+    peak_cache.get_visible_peaks("nonexistent-media-id", 0, 48000, 100, -1)  -- -1 = composite channel (023)
 assert(peaks == nil, "peaks is nil when TC origin unknown")
 assert(count == 0, "count is 0")
 assert(actual_start == 0, "actual_start is 0")

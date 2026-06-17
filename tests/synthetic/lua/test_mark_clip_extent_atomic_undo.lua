@@ -50,6 +50,10 @@ package.loaded["ui.timeline.timeline_state"] = {
         })
     end,
     get_project_id    = function() return "p" end,
+    -- capture_displayed_playhead asserts displayed-sequence ⇔ playhead ⇔ rate;
+    -- keep these consistent with get_playhead_position (non-nil).
+    get_displayed_tab_id   = function() return "s" end,
+    get_displayed_tab_kind = function() return "record" end,
     get_track_by_id   = function() return { track_type = "VIDEO", track_index = 1 } end,
     get_track_index   = function() return 1 end,
     get_selected_clips= function() return {} end,

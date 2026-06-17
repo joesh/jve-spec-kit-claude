@@ -160,7 +160,28 @@ expect_error("V3: audio media_ref without audio_sample_rate is refused",
         })
     end, "audio_sample_rate")
 
--- Happy path: AUDIO media_ref with rate succeeds.
+-- V3b: AUDIO media_ref must also name the file channel it reads (023 — one
+-- clip per stream). source_channel is required, no silent default.
+expect_error("V3: audio media_ref without source_channel is refused",
+    function()
+        MediaRef.create({
+            project_id = "p",
+            owner_sequence_id = "m",
+            track_id = "m-a",
+            media_id = "med",
+            source_in_frame = 0,
+            source_out_frame = 1000,
+            sequence_start_frame = 0,
+            duration_frames = 1000,
+            audio_sample_rate = 48000,
+            -- source_channel omitted on an AUDIO media_ref
+            enabled = true,
+            volume = 1.0,
+            playhead_frame = 0,
+        })
+    end, "source_channel")
+
+-- Happy path: AUDIO media_ref with rate + channel succeeds.
 local mr_ok = MediaRef.create({
     project_id = "p",
     owner_sequence_id = "m",
@@ -171,11 +192,12 @@ local mr_ok = MediaRef.create({
     sequence_start_frame = 0,
     duration_frames = 1000,
     audio_sample_rate = 48000,
+    source_channel = 0,
     enabled = true,
     volume = 1.0,
     playhead_frame = 0,
 })
-assert(mr_ok, "V3 happy: audio media_ref with rate created")
+assert(mr_ok, "V3 happy: audio media_ref with rate + channel created")
 
 -- VIDEO media_ref with rate=nil is fine.
 local mr_v_ok = MediaRef.create({

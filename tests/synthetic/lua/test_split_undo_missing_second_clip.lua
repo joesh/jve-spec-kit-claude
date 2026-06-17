@@ -58,6 +58,10 @@ package.loaded["core.database"] = {
     savepoint = function() return true end,
     release_savepoint = function() return true end,
     rollback_to_savepoint = function() return true end,
+    -- split_clip's undoer batches Clip lookups through an IN (...) query
+    -- built with database.in_placeholders (88706fec). Mirror the real
+    -- helper so the stubbed DB layer behaves identically.
+    in_placeholders = function(n) return string.rep("?,", n - 1) .. "?" end,
 }
 
 package.loaded["core.signals"] = { emit = function() end }

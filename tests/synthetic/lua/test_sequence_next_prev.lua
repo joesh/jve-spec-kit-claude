@@ -22,8 +22,8 @@ assert(db:exec(import_schema))
 
 -- Project + sequence
 assert(db:exec([[
-    INSERT INTO projects(id, name, fps_mismatch_policy, created_at, modified_at)
-    VALUES('proj', 'Test', 'resample', 0, 0)
+    INSERT INTO projects(id, name, fps_mismatch_policy, settings, created_at, modified_at)
+    VALUES('proj', 'Test', 'resample', '{"master_clock_hz":192000,"default_fps":{"num":24,"den":1}}', 0, 0)
 ]]))
 
 assert(db:exec([[
@@ -55,31 +55,20 @@ assert(db:exec([[
 -- V1: clip_v1a [0, 100), clip_v1b [200, 300)
 -- V2: clip_v2a [50, 150)
 -- A1: clip_a1 [0, 100), clip_a2 [200, 300)
-assert(db:exec([[
-    -- V13 master sequence for media_a
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_a', 'proj', 'media_a_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
-INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-VALUES ('master_v_media_a', 'master_media_a', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-UPDATE sequences SET default_video_layer_track_id = 'master_v_media_a' WHERE id = 'master_media_a' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_a', 'proj', 'master_media_a', 'master_v_media_a', 'media_a', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
+-- Build masters via the real factory (per-type tracks) so the resolver's
+-- per-type media_ref JOIN resolves audio clips against an AUDIO master track.
+-- opts.sample_rate supplies the project-default rate — media rows carry none.
+local master_v = Sequence.ensure_master("media_v", "proj", { sample_rate = 48000 })
+local master_a = Sequence.ensure_master("media_a", "proj", { sample_rate = 48000 })
 
--- V13 master sequence for media_v
-INSERT OR IGNORE INTO sequences (id, project_id, name, kind, fps_numerator, fps_denominator, audio_sample_rate, width, height, created_at, modified_at)
-VALUES ('master_media_v', 'proj', 'media_v_master', 'master', 30, 1, NULL, 1920, 1080, 0, 0);
-INSERT OR IGNORE INTO tracks (id, sequence_id, name, track_type, track_index, enabled, locked, muted, soloed, volume, pan)
-VALUES ('master_v_media_v', 'master_media_v', 'V1', 'VIDEO', 1, 1, 0, 0, 0, 1.0, 0.0);
-UPDATE sequences SET default_video_layer_track_id = 'master_v_media_v' WHERE id = 'master_media_v' AND default_video_layer_track_id IS NULL;
-INSERT OR IGNORE INTO media_refs (id, project_id, owner_sequence_id, track_id, media_id, source_in_frame, source_out_frame, sequence_start_frame, duration_frames, enabled, volume, playhead_frame, created_at, modified_at)
-VALUES ('mr_media_v', 'proj', 'master_media_v', 'master_v_media_v', 'media_v', 0, 1000000, 0, 1000000, 1, 1.0, 0, 0, 0);
-
+assert(db:exec(string.format([[
 INSERT INTO clips (id, project_id, name, track_id, owner_sequence_id, sequence_id, sequence_start_frame, duration_frames, source_in_frame, source_out_frame, source_in_subframe, source_out_subframe, enabled, created_at, modified_at, master_layer_track_id, master_audio_track_id, fps_mismatch_policy, volume, playhead_frame) VALUES
-    ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', 'master_media_v', 0, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', 'master_media_v', 200, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', 'master_media_v', 50, 100, 10, 110, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a1', 'proj', 'A1', 'a1', 'seq', 'master_media_a', 0, 100, 0, 200000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
-    ('clip_a2', 'proj', 'A2', 'a1', 'seq', 'master_media_a', 200, 100, 200000, 400000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);]]))
+    ('clip_v1a', 'proj', 'V1a', 'v1', 'seq', '%s', 0, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v1b', 'proj', 'V1b', 'v1', 'seq', '%s', 200, 100, 0, 100, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_v2a', 'proj', 'V2a', 'v2', 'seq', '%s', 50, 100, 10, 110, NULL, NULL, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a1', 'proj', 'A1', 'a1', 'seq', '%s', 0, 100, 0, 200000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0),
+    ('clip_a2', 'proj', 'A2', 'a1', 'seq', '%s', 200, 100, 200000, 400000, 0, 0, 1, 0, 0, NULL, NULL, 'resample', 1.0, 0);
+]], master_v, master_v, master_v, master_a, master_a)))
 
 local seq = Sequence.load("seq")
 assert(seq, "Failed to load test sequence")

@@ -61,6 +61,11 @@ local timeline_state_stub = {
             displayed_clips = test_clips,
         })
     end,
+    -- command_manager.capture_displayed_playhead reads the displayed tab to
+    -- assert displayed-sequence ⇔ playhead ⇔ rate; keep these consistent with
+    -- get_playhead_position/get_sequence_frame_rate (all non-nil).
+    get_displayed_tab_id = function() return "seq1" end,
+    get_displayed_tab_kind = function() return "record" end,
     get_track_by_id = function(track_id) return test_tracks[track_id] end,
     get_track_index = function(track_id)
         local t = test_tracks[track_id]
