@@ -696,7 +696,9 @@ end
 -- clip on import (silently — no error dialog; just an empty timeline).
 --
 -- Substitutions (the only ones we vary today):
---   • outer Sm2MpVideoClip @DbId  → media.file_uuid (matches MediaRef)
+--   • outer Sm2MpVideoClip @DbId  → payload media_ref.file_uuid (source-clip
+--                                    identity = master.import_uuid or master.id;
+--                                    matches the clip's <MediaRef>)
 --   • <MpFolder> back-ref         → minted mp_folder DbId
 --   • <UniqueMediaPoolItemId>     → fresh-minted UUID
 --   • <Name>                      → basename(media.file_path) if different

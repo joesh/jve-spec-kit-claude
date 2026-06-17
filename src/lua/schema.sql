@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
-INSERT OR IGNORE INTO schema_version (version) VALUES (15);
+INSERT OR IGNORE INTO schema_version (version) VALUES (16);
 
 CREATE TABLE IF NOT EXISTS projects (
     id TEXT PRIMARY KEY,
@@ -70,9 +70,10 @@ CREATE TABLE IF NOT EXISTS media (
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     file_path TEXT NOT NULL UNIQUE,
-    -- NOTE: source-format stable identity (DRP MediaRef DbId, FCP7 file id) IS
-    -- media.id (see importer_core: stable_id = media_item.file_uuid). No separate
-    -- identity column — file_path UNIQUE enforces one media per physical file.
+    -- NOTE: media.id IS the source format's stable per-file identity when the
+    -- parser supplies one (currently the DRP MediaRef DbId — see importer_core
+    -- stable_id); formats without one get a minted UUID. No separate identity
+    -- column — file_path UNIQUE enforces one media per physical file.
 
     -- Duration in its native timebase
     duration_frames INTEGER NOT NULL CHECK(duration_frames > 0),
