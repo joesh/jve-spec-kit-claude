@@ -545,6 +545,7 @@ Legacy column refers to what is in the codebase today (pre-021). New column is t
 | `clip.id`, `clip_id` | **(unchanged — v2 keeps `clip`)** |
 | `clips.master_layer_track_id` | `clips.video_layer_track_id` (no "master" — the clip already knows its source sequence) |
 | `clips.master_audio_track_id` | `clips.audio_layer_track_id` |
+| `clip.playhead_frame` (Lua model property) | `clip.playhead_position` (drop `_frame` per the clip-field-suffix rule; matches `Sequence.playhead_position`). SQL column `clips.playhead_frame` stays. NOT localized: `playhead_frame` is the field-dict key threaded through ~25 files in the command/mutation path (`command_helper`, `clip_mutator`, `media_ref`, ~15 commands) — sweep all dict producers/consumers in one commit. Clip playhead is meaningful only for master clips opened in the source monitor (the remembered source-monitor position; `0` elsewhere) — sound design, naming-only fix. |
 | `clip_grade` table | **(unchanged — v2 keeps `clip_grade`)** |
 | `clip_links` table | **(unchanged — v2 keeps `clip_links`)** |
 | `clip_markers` table | **(unchanged — v2 keeps `clip_markers`)** |
