@@ -164,6 +164,14 @@ ui_constants.WINDOW = {
     MIN_VALID_DIMENSION = 100,      -- geometry with width/height below this (px) is treated as invalid and ignored
     MIN_PANEL_PX = 50,              -- a persisted panel narrower than this is degenerate → fall back to defaults
     SPLITTER_RESTORE_DELAY_MS = 50, -- let Qt compute the initial layout before applying saved splitter sizes
+    -- Splitter handle thickness, in pixels, for the panel dividers. This is
+    -- BOTH the visible divider width and the mouse grab target (Qt ties them
+    -- together for a stylesheet-styled handle). The divider rendered ~4px and
+    -- was effectively un-grabbable: the split cursor shows a couple px wider
+    -- than the handle, so presses that felt on-target hit-tested onto the
+    -- adjacent panel and the drag was dropped (first-drag-fails symptom). 6px
+    -- keeps the target above that floor while staying visually slim.
+    SPLITTER_HANDLE_GRAB_PX = 6,
     GEOMETRY_SETTING_KEY = "window_geometry",
     SPLITTER_SIZES_SETTING_KEY = "splitter_sizes",
 }
@@ -192,7 +200,13 @@ ui_constants.STYLES = {
         -- Window and container backgrounds (no blanket QWidget rule — that kills native rendering)
         "QMainWindow { background-color: " .. PANEL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; }",
         "QSplitter { background-color: " .. PANEL_BACKGROUND_COLOR .. "; }",
-        "QSplitter::handle { background-color: " .. SCROLL_BORDER_COLOR .. "; width: 2px; height: 2px; }",
+        -- Orientation-specific: a horizontal splitter's handle is a vertical
+        -- bar (its WIDTH is the divider thickness); a vertical splitter's handle
+        -- is a horizontal bar (its HEIGHT is the thickness). The generic
+        -- ::handle rule with both width+height set the wrong axis per
+        -- orientation and left a too-thin grab target. See WINDOW.SPLITTER_HANDLE_GRAB_PX.
+        "QSplitter::handle:horizontal { background-color: " .. SCROLL_BORDER_COLOR .. "; width: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
+        "QSplitter::handle:vertical { background-color: " .. SCROLL_BORDER_COLOR .. "; height: " .. ui_constants.WINDOW.SPLITTER_HANDLE_GRAB_PX .. "px; }",
         -- Text controls
         "QLabel { background-color: " .. SCROLL_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. SCROLL_BORDER_COLOR .. "; padding: 8px; }",
         "QLineEdit { background-color: " .. BUTTON_BACKGROUND_COLOR .. "; color: " .. WHITE_TEXT_COLOR .. "; border: 1px solid " .. DROPDOWN_BORDER_COLOR .. "; padding: 4px; }",
