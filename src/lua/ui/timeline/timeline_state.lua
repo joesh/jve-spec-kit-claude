@@ -639,19 +639,21 @@ M.get_project_id = function() return data.state.project_id end
 
 M.get_active_sequence_id = function() return data.state.sequence_id end
 -- Strip-authoritative: the displayed tab lives on TimelineTabStrip; this
--- accessor is a pure projection. Returns nil when no tab is displayed
+-- accessor is a pure projection. Reads via strip_holder — the SAME source
+-- as get_playhead_position / get_sequence_frame_rate (displayed_cache) — so
+-- the displayed-tab ⇔ playhead invariant in capture_displayed_playhead can
+-- never see id and playhead diverge. Returns nil when no tab is displayed
 -- (project-changed reset, blank panel).
 M.get_displayed_tab_id   = function()
-    local displayed = tab_strip:get_displayed()
-    return displayed and displayed.sequence_id or nil
+    return strip_holder.displayed_sequence_id()
 end
 
 -- 017: returns the kind of the currently-displayed timeline tab ("source"
 -- or "record"), or nil when the panel is blank. The transport target is
--- derived from this — never stored independently.
+-- derived from this — never stored independently. Strip-holder-sourced for
+-- the same single-source-of-truth reason as get_displayed_tab_id.
 M.get_displayed_tab_kind = function()
-    local displayed = tab_strip:get_displayed()
-    return displayed and displayed.kind or nil
+    return strip_holder.displayed_kind()
 end
 
 -- Movement-class commands (SetPlayhead, SetMarkIn/Out, GoToMarkIn/Out, ...)

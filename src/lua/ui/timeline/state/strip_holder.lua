@@ -40,6 +40,18 @@ function M.displayed_sequence_id()
     return displayed and displayed.sequence_id or nil
 end
 
+--- Convenience: returns the displayed tab's kind ("source" / "record"),
+--- or nil when there is no strip or no displayed tab. Companion to
+--- displayed_sequence_id() — the canonical answer to "what kind of tab
+--- does the timeline view render?". Keeps id/kind/cache reads on one
+--- source so the displayed-tab invariant in capture_displayed_playhead
+--- can never see them diverge.
+function M.displayed_kind()
+    if not _strip then return nil end
+    local displayed = _strip:get_displayed()
+    return displayed and displayed.kind or nil
+end
+
 --- Convenience: returns the displayed tab's cache, or nil when there is
 --- no strip or no displayed tab. The cache is the authoritative per-tab
 --- store for per-sequence view-state (frame_rate, tc origin, viewport,
